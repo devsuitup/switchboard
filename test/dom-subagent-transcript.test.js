@@ -27,7 +27,6 @@ const INDEX_HTML = `<!DOCTYPE html>
 <html>
   <body>
     <div id="sidebar-content"></div>
-    <div id="plans-content"></div>
     <div id="stats-content"></div>
     <div id="memory-content"></div>
     <div id="placeholder"></div>
@@ -83,7 +82,6 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   // find them as globals; these don't clash with function names)
   const stubValues = {
     sidebarContent: doc.getElementById('sidebar-content'),
-    plansContent: doc.getElementById('plans-content'),
     statsContent: doc.getElementById('stats-content'),
     memoryContent: doc.getElementById('memory-content'),
     placeholder: doc.getElementById('placeholder'),
@@ -94,7 +92,6 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
     jsonlViewerBody: doc.getElementById('jsonl-viewer-body'),
 
     // Viewer references (hideAllViewers touches these)
-    planViewer: doc.createElement('div'),
     statsViewer: doc.createElement('div'),
     memoryViewer: doc.createElement('div'),
     settingsViewer: doc.createElement('div'),
@@ -134,7 +131,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
     loadProjects: () => {},
     launchScheduleCreator: () => {},
     setActiveSession: () => {},
-    // hideAllViewers is defined in plans-memory-view.js in the real app; stub it here.
+    // hideAllViewers is defined in memory-workfiles-view.js in the real app; stub it here.
     hideAllViewers: () => {},
     // openSession is stubbed after eval; we pre-stub it so it's present during eval
     openSession: () => {},

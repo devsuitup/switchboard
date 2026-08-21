@@ -25,7 +25,6 @@ const globals = require('globals');
 const rendererCrossFileGlobals = {
   // DOM element handles (defined in app.js)
   sidebarContent: 'readonly',
-  plansContent: 'readonly',
   statsContent: 'readonly',
   memoryContent: 'readonly',
   placeholder: 'readonly',
@@ -47,8 +46,6 @@ const rendererCrossFileGlobals = {
   loadingStatus: 'readonly',
   statusBarInfo: 'readonly',
   statusBarActivity: 'readonly',
-  planViewer: 'readonly',
-  planPanel: 'readonly',
   memoryViewer: 'readonly',
   memoryPanel: 'readonly',
   workFilesContent: 'readonly',
@@ -89,7 +86,6 @@ const rendererCrossFileGlobals = {
   sessionBusyState: 'readonly',
   cachedProjects: 'writable',
   cachedAllProjects: 'writable',
-  cachedPlans: 'writable',
   gridCards: 'writable',
   gridViewActive: 'writable',
   activeTab: 'writable',
@@ -125,7 +121,6 @@ const rendererCrossFileGlobals = {
   openSession: 'readonly',
   loadProjects: 'readonly',
   renderProjects: 'readonly',
-  renderPlans: 'readonly',
   buildSubagentIndex: 'readonly',
   buildSubagentItem: 'readonly',
   appendSubagentChildren: 'readonly',
@@ -160,7 +155,7 @@ const rendererCrossFileGlobals = {
   WebglAddon: 'readonly',
   UnicodeGraphemesAddon: 'readonly',
 
-  // Terminal/grid/file-panel/plans/stats/notifications and assorted helpers
+  // Terminal/grid/file-panel/stats/notifications and assorted helpers
   // shared across renderer files (defined somewhere in public/*.js).
   TERMINAL_THEME: 'writable',
   TERMINAL_THEMES: 'readonly',
@@ -172,7 +167,6 @@ const rendererCrossFileGlobals = {
   refreshSidebar: 'readonly',
   updateRunningIndicators: 'readonly',
   hideAllViewers: 'readonly',
-  hidePlanViewer: 'readonly',
   drainViewerWatches: 'readonly',
   showTerminalHeader: 'readonly',
   switchPanel: 'readonly',
@@ -185,7 +179,6 @@ const rendererCrossFileGlobals = {
   initFilePanel: 'readonly',
   openFileInPanel: 'readonly',
   rekeyFilePanelState: 'readonly',
-  loadPlans: 'readonly',
   loadStats: 'readonly',
   loadMemories: 'readonly',
   renderMemories: 'readonly',
