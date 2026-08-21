@@ -155,6 +155,87 @@ function evalInWindow(dom, file) {
   vm.runInContext(src, dom.getInternalVMContext(), { filename: file });
 }
 
+// Minimal DOM + globals for exercising public/grid-view.js in isolation.
+// grid-view.js is written against app.js/terminal-manager.js globals; the
+// stubs below cover only what wrapInGridCard() and the subagent-pill flow
+// touch — nothing else in grid-view.js is under test here.
+function setupGridViewDom() {
+  const dom = new JSDOM('<!DOCTYPE html><html><body><div id="terminals"></div></body></html>', {
+    url: 'http://localhost/',
+    runScripts: 'outside-only',
+    pretendToBeVisual: true,
+  });
+  const { window } = dom;
+
+  // Same capture pattern as setupSidebarDom — grid-view.js registers its
+  // own subagent listeners at eval time via an IIFE, so the callbacks must
+  // be captured before evaluation.
+  const apiTarget = {
+    onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
+    onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
+  };
+  window.api = new Proxy(apiTarget, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      return () => Promise.resolve({ ok: true });
+    },
+  });
+
+  const stubGlobals = {
+    openSessions: new Map(),
+    activeSessionId: null,
+    sessionMap: new Map(),
+    activePtyIds: new Set(),
+    sortedOrder: [],
+    sidebarContent: window.document.createElement('div'),
+    terminalsEl: window.document.getElementById('terminals'),
+    gridViewActive: false,
+    isMac: false,
+    cachedProjects: [],
+    // Cross-file functions grid-view.js calls but that this suite doesn't
+    // exercise the behavior of — no-op stubs.
+    replayHiddenBuffer: () => {},
+    confirmAndStopSession: () => {},
+    updateRunningIndicators: () => {},
+    fitAndScroll: () => {},
+    showSession: () => {},
+  };
+
+  for (const [k, v] of Object.entries(stubGlobals)) {
+    Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
+  }
+
+  // Real utils.js for cleanDisplayName/shortProjectPath/formatDate. shortcuts.js
+  // for normalizeShortcuts() — grid-view.js calls it at top level (module-init
+  // time, not lazily), so it must be defined before grid-view.js evaluates.
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'grid-view.js'));
+
+  return {
+    window,
+    document: window.document,
+    gridView: {
+      wrapInGridCard: window.wrapInGridCard,
+      updateGridSubagentPills: window.updateGridSubagentPills,
+      pruneStaleSubagents: window.pruneStaleSubagents,
+    },
+    // Simulate the main process emitting subagent-spawned/subagent-completed
+    // (session-transitions.js) by invoking the callback grid-view.js
+    // registered via window.api.onSubagentSpawned/onSubagentCompleted at
+    // eval time — same pattern as setupSidebarDom's emit helpers.
+    emitSubagentSpawned(payload) {
+      if (typeof apiTarget._subagentSpawnedCb === 'function') apiTarget._subagentSpawnedCb(payload);
+    },
+    emitSubagentCompleted(payload) {
+      if (typeof apiTarget._subagentCompletedCb === 'function') apiTarget._subagentCompletedCb(payload);
+    },
+    destroy() {
+      window.close();
+    },
+  };
+}
+
 // Build a deterministic sample project fixture.
 function makeSampleProject(overrides = {}) {
   const projectPath = overrides.projectPath || '/home/dev/myproj';
@@ -215,4 +296,4 @@ function makeSampleProject(overrides = {}) {
   };
 }
 
-module.exports = { setupSidebarDom, makeSampleProject };
+module.exports = { setupSidebarDom, setupGridViewDom, makeSampleProject };

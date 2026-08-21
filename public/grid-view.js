@@ -34,8 +34,8 @@ function gridSubagentColor(type) {
   if (typeof window.api === 'undefined') return;
 
   if (typeof window.api.onSubagentSpawned === 'function') {
-    window.api.onSubagentSpawned((event, data) => {
-      const { parentSessionId, agentId, subagentType } = data || {};
+    window.api.onSubagentSpawned((payload) => {
+      const { parentSessionId, agentId, subagentType } = payload || {};
       if (!parentSessionId || !agentId) return;
       if (!activeSubagents.has(parentSessionId)) activeSubagents.set(parentSessionId, new Map());
       activeSubagents.get(parentSessionId).set(agentId, { agentId, subagentType, spawnedAt: Date.now() });
@@ -44,8 +44,8 @@ function gridSubagentColor(type) {
   }
 
   if (typeof window.api.onSubagentCompleted === 'function') {
-    window.api.onSubagentCompleted((event, data) => {
-      const { parentSessionId, agentId } = data || {};
+    window.api.onSubagentCompleted((payload) => {
+      const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
       const map = activeSubagents.get(parentSessionId);
       if (map) {
