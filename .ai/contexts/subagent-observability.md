@@ -84,6 +84,14 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   `read-session-file.js` — that file is main-process and not `require()`-able
   from the renderer (sidebar.js loads as a plain script), hence the local copy.
 
+- **Grid view has its own parallel tracking** (`activeSubagents` +
+  `pruneStaleGridSubagents()` in `grid-view.js`, pruned from `wrapInGridCard()`,
+  not on a timer). Renderer files are plain non-module `<script>`s sharing one
+  global scope, and sidebar.js loads *after* grid-view.js — a top-level function
+  with the same name in both files gets silently shadowed (this exact bug froze
+  the grid's TTL prune, PR #137). Keep cross-file names distinct;
+  `test/dom-grid-sidebar-prune-collision.test.js` pins the known pair.
+
 ## If you change this, also check
 
 - `eslint.config.js` `rendererCrossFileGlobals` — must list any new renderer-global functions (e.g. `showSubagentTranscript`, `drainViewerWatches`) or lint fails on `no-undef`

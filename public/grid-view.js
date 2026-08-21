@@ -59,7 +59,7 @@ function gridSubagentColor(type) {
 
 // Prune subagents that have been running for more than 60 s without a completion event.
 // Called from wrapInGridCard() when a card is (re)wrapped, not on a timer.
-// Named distinctly from sidebar.js's own pruneStaleSubagents() — see PR #137 review, Finding 1.
+// Named distinctly from sidebar.js's own pruneStaleSubagents() — see .ai/contexts/subagent-observability.md
 function pruneStaleGridSubagents() {
   const cutoff = Date.now() - 60000;
   for (const [parentId, map] of activeSubagents) {
