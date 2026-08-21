@@ -218,7 +218,7 @@ function setupGridViewDom() {
     gridView: {
       wrapInGridCard: window.wrapInGridCard,
       updateGridSubagentPills: window.updateGridSubagentPills,
-      pruneStaleSubagents: window.pruneStaleSubagents,
+      pruneStaleGridSubagents: window.pruneStaleGridSubagents,
     },
     // Simulate the main process emitting subagent-spawned/subagent-completed
     // (session-transitions.js) by invoking the callback grid-view.js
