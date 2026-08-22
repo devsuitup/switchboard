@@ -34,8 +34,8 @@ function gridSubagentColor(type) {
   if (typeof window.api === 'undefined') return;
 
   if (typeof window.api.onSubagentSpawned === 'function') {
-    window.api.onSubagentSpawned((event, data) => {
-      const { parentSessionId, agentId, subagentType } = data || {};
+    window.api.onSubagentSpawned((payload) => {
+      const { parentSessionId, agentId, subagentType } = payload || {};
       if (!parentSessionId || !agentId) return;
       if (!activeSubagents.has(parentSessionId)) activeSubagents.set(parentSessionId, new Map());
       activeSubagents.get(parentSessionId).set(agentId, { agentId, subagentType, spawnedAt: Date.now() });
@@ -44,8 +44,8 @@ function gridSubagentColor(type) {
   }
 
   if (typeof window.api.onSubagentCompleted === 'function') {
-    window.api.onSubagentCompleted((event, data) => {
-      const { parentSessionId, agentId } = data || {};
+    window.api.onSubagentCompleted((payload) => {
+      const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
       const map = activeSubagents.get(parentSessionId);
       if (map) {
@@ -58,8 +58,9 @@ function gridSubagentColor(type) {
 })();
 
 // Prune subagents that have been running for more than 60 s without a completion event.
-// Called on each grid render cycle.
-function pruneStaleSubagents() {
+// Called from wrapInGridCard() when a card is (re)wrapped, not on a timer.
+// Named distinctly from sidebar.js's own pruneStaleSubagents() — see .ai/contexts/subagent-observability.md
+function pruneStaleGridSubagents() {
   const cutoff = Date.now() - 60000;
   for (const [parentId, map] of activeSubagents) {
     for (const [agentId, info] of map) {
@@ -245,7 +246,7 @@ function wrapInGridCard(sessionId) {
   updateRunningIndicators();
 
   // Render subagent pills for any already-tracked children
-  pruneStaleSubagents();
+  pruneStaleGridSubagents();
   updateGridSubagentPills(sessionId);
 }
 
