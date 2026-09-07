@@ -38,11 +38,20 @@ const SENSITIVE_PATH_PATTERNS = [
   /[/\\]\.ssh[/\\]/i,
   /[/\\]\.gnupg[/\\]/i,
   /[/\\]\.aws[/\\]credentials$/i,
-  /[/\\]\.env$/i,
-  /[/\\]\.env\.local$/i,
+  // Any .env flavour, minus the committed placeholders.
+  /[/\\]\.env(\.(?!example$|sample$|template$)[A-Za-z0-9_-]+)?$/i,
   /[/\\]\.netrc$/i,
   /[/\\]\.docker[/\\]config\.json$/i,
   /[/\\]\.kube[/\\]config$/i,
+  // The OAuth token this app reads itself -- see claude-auth.js.
+  /[/\\]\.claude[/\\]\.credentials\.json$/i,
+  /[/\\]\.git-credentials$/i,
+  /[/\\]\.config[/\\]gh[/\\]hosts\.ya?ml$/i,
+  /[/\\]\.config[/\\]gcloud[/\\]/i,
+  /[/\\]\.npmrc$/i,
+  /[/\\]\.pypirc$/i,
+  /[/\\]\.pgpass$/i,
+  /[/\\]\.my\.cnf$/i,
 ];
 
 /**
