@@ -206,3 +206,39 @@ test('an unsafe rel path from the host is refused, not joined onto a local dir',
     assert.equal(fs.existsSync(path.join(dir, '..', 'escape.jsonl')), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// scp is bounded in time, never in bytes, and its output cap applies to stdout
+// while the payload goes to the destination file. The inventory already carries
+// size, so refusing an oversized transcript before the fetch is the only bound
+// that exists. See .ai/contexts/session-cache.md, "Remote hosts".
+test('a file above the per-file ceiling is never fetched', async () => {
+  const dir = tmp('mirror-toobig');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const asked = [];
+    const transport = {
+      listFiles: async () => ([
+        { rel: '-srv-a/small.jsonl', size: 10, mtimeMs: 1 },
+        { rel: '-srv-a/huge.jsonl', size: 200 * 1024 * 1024, mtimeMs: 1 },
+      ]),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const warned = [];
+    await syncMirror({
+      alias: 'vps', transport, projectsDir, manifestPath,
+      log: { warn: (m) => warned.push(m), info() {}, error() {} },
+    });
+    assert.deepEqual(asked, ['-srv-a/small.jsonl'], 'the oversized file must never be asked for');
+    assert.equal(fs.existsSync(path.join(projectsDir, '-srv-a/huge.jsonl')), false);
+    assert.ok(warned.some(m => m.includes('skipped')), 'the skip must be reported, not silent');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

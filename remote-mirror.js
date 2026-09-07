@@ -6,6 +6,8 @@ const path = require('path');
 const { isSafeRelPath, topFolderOf } = require('./remote-hosts');
 
 const MAX_INVENTORY_ENTRIES = 20_000;
+// Per-file ceiling: scp is bounded in time, never in bytes.
+const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
 function readManifest(manifestPath) {
   try {
@@ -58,13 +60,24 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
   const previous = readManifest(manifestPath);
 
   const toFetch = [];
+  let skippedTooLarge = 0;
   for (const [rel, meta] of want) {
+    // The inventory already carries the size; scp is bounded in time only, so
+    // this is the only place a single oversized transcript can be refused
+    // before it lands. See .ai/contexts/session-cache.md, "Remote hosts".
+    if (meta.size > MAX_FILE_BYTES) {
+      skippedTooLarge++;
+      continue;
+    }
     const prev = previous[rel];
     const localPath = path.join(projectsDir, rel);
     if (prev && prev.size === meta.size && prev.mtimeMs === meta.mtimeMs && fs.existsSync(localPath)) {
       continue;
     }
     toFetch.push(rel);
+  }
+  if (skippedTooLarge && log && log.warn) {
+    log.warn(`[remote:${alias}] ${skippedTooLarge} file(s) skipped: over ${MAX_FILE_BYTES} bytes`);
   }
 
   let fetched = [];
