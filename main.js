@@ -187,6 +187,8 @@ searchClient.startWorker();
 const searchViaWorker = searchClient.searchViaWorker;
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+// Ceiling for a file opened in the viewer panel, mirroring read-work-file.
+const PANEL_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 // MAX_BUFFER_SIZE imported from output-buffer.js (single source of truth)
@@ -801,8 +803,15 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
     const resolved = path.resolve(filePath);
     if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-    const content = fs.readFileSync(resolved, 'utf8');
-    return { ok: true, content };
+    // A file link in terminal output decides this path, so the size is not
+    // ours -- see .ai/contexts/viewer-panel.md, "Bounds".
+    const stat = fs.statSync(resolved);
+    if (stat.size > PANEL_FILE_MAX_BYTES) {
+      return { ok: false, error: 'file too large to display' };
+    }
+    const buf = fs.readFileSync(resolved);
+    if (buf.includes(0)) return { ok: false, error: 'binary file' };
+    return { ok: true, content: buf.toString('utf8') };
   } catch (err) {
     return { ok: false, error: err.message };
   }
