@@ -75,8 +75,10 @@ function createSshTransport(opts = {}) {
       const kill = () => {
         try { child.kill('SIGKILL'); } catch {}
       };
+      // Never unref'd: this timer IS the bound on the child. Unref'd, an
+      // otherwise-idle loop exits before it fires and the promise never
+      // settles. see .ai/contexts/session-cache.md ("Remote SSH hosts")
       const timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
-      if (typeof timer.unref === 'function') timer.unref();
 
       const finish = (code) => {
         if (settled) return;

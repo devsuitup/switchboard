@@ -125,6 +125,15 @@ or deleted from here.
   `remoteIndexer.stop()` (wired to `before-quit`) kills whatever is left. On
   Windows a child outlives the death of its launcher — on 2026-09-06 an unbounded
   load left 24 orphans at 100% CPU on this machine.
+  **That kill timer must never be `unref()`'d.** It was, in the first cut: a
+  process whose only pending handle is an unref'd timer exits before it fires,
+  so the child is never killed and the promise never settles. This is invisible
+  from inside `node:test` (the runner holds the loop open) and surfaced only on
+  CI, as five `cancelledByParent` tests alongside `# fail 0`. Pinned from
+  outside by `test/remote-transport-eventloop.test.js`, which runs the case in a
+  child node process with nothing else pending. The repeating *interval* in
+  `remote-index.js` is unref'd on purpose — a poll must not hold the app open —
+  but a one-shot safety timeout never is.
 
 - **A failing host degrades quietly and leaves the mirror alone.**
   `syncMirror` throws before mutating anything if the inventory call fails; a

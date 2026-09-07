@@ -683,7 +683,6 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders }) {
     const timer = setTimeout(() => {
       settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions });
     }, SUBSET_SCAN_TIMEOUT_MS);
-    if (typeof timer.unref === 'function') timer.unref();
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
