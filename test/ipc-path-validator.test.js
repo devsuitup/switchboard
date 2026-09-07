@@ -356,3 +356,37 @@ test('isKnownProjectRoot: rejects a sub-path of a known project (must be exact, 
 test('isKnownProjectRoot: empty known list rejects everything', () => {
   assert.equal(isKnownProjectRoot(path.resolve('/home/user/project'), []), false);
 });
+
+// Locations the denylist used to let through. read-file-for-panel accepts an
+// arbitrary path on purpose (an OSC 8 hyperlink from terminal output decides
+// it), so the denylist is the only thing standing between that path and a
+// credential file -- and save-file-for-panel shares it, which makes the same
+// gap a write.
+test('isSensitivePath: rejects the OAuth token this app reads itself', () => {
+  assert.equal(isSensitivePath(path.join(HOME, '.claude', '.credentials.json')), true);
+});
+
+test('isSensitivePath: rejects every .env flavour, not just .env and .env.local', () => {
+  for (const name of ['.env', '.env.local', '.env.production', '.env.staging']) {
+    assert.equal(isSensitivePath(path.join('/srv/app', name)), true, name);
+  }
+});
+
+test('isSensitivePath: rejects the usual credential stores', () => {
+  const cases = [
+    path.join(HOME, '.git-credentials'),
+    path.join(HOME, '.config', 'gh', 'hosts.yml'),
+    path.join(HOME, '.config', 'gcloud', 'credentials.db'),
+    path.join(HOME, '.npmrc'),
+    path.join(HOME, '.pypirc'),
+    path.join(HOME, '.pgpass'),
+    path.join(HOME, '.my.cnf'),
+    path.join(HOME, '.aws', 'credentials'),
+  ];
+  for (const p of cases) assert.equal(isSensitivePath(p), true, p);
+});
+
+test('isSensitivePath: an ordinary project file is still allowed', () => {
+  assert.equal(isSensitivePath(path.join('/srv/app', 'src', 'index.js')), false);
+  assert.equal(isSensitivePath(path.join('/srv/app', 'environment.md')), false);
+});
