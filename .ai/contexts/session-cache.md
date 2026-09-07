@@ -71,8 +71,98 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktree
   - **Open question #2 (which file keeps being written)**: established by measurement above — the mirror, not the parent. That is exactly why the mirror is never discarded: dropping it would silently erase every message written after the compaction, for as long as the session keeps being used. The union design keeps both files' rows, forever, each independently refreshed.
   - **Open question #3 (existing databases)**: repaired on the next index pass, not left alone. `bridgeSessionId` and `mergedIntoSessionId` are added purely via the schema-reconciliation block (not a numbered migration — deliberately, to avoid coupling `migrations.length` to unrelated migration-ordering tests; see `db-schema-reconcile.test.js`'s "foreign higher-version" precedent for why reconciliation is the version-independent mechanism). Their absence sets `mustReindex = true`, which wipes `session_cache` + `cache_meta` + the `initial_scan_complete` marker, forcing every folder through the now-merging indexer on the next scan — the same repair path already used when `fileMtime` (v7) or the fork subagent columns (v4) were introduced.
 
+## Remote SSH hosts (issue #201)
+
+A declared SSH host's `~/.claude/projects` is mirrored into
+`<dataDir>/remote/<alias>/projects/` and indexed as a **second projects root**.
+Observation only: a remote session is read, searched and counted, never resumed
+or deleted from here.
+
+- **The local path is unchanged when no host is declared.** `remote-index.js`
+  `start()` returns false before touching anything if `enabledHosts()` is empty:
+  no `setInterval`, no ssh, no mirror directory. `session-cache.js`'s
+  `remoteRoots` map stays empty, so `resolveFolderDir()` is `path.join(PROJECTS_DIR, folder)`
+  and `buildProjectsFromCache`'s root list has exactly one entry — the same
+  `readdirSync` it always did. Proven by `test/remote-index.test.js` (a transport
+  and a `sync` that throw on any call) and `test/remote-indexing-e2e.test.js`.
+
+- **Folder keys are `<alias>::<folder>`.** `encodeProjectPath` emits only
+  `[a-zA-Z0-9-]` (`encode-project-path.js:5`), so `::` cannot occur in a local
+  key and a remote key can never collide with one. `parseFolderKey`
+  (`remote-hosts.js`) refuses a prefix that is not a valid alias, so a local
+  folder whose name happens to contain `::` still reads as local. Local rows keep
+  their current unprefixed form — nothing migrates.
+
+- **The primary key is NOT namespaced, and that risk is accepted here in
+  writing.** `session_meta.sessionId` and `session_cache.sessionId` stay global
+  PKs (`db.js:51`, `db.js:60`). Two hosts whose CLIs generate the same session id
+  would overwrite each other's star, title and archive state, and one host's row
+  would shadow the other's in the sidebar. The ids are CLI-generated UUIDv4 and no
+  collision exists in the measured data (255 transcripts on the probed host, 2026-09-07).
+  Migrating the PK to `(host, sessionId)` touches every table, every IPC payload
+  and every renderer id — it is not worth doing before a second host exists.
+  **If you ever see two sessions fighting over a star or a title, this is why.**
+
+- **The mirror is pulled, never watched.** `fs.watch` cannot cross SSH
+  (inotify/FSEvents/ReadDirectoryChangesW are kernel-local), and the local
+  watcher at `main.js` `startProjectsWatcher()` is deliberately not pointed at the
+  mirror — it would fire on our own `scp` writes, not on remote activity. A timer
+  drives it instead, floored at 60 s: a tighter loop costs latency and VPS CPU for
+  a "where is my session at" use case that does not need it.
+
+- **One `ssh` inventory, then only the deltas.** `remote-transport.js` runs
+  `find .claude/projects -type f -name '*.jsonl' -printf '%T@	%s	%P
+'` over
+  a single ssh call and compares `(size, mtimeMs)` against
+  `<dataDir>/remote/<alias>/inventory.json`. `rsync` is not used because it is
+  absent on this Windows machine (measured); `ssh2` is not used because it would
+  drag an optional native addon into the `electron-builder` pipeline. First pull
+  moves the whole tree (249 MB on the probed host) as one `scp` per file at
+  concurrency 4 — slow once, near-free afterwards.
+
+- **Every child process is bounded and reaped.** Each `ssh`/`scp` gets a timeout
+  that `SIGKILL`s it, every child is registered in a live set, and
+  `remoteIndexer.stop()` (wired to `before-quit`) kills whatever is left. On
+  Windows a child outlives the death of its launcher — on 2026-09-06 an unbounded
+  load left 24 orphans at 100% CPU on this machine.
+
+- **A failing host degrades quietly and leaves the mirror alone.**
+  `syncMirror` throws before mutating anything if the inventory call fails; a
+  partial fetch skips the deletion pass *and* keeps the vanished files in the
+  manifest, so the deletion is still owed on the next healthy run rather than
+  silently forgotten. `remote-index.js` catches per host, so one dead host does
+  not stop its peers or the local scan.
+
+- **The mirror is indexed off the main thread.** `workers/scan-projects.js` takes
+  `folderPrefix` and a `folders` subset in `workerData`, and
+  `sessionCache.scanFoldersViaWorker` writes each folder result through the same
+  delete-then-insert path as the cold-start scan. Parsing 249 MB on the main
+  thread would freeze the UI; `refreshFolder` is deliberately not the remote path.
+
+- **A remote project is never "missing".** `buildProjectsFromCache` sets
+  `missing: false` for any aliased row. Probing the local filesystem for
+  `/srv/supervision` would flag every remote project missing and offer it to the
+  missing-project remap UI, which rewrites transcripts for a path this machine
+  never owned. Sidebar grouping is keyed on `alias + projectPath`, not
+  `projectPath` alone, so two hosts holding the same absolute path stay two groups.
+
+- **Switchboard never stores, reads or displays an SSH credential.** A host row
+  is an alias and a label. Resolution (user, port, key, agent, proxy) stays in the
+  user's `~/.ssh/config`, which is already on the sensitive-path denylist
+  (`ipc-path-validator.js:38`, `main.js:732`) and stays there. The alias is passed
+  as its own argv element, never concatenated into a shell string; a remote
+  relative path is validated by `isSafeRelPath` before it is joined onto a local
+  directory or handed to `scp` (OpenSSH 9 runs scp over SFTP, where quoting would
+  become part of the name — the validation is the guard, not quoting).
+
 ## If you change this, also check
 
+- `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
+- `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
+- `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected
+- `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning
+- `remote-indexing-e2e.test.js` — covers the `<alias>::` prefix reaching session rows, the search entries, the metrics and the sidebar
+- `dom-sidebar-remote-session.test.js` — covers the remote badge and the read-only click routing
 - `derive-project-path.test.js` — covers the worktree-collapse + cwd extraction paths
 - `db-daily-activity.test.js` — covers heatmap aggregation
 - `read-session-file.test.js` — covers header parsing

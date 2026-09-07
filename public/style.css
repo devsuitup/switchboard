@@ -4120,6 +4120,38 @@ body { display: flex; flex-direction: column; }
   top: -1px;
 }
 
+.remote-badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border: 1px solid #3b5a7a;
+  border-radius: 3px;
+  color: #7fb3e0;
+  font-size: 10px;
+  line-height: 15px;
+  vertical-align: middle;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-hosts-list {
+  margin: 8px 0;
+}
+
+.remote-host-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.remote-host-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
   background: #3ecf5a;
