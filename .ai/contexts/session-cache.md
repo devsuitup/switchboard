@@ -164,6 +164,28 @@ or deleted from here.
   directory or handed to `scp` (OpenSSH 9 runs scp over SFTP, where quoting would
   become part of the name — the validation is the guard, not quoting).
 
+### `stop()` cancels, `dispose()` ends -- they are not the same thing
+
+`createSshTransport().dispose()` is **terminal**: it sets a flag every later
+`run()` checks, so once disposed the transport answers
+`ssh inventory failed (exit -1): transport disposed` forever. It exists for
+application shutdown.
+
+The indexer's `stop()` must therefore **not** call it. `stop()` cancels what is
+in flight (`cancelInFlight()`) and clears the timer; `dispose()` on the indexer
+is the shutdown path and is the only caller of the transport's `dispose()`.
+
+Why this is not a detail: `restart()` is `stop()` then `start()`, and
+`restart()` is exactly what the `remote-hosts-apply` IPC calls when a host is
+saved in Settings. With `stop()` disposing, declaring a host at runtime killed
+the transport in the same breath, and the feature could only ever have worked
+for a host already declared at launch -- that is, never on first use. Measured
+in the field on 2026-09-07 (v0.0.68): the mirror directory was created and
+stayed empty, one warn line in `main.log` and no user-visible error.
+
+The tests that hold this: "restart() after adding a host keeps the transport
+usable" and "dispose() is terminal", in `test/remote-index.test.js`.
+
 ## If you change this, also check
 
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard

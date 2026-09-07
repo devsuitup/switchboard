@@ -190,3 +190,81 @@ test('folders of an undeclared alias are dropped from the cache', async () => {
     assert.ok(!dropped.includes('C--Serveur-switchboard'), 'a local folder is never dropped');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+// Field failure, 2026-09-07: declaring a host in Settings calls restart(), whose
+// stop() disposed the shared transport for good. Every pull after that answered
+// "ssh inventory failed (exit -1): transport disposed" and the mirror stayed
+// empty. See .ai/contexts/session-cache.md, "Remote hosts".
+function lifecycleTransport() {
+  let disposed = false;
+  const calls = [];
+  return {
+    calls,
+    isDisposed: () => disposed,
+    async listFiles(alias) {
+      if (disposed) throw new Error('ssh inventory failed (exit -1): transport disposed');
+      calls.push(alias);
+      return [];
+    },
+    fetchFiles: async () => ({ fetched: [], failed: [] }),
+    cancelInFlight() {},
+    dispose() { disposed = true; },
+  };
+}
+
+test('restart() after adding a host keeps the transport usable', async () => {
+  const dataDir = tmp('idx-restart');
+  try {
+    const timers = fakeTimers();
+    const transport = lifecycleTransport();
+    let hosts = [];
+    const indexer = createRemoteIndexer({
+      getHosts: () => hosts,
+      dataDir,
+      transport,
+      timers,
+      sync: async ({ alias, transport: t }) => {
+        await t.listFiles(alias);
+        return { changedFolders: [], errors: [] };
+      },
+      scanFolders: () => {},
+      setRemoteRoots: () => {},
+    });
+
+    // Launched with no host: nothing armed, exactly as in the field.
+    assert.equal(indexer.start(), false);
+
+    // The user adds one in Settings; the IPC handler calls restart().
+    hosts = [{ alias: 'planificator', enabled: true }];
+    assert.equal(indexer.restart(), true, 'restart() must arm the timer');
+    await indexer.refreshNow();
+
+    assert.equal(transport.isDisposed(), false, 'restart() must never dispose the transport');
+    assert.ok(transport.calls.length > 0, 'the inventory must actually run after restart()');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('dispose() is terminal: it stops the timer and ends the transport', async () => {
+  const dataDir = tmp('idx-dispose');
+  try {
+    const timers = fakeTimers();
+    const transport = lifecycleTransport();
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'planificator', enabled: true }],
+      dataDir,
+      transport,
+      timers,
+      sync: async ({ alias, transport: t }) => {
+        await t.listFiles(alias);
+        return { changedFolders: [], errors: [] };
+      },
+      scanFolders: () => {},
+      setRemoteRoots: () => {},
+    });
+
+    assert.equal(indexer.start(), true);
+    indexer.dispose();
+    assert.equal(transport.isDisposed(), true, 'shutdown must end the transport');
+    assert.equal(indexer.isRunning(), false, 'shutdown must clear the timer');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

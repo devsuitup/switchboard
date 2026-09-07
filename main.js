@@ -2710,7 +2710,7 @@ app.on('before-quit', () => {
   }
   cliSessionState.stop();
   // Stops the timer and SIGKILLs any ssh/scp still in flight.
-  remoteIndexer.stop();
+  remoteIndexer.dispose();
 
   // Kill all PTY processes on quit
   for (const [id, session] of activeSessions) {

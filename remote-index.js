@@ -172,6 +172,12 @@ function createRemoteIndexer(ctx) {
       timers.clearInterval(timer);
       timer = null;
     }
+    if (ctx.transport && typeof ctx.transport.cancelInFlight === 'function') ctx.transport.cancelInFlight();
+  }
+
+  // Terminal: for application shutdown only, never for restart().
+  function dispose() {
+    stop();
     if (ctx.transport && typeof ctx.transport.dispose === 'function') ctx.transport.dispose();
   }
 
@@ -180,7 +186,7 @@ function createRemoteIndexer(ctx) {
     return start();
   }
 
-  return { start, stop, restart, refreshNow, isRunning: () => timer !== null };
+  return { start, stop, dispose, restart, refreshNow, isRunning: () => timer !== null };
 }
 
 module.exports = { createRemoteIndexer };
