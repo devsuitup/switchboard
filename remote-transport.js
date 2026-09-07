@@ -165,15 +165,21 @@ function createSshTransport(opts = {}) {
     return { fetched, failed };
   }
 
-  function dispose() {
-    disposed = true;
+  // Kill what is running without ending the transport -- see
+  // .ai/contexts/session-cache.md, "Remote hosts".
+  function cancelInFlight() {
     for (const child of live) {
       try { child.kill('SIGKILL'); } catch {}
     }
     live.clear();
   }
 
-  return { listFiles, fetchFiles, dispose, liveCount: () => live.size };
+  function dispose() {
+    disposed = true;
+    cancelInFlight();
+  }
+
+  return { listFiles, fetchFiles, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
 module.exports = { createSshTransport, parseInventory, LIST_COMMAND, REMOTE_PROJECTS_REL };
