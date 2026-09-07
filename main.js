@@ -451,8 +451,41 @@ sessionCache.init({
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir } = sessionCache;
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
+
+// --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
+const { isRemoteFolder } = require('./remote-hosts');
+const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
+const { createSshTransport } = require('./remote-transport');
+const { createRemoteIndexer } = require('./remote-index');
+
+const remoteTransport = createSshTransport({ log });
+const remoteIndexer = createRemoteIndexer({
+  getHosts: () => (getSetting('global') || {}).remoteHosts,
+  getRefreshMs: () => (getSetting('global') || {}).remoteRefreshMs,
+  dataDir: path.dirname(DB_PATH),
+  transport: remoteTransport,
+  scanFolders: scanFoldersViaWorker,
+  listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
+  dropFolder: (folderKey) => { deleteCachedFolder(folderKey); deleteSearchFolder(folderKey); },
+  setRemoteRoots,
+  notify: notifyRendererProjectsChanged,
+  log,
+});
+
+/** Directory holding a folder key's transcripts, local or mirrored. */
+function projectsDirForFolder(folder) {
+  return resolveFolderDir(folder);
+}
+
+/** resolveJsonlPath for a cache row whose `folder` may carry an alias prefix. */
+function resolveSessionJsonlPath(row) {
+  const dir = projectsDirForFolder(row && row.folder);
+  if (!dir) return null;
+  return resolveJsonlPath(dir, { ...row, folder: '.' });
+}
 
 // --- IPC: browse-folder ---
 ipcMain.handle('browse-folder', async () => {
@@ -1390,6 +1423,26 @@ ipcMain.handle('set-setting', (_event, key, value) => {
   return { ok: true };
 });
 
+// --- IPC: remote hosts ---
+// Re-reads the declared hosts and pulls straight away, so a host added in
+// Settings shows up without waiting a full refresh interval.
+ipcMain.handle('remote-hosts-apply', () => {
+  try {
+    const running = remoteIndexer.restart();
+    return { ok: true, running };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('remote-hosts-refresh', async () => {
+  try {
+    return { ok: true, ...(await remoteIndexer.refreshNow()) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('delete-setting', (_event, key) => {
   deleteSetting(key);
   return { ok: true };
@@ -1508,7 +1561,9 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const folderDir = projectsDirForFolder(folder);
+  if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
+  const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -1525,7 +1580,8 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
 ipcMain.handle('read-subagent-jsonl', (_event, parentSessionId, agentId) => {
   const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
   if (!row) return { error: 'Subagent session not found in cache' };
-  const jsonlPath = resolveJsonlPath(PROJECTS_DIR, row);
+  const jsonlPath = resolveSessionJsonlPath(row);
+  if (!jsonlPath) return { error: 'Subagent belongs to a host that is no longer declared' };
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -1555,7 +1611,8 @@ ipcMain.handle('list-subagents', (_event, parentSessionId) => {
 ipcMain.handle('start-subagent-watch', (_event, parentSessionId, agentId) => {
   const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
   if (!row) return { error: 'Subagent not found in cache' };
-  const filePath = resolveJsonlPath(PROJECTS_DIR, row);
+  const filePath = resolveSessionJsonlPath(row);
+  if (!filePath) return { error: 'Subagent belongs to a host that is no longer declared' };
 
   const watchId = ++subagentWatcherSeq;
   let offset = 0;
@@ -1654,6 +1711,7 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   const id = String(sessionId || '');
   let folder = null;
   try { folder = getCachedFolder(id); } catch {}
+  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
   const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   let subagents = 0;
@@ -1677,6 +1735,8 @@ ipcMain.handle('delete-session', (_event, sessionId) => {
   // is missing (a placeholder session that was never indexed).
   let folder = null;
   try { folder = getCachedFolder(id); } catch {}
+  // A mirrored transcript is a copy; the next refresh would fetch it back.
+  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
   const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   for (const r of resolved.refused) {
@@ -1794,6 +1854,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     }
 
     return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
+  }
+
+  // A mirrored transcript has no local cwd to resume in. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+  if (!isNew) {
+    let cachedFolder = null;
+    try { cachedFolder = getCachedFolder(sessionId); } catch {}
+    if (isRemoteFolder(cachedFolder)) return { ok: false, error: REMOTE_READ_ONLY };
   }
 
   // For a Claude resume, spawn in the session's real recorded cwd (e.g. its
@@ -2501,6 +2568,8 @@ if (!gotSingleInstanceLock) {
     buildMenu();
     createWindow();
     startProjectsWatcher();
+    // No declared host => no timer and no ssh call. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+    remoteIndexer.start();
     cliSessionState.ensureWatching();
     // Remove IDE lock files left behind by a crashed instance whose PID was
     // reused (the function only unlinks locks matching our own pid).
@@ -2640,6 +2709,8 @@ app.on('before-quit', () => {
     projectsWatcher = null;
   }
   cliSessionState.stop();
+  // Stops the timer and SIGKILLs any ssh/scp still in flight.
+  remoteIndexer.stop();
 
   // Kill all PTY processes on quit
   for (const [id, session] of activeSessions) {

@@ -1081,6 +1081,9 @@ function rebindSidebarEvents(projects) {
     item.onclick = () => {
       if (item.dataset.subagent && session.parentSessionId) {
         showSubagentTranscript(session);
+      } else if (session.remoteAlias) {
+        // Observation only. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+        showJsonlViewer(session);
       } else {
         openSession(session);
       }
@@ -1256,6 +1259,14 @@ function buildSessionItem(session) {
   shortIdEl.title = session.sessionId;
   shortIdEl.textContent = session.sessionId.split('-')[0];
   metaEl.append(timeEl, shortIdEl);
+
+  if (session.remoteAlias) {
+    const badge = document.createElement('span');
+    badge.className = 'remote-badge';
+    badge.title = 'Read-only session mirrored from ' + session.remoteAlias;
+    badge.textContent = session.remoteAlias;
+    summaryEl.prepend(badge);
+  }
 
   if (session.type === 'terminal') {
     const badge = document.createElement('span');

@@ -6,17 +6,20 @@ const { deriveProjectPath } = require('../derive-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups } = require('../read-session-file');
 
 const PROJECTS_DIR = workerData.projectsDir;
+// Non-empty only for a remote mirror root; `folder` is then <alias>::<folder>.
+const FOLDER_PREFIX = workerData.folderPrefix ? workerData.folderPrefix + '::' : '';
 
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   const projectPath = deriveProjectPath(folderPath, folder);
   if (!projectPath) return null;
+  const key = FOLDER_PREFIX + folder;
   const sessions = [];
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
   for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
     try {
-      const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+      const s = readSessionFile(filePath, key, projectPath, { parentSessionId });
       if (s) sessions.push(s);
     } catch {}
   }
@@ -25,11 +28,11 @@ function readFolderFromFilesystem(folder) {
   // existingRows=[] (fresh scan): every group member is re-derived from scratch.
   const reread = (sessionId, cutoff) => {
     try {
-      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), folder, projectPath, { dedupeSinceTimestamp: cutoff });
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff });
     } catch { return null; }
   };
   const { toUpsert } = mergeBridgeGroups([], sessions, reread);
-  return { folder, projectPath, sessions: toUpsert, indexMtimeMs };
+  return { folder: key, projectPath, sessions: toUpsert, indexMtimeMs };
 }
 
 // Scan all folders, streaming one message per folder as soon as it's read
@@ -40,9 +43,12 @@ function readFolderFromFilesystem(folder) {
 // \u2014 the sidebar showed a bare "Loading\u2026" the whole time. Streaming lets the
 // caller write + notify after every folder instead.
 try {
-  const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory() && d.name !== '.git')
-    .map(d => d.name);
+  // workerData.folders restricts the sweep to a subset; absent, walk the root.
+  const folders = Array.isArray(workerData.folders)
+    ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
+    : fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.git')
+      .map(d => d.name);
 
   for (let i = 0; i < folders.length; i++) {
     const result = readFolderFromFilesystem(folders[i]);

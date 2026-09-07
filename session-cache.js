@@ -5,6 +5,7 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
+const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 
 /**
  * Session cache module.
@@ -43,11 +44,30 @@ function init(ctx) {
   setInitialScanComplete = ctx.db.setInitialScanComplete;
 }
 
+// alias -> that host's mirrored projects root; empty unless one is declared.
+let remoteRoots = new Map();
+function setRemoteRoots(roots) {
+  remoteRoots = roots instanceof Map ? new Map(roots) : new Map();
+}
+function getRemoteRoots() {
+  return new Map(remoteRoots);
+}
+
+/** Absolute directory for a folder key, local or `<alias>::<folder>`.
+ *  Returns null when the key names a host that is not declared. */
+function resolveFolderDir(folderKey) {
+  const { alias, folder } = parseFolderKey(folderKey);
+  if (alias === null) return path.join(PROJECTS_DIR, folder);
+  const root = remoteRoots.get(alias);
+  return root ? path.join(root, folder) : null;
+}
+
 // readSessionFile is imported from read-session-file.js (shared with worker)
 
 /** Read one folder from filesystem by scanning .jsonl files directly */
 function readFolderFromFilesystem(folder) {
-  const folderPath = path.join(PROJECTS_DIR, folder);
+  const folderPath = resolveFolderDir(folder);
+  if (!folderPath) return { projectPath: null, sessions: [] };
   const projectPath = deriveProjectPath(folderPath, folder);
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
@@ -77,8 +97,9 @@ function readFolderFromFilesystem(folder) {
  *   folder (used for bootstrap and folder-level events).
  */
 function refreshFolder(folder, opts = {}) {
-  const folderPath = path.join(PROJECTS_DIR, folder);
-  if (!fs.existsSync(folderPath)) {
+  // null when the key names a host no longer declared — treated as vanished.
+  const folderPath = resolveFolderDir(folder);
+  if (!folderPath || !fs.existsSync(folderPath)) {
     deleteCachedFolder(folder);
     return;
   }
@@ -106,10 +127,12 @@ function refreshFolder(folder, opts = {}) {
   // fires frequently while live Claude sessions append JSONL, freezing the main
   // process for folders with thousands of subagents).
   const cachedSessions = getCachedByFolder(folder);
+  // `folder` may carry an `<alias>::` prefix, which is not a path component.
+  const jsonlPathFor = (row) => resolveJsonlPath(folderPath, { ...row, folder: '.' });
   const cachedMap = new Map();
   const filePathToDbId = new Map();
   for (const row of cachedSessions) {
-    const filePath = resolveJsonlPath(PROJECTS_DIR, row);
+    const filePath = jsonlPathFor(row);
     // Keep the full row so refresh can merge display-only header updates with
     // unchanged fields (created, messageCount, textContent) without re-reading
     // the file body.
@@ -273,7 +296,7 @@ function refreshFolder(folder, opts = {}) {
   // cachedSessions is the folder's full pre-refresh state, independent of
   // `targeted`, so an already-cached parent is recognised without re-reading it.
   const reread = (sessionId, cutoff) => readSessionFile(
-    resolveJsonlPath(PROJECTS_DIR, { folder, sessionId }), folder, projectPath, { dedupeSinceTimestamp: cutoff }
+    jsonlPathFor({ folder, sessionId }), folder, projectPath, { dedupeSinceTimestamp: cutoff }
   );
   const { toUpsert: mergedRows, toDelete: mergeDeletes } = mergeBridgeGroups(cachedSessions, newFileReads, reread);
 
@@ -394,11 +417,15 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
+  // Keyed on alias + projectPath: two hosts can hold the same absolute path.
   const projectMap = new Map();
+  // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
+  const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
     if (hiddenProjects.has(row.projectPath)) continue;
+    const { alias } = parseFolderKey(row.folder);
     const meta = metaMap.get(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     let messageCount = row.messageCount;
@@ -424,17 +451,23 @@ function buildProjectsFromCache(showArchived) {
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      remoteAlias: alias,
     };
     if (!showArchived && s.archived) continue;
-    if (!projectMap.has(row.projectPath)) {
-      projectMap.set(row.projectPath, {
-        folder: encodeProjectPath(row.projectPath),
+    const key = groupKey(alias, row.projectPath);
+    if (!projectMap.has(key)) {
+      projectMap.set(key, {
+        folder: alias === null
+          ? encodeProjectPath(row.projectPath)
+          : joinFolderKey(alias, encodeProjectPath(row.projectPath)),
         projectPath: row.projectPath,
+        remoteAlias: alias,
         sessions: [],
-        missing: !fs.existsSync(row.projectPath),
+        // A remote root is never on this filesystem. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+        missing: alias === null ? !fs.existsSync(row.projectPath) : false,
       });
     }
-    projectMap.get(row.projectPath).sessions.push(s);
+    projectMap.get(key).sessions.push(s);
   }
 
   // Include empty project directories (no sessions yet). Resolve folder->projectPath
@@ -457,30 +490,40 @@ function buildProjectsFromCache(showArchived) {
   try {
     const scanComplete = isInitialScanComplete ? isInitialScanComplete() : true;
     const folderMeta = getAllFolderMeta();
-    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git');
-    for (const d of dirs) {
-      let projectPath = folderMeta.get(d.name)?.projectPath;
-      let placeholder = false;
-      if (!projectPath) {
-        if (scanComplete) {
-          projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
-          if (projectPath) setFolderMeta(d.name, projectPath, 0);
-        } else {
-          projectPath = decodeProjectFolderBestEffort(d.name);
-          placeholder = true;
+    const roots = [{ alias: null, dir: PROJECTS_DIR }];
+    for (const [alias, dir] of remoteRoots) roots.push({ alias, dir });
+    for (const { alias, dir } of roots) {
+      let dirs;
+      try {
+        dirs = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== '.git');
+      } catch { continue; }
+      for (const d of dirs) {
+        const folderKey = alias === null ? d.name : joinFolderKey(alias, d.name);
+        let projectPath = folderMeta.get(folderKey)?.projectPath;
+        let placeholder = false;
+        if (!projectPath) {
+          if (scanComplete) {
+            projectPath = deriveProjectPath(path.join(dir, d.name), d.name);
+            if (projectPath) setFolderMeta(folderKey, projectPath, 0);
+          } else {
+            projectPath = decodeProjectFolderBestEffort(d.name);
+            placeholder = true;
+          }
         }
-      }
-      if (!projectPath) continue;
-      if (hiddenProjects.has(projectPath)) continue;
-      if (!projectMap.has(projectPath)) {
-        projectMap.set(projectPath, {
-          // For a placeholder the on-disk name IS the ground truth — re-encoding
-          // the lossy decode could diverge from it (>200-char hashed names).
-          folder: placeholder ? d.name : encodeProjectPath(projectPath),
+        if (!projectPath) continue;
+        if (hiddenProjects.has(projectPath)) continue;
+        const key = groupKey(alias, projectPath);
+        if (projectMap.has(key)) continue;
+        // For a placeholder the on-disk name IS the ground truth — re-encoding
+        // the lossy decode could diverge from it (>200-char hashed names).
+        const bare = placeholder ? d.name : encodeProjectPath(projectPath);
+        projectMap.set(key, {
+          folder: alias === null ? bare : joinFolderKey(alias, bare),
           projectPath,
+          remoteAlias: alias,
           sessions: [],
-          missing: placeholder ? false : !fs.existsSync(projectPath),
+          // A remote root is never on this filesystem — see above.
+          missing: (placeholder || alias !== null) ? false : !fs.existsSync(projectPath),
         });
       }
     }
@@ -491,14 +534,16 @@ function buildProjectsFromCache(showArchived) {
     if (session.exited || !session.isPlainTerminal) continue;
     if (!session.projectPath) continue;
     if (hiddenProjects.has(session.projectPath)) continue;
-    if (!projectMap.has(session.projectPath)) {
-      projectMap.set(session.projectPath, {
+    const localKey = groupKey(null, session.projectPath);
+    if (!projectMap.has(localKey)) {
+      projectMap.set(localKey, {
         folder: encodeProjectPath(session.projectPath),
         projectPath: session.projectPath,
+        remoteAlias: null,
         sessions: [],
       });
     }
-    const proj = projectMap.get(session.projectPath);
+    const proj = projectMap.get(localKey);
     if (!proj.sessions.some(s => s.sessionId === sessionId)) {
       proj.sessions.push({
         sessionId, summary: 'Terminal', firstPrompt: '', projectPath: session.projectPath,
@@ -581,6 +626,88 @@ function sendIndexingProgress(payload) {
   }
 }
 
+/** Persist one `{type:'folder'}` result from workers/scan-projects.js.
+ *  Delete-then-insert, so re-scanning an already-written folder never
+ *  duplicates rows. `folder` already carries the `<alias>::` prefix when the
+ *  worker was pointed at a remote mirror. Returns the session count written. */
+function writeScannedFolder(r) {
+  if (!r) return 0;
+  const { folder, projectPath, sessions, indexMtimeMs } = r;
+  deleteCachedFolder(folder);
+  deleteSearchFolder(folder);
+  if (sessions.length > 0) {
+    upsertCachedSessions(sessions);
+    for (const s of sessions) {
+      // Only JSONL custom-title (genuine user title) promotes to the DB name column.
+      // AI titles must not -- see refreshFolder for the rationale.
+      if (s.customTitle) setName(s.sessionId, s.customTitle);
+      // Worker called readSessionFile, so dailyMetrics is present.
+      replaceSessionMetrics(s.sessionId, s.dailyMetrics);
+    }
+    upsertSearchEntries(sessions.map(s => {
+      // Search title precedence matches the sidebar: user rename > custom-title > ai-title.
+      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+      return {
+        id: s.sessionId, type: 'session', folder: s.folder,
+        title: (name ? name + ' ' : '') + s.summary,
+        body: s.textContent,
+      };
+    }));
+  }
+  setFolderMeta(folder, projectPath, indexMtimeMs);
+  return sessions.length;
+}
+
+// Hard ceiling on one subset scan; a worker that never reports is terminated.
+const SUBSET_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Index a caller-chosen subset of folders under an arbitrary projects root.
+ *  Rows are keyed `<folderPrefix>::<folder>`. see .ai/contexts/session-cache.md ("Remote SSH hosts") */
+function scanFoldersViaWorker({ projectsDir, folderPrefix, folders }) {
+  return new Promise((resolve) => {
+    if (!Array.isArray(folders) || folders.length === 0) {
+      resolve({ ok: true, folders: 0, sessions: 0 });
+      return;
+    }
+    let settled = false;
+    let sessions = 0;
+    let scanned = 0;
+    let worker;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { worker && worker.terminate(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions });
+    }, SUBSET_SCAN_TIMEOUT_MS);
+
+    try {
+      worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
+        workerData: { projectsDir, folderPrefix, folders },
+      });
+    } catch (err) {
+      settle({ ok: false, error: err.message, folders: 0, sessions: 0 });
+      return;
+    }
+
+    worker.on('message', (msg) => {
+      if (msg.type === 'folder') {
+        scanned++;
+        try { sessions += writeScannedFolder(msg.result); } catch (err) {
+          log && log.warn(`[remote] folder write failed: ${err.message}`);
+        }
+        return;
+      }
+      settle({ ok: !!msg.ok, error: msg.error, folders: scanned, sessions });
+    });
+    worker.on('error', (err) => settle({ ok: false, error: err.message, folders: scanned, sessions }));
+    worker.on('exit', (code) => settle({ ok: code === 0, error: code === 0 ? undefined : `worker exited ${code}`, folders: scanned, sessions }));
+  });
+}
+
 // --- Worker-based cache population ---
 // Returns a Promise that resolves when the in-flight scan finishes. Concurrent
 // callers share the same Promise so the first get-projects after a migration
@@ -648,33 +775,10 @@ function populateCacheViaWorker() {
       if (msg.type === 'folder') {
         scannedFolders = msg.current;
         totalFolders = msg.total;
-        const r = msg.result;
-        if (r) {
-          const { folder, projectPath, sessions, indexMtimeMs } = r;
-          deleteCachedFolder(folder);
-          deleteSearchFolder(folder);
-          if (sessions.length > 0) {
-            sessionCount += sessions.length;
-            indexedProjects++;
-            upsertCachedSessions(sessions);
-            for (const s of sessions) {
-              // Only JSONL custom-title (genuine user title) promotes to the DB name column.
-              // AI titles must not -- see refreshFolder for the rationale.
-              if (s.customTitle) setName(s.sessionId, s.customTitle);
-              // Worker called readSessionFile, so dailyMetrics is present.
-              replaceSessionMetrics(s.sessionId, s.dailyMetrics);
-            }
-            upsertSearchEntries(sessions.map(s => {
-              // Search title precedence matches the sidebar: user rename > custom-title > ai-title.
-              const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
-              return {
-                id: s.sessionId, type: 'session', folder: s.folder,
-                title: (name ? name + ' ' : '') + s.summary,
-                body: s.textContent,
-              };
-            }));
-          }
-          setFolderMeta(folder, projectPath, indexMtimeMs);
+        const written = writeScannedFolder(msg.result);
+        if (written > 0) {
+          sessionCount += written;
+          indexedProjects++;
         }
 
         sendStatus(`Scanning projects (${scannedFolders}/${totalFolders})…`, 'active');
@@ -742,4 +846,8 @@ module.exports = {
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,
+  scanFoldersViaWorker,
+  setRemoteRoots,
+  getRemoteRoots,
+  resolveFolderDir,
 };

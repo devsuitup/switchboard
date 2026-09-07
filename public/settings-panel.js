@@ -79,6 +79,12 @@
     const autoUpdateValue = fieldValue('autoUpdate', true);
     const shellProfileValue = fieldValue('shellProfile', 'auto');
 
+    // Working copy of the global-only host list, written back on Save.
+    const remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : [])
+      .filter(h => h && typeof h === 'object')
+      .map(h => ({ alias: String(h.alias || ''), label: String(h.label || ''), enabled: h.enabled !== false }));
+    const remoteRefreshMinutes = Math.max(1, Math.round((Number(current.remoteRefreshMs) || 300000) / 60000));
+
     // Live switch, not a form field — main owns the state. See docs/activity-trace.md.
     let traceState = { enabled: false };
     if (!isProject) {
@@ -330,6 +336,28 @@
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
+        <div class="settings-section-title">Remote Hosts</div>
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <span class="settings-label">SSH hosts to observe</span>
+            <div class="settings-description">Each host is an alias from your <code>~/.ssh/config</code> — Switchboard never stores or reads a key, a password or a port. Its Claude sessions are mirrored read-only into the local database and appear in the sidebar, the search and the heatmap alongside your own. Opening one shows its transcript; it cannot be resumed from here.</div>
+            <div class="remote-hosts-list" id="sv-remote-hosts"></div>
+            <button class="settings-check-updates-btn" id="sv-remote-add">Add host</button>
+            <span id="sv-remote-status" class="settings-description"></span>
+          </div>
+        </div>
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Refresh every</span>
+            <div class="settings-description">Minutes between pulls. A pull lists the remote transcripts over one SSH call and copies only what changed; nothing is watched live, because file watching cannot cross SSH. Minimum 1 minute.</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="number" class="settings-input settings-input-compact" id="sv-remote-refresh" min="1" max="1440" value="${remoteRefreshMinutes}">
+          </div>
+        </div>
+      </div>` : ''}
+
+      ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Diagnostics</div>
         <div class="settings-field">
           <div class="settings-field-info">
@@ -366,6 +394,39 @@
       </div>
     </div>
   `;
+
+    // Remote hosts: a list the user grows and shrinks, rebuilt in place.
+    if (!isProject) {
+      const listEl = settingsViewerBody.querySelector('#sv-remote-hosts');
+
+      function renderRemoteHosts() {
+        listEl.innerHTML = remoteHosts.map((h, i) => `
+          <div class="remote-host-row" data-i="${i}">
+            <label class="settings-toggle"><input type="checkbox" class="rh-enabled" ${h.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+            <input type="text" class="settings-input rh-alias" placeholder="ssh alias" value="${escapeHtml(h.alias)}">
+            <input type="text" class="settings-input rh-label" placeholder="label (optional)" value="${escapeHtml(h.label)}">
+            <button class="settings-remove-btn rh-remove" title="Remove host">Remove</button>
+          </div>`).join('');
+        listEl.querySelectorAll('.remote-host-row').forEach(row => {
+          const i = Number(row.dataset.i);
+          row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; });
+          row.querySelector('.rh-label').addEventListener('input', e => { remoteHosts[i].label = e.target.value; });
+          row.querySelector('.rh-enabled').addEventListener('change', e => { remoteHosts[i].enabled = e.target.checked; });
+          row.querySelector('.rh-remove').addEventListener('click', () => {
+            remoteHosts.splice(i, 1);
+            renderRemoteHosts();
+          });
+        });
+      }
+      renderRemoteHosts();
+
+      settingsViewerBody.querySelector('#sv-remote-add').addEventListener('click', () => {
+        remoteHosts.push({ alias: '', label: '', enabled: true });
+        renderRemoteHosts();
+        const rows = listEl.querySelectorAll('.rh-alias');
+        if (rows.length) rows[rows.length - 1].focus();
+      });
+    }
 
     // Debug mode is a live switch: it does not go through Save.
     if (!isProject && typeof wireActivityTraceToggle === 'function') {
@@ -479,6 +540,24 @@
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.shortcuts = scShortcuts;
+        // Same alias rule as remote-hosts.js; a failing row is reported.
+        const aliasRe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+        const rejected = [];
+        settings.remoteHosts = remoteHosts
+          .map(h => ({ alias: h.alias.trim(), label: h.label.trim(), enabled: h.enabled }))
+          .filter(h => {
+            if (!h.alias) return false;
+            if (aliasRe.test(h.alias)) return true;
+            rejected.push(h.alias);
+            return false;
+          });
+        const statusEl = settingsViewerBody.querySelector('#sv-remote-status');
+        if (statusEl) {
+          statusEl.textContent = rejected.length
+            ? 'Not saved (an ssh alias may only contain letters, digits, dot, dash or underscore): ' + rejected.join(', ')
+            : '';
+        }
+        settings.remoteRefreshMs = Math.max(1, parseInt(settingsViewerBody.querySelector('#sv-remote-refresh').value, 10) || 5) * 60000;
       }
       stopShortcutCapture();
 
@@ -508,6 +587,8 @@
           window._applyShortcuts(settings.shortcuts);
         }
         if (typeof refreshSidebar === 'function') refreshSidebar();
+        // Re-arm the remote refresher so a host added here pulls immediately.
+        try { await window.api.remoteHostsApply(); } catch {}
       }
 
       // Notify if IDE Emulation changed
