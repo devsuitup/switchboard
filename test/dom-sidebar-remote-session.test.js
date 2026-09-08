@@ -1,6 +1,8 @@
-// Issue #201: a session mirrored from an SSH host is observation-only. Its row
-// must say so, and clicking it must open the read-only transcript instead of
-// trying to `claude --resume` in a cwd this machine does not have.
+// Issue #201: a session mirrored from an SSH host defaults to observation
+// only. Its row says so via a badge naming the host. Issue #221: when the
+// main process reports the session as attachable, the click opens a terminal
+// instead; otherwise it still falls back to the read-only transcript rather
+// than trying to `claude --resume` in a cwd this machine does not have.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -45,7 +47,7 @@ test('a remote session row carries a badge naming its host', () => {
   } finally { ctx.destroy(); }
 });
 
-test('clicking a remote session opens the transcript, never a resume', () => {
+test('a remote session with no live attachable descriptor opens the transcript, never a resume', () => {
   const ctx = setupSidebarDom();
   try {
     register(ctx, [REMOTE_SESSION]);
@@ -56,10 +58,39 @@ test('clicking a remote session opens the transcript, never a resume', () => {
     ctx.window.openSession = (s) => opened.push(s.sessionId);
     ctx.window.showJsonlViewer = (s) => viewed.push(s.sessionId);
 
-    ctx.document.getElementById('si-remote-1').onclick();
+    const item = ctx.document.getElementById('si-remote-1');
+    item.onclick();
 
     assert.deepEqual(viewed, ['remote-1']);
     assert.deepEqual(opened, [], 'openSession would spawn a PTY in a cwd that is not on this machine');
+    assert.match(item.title, /not currently attachable/i, 'the row must say why it fell back to the transcript');
+    assert.doesNotMatch(item.title, /tmux/i, 'the renderer must never name a multiplexer');
+  } finally { ctx.destroy(); }
+});
+
+test('a remote session with a live attachable descriptor opens a terminal, not the transcript', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const attachable = { ...REMOTE_SESSION, sessionId: 'remote-2', remoteAttachable: true };
+    register(ctx, [attachable]);
+    ctx.sidebar.renderProjects([makeSampleProject({
+      projectPath: '/srv/supervision',
+      folder: 'planificator::-srv-supervision',
+      remoteAlias: 'planificator',
+      sessions: [attachable],
+    })], true);
+
+    const opened = [];
+    const viewed = [];
+    ctx.window.openSession = (s) => opened.push(s.sessionId);
+    ctx.window.showJsonlViewer = (s) => viewed.push(s.sessionId);
+
+    const item = ctx.document.getElementById('si-remote-2');
+    item.onclick();
+
+    assert.deepEqual(opened, ['remote-2']);
+    assert.deepEqual(viewed, [], 'an attachable remote session must open a terminal, not the read-only transcript');
+    assert.ok(!item.title, 'an attachable session carries no fallback-reason title');
   } finally { ctx.destroy(); }
 });
 

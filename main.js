@@ -484,6 +484,25 @@ const remoteAttachAdapter = createTmuxAttachAdapter({
   log,
 });
 
+// Joins the sidebar's remote sessions to the indexer's live descriptors so the
+// renderer can route a click without ever naming an attach mechanism itself
+// — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach").
+function annotateRemoteAttachable(projects) {
+  const descriptorsByAlias = new Map();
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!session.remoteAlias) continue;
+      if (!descriptorsByAlias.has(session.remoteAlias)) {
+        const descriptors = remoteIndexer.getRemoteSessions(session.remoteAlias);
+        descriptorsByAlias.set(session.remoteAlias, new Map(descriptors.map(d => [d.sessionId, d])));
+      }
+      const descriptor = descriptorsByAlias.get(session.remoteAlias).get(session.sessionId);
+      session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+    }
+  }
+  return projects;
+}
+
 /** Directory holding a folder key's transcripts, local or mirrored. */
 function projectsDirForFolder(folder) {
   return resolveFolderDir(folder);
@@ -938,7 +957,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       reconcileCacheFromFilesystem();
     }
 
-    return buildProjectsFromCache(showArchived);
+    return annotateRemoteAttachable(buildProjectsFromCache(showArchived));
   } catch (err) {
     console.error('Error listing projects:', err);
     return [];
