@@ -759,7 +759,12 @@ function renderProjects(projects, resort) {
     const newBtn = document.createElement('button');
     newBtn.className = 'project-new-btn';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-    newBtn.title = 'New session';
+    if (project.remoteAlias) {
+      newBtn.disabled = true;
+      newBtn.title = 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
+    } else {
+      newBtn.title = 'New session';
+    }
     header.appendChild(newBtn);
 
     const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath);
@@ -924,7 +929,11 @@ function rebindSidebarEvents(projects) {
     if (!header) continue;
     const newBtn = header.querySelector('.project-new-btn');
     if (newBtn) {
-      newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
+      if (project.remoteAlias) {
+        newBtn.onclick = (e) => e.stopPropagation();
+      } else {
+        newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
+      }
     }
     const scheduleBtn = header.querySelector('.project-schedule-btn');
     if (scheduleBtn) {
