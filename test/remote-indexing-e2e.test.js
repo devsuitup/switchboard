@@ -88,7 +88,10 @@ function fakeHost() {
   return {
     files,
     async listFiles() {
-      return Object.entries(files).map(([rel, f]) => ({ rel, size: f.content.length, mtimeMs: f.mtimeMs }));
+      return {
+        files: Object.entries(files).map(([rel, f]) => ({ rel, size: f.content.length, mtimeMs: f.mtimeMs })),
+        sessions: [],
+      };
     },
     async fetchFiles(alias, rels, destRoot) {
       for (const rel of rels) {
