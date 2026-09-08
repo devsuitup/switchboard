@@ -123,16 +123,22 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
 
   writeManifest(manifestPath, nextFiles);
 
+  // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
   const changedFolders = new Set();
-  for (const rel of fetched) {
+  const changedFilesByFolder = new Map();
+  const markChanged = (rel) => {
     const folder = topFolderOf(rel);
-    if (folder) changedFolders.add(folder);
-  }
+    if (!folder) return;
+    changedFolders.add(folder);
+    let set = changedFilesByFolder.get(folder);
+    if (!set) { set = new Set(); changedFilesByFolder.set(folder, set); }
+    set.add(rel.slice(folder.length + 1));
+  };
+  for (const rel of fetched) markChanged(rel);
   if (failed.length === 0) {
     for (const rel of Object.keys(previous)) {
       if (want.has(rel)) continue;
-      const folder = topFolderOf(rel);
-      if (folder) changedFolders.add(folder);
+      markChanged(rel);
     }
   }
 
@@ -143,6 +149,7 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
     unchanged: want.size - toFetch.length,
     removed,
     changedFolders,
+    changedFilesByFolder,
     sessions: Array.isArray(sessions) ? sessions : [],
   };
 }
