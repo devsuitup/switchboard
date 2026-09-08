@@ -175,6 +175,68 @@ or deleted from here.
   delete-then-insert path as the cold-start scan. Parsing 249 MB on the main
   thread would freeze the UI; `refreshFolder` is deliberately not the remote path.
 
+### Remote hosts file-level rescan (issue #216, first half)
+
+**The unit of rescan used to be the folder, not the file.** `syncMirror`
+already tracks per-file size/mtime to decide what to `scp` (`remote-mirror.js`),
+but `remote-index.js`'s `refreshHost()` reduced that down to a `Set` of folder
+names via `topFolderOf()` before handing it to `scanFoldersViaWorker`, and
+`workers/scan-projects.js`'s `readFolderFromFilesystem` then re-read and
+re-parsed EVERY `.jsonl` in that folder — measured 08/09/2026: a folder with
+108 MB across 144 files got fully re-read because one line was appended to
+one of them. This is fixed additively; the local path (cold-start scan,
+`populateCacheViaWorker`, and the fs.watch-driven `refreshFolder`) is
+untouched.
+
+- **`syncMirror` now also returns `changedFilesByFolder`** (`Map<folder,
+  Set<relPathWithinFolder>>`), built from the exact same `fetched` list and
+  deletion-reconciliation loop that already built `changedFolders` — same
+  data, not collapsed.
+- **`refreshHost()` builds `fileSubsets`** (`Map<folder, Set<relFile>>`) from
+  it, but ONLY for a folder already present in `listIndexedFolderKeys()`. A
+  folder scanned for the first time (present on the mirror but not yet
+  indexed — the "mirror on disk but absent from the cache" case just above)
+  always gets the full walk: there is no baseline to restrict against.
+- **`scanFoldersViaWorker({..., fileSubsets})` is purely additive.** Omitting
+  `fileSubsets` reproduces the prior behavior byte-for-byte (proven by
+  `test/scan-projects-worker.test.js`, unmodified, and by
+  `test/remote-indexing-e2e.test.js`, unmodified). When given, it splits
+  `folders` into `fullFolders` (scanned exactly as before) and `targets`
+  (`{folder, files, existingRows}`, `existingRows` pulled from
+  `getCachedByFolder` before the worker is spawned — the worker itself has no
+  DB access). `workers/scan-projects.js`'s new
+  `readFolderFileSubsetFromFilesystem` reads only the named files and returns
+  `{ ..., partial: true, toDelete }`.
+- **The `mergeBridgeGroups` pitfall — this is the one that would regress
+  silently (PR #198 duplicate-sidebar-entry class of bug).** A file-subset
+  scan's `freshRows` contains only the changed file(s), so without more,
+  `mergeBridgeGroups([], freshRows, reread)` would see a bridge group of one
+  and never mark a changed compaction mirror as merged into its still-cached
+  parent. Fixed by threading real `existingRows` (the folder's cached rows,
+  fetched by `scanFoldersViaWorker` before spawning the worker) into
+  `mergeBridgeGroups` on the partial path instead of `[]` — exactly the
+  parameter the function already exists to take (`refreshFolder`'s local
+  targeted-refresh path does the same with `cachedSessions`). The full-folder
+  path (`readFolderFromFilesystem`) still calls `mergeBridgeGroups([], ...)`
+  unchanged, because a full read already has every group member in
+  `freshRows`.
+- **`writeScannedFolderPartial` (session-cache.js), not `writeScannedFolder`,
+  handles a `partial: true` result.** `writeScannedFolder`'s
+  delete-then-insert-the-whole-folder would wipe every other cached session
+  in that folder that the restricted scan never touched. The partial path
+  upserts only the returned `sessions` and deletes only the returned
+  `toDelete` ids (files gone from the mirror, or a merge member whose
+  re-derivation found nothing surviving the cutoff).
+- Proven by `test/remote-scan-file-granularity.test.js`, each property pinned
+  by an injected-then-reverted mutation: forcing `fullFolders` to ignore
+  `fileSubsets` reddens the single-file property; defaulting `subsets` when
+  `fileSubsets` is absent reddens the full-folder-by-default property;
+  dropping `existingRows` back to `[]` on the partial path reddens only the
+  merge-equivalence property.
+- **Out of scope, deliberately**: incremental parsing by byte offset within a
+  changed file (issue #216's second half) — a changed file discovered this
+  way is still read in full by `readSessionFile`.
+
 - **A remote project is never "missing".** `buildProjectsFromCache` sets
   `missing: false` for any aliased row. Probing the local filesystem for
   `/srv/supervision` would flag every remote project missing and offer it to the

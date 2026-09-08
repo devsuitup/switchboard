@@ -658,17 +658,67 @@ function writeScannedFolder(r) {
   return sessions.length;
 }
 
+/** Persist one `{type:'folder', result:{partial:true}}` file-subset scan
+ *  result. Upserts/deletes only the named rows, never the whole folder --
+ *  see .ai/contexts/session-cache.md ("Remote hosts file-level rescan"). */
+function writeScannedFolderPartial(r) {
+  if (!r) return 0;
+  const { folder, projectPath, sessions, toDelete, indexMtimeMs } = r;
+  if (sessions.length > 0) {
+    upsertCachedSessions(sessions);
+    for (const s of sessions) {
+      if (s.customTitle) setName(s.sessionId, s.customTitle);
+      replaceSessionMetrics(s.sessionId, s.dailyMetrics);
+    }
+    for (const s of sessions) deleteSearchSession(s.sessionId);
+    upsertSearchEntries(sessions.map(s => {
+      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+      return {
+        id: s.sessionId, type: 'session', folder: s.folder,
+        title: (name ? name + ' ' : '') + s.summary,
+        body: s.textContent,
+      };
+    }));
+  }
+  for (const sessionId of (toDelete || [])) {
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+  }
+  setFolderMeta(folder, projectPath, indexMtimeMs);
+  return sessions.length;
+}
+
 // Hard ceiling on one subset scan; a worker that never reports is terminated.
 const SUBSET_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Index a caller-chosen subset of folders under an arbitrary projects root.
- *  Rows are keyed `<folderPrefix>::<folder>`. see .ai/contexts/session-cache.md ("Remote SSH hosts") */
-function scanFoldersViaWorker({ projectsDir, folderPrefix, folders }) {
+ *  Rows are keyed `<folderPrefix>::<folder>`. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+ *
+ *  `fileSubsets` (optional Map<folder, Set<relPathWithinFolder>>) additively
+ *  restricts named folders to just those files -- see
+ *  .ai/contexts/session-cache.md ("Remote hosts file-level rescan"). */
+function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets }) {
   return new Promise((resolve) => {
-    if (!Array.isArray(folders) || folders.length === 0) {
+    const hasFolders = Array.isArray(folders) && folders.length > 0;
+    const subsets = fileSubsets instanceof Map ? fileSubsets : null;
+    if (!hasFolders && !subsets) {
       resolve({ ok: true, folders: 0, sessions: 0 });
       return;
     }
+    const fullFolders = hasFolders ? folders.filter(f => !subsets || !subsets.has(f)) : [];
+    const targets = [];
+    if (subsets) {
+      for (const [folder, files] of subsets) {
+        if (hasFolders && !folders.includes(folder)) continue;
+        const folderKey = folderPrefix ? joinFolderKey(folderPrefix, folder) : folder;
+        targets.push({ folder, files: [...files], existingRows: getCachedByFolder(folderKey) });
+      }
+    }
+    if (fullFolders.length === 0 && targets.length === 0) {
+      resolve({ ok: true, folders: 0, sessions: 0 });
+      return;
+    }
+
     let settled = false;
     let sessions = 0;
     let scanned = 0;
@@ -686,7 +736,7 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders }) {
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir, folderPrefix, folders },
+        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets },
       });
     } catch (err) {
       settle({ ok: false, error: err.message, folders: 0, sessions: 0 });
@@ -696,7 +746,11 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders }) {
     worker.on('message', (msg) => {
       if (msg.type === 'folder') {
         scanned++;
-        try { sessions += writeScannedFolder(msg.result); } catch (err) {
+        try {
+          sessions += msg.result && msg.result.partial
+            ? writeScannedFolderPartial(msg.result)
+            : writeScannedFolder(msg.result);
+        } catch (err) {
           log && log.warn(`[remote] folder write failed: ${err.message}`);
         }
         return;

@@ -149,10 +149,12 @@ function createRemoteIndexer(ctx) {
 
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);
+    const changedFilesByFolder = result.changedFilesByFolder instanceof Map
+      ? result.changedFilesByFolder : new Map();
 
     // A mirror on disk but absent from the cache reports no change; index it once.
+    const indexed = new Set();
     if (ctx.listIndexedFolderKeys) {
-      const indexed = new Set();
       for (const key of ctx.listIndexedFolderKeys()) {
         const parsed = parseFolderKey(key);
         if (parsed.alias === host.alias) indexed.add(parsed.folder);
@@ -171,10 +173,18 @@ function createRemoteIndexer(ctx) {
     }
 
     if (toScan.size > 0 && ctx.scanFolders) {
+      // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
+      const fileSubsets = new Map();
+      for (const folder of toScan) {
+        if (!indexed.has(folder)) continue;
+        const files = changedFilesByFolder.get(folder);
+        if (files && files.size > 0) fileSubsets.set(folder, files);
+      }
       await ctx.scanFolders({
         projectsDir,
         folderPrefix,
         folders: [...toScan],
+        ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
       });
     }
 

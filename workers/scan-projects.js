@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
 const { deriveProjectPath } = require('../derive-project-path');
-const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups } = require('../read-session-file');
+const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId } = require('../read-session-file');
 
 const PROJECTS_DIR = workerData.projectsDir;
 // Non-empty only for a remote mirror root; `folder` is then <alias>::<folder>.
@@ -35,6 +35,56 @@ function readFolderFromFilesystem(folder) {
   return { folder: key, projectPath, sessions: toUpsert, indexMtimeMs };
 }
 
+// rel is POSIX-separated (remote inventory, not the local fs) -- see
+// .ai/contexts/session-cache.md ("Remote hosts file-level rescan").
+function sessionIdFromRel(rel, parentSessionId) {
+  const parts = String(rel).split('/');
+  const filename = parts[parts.length - 1];
+  if (!parentSessionId) return path.basename(filename, '.jsonl');
+  const m = filename.match(/^agent-(.+)\.jsonl$/);
+  return m ? subagentSessionId(parentSessionId, m[1]) : null;
+}
+
+// File-subset scan for the remote path -- see .ai/contexts/session-cache.md
+// ("Remote hosts file-level rescan").
+function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
+  const folderPath = path.join(PROJECTS_DIR, folder);
+  const projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) return null;
+  const key = FOLDER_PREFIX + folder;
+  const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
+
+  const freshRows = [];
+  const goneIds = [];
+  for (const rel of files || []) {
+    const parts = String(rel).split('/');
+    let parentSessionId = null;
+    if (parts.length === 3 && parts[1] === 'subagents') parentSessionId = parts[0];
+    else if (parts.length === 2) parentSessionId = parts[0];
+    const filePath = path.join(folderPath, ...parts);
+
+    try {
+      fs.statSync(filePath);
+    } catch {
+      const sessionId = sessionIdFromRel(rel, parentSessionId);
+      if (sessionId) goneIds.push(sessionId);
+      continue;
+    }
+    try {
+      const s = readSessionFile(filePath, key, projectPath, { parentSessionId });
+      if (s) freshRows.push(s);
+    } catch {}
+  }
+
+  const reread = (sessionId, cutoff) => {
+    try {
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff });
+    } catch { return null; }
+  };
+  const { toUpsert, toDelete } = mergeBridgeGroups(existingRows || [], freshRows, reread);
+  return { folder: key, projectPath, sessions: toUpsert, toDelete: [...goneIds, ...toDelete], indexMtimeMs, partial: true };
+}
+
 // Scan all folders, streaming one message per folder as soon as it's read
 // instead of buffering every folder into one `results` array and posting a
 // single message at the very end. A large ~/.claude/projects/ (1GB+,
@@ -50,11 +100,22 @@ try {
       .filter(d => d.isDirectory() && d.name !== '.git')
       .map(d => d.name);
 
+  // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
+  const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
+  const total = folders.length + targets.length;
+  let current = 0;
+
   for (let i = 0; i < folders.length; i++) {
     const result = readFolderFromFilesystem(folders[i]);
-    parentPort.postMessage({ type: 'folder', result, current: i + 1, total: folders.length });
+    current++;
+    parentPort.postMessage({ type: 'folder', result, current, total });
   }
-  parentPort.postMessage({ type: 'done', ok: true, total: folders.length });
+  for (const t of targets) {
+    const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);
+    current++;
+    parentPort.postMessage({ type: 'folder', result, current, total });
+  }
+  parentPort.postMessage({ type: 'done', ok: true, total });
 } catch (err) {
   parentPort.postMessage({ type: 'done', ok: false, error: err.message });
 }
