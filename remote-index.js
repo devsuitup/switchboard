@@ -39,6 +39,7 @@ function createRemoteIndexer(ctx) {
   let timer = null;
   let inFlight = false;
   let stopped = false;
+  const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
 
   function hosts() {
     return enabledHosts(ctx.getHosts ? ctx.getHosts() : []);
@@ -61,6 +62,9 @@ function createRemoteIndexer(ctx) {
       if (alias === null || known.has(alias)) continue;
       ctx.dropFolder(key);
       dropped++;
+    }
+    for (const alias of [...remoteSessions.keys()]) {
+      if (!known.has(alias)) remoteSessions.delete(alias);
     }
     return dropped;
   }
@@ -87,6 +91,8 @@ function createRemoteIndexer(ctx) {
       manifestPath,
       log,
     });
+
+    remoteSessions.set(host.alias, Array.isArray(result.sessions) ? result.sessions : []);
 
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);
@@ -140,6 +146,7 @@ function createRemoteIndexer(ctx) {
         try {
           if (await refreshHost(host)) changed = true;
         } catch (err) {
+          remoteSessions.set(host.alias, []);
           errors.push({ alias: host.alias, error: err.message });
           log.warn(`[remote:${host.alias}] refresh failed: ${err.message}`);
         }
@@ -186,7 +193,11 @@ function createRemoteIndexer(ctx) {
     return start();
   }
 
-  return { start, stop, dispose, restart, refreshNow, isRunning: () => timer !== null };
+  function getRemoteSessions(alias) {
+    return remoteSessions.get(alias) || [];
+  }
+
+  return { start, stop, dispose, restart, refreshNow, isRunning: () => timer !== null, getRemoteSessions };
 }
 
 module.exports = { createRemoteIndexer };

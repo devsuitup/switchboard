@@ -140,6 +140,70 @@ test('a failing host is logged and does not stop its peer', async () => {
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
+test('getRemoteSessions surfaces per-host session descriptors from the same sync cycle', async () => {
+  const dataDir = tmp('idx-sessions');
+  try {
+    const sessionsByAlias = {
+      withSessions: [{ pid: 123, sessionId: 'abc' }],
+      empty: [],
+    };
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'withSessions' }, { alias: 'empty' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async ({ alias }) => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(), sessions: sessionsByAlias[alias],
+      }),
+    });
+
+    const r = await indexer.refreshNow();
+
+    assert.deepEqual(r.errors, [], 'both hosts complete without error');
+    assert.deepEqual(indexer.getRemoteSessions('withSessions'), sessionsByAlias.withSessions);
+    assert.deepEqual(indexer.getRemoteSessions('empty'), []);
+    assert.deepEqual(indexer.getRemoteSessions('some-alias-never-refreshed'), [],
+      'an unknown alias must never throw or return undefined');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('getRemoteSessions is cleared, not left stale, after a cycle where sync() throws', async () => {
+  const dataDir = tmp('idx-sessions-stale');
+  try {
+    let cycle = 0;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'planificator' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => {
+        cycle++;
+        if (cycle === 1) {
+          return {
+            fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+            changedFolders: new Set(), sessions: [{ pid: 1, sessionId: 'still-alive' }],
+          };
+        }
+        throw new Error('ssh: connect to host planificator port 22: timed out');
+      },
+    });
+
+    const r1 = await indexer.refreshNow();
+    assert.deepEqual(r1.errors, []);
+    assert.deepEqual(indexer.getRemoteSessions('planificator'), [{ pid: 1, sessionId: 'still-alive' }]);
+
+    const r2 = await indexer.refreshNow();
+    assert.equal(r2.errors.length, 1, 'the second cycle must be reported as failed');
+    assert.deepEqual(indexer.getRemoteSessions('planificator'), [],
+      'a failed cycle must not keep reporting hours-old sessions as live');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test('a mirror already on disk but absent from the cache is indexed once', async () => {
   const dataDir = tmp('idx-cold');
   try {
@@ -204,7 +268,7 @@ function lifecycleTransport() {
     async listFiles(alias) {
       if (disposed) throw new Error('ssh inventory failed (exit -1): transport disposed');
       calls.push(alias);
-      return [];
+      return { files: [], sessions: [] };
     },
     fetchFiles: async () => ({ fetched: [], failed: [] }),
     cancelInFlight() {},

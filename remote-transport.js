@@ -6,6 +6,10 @@ const path = require('path');
 const { isSafeRelPath } = require('./remote-hosts');
 
 const REMOTE_PROJECTS_REL = '.claude/projects';
+const REMOTE_SESSIONS_REL = '.claude/sessions';
+const SESSIONS_MARKER = '\u0001SWITCHBOARD-SESSIONS\u0001';
+const MAX_SESSION_DESCRIPTORS = 200;
+const MAX_SESSION_DESCRIPTOR_BYTES = 8192;
 const DEFAULT_CONNECT_TIMEOUT_S = 10;
 const DEFAULT_LIST_TIMEOUT_MS = 60_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
@@ -17,8 +21,12 @@ const SSH_BASE_OPTS = [
   '-o', `ConnectTimeout=${DEFAULT_CONNECT_TIMEOUT_S}`,
 ];
 
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)")
 const LIST_COMMAND =
-  `find ${REMOTE_PROJECTS_REL} -type f -name '*.jsonl' -printf '%T@\\t%s\\t%P\\n'`;
+  `find ${REMOTE_PROJECTS_REL} -type f -name '*.jsonl' -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
+  `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
+  `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
+  `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; done`;
 
 function parseInventory(stdout) {
   const out = [];
@@ -34,6 +42,48 @@ function parseInventory(stdout) {
     out.push({ rel, size, mtimeMs: Math.round(mtime * 1000) });
   }
   return out;
+}
+
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)")
+function splitListOutput(stdout) {
+  const idx = stdout.indexOf(SESSIONS_MARKER);
+  if (idx === -1) return { inventoryBlock: stdout, sessionsBlock: '' };
+  const afterIdx = idx + SESSIONS_MARKER.length;
+  const validStart = idx === 0 || stdout[idx - 1] === '\n';
+  const validEnd = stdout[afterIdx] === '\n';
+  if (!validStart || !validEnd) return { inventoryBlock: stdout, sessionsBlock: '' };
+  return { inventoryBlock: stdout.slice(0, idx), sessionsBlock: stdout.slice(afterIdx + 1) };
+}
+
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)")
+function parseSessions(block) {
+  const sessions = [];
+  const warnings = [];
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (!line) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      warnings.push('skipped a session descriptor: invalid JSON');
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      warnings.push('skipped a session descriptor: not a JSON object');
+      continue;
+    }
+    if (!Number.isInteger(parsed.pid) || parsed.pid <= 0) {
+      warnings.push('skipped a session descriptor: missing/invalid pid');
+      continue;
+    }
+    if (typeof parsed.sessionId !== 'string' || !parsed.sessionId) {
+      warnings.push('skipped a session descriptor: missing/invalid sessionId');
+      continue;
+    }
+    sessions.push(parsed);
+  }
+  return { sessions, warnings };
 }
 
 /**
@@ -116,7 +166,11 @@ function createSshTransport(opts = {}) {
     if (res.timedOut) throw new Error(`ssh inventory timed out after ${listTimeoutMs} ms`);
     if (res.truncated) throw new Error('ssh inventory output exceeded the size cap');
     if (res.code !== 0) throw new Error(`ssh inventory failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
-    return parseInventory(res.stdout);
+    const { inventoryBlock, sessionsBlock } = splitListOutput(res.stdout);
+    const files = parseInventory(inventoryBlock);
+    const { sessions, warnings } = parseSessions(sessionsBlock);
+    for (const w of warnings) log.warn(`[remote:${alias}] ${w}`);
+    return { files, sessions };
   }
 
   async function fetchOne(alias, rel, destRoot) {
@@ -182,4 +236,15 @@ function createSshTransport(opts = {}) {
   return { listFiles, fetchFiles, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
-module.exports = { createSshTransport, parseInventory, LIST_COMMAND, REMOTE_PROJECTS_REL };
+module.exports = {
+  createSshTransport,
+  parseInventory,
+  parseSessions,
+  splitListOutput,
+  LIST_COMMAND,
+  REMOTE_PROJECTS_REL,
+  REMOTE_SESSIONS_REL,
+  SESSIONS_MARKER,
+  MAX_SESSION_DESCRIPTORS,
+  MAX_SESSION_DESCRIPTOR_BYTES,
+};

@@ -24,9 +24,12 @@ function fakeTransport(files, opts = {}) {
     async listFiles() {
       calls.list++;
       if (opts.listThrows) throw new Error(opts.listThrows);
-      return Object.entries(files).map(([rel, f]) => ({
-        rel, size: f.content.length, mtimeMs: f.mtimeMs,
-      }));
+      return {
+        files: Object.entries(files).map(([rel, f]) => ({
+          rel, size: f.content.length, mtimeMs: f.mtimeMs,
+        })),
+        sessions: opts.sessions || [],
+      };
     },
     async fetchFiles(alias, rels, destRoot) {
       calls.fetch++;
@@ -218,10 +221,13 @@ test('a file above the per-file ceiling is never fetched', async () => {
     const manifestPath = path.join(dir, 'manifest.json');
     const asked = [];
     const transport = {
-      listFiles: async () => ([
-        { rel: '-srv-a/small.jsonl', size: 10, mtimeMs: 1 },
-        { rel: '-srv-a/huge.jsonl', size: 200 * 1024 * 1024, mtimeMs: 1 },
-      ]),
+      listFiles: async () => ({
+        files: [
+          { rel: '-srv-a/small.jsonl', size: 10, mtimeMs: 1 },
+          { rel: '-srv-a/huge.jsonl', size: 200 * 1024 * 1024, mtimeMs: 1 },
+        ],
+        sessions: [],
+      }),
       fetchFiles: async (_alias, rels, destRoot) => {
         asked.push(...rels);
         for (const rel of rels) {
@@ -240,5 +246,23 @@ test('a file above the per-file ceiling is never fetched', async () => {
     assert.deepEqual(asked, ['-srv-a/small.jsonl'], 'the oversized file must never be asked for');
     assert.equal(fs.existsSync(path.join(projectsDir, '-srv-a/huge.jsonl')), false);
     assert.ok(warned.some(m => m.includes('skipped')), 'the skip must be reported, not silent');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #211: a host with no ~/.claude/sessions dir still resolves normally.
+test('a host with no sessions dir completes the cycle with zero descriptors', async () => {
+  const dir = tmp('mirror-nosessions');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const t = fakeTransport({
+      '-srv-a/a.jsonl': { content: line('/srv/a'), mtimeMs: 1000 },
+    });
+
+    const result = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.deepEqual(result.sessions, []);
+    assert.equal(result.fetched, 1, 'inventory fetch/deletion behavior is unaffected');
+    assert.ok(fs.existsSync(path.join(projectsDir, '-srv-a', 'a.jsonl')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

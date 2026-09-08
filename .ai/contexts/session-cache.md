@@ -164,6 +164,104 @@ or deleted from here.
   directory or handed to `scp` (OpenSSH 9 runs scp over SFTP, where quoting would
   become part of the name — the validation is the guard, not quoting).
 
+- **Session descriptors ride the SAME ssh call as the inventory (issue #211)
+  — never a second connection.** The CLI writes one descriptor file per live
+  session to `~/.claude/sessions/<pid>.json` on the remote host, alongside
+  unrelated `*.key` secret files (mode 600) in the same directory.
+  `remote-transport.js`'s `LIST_COMMAND` (`remote-transport.js:25-29`) is a
+  single shell command: the existing `find .claude/projects`
+  inventory, then a `printf` of a marker line, then a bounded pull of
+  `.claude/sessions`. `listFiles(alias)` still spawns exactly one `ssh` — the
+  test "listFiles spawns one bounded ssh…" in `test/remote-transport.test.js`
+  asserts both `find .claude/projects` and `find .claude/sessions` appear
+  inside that single command string.
+  - **The two halves fail independently, in opposite directions — neither
+    direction should be mistaken for the other.** The inventory `find` is
+    followed by `|| exit $?`: if it fails (missing `.claude/projects`, an
+    unmounted home, a permission change, a BusyBox `find` with no `-printf`),
+    the whole command aborts immediately with that `find`'s own exit status —
+    `listFiles` still throws and `syncMirror` still refuses to touch the local
+    mirror, exactly as before issue #211 introduced the sessions pull. The
+    sessions half's own failure (a missing or unreadable `.claude/sessions`)
+    is independently swallowed (`2>/dev/null`, and the final pipeline's exit
+    status is the trailing `while` loop's, not `find`'s) and degrades to zero
+    descriptors without affecting the inventory half. Before this fix, the `;`
+    between the two stages let the sessions half's `while` loop mask a failed
+    inventory `find` — an unreachable/misconfigured host's inventory failure
+    was silently read as "nothing remote exists", which `syncMirror` then
+    read as license to delete every locally mirrored file for that host.
+  - **The marker (`SESSIONS_MARKER = '\u0001SWITCHBOARD-SESSIONS\u0001'`)
+    cannot collide with real descriptor content, by construction.** It is
+    wrapped in a raw SOH control byte (0x01) on each side — written in source
+    with an explicit `\u0001` escape, not a raw byte, so the constant stays
+    legible in a diff — sent to the shell as `\001` inside a `printf` format
+    string. Valid JSON text can never contain a raw, unescaped control byte —
+    the JSON spec requires control characters inside a string to be escaped
+    (per RFC 8259 section 7) rather than appear as a raw byte — so no
+    legitimate descriptor line can ever contain the two raw 0x01 bytes that
+    frame the marker. `splitListOutput(stdout)` (`remote-transport.js`) only
+    accepts a marker occurrence preceded by a newline (or at byte offset 0 —
+    the legitimate case when the inventory `find` found zero files) and
+    followed by a newline, consuming that trailing newline into the boundary;
+    a marker substring that doesn't sit on its own line, or an absent marker
+    (an unexpected truncation), both degrade to treating the whole stdout as
+    the inventory block and return `sessionsBlock: ''` rather than throwing —
+    `parseInventory` keeps working exactly as before on the degraded input.
+  - **The command assumes a POSIX-sh-compatible remote login shell.** `;`,
+    `||`, pipes, `2>/dev/null` and `while … do … done` are `sh`/`bash`/`dash`/
+    `ksh` syntax, not portable to `fish` (different loop syntax, no `do`/`done`)
+    or `csh`/`tcsh` (different control-flow syntax entirely) — a host whose
+    login shell is one of those would get a syntax error from `ssh`, whereas
+    the pre-#211 command (a single `find` invocation with no shell operators
+    at all) was portable to any shell. No such host is declared today; this is
+    a known, undemonstrated limitation, not something this change attempts to
+    fix.
+  - **`-name '[0-9]*.json'` is the only thing standing between this feature and
+    reading a `.key` secret file** — it structurally cannot match any `*.key`
+    filename regardless of the digit-prefix part, because the extension itself
+    is wrong. This is a property of the glob, not an added exclude-filter.
+    Pinned by two tests in `test/remote-transport.test.js`: an exact-string pin
+    of `LIST_COMMAND` (so widening the glob, or swapping the `find`+`head -c`
+    pipeline for a bare `cat *`, changes the string and fails immediately), and
+    a belt-and-suspenders `!LIST_COMMAND.includes('.key')` check that survives
+    unrelated wording changes.
+  - **Byte and count caps are enforced remotely, in the shell command itself**
+    (defense in depth, not just in JS): `head -c 8192 "$f"` bounds each
+    descriptor, `head -n 200` bounds the count. Worst case the sessions payload
+    adds ≈ 200 × 8193 ≈ 1.64 MiB to a cycle, comfortably under the existing
+    8 MiB `MAX_LIST_BYTES` combined-output cap on its own — so this addition
+    cannot by itself push a cycle over that cap. A projects inventory already
+    near 8 MiB could still combine with this to overflow, but that is the
+    pre-existing risk of an oversized inventory, not a new failure mode.
+    `LC_ALL=C sort` orders the descriptor files deterministically (byte order,
+    not locale-dependent) — cosmetic, but keeps test/log output stable.
+  - **A missing or unreadable `~/.claude/sessions` degrades to zero
+    descriptors instead of failing the whole cycle.** The sessions half is a
+    pipeline ending in `while IFS= read -r f; do …; done`, whose exit status is
+    the *loop's* status (0, even on empty input) — not the `find`'s. `find`'s
+    own stderr is swallowed by `2>/dev/null`, so a missing directory produces
+    empty stdout and exit 0. The two `find` stages are joined by `;`, not
+    `&&`, and deliberately carry no `set -e`/`pipefail` — a failure in the
+    sessions half must never fail the inventory half it rides alongside.
+  - **`parseSessions(block)` preserves every field verbatim** — the schema
+    belongs to the CLI, not to Switchboard — validating only `pid` (positive
+    integer) and `sessionId` (non-empty string) before accepting a line.
+    Malformed lines (a `head -c`-truncated descriptor produces incomplete
+    JSON) are dropped with a **fixed, generic warning string only** — never the
+    raw line, the parsed object, or any field value — because descriptor
+    content must never be logged. `listFiles`'s return contract changed from a
+    plain array to `{ files, sessions }`; every stub of `transport.listFiles`
+    across `remote-mirror.test.js`, `remote-index.test.js` and
+    `remote-indexing-e2e.test.js` was updated to match in the same change.
+  - **`remote-index.js` keeps the latest descriptors per alias, keyed and
+    pruned exactly like folder keys.** `createRemoteIndexer()`'s private
+    `remoteSessions` map is set from `result.sessions` inside `refreshHost()`
+    and read back through `getRemoteSessions(alias)` (defaults to `[]` for an
+    alias never refreshed). `pruneUnknownAliases()` deletes its entries for any
+    alias no longer declared, the same pass that prunes folder keys, so the map
+    cannot grow unboundedly across host-list edits. No IPC, no renderer surface
+    and no attach/injection exist yet for this data — that is issue #212's job.
+
 ### `stop()` cancels, `dispose()` ends -- they are not the same thing
 
 `createSshTransport().dispose()` is **terminal**: it sets a flag every later
@@ -190,8 +288,9 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
-- `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected
-- `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning
+- `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`
+- `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, and a `.key` file plus a directory named like a descriptor must both be excluded from what reaches stdout
+- `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning, and that `getRemoteSessions()` is cleared (not left stale) after a cycle whose `sync()` throws
 - `remote-indexing-e2e.test.js` — covers the `<alias>::` prefix reaching session rows, the search entries, the metrics and the sidebar
 - `dom-sidebar-remote-session.test.js` — covers the remote badge and the read-only click routing
 - `derive-project-path.test.js` — covers the worktree-collapse + cwd extraction paths

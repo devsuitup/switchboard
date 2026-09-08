@@ -40,18 +40,18 @@ function pruneEmptyDirs(root, dir) {
 /**
  * Bring the local mirror of one host in line with its remote inventory.
  * Injected transport:
- *   listFiles(alias)                  -> Promise<[{ rel, size, mtimeMs }]>
+ *   listFiles(alias)                  -> Promise<{ files: [{ rel, size, mtimeMs }], sessions: [object] }>
  *   fetchFiles(alias, rels, destRoot) -> Promise<{ fetched: [], failed: [] }>
  */
 async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) {
-  const inventory = await transport.listFiles(alias);
-  if (!Array.isArray(inventory)) throw new Error('transport.listFiles did not return an array');
-  if (inventory.length > MAX_INVENTORY_ENTRIES) {
-    throw new Error(`remote inventory too large (${inventory.length} entries)`);
+  const { files, sessions } = await transport.listFiles(alias);
+  if (!Array.isArray(files)) throw new Error('transport.listFiles did not return a files array');
+  if (files.length > MAX_INVENTORY_ENTRIES) {
+    throw new Error(`remote inventory too large (${files.length} entries)`);
   }
 
   const want = new Map();
-  for (const entry of inventory) {
+  for (const entry of files) {
     if (!entry || !isSafeRelPath(entry.rel)) continue;
     if (!topFolderOf(entry.rel)) continue; // a transcript must live under a project folder
     want.set(entry.rel, { size: Number(entry.size) || 0, mtimeMs: Number(entry.mtimeMs) || 0 });
@@ -143,6 +143,7 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
     unchanged: want.size - toFetch.length,
     removed,
     changedFolders,
+    sessions: Array.isArray(sessions) ? sessions : [],
   };
 }
 
