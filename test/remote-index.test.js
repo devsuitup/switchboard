@@ -32,6 +32,14 @@ function fakeTimers() {
   };
 }
 
+/** A controllable clock for the backoff seam (`ctx.now`) — no wall-clock wait. */
+function fakeClock(start = 0) {
+  let t = start;
+  const fn = () => t;
+  fn.advance = (ms) => { t += ms; };
+  return fn;
+}
+
 test('no host declared: no timer, no transport call, no mirror directory', async () => {
   const dataDir = tmp('idx-none');
   try {
@@ -330,5 +338,163 @@ test('dispose() is terminal: it stops the timer and ends the transport', async (
     indexer.dispose();
     assert.equal(transport.isDisposed(), true, 'shutdown must end the transport');
     assert.equal(indexer.isRunning(), false, 'shutdown must clear the timer');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+// Issue #215 acceptance: a host stuck in `ssh inventory failed ... transport
+// disposed` must not be retried at a fixed cadence forever (the field log
+// shows 226 identical attempts, one every 300.0 s, over ~19 h). Backoff is
+// driven by an injected clock (`ctx.now`), never a real timer.
+
+test('consecutive failures on one host back off exponentially and the delay is capped', async () => {
+  const dataDir = tmp('idx-backoff-space');
+  try {
+    const clock = fakeClock(0);
+    let attempts = 0;
+    const BASE = 60_000;
+    const CAP = 30 * 60 * 1000;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }],
+      getRefreshMs: () => BASE,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => { attempts++; throw new Error('ssh inventory failed (exit -1): transport disposed'); },
+    });
+
+    const expectedDelay = (failures) => Math.min(BASE * 2 ** (failures - 1), CAP);
+
+    for (let failures = 1; failures <= 8; failures++) {
+      await indexer.refreshNow();
+      const state = indexer.getRemoteHostState('dead');
+      assert.equal(state.consecutiveFailures, failures, `failure ${failures} counted`);
+      assert.equal(state.nextAttemptAt - clock(), expectedDelay(failures), `delay after failure ${failures}`);
+
+      // A tick before the backoff elapses must not spend another ssh attempt.
+      const before = attempts;
+      clock.advance(1);
+      await indexer.refreshNow();
+      assert.equal(attempts, before, `failure ${failures}: not due yet, must be skipped`);
+
+      // Land exactly on the next due instant for the following iteration.
+      clock.advance(state.nextAttemptAt - clock());
+    }
+
+    assert.equal(attempts, 8, 'every due cycle actually attempted the host once');
+    assert.equal(expectedDelay(8), CAP, 'sanity: by the 8th failure the exponential has saturated at the cap, ' +
+      'so the per-iteration assertion above already proved the ceiling holds');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('a success after consecutive failures resets the backoff to nominal immediately', async () => {
+  const dataDir = tmp('idx-backoff-reset');
+  try {
+    const clock = fakeClock(0);
+    let shouldFail = true;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'flaky' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => {
+        if (shouldFail) throw new Error('ssh: connect to host flaky port 22: timed out');
+        return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set() };
+      },
+    });
+
+    // Three consecutive failures widen the gap well past the nominal cadence.
+    let failedState;
+    let delayBeforeRecovery;
+    for (let i = 0; i < 3; i++) {
+      await indexer.refreshNow();
+      failedState = indexer.getRemoteHostState('flaky');
+      delayBeforeRecovery = failedState.nextAttemptAt - clock();
+      clock.advance(delayBeforeRecovery);
+    }
+    assert.equal(failedState.consecutiveFailures, 3);
+    assert.equal(delayBeforeRecovery, 240_000, 'the 3rd failure widened the delay past the 60 s nominal cadence');
+
+    // The host recovers on the next due attempt.
+    shouldFail = false;
+    await indexer.refreshNow();
+    const recovered = indexer.getRemoteHostState('flaky');
+    assert.equal(recovered.consecutiveFailures, 0, 'failure count drops to zero on success');
+    assert.equal(recovered.lastError, null, 'the stale error is cleared');
+    assert.equal(recovered.nextAttemptAt, 0, 'no artificial delay is left behind after recovery');
+
+    // Immediately eligible again — no leftover cool-down from the outage.
+    shouldFail = true; // if backoff state had survived, this would silently be skipped
+    const r = await indexer.refreshNow();
+    assert.equal(r.errors.length, 1, 'the very next cycle actually attempted the host again');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('a host backing off does not block its peers from refreshing on schedule', async () => {
+  const dataDir = tmp('idx-backoff-isolation');
+  try {
+    const clock = fakeClock(0);
+    const aliveCalls = [];
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }, { alias: 'alive' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async ({ alias }) => {
+        if (alias === 'dead') throw new Error('ssh: dead unreachable');
+        aliveCalls.push(clock());
+        return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set() };
+      },
+    });
+
+    await indexer.refreshNow(); // dead fails once (60 s backoff), alive succeeds
+    assert.equal(aliveCalls.length, 1);
+    assert.equal(indexer.getRemoteHostState('dead').consecutiveFailures, 1);
+
+    // Advance far less than dead's backoff: dead must be skipped, alive must not.
+    clock.advance(1_000);
+    const r = await indexer.refreshNow();
+    assert.equal(aliveCalls.length, 2, 'alive is refreshed on every cycle regardless of dead backing off');
+    assert.equal(indexer.getRemoteHostState('dead').consecutiveFailures, 1, 'dead was skipped, not re-attempted');
+    assert.equal(r.errors.length, 0, 'a skipped host is not reported as a fresh error');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('failure logging is throttled: only the first failure and tier changes are logged', async () => {
+  const dataDir = tmp('idx-backoff-log');
+  try {
+    const clock = fakeClock(0);
+    const warnings = [];
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      log: { info() {}, warn: (m) => warnings.push(m), error() {} },
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => { throw new Error('ssh inventory failed (exit -1): transport disposed'); },
+    });
+
+    for (let i = 0; i < 12; i++) {
+      await indexer.refreshNow();
+      clock.advance(indexer.getRemoteHostState('dead').nextAttemptAt - clock());
+    }
+
+    assert.equal(indexer.getRemoteHostState('dead').consecutiveFailures, 12, '12 attempts actually happened');
+    assert.ok(warnings.length < 12, 'not every attempt is logged');
+    assert.ok(warnings.length <= 6, `only the tier changes are logged, got ${warnings.length}`);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

@@ -142,6 +142,33 @@ or deleted from here.
   silently forgotten. `remote-index.js` catches per host, so one dead host does
   not stop its peers or the local scan.
 
+- **A host that keeps failing backs off per host, exponentially, capped at
+  30 min — it is never disabled (issue #215).** Field incident 2026-09-07/08:
+  a `transport disposed` cause (fixed separately) reran the plain fixed-cadence
+  loop every 300.0 s for ~19 h (226 identical `refresh failed` warnings) because
+  nothing slowed a permanently broken host down. `refreshNow()` now tracks
+  `{ failures, lastError, nextAttemptAt }` per alias; on failure the delay is
+  `min(intervalMs * 2^(failures-1), 30 min)` — base equals the host's own
+  configured cadence, so an isolated blip costs nothing extra, and the 30 min
+  ceiling was chosen so an operator never has to restart the app to get a
+  recovered host picked back up. A host past `nextAttemptAt` is skipped for
+  that cycle only: no ssh call, no log line, and its peers still run on
+  schedule — the loop `continue`s per host, it never returns early. One
+  success resets `failures`/`nextAttemptAt` to nominal immediately (issue
+  requirement: fast recovery, not a cool-down after the outage ends).
+  **Decision: slow down, never disable.** Disabling would need to flip the
+  same `enabled` flag the Settings UI owns, which is out of this issue's scope
+  and would turn a transient network problem into a silent, permanent loss of
+  mirroring that nothing in the sidebar currently surfaces — the capped
+  exponential delay already bounds the cost of a dead host to one attempt per
+  30 min, which is cheap enough to just keep trying. Logging is throttled to
+  the first failure and each change of tier (`onHostFailure` in
+  `remote-index.js`), not every attempt, so the same field incident would have
+  produced roughly 5 lines instead of 226. Per-host state is readable via
+  `getRemoteHostState(alias)` (mirrors `getRemoteSessions(alias)`); no GUI
+  reads it yet. Proven in `test/remote-index.test.js` with an injected
+  `now()` clock — no real timers, no `setTimeout` waits.
+
 - **The mirror is indexed off the main thread.** `workers/scan-projects.js` takes
   `folderPrefix` and a `folders` subset in `workerData`, and
   `sessionCache.scanFoldersViaWorker` writes each folder result through the same
