@@ -65,10 +65,9 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
   `isAlive()` entirely (same as it overrode `defaultIsPtyAlive` before) —
   tests use this to simulate death without a real dying process.
 
-This is a seam, not a remote implementation: nothing sets `host` to anything
-but `null`, and nothing constructs a non-local handle in production. It only
-makes the write/liveness paths a property of the entry instead of an
-assumption baked into `trigger-watcher.js`.
+Was a seam only: as of issue #221, `main.js`'s tmux-attach branch is the
+first production caller to set a non-null `host` and a real `session.handle`
+— see `.ai/contexts/session-cache.md`, "Remote hosts — tmux attach".
 
 ## The submission contract
 

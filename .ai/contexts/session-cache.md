@@ -286,8 +286,109 @@ or deleted from here.
     and read back through `getRemoteSessions(alias)` (defaults to `[]` for an
     alias never refreshed). `pruneUnknownAliases()` deletes its entries for any
     alias no longer declared, the same pass that prunes folder keys, so the map
-    cannot grow unboundedly across host-list edits. No IPC, no renderer surface
-    and no attach/injection exist yet for this data — that is issue #212's job.
+    cannot grow unboundedly across host-list edits. Attach now exists off this
+    data (issue #221, below); capacity tiers and a liveness badge in the UI
+    (#218, #212) still don't.
+
+## Remote hosts — tmux attach (issue #221)
+
+`open-terminal` no longer refuses every remote session outright. When
+`isRemoteFolder(cachedFolder)` is true, it now looks up that session's own
+descriptor via `remoteIndexer.getRemoteSessions(alias)` and asks
+`remote-attach.js`'s adapter whether it can attach. Only if the descriptor
+carries no usable multiplexer field does it still return `REMOTE_READ_ONLY`.
+Launching a new remote session (#222) and injection over the messaging socket
+(#219) are untouched — this is attach-to-an-already-running-CLI only.
+
+- **The adapter is indexed on the descriptor's own field, never on host
+  detection.** `remote-attach.js`'s `createTmuxAttachAdapter().supports(descriptor)`
+  and `.attach(alias, descriptor)` both key off `descriptor.tmux` — a host
+  whose CLI never writes that field (no multiplexer, or a different one) is
+  refused before any ssh call, not probed. **The word "tmux" is confined to
+  this one file by construction** — `main.js` never inspects `descriptor.tmux`
+  itself, it only calls `supports()`/`attach()`. A second adapter for a
+  different multiplexer would slot in beside this one without `main.js`
+  changing at all.
+
+- **Sizing rule, measured on tmux 3.6 against a window never pinned to a
+  size (`window-size latest`):** `cols = window_width`, `rows = window_height
+  + status_lines`, where `status_lines` is 1 when the `status` option is
+  `on`, 0 when `off`, and the rendered count otherwise (tmux allows a
+  multi-line status bar). Attaching at the bare height instead measurably
+  leaves the window one row short **after the client detaches**, not just
+  while attached — a client that sized itself to the true height (200x51 on
+  a 200x50 usable pane) left the window at 200x50 once it left; the naive
+  200x50 client left it at 200x49. `parseProbeOutput()` in `remote-attach.js`
+  applies the correction; `test/remote-attach.test.js` proves it by mutation
+  (dropping `+ statusLines` reddens 3 of 11 tests).
+  - `attach -f ignore-size` was tried and rejected: measured to resize the
+    window anyway.
+  - `resize-window` was tried and rejected: it sets `window-size manual` on
+    the window, silently, on a session this app does not own.
+
+- **The probe and the attach are two separate ssh calls, deliberately not
+  combined with the mirror's own inventory ssh.** The probe
+  (`buildProbeCommand`) runs `tmux -L <socket> display-message -p -t <target>
+  '#{window_width}x#{window_height}'`, then a `PROBE_SEP` control-byte separator, then `tmux
+  -L <socket> show-options -A -t <socket> status` — one non-interactive ssh
+  round trip, parsed by `parseProbeOutput`. The attach itself
+  (`buildAttachCommand`) is `tmux -L <socket> attach -t <target>`, run over a
+  **second**, interactive `ssh -tt <alias> …` that becomes the actual PTY —
+  it cannot be the same call as the probe because the probe must complete and
+  return a size before the interactive PTY is even spawned.
+
+- **The `tmux` field's own shape is treated as the socket name too.** The CLI
+  writes e.g. `"main:@0.%0"` — a `session:window.pane` target string. This
+  adapter reads the part before `:` (`"main"`) as both the tmux socket
+  (`-L main`) and the session to query status on, on the assumption the CLI
+  always names its socket after its session. **This is an assumption, not
+  something measured against the CLI's own socket-naming code** — if a
+  future CLI version uses a socket name that differs from the session name,
+  `show-options -A -t <socket>` would query the wrong (or a nonexistent)
+  session and this adapter would need a real socket field instead of
+  deriving one.
+
+- **`TMUX_FIELD_RE` is the injection guard, not shell quoting.** Same posture
+  as `remote-hosts.js`'s `isSafeRelPath`: the descriptor field is matched
+  against `^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$` before it
+  ever reaches a command string, so a field forged to include a semicolon or
+  backtick is refused outright (`parseTmuxField` returns `null`) rather than
+  escaped. Descriptor content besides `pid`/`sessionId` is otherwise
+  untyped — see "Session descriptors ride the same ssh call…" above.
+
+- **Detach sends Ctrl-B d before ending the local ssh client — it does not
+  just kill the connection.** `ptyProcess.kill()` on the returned wrapper
+  writes `DETACH_KEYS` (`\x02d`, tmux's default prefix + detach) to the
+  attach PTY, waits `DETACH_GRACE_MS` (150 ms) for tmux to process it, then
+  kills the local `ssh -tt` client. Killing immediately, without the
+  keystroke, races tmux's own cleanup and risks the same window-corruption
+  failure mode the sizing rule fixes on the other end. No new IPC or
+  `main.js` call site was added for this — `stop-session` already calls
+  `killPty(session, sessionId)` → `session.pty.kill()` through the existing
+  `pty-ops.js` seam, so the clean detach is just what that seam now reaches.
+
+- **`main.js`'s onData/onExit wiring (OSC parsing, busy detection, output
+  buffering, `activeSessions` cleanup) is shared between local spawn and
+  remote attach.** Extracted into `wireSessionPty(session, sessionId,
+  ptyProcess)`, called once from the local-spawn tail and once from the new
+  remote-attach branch — the same code path, not a parallel copy that can
+  drift. A remote session's `ptyProcess` (from `remote-attach.js`) exposes
+  the same `write/resize/kill/onData/onExit/pid` shape node-pty does, so
+  `pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
+  remote-awareness of their own; `resize()` is a deliberate no-op — see the
+  sizing rule above for why a remote attach is never resized mid-session.
+
+- **This is the first thing to populate the session-handle seam from issue
+  #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a
+  remote-attach entry sets `host: alias`, `kind: 'remote-attach'`, and
+  `handle: attachResult.ptyProcess` — the same wrapper object also stored as
+  `session.pty`. That works without a second object because the wrapper
+  already exposes `write`/`isAlive` alongside the pty-duck-type methods
+  (`resize`/`kill`/`onData`/`onExit`/`pid`) `pty-ops.js` and `wireSessionPty`
+  need; `getPtyForSession` takes it as `session.handle` given, unmodified,
+  exactly the branch #220 left unexercised. Proven in
+  `test/remote-attach.test.js` ("pilots the fake remote pty through write()
+  and kill()") with a bare fake pty, no real node-pty involved.
 
 ### `stop()` cancels, `dispose()` ends -- they are not the same thing
 

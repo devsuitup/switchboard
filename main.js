@@ -80,6 +80,7 @@ const { setPtyOpLogger, resizePty, killPty } = require('./pty-ops');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
+const { createTmuxAttachAdapter } = require('./remote-attach');
 
 setPtyOpLogger(log);
 
@@ -458,7 +459,7 @@ const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCache
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey } = require('./remote-hosts');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 const { createRemoteIndexer } = require('./remote-index');
@@ -474,6 +475,12 @@ const remoteIndexer = createRemoteIndexer({
   dropFolder: (folderKey) => { deleteCachedFolder(folderKey); deleteSearchFolder(folderKey); },
   setRemoteRoots,
   notify: notifyRendererProjectsChanged,
+  log,
+});
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+const remoteAttachAdapter = createTmuxAttachAdapter({
+  spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanPtyEnv }),
   log,
 });
 
@@ -1836,6 +1843,122 @@ function sandboxBindEnv(dirs) {
   return usable.length ? usable.join(':') : undefined;
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+function wireSessionPty(session, sessionId, ptyProcess) {
+  ptyProcess.onData(data => {
+    const currentId = session.realSessionId || sessionId;
+
+    // Parse OSC sequences (title changes, progress, notifications, etc.)
+    if (data.includes('\x1b]')) {
+      const oscMatches = data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
+      for (const m of oscMatches) {
+        const code = m[1];
+        const payload = m[2].slice(0, 120);
+        // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
+        if (code === '0') {
+          const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
+          log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
+          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
+          if (isBusy && !session._cliBusy) {
+            session._cliBusy = true;
+            session._oscIdle = false;
+            log.debug(`[OSC 0] session=${currentId} → BUSY`);
+            if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, true);
+            }
+          } else if (isIdle && session._cliBusy) {
+            session._cliBusy = false;
+            session._oscIdle = true;
+            log.debug(`[OSC 0] session=${currentId} → IDLE`);
+            if (TRACE.on) trace('busy.emit', currentId, { busy: false, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, false);
+            }
+          }
+        }
+      }
+      // Parse iTerm2 OSC 9 sequences (terminated by BEL \x07 or ST \x1b\\)
+      const osc9Matches = data.matchAll(/\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
+      for (const osc9 of osc9Matches) {
+        const payload = osc9[1];
+        // OSC 9;4 progress: 4;0; = clear/done, 4;1;N = running at N%, 4;2;N = error, 4;3; = indeterminate
+        if (payload.startsWith('4;')) {
+          const level = payload.split(';')[1];
+          if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
+          log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
+          if (TRACE.on) trace('osc.progress', currentId, { level, payload: payload.slice(0, 60), was: !!session._cliBusy, decision: progressDecision(level, !!session._cliBusy) });
+          if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
+            session._cliBusy = true;
+            session._oscIdle = false;
+            log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
+            if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc9.4', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, true);
+            }
+          }
+        } else {
+          // Regular notification (attention, permission, etc.)
+          log.info(`[OSC 9] session=${currentId} message="${payload}"`);
+          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('terminal-notification', currentId, payload);
+          }
+        }
+      }
+    }
+
+    // Standalone BEL (not part of an OSC sequence)
+    if (data.includes('\x07') && !data.includes('\x1b]')) {
+      log.info(`[BEL] session=${currentId}`);
+    }
+
+    // Track alternate screen mode (only if data contains the marker)
+    if (data.includes('\x1b[?')) {
+      if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) {
+        session.altScreen = true;
+        log.info(`[altscreen] session=${currentId} ON`);
+      }
+      if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) {
+        session.altScreen = false;
+        log.info(`[altscreen] session=${currentId} OFF`);
+      }
+    }
+
+    // Buffer output (skip resize-triggered redraws for plain terminals)
+    if (!session._suppressBuffer) {
+      appendToOutputBuffer(session, data, MAX_BUFFER_SIZE);
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal-data', currentId, data);
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    session.exited = true;
+    // Clean up MCP server
+    const mcpId = session.realSessionId || sessionId;
+    shutdownMcpServer(mcpId);
+    session.mcpServer = null;
+
+    const realId = session.realSessionId || sessionId;
+    if (TRACE.on) trace('pty.exit', realId, { exitCode, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('process-exited', realId, exitCode);
+      // If a fork transition re-keyed this session under realId but the PTY
+      // exited before transition detection ran, also notify the renderer for
+      // the original sessionId so it doesn't stay stuck as "Running".
+      if (realId !== sessionId && activeSessions.has(sessionId)) {
+        mainWindow.webContents.send('process-exited', sessionId, exitCode);
+      }
+    }
+    activeSessions.delete(realId);
+    // Clean up the original key too in case transition detection hasn't run yet
+    activeSessions.delete(sessionId);
+  });
+}
+
 // --- IPC: open-terminal ---
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
@@ -1865,11 +1988,35 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
   }
 
-  // A mirrored transcript has no local cwd to resume in. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+  // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
   if (!isNew) {
     let cachedFolder = null;
     try { cachedFolder = getCachedFolder(sessionId); } catch {}
-    if (isRemoteFolder(cachedFolder)) return { ok: false, error: REMOTE_READ_ONLY };
+    if (isRemoteFolder(cachedFolder)) {
+      const { alias } = parseFolderKey(cachedFolder);
+      const descriptor = remoteIndexer.getRemoteSessions(alias).find(s => s.sessionId === sessionId);
+      const attachResult = descriptor
+        ? await remoteAttachAdapter.attach(alias, descriptor)
+        : { ok: false, error: REMOTE_READ_ONLY };
+      if (!attachResult.ok) return { ok: false, error: attachResult.error || REMOTE_READ_ONLY };
+
+      const remoteCwd = (descriptor && typeof descriptor.cwd === 'string') ? descriptor.cwd : null;
+      const remoteSession = {
+        pty: attachResult.ptyProcess,
+        // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
+        handle: attachResult.ptyProcess,
+        host: alias, kind: 'remote-attach',
+        rendererAttached: true, exited: false,
+        outputBuffer: [], outputBufferSize: 0, altScreen: false,
+        projectPath, firstResize: true,
+        cwd: remoteCwd,
+        isPlainTerminal: false,
+        _openedAt: Date.now(),
+      };
+      activeSessions.set(sessionId, remoteSession);
+      wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
+      return { ok: true, reattached: false, remote: true, sandbox: false };
+    }
   }
 
   // For a Claude resume, spawn in the session's real recorded cwd (e.g. its
@@ -2149,118 +2296,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (typeof retry.unref === 'function') retry.unref();
   }
 
-  ptyProcess.onData(data => {
-    const currentId = session.realSessionId || sessionId;
-
-    // Parse OSC sequences (title changes, progress, notifications, etc.)
-    if (data.includes('\x1b]')) {
-      const oscMatches = data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
-      for (const m of oscMatches) {
-        const code = m[1];
-        const payload = m[2].slice(0, 120);
-        // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
-        if (code === '0') {
-          const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
-          log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
-          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
-          if (isBusy && !session._cliBusy) {
-            session._cliBusy = true;
-            session._oscIdle = false;
-            log.debug(`[OSC 0] session=${currentId} → BUSY`);
-            if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('cli-busy-state', currentId, true);
-            }
-          } else if (isIdle && session._cliBusy) {
-            session._cliBusy = false;
-            session._oscIdle = true;
-            log.debug(`[OSC 0] session=${currentId} → IDLE`);
-            if (TRACE.on) trace('busy.emit', currentId, { busy: false, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('cli-busy-state', currentId, false);
-            }
-          }
-        }
-      }
-      // Parse iTerm2 OSC 9 sequences (terminated by BEL \x07 or ST \x1b\\)
-      const osc9Matches = data.matchAll(/\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
-      for (const osc9 of osc9Matches) {
-        const payload = osc9[1];
-        // OSC 9;4 progress: 4;0; = clear/done, 4;1;N = running at N%, 4;2;N = error, 4;3; = indeterminate
-        if (payload.startsWith('4;')) {
-          const level = payload.split(';')[1];
-          if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
-          log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
-          if (TRACE.on) trace('osc.progress', currentId, { level, payload: payload.slice(0, 60), was: !!session._cliBusy, decision: progressDecision(level, !!session._cliBusy) });
-          if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
-            session._cliBusy = true;
-            session._oscIdle = false;
-            log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
-            if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc9.4', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('cli-busy-state', currentId, true);
-            }
-          }
-        } else {
-          // Regular notification (attention, permission, etc.)
-          log.info(`[OSC 9] session=${currentId} message="${payload}"`);
-          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('terminal-notification', currentId, payload);
-          }
-        }
-      }
-    }
-
-    // Standalone BEL (not part of an OSC sequence)
-    if (data.includes('\x07') && !data.includes('\x1b]')) {
-      log.info(`[BEL] session=${currentId}`);
-    }
-
-    // Track alternate screen mode (only if data contains the marker)
-    if (data.includes('\x1b[?')) {
-      if (data.includes('\x1b[?1049h') || data.includes('\x1b[?47h')) {
-        session.altScreen = true;
-        log.info(`[altscreen] session=${currentId} ON`);
-      }
-      if (data.includes('\x1b[?1049l') || data.includes('\x1b[?47l')) {
-        session.altScreen = false;
-        log.info(`[altscreen] session=${currentId} OFF`);
-      }
-    }
-
-    // Buffer output (skip resize-triggered redraws for plain terminals)
-    if (!session._suppressBuffer) {
-      appendToOutputBuffer(session, data, MAX_BUFFER_SIZE);
-    }
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal-data', currentId, data);
-    }
-  });
-
-  ptyProcess.onExit(({ exitCode }) => {
-    session.exited = true;
-    // Clean up MCP server
-    const mcpId = session.realSessionId || sessionId;
-    shutdownMcpServer(mcpId);
-    session.mcpServer = null;
-
-    const realId = session.realSessionId || sessionId;
-    if (TRACE.on) trace('pty.exit', realId, { exitCode, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode);
-      // If a fork transition re-keyed this session under realId but the PTY
-      // exited before transition detection ran, also notify the renderer for
-      // the original sessionId so it doesn't stay stuck as "Running".
-      if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode);
-      }
-    }
-    activeSessions.delete(realId);
-    // Clean up the original key too in case transition detection hasn't run yet
-    activeSessions.delete(sessionId);
-  });
+  wireSessionPty(session, sessionId, ptyProcess);
 
   if (sessionOptions?.forkFrom) {
     log.info(`[fork-spawn] tempId=${sessionId} forkFrom=${sessionOptions.forkFrom} folder=${projectFolder} knownFiles=${knownJsonlFiles.size}`);
