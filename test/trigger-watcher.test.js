@@ -5710,3 +5710,62 @@ test('steps_total: a failure path that never sent anything still carries the fie
     cleanup(tmp);
   }
 });
+
+// ── Session handle seam (issue #220) ─────────────────────────────────────────
+//
+// Unlike every other ctx in this file, this one is NOT hand-built: it goes
+// through the real createTriggerContext, against a real activeSessions Map,
+// with an entry that carries a fully test-supplied handle and no `pty` field
+// at all -- nothing node-pty-shaped exists anywhere in this entry. This is
+// the proof the seam is real: the injection path must reach this session
+// without ever assuming a node-pty. See .ai/contexts/trigger-watcher.md,
+// "Session handle".
+test('session handle seam: an entry with only a fake handle (no node-pty) is pilotable by the injection path', async () => {
+  const tmp = mkTmp();
+  let watcher;
+  try {
+    process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
+    process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
+
+    const { createTriggerContext } = require('../trigger-context');
+    const { start } = require('../trigger-watcher');
+
+    const SESSION_ID = 'sess-fake-handle-' + Date.now();
+    const written = [];
+    const activeSessions = new Map([[SESSION_ID, {
+      exited: false,
+      _cliBusy: false,
+      composerState: { pending: 0, lastInputAt: 0 },
+      // Non-null host: getPtyForSession must take this entry's handle as
+      // given rather than deducing one from a `pty` field -- there is none.
+      host: 'fake-test-host',
+      kind: 'fake-test',
+      handle: {
+        write(data) { written.push(data); },
+        isAlive() { return true; },
+      },
+    }]]);
+
+    const ctx = createTriggerContext({ activeSessions, log: silentLog });
+    watcher = start(ctx);
+
+    const uuid = 'fake-handle-' + Date.now();
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/help', wait: 'none' });
+
+    const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
+    await waitForFile(resultPath, 2000);
+
+    const result = readResult(path.join(tmp, 'processed'), uuid);
+    assert.equal(result.ok, true, 'a session carrying only a fake handle must still be drivable');
+    // Busy never rises on this fake handle, so submitWithVerify retries the
+    // Enter once (same pattern as the "W7 default helper" test above).
+    assert.deepEqual(written, ['/help', '\r', '\r'],
+      'the command and its Enter(s) must land in the fake handle, never a node-pty');
+
+  } finally {
+    if (watcher) watcher.close();
+    delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+    delete process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS;
+    cleanup(tmp);
+  }
+});

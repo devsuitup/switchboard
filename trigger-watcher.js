@@ -36,6 +36,8 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 
+const { createLocalSessionHandle } = require('./trigger-context');
+
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
 // Default idle-wait timeout: 5 minutes.
 // Rationale: agentic Claude CLI turns can run 10-20 min between idle states.
@@ -102,20 +104,13 @@ function classifySubmitted(composerConfirmed, sawBusy) {
   return composerConfirmed ? SUBMITTED_CONFIRMED : (sawBusy ? SUBMITTED_ACTIVITY : SUBMITTED_ASSUMED);
 }
 
-// W7 — child-process liveness check.
-// node-pty's ptyProcess.write() is silent on a dead child: the bytes land in
-// the kernel PTY buffer and are never consumed.  Without this check the watcher
-// would happily report ok:true on writes nobody will ever read.  We use
-// signal 0 (POSIX no-op probe) — throws ESRCH if the process is gone,
-// throws EPERM if it exists but we can't signal it (still alive, treat as alive).
-function defaultIsPtyAlive(ptyProcess) {
-  if (!ptyProcess || typeof ptyProcess.pid !== 'number') return false;
-  try {
-    process.kill(ptyProcess.pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === 'EPERM';
-  }
+// W7 liveness probe — see .ai/contexts/trigger-watcher.md, "Session handle".
+function resolveHandle(entry) {
+  return entry.handle || createLocalSessionHandle(entry.ptyProcess);
+}
+
+function isEntryAlive(ctx, entry, handle) {
+  return ctx.isPtyAlive ? ctx.isPtyAlive(entry.ptyProcess) : handle.isAlive();
 }
 
 // Poll interval (ms) for `delayWithBusyPoll` below. Deliberately finer than
@@ -156,12 +151,12 @@ function delayWithBusyPoll(ms, sessionId, ctx) {
 // busy observed anywhere here cannot be attributed to an Enter that had not
 // been sent yet. See the "composerConfirmed" gate in submitWithVerify, which
 // this narrows.
-async function submitToPty(ptyProcess, command, sessionId, ctx) {
-  ptyProcess.write(command);
+async function submitToPty(handle, command, sessionId, ctx) {
+  handle.write(command);
   const envMs = envNumber('SWITCHBOARD_SUBMIT_ENTER_DELAY_MS');
   const delayMs = envMs !== undefined ? envMs : DEFAULT_SUBMIT_ENTER_DELAY_MS;
   const midBusy = await delayWithBusyPoll(delayMs, sessionId, ctx);
-  ptyProcess.write('\r');
+  handle.write('\r');
   return midBusy;
 }
 
@@ -376,11 +371,11 @@ function pollForBusyObserved(sessionId, ctx, windowMs, deadlineMs) {
  * the caller keeps the legacy instant-reply semantics — submit_retries traces
  * that the verification could not confirm a turn started.
  */
-async function submitWithVerify(ptyProcess, sessionId, command, ctx, deadlineMs) {
+async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // Sampled before the write — see .ai/contexts/trigger-watcher.md ("submitted").
   const preBusy = ctx.isSessionBusy(sessionId);
 
-  const midBusy = await submitToPty(ptyProcess, command, sessionId, ctx);
+  const midBusy = await submitToPty(handle, command, sessionId, ctx);
 
   // Composer read-back: unconditional, immediate, never gated on activity.
   const postWriteState = (typeof ctx.getComposerState === 'function')
@@ -423,7 +418,7 @@ async function submitWithVerify(ptyProcess, sessionId, command, ctx, deadlineMs)
   }
 
   try {
-    ptyProcess.write('\r');
+    handle.write('\r');
   } catch (err) {
     // Surface as a sessionExited-like failure; caller maps to an error result.
     return {
@@ -867,15 +862,14 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     return;
   }
 
-  const { ptyProcess } = sessionEntry;
-  const isPtyAlive = ctx.isPtyAlive || defaultIsPtyAlive;
+  const handle = resolveHandle(sessionEntry);
 
   // W7 — pre-flight liveness check.  main.js may keep a stale entry in its
   // activeSessions map after a Claude process exited "cleanly" (Ctrl+D, /exit)
   // without the Switchboard window closing.  Without this guard we'd wait the
   // full idle-timeout for a busy flag that will never flip, then write into a
   // dead PTY and report ok:true.
-  if (!isPtyAlive(ptyProcess)) {
+  if (!isEntryAlive(ctx, sessionEntry, handle)) {
     ctx.log.warn('[trigger-watcher] Target process not running:', sessionId);
     await writeResult({ ok: false, error: 'target process not running', sessionId });
     return;
@@ -971,7 +965,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // deadline; the child may have exited during either while busy-was-true
     // never flipped.  This probe belongs AFTER both waits: run before them it
     // proves nothing about the moment of the write.
-    if (!isPtyAlive(ptyProcess)) {
+    if (!isEntryAlive(ctx, sessionEntry, handle)) {
       ctx.log.warn('[trigger-watcher] Target process exited during wait:', sessionId);
       await writeResult({ ok: false, error: 'target process not running', sessionId, waited_ms });
       return;
@@ -987,7 +981,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let recoverySkipped = false;
     let recoveryReason = null;
     try {
-      const v = await submitWithVerify(ptyProcess, sessionId, command, ctx);
+      const v = await submitWithVerify(handle, sessionId, command, ctx);
       submitRetries     = v.submit_retries;
       sawBusy           = v.sawBusy;
       composerConfirmed = !!v.composerConfirmed;
@@ -1086,6 +1080,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       await writeResult({ ok: false, submitted: (i > 0) ? chainSubmitted : SUBMITTED_NO, error: 'session exited during wait', partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
+    const entryHandle = resolveHandle(entry);
 
     // Inject the step command
     const stepSentAt = new Date().toISOString();
@@ -1131,7 +1126,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // main.js still has a stale activeSessions entry.  The probe belongs after
     // both waits.  The remaining liveness→write TOCTOU window is bounded by
     // the try/catch on write.
-    if (!isPtyAlive(entry.ptyProcess)) {
+    if (!isEntryAlive(ctx, entry, entryHandle)) {
       ctx.log.warn(`[trigger-watcher] Target process not running at chain step ${i}:`, sessionId);
       await writeResult({ ok: false, submitted: (i > 0) ? chainSubmitted : SUBMITTED_NO, error: 'target process not running', partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
@@ -1149,7 +1144,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let stepWaitedMs = polite.waited_ms;
     let verify;
     try {
-      verify = await submitWithVerify(entry.ptyProcess, sessionId, step.command, ctx, stepDeadline);
+      verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline);
     } catch (err) {
       ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, err.message);
       await writeResult({ ok: false, error: 'pty write failed: ' + err.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
@@ -1249,13 +1244,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
  * both apply identically). See .ai/contexts/trigger-watcher.md, "Startup scan".
  *
  * @param {object} ctx
- * @param {function} ctx.getPtyForSession  (sessionId: string) => { ptyProcess, cwd } | null;
- *                                          `cwd` feeds the expectedCwd target
- *                                          guard (see .ai/contexts/trigger-watcher.md, "Target guard")
+ * @param {function} ctx.getPtyForSession  (sessionId: string) => { ptyProcess, cwd, handle } | null;
+ *                                          see .ai/contexts/trigger-watcher.md, "Session handle" and "Target guard"
  * @param {function} ctx.isSessionBusy     (sessionId: string) => boolean
  * @param {function} [ctx.getComposerState] (sessionId) => { pending, lastInputAt } | null;
  *                                          absent or null means busy, never free
- * @param {function} [ctx.isPtyAlive]      (ptyProcess) => boolean (default: signal 0 probe)
+ * @param {function} [ctx.isPtyAlive]      (ptyProcess) => boolean (default: handle.isAlive())
  * @param {object}   ctx.log               electron-log compatible logger
  * @returns {{ close(): void }}
  */
