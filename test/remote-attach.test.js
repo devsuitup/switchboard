@@ -37,8 +37,14 @@ function fakeRawPty() {
   return { pty, writes, emitter, killedCount: () => killed };
 }
 
-function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactory } = {}) {
-  const runRemoteCommand = async () => ({ code: probeCode, stdout: probeStdout || '', stderr: '' });
+const FAKE_SOCKET = '/tmp/tmux-0/test';
+
+function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactory, socket = FAKE_SOCKET } = {}) {
+  const runRemoteCommand = async () => ({
+    code: probeCode,
+    stdout: probeCode === 0 ? `${socket}${PROBE_SEP}${probeStdout || ''}` : (probeStdout || ''),
+    stderr: '',
+  });
   const spawnPty = (file, args, ptyOpts) => {
     spawnCalls.push({ file, args, ptyOpts });
     return (rawPtyFactory || (() => fakeRawPty().pty))();
@@ -76,7 +82,7 @@ test('parseProbeOutput returns null when the size cannot be parsed', () => {
 test('attach() spawns the pty at window height plus status lines, never the bare height', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({ probeStdout: '200x50' + PROBE_SEP + 'status on', spawnCalls });
-  const result = await adapter.attach('vps', { sessionId: 's1', tmux: 'main:@0.%0' });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
 
   assert.equal(result.ok, true);
   assert.equal(spawnCalls.length, 1);
@@ -106,11 +112,92 @@ test('attach() refuses a descriptor with no tmux field, before any ssh call', as
   assert.equal(spawnCalls.length, 0, 'no attach pty should ever be spawned for a host with no declared multiplexer');
 });
 
-test('supports() reports false for a descriptor without a usable tmux field', () => {
+test('supports() reports false for a descriptor without a usable tmux field or a readable pid', () => {
   const adapter = makeAdapter({});
   assert.equal(adapter.supports({ sessionId: 's1' }), false);
-  assert.equal(adapter.supports({ sessionId: 's1', tmux: 'not valid' }), false);
-  assert.equal(adapter.supports({ sessionId: 's1', tmux: 'main:@0.%0' }), true);
+  assert.equal(adapter.supports({ sessionId: 's1', tmux: 'not valid', pid: 4242 }), false);
+  assert.equal(
+    adapter.supports({ sessionId: 's1', tmux: 'main:@0.%0' }),
+    false,
+    'no pid means no way to discover the socket -- not attachable',
+  );
+  assert.equal(adapter.supports({ sessionId: 's1', tmux: 'main:@0.%0', pid: 4242 }), true);
+});
+
+// Property: the socket comes from the process's own TMUX environment
+// variable, never from the descriptor's tmux field -- issue #221's actual
+// production failure ("error connecting to /tmp/tmux-0/main") came from
+// treating the descriptor's "main:@0.%0" as a socket name.
+test('attach() discovers the socket from the process TMUX env var, not the descriptor tmux field (issue #221)', async () => {
+  const spawnCalls = [];
+  let probeCalls = 0;
+  const runRemoteCommand = async (alias, command) => {
+    probeCalls++;
+    assert.match(command, /\/proc\/4085772\/environ/, 'must read the environ of the descriptor pid, not a guessed one');
+    assert.doesNotMatch(command, /-L /, 'must never derive a -L socket name from the descriptor tmux field');
+    // What a real /proc/<pid>/environ TMUX line yields once the remote
+    // shell does `cut -d, -f1` on it -- measured on the host 2026-09-08.
+    const socket = 'TMUX=/tmp/tmux-0/orchestration,4085772,0'.slice('TMUX='.length).split(',')[0];
+    return { code: 0, stdout: `${socket}${PROBE_SEP}200x50${PROBE_SEP}status on`, stderr: '' };
+  };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: (file, args, ptyOpts) => { spawnCalls.push({ file, args, ptyOpts }); return fakeRawPty().pty; },
+    runRemoteCommand,
+    log: silentLog,
+  });
+
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4085772, tmux: 'main:@0.%0' });
+
+  assert.equal(result.ok, true);
+  assert.equal(probeCalls, 1, 'discovery must ride the existing probe call, not a separate ssh connection');
+  assert.equal(spawnCalls.length, 1);
+  const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
+  assert.match(
+    attachCommand,
+    /-S '\/tmp\/tmux-0\/orchestration'/,
+    'attach must use the socket discovered from TMUX, never one derived from the descriptor tmux field',
+  );
+  assert.match(attachCommand, /-t main:@0\.%0/, 'the descriptor tmux field still supplies the -t target');
+});
+
+// Property: no readable TMUX env var means no attach attempt, ever -- never
+// a guess at a socket name.
+test('attach() refuses when the remote process has no readable TMUX env var, without attempting to attach', async () => {
+  const spawnCalls = [];
+  let probeCalls = 0;
+  const runRemoteCommand = async () => { probeCalls++; return { code: 3, stdout: '', stderr: 'NO_TMUX_ENV\n' }; };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
+    runRemoteCommand,
+    log: silentLog,
+  });
+
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /tmux environment/i);
+  assert.equal(probeCalls, 1);
+  assert.equal(spawnCalls.length, 0, 'no attach pty may be spawned when the socket cannot be discovered');
+});
+
+// Property: a descriptor with no readable pid is refused before any ssh call
+// at all -- there is nothing to read /proc/<pid>/environ from.
+test('attach() refuses a descriptor with no readable pid, before any ssh call', async () => {
+  const spawnCalls = [];
+  let probeCalls = 0;
+  const runRemoteCommand = async () => { probeCalls++; return { code: 0, stdout: '' }; };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
+    runRemoteCommand,
+    log: silentLog,
+  });
+
+  const result = await adapter.attach('vps', { sessionId: 's1', tmux: 'main:@0.%0' });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /pid/i);
+  assert.equal(probeCalls, 0);
+  assert.equal(spawnCalls.length, 0);
 });
 
 // Property 3 -- the returned ptyProcess is pilotable without any real local
@@ -119,7 +206,7 @@ test('supports() reports false for a descriptor without a usable tmux field', ()
 test('the returned ptyProcess pilots the fake remote pty through write() and kill()', async () => {
   const raw = fakeRawPty();
   const adapter = makeAdapter({ probeStdout: '200x50' + PROBE_SEP + 'status on', rawPtyFactory: () => raw.pty });
-  const result = await adapter.attach('vps', { sessionId: 's1', tmux: 'main:@0.%0' });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
 
   assert.equal(result.ok, true);
   const { ptyProcess } = result;
@@ -142,7 +229,7 @@ test('the returned ptyProcess pilots the fake remote pty through write() and kil
 test('resize() is a no-op -- a fixed-size attach is never resized mid-session', async () => {
   const raw = fakeRawPty();
   const adapter = makeAdapter({ probeStdout: '200x50' + PROBE_SEP + 'status on', rawPtyFactory: () => raw.pty });
-  const { ptyProcess } = await adapter.attach('vps', { sessionId: 's1', tmux: 'main:@0.%0' });
+  const { ptyProcess } = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
   assert.doesNotThrow(() => ptyProcess.resize(80, 24));
   assert.deepEqual(raw.writes, []);
 });
@@ -150,7 +237,7 @@ test('resize() is a no-op -- a fixed-size attach is never resized mid-session', 
 test('attach() surfaces a failed size probe without spawning anything', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({ probeCode: 1, spawnCalls });
-  const result = await adapter.attach('vps', { sessionId: 's1', tmux: 'main:@0.%0' });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
   assert.equal(result.ok, false);
   assert.equal(spawnCalls.length, 0);
 });

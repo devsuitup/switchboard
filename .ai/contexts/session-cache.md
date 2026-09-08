@@ -452,6 +452,36 @@ Launching a new remote session (#222) and injection over the messaging socket
   `test/remote-attach.test.js` ("pilots the fake remote pty through write()
   and kill()") with a bare fake pty, no real node-pty involved.
 
+- **Corrected 2026-09-08 (issue #221) — the socket is discovered from the
+  process's own `TMUX` environment variable, not derived from the
+  descriptor's `tmux` field.** The assumption logged above ("the CLI always
+  names its socket after its session") was wrong: the descriptor's
+  `session:window.pane` string is a **target**, never a socket name, and the
+  real sockets on the host (`/tmp/tmux-0/orchestration`,
+  `/tmp/tmux-0/orchestration-harness`) don't match the session name at all —
+  the first click on a remote session failed with `error connecting to
+  /tmp/tmux-0/main`. `buildProbeCommand(pid, target)` now reads
+  `/proc/<pid>/environ` on the remote host (`tr '\0' '\n'`, since the file is
+  NUL-separated), extracts `TMUX=<socket>,<server-pid>,<index>`, and takes the
+  part before the first comma — all inside the **same** non-interactive ssh
+  call the size probe already made (the OpenSSH client on Windows has no
+  `ControlMaster`, so a second call is a second full connection, not a free
+  one). The discovered socket rides back to the caller as a prefix segment on
+  the probe's stdout (`parseDiscoveryProbeOutput`) so the later interactive
+  `attach -S <socket>` uses the same value, quoted, never re-derived. A pid
+  with no readable `TMUX` (dead process, unreadable `/proc`) degrades to a
+  refusal naming the reason — never a guessed socket. `descriptor.pid` was
+  already validated as a positive integer upstream (`parseSessions`, above);
+  `isValidPid`/`isSafeSocketPath` in `remote-attach.js` re-check it anyway
+  because this file builds shell command strings from it.
+- **`supports()` grew a `pid` requirement in the same change** — a
+  descriptor with a `tmux` field but no usable `pid` can never discover a
+  socket, so routing it to an attach attempt (`main.js`'s
+  `annotateRemoteAttachable`) would only ever produce an error terminal. Every
+  descriptor `parseSessions` accepts already carries a valid `pid`, so this is
+  a no-op on real data; it only changes routing for a hand-built or malformed
+  descriptor.
+
 ### `stop()` cancels, `dispose()` ends -- they are not the same thing
 
 `createSshTransport().dispose()` is **terminal**: it sets a flag every later

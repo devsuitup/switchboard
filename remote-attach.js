@@ -9,6 +9,8 @@ const DETACH_KEYS = '\x02d'; // Ctrl-B d — tmux default prefix, then detach
 const DETACH_GRACE_MS = 150;
 const DEFAULT_PROBE_TIMEOUT_MS = 15000;
 const DEFAULT_STATUS_LINES = 1;
+const NO_TMUX_ENV_EXIT_CODE = 3;
+const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
 
 /** Parse the CLI-written `tmux` descriptor field, e.g. "main:@0.%0". */
 function parseTmuxField(value) {
@@ -16,6 +18,15 @@ function parseTmuxField(value) {
   const m = TMUX_FIELD_RE.exec(value);
   if (!m) return null;
   return { socket: m[1], target: value };
+}
+
+function isValidPid(pid) {
+  return Number.isInteger(pid) && pid > 0 && pid < 2 ** 31;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
+function isSafeSocketPath(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/['"\\\s]/.test(value);
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", sizing rule)
@@ -44,14 +55,29 @@ function parseProbeOutput(stdout) {
   return { cols: width, rows: height + statusLines };
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", injection guard)
-function buildProbeCommand(parsed) {
-  return `tmux -L ${parsed.socket} display-message -p -t ${parsed.target} '#{window_width}x#{window_height}'` +
-    `; printf '${PROBE_SEP}'; tmux -L ${parsed.socket} show-options -A -t ${parsed.socket} status 2>/dev/null`;
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
+function buildProbeCommand(pid, target) {
+  return `sock=$(tr '\\0' '\\n' < /proc/${pid}/environ 2>/dev/null | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1); ` +
+    `if [ -z "$sock" ]; then echo ${NO_TMUX_ENV_MARKER} >&2; exit ${NO_TMUX_ENV_EXIT_CODE}; fi; ` +
+    `printf '%s${PROBE_SEP}' "$sock"; ` +
+    `tmux -S "$sock" display-message -p -t ${target} '#{window_width}x#{window_height}'` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null`;
 }
 
-function buildAttachCommand(parsed) {
-  return `tmux -L ${parsed.socket} attach -t ${parsed.target}`;
+function buildAttachCommand(socket, target) {
+  return `tmux -S '${socket}' attach -t ${target}`;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
+function parseDiscoveryProbeOutput(stdout) {
+  const text = typeof stdout === 'string' ? stdout : '';
+  const idx = text.indexOf(PROBE_SEP);
+  if (idx === -1) return null;
+  const socket = text.slice(0, idx);
+  if (!isSafeSocketPath(socket)) return null;
+  const size = parseProbeOutput(text.slice(idx + PROBE_SEP.length));
+  if (!size) return null;
+  return { socket, cols: size.cols, rows: size.rows };
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -127,7 +153,7 @@ function createTmuxAttachAdapter(opts = {}) {
 
   /** Whether this descriptor names a multiplexer this adapter can attach to. */
   function supports(descriptor) {
-    return !!(descriptor && parseTmuxField(descriptor.tmux));
+    return !!(descriptor && parseTmuxField(descriptor.tmux) && isValidPid(descriptor.pid));
   }
 
   async function attach(alias, descriptor) {
@@ -135,28 +161,37 @@ function createTmuxAttachAdapter(opts = {}) {
     if (!parsed) {
       return { ok: false, error: 'session carries no tmux target — attach is not supported for this host' };
     }
+    if (!isValidPid(descriptor.pid)) {
+      return { ok: false, error: 'session carries no readable pid — cannot discover its tmux socket' };
+    }
 
     let probe;
     try {
-      probe = await runRemoteCommand(alias, buildProbeCommand(parsed), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+      probe = await runRemoteCommand(alias, buildProbeCommand(descriptor.pid, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
     } catch (err) {
       return { ok: false, error: `size probe failed: ${err.message}` };
     }
-    if (!probe || probe.code !== 0) {
-      const reason = (probe && probe.stderr || '').trim() || 'no stderr';
-      return { ok: false, error: `size probe failed (exit ${probe ? probe.code : 'n/a'}): ${reason}` };
+    if (!probe) {
+      return { ok: false, error: 'size probe failed: no response' };
     }
-    const size = parseProbeOutput(probe.stdout);
-    if (!size) {
+    if (probe.code === NO_TMUX_ENV_EXIT_CODE) {
+      return { ok: false, error: `process ${descriptor.pid} carries no readable TMUX environment variable — cannot discover its tmux socket` };
+    }
+    if (probe.code !== 0) {
+      const reason = (probe.stderr || '').trim() || 'no stderr';
+      return { ok: false, error: `size probe failed (exit ${probe.code}): ${reason}` };
+    }
+    const discovery = parseDiscoveryProbeOutput(probe.stdout);
+    if (!discovery) {
       return { ok: false, error: 'could not parse the remote window size' };
     }
 
     const sshPath = resolveSshPath();
-    const argv = ['-tt', '-o', 'BatchMode=yes', alias, buildAttachCommand(parsed)];
+    const argv = ['-tt', '-o', 'BatchMode=yes', alias, buildAttachCommand(discovery.socket, parsed.target)];
 
     let raw;
     try {
-      raw = spawnPtyFn(sshPath, argv, { name: 'xterm-256color', cols: size.cols, rows: size.rows });
+      raw = spawnPtyFn(sshPath, argv, { name: 'xterm-256color', cols: discovery.cols, rows: discovery.rows });
     } catch (err) {
       return { ok: false, error: `attach spawn failed: ${err.message}` };
     }
@@ -183,8 +218,8 @@ function createTmuxAttachAdapter(opts = {}) {
       get pid() { return raw.pid; },
     };
 
-    log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${size.cols}x${size.rows}`);
-    return { ok: true, ptyProcess, cols: size.cols, rows: size.rows };
+    log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${discovery.cols}x${discovery.rows}`);
+    return { ok: true, ptyProcess, cols: discovery.cols, rows: discovery.rows };
   }
 
   return { supports, attach };
@@ -194,6 +229,7 @@ module.exports = {
   createTmuxAttachAdapter,
   parseTmuxField,
   parseProbeOutput,
+  parseDiscoveryProbeOutput,
   buildProbeCommand,
   buildAttachCommand,
   DETACH_KEYS,
