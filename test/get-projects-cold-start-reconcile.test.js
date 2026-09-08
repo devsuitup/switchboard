@@ -45,13 +45,17 @@ function makeHandler(mocks) {
   const fn = new Function(
     'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
     'populateCacheViaWorker',
-    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'showArchived',
+    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'annotateRemoteAttachable', 'showArchived',
     body
   );
+  // annotateRemoteAttachable (remote-attach join, issue #221) is irrelevant to
+  // the populate/reconcile/build ordering this file locks down -- a passthrough
+  // stands in for it unless a test overrides it.
+  const annotateRemoteAttachable = mocks.annotateRemoteAttachable || (projects => projects);
   return () => fn(
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
-    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, false
+    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, annotateRemoteAttachable, false
   );
 }
 

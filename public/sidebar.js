@@ -1087,11 +1087,15 @@ function rebindSidebarEvents(projects) {
       return;
     }
 
+    // see .ai/contexts/session-cache.md ("Remote SSH hosts")
+    if (session.remoteAlias && !session.remoteAttachable) {
+      item.title = 'Not currently attachable — opening the transcript instead';
+    }
+
     item.onclick = () => {
       if (item.dataset.subagent && session.parentSessionId) {
         showSubagentTranscript(session);
-      } else if (session.remoteAlias) {
-        // Observation only. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+      } else if (session.remoteAlias && !session.remoteAttachable) {
         showJsonlViewer(session);
       } else {
         openSession(session);
