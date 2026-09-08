@@ -576,6 +576,20 @@ body { display: flex; flex-direction: column; }
   color: #5ec46a;
 }
 
+.project-new-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.project-new-btn:disabled:hover {
+  background: transparent;
+  color: #808098;
+}
+
+.project-header:hover .project-new-btn:disabled {
+  opacity: 0.4;
+}
+
 .project-archive-btn:hover {
   background: rgba(120,130,255,0.1);
   color: #8088ff;
