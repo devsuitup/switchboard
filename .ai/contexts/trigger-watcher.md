@@ -24,7 +24,7 @@ require('./trigger-watcher').start(createTriggerContext({ activeSessions, log })
 // trigger-context.js builds the ctx:
 {
   log,                          // electron-log compatible
-  getPtyForSession(sessionId),  // → { ptyProcess } | null
+  getPtyForSession(sessionId),  // → { ptyProcess, cwd, handle } | null
   isSessionBusy(sessionId),     // → boolean
   getComposerState(sessionId),  // → { pending, lastInputAt } | null
   isPtyAlive(ptyProcess),       // optional; only present when supplied
@@ -38,6 +38,37 @@ user typed and has not submitted (`composer-state.js`, fed from
 `terminal-input.js`, called from `ipcMain.on('terminal-input')`).  It returns
 `null` for an unknown or exited session, and **a `null` — or an absent `getComposerState` — means busy, never
 free**.
+
+### Session handle (2026-09-08, issue #220)
+
+`trigger-watcher.js` never touches `session.pty` or a raw pid.  It writes and
+probes liveness through a `handle` — `{ write(data), isAlive() }` — that
+`getPtyForSession` attaches to the returned entry:
+
+- `activeSessions` entries now carry `host` (`null` for a local `node-pty`
+  session; a non-null hostname would mark a session whose process lives
+  elsewhere) and `kind` (`'local-pty'` today; descriptive metadata, not yet
+  read by anything).
+- `trigger-context.js`'s `createLocalSessionHandle(ptyProcess)` builds the
+  local handle: `write` calls `ptyProcess.write`, `isAlive` is the same
+  signal-0 probe (`process.kill(pid, 0)`, `EPERM` counts as alive) that used
+  to live inline in `trigger-watcher.js` as `defaultIsPtyAlive`. `getPtyForSession`
+  uses it whenever `session.host == null`; a non-null host would instead take
+  `session.handle` as given — nothing currently sets that, since no remote
+  session type exists yet.
+- `trigger-watcher.js` deduces the same local handle itself
+  (`resolveHandle(entry)`, wrapping `entry.ptyProcess`) whenever a ctx doesn't
+  supply `entry.handle` — this keeps every ctx implementation that predates
+  this change (all of `test/trigger-watcher.test.js`'s hand-built ctx objects)
+  working unmodified, since they still only shape `{ ptyProcess, cwd }`.
+- `ctx.isPtyAlive`, when supplied, still overrides the handle's own
+  `isAlive()` entirely (same as it overrode `defaultIsPtyAlive` before) —
+  tests use this to simulate death without a real dying process.
+
+This is a seam, not a remote implementation: nothing sets `host` to anything
+but `null`, and nothing constructs a non-local handle in production. It only
+makes the write/liveness paths a property of the entry instead of an
+assumption baked into `trigger-watcher.js`.
 
 ## The submission contract
 

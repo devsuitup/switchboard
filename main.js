@@ -2138,6 +2138,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpServer, _openedAt: Date.now(),
     // see docs/automation.md — the trigger watcher's politeness guard
     composerState: createComposerState(),
+    // see .ai/contexts/trigger-watcher.md, "Session handle"
+    host: null, kind: 'local-pty',
   };
   activeSessions.set(sessionId, session);
 

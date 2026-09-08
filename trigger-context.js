@@ -1,6 +1,22 @@
 // trigger-context.js — see .ai/contexts/trigger-watcher.md
 'use strict';
 
+// Local session handle — see .ai/contexts/trigger-watcher.md, "Session handle".
+function createLocalSessionHandle(ptyProcess) {
+  return {
+    write(data) { ptyProcess.write(data); },
+    isAlive() {
+      if (!ptyProcess || typeof ptyProcess.pid !== 'number') return false;
+      try {
+        process.kill(ptyProcess.pid, 0);
+        return true;
+      } catch (e) {
+        return e.code === 'EPERM';
+      }
+    },
+  };
+}
+
 /**
  * Build the `ctx` object trigger-watcher's `start(ctx)` expects.
  *
@@ -16,8 +32,11 @@ function createTriggerContext({ activeSessions, log, isPtyAlive }) {
     getPtyForSession(sessionId) {
       const session = activeSessions.get(sessionId);
       if (!session || session.exited) return null;
+      const handle = (session.host == null)
+        ? createLocalSessionHandle(session.pty)
+        : session.handle;
       // cwd: see .ai/contexts/trigger-watcher.md, "Target guard"
-      return { ptyProcess: session.pty, cwd: session.cwd };
+      return { ptyProcess: session.pty, cwd: session.cwd, handle };
     },
     isSessionBusy(sessionId) {
       const session = activeSessions.get(sessionId);
@@ -34,4 +53,4 @@ function createTriggerContext({ activeSessions, log, isPtyAlive }) {
   return ctx;
 }
 
-module.exports = { createTriggerContext };
+module.exports = { createTriggerContext, createLocalSessionHandle };

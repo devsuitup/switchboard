@@ -4,8 +4,9 @@
 const test   = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createTriggerContext } = require('../trigger-context');
+const { createTriggerContext, createLocalSessionHandle } = require('../trigger-context');
 const { createComposerState, noteUserInput } = require('../composer-state');
+const { spawnSync } = require('node:child_process');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
@@ -75,6 +76,54 @@ test('isSessionBusy reads _cliBusy and is false for an unknown session', () => {
   assert.equal(ctx.isSessionBusy('busy'), true);
   assert.equal(ctx.isSessionBusy('idle'), false);
   assert.equal(ctx.isSessionBusy('nope'), false);
+});
+
+test('getPtyForSession attaches a handle: local (host null) writes to session.pty', () => {
+  const written = [];
+  const session = makeSession({ pty: { pid: process.pid, write: (d) => written.push(d) } });
+  const ctx     = ctxWith([['s1', session]]);
+
+  const entry = ctx.getPtyForSession('s1');
+  entry.handle.write('hello');
+  assert.deepEqual(written, ['hello'], 'the local handle must write into session.pty');
+  assert.equal(entry.handle.isAlive(), true, "the local handle probes session.pty's real pid");
+});
+
+test('getPtyForSession: a non-null host takes session.handle as given, not session.pty', () => {
+  const written = [];
+  const session = makeSession({
+    host: 'some-remote-host',
+    pty: undefined, // deliberately no node-pty on this entry
+    handle: { write: (d) => written.push(d), isAlive: () => true },
+  });
+  const ctx = ctxWith([['s1', session]]);
+
+  const entry = ctx.getPtyForSession('s1');
+  assert.equal(entry.handle, session.handle, 'a non-local entry must use the supplied handle unchanged');
+  entry.handle.write('x');
+  assert.deepEqual(written, ['x']);
+});
+
+test('createLocalSessionHandle.write forwards verbatim to the underlying pty', () => {
+  const written = [];
+  const handle = createLocalSessionHandle({ pid: process.pid, write: (d) => written.push(d) });
+  handle.write('abc');
+  handle.write('\r');
+  assert.deepEqual(written, ['abc', '\r']);
+});
+
+test('createLocalSessionHandle.isAlive reflects the real process, not just an override', () => {
+  const aliveHandle = createLocalSessionHandle({ pid: process.pid, write() {} });
+  assert.equal(aliveHandle.isAlive(), true, 'the current test process must read as alive');
+
+  // The only test in this suite (or trigger-watcher's) exercising the FALSE
+  // branch of the real signal-0 probe with a genuinely dead pid -- every
+  // trigger-watcher test overrides ctx.isPtyAlive instead, so this is the
+  // one place mutating this probe to always return true is observable.
+  const child = spawnSync(process.platform === 'win32' ? 'cmd' : 'true',
+    process.platform === 'win32' ? ['/c', 'exit', '0'] : []);
+  const deadHandle = createLocalSessionHandle({ pid: child.pid, write() {} });
+  assert.equal(deadHandle.isAlive(), false, 'a pid whose process has already exited must read as not alive');
 });
 
 test('log is forwarded, and isPtyAlive is only present when supplied', () => {
