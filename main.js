@@ -459,10 +459,11 @@ const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCache
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 const { createRemoteIndexer } = require('./remote-index');
+const { createRemoteWatcher } = require('./remote-watch');
 
 const remoteTransport = createSshTransport({ log });
 const remoteIndexer = createRemoteIndexer({
@@ -477,6 +478,22 @@ const remoteIndexer = createRemoteIndexer({
   notify: notifyRendererProjectsChanged,
   log,
 });
+
+// see .ai/contexts/session-cache.md ("Remote hosts — watch channel")
+const remoteWatcher = createRemoteWatcher({ log });
+let watchedAliases = new Set();
+function onRemoteWatchEvent(alias) { remoteIndexer.refreshHostNow(alias).catch(() => {}); }
+function syncRemoteWatchers() {
+  const declared = enabledHosts((getSetting('global') || {}).remoteHosts);
+  const wanted = new Set(declared.map(h => h.alias));
+  for (const alias of watchedAliases) {
+    if (!wanted.has(alias)) remoteWatcher.stop(alias);
+  }
+  for (const host of declared) {
+    if (!remoteWatcher.isRunning(host.alias)) remoteWatcher.start(host.alias, onRemoteWatchEvent);
+  }
+  watchedAliases = wanted;
+}
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 const remoteAttachAdapter = createTmuxAttachAdapter({
@@ -1476,6 +1493,7 @@ ipcMain.handle('set-setting', (_event, key, value) => {
 ipcMain.handle('remote-hosts-apply', () => {
   try {
     const running = remoteIndexer.restart();
+    syncRemoteWatchers();
     return { ok: true, running };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -2649,6 +2667,7 @@ if (!gotSingleInstanceLock) {
     startProjectsWatcher();
     // No declared host => no timer and no ssh call. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     remoteIndexer.start();
+    syncRemoteWatchers();
     cliSessionState.ensureWatching();
     // Remove IDE lock files left behind by a crashed instance whose PID was
     // reused (the function only unlinks locks matching our own pid).
@@ -2790,6 +2809,7 @@ app.on('before-quit', () => {
   cliSessionState.stop();
   // Stops the timer and SIGKILLs any ssh/scp still in flight.
   remoteIndexer.dispose();
+  remoteWatcher.stopAll();
 
   // Kill all PTY processes on quit
   for (const [id, session] of activeSessions) {

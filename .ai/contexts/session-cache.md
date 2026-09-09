@@ -103,12 +103,23 @@ or deleted from here.
   and every renderer id — it is not worth doing before a second host exists.
   **If you ever see two sessions fighting over a star or a title, this is why.**
 
-- **The mirror is pulled, never watched.** `fs.watch` cannot cross SSH
+- **The mirror is pulled on a timer, floored at 60 s, as the reconciliation
+  path — it never goes away.** `fs.watch` cannot cross SSH
   (inotify/FSEvents/ReadDirectoryChangesW are kernel-local), and the local
   watcher at `main.js` `startProjectsWatcher()` is deliberately not pointed at the
-  mirror — it would fire on our own `scp` writes, not on remote activity. A timer
-  drives it instead, floored at 60 s: a tighter loop costs latency and VPS CPU for
-  a "where is my session at" use case that does not need it.
+  mirror — it would fire on our own `scp` writes, not on remote activity.
+  Issue #240 adds a push channel alongside it (below) so a live host is not
+  stale for up to 5 minutes; the pull remains the ground truth and the only
+  path for a host with no push channel (see below).
+
+### Remote hosts — watch channel (issue #240)
+
+`remote-watch.js` keeps one long-lived `ssh -tt … inotifywait` child per
+declared alias and calls `remoteIndexer.refreshHostNow(alias)` (the periodic
+cycle's per-host entry point) on a coalesced "this host changed" signal —
+never on every line, and never in place of the periodic pull. Full rationale,
+the exact remote command, and the mutation proofs are in
+`.work-files/switchboard/remote-watch-report.md`.
 
 - **One `ssh` inventory, then only the deltas.** `remote-transport.js` runs
   `find .claude/projects -type f -name '*.jsonl' -printf '%T@	%s	%P
