@@ -5,8 +5,6 @@
 
 const TMUX_FIELD_RE = /^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$/;
 const PROBE_SEP = '\u0001';
-const DETACH_KEYS = '\x02d'; // Ctrl-B d — tmux default prefix, then detach
-const DETACH_GRACE_MS = 150;
 const DEFAULT_PROBE_TIMEOUT_MS = 15000;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
@@ -220,12 +218,15 @@ function createTmuxAttachAdapter(opts = {}) {
     raw.onExit(() => { alive = false; });
 
     let detaching = false;
+    // Ending the local ssh client is what detaches: the remote tmux client
+    // loses its pty and tmux drops it, leaving the session running. Sending a
+    // prefix keystroke instead would assume this host's prefix, and land as
+    // literal text in the remote session on any host that remapped it.
+    // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
     function detach() {
       if (detaching || !alive) return;
       detaching = true;
-      try { raw.write(DETACH_KEYS); } catch {}
-      // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
-      setTimeout(() => { try { raw.kill(); } catch {} }, DETACH_GRACE_MS);
+      try { raw.kill(); } catch {}
     }
 
     const ptyProcess = {
@@ -264,5 +265,4 @@ module.exports = {
   parseDiscoveryProbeOutput,
   buildProbeCommand,
   buildAttachCommand,
-  DETACH_KEYS,
 };

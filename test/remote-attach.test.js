@@ -206,8 +206,8 @@ test('attach() refuses a descriptor with no readable pid, before any ssh call', 
 });
 
 // Property 3 -- the returned ptyProcess is pilotable without any real local
-// node-pty: writes reach the underlying process, and kill() detaches cleanly
-// (Ctrl-B d) before ending the local ssh client, rather than killing outright.
+// node-pty: writes reach the underlying process, and kill() detaches by
+// ending the local ssh client, sending nothing to the remote session.
 test('the returned ptyProcess pilots the fake remote pty through write() and kill()', async () => {
   const raw = fakeRawPty();
   const adapter = makeAdapter({ probeStdout: '200x50' + PROBE_SEP + 'status on', rawPtyFactory: () => raw.pty });
@@ -222,12 +222,13 @@ test('the returned ptyProcess pilots the fake remote pty through write() and kil
   assert.equal(ptyProcess.pid, 4242);
 
   ptyProcess.kill();
-  // Detach sends Ctrl-B d before ending the local client -- see DETACH_KEYS.
-  assert.equal(raw.writes[raw.writes.length - 1], '\x02d', 'kill() must send the tmux detach sequence, not just end the process');
-  assert.equal(raw.killedCount(), 0, 'the local client must not be ended immediately -- see the detach grace period');
-
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(raw.killedCount(), 1, 'the local client must be ended once the detach keystroke has had time to land');
+  // Detaching means ending the local ssh client and nothing else: any prefix
+  // keystroke would assume this host's tmux prefix and land as literal text
+  // in the remote session on a host that remapped it. Measured on the live
+  // host: killing the client alone takes the attached client count back to 0
+  // and leaves the session running.
+  assert.deepEqual(raw.writes, ['echo hi\n'], 'kill() must not send any keystroke to the remote session');
+  assert.equal(raw.killedCount(), 1, 'kill() must end the local ssh client');
   assert.equal(ptyProcess.isAlive(), false);
 });
 
