@@ -1324,7 +1324,9 @@ function buildSessionItem(session) {
   if (session.remoteAlias) {
     const badge = document.createElement('span');
     badge.className = 'remote-badge';
-    badge.title = 'Read-only session mirrored from ' + session.remoteAlias;
+    badge.title = session.remoteAttachable
+      ? 'Live session on ' + session.remoteAlias + ' — click to attach'
+      : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
     badge.textContent = session.remoteAlias;
     summaryEl.prepend(badge);
 
