@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('api', {
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
-  removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
+  removeProject: (projectPath, folderKey) => ipcRenderer.invoke('remove-project', projectPath, folderKey),
   remapProject: (oldPath, newPath) => ipcRenderer.invoke('remap-project', oldPath, newPath),
   deleteWorktree: (worktreePath) => ipcRenderer.invoke('delete-worktree', worktreePath),
   worktreeStatus: (worktreePath) => ipcRenderer.invoke('worktree-status', worktreePath),

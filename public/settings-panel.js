@@ -24,7 +24,7 @@
     }
   }
 
-  async function openSettingsViewer(scope, projectPath) {
+  async function openSettingsViewer(scope, projectPath, folderKey) {
     const isProject = scope === 'project';
     const settingsKey = isProject ? 'project:' + projectPath : 'global';
     const current = (await window.api.getSetting(settingsKey)) || {};
@@ -644,7 +644,7 @@
     if (removeBtn) {
       removeBtn.addEventListener('click', async () => {
         if (!confirm(`Hide project "${shortName}" from Switchboard?\n\nThis hides the project from the sidebar. Your session files are not deleted.`)) return;
-        await window.api.removeProject(projectPath);
+        await window.api.removeProject(projectPath, folderKey);
         settingsViewer.style.display = 'none';
         document.getElementById('placeholder').style.display = 'flex';
         if (typeof loadProjects === 'function') loadProjects();

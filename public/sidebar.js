@@ -989,7 +989,7 @@ function rebindSidebarEvents(projects) {
     }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
-      settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
+      settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath, project.folder); };
     }
     const archiveGroupBtn = header.querySelector('.project-archive-btn');
     if (archiveGroupBtn) {
