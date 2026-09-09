@@ -8,7 +8,7 @@ const { isSafeRelPath, topFolderOf } = require('./remote-hosts');
 const MAX_INVENTORY_ENTRIES = 20_000;
 // Per-file ceiling: scp is bounded in time, never in bytes.
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
-const MAX_CYCLE_FILES = 100;
+const MAX_CYCLE_FILES = 500;
 const MAX_CYCLE_BYTES = 256 * 1024 * 1024;
 
 function readManifest(manifestPath) {
