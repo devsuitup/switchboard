@@ -45,6 +45,7 @@ function createRemoteIndexer(ctx) {
   let inFlight = false;
   let stopped = false;
   const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
+  const remoteSessionsAt = new Map(); // alias -> epoch ms of the last cycle that did not throw
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
 
   function backoffState(alias) {
@@ -115,6 +116,9 @@ function createRemoteIndexer(ctx) {
     }
     for (const alias of [...remoteSessions.keys()]) {
       if (!known.has(alias)) remoteSessions.delete(alias);
+    }
+    for (const alias of [...remoteSessionsAt.keys()]) {
+      if (!known.has(alias)) remoteSessionsAt.delete(alias);
     }
     for (const alias of [...hostBackoff.keys()]) {
       if (!known.has(alias)) hostBackoff.delete(alias);
@@ -212,6 +216,7 @@ function createRemoteIndexer(ctx) {
         try {
           if (await refreshHost(host)) changed = true;
           onHostSuccess(host.alias);
+          remoteSessionsAt.set(host.alias, now());
         } catch (err) {
           remoteSessions.set(host.alias, []);
           errors.push({ alias: host.alias, error: err.message });
@@ -260,8 +265,14 @@ function createRemoteIndexer(ctx) {
     return start();
   }
 
+  // Freshness contract (issue #212) — see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
   function getRemoteSessions(alias) {
-    return remoteSessions.get(alias) || [];
+    const backoff = hostBackoff.get(alias);
+    return {
+      sessions: remoteSessions.get(alias) || [],
+      at: remoteSessionsAt.get(alias) || null,
+      error: backoff ? backoff.lastError : null,
+    };
   }
 
   return {

@@ -17,6 +17,45 @@ function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
+function formatRemoteAge(epochMs) {
+  if (!Number.isFinite(epochMs)) return null;
+  const deltaMs = Date.now() - epochMs;
+  const s = Math.max(0, Math.floor(deltaMs / 1000));
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+// Three states a remote host's project header can carry (issue #212): the last
+// sync cycle failed (host unreachable, reason visible), the host has never
+// been read yet, or it was read successfully and genuinely has no live
+// session right now. See .ai/contexts/session-cache.md.
+function remoteHostState(project) {
+  if (project.remoteHostError) {
+    const age = formatRemoteAge(project.remoteHostAt);
+    return {
+      cls: 'remote-host-error',
+      detail: 'host unreachable: ' + project.remoteHostError
+        + (age ? ' (last confirmed ' + age + ')' : ', never confirmed'),
+    };
+  }
+  if (!Number.isFinite(project.remoteHostAt)) {
+    return { cls: 'remote-host-unknown', detail: 'not yet synced with this host' };
+  }
+  const age = formatRemoteAge(project.remoteHostAt);
+  const liveCount = (project.sessions || []).filter(s => s.remoteStatus).length;
+  return {
+    cls: liveCount > 0 ? 'remote-host-live' : 'remote-host-empty',
+    detail: (liveCount > 0 ? liveCount + ' live session' + (liveCount > 1 ? 's' : '') : 'no live session')
+      + ' (confirmed ' + age + ')',
+  };
+}
+
 // --- Subagent localStorage helpers ---
 
 // One-time GC: prune sessionIds that no longer exist in sessionMap.
@@ -730,6 +769,15 @@ function renderProjects(projects, resort) {
     const missingIcon = project.missing ? '<svg class="project-missing-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ' : '';
     header.innerHTML = `<span class="arrow">&#9660;</span> ${missingIcon}<span class="project-name">${escapeHtml(shortName)}</span>`;
 
+    // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
+    if (project.remoteAlias) {
+      const state = remoteHostState(project);
+      const hostDot = document.createElement('span');
+      hostDot.className = 'session-status-dot remote-host-dot ' + state.cls;
+      hostDot.title = state.detail;
+      header.querySelector('.project-name').after(hostDot);
+    }
+
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
     scheduleBtn.title = 'Create scheduled task';
@@ -1279,6 +1327,16 @@ function buildSessionItem(session) {
     badge.title = 'Read-only session mirrored from ' + session.remoteAlias;
     badge.textContent = session.remoteAlias;
     summaryEl.prepend(badge);
+
+    // status is the descriptor's last recorded transition, not a heartbeat —
+    // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
+    if (session.remoteStatus) {
+      const age = formatRemoteAge(session.remoteStatusUpdatedAt);
+      const statusEl = document.createElement('span');
+      statusEl.className = 'session-remote-status';
+      statusEl.textContent = session.remoteStatus + (age ? ' · ' + age : '');
+      metaEl.appendChild(statusEl);
+    }
   }
 
   if (session.type === 'terminal') {
