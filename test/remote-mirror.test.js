@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { syncMirror, readManifest } = require('../remote-mirror');
+const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../remote-mirror');
 
 function tmp(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-' + name + '-'));
@@ -246,6 +246,187 @@ test('a file above the per-file ceiling is never fetched', async () => {
     assert.deepEqual(asked, ['-srv-a/small.jsonl'], 'the oversized file must never be asked for');
     assert.equal(fs.existsSync(path.join(projectsDir, '-srv-a/huge.jsonl')), false);
     assert.ok(warned.some(m => m.includes('skipped')), 'the skip must be reported, not silent');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #217: nothing bounded a whole cycle before this — a host back after a
+// long outage could rebuild its entire mirror (hundreds of files) in one pull.
+test('a per-cycle ceiling on file count defers the rest to the next cycle', async () => {
+  const dir = tmp('mirror-cycle-files');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const extra = 37;
+    const entries = Array.from({ length: MAX_CYCLE_FILES + extra }, (_, i) => ({
+      rel: `-srv-a/f${String(i).padStart(4, '0')}.jsonl`, size: 10, mtimeMs: 1,
+    }));
+    const asked = [];
+    const transport = {
+      listFiles: async () => ({ files: entries, sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const warned = [];
+    const log = { warn: (m) => warned.push(m), info() {}, error() {} };
+
+    const first = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log });
+    assert.equal(first.fetched, MAX_CYCLE_FILES, 'the first cycle stops at the file-count ceiling');
+    assert.equal(asked.length, MAX_CYCLE_FILES);
+    assert.ok(warned.some(m => m.includes('deferred')), 'the deferral must be logged');
+
+    asked.length = 0;
+    const second = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log });
+    assert.equal(second.fetched, extra, 'the deferred remainder is picked up next cycle');
+    assert.equal(asked.length, extra);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a per-cycle ceiling on total bytes defers the rest to the next cycle', async () => {
+  const dir = tmp('mirror-cycle-bytes');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const fileSize = 60 * 1024 * 1024; // under MAX_FILE_BYTES; 4 of these fit under MAX_CYCLE_BYTES
+    const entries = Array.from({ length: 6 }, (_, i) => ({
+      rel: `-srv-a/big${i}.jsonl`, size: fileSize, mtimeMs: 1,
+    }));
+    const asked = [];
+    const transport = {
+      listFiles: async () => ({ files: entries, sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const warned = [];
+    const log = { warn: (m) => warned.push(m), info() {}, error() {} };
+
+    const first = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log });
+    assert.equal(first.fetched, 4, 'the first cycle stops once a fifth file would exceed the byte ceiling');
+    assert.deepEqual(asked, entries.slice(0, 4).map(e => e.rel));
+    assert.ok(warned.some(m => m.includes('deferred') && m.includes('bytes')), 'the byte deferral must be logged');
+
+    asked.length = 0;
+    const second = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log });
+    assert.equal(second.fetched, 2, 'the deferred remainder is picked up next cycle');
+    assert.deepEqual(asked, entries.slice(4).map(e => e.rel));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a mirrored file that changed but got deferred is still refetched once room frees up', async () => {
+  const dir = tmp('mirror-cycle-deferred-change');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const targetRel = '-srv-z/target.jsonl';
+    const state = { mtimeMs: 1 };
+    const buildEntries = (withFillers) => [
+      ...(withFillers ? Array.from({ length: MAX_CYCLE_FILES }, (_, i) => ({
+        rel: `-srv-a/filler${String(i).padStart(4, '0')}.jsonl`, size: 10, mtimeMs: 1,
+      })) : []),
+      { rel: targetRel, size: 10, mtimeMs: state.mtimeMs },
+    ];
+    let withFillers = false;
+    const asked = [];
+    const transport = {
+      listFiles: async () => ({ files: buildEntries(withFillers), sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, rel === targetRel ? `mtime=${state.mtimeMs}` : 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const targetPath = path.join(projectsDir, ...targetRel.split('/'));
+
+    // Cycle 1: target alone, fetched and mirrored.
+    const first = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath });
+    assert.equal(first.fetched, 1);
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'mtime=1');
+
+    // Cycle 2: target changes remotely, but a flood of new filler files fills
+    // the per-cycle quota first (targetRel sorts after the fillers in
+    // insertion order), so target is deferred without ever being attempted.
+    state.mtimeMs = 2;
+    withFillers = true;
+    asked.length = 0;
+    const second = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath });
+    assert.equal(second.fetched, MAX_CYCLE_FILES, 'only the fillers fit this cycle');
+    assert.ok(!asked.includes(targetRel), 'target was deferred, not attempted');
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'mtime=1', 'target on disk is untouched by the deferred cycle');
+
+    // Cycle 3: fillers now match the manifest and are skipped, freeing the
+    // quota. The deferred file must still look "changed" and get refetched.
+    withFillers = false;
+    asked.length = 0;
+    const third = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath });
+    assert.equal(third.fetched, 1, 'the deferred file is picked up once room frees up');
+    assert.deepEqual(asked, [targetRel]);
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'mtime=2', 'the deferred change finally lands');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('deletions still run on a cycle that hits the per-cycle ceiling', async () => {
+  const dir = tmp('mirror-cycle-delete');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const files = {
+      '-srv-a/a.jsonl': { content: line('/srv/a'), mtimeMs: 1000 },
+      '-srv-b/b.jsonl': { content: line('/srv/b'), mtimeMs: 2000 },
+    };
+    await syncMirror({ alias: 'vps', transport: fakeTransport(files), projectsDir, manifestPath });
+
+    // b vanishes remotely; a flood of new files also blows the per-cycle
+    // ceiling. The deletion of b must still run: a deferred cycle is not a
+    // failed one. (PR #224 regressed a failed inventory into deleting
+    // everything for a host — this proves a deferred cycle is not confused
+    // with that case.)
+    const extra = MAX_CYCLE_FILES + 10;
+    const entries = [
+      { rel: '-srv-a/a.jsonl', size: files['-srv-a/a.jsonl'].content.length, mtimeMs: 1000 },
+      ...Array.from({ length: extra }, (_, i) => ({
+        rel: `-srv-c/f${String(i).padStart(4, '0')}.jsonl`, size: 10, mtimeMs: 1,
+      })),
+    ];
+    const transport = {
+      listFiles: async () => ({ files: entries, sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const warned = [];
+    const r = await syncMirror({
+      alias: 'vps', transport, projectsDir, manifestPath,
+      log: { warn: (m) => warned.push(m), info() {}, error() {} },
+    });
+
+    assert.equal(r.fetched, MAX_CYCLE_FILES, 'the new-file flood is bounded');
+    assert.equal(r.removed, 1, 'the deletion still runs: deferral is not a failure');
+    assert.equal(fs.existsSync(path.join(projectsDir, '-srv-b', 'b.jsonl')), false);
+    assert.equal(fs.existsSync(path.join(projectsDir, '-srv-b')), false);
+    assert.ok(fs.existsSync(path.join(projectsDir, '-srv-a', 'a.jsonl')), 'the survivor is untouched');
+    assert.ok(warned.some(m => m.includes('deferred')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

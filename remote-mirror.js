@@ -8,6 +8,8 @@ const { isSafeRelPath, topFolderOf } = require('./remote-hosts');
 const MAX_INVENTORY_ENTRIES = 20_000;
 // Per-file ceiling: scp is bounded in time, never in bytes.
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_CYCLE_FILES = 500;
+const MAX_CYCLE_BYTES = 256 * 1024 * 1024;
 
 function readManifest(manifestPath) {
   try {
@@ -61,6 +63,10 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
 
   const toFetch = [];
   let skippedTooLarge = 0;
+  let cycleBytes = 0;
+  let cycleFull = false;
+  let deferredFiles = 0;
+  let deferredBytes = 0;
   for (const [rel, meta] of want) {
     // The inventory already carries the size; scp is bounded in time only, so
     // this is the only place a single oversized transcript can be refused
@@ -74,10 +80,20 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
     if (prev && prev.size === meta.size && prev.mtimeMs === meta.mtimeMs && fs.existsSync(localPath)) {
       continue;
     }
-    toFetch.push(rel);
+    if (!cycleFull && toFetch.length < MAX_CYCLE_FILES && cycleBytes + meta.size <= MAX_CYCLE_BYTES) {
+      toFetch.push(rel);
+      cycleBytes += meta.size;
+    } else {
+      cycleFull = true;
+      deferredFiles++;
+      deferredBytes += meta.size;
+    }
   }
   if (skippedTooLarge && log && log.warn) {
     log.warn(`[remote:${alias}] ${skippedTooLarge} file(s) skipped: over ${MAX_FILE_BYTES} bytes`);
+  }
+  if (deferredFiles && log && log.warn) {
+    log.warn(`[remote:${alias}] ${deferredFiles} file(s) deferred to next cycle: ${deferredBytes} bytes over the per-cycle ceiling`);
   }
 
   let fetched = [];
@@ -154,4 +170,4 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
   };
 }
 
-module.exports = { syncMirror, readManifest, writeManifest };
+module.exports = { syncMirror, readManifest, writeManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES, MAX_FILE_BYTES };
