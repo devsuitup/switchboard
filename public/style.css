@@ -4150,6 +4150,22 @@ body { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
+/* Issue #212 — see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") */
+.session-remote-status {
+  color: #7fb3e0;
+}
+
+.remote-host-dot {
+  display: inline-block;
+  margin: 0 0 0 4px;
+  vertical-align: middle;
+}
+
+.remote-host-dot.remote-host-error { background: #e05a5a; }
+.remote-host-dot.remote-host-unknown { background: #f5be3c; }
+.remote-host-dot.remote-host-empty { background: rgba(255,255,255,0.18); }
+.remote-host-dot.remote-host-live { background: #3ecf5a; }
+
 .remote-hosts-list {
   margin: 8px 0;
 }

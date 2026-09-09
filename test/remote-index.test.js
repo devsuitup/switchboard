@@ -171,10 +171,18 @@ test('getRemoteSessions surfaces per-host session descriptors from the same sync
     const r = await indexer.refreshNow();
 
     assert.deepEqual(r.errors, [], 'both hosts complete without error');
-    assert.deepEqual(indexer.getRemoteSessions('withSessions'), sessionsByAlias.withSessions);
-    assert.deepEqual(indexer.getRemoteSessions('empty'), []);
-    assert.deepEqual(indexer.getRemoteSessions('some-alias-never-refreshed'), [],
-      'an unknown alias must never throw or return undefined');
+    const withSessions = indexer.getRemoteSessions('withSessions');
+    assert.deepEqual(withSessions.sessions, sessionsByAlias.withSessions);
+    assert.ok(Number.isInteger(withSessions.at), 'a successful cycle records when it happened');
+    assert.equal(withSessions.error, null);
+    const empty = indexer.getRemoteSessions('empty');
+    assert.deepEqual(empty.sessions, []);
+    assert.ok(Number.isInteger(empty.at), 'a host with zero live sessions still had a successful read');
+    assert.equal(empty.error, null);
+    const neverRefreshed = indexer.getRemoteSessions('some-alias-never-refreshed');
+    assert.deepEqual(neverRefreshed.sessions, [], 'an unknown alias must never throw or return undefined');
+    assert.equal(neverRefreshed.at, null, 'an alias never refreshed has no successful-read timestamp');
+    assert.equal(neverRefreshed.error, null);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
@@ -203,12 +211,20 @@ test('getRemoteSessions is cleared, not left stale, after a cycle where sync() t
 
     const r1 = await indexer.refreshNow();
     assert.deepEqual(r1.errors, []);
-    assert.deepEqual(indexer.getRemoteSessions('planificator'), [{ pid: 1, sessionId: 'still-alive' }]);
+    const afterSuccess = indexer.getRemoteSessions('planificator');
+    assert.deepEqual(afterSuccess.sessions, [{ pid: 1, sessionId: 'still-alive' }]);
+    assert.ok(Number.isInteger(afterSuccess.at));
+    assert.equal(afterSuccess.error, null);
 
     const r2 = await indexer.refreshNow();
     assert.equal(r2.errors.length, 1, 'the second cycle must be reported as failed');
-    assert.deepEqual(indexer.getRemoteSessions('planificator'), [],
+    const afterFailure = indexer.getRemoteSessions('planificator');
+    assert.deepEqual(afterFailure.sessions, [],
       'a failed cycle must not keep reporting hours-old sessions as live');
+    assert.match(afterFailure.error, /timed out/,
+      'the failure reason must survive on the accessor so the UI can distinguish it from a genuinely idle host');
+    assert.equal(afterFailure.at, afterSuccess.at,
+      'the last-successful-read timestamp is not a heartbeat: a failed cycle does not bump it');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

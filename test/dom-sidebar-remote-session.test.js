@@ -64,6 +64,9 @@ test('a remote session with no live attachable descriptor opens the transcript, 
     assert.deepEqual(viewed, ['remote-1']);
     assert.deepEqual(opened, [], 'openSession would spawn a PTY in a cwd that is not on this machine');
     assert.match(item.title, /not currently attachable/i, 'the row must say why it fell back to the transcript');
+    const badge = item.querySelector('.remote-badge');
+    assert.match(badge.title, /transcript/i, 'the badge must not promise an attach it will not perform');
+    assert.doesNotMatch(badge.title, /read-only session mirrored/i, 'the pre-attach wording is obsolete');
     assert.doesNotMatch(item.title, /tmux/i, 'the renderer must never name a multiplexer');
   } finally { ctx.destroy(); }
 });
@@ -91,6 +94,9 @@ test('a remote session with a live attachable descriptor opens a terminal, not t
     assert.deepEqual(opened, ['remote-2']);
     assert.deepEqual(viewed, [], 'an attachable remote session must open a terminal, not the read-only transcript');
     assert.ok(!item.title, 'an attachable session carries no fallback-reason title');
+    const badge = item.querySelector('.remote-badge');
+    assert.match(badge.title, /attach/i, 'an attachable session must not be described as read-only');
+    assert.doesNotMatch(badge.title, /read-only/i, 'an attachable session must not be described as read-only');
   } finally { ctx.destroy(); }
 });
 

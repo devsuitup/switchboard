@@ -488,16 +488,26 @@ const remoteAttachAdapter = createTmuxAttachAdapter({
 // renderer can route a click without ever naming an attach mechanism itself
 // — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach").
 function annotateRemoteAttachable(projects) {
-  const descriptorsByAlias = new Map();
+  const hostInfoByAlias = new Map();
+  function hostInfo(alias) {
+    if (!hostInfoByAlias.has(alias)) {
+      const { sessions, at, error } = remoteIndexer.getRemoteSessions(alias);
+      hostInfoByAlias.set(alias, { at, error, byId: new Map(sessions.map(d => [d.sessionId, d])) });
+    }
+    return hostInfoByAlias.get(alias);
+  }
   for (const project of projects) {
+    if (project.remoteAlias) {
+      const info = hostInfo(project.remoteAlias);
+      project.remoteHostAt = info.at;
+      project.remoteHostError = info.error;
+    }
     for (const session of project.sessions) {
       if (!session.remoteAlias) continue;
-      if (!descriptorsByAlias.has(session.remoteAlias)) {
-        const descriptors = remoteIndexer.getRemoteSessions(session.remoteAlias);
-        descriptorsByAlias.set(session.remoteAlias, new Map(descriptors.map(d => [d.sessionId, d])));
-      }
-      const descriptor = descriptorsByAlias.get(session.remoteAlias).get(session.sessionId);
+      const descriptor = hostInfo(session.remoteAlias).byId.get(session.sessionId);
       session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+      session.remoteStatus = descriptor ? (descriptor.status || null) : null;
+      session.remoteStatusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
     }
   }
   return projects;
@@ -2013,7 +2023,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     try { cachedFolder = getCachedFolder(sessionId); } catch {}
     if (isRemoteFolder(cachedFolder)) {
       const { alias } = parseFolderKey(cachedFolder);
-      const descriptor = remoteIndexer.getRemoteSessions(alias).find(s => s.sessionId === sessionId);
+      const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
       const localPtySize = normalizePtySize(initialSize);
       const attachResult = descriptor
         ? await remoteAttachAdapter.attach(alias, descriptor, localPtySize)
