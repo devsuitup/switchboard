@@ -514,3 +514,128 @@ test('failure logging is throttled: only the first failure and tier changes are 
     assert.ok(warnings.length <= 6, `only the tier changes are logged, got ${warnings.length}`);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+// refreshHostNow(alias) — issue #240's per-host entry point for the watch
+// channel: the same refresh path the periodic timer takes, narrowed to one
+// host, so a push signal never pays for refreshing every declared host.
+test('refreshHostNow refreshes only the named host, not its peers', async () => {
+  const dataDir = tmp('idx-hostnow-scope');
+  try {
+    const scans = [];
+    let notified = 0;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }, { alias: 'other' }],
+      dataDir,
+      transport: {},
+      scanFolders: (args) => { scans.push(args.folderPrefix); return Promise.resolve({ ok: true }); },
+      listIndexedFolderKeys: () => [],
+      notify: () => { notified++; },
+      timers: fakeTimers(),
+      sync: async ({ alias, projectsDir }) => {
+        fs.mkdirSync(path.join(projectsDir, '-srv-x'), { recursive: true });
+        return { fetched: 1, unchanged: 0, removed: 0, failed: 0, total: 1, changedFolders: new Set(['-srv-x']) };
+      },
+    });
+
+    const r = await indexer.refreshHostNow('vps');
+
+    assert.equal(r.skipped, false);
+    assert.equal(r.changed, true);
+    assert.deepEqual(scans, ['vps'], 'only the named host was scanned');
+    assert.equal(notified, 1, 'the same notify path the periodic cycle uses fires on change');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshHostNow reports skipped for an alias that is not declared', async () => {
+  const dataDir = tmp('idx-hostnow-unknown');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: () => { throw new Error('sync must not be called for an unknown alias'); },
+    });
+
+    assert.deepEqual(await indexer.refreshHostNow('ghost'), { skipped: true });
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshHostNow honors the same per-host backoff refreshNow uses', async () => {
+  const dataDir = tmp('idx-hostnow-backoff');
+  try {
+    const clock = fakeClock(0);
+    let attempts = 0;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => { attempts++; throw new Error('ssh: connect to host dead port 22: timed out'); },
+    });
+
+    await indexer.refreshHostNow('dead');
+    assert.equal(attempts, 1);
+    const state = indexer.getRemoteHostState('dead');
+    assert.ok(state.nextAttemptAt > clock(), 'a failure must arm the backoff exactly as refreshNow does');
+
+    // Still backing off: a second watch-triggered call must not spend another ssh attempt.
+    await indexer.refreshHostNow('dead');
+    assert.equal(attempts, 1, 'a host still backing off is skipped, not re-attempted');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshHostNow and the periodic cycle never overlap on the same host', async () => {
+  const dataDir = tmp('idx-hostnow-overlap');
+  try {
+    let inflightCount = 0;
+    let maxInflight = 0;
+    let releasePeriodic;
+    const periodicGate = new Promise((resolve) => { releasePeriodic = resolve; });
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async ({ projectsDir }) => {
+        inflightCount++;
+        maxInflight = Math.max(maxInflight, inflightCount);
+        await periodicGate;
+        fs.mkdirSync(path.join(projectsDir, '-srv-x'), { recursive: true });
+        inflightCount--;
+        return { fetched: 1, unchanged: 0, removed: 0, failed: 0, total: 1, changedFolders: new Set(['-srv-x']) };
+      },
+    });
+
+    const periodic = indexer.refreshNow();
+    // A missing overlap guard would make this call join the same in-flight
+    // sync() and hang on periodicGate forever — race a timeout so a broken
+    // guard fails the test instead of hanging the whole run.
+    let timeoutHandle;
+    const timeout = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error(
+        'refreshHostNow did not return promptly — it is not skipping the host the periodic cycle already owns',
+      )), 2000);
+      if (timeoutHandle.unref) timeoutHandle.unref();
+    });
+    let watchTriggered;
+    try {
+      watchTriggered = await Promise.race([indexer.refreshHostNow('vps'), timeout]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+    assert.equal(watchTriggered.skipped, true, 'a watch signal must not race the periodic cycle for the same host');
+
+    releasePeriodic();
+    await periodic;
+    assert.equal(maxInflight, 1, 'the two paths never ran the transport for the same host concurrently');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

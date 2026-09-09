@@ -17,6 +17,12 @@ const NOOP_LOG = { info() {}, warn() {}, error() {} };
 // see .ai/contexts/session-cache.md ("Remote hosts backoff")
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
+// see .ai/contexts/session-cache.md ("Remote hosts backoff")
+function backoffDelayMs(failures, intervalMs) {
+  if (failures <= 0) return 0;
+  return Math.min(intervalMs * Math.pow(2, failures - 1), MAX_BACKOFF_MS);
+}
+
 /**
  * Periodic mirror + index of every declared SSH host.
  * see .ai/contexts/session-cache.md ("Remote SSH hosts")
@@ -47,6 +53,7 @@ function createRemoteIndexer(ctx) {
   const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
   const remoteSessionsAt = new Map(); // alias -> epoch ms of the last cycle that did not throw
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
+  const hostInFlight = new Set();
 
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
@@ -55,12 +62,6 @@ function createRemoteIndexer(ctx) {
       hostBackoff.set(alias, s);
     }
     return s;
-  }
-
-  // see .ai/contexts/session-cache.md ("Remote hosts backoff")
-  function backoffDelayMs(failures, intervalMs) {
-    if (failures <= 0) return 0;
-    return Math.min(intervalMs * Math.pow(2, failures - 1), MAX_BACKOFF_MS);
   }
 
   function onHostSuccess(alias) {
@@ -211,6 +212,7 @@ function createRemoteIndexer(ctx) {
     try {
       for (const host of list) {
         if (stopped) break;
+        if (hostInFlight.has(host.alias)) continue;
         const state = backoffState(host.alias);
         if (now() < state.nextAttemptAt) continue; // still backing off: no attempt, no log, no ssh
         try {
@@ -229,6 +231,32 @@ function createRemoteIndexer(ctx) {
 
     if (changed && ctx.notify) ctx.notify();
     return { skipped: false, hosts: list.length, changed, errors };
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — watch channel")
+  async function refreshHostNow(alias) {
+    if (stopped || inFlight || hostInFlight.has(alias)) return { skipped: true };
+    const host = hosts().find(h => h.alias === alias);
+    if (!host) return { skipped: true };
+    const state = backoffState(alias);
+    if (now() < state.nextAttemptAt) return { skipped: true };
+    const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
+    hostInFlight.add(alias);
+    let changed = false;
+    let error = null;
+    try {
+      changed = await refreshHost(host);
+      onHostSuccess(alias);
+      remoteSessionsAt.set(alias, now());
+    } catch (err) {
+      remoteSessions.set(alias, []);
+      onHostFailure(alias, err, intervalMs);
+      error = err.message;
+    } finally {
+      hostInFlight.delete(alias);
+    }
+    if (changed && ctx.notify) ctx.notify();
+    return { skipped: false, changed, error };
   }
 
   function start() {
@@ -276,11 +304,11 @@ function createRemoteIndexer(ctx) {
   }
 
   return {
-    start, stop, dispose, restart, refreshNow,
+    start, stop, dispose, restart, refreshNow, refreshHostNow,
     isRunning: () => timer !== null,
     getRemoteSessions,
     getRemoteHostState,
   };
 }
 
-module.exports = { createRemoteIndexer };
+module.exports = { createRemoteIndexer, backoffDelayMs };
