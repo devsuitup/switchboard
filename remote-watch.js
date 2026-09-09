@@ -11,7 +11,7 @@ const NO_INOTIFYWAIT_EXIT_CODE = 44;
 const SESSION_FILE_RE = /^[0-9]+\.json$/;
 const PROJECTS_EVENTS = 'modify,close_write,create,moved_to';
 const SESSIONS_EVENTS = 'close_write,create,delete,moved_to';
-const COALESCE_MS = 1000;
+const COALESCE_MS = 15000;
 const RESTART_BASE_MS = 5000;
 const HEALTHY_MS = 30000;
 
