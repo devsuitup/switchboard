@@ -459,7 +459,7 @@ const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCache
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 const { createRemoteIndexer } = require('./remote-index');
@@ -576,17 +576,19 @@ ipcMain.handle('add-project', (_event, projectPath) => {
 });
 
 // --- IPC: remove-project ---
-ipcMain.handle('remove-project', (_event, projectPath) => {
+ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
   try {
     // Add to hidden projects list
     const global = getSetting('global') || {};
     const hidden = global.hiddenProjects || [];
-    if (!hidden.includes(projectPath)) hidden.push(projectPath);
+    const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
+    const hiddenEntry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
+    if (!hidden.includes(hiddenEntry)) hidden.push(hiddenEntry);
     global.hiddenProjects = hidden;
     setSetting('global', global);
 
     // Clean up DB cache and search index for this folder
-    const folder = encodeProjectPath(projectPath);
+    const folder = folderKey || encodeProjectPath(projectPath);
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);

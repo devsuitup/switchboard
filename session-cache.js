@@ -390,6 +390,13 @@ function reconcileCacheFromFilesystem() {
   }
 }
 
+// A hidden entry is a bare projectPath (legacy, hides on every host) or
+// alias+'::'+projectPath (hides only on that host). See remove-project in main.js.
+function isProjectHidden(hiddenProjects, alias, projectPath) {
+  if (hiddenProjects.has(projectPath)) return true;
+  return alias !== null && hiddenProjects.has(joinFolderKey(alias, projectPath));
+}
+
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   const metaMap = getAllMeta();
@@ -424,8 +431,8 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
-    if (hiddenProjects.has(row.projectPath)) continue;
     const { alias } = parseFolderKey(row.folder);
+    if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     let messageCount = row.messageCount;
@@ -511,7 +518,7 @@ function buildProjectsFromCache(showArchived) {
           }
         }
         if (!projectPath) continue;
-        if (hiddenProjects.has(projectPath)) continue;
+        if (isProjectHidden(hiddenProjects, alias, projectPath)) continue;
         const key = groupKey(alias, projectPath);
         if (projectMap.has(key)) continue;
         // For a placeholder the on-disk name IS the ground truth — re-encoding
@@ -533,7 +540,7 @@ function buildProjectsFromCache(showArchived) {
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
     if (!session.projectPath) continue;
-    if (hiddenProjects.has(session.projectPath)) continue;
+    if (isProjectHidden(hiddenProjects, null, session.projectPath)) continue;
     const localKey = groupKey(null, session.projectPath);
     if (!projectMap.has(localKey)) {
       projectMap.set(localKey, {
