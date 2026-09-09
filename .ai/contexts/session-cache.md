@@ -437,8 +437,28 @@ Launching a new remote session (#222) and injection over the messaging socket
   drift. A remote session's `ptyProcess` (from `remote-attach.js`) exposes
   the same `write/resize/kill/onData/onExit/pid` shape node-pty does, so
   `pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
-  remote-awareness of their own; `resize()` is a deliberate no-op — see the
-  sizing rule above for why a remote attach is never resized mid-session.
+  remote-awareness of their own — the existing `terminal-resize` IPC reaches
+  a remote session's PTY through the exact same `resizePty(session, cols,
+  rows, sessionId)` call as a local one.
+
+- **Solo vs shared (issue #221 follow-up): resize follows the local window
+  only when no other tmux client is already attached.** The probe
+  (`buildProbeCommand`) now appends a third `PROBE_SEP`-delimited segment,
+  `tmux -S "$sock" list-clients -t <target> | wc -l` — still the one
+  non-interactive ssh round trip, no second connection. `attach(alias,
+  descriptor, localSize)` takes the caller's locally-measured `{cols, rows}`
+  (`main.js`'s `open-terminal` handler passes the same `normalizePtySize
+  (initialSize)` result a local spawn uses) and treats the session as
+  **solo** only when the probed client count is exactly `0` *and* a valid
+  `localSize` was supplied. Solo: the PTY opens at `localSize`, and the
+  returned `ptyProcess.resize(cols, rows)` forwards to the underlying ssh
+  PTY — a live terminal like any local one. Not solo (one or more other
+  clients attached, or the client count could not be parsed — fail closed
+  the same as "attached"): the PTY opens at the sizing-rule's remote
+  `cols/rows` as before, and `resize()` stays a no-op, logging which of the
+  two reasons applied. Rewrapping a screen someone else is actively looking
+  at is the failure this refuses; an unparseable count is treated the same
+  as "someone's there" rather than guessed.
 
 - **This is the first thing to populate the session-handle seam from issue
   #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a

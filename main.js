@@ -2014,8 +2014,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (isRemoteFolder(cachedFolder)) {
       const { alias } = parseFolderKey(cachedFolder);
       const descriptor = remoteIndexer.getRemoteSessions(alias).find(s => s.sessionId === sessionId);
+      const localPtySize = normalizePtySize(initialSize);
       const attachResult = descriptor
-        ? await remoteAttachAdapter.attach(alias, descriptor)
+        ? await remoteAttachAdapter.attach(alias, descriptor, localPtySize)
         : { ok: false, error: REMOTE_READ_ONLY };
       if (!attachResult.ok) return { ok: false, error: attachResult.error || REMOTE_READ_ONLY };
 
