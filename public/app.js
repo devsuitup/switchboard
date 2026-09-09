@@ -121,6 +121,11 @@ let restoringWorkingSet = false;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
 
+// Cold-cache retry: see .work-files/switchboard/restore-cold-cache-report.md
+let restorePendingRetry = false;
+let restoreRetryDone = false;
+let sessionOpenedOutsideRestore = false;
+
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
@@ -177,13 +182,29 @@ async function restoreWorkingSet() {
   const mode = (g && g.restoreOnStartup) || 'ask';
   const savedSet = (g && g.openWorkingSet) || [];
 
-  if (mode === 'off' || savedSet.length === 0) return;
+  document.getElementById('restore-cold-toast')?.remove();
 
-  // Filter to sessions still indexed (guard for deleted sessions / vanished worktrees)
-  const candidates = savedSet.filter(item =>
-    sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId)
-  );
-  if (candidates.length === 0) return;
+  if (mode === 'off') return;
+
+  // Decision logic: restore-plan.js — see .work-files/switchboard/restore-cold-cache-report.md
+  const plan = planWorkingSetRestore({
+    savedSet,
+    sessionMap,
+    openSessions,
+    retryDone: restoreRetryDone,
+    sessionOpenedOutsideRestore,
+  });
+
+  if (plan.action === 'nothing') return;
+
+  if (plan.action === 'defer') {
+    restorePendingRetry = true;
+    if (mode === 'ask') showColdCacheNotice(savedSet.length);
+    return;
+  }
+
+  const candidates = plan.candidates;
+  restorePendingRetry = false;
 
   if (mode === 'auto') {
     restoringWorkingSet = true;
@@ -220,10 +241,38 @@ async function restoreWorkingSet() {
   });
 }
 
+function showColdCacheNotice(count) {
+  document.getElementById('restore-cold-toast')?.remove();
+  const toast = document.createElement('div');
+  toast.id = 'restore-cold-toast';
+  toast.className = 'restore-toast';
+  toast.innerHTML = `<span class="restore-toast-msg">Finishing indexing before restoring ${count} session${count !== 1 ? 's' : ''} from last time…</span>` +
+    `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
+  document.body.appendChild(toast);
+  toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
+    toast.remove();
+    restorePendingRetry = false;
+    restoreRetryDone = true;
+  });
+}
+
+async function maybeRetryRestoreWorkingSet() {
+  if (!restorePendingRetry || restoreRetryDone) return;
+  if (sessionMap.size === 0) return;
+  restoreRetryDone = true;
+  restorePendingRetry = false;
+  if (sessionOpenedOutsideRestore) {
+    document.getElementById('restore-cold-toast')?.remove();
+    return;
+  }
+  await restoreWorkingSet();
+}
+
 // Expose for tests
 window._persistWorkingSet = () => persistWorkingSet();
 window._restoreWorkingSet = () => restoreWorkingSet();
 window._runRestore = (list) => runRestore(list);
+window._maybeRetryRestoreWorkingSet = () => maybeRetryRestoreWorkingSet();
 
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 let searchMatchProjectPaths = null; // Set<string> of project paths matched by name
@@ -996,6 +1045,7 @@ async function showTerminalHeader(session) {
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
 async function openSession(session, customOptions) {
+  if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   const { sessionId, projectPath } = session;
 
   // If already open, handle closed-session cleanup or just show it
@@ -1097,7 +1147,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       // Catch up on changes that happened while on another tab
       if (projectsChangedWhileAway) {
         projectsChangedWhileAway = false;
-        loadProjects();
+        loadProjects().then(() => maybeRetryRestoreWorkingSet());
       }
     } else if (tabName === 'stats') {
       statsContent.style.display = '';
@@ -1291,7 +1341,7 @@ window.api.onProjectsChanged(() => {
   // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    loadProjects();
+    loadProjects().then(() => maybeRetryRestoreWorkingSet());
   }, 900);
 });
 
