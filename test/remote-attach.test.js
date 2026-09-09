@@ -22,34 +22,39 @@ const {
 const PROBE_SEP = '';
 const silentLog = { info() {}, warn() {}, error() {} };
 
-/** A minimal IPty-like double: onData/onExit/write/kill/pid. */
+/** A minimal IPty-like double: onData/onExit/write/resize/kill/pid. */
 function fakeRawPty() {
   const emitter = new EventEmitter();
   const writes = [];
+  const resizes = [];
   let killed = 0;
   const pty = {
     write: (d) => writes.push(d),
+    resize: (cols, rows) => resizes.push({ cols, rows }),
     onData: (cb) => emitter.on('data', cb),
     onExit: (cb) => emitter.on('exit', cb),
     kill: () => { killed++; emitter.emit('exit', { exitCode: 0 }); },
     pid: 4242,
   };
-  return { pty, writes, emitter, killedCount: () => killed };
+  return { pty, writes, resizes, emitter, killedCount: () => killed };
 }
 
 const FAKE_SOCKET = '/tmp/tmux-0/test';
 
-function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactory, socket = FAKE_SOCKET } = {}) {
-  const runRemoteCommand = async () => ({
-    code: probeCode,
-    stdout: probeCode === 0 ? `${socket}${PROBE_SEP}${probeStdout || ''}` : (probeStdout || ''),
-    stderr: '',
-  });
+function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactory, socket = FAKE_SOCKET, probeCalls, log = silentLog } = {}) {
+  const runRemoteCommand = async (alias, command) => {
+    if (probeCalls) probeCalls.push(command);
+    return {
+      code: probeCode,
+      stdout: probeCode === 0 ? `${socket}${PROBE_SEP}${probeStdout || ''}` : (probeStdout || ''),
+      stderr: '',
+    };
+  };
   const spawnPty = (file, args, ptyOpts) => {
     spawnCalls.push({ file, args, ptyOpts });
     return (rawPtyFactory || (() => fakeRawPty().pty))();
   };
-  return createTmuxAttachAdapter({ spawnPty, runRemoteCommand, log: silentLog });
+  return createTmuxAttachAdapter({ spawnPty, runRemoteCommand, log });
 }
 
 test('parseTmuxField accepts the CLI-written format and rejects the rest', () => {
@@ -240,4 +245,96 @@ test('attach() surfaces a failed size probe without spawning anything', async ()
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
   assert.equal(result.ok, false);
   assert.equal(spawnCalls.length, 0);
+});
+
+// Solo vs shared (issue #221 follow-up) -- property 1: no other client means
+// a normal, resizable terminal at the locally measured size.
+test('attach() opens at the local size and forwards resize to the ssh pty when no other client is attached', async () => {
+  const raw = fakeRawPty();
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '0',
+    spawnCalls,
+    rawPtyFactory: () => raw.pty,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    { cols: spawnCalls[0].ptyOpts.cols, rows: spawnCalls[0].ptyOpts.rows },
+    { cols: 100, rows: 40 },
+    'solo attach must open at the locally measured size, not the remote window size',
+  );
+
+  result.ptyProcess.resize(120, 50);
+  assert.deepEqual(raw.resizes, [{ cols: 120, rows: 50 }], 'a later local resize must reach the ssh pty when solo');
+});
+
+// Property 2: another client already attached means the previous fixed
+// behavior, unchanged, with the reason logged.
+test('attach() keeps the fixed remote size and ignores resize when another client is already attached', async () => {
+  const raw = fakeRawPty();
+  const spawnCalls = [];
+  const logLines = [];
+  const log = { info: (msg) => logLines.push(msg), warn() {}, error() {} };
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '1',
+    spawnCalls,
+    rawPtyFactory: () => raw.pty,
+    log,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    { cols: spawnCalls[0].ptyOpts.cols, rows: spawnCalls[0].ptyOpts.rows },
+    { cols: 200, rows: 51 },
+    'a session with another attached client must keep the sizing-rule remote size, not the local one',
+  );
+
+  result.ptyProcess.resize(120, 50);
+  assert.deepEqual(raw.resizes, [], 'resize must not reach the ssh pty while another client is attached');
+  assert.ok(logLines.some((l) => /other client/i.test(l)), 'the log must say why resize is disabled');
+});
+
+// Fail-closed: an unparseable client count must be treated the same as
+// "someone's there", not guessed as solo.
+test('attach() fails closed to the fixed remote size when the client count cannot be parsed', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'garbage',
+    spawnCalls,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    { cols: spawnCalls[0].ptyOpts.cols, rows: spawnCalls[0].ptyOpts.rows },
+    { cols: 200, rows: 51 },
+  );
+});
+
+// Property 3: the attached-client count must ride the existing probe
+// connection -- the Windows OpenSSH client has no ControlMaster, so a
+// second call would be a second full ssh connection.
+test('the attached-client count rides the existing probe connection, never a second ssh call', async () => {
+  const spawnCalls = [];
+  const probeCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '0',
+    spawnCalls,
+    probeCalls,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(probeCalls.length, 1, 'reading the client count must not add a second ssh round trip');
+  assert.match(probeCalls[0], /list-clients/, 'the probe command must ask tmux for the attached client count');
 });

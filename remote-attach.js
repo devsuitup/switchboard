@@ -61,23 +61,32 @@ function buildProbeCommand(pid, target) {
     `if [ -z "$sock" ]; then echo ${NO_TMUX_ENV_MARKER} >&2; exit ${NO_TMUX_ENV_EXIT_CODE}; fi; ` +
     `printf '%s${PROBE_SEP}' "$sock"; ` +
     `tmux -S "$sock" display-message -p -t ${target} '#{window_width}x#{window_height}'` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null`;
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l`;
 }
 
 function buildAttachCommand(socket, target) {
   return `tmux -S '${socket}' attach -t ${target}`;
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo vs shared)
+function parseClientCount(text) {
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  return Number.parseInt(trimmed, 10);
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
 function parseDiscoveryProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
-  const idx = text.indexOf(PROBE_SEP);
-  if (idx === -1) return null;
-  const socket = text.slice(0, idx);
-  if (!isSafeSocketPath(socket)) return null;
-  const size = parseProbeOutput(text.slice(idx + PROBE_SEP.length));
+  const parts = text.split(PROBE_SEP);
+  const socket = parts[0] || '';
+  if (parts.length < 3 || !isSafeSocketPath(socket)) return null;
+  const size = parseProbeOutput(parts.slice(1, 3).join(PROBE_SEP));
   if (!size) return null;
-  return { socket, cols: size.cols, rows: size.rows };
+  const clientCount = parseClientCount(parts[3]);
+  return { socket, cols: size.cols, rows: size.rows, clientCount };
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -156,7 +165,10 @@ function createTmuxAttachAdapter(opts = {}) {
     return !!(descriptor && parseTmuxField(descriptor.tmux) && isValidPid(descriptor.pid));
   }
 
-  async function attach(alias, descriptor) {
+  // localSize: {cols, rows} the caller measured locally — used only when the
+  // probe finds no other attached client (see .ai/contexts/session-cache.md,
+  // "Remote hosts — tmux attach", solo vs shared).
+  async function attach(alias, descriptor, localSize) {
     const parsed = descriptor && parseTmuxField(descriptor.tmux);
     if (!parsed) {
       return { ok: false, error: 'session carries no tmux target — attach is not supported for this host' };
@@ -186,12 +198,20 @@ function createTmuxAttachAdapter(opts = {}) {
       return { ok: false, error: 'could not parse the remote window size' };
     }
 
+    // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo vs shared)
+    const hasLocalSize = !!localSize
+      && Number.isInteger(localSize.cols) && localSize.cols > 0
+      && Number.isInteger(localSize.rows) && localSize.rows > 0;
+    const solo = discovery.clientCount === 0 && hasLocalSize;
+    const openCols = solo ? localSize.cols : discovery.cols;
+    const openRows = solo ? localSize.rows : discovery.rows;
+
     const sshPath = resolveSshPath();
     const argv = ['-tt', '-o', 'BatchMode=yes', alias, buildAttachCommand(discovery.socket, parsed.target)];
 
     let raw;
     try {
-      raw = spawnPtyFn(sshPath, argv, { name: 'xterm-256color', cols: discovery.cols, rows: discovery.rows });
+      raw = spawnPtyFn(sshPath, argv, { name: 'xterm-256color', cols: openCols, rows: openRows });
     } catch (err) {
       return { ok: false, error: `attach spawn failed: ${err.message}` };
     }
@@ -210,7 +230,10 @@ function createTmuxAttachAdapter(opts = {}) {
 
     const ptyProcess = {
       write(data) { if (alive) raw.write(data); },
-      resize() {}, // fixed at attach time — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+      resize(cols, rows) {
+        if (!solo || !alive) return;
+        try { raw.resize(cols, rows); } catch {}
+      },
       kill: detach,
       onData(cb) { return raw.onData(cb); },
       onExit(cb) { return raw.onExit(cb); },
@@ -218,8 +241,17 @@ function createTmuxAttachAdapter(opts = {}) {
       get pid() { return raw.pid; },
     };
 
-    log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${discovery.cols}x${discovery.rows}`);
-    return { ok: true, ptyProcess, cols: discovery.cols, rows: discovery.rows };
+    if (solo) {
+      log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (solo — following local resizes)`);
+    } else {
+      const reason = discovery.clientCount == null
+        ? 'attached client count unknown, failing closed'
+        : discovery.clientCount > 0
+          ? `${discovery.clientCount} other client(s) already attached`
+          : 'no local size supplied';
+      log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (fixed at attach time — ${reason})`);
+    }
+    return { ok: true, ptyProcess, cols: openCols, rows: openRows };
   }
 
   return { supports, attach };
