@@ -245,6 +245,9 @@ const rendererCrossFileGlobals = {
   captureBinding: 'readonly',
   appShortcuts: 'writable',
   setAppShortcuts: 'readonly',
+
+  // Working-set restore decision (public/restore-plan.js)
+  planWorkingSetRestore: 'readonly',
 };
 
 module.exports = [
@@ -285,7 +288,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',
