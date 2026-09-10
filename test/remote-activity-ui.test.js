@@ -1,9 +1,11 @@
 // Tests for public/remote-activity-ui.js — the sidebar's remote
-// transcript-write signal. Since #243 it goes through the same .cli-busy
-// braille spinner a local session gets, via session-activity.js's
-// applyActivityClasses() (its declared single writer of .cli-busy), rather
-// than a separate violet dot. Evaluated standalone in jsdom together with
-// the real session-activity.js, same technique as test/session-activity.test.js:
+// transcript-write signal. Since #243 it goes through the same central
+// dispatcher local PTY output uses: session-activity.js's
+// setActivity(sessionId, active, via), which owns sessionBusyState,
+// activitySeq, the response-ready transition and the trace — never a direct
+// write. See .ai/contexts/session-cache.md ("Remote hosts — busy spinner
+// (issue #242)"). Evaluated standalone in jsdom together with the real
+// session-activity.js, same technique as test/session-activity.test.js:
 // split out precisely so it can be exercised without the rest of app.js
 // (which builds ViewerPanel/xterm at module scope and cannot be eval'd in
 // isolation).
@@ -72,17 +74,18 @@ function setup(sessionIds = ['s1']) {
     pruneRemoteActivityTimers: read('pruneRemoteActivityTimers'),
     remoteActivityDecayTimers: read('remoteActivityDecayTimers'),
     sessionBusyState: read('sessionBusyState'),
+    responseReadySessions: read('responseReadySessions'),
     destroy: () => window.close(),
   };
 }
 
-test('a remote-activity event marks the matching row busy through applyActivityClasses', () => {
+test('a remote-activity event marks the matching row busy through setActivity', () => {
   const t = setup(['s1']);
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'precondition: row starts idle');
 
   t.emit({ alias: 'vps', sessionId: 's1', at: Date.now() });
 
-  assert.equal(t.sessionBusyState.get('s1'), true, 'sessionBusyState is set through the single writer path');
+  assert.equal(t.sessionBusyState.get('s1'), true, 'sessionBusyState is set through the central dispatcher');
   assert.ok(t.item('s1').classList.contains('cli-busy'), 'the row must go busy, same as a local session');
   t.destroy();
 });
@@ -112,6 +115,19 @@ test('.cli-busy clears once the decay timer fires, and not before', () => {
 
   timer.fn(); // simulate the 20s elapsing
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'the row must go idle once the decay window elapses');
+  t.destroy();
+});
+
+test('decay routes through setActivity: a non-selected remote session lands in responseReadySessions, exactly like a local one', () => {
+  const t = setup(['s1']);
+  t.window.activeSessionId = 's2'; // s1 is not the focused session
+  t.emit({ sessionId: 's1' });
+  assert.ok(!t.responseReadySessions.has('s1'), 'precondition: not response-ready while busy');
+
+  t.pending()[0].fn(); // decay fires
+
+  assert.equal(t.sessionBusyState.get('s1'), false);
+  assert.ok(t.responseReadySessions.has('s1'), 'going idle through setActivity marks the turn as an unread response, like a local session');
   t.destroy();
 });
 

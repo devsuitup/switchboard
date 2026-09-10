@@ -9,9 +9,6 @@
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
-// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
-const REMOTE_ACTIVITY_DECAY_MS = 20000;
-
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -522,6 +519,10 @@ function buildSlugGroup(slug, sessions, subagentIndex) {
 function renderProjects(projects, resort) {
   pruneStaleSubagents();
   pendingSubagentRest.clear();
+  // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
+  for (const project of projects) {
+    for (const session of project.sessions) seedRemoteActivity(session);
+  }
   const newSidebar = document.createElement('div');
 
   // Sort project groups using sortedOrder as source of truth
@@ -1279,11 +1280,6 @@ function buildSessionItem(session) {
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
   if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
-  // see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
-  if (session.remoteAlias && Number.isFinite(session.remoteActiveAt) &&
-      (Date.now() - session.remoteActiveAt) < REMOTE_ACTIVITY_DECAY_MS) {
-    sessionBusyState.set(session.sessionId, true);
-  }
   if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
   if (parentHasActiveSubagent(session.sessionId)) item.classList.add('has-busy-agents');
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
