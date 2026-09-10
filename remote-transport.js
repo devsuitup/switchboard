@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isSafeRelPath } = require('./remote-hosts');
+const { isSafeMirrorRelPath } = require('./remote-hosts');
 
 const REMOTE_PROJECTS_REL = '.claude/projects';
 const REMOTE_SESSIONS_REL = '.claude/sessions';
@@ -21,9 +21,10 @@ const SSH_BASE_OPTS = [
   '-o', `ConnectTimeout=${DEFAULT_CONNECT_TIMEOUT_S}`,
 ];
 
-// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)")
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)" and
+// "Remote hosts — meta.json sidecars")
 const LIST_COMMAND =
-  `find ${REMOTE_PROJECTS_REL} -type f -name '*.jsonl' -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
+  `find ${REMOTE_PROJECTS_REL} -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
   `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
   `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
   `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; done`;
@@ -38,7 +39,7 @@ function parseInventory(stdout) {
     const size = Number.parseInt(parts[1], 10);
     const rel = parts.slice(2).join('\t').replace(/\r$/, '');
     if (!Number.isFinite(mtime) || !Number.isFinite(size)) continue;
-    if (!isSafeRelPath(rel)) continue;
+    if (!isSafeMirrorRelPath(rel)) continue;
     out.push({ rel, size, mtimeMs: Math.round(mtime * 1000) });
   }
   return out;
@@ -177,7 +178,7 @@ function createSshTransport(opts = {}) {
     const destPath = path.join(destRoot, rel);
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     const tmpPath = destPath + '.part';
-    // Deliberately unquoted; isSafeRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+    // Deliberately unquoted; isSafeMirrorRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     const remote = `${alias}:${REMOTE_PROJECTS_REL}/${rel}`;
     const res = await run('scp', [...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
       timeoutMs: fetchTimeoutMs,
@@ -201,7 +202,7 @@ function createSshTransport(opts = {}) {
   async function fetchFiles(alias, rels, destRoot) {
     const fetched = [];
     const failed = [];
-    const queue = rels.filter(isSafeRelPath);
+    const queue = rels.filter(isSafeMirrorRelPath);
     let cursor = 0;
 
     const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {

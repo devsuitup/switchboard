@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 
 const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../remote-mirror');
+const { readSubagentMeta } = require('../read-session-file');
 
 function tmp(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-' + name + '-'));
@@ -445,5 +446,125 @@ test('a host with no sessions dir completes the cycle with zero descriptors', as
     assert.deepEqual(result.sessions, []);
     assert.equal(result.fetched, 1, 'inventory fetch/deletion behavior is unaffected');
     assert.ok(fs.existsSync(path.join(projectsDir, '-srv-a', 'a.jsonl')));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #244: readSubagentMeta() (read-session-file.js) is the real consumer
+// of the mirrored sidecar — it derives the sidecar path from the jsonl path by
+// suffix substitution, so the two must land in the same mirrored directory.
+// See .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars").
+test('a subagent .meta.json sidecar is mirrored next to its transcript, and readSubagentMeta finds it', async () => {
+  const dir = tmp('mirror-meta-sidecar');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const jsonlRel = '-srv-x/parent-uuid/subagents/agent-1.jsonl';
+    const metaRel = '-srv-x/parent-uuid/subagents/agent-1.meta.json';
+    const t = fakeTransport({
+      [jsonlRel]: { content: line('/srv/x'), mtimeMs: 1000 },
+      [metaRel]: { content: JSON.stringify({ agentType: 'Explore', description: 'find things' }), mtimeMs: 1000 },
+    });
+
+    const r = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(r.total, 2, 'both the transcript and its sidecar are in the inventory');
+    assert.equal(r.fetched, 2);
+    const mirroredJsonl = path.join(projectsDir, ...jsonlRel.split('/'));
+    const mirroredMeta = path.join(projectsDir, ...metaRel.split('/'));
+    assert.ok(fs.existsSync(mirroredJsonl));
+    assert.ok(fs.existsSync(mirroredMeta));
+    assert.deepEqual(readSubagentMeta(mirroredJsonl), { agentType: 'Explore', description: 'find things' });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The sidecar's own rel path is meaningless to the file-subset rescan (it
+// carries no session row of its own); it must be reported under its
+// transcript's rel path instead, so a sidecar arriving alone still triggers a
+// re-derive of the row that needs it.
+test('a sidecar-only change is reported to the indexer under its transcript rel path', async () => {
+  const dir = tmp('mirror-meta-changed');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const jsonlRel = '-srv-x/parent-uuid/subagents/agent-1.jsonl';
+    const metaRel = '-srv-x/parent-uuid/subagents/agent-1.meta.json';
+    // First cycle: transcript only, no sidecar yet on the host.
+    const files = { [jsonlRel]: { content: line('/srv/x'), mtimeMs: 1000 } };
+    await syncMirror({ alias: 'vps', transport: fakeTransport(files), projectsDir, manifestPath });
+
+    // Second cycle: the sidecar shows up; the transcript itself is unchanged.
+    files[metaRel] = { content: JSON.stringify({ agentType: 'Explore' }), mtimeMs: 2000 };
+    const r = await syncMirror({ alias: 'vps', transport: fakeTransport(files), projectsDir, manifestPath });
+
+    assert.equal(r.fetched, 1, 'only the sidecar is new');
+    assert.ok(r.changedFolders.has('-srv-x'));
+    const files1 = r.changedFilesByFolder.get('-srv-x');
+    assert.ok(files1 && files1.has('parent-uuid/subagents/agent-1.jsonl'),
+      'the transcript, not the sidecar, must be the file the indexer re-derives');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #244 acceptance: no sidecar on the host must never be an error.
+test('a subagent transcript with no sidecar on the host still mirrors cleanly', async () => {
+  const dir = tmp('mirror-meta-absent');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const jsonlRel = '-srv-x/parent-uuid/subagents/agent-1.jsonl';
+    const t = fakeTransport({ [jsonlRel]: { content: line('/srv/x'), mtimeMs: 1000 } });
+
+    const r = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(r.total, 1);
+    const mirroredJsonl = path.join(projectsDir, ...jsonlRel.split('/'));
+    assert.ok(fs.existsSync(mirroredJsonl));
+    assert.equal(readSubagentMeta(mirroredJsonl), null, 'no sidecar on disk, no error, just null');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #244: sidecars are tiny but must never starve a transcript out of a
+// full cycle. Fillers are all .jsonl transcripts (bigger consumers of the
+// same per-cycle file quota) placed ahead of the sidecar in host `find`
+// order — the priority sort must still put every transcript ahead of every
+// sidecar regardless of listing order.
+test('transcripts keep priority over .meta.json sidecars when a cycle is full', async () => {
+  const dir = tmp('mirror-meta-priority');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const metaRel = '-srv-a/parent/subagents/agent-1.meta.json';
+    const entries = [
+      { rel: metaRel, size: 10, mtimeMs: 1 },
+      ...Array.from({ length: MAX_CYCLE_FILES }, (_, i) => ({
+        rel: `-srv-a/f${String(i).padStart(4, '0')}.jsonl`, size: 10, mtimeMs: 1,
+      })),
+    ];
+    const asked = [];
+    const transport = {
+      listFiles: async () => ({ files: entries, sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const warned = [];
+    const r = await syncMirror({
+      alias: 'vps', transport, projectsDir, manifestPath,
+      log: { warn: (m) => warned.push(m), info() {}, error() {} },
+    });
+
+    assert.equal(r.fetched, MAX_CYCLE_FILES, 'the cycle is exactly full of transcripts');
+    assert.ok(!asked.includes(metaRel), 'the sidecar was deferred even though it was listed first');
+    assert.ok(warned.some(m => m.includes('deferred')));
+
+    asked.length = 0;
+    const second = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log: { warn: () => {}, info() {}, error() {} } });
+    assert.equal(second.fetched, 1, 'the deferred sidecar is picked up once the transcripts are unchanged');
+    assert.deepEqual(asked, [metaRel], 'the deferred sidecar is picked up once the transcripts are unchanged');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
