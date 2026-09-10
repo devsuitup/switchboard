@@ -485,7 +485,7 @@ const remoteWatcher = createRemoteWatcher({ log });
 let watchedAliases = new Set();
 function onRemoteWatchEvent(alias) { remoteIndexer.refreshHostNow(alias).catch(() => {}); }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+// see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
 const remoteActivityTracker = createRemoteActivityTracker({});
 
 function onRemoteWatchActivity(alias, rel) {

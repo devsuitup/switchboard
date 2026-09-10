@@ -1,4 +1,4 @@
-// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+// see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
 'use strict';
 
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
