@@ -113,8 +113,8 @@ test('a live remote session shows its status and age, and a 24h-old status does 
         messageCount: 1,
         projectPath: '/srv/live-host',
         remoteAlias: 'planificator',
-        remoteStatus: 'idle',
-        remoteStatusUpdatedAt: now - 23 * 3600 * 1000, // 23h ago
+        status: 'idle',
+        statusUpdatedAt: now - 23 * 3600 * 1000, // 23h ago
       };
       const freshSession = {
         sessionId: 'remote-fresh',
@@ -125,8 +125,8 @@ test('a live remote session shows its status and age, and a 24h-old status does 
         messageCount: 1,
         projectPath: '/srv/live-host',
         remoteAlias: 'planificator',
-        remoteStatus: 'idle',
-        remoteStatusUpdatedAt: now - 26 * 1000, // 26s ago
+        status: 'idle',
+        statusUpdatedAt: now - 26 * 1000, // 26s ago
       };
       const project = remoteProject({
         projectPath: '/srv/live-host',
@@ -139,8 +139,8 @@ test('a live remote session shows its status and age, and a 24h-old status does 
 
       ctx.sidebar.renderProjects([project], true);
 
-      const staleEl = ctx.document.getElementById('si-remote-stale').querySelector('.session-remote-status');
-      const freshEl = ctx.document.getElementById('si-remote-fresh').querySelector('.session-remote-status');
+      const staleEl = ctx.document.getElementById('si-remote-stale').querySelector('.session-status');
+      const freshEl = ctx.document.getElementById('si-remote-fresh').querySelector('.session-status');
       assert.ok(staleEl, 'the stale session must show a status/age indicator');
       assert.ok(freshEl, 'the fresh session must show a status/age indicator');
 
@@ -166,8 +166,8 @@ test('a host genuinely without any live session is distinct from a host with a l
       messageCount: 1,
       projectPath: '/srv/live-project',
       remoteAlias: 'planificator',
-      remoteStatus: 'busy',
-      remoteStatusUpdatedAt: Date.now() - 5000,
+      status: 'busy',
+      statusUpdatedAt: Date.now() - 5000,
     };
     const liveProject = remoteProject({
       projectPath: '/srv/live-project',

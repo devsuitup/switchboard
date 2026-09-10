@@ -4150,8 +4150,10 @@ body { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
-/* Issue #212 — see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") */
-.session-remote-status {
+/* Issue #212/#245 — see .ai/contexts/session-cache.md ("Remote hosts —
+   freshness contract") and .ai/contexts/cli-session-state.md; shared by
+   remote and local sessions, which carry the same status/statusUpdatedAt pair */
+.session-status {
   color: #7fb3e0;
 }
 

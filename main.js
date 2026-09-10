@@ -533,12 +533,19 @@ function annotateRemoteAttachable(projects) {
       project.remoteHostError = info.error;
     }
     for (const session of project.sessions) {
-      if (!session.remoteAlias) continue;
-      const descriptor = hostInfo(session.remoteAlias).byId.get(session.sessionId);
-      session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
-      session.remoteStatus = descriptor ? (descriptor.status || null) : null;
-      session.remoteStatusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
-      session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
+      if (session.remoteAlias) {
+        const descriptor = hostInfo(session.remoteAlias).byId.get(session.sessionId);
+        session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        session.status = descriptor ? (descriptor.status || null) : null;
+        session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
+        session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
+      } else {
+        // Same descriptor vocabulary, read from the local ~/.claude/sessions/<pid>.json
+        // instead of a remote host's mirror -- see .ai/contexts/cli-session-state.md
+        const local = cliSessionState.getStatus(session.sessionId);
+        session.status = local ? local.status : undefined;
+        session.statusUpdatedAt = local ? local.statusUpdatedAt : undefined;
+      }
     }
   }
   return projects;

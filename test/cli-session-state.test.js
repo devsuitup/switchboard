@@ -260,6 +260,117 @@ test('a missing directory attaches nothing and costs nothing', () => {
   cliSessionState.stop();
 });
 
+test('getStatus returns the last parsed status/statusUpdatedAt for a sessionId', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession());
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000 });
+
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 2000 });
+    await waitFor(() => cliSessionState.getStatus('sess-1').status === 'idle');
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'idle', statusUpdatedAt: 2000 });
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus works for a CLI descriptor with no matching Switchboard session (started outside Switchboard)', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', sessionId: 'somebody-elses-session', statusUpdatedAt: 42 });
+    // No Switchboard session at all — findSession() would never match this,
+    // but getStatus() is a pure sessionId lookup, independent of activeSessions.
+    boot(dir, new Map());
+    await waitFor(() => cliSessionState.getStatus('somebody-elses-session') !== undefined);
+    assert.deepEqual(cliSessionState.getStatus('somebody-elses-session'), { status: 'busy', statusUpdatedAt: 42 });
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus never surfaces a descriptor left behind by a crashed process (seeded at startup)', async () => {
+  // The CLI deletes its state file on a clean exit only. A crash or a reboot
+  // can leave one behind indefinitely, and it must never read as a live status.
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 1000 });
+    boot(dir, oneSession(), { isProcessAlive: () => false });
+    await delay(SETTLE_MS);
+    assert.equal(cliSessionState.getStatus('sess-1'), undefined,
+      'a dead pid must never surface a status, even when seeded at startup');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus never surfaces a descriptor left behind by a crashed process (written after the watcher started)', async () => {
+  const dir = mkTmp();
+  try {
+    const { rescans } = boot(dir, oneSession(), { isProcessAlive: () => false });
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 1000 });
+    await delay(SETTLE_MS);
+    assert.equal(cliSessionState.getStatus('sess-1'), undefined,
+      'a dead pid written after the watcher started must never surface a status');
+    assert.equal(rescans.length, 0, 'a dead pid must still never rescan either (unchanged behavior)');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus clears once a previously-live descriptor is next observed with a dead pid', async () => {
+  const dir = mkTmp();
+  let alive = true;
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession(), { isProcessAlive: () => alive });
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+
+    alive = false;
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 2000 });
+    await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus returns undefined once the descriptor file is removed', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 1000 });
+    boot(dir, oneSession());
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+
+    fs.unlinkSync(path.join(dir, '4242.json'));
+    await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus returns undefined for an sessionId never seen and stop() clears it', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 1000 });
+    boot(dir, oneSession());
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+    assert.equal(cliSessionState.getStatus('unknown-session'), undefined);
+
+    cliSessionState.stop();
+    assert.equal(cliSessionState.getStatus('sess-1'), undefined, 'stop() must clear the cache');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('parseState rejects everything that is not a usable state file', () => {
   const { parseState } = cliSessionState;
   assert.equal(parseState('not json'), null);
