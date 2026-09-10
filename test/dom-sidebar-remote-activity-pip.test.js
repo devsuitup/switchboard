@@ -1,6 +1,7 @@
-// Issue #242: a rebuilt sidebar (or a fresh launch) must paint the remote
-// activity pip from session.remoteActiveAt without waiting for the next
-// live remote-activity IPC message — see .ai/contexts/session-cache.md
+// Issue #242/#243: a rebuilt sidebar (or a fresh launch) must paint a remote
+// session busy — the same braille spinner a local session gets — straight
+// from session.remoteActiveAt, without waiting for the next live
+// remote-activity IPC message. See .ai/contexts/session-cache.md
 // ("Remote hosts — activity pip"). The live-update path itself is covered
 // by test/remote-activity-ui.test.js.
 
@@ -18,7 +19,7 @@ function remoteProject(session) {
   });
 }
 
-test('a session active within the decay window paints the pip lit on first render', () => {
+test('a session active within the decay window renders busy on first render', () => {
   const ctx = setupSidebarDom();
   try {
     const session = {
@@ -28,13 +29,13 @@ test('a session active within the decay window paints the pip lit on first rende
     };
     ctx.sidebar.renderProjects([remoteProject(session)], true);
 
-    const dot = ctx.document.querySelector('#si-remote-active .remote-activity-dot');
-    assert.ok(dot, 'a remote session must carry the activity pip element');
-    assert.ok(dot.classList.contains('active'), 'a sighting 5s ago is still inside the 20s decay window');
+    const item = ctx.document.querySelector('#si-remote-active');
+    assert.ok(item, 'the session row must exist');
+    assert.ok(item.classList.contains('cli-busy'), 'a sighting 5s ago is still inside the 20s decay window');
   } finally { ctx.destroy(); }
 });
 
-test('a session last active past the decay window renders the pip off', () => {
+test('a session last active past the decay window renders idle', () => {
   const ctx = setupSidebarDom();
   try {
     const session = {
@@ -44,13 +45,13 @@ test('a session last active past the decay window renders the pip off', () => {
     };
     ctx.sidebar.renderProjects([remoteProject(session)], true);
 
-    const dot = ctx.document.querySelector('#si-remote-stale .remote-activity-dot');
-    assert.ok(dot);
-    assert.ok(!dot.classList.contains('active'), 'a sighting a minute ago is well past the 20s decay window');
+    const item = ctx.document.querySelector('#si-remote-stale');
+    assert.ok(item);
+    assert.ok(!item.classList.contains('cli-busy'), 'a sighting a minute ago is well past the 20s decay window');
   } finally { ctx.destroy(); }
 });
 
-test('a session with no remoteActiveAt at all renders the pip off, not crashing on undefined', () => {
+test('a session with no remoteActiveAt at all renders idle, not crashing on undefined', () => {
   const ctx = setupSidebarDom();
   try {
     const session = {
@@ -60,13 +61,27 @@ test('a session with no remoteActiveAt at all renders the pip off, not crashing 
     };
     ctx.sidebar.renderProjects([remoteProject(session)], true);
 
-    const dot = ctx.document.querySelector('#si-remote-never .remote-activity-dot');
-    assert.ok(dot);
-    assert.ok(!dot.classList.contains('active'));
+    const item = ctx.document.querySelector('#si-remote-never');
+    assert.ok(item);
+    assert.ok(!item.classList.contains('cli-busy'));
   } finally { ctx.destroy(); }
 });
 
-test('a local session carries no activity pip at all', () => {
+test('no .remote-activity-dot element remains anywhere in the DOM', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = {
+      sessionId: 'remote-active', summary: 'live now', modified: '2026-09-06T10:00:00.000Z',
+      starred: false, archived: 0, messageCount: 1,
+      remoteAlias: 'planificator', remoteActiveAt: Date.now() - 5000,
+    };
+    ctx.sidebar.renderProjects([remoteProject(session)], true);
+
+    assert.equal(ctx.document.querySelector('.remote-activity-dot'), null);
+  } finally { ctx.destroy(); }
+});
+
+test('a local session is not marked busy by the remote paint path', () => {
   const ctx = setupSidebarDom();
   try {
     const project = makeSampleProject({
@@ -77,6 +92,8 @@ test('a local session carries no activity pip at all', () => {
     });
     ctx.sidebar.renderProjects([project], true);
 
-    assert.equal(ctx.document.querySelector('#si-local-1 .remote-activity-dot'), null);
+    const item = ctx.document.querySelector('#si-local-1');
+    assert.ok(item);
+    assert.ok(!item.classList.contains('cli-busy'));
   } finally { ctx.destroy(); }
 });

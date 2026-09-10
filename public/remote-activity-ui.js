@@ -3,11 +3,6 @@
 const PIP_DECAY_MS = 20000;
 const remoteActivityDecayTimers = new Map();
 
-function remoteActivityDotFor(sessionId) {
-  const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-  return item ? item.querySelector('.remote-activity-dot') : null;
-}
-
 function clearRemoteActivityTimer(sessionId) {
   const t = remoteActivityDecayTimers.get(sessionId);
   if (t) {
@@ -18,20 +13,20 @@ function clearRemoteActivityTimer(sessionId) {
 
 function pruneRemoteActivityTimers() {
   for (const sessionId of remoteActivityDecayTimers.keys()) {
-    if (!remoteActivityDotFor(sessionId)) clearRemoteActivityTimer(sessionId);
+    if (!sessionItemEl(sessionId)) clearRemoteActivityTimer(sessionId);
   }
 }
 
 function onRemoteActivityEvent(payload) {
   const sessionId = payload && payload.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) return;
-  const dot = remoteActivityDotFor(sessionId);
-  if (dot) dot.classList.add('active');
+  sessionBusyState.set(sessionId, true);
+  applyActivityClasses(sessionId);
   clearRemoteActivityTimer(sessionId);
   remoteActivityDecayTimers.set(sessionId, setTimeout(() => {
     remoteActivityDecayTimers.delete(sessionId);
-    const el = remoteActivityDotFor(sessionId);
-    if (el) el.classList.remove('active');
+    sessionBusyState.set(sessionId, false);
+    applyActivityClasses(sessionId);
   }, PIP_DECAY_MS));
 }
 

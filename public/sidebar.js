@@ -1279,6 +1279,11 @@ function buildSessionItem(session) {
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
   if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
+  // see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+  if (session.remoteAlias && Number.isFinite(session.remoteActiveAt) &&
+      (Date.now() - session.remoteActiveAt) < REMOTE_ACTIVITY_DECAY_MS) {
+    sessionBusyState.set(session.sessionId, true);
+  }
   if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
   if (parentHasActiveSubagent(session.sessionId)) item.classList.add('has-busy-agents');
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
@@ -1301,16 +1306,6 @@ function buildSessionItem(session) {
   // Running status dot
   const dot = document.createElement('span');
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
-
-  // see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
-  let activityDot = null;
-  if (session.remoteAlias) {
-    activityDot = document.createElement('span');
-    const isActive = Number.isFinite(session.remoteActiveAt) &&
-      (Date.now() - session.remoteActiveAt) < REMOTE_ACTIVITY_DECAY_MS;
-    activityDot.className = 'session-status-dot remote-activity-dot' + (isActive ? ' active' : '');
-    activityDot.title = 'Remote session is writing its transcript';
-  }
 
   // Info block
   const info = document.createElement('div');
@@ -1408,7 +1403,6 @@ function buildSessionItem(session) {
 
   row.appendChild(pin);
   row.appendChild(dot);
-  if (activityDot) row.appendChild(activityDot);
   row.appendChild(info);
   row.appendChild(actions);
   item.appendChild(row);

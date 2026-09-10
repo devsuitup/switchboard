@@ -969,22 +969,6 @@ body { display: flex; flex-direction: column; }
   background: #3ecf5a;
 }
 
-/* see .ai/contexts/session-cache.md ("Remote hosts — activity pip") */
-.remote-activity-dot {
-  background: transparent;
-  margin-left: -4px;
-}
-
-.remote-activity-dot.active {
-  background: #b388ff;
-  animation: remote-activity-pulse 1s ease-in-out infinite;
-}
-
-@keyframes remote-activity-pulse {
-  0%, 100% { opacity: 0.45; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1.2); }
-}
-
 /* ---- CLI busy spinner (braille spinner detected) ---- */
 /* needs-attention takes precedence — when both are set, the attention indicator shows */
 /* Braille spinner via content keyframes — see docs/decisions/0002 */

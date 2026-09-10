@@ -1,8 +1,12 @@
 // Tests for public/remote-activity-ui.js — the sidebar's remote
-// transcript-write pip. Evaluated standalone in jsdom, same technique as
-// test/session-activity.test.js: this file was split out precisely so it can
-// be exercised without the rest of app.js (which builds ViewerPanel/xterm at
-// module scope and cannot be eval'd in isolation).
+// transcript-write signal. Since #243 it goes through the same .cli-busy
+// braille spinner a local session gets, via session-activity.js's
+// applyActivityClasses() (its declared single writer of .cli-busy), rather
+// than a separate violet dot. Evaluated standalone in jsdom together with
+// the real session-activity.js, same technique as test/session-activity.test.js:
+// split out precisely so it can be exercised without the rest of app.js
+// (which builds ViewerPanel/xterm at module scope and cannot be eval'd in
+// isolation).
 //
 // setTimeout/clearTimeout are stubbed on the jsdom window so the 20s decay
 // is driven by hand instead of a real wall-clock wait.
@@ -15,15 +19,18 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
+const ACTIVITY_SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 const SRC = path.join(__dirname, '..', 'public', 'remote-activity-ui.js');
 
 function setup(sessionIds = ['s1']) {
   const items = sessionIds
-    .map(id => `<div class="session-item" data-session-id="${id}"><span class="remote-activity-dot"></span></div>`)
+    .map(id => `<div class="session-item" data-session-id="${id}"><span class="session-status-dot"></span></div>`)
     .join('');
   const dom = new JSDOM(`<!DOCTYPE html><html><body>${items}</body></html>`,
     { url: 'http://localhost/', runScripts: 'outside-only' });
   const { window } = dom;
+
+  Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   let onRemoteActivityCb = null;
   Object.defineProperty(window, 'api', {
@@ -50,6 +57,7 @@ function setup(sessionIds = ['s1']) {
   });
 
   const ctx = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
   vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });
 
   const read = (expr) => vm.runInContext(expr, ctx);
@@ -58,23 +66,24 @@ function setup(sessionIds = ['s1']) {
     window,
     document: window.document,
     item: (id) => window.document.querySelector(`.session-item[data-session-id="${id}"]`),
-    dot: (id) => window.document.querySelector(`.session-item[data-session-id="${id}"] .remote-activity-dot`),
     emit: (payload) => onRemoteActivityCb(payload),
     scheduled,
     pending: () => scheduled.filter(h => !h.cleared),
     pruneRemoteActivityTimers: read('pruneRemoteActivityTimers'),
     remoteActivityDecayTimers: read('remoteActivityDecayTimers'),
+    sessionBusyState: read('sessionBusyState'),
     destroy: () => window.close(),
   };
 }
 
-test('a remote-activity event marks the matching row active', () => {
+test('a remote-activity event marks the matching row busy through applyActivityClasses', () => {
   const t = setup(['s1']);
-  assert.ok(!t.dot('s1').classList.contains('active'), 'precondition: pip starts off');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'precondition: row starts idle');
 
   t.emit({ alias: 'vps', sessionId: 's1', at: Date.now() });
 
-  assert.ok(t.dot('s1').classList.contains('active'), 'the pip must light up on activity');
+  assert.equal(t.sessionBusyState.get('s1'), true, 'sessionBusyState is set through the single writer path');
+  assert.ok(t.item('s1').classList.contains('cli-busy'), 'the row must go busy, same as a local session');
   t.destroy();
 });
 
@@ -84,25 +93,25 @@ test('a payload with no sessionId is ignored', () => {
   t.emit(null);
   t.emit(undefined);
 
-  assert.ok(!t.dot('s1').classList.contains('active'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
   assert.equal(t.scheduled.length, 0, 'a malformed payload must not schedule a decay timer either');
   t.destroy();
 });
 
-test('the pip clears once the decay timer fires, and not before', () => {
+test('.cli-busy clears once the decay timer fires, and not before', () => {
   const t = setup(['s1']);
   t.emit({ sessionId: 's1' });
-  assert.ok(t.dot('s1').classList.contains('active'));
+  assert.ok(t.item('s1').classList.contains('cli-busy'));
 
   const timer = t.pending()[0];
   assert.ok(timer, 'a decay timer must be scheduled');
   assert.equal(timer.ms, 20000, 'the decay window is 20s');
 
-  // Before the timer fires, the pip stays lit.
-  assert.ok(t.dot('s1').classList.contains('active'));
+  // Before the timer fires, the row stays busy.
+  assert.ok(t.item('s1').classList.contains('cli-busy'));
 
   timer.fn(); // simulate the 20s elapsing
-  assert.ok(!t.dot('s1').classList.contains('active'), 'the pip must clear once the decay window elapses');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'the row must go idle once the decay window elapses');
   t.destroy();
 });
 
@@ -118,10 +127,10 @@ test('a second event before decay resets the timer instead of stacking one', () 
 
   // Firing the (now-cancelled) first timer's callback would be a stale fire
   // in the real world — clearTimeout prevents that from ever happening — but
-  // confirm the surviving timer is the one that actually clears the pip.
+  // confirm the surviving timer is the one that actually clears the row.
   const second = t.pending()[0];
   second.fn();
-  assert.ok(!t.dot('s1').classList.contains('active'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
   t.destroy();
 });
 
