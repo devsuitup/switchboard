@@ -24,6 +24,10 @@ let flushTimer = null;
 const pending = new Set();
 const known = new Map();
 const lastRescanAt = new Map();
+// sessionId -> { status, statusUpdatedAt }, kept in step with `known` so
+// getStatus() below is a pure lookup over what seed()/handleFile() already
+// parse -- see .ai/contexts/cli-session-state.md
+const statusBySession = new Map();
 
 function defaultIsProcessAlive(pid) {
   try {
@@ -74,6 +78,8 @@ function handleFile(name) {
   try {
     text = fs.readFileSync(path.join(dir, name), 'utf8');
   } catch {
+    const stale = known.get(name);
+    if (stale && stale.sessionId) statusBySession.delete(stale.sessionId);
     known.delete(name);
     return;
   }
@@ -82,7 +88,9 @@ function handleFile(name) {
   if (!state) return;
 
   const prev = known.get(name);
-  known.set(name, { procStart: state.procStart, status: state.status });
+  if (prev && prev.sessionId && prev.sessionId !== state.sessionId) statusBySession.delete(prev.sessionId);
+  known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+  statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
 
   const reused = !!prev && prev.procStart !== state.procStart;
   if (!prev || reused) return;
@@ -124,7 +132,10 @@ function seed() {
     let text;
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const state = parseState(text);
-    if (state) known.set(name, { procStart: state.procStart, status: state.status });
+    if (state) {
+      known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+      statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+    }
   }
 }
 
@@ -169,7 +180,18 @@ function stop() {
   }
   pending.clear();
   known.clear();
+  statusBySession.clear();
   lastRescanAt.clear();
+}
+
+/**
+ * Pure lookup: the last {status, statusUpdatedAt} parsed for `sessionId`, or
+ * undefined if no state file has ever named it. Never touches disk, never
+ * arms anything -- see .ai/contexts/cli-session-state.md ("the one invariant").
+ */
+function getStatus(sessionId) {
+  const entry = statusBySession.get(sessionId);
+  return entry ? { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt } : undefined;
 }
 
 module.exports = {
@@ -177,6 +199,7 @@ module.exports = {
   ensureWatching,
   stop,
   parseState,
+  getStatus,
   KNOWN_STATUSES,
   DEFAULT_DIR,
   FLUSH_MS,

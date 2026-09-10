@@ -17,8 +17,9 @@ function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
-function formatRemoteAge(epochMs) {
+// see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") and
+// .ai/contexts/cli-session-state.md (local sessions use the same field pair)
+function formatStatusAge(epochMs) {
   if (!Number.isFinite(epochMs)) return null;
   const deltaMs = Date.now() - epochMs;
   const s = Math.max(0, Math.floor(deltaMs / 1000));
@@ -37,7 +38,7 @@ function formatRemoteAge(epochMs) {
 // session right now. See .ai/contexts/session-cache.md.
 function remoteHostState(project) {
   if (project.remoteHostError) {
-    const age = formatRemoteAge(project.remoteHostAt);
+    const age = formatStatusAge(project.remoteHostAt);
     return {
       cls: 'remote-host-error',
       detail: 'host unreachable: ' + project.remoteHostError
@@ -47,8 +48,8 @@ function remoteHostState(project) {
   if (!Number.isFinite(project.remoteHostAt)) {
     return { cls: 'remote-host-unknown', detail: 'not yet synced with this host' };
   }
-  const age = formatRemoteAge(project.remoteHostAt);
-  const liveCount = (project.sessions || []).filter(s => s.remoteStatus).length;
+  const age = formatStatusAge(project.remoteHostAt);
+  const liveCount = (project.sessions || []).filter(s => s.status).length;
   return {
     cls: liveCount > 0 ? 'remote-host-live' : 'remote-host-empty',
     detail: (liveCount > 0 ? liveCount + ' live session' + (liveCount > 1 ? 's' : '') : 'no live session')
@@ -1333,16 +1334,18 @@ function buildSessionItem(session) {
       : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
     badge.textContent = session.remoteAlias;
     summaryEl.prepend(badge);
+  }
 
-    // status is the descriptor's last recorded transition, not a heartbeat —
-    // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
-    if (session.remoteStatus) {
-      const age = formatRemoteAge(session.remoteStatusUpdatedAt);
-      const statusEl = document.createElement('span');
-      statusEl.className = 'session-remote-status';
-      statusEl.textContent = session.remoteStatus + (age ? ' · ' + age : '');
-      metaEl.appendChild(statusEl);
-    }
+  // status is the descriptor's last recorded transition, not a heartbeat —
+  // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") for
+  // remote sessions and .ai/contexts/cli-session-state.md for local ones. Same
+  // two fields either way, so this renders regardless of session.remoteAlias.
+  if (session.status) {
+    const age = formatStatusAge(session.statusUpdatedAt);
+    const statusEl = document.createElement('span');
+    statusEl.className = 'session-status';
+    statusEl.textContent = session.status + (age ? ' · ' + age : '');
+    metaEl.appendChild(statusEl);
   }
 
   if (session.type === 'terminal') {

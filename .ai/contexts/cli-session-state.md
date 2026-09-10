@@ -136,6 +136,17 @@ throw. The CLI does not write this file atomically. Degrading to "the tick
 handles it" is always an acceptable outcome, which is what makes depending on an
 undocumented file defensible at all.
 
+## Surfacing status on the session object (issue #245)
+
+`getStatus(sessionId)` is a pure `Map` lookup over the `{status,
+statusUpdatedAt}` pairs `seed()`/`handleFile()` already parse for every state
+file they see — it adds no disk read, no watcher, and never calls `onIdle`, so
+it does not touch the one invariant above. `main.js`'s `annotateRemoteAttachable`
+calls it for every session without a `remoteAlias`, writing the result to the
+same `session.status` / `session.statusUpdatedAt` pair a remote session gets
+from its host's mirrored descriptor — one field pair, one renderer code path
+(`public/sidebar.js`), for both a local and a remote session.
+
 ## Canary tests
 
 `test/canary-*.test.js` is a convention this module introduces. A canary
