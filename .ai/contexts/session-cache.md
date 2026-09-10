@@ -374,6 +374,25 @@ untouched.
     cannot grow unboundedly across host-list edits. Attach now exists off this
     data (issue #221, below); capacity tiers and a liveness badge in the UI
     (#218, #212) still don't.
+  - **Remote hosts — meta.json sidecars (issue #244).** A subagent's agent
+    type lives in a sidecar `agent-<id>.meta.json` next to its transcript,
+    read by `readSubagentMeta()` (`read-session-file.js`). `LIST_COMMAND`'s
+    projects `find` matches `*.jsonl` **or** `*.meta.json`, and
+    `isSafeMirrorRelPath` (`remote-hosts.js`) — not `isSafeRelPath` — gates
+    both in `parseInventory` and in `remote-mirror.js`'s inventory filter and
+    fetch queue, so the sidecar rides the same `scp` path as its transcript
+    and lands in the same mirrored directory (no path-layout code needed:
+    `fetchOne` already preserves the full relative path). `isSafeRelPath`
+    itself is untouched on purpose — `remote-watch.js` still imports it
+    directly, so a `.meta.json` write on the host is never classified as
+    project activity; the sidecar only ever arrives on the next inventory
+    refresh. Inside `syncMirror`, transcripts are sorted ahead of sidecars
+    before the per-cycle budget (`MAX_CYCLE_FILES`/`MAX_CYCLE_BYTES`, #238) is
+    applied, so a flood of tiny sidecars can never push a transcript out of a
+    full cycle. A sidecar that arrives (or leaves) on its own — the transcript
+    itself unchanged — is reported to the indexer under its **transcript's**
+    rel path, not its own, because `readSubagentMeta()` in the transcript's
+    row is what actually needs re-deriving.
 
 ## Remote hosts — tmux attach (issue #221)
 

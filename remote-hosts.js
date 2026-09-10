@@ -81,6 +81,20 @@ function isSafeRelPath(rel) {
   return SAFE_REL_RE.test(rel);
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars")
+function isSafeMetaRelPath(rel) {
+  if (typeof rel !== 'string' || rel.length === 0 || rel.length > 512) return false;
+  if (!rel.endsWith('.meta.json')) return false;
+  if (rel.includes('..')) return false;
+  if (rel.split('/').some(seg => seg === '.')) return false;
+  return SAFE_REL_RE.test(rel);
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars")
+function isSafeMirrorRelPath(rel) {
+  return isSafeRelPath(rel) || isSafeMetaRelPath(rel);
+}
+
 function topFolderOf(rel) {
   const i = rel.indexOf('/');
   return i < 0 ? null : rel.slice(0, i);
@@ -101,5 +115,7 @@ module.exports = {
   mirrorProjectsDirFor,
   manifestPathFor,
   isSafeRelPath,
+  isSafeMetaRelPath,
+  isSafeMirrorRelPath,
   topFolderOf,
 };

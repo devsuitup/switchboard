@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isSafeRelPath, topFolderOf } = require('./remote-hosts');
+const { isSafeMirrorRelPath, topFolderOf } = require('./remote-hosts');
 
 const MAX_INVENTORY_ENTRIES = 20_000;
 // Per-file ceiling: scp is bounded in time, never in bytes.
@@ -54,7 +54,7 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
 
   const want = new Map();
   for (const entry of files) {
-    if (!entry || !isSafeRelPath(entry.rel)) continue;
+    if (!entry || !isSafeMirrorRelPath(entry.rel)) continue;
     if (!topFolderOf(entry.rel)) continue; // a transcript must live under a project folder
     want.set(entry.rel, { size: Number(entry.size) || 0, mtimeMs: Number(entry.mtimeMs) || 0 });
   }
@@ -67,7 +67,13 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
   let cycleFull = false;
   let deferredFiles = 0;
   let deferredBytes = 0;
-  for (const [rel, meta] of want) {
+  // see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars")
+  const byFetchPriority = [...want.entries()].sort((a, b) => {
+    const aMeta = a[0].endsWith('.meta.json') ? 1 : 0;
+    const bMeta = b[0].endsWith('.meta.json') ? 1 : 0;
+    return aMeta - bMeta;
+  });
+  for (const [rel, meta] of byFetchPriority) {
     // The inventory already carries the size; scp is bounded in time only, so
     // this is the only place a single oversized transcript can be refused
     // before it lands. See .ai/contexts/session-cache.md, "Remote hosts".
@@ -139,16 +145,19 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
 
   writeManifest(manifestPath, nextFiles);
 
-  // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
+  // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan" and
+  // "Remote hosts — meta.json sidecars")
   const changedFolders = new Set();
   const changedFilesByFolder = new Map();
   const markChanged = (rel) => {
     const folder = topFolderOf(rel);
     if (!folder) return;
     changedFolders.add(folder);
+    // see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars")
+    const targetRel = rel.endsWith('.meta.json') ? rel.slice(0, -'.meta.json'.length) + '.jsonl' : rel;
     let set = changedFilesByFolder.get(folder);
     if (!set) { set = new Set(); changedFilesByFolder.set(folder, set); }
-    set.add(rel.slice(folder.length + 1));
+    set.add(targetRel.slice(folder.length + 1));
   };
   for (const rel of fetched) markChanged(rel);
   if (failed.length === 0) {

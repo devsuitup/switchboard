@@ -9,7 +9,8 @@ const assert = require('node:assert/strict');
 
 const {
   isValidAlias, joinFolderKey, parseFolderKey, isRemoteFolder,
-  normalizeHosts, enabledHosts, normalizeRefreshMs, isSafeRelPath, topFolderOf,
+  normalizeHosts, enabledHosts, normalizeRefreshMs, isSafeRelPath,
+  isSafeMetaRelPath, isSafeMirrorRelPath, topFolderOf,
   MIN_REFRESH_MS,
 } = require('../remote-hosts');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -86,4 +87,26 @@ test('isSafeRelPath is the only guard between remote output and an scp argument'
   assert.equal(isSafeRelPath('bare.jsonl'), true);
   assert.equal(topFolderOf('bare.jsonl'), null);
   assert.equal(topFolderOf('-srv-x/abc.jsonl'), '-srv-x');
+});
+
+// issue #244: readSubagentMeta()'s sidecar needs its own safety gate, kept
+// apart from isSafeRelPath so remote-watch.js's activity classification (which
+// imports isSafeRelPath directly) keeps treating a sidecar write as a no-op —
+// see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars").
+test('isSafeMetaRelPath admits only a well-formed .meta.json sidecar path', () => {
+  assert.equal(isSafeMetaRelPath('-srv-x/uuid/subagents/agent-1.meta.json'), true);
+  assert.equal(isSafeMetaRelPath('-srv-x/uuid/subagents/agent-1.jsonl'), false);
+  assert.equal(isSafeMetaRelPath('../../etc/passwd.meta.json'), false);
+  assert.equal(isSafeMetaRelPath('/abs/path.meta.json'), false);
+  assert.equal(isSafeMetaRelPath("a/x';id;'.meta.json"), false);
+});
+
+test('isSafeMirrorRelPath admits both a transcript and its sidecar; isSafeRelPath stays .jsonl-only', () => {
+  assert.equal(isSafeMirrorRelPath('-srv-x/uuid/subagents/agent-1.jsonl'), true);
+  assert.equal(isSafeMirrorRelPath('-srv-x/uuid/subagents/agent-1.meta.json'), true);
+  assert.equal(isSafeMirrorRelPath('-srv-x/notes.txt'), false);
+  // The regression this guards: widening isSafeRelPath itself would make
+  // remote-watch.js's parseWatchLine() treat a sidecar write as project
+  // activity, which issue #244 explicitly rules out.
+  assert.equal(isSafeRelPath('-srv-x/uuid/subagents/agent-1.meta.json'), false);
 });

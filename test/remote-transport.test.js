@@ -55,6 +55,23 @@ test('parseInventory keeps well-formed lines and drops everything else', () => {
   ]);
 });
 
+// issue #244: readSubagentMeta() needs the sidecar mirrored next to its
+// transcript. parseInventory is the first gate the sidecar has to clear —
+// see .ai/contexts/session-cache.md ("Remote hosts — meta.json sidecars").
+test('parseInventory keeps a .meta.json sidecar alongside its transcript', () => {
+  const out = [
+    '1757200000.0\t10\t-srv-x/uuid/subagents/agent-1.jsonl',
+    '1757200000.0\t42\t-srv-x/uuid/subagents/agent-1.meta.json',
+    '1757200000.0\t10\t../escape.meta.json',
+    '1757200000.0\t10\t-srv-x/notes.meta.txt',
+  ].join('\n') + '\n';
+
+  assert.deepEqual(parseInventory(out), [
+    { rel: '-srv-x/uuid/subagents/agent-1.jsonl', size: 10, mtimeMs: 1757200000000 },
+    { rel: '-srv-x/uuid/subagents/agent-1.meta.json', size: 42, mtimeMs: 1757200000000 },
+  ]);
+});
+
 test('listFiles spawns one bounded ssh with the alias as an operand, never as a shell string', async () => {
   const spawn = spawnRecorder((child) => {
     child.stdout.push('1757200000.0\t9\t-srv-a/a.jsonl\n');
@@ -89,11 +106,16 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
 // feature and reading a '*.key' secret file dropped in the same directory.
 test('LIST_COMMAND is pinned exactly — any widening of the sessions glob must fail this test', () => {
   const expected =
-    `find .claude/projects -type f -name '*.jsonl' -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
+    `find .claude/projects -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
     `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
     `find .claude/sessions -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
     `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; done`;
   assert.equal(LIST_COMMAND, expected);
+});
+
+// issue #244: the projects find must list both the transcript and its sidecar.
+test('LIST_COMMAND lists .meta.json sidecars alongside .jsonl transcripts', () => {
+  assert.ok(LIST_COMMAND.includes("-name '*.jsonl' -o -name '*.meta.json'"));
 });
 
 test('LIST_COMMAND can never match a .key file, independent of exact wording', () => {
@@ -329,6 +351,25 @@ test('a failed scp reports the file instead of leaving a partial one behind', as
     assert.deepEqual(r.fetched, []);
     assert.equal(fs.existsSync(path.join(dir, '-srv-a', 'a.jsonl')), false);
     assert.equal(fs.existsSync(path.join(dir, '-srv-a', 'a.jsonl.part')), false, 'the partial is removed');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('fetchFiles accepts a .meta.json sidecar rel path, not just .jsonl', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-meta-'));
+  try {
+    const spawn = spawnRecorder((child, cmd, args) => {
+      fs.writeFileSync(args[args.length - 1], '{"agentType":"Explore"}', 'utf8');
+      child.stdout.push(null);
+      child.emit('close', 0);
+    });
+    const t = createSshTransport({ spawn });
+
+    const r = await t.fetchFiles('vps', ['-srv-a/uuid/subagents/agent-1.meta.json'], dir);
+
+    assert.deepEqual(r.fetched, ['-srv-a/uuid/subagents/agent-1.meta.json']);
+    assert.deepEqual(r.failed, []);
+    const final = path.join(dir, '-srv-a', 'uuid', 'subagents', 'agent-1.meta.json');
+    assert.equal(fs.readFileSync(final, 'utf8'), '{"agentType":"Explore"}');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
