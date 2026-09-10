@@ -128,6 +128,54 @@ test('a burst of same-kind events collapses to far fewer callbacks than events',
   assert.ok(events.every(e => e.kind === 'project'));
 });
 
+test('onActivity fires once per project event, uncoalesced — not collapsed like onEvent', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const watcher = createRemoteWatcher({ spawn, log: silentLog, timers });
+  const events = [];
+  const activity = [];
+
+  watcher.start('vps', (alias, kind) => events.push({ alias, kind }), (alias, rel) => activity.push({ alias, rel }));
+  const { child } = spawn.calls[0];
+  const rel = `${REMOTE_PROJECTS_REL}/-srv-a/session.jsonl`;
+  for (let i = 0; i < 19; i++) child.stdout.push(`P|${rel}\n`);
+  child.stdout.push(null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(activity.length, 19, 'onActivity must fire once per raw line, unlike the coalesced onEvent');
+  assert.ok(events.length <= 2, 'onEvent must still coalesce the same burst');
+  assert.ok(activity.every(a => a.alias === 'vps' && a.rel === '-srv-a/session.jsonl'));
+});
+
+test('a session-kind event never reaches onActivity', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const watcher = createRemoteWatcher({ spawn, log: silentLog, timers });
+  const activity = [];
+
+  watcher.start('vps', () => {}, (alias, rel) => activity.push({ alias, rel }));
+  const { child } = spawn.calls[0];
+  child.stdout.push(`S|${REMOTE_SESSIONS_REL}/1234.json\n`);
+  child.stdout.push(null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(activity, [], 'a session descriptor event must not be mistaken for transcript activity');
+});
+
+test('start() works with no onActivity supplied — the callback is optional', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const watcher = createRemoteWatcher({ spawn, log: silentLog, timers });
+
+  watcher.start('vps', () => {});
+  const { child } = spawn.calls[0];
+  child.stdout.push(`P|${REMOTE_PROJECTS_REL}/-srv-a/session.jsonl\n`);
+  child.stdout.push(null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(watcher.isRunning('vps'), true, 'a project event with no onActivity wired must not throw');
+});
+
 test('project and session events are distinguishable in the callback', async () => {
   const spawn = spawnRecorder();
   const timers = fakeTimers();

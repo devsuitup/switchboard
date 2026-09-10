@@ -9,6 +9,9 @@
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
+// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+const REMOTE_ACTIVITY_DECAY_MS = 20000;
+
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -1299,6 +1302,16 @@ function buildSessionItem(session) {
   const dot = document.createElement('span');
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
 
+  // see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+  let activityDot = null;
+  if (session.remoteAlias) {
+    activityDot = document.createElement('span');
+    const isActive = Number.isFinite(session.remoteActiveAt) &&
+      (Date.now() - session.remoteActiveAt) < REMOTE_ACTIVITY_DECAY_MS;
+    activityDot.className = 'session-status-dot remote-activity-dot' + (isActive ? ' active' : '');
+    activityDot.title = 'Remote session is writing its transcript';
+  }
+
   // Info block
   const info = document.createElement('div');
   info.className = 'session-info';
@@ -1395,6 +1408,7 @@ function buildSessionItem(session) {
 
   row.appendChild(pin);
   row.appendChild(dot);
+  if (activityDot) row.appendChild(activityDot);
   row.appendChild(info);
   row.appendChild(actions);
   item.appendChild(row);

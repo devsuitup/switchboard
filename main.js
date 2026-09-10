@@ -464,6 +464,7 @@ const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes 
 const { createSshTransport } = require('./remote-transport');
 const { createRemoteIndexer } = require('./remote-index');
 const { createRemoteWatcher } = require('./remote-watch');
+const { createRemoteActivityTracker } = require('./remote-activity');
 
 const remoteTransport = createSshTransport({ log });
 const remoteIndexer = createRemoteIndexer({
@@ -483,6 +484,18 @@ const remoteIndexer = createRemoteIndexer({
 const remoteWatcher = createRemoteWatcher({ log });
 let watchedAliases = new Set();
 function onRemoteWatchEvent(alias) { remoteIndexer.refreshHostNow(alias).catch(() => {}); }
+
+// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
+const remoteActivityTracker = createRemoteActivityTracker({});
+
+function onRemoteWatchActivity(alias, rel) {
+  const result = remoteActivityTracker.record(alias, rel);
+  if (!result) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('remote-activity', result);
+  }
+}
+
 function syncRemoteWatchers() {
   const declared = enabledHosts((getSetting('global') || {}).remoteHosts);
   const wanted = new Set(declared.map(h => h.alias));
@@ -490,7 +503,7 @@ function syncRemoteWatchers() {
     if (!wanted.has(alias)) remoteWatcher.stop(alias);
   }
   for (const host of declared) {
-    if (!remoteWatcher.isRunning(host.alias)) remoteWatcher.start(host.alias, onRemoteWatchEvent);
+    if (!remoteWatcher.isRunning(host.alias)) remoteWatcher.start(host.alias, onRemoteWatchEvent, onRemoteWatchActivity);
   }
   watchedAliases = wanted;
 }
@@ -525,6 +538,7 @@ function annotateRemoteAttachable(projects) {
       session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
       session.remoteStatus = descriptor ? (descriptor.status || null) : null;
       session.remoteStatusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
+      session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
     }
   }
   return projects;

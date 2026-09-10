@@ -86,6 +86,7 @@ function createRemoteWatcher(opts = {}) {
     }
     const parsed = parseWatchLine(line);
     if (!parsed) return;
+    if (parsed.kind === 'project' && s.onActivity) s.onActivity(s.alias, parsed.rel);
     emitCoalesced(s, parsed.kind);
   }
 
@@ -140,7 +141,7 @@ function createRemoteWatcher(opts = {}) {
     if (!s) {
       s = {
         alias, child: null, buf: '', stopped: true, unwatchable: false,
-        failures: 0, spawnedAt: 0, restartTimer: null, onEvent: null,
+        failures: 0, spawnedAt: 0, restartTimer: null, onEvent: null, onActivity: null,
         cooldown: { project: false, session: false },
         pending: { project: false, session: false },
       };
@@ -149,7 +150,7 @@ function createRemoteWatcher(opts = {}) {
     return s;
   }
 
-  function start(alias, onEvent) {
+  function start(alias, onEvent, onActivity) {
     if (typeof alias !== 'string' || !alias || typeof onEvent !== 'function') return;
     const s = getState(alias);
     if (!s.stopped && !s.unwatchable) return;
@@ -157,6 +158,7 @@ function createRemoteWatcher(opts = {}) {
     s.unwatchable = false;
     s.failures = 0;
     s.onEvent = onEvent;
+    s.onActivity = typeof onActivity === 'function' ? onActivity : null;
     spawnChild(s);
   }
 

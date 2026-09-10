@@ -145,6 +145,7 @@ const rendererCrossFileGlobals = {
   reconcileBusyState: 'readonly',
   currentActivitySeq: 'readonly',
   forgetActivitySeq: 'readonly',
+  pruneRemoteActivityTimers: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',
