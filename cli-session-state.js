@@ -24,9 +24,7 @@ let flushTimer = null;
 const pending = new Set();
 const known = new Map();
 const lastRescanAt = new Map();
-// sessionId -> { status, statusUpdatedAt }, kept in step with `known` so
-// getStatus() below is a pure lookup over what seed()/handleFile() already
-// parse -- see .ai/contexts/cli-session-state.md
+// sessionId -> { status, statusUpdatedAt } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
 
 function defaultIsProcessAlive(pid) {
@@ -90,7 +88,11 @@ function handleFile(name) {
   const prev = known.get(name);
   if (prev && prev.sessionId && prev.sessionId !== state.sessionId) statusBySession.delete(prev.sessionId);
   known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
-  statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+  if (isProcessAlive(state.pid)) {
+    statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+  } else {
+    statusBySession.delete(state.sessionId);
+  }
 
   const reused = !!prev && prev.procStart !== state.procStart;
   if (!prev || reused) return;
@@ -134,7 +136,9 @@ function seed() {
     const state = parseState(text);
     if (state) {
       known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
-      statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+      if (isProcessAlive(state.pid)) {
+        statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+      }
     }
   }
 }

@@ -145,7 +145,19 @@ it does not touch the one invariant above. `main.js`'s `annotateRemoteAttachable
 calls it for every session without a `remoteAlias`, writing the result to the
 same `session.status` / `session.statusUpdatedAt` pair a remote session gets
 from its host's mirrored descriptor — one field pair, one renderer code path
-(`public/sidebar.js`), for both a local and a remote session.
+(`public/sidebar.js`), for both a local and a remote session. The renderer
+(`public/sidebar.js`, the state+age line built from `session.status` /
+`session.statusUpdatedAt`) treats both sources identically and renders
+regardless of `session.remoteAlias` — see also `.ai/contexts/session-cache.md`
+("Remote hosts — freshness contract") for the remote half of that contract.
+
+The backing `statusBySession` map (kept alongside `known`, filename-keyed)
+holds an entry **only while `isProcessAlive(state.pid)` is true** — a
+descriptor a crashed or killed CLI left behind (the CLI only deletes its file
+on a clean exit) must not surface as a permanently "live" status on a closed
+session. Both `seed()` and `handleFile()` apply this gate before writing to
+`statusBySession`; `handleFile()` also deletes the entry outright once the
+liveness check fails, same as it does when the file itself disappears.
 
 ## Canary tests
 

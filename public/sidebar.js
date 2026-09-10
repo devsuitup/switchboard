@@ -1336,10 +1336,7 @@ function buildSessionItem(session) {
     summaryEl.prepend(badge);
   }
 
-  // status is the descriptor's last recorded transition, not a heartbeat —
-  // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") for
-  // remote sessions and .ai/contexts/cli-session-state.md for local ones. Same
-  // two fields either way, so this renders regardless of session.remoteAlias.
+  // see .ai/contexts/cli-session-state.md ("Surfacing status on the session object")
   if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
     const statusEl = document.createElement('span');
