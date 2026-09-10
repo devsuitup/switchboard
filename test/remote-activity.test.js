@@ -78,3 +78,21 @@ test('two hosts never share activity state for the same session id', () => {
   tracker.record('vps-a', `-srv-a/${UUID}.jsonl`);
   assert.equal(tracker.activeAt('vps-b', UUID), null, 'alias must be part of the key, not just the session id');
 });
+
+test('neither map grows without bound: both are pruned past the decay window', () => {
+  let t = 1000;
+  const tracker = createRemoteActivityTracker({ now: () => t, decayMs: 20000, ipcMinMs: 1000 });
+  for (let i = 0; i < 50; i++) {
+    tracker.record('vps', `-srv-a/${String(i).padStart(8, '0')}-1111-2222-3333-444444444444.jsonl`);
+    t += 10;
+  }
+  const filled = tracker.stats();
+  assert.equal(filled.seen, 50);
+  assert.equal(filled.ipc, 50, 'every distinct session took an IPC slot');
+
+  t += 30000;
+  tracker.record('vps', '-srv-a/99999999-1111-2222-3333-444444444444.jsonl');
+  const pruned = tracker.stats();
+  assert.equal(pruned.seen, 1, 'stale sightings must be dropped');
+  assert.equal(pruned.ipc, 1, 'stale throttle entries must be dropped too, or the map leaks one entry per session seen');
+});

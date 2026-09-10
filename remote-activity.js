@@ -27,6 +27,9 @@ function createRemoteActivityTracker(opts = {}) {
     for (const [k, at] of seenAt) {
       if (t - at > decayMs) seenAt.delete(k);
     }
+    for (const [k, at] of ipcAt) {
+      if (t - at > decayMs) ipcAt.delete(k);
+    }
   }
 
   function record(alias, rel) {
@@ -48,7 +51,11 @@ function createRemoteActivityTracker(opts = {}) {
     return seenAt.has(k) ? seenAt.get(k) : null;
   }
 
-  return { record, activeAt };
+  function stats() {
+    return { seen: seenAt.size, ipc: ipcAt.size };
+  }
+
+  return { record, activeAt, stats };
 }
 
 module.exports = { createRemoteActivityTracker, sessionIdFromRel, SESSION_ID_RE };
