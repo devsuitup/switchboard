@@ -545,6 +545,27 @@ Launching a new remote session (#222) and injection over the messaging socket
   at is the failure this refuses; an unparseable count is treated the same
   as "someone's there" rather than guessed.
 
+- **Solo attach parity, issue #253.** A solo attach now makes the remote
+  tmux session look and behave like a local terminal instead of a plain
+  multiplexer view: `buildAttachCommand(socket, target, { solo, pre })`
+  prefixes the attach with three session-scoped (never `-g`, never `-w`)
+  `tmux ... \; ...` sets — `status off`, `mouse on`, `window-size latest` —
+  when `solo` is true, and emits the unchanged pre-#253 command when it
+  isn't (shared attach never touches another client's view). The probe
+  (`buildProbeCommand`) now also reads `mouse` and `window-size` alongside
+  `status`, and `parseProbeOutput` returns their raw pre-attach values as
+  `pre: { status, mouse, windowSize }` (`null` when an option is absent
+  from the probe output) in addition to the existing `cols`/`rows`. On
+  detach, when the attach was solo, the adapter fires a best-effort,
+  fire-and-forget `buildRestoreCommand(socket, target, pre)` ssh call that
+  sets each option back to its probed value (`set -t <target> <name>
+  <value>`) or, when the probed value was `null`, unsets the session
+  override (`set -u -t <target> <name>`) so the host's own global option
+  applies again. The restore call's failure is only logged — it never
+  throws out of `detach()` and never blocks the local ssh client from being
+  killed. No shared-attach restore is ever sent, because a shared attach
+  never applied the options in the first place.
+
 - **This is the first thing to populate the session-handle seam from issue
   #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a
   remote-attach entry sets `host: alias`, `kind: 'remote-attach'`, and
