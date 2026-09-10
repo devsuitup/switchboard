@@ -176,9 +176,35 @@ the exact remote command, and the mutation proofs are in
   the first failure and each change of tier (`onHostFailure` in
   `remote-index.js`), not every attempt, so the same field incident would have
   produced roughly 5 lines instead of 226. Per-host state is readable via
-  `getRemoteHostState(alias)` (mirrors `getRemoteSessions(alias)`); no GUI
-  reads it yet. Proven in `test/remote-index.test.js` with an injected
-  `now()` clock — no real timers, no `setTimeout` waits.
+  `getRemoteHostState(alias)` (mirrors `getRemoteSessions(alias)`); the sidebar
+  reads its `nextAttemptAt` for the host dot's error tooltip (below). Proven in
+  `test/remote-index.test.js` with an injected `now()` clock — no real timers,
+  no `setTimeout` waits.
+
+- **A manual refresh means "I know the host is back": it ignores the backoff
+  instead of waiting it out (issue #252).** Field incident 2026-09-10 17:41: a
+  single transient ssh timeout put a host in backoff, and because
+  `refreshHostNow`/`refreshNow` honoured `nextAttemptAt` unconditionally, the
+  sidebar refresh button and a per-host reconnect action were both powerless
+  for the whole ≥300 s window even though the tmux sessions were alive.
+  `refreshHostNow(alias, { force: true })` and `refreshNow({ force: true })`
+  now reset `failures`/`nextAttemptAt` to nominal (`lastError` is left alone —
+  it only clears on an actual success, or gets overwritten by a fresh failure)
+  and run the transport immediately regardless of `nextAttemptAt`. The
+  automatic callers — the periodic timer's `refreshNow()` and the watch
+  channel's `onRemoteWatchEvent` → `refreshHostNow(alias)` in `main.js` — call
+  both functions with no options, so `force` defaults to `false` and the
+  backoff keeps applying exactly as before. IPC `remote-hosts-refresh` (all
+  enabled hosts) and `remote-host-refresh` (one alias, `main.js`) both force;
+  after the refresh, both also restart that alias's watch channel
+  (`remoteWatcher.stop` then the same `start(alias, onRemoteWatchEvent,
+  onRemoteWatchActivity)` `syncRemoteWatchers()` uses, factored into
+  `startWatcherForHost`/`restartWatcherForAlias` so the callback wiring is
+  never duplicated) — this also clears a channel stuck on the
+  `SWITCHBOARD-NO-INOTIFYWAIT` marker, since `remoteWatcher.start()` resets
+  `unwatchable`. Proven in `test/remote-index.test.js`: `force` bypassing the
+  backoff and clearing it on success, and the automatic (non-forced) path
+  still honouring it, both on an injected clock.
 
 - **The mirror is indexed off the main thread.** `workers/scan-projects.js` takes
   `folderPrefix` and a `folders` subset in `workerData`, and
@@ -374,6 +400,23 @@ untouched.
     cannot grow unboundedly across host-list edits. Attach now exists off this
     data (issue #221, below); capacity tiers and a liveness badge in the UI
     (#218, #212) still don't.
+    **Corrected 2026-09-10 (issue #252): only a SUCCESSFUL cycle replaces this
+    map.** `refreshHost()`'s failure path used to also do `remoteSessions.set(alias,
+    [])`, so one transient ssh timeout wiped every live descriptor and
+    `annotateRemoteAttachable` (`main.js`) then found none — every remote
+    session read as non-attachable for the whole backoff window even though
+    the tmux sessions were alive (field incident 2026-09-10 17:41). The wipe is
+    removed from both `refreshNow()`'s and `refreshHostNow()`'s catch blocks;
+    `getRemoteSessions(alias)` on a failed cycle now returns the previous
+    `sessions` list unchanged, the previous `at`, and the fresh `error` from
+    `hostBackoff` — the host dot already renders `error` as "unreachable", so
+    the UI signal is unchanged, only the underlying data survives. Attach
+    itself is the honest failure mode for a genuinely dead host: it tries the
+    stale descriptor and the ssh call inside it fails. A host that is
+    disabled or removed is still pruned by `pruneUnknownAliases()`, unaffected
+    by this change. Proven by `test/remote-index.test.js` ("getRemoteSessions
+    keeps the last known descriptors, not wiped, after a cycle where sync()
+    throws").
   - **Remote hosts — meta.json sidecars (issue #244).** A subagent's agent
     type lives in a sidecar `agent-<id>.meta.json` next to its transcript,
     read by `readSubagentMeta()` (`read-session-file.js`). `LIST_COMMAND`'s

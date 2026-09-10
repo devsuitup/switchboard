@@ -32,6 +32,17 @@ function formatStatusAge(epochMs) {
   return d + 'd ago';
 }
 
+// The next automatic retry, phrased for a tooltip — issue #252. null when the
+// host isn't backing off (never failed, or a manual reconnect just reset it).
+function formatNextAttemptIn(epochMs) {
+  if (!Number.isFinite(epochMs)) return null;
+  const deltaMs = epochMs - Date.now();
+  if (deltaMs <= 0) return null;
+  const s = Math.ceil(deltaMs / 1000);
+  if (s < 60) return s + 's';
+  return Math.ceil(s / 60) + 'm';
+}
+
 // Three states a remote host's project header can carry (issue #212): the last
 // sync cycle failed (host unreachable, reason visible), the host has never
 // been read yet, or it was read successfully and genuinely has no live
@@ -39,10 +50,12 @@ function formatStatusAge(epochMs) {
 function remoteHostState(project) {
   if (project.remoteHostError) {
     const age = formatStatusAge(project.remoteHostAt);
+    const nextIn = formatNextAttemptIn(project.remoteHostNextAttemptAt);
     return {
       cls: 'remote-host-error',
       detail: 'host unreachable: ' + project.remoteHostError
-        + (age ? ' (last confirmed ' + age + ')' : ', never confirmed'),
+        + (age ? ' (last confirmed ' + age + ')' : ', never confirmed')
+        + (nextIn ? '; next automatic attempt in ' + nextIn : ''),
     };
   }
   if (!Number.isFinite(project.remoteHostAt)) {
@@ -781,6 +794,15 @@ function renderProjects(projects, resort) {
       hostDot.className = 'session-status-dot remote-host-dot ' + state.cls;
       hostDot.title = state.detail;
       header.querySelector('.project-name').after(hostDot);
+
+      // Manual reconnect (issue #252): ignores backoff, restarts the watch
+      // channel for this alias — see .ai/contexts/session-cache.md
+      // ("Remote hosts backoff" — manual reconnect).
+      const hostRefreshBtn = document.createElement('button');
+      hostRefreshBtn.className = 'remote-host-refresh-btn';
+      hostRefreshBtn.title = 'Reconnect ' + project.remoteAlias + ' now';
+      hostRefreshBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
+      hostDot.after(hostRefreshBtn);
     }
 
     const scheduleBtn = document.createElement('button');
@@ -1015,6 +1037,20 @@ function rebindSidebarEvents(projects) {
         loadProjects();
       };
     }
+    const hostRefreshBtn = header.querySelector('.remote-host-refresh-btn');
+    if (hostRefreshBtn) {
+      hostRefreshBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const hostDot = header.querySelector('.remote-host-dot');
+        if (hostDot) hostDot.className = 'session-status-dot remote-host-dot remote-host-connecting';
+        try {
+          await window.api.remoteHostRefresh(project.remoteAlias);
+        } catch (err) {
+          console.error('remote host refresh failed for ' + project.remoteAlias, err);
+        }
+        loadProjects();
+      };
+    }
     const remapBtn = header.querySelector('.project-remap-btn');
     if (remapBtn) {
       remapBtn.onclick = async (e) => {
@@ -1032,7 +1068,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn') || e.target.closest('.remote-host-refresh-btn')) return;
       header.classList.toggle('collapsed');
     };
   }

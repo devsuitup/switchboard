@@ -496,6 +496,10 @@ function onRemoteWatchActivity(alias, rel) {
   }
 }
 
+function startWatcherForHost(host) {
+  remoteWatcher.start(host.alias, onRemoteWatchEvent, onRemoteWatchActivity);
+}
+
 function syncRemoteWatchers() {
   const declared = enabledHosts((getSetting('global') || {}).remoteHosts);
   const wanted = new Set(declared.map(h => h.alias));
@@ -503,9 +507,22 @@ function syncRemoteWatchers() {
     if (!wanted.has(alias)) remoteWatcher.stop(alias);
   }
   for (const host of declared) {
-    if (!remoteWatcher.isRunning(host.alias)) remoteWatcher.start(host.alias, onRemoteWatchEvent, onRemoteWatchActivity);
+    if (!remoteWatcher.isRunning(host.alias)) startWatcherForHost(host);
   }
   watchedAliases = wanted;
+}
+
+// A manual reconnect (issue #252) restarts the watch channel for one alias so
+// a channel killed by a network blip or the SWITCHBOARD-NO-INOTIFYWAIT marker
+// comes back without a settings round-trip — see .ai/contexts/session-cache.md
+// ("Remote hosts backoff" — manual reconnect).
+function restartWatcherForAlias(alias) {
+  const declared = enabledHosts((getSetting('global') || {}).remoteHosts);
+  const host = declared.find(h => h.alias === alias);
+  if (!host) return;
+  remoteWatcher.stop(alias);
+  startWatcherForHost(host);
+  watchedAliases.add(alias);
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -522,7 +539,8 @@ function annotateRemoteAttachable(projects) {
   function hostInfo(alias) {
     if (!hostInfoByAlias.has(alias)) {
       const { sessions, at, error } = remoteIndexer.getRemoteSessions(alias);
-      hostInfoByAlias.set(alias, { at, error, byId: new Map(sessions.map(d => [d.sessionId, d])) });
+      const { nextAttemptAt } = remoteIndexer.getRemoteHostState(alias);
+      hostInfoByAlias.set(alias, { at, error, nextAttemptAt, byId: new Map(sessions.map(d => [d.sessionId, d])) });
     }
     return hostInfoByAlias.get(alias);
   }
@@ -531,6 +549,7 @@ function annotateRemoteAttachable(projects) {
       const info = hostInfo(project.remoteAlias);
       project.remoteHostAt = info.at;
       project.remoteHostError = info.error;
+      project.remoteHostNextAttemptAt = info.nextAttemptAt || null;
     }
     for (const session of project.sessions) {
       if (session.remoteAlias) {
@@ -1521,9 +1540,28 @@ ipcMain.handle('remote-hosts-apply', () => {
   }
 });
 
+// A manual refresh means "I know the host is back, reconnect now": it ignores
+// backoff and restarts the watch channel per enabled host — see
+// .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252).
 ipcMain.handle('remote-hosts-refresh', async () => {
   try {
-    return { ok: true, ...(await remoteIndexer.refreshNow()) };
+    const result = await remoteIndexer.refreshNow({ force: true });
+    for (const host of enabledHosts((getSetting('global') || {}).remoteHosts)) {
+      restartWatcherForAlias(host.alias);
+    }
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Same as above, narrowed to one alias — the per-host reconnect action next
+// to a remote project header's host dot.
+ipcMain.handle('remote-host-refresh', async (_event, alias) => {
+  try {
+    const result = await remoteIndexer.refreshHostNow(alias, { force: true });
+    restartWatcherForAlias(alias);
+    return { ok: true, ...result };
   } catch (err) {
     return { ok: false, error: err.message };
   }
