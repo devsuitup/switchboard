@@ -99,6 +99,9 @@ contextBridge.exposeInMainWorld('api', {
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
   },
+  onRemoteActivity: (callback) => {
+    ipcRenderer.on('remote-activity', (_event, payload) => callback(payload));
+  },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));
   },

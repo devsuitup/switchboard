@@ -503,6 +503,7 @@ function refreshSidebar({ resort = false } = {}) {
   }
 
   renderProjects(projects, resort);
+  pruneRemoteActivityTimers();
 }
 
 // --- Archive toggle ---
