@@ -32,8 +32,7 @@ function formatStatusAge(epochMs) {
   return d + 'd ago';
 }
 
-// The next automatic retry, phrased for a tooltip — issue #252. null when the
-// host isn't backing off (never failed, or a manual reconnect just reset it).
+// see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
 function formatNextAttemptIn(epochMs) {
   if (!Number.isFinite(epochMs)) return null;
   const deltaMs = epochMs - Date.now();
@@ -795,9 +794,7 @@ function renderProjects(projects, resort) {
       hostDot.title = state.detail;
       header.querySelector('.project-name').after(hostDot);
 
-      // Manual reconnect (issue #252): ignores backoff, restarts the watch
-      // channel for this alias — see .ai/contexts/session-cache.md
-      // ("Remote hosts backoff" — manual reconnect).
+      // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
       const hostRefreshBtn = document.createElement('button');
       hostRefreshBtn.className = 'remote-host-refresh-btn';
       hostRefreshBtn.title = 'Reconnect ' + project.remoteAlias + ' now';

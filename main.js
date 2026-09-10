@@ -512,10 +512,7 @@ function syncRemoteWatchers() {
   watchedAliases = wanted;
 }
 
-// A manual reconnect (issue #252) restarts the watch channel for one alias so
-// a channel killed by a network blip or the SWITCHBOARD-NO-INOTIFYWAIT marker
-// comes back without a settings round-trip — see .ai/contexts/session-cache.md
-// ("Remote hosts backoff" — manual reconnect).
+// see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
 function restartWatcherForAlias(alias) {
   const declared = enabledHosts((getSetting('global') || {}).remoteHosts);
   const host = declared.find(h => h.alias === alias);
@@ -1540,9 +1537,7 @@ ipcMain.handle('remote-hosts-apply', () => {
   }
 });
 
-// A manual refresh means "I know the host is back, reconnect now": it ignores
-// backoff and restarts the watch channel per enabled host — see
-// .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252).
+// see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
 ipcMain.handle('remote-hosts-refresh', async () => {
   try {
     const result = await remoteIndexer.refreshNow({ force: true });
@@ -1555,8 +1550,6 @@ ipcMain.handle('remote-hosts-refresh', async () => {
   }
 });
 
-// Same as above, narrowed to one alias — the per-host reconnect action next
-// to a remote project header's host dot.
 ipcMain.handle('remote-host-refresh', async (_event, alias) => {
   try {
     const result = await remoteIndexer.refreshHostNow(alias, { force: true });
