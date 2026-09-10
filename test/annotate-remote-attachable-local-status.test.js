@@ -39,7 +39,10 @@ function makeAnnotate(mocks) {
     source + '\nreturn annotateRemoteAttachable;'
   );
   return factory(
-    mocks.remoteIndexer || { getRemoteSessions: () => ({ sessions: [], at: null, error: null }) },
+    mocks.remoteIndexer || {
+      getRemoteSessions: () => ({ sessions: [], at: null, error: null }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+    },
     mocks.remoteAttachAdapter || { supports: () => false },
     mocks.remoteActivityTracker || { activeAt: () => null },
     mocks.cliSessionState || { getStatus: () => undefined }
@@ -90,6 +93,7 @@ test('a remote session still gets status/statusUpdatedAt from the remote descrip
         at: 111,
         error: null,
       }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
     },
     remoteAttachAdapter: { supports: () => true },
     cliSessionState: { getStatus: () => { throw new Error('must not be called for a remote session'); } },

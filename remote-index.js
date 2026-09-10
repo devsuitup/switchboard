@@ -199,7 +199,8 @@ function createRemoteIndexer(ctx) {
     return toScan.size > 0;
   }
 
-  async function refreshNow() {
+  // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
+  async function refreshNow({ force = false } = {}) {
     if (stopped || inFlight) return { skipped: true };
     const list = hosts();
     publishRoots(list);
@@ -214,13 +215,19 @@ function createRemoteIndexer(ctx) {
         if (stopped) break;
         if (hostInFlight.has(host.alias)) continue;
         const state = backoffState(host.alias);
-        if (now() < state.nextAttemptAt) continue; // still backing off: no attempt, no log, no ssh
+        if (force) {
+          state.failures = 0;
+          state.nextAttemptAt = 0;
+        } else if (now() < state.nextAttemptAt) {
+          continue; // still backing off: no attempt, no log, no ssh
+        }
         try {
           if (await refreshHost(host)) changed = true;
           onHostSuccess(host.alias);
           remoteSessionsAt.set(host.alias, now());
         } catch (err) {
-          remoteSessions.set(host.alias, []);
+          // A failed cycle keeps the last known descriptors — see
+          // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
           errors.push({ alias: host.alias, error: err.message });
           onHostFailure(host.alias, err, intervalMs);
         }
@@ -233,13 +240,19 @@ function createRemoteIndexer(ctx) {
     return { skipped: false, hosts: list.length, changed, errors };
   }
 
-  // see .ai/contexts/session-cache.md ("Remote hosts — watch channel")
-  async function refreshHostNow(alias) {
+  // see .ai/contexts/session-cache.md ("Remote hosts — watch channel" and,
+  // for `force`, "Remote hosts backoff" — manual reconnect, issue #252)
+  async function refreshHostNow(alias, { force = false } = {}) {
     if (stopped || inFlight || hostInFlight.has(alias)) return { skipped: true };
     const host = hosts().find(h => h.alias === alias);
     if (!host) return { skipped: true };
     const state = backoffState(alias);
-    if (now() < state.nextAttemptAt) return { skipped: true };
+    if (force) {
+      state.failures = 0;
+      state.nextAttemptAt = 0;
+    } else if (now() < state.nextAttemptAt) {
+      return { skipped: true };
+    }
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     hostInFlight.add(alias);
     let changed = false;
@@ -249,7 +262,8 @@ function createRemoteIndexer(ctx) {
       onHostSuccess(alias);
       remoteSessionsAt.set(alias, now());
     } catch (err) {
-      remoteSessions.set(alias, []);
+      // A failed cycle keeps the last known descriptors — see
+      // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
       onHostFailure(alias, err, intervalMs);
       error = err.message;
     } finally {

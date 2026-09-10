@@ -720,6 +720,11 @@ async function triggerRebuildAndSearch() {
   if (rebuildInFlight) return;
   rebuildInFlight = true;
   if (searchRefreshBtn) searchRefreshBtn.classList.add('spinning');
+  // Fire-and-forget: a manual refresh also reconnects every enabled remote
+  // host (issue #252), but that must never block the local reindex below.
+  window.api.remoteHostsRefresh().catch((err) => {
+    console.error('remote hosts refresh failed', err);
+  });
   try {
     await window.api.rebuildCache();
   } catch {}

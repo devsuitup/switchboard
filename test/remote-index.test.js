@@ -186,7 +186,12 @@ test('getRemoteSessions surfaces per-host session descriptors from the same sync
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test('getRemoteSessions is cleared, not left stale, after a cycle where sync() throws', async () => {
+// Issue #252, field incident 2026-09-10 17:41: a transient ssh timeout used to
+// wipe the descriptor list, so every remote session read as non-attachable
+// for the whole backoff window while the tmux sessions were alive. A failed
+// cycle now keeps the last known descriptors; only a successful inventory
+// replaces them.
+test('getRemoteSessions keeps the last known descriptors, not wiped, after a cycle where sync() throws', async () => {
   const dataDir = tmp('idx-sessions-stale');
   try {
     let cycle = 0;
@@ -219,8 +224,8 @@ test('getRemoteSessions is cleared, not left stale, after a cycle where sync() t
     const r2 = await indexer.refreshNow();
     assert.equal(r2.errors.length, 1, 'the second cycle must be reported as failed');
     const afterFailure = indexer.getRemoteSessions('planificator');
-    assert.deepEqual(afterFailure.sessions, [],
-      'a failed cycle must not keep reporting hours-old sessions as live');
+    assert.deepEqual(afterFailure.sessions, [{ pid: 1, sessionId: 'still-alive' }],
+      'a failed cycle must keep the last known descriptors — the tmux session is still alive, attach must stay possible');
     assert.match(afterFailure.error, /timed out/,
       'the failure reason must survive on the accessor so the UI can distinguish it from a genuinely idle host');
     assert.equal(afterFailure.at, afterSuccess.at,
@@ -637,5 +642,92 @@ test('refreshHostNow and the periodic cycle never overlap on the same host', asy
     releasePeriodic();
     await periodic;
     assert.equal(maxInflight, 1, 'the two paths never ran the transport for the same host concurrently');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+// Issue #252 — a manual reconnect means "I know the host is back": it must
+// ignore the backoff and actually run the ssh inventory, unlike the automatic
+// path (`onRemoteWatchEvent` in main.js), which keeps calling refreshHostNow
+// without `force` and must keep respecting it.
+test('refreshHostNow({force:true}) ignores backoff, runs the transport, and clears it on success', async () => {
+  const dataDir = tmp('idx-hostnow-force');
+  try {
+    const clock = fakeClock(0);
+    let shouldFail = true;
+    let attempts = 0;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => {
+        attempts++;
+        if (shouldFail) throw new Error('ssh: connect to host dead port 22: timed out');
+        return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set() };
+      },
+    });
+
+    await indexer.refreshHostNow('dead');
+    assert.equal(attempts, 1);
+    assert.ok(indexer.getRemoteHostState('dead').nextAttemptAt > clock(), 'the host must now be backing off');
+
+    // The automatic (non-forced) path — what onRemoteWatchEvent keeps calling
+    // — must still be skipped while backing off.
+    const skipped = await indexer.refreshHostNow('dead');
+    assert.equal(attempts, 1, 'the automatic path must still respect the backoff');
+    assert.equal(skipped.skipped, true);
+
+    // A manual reconnect ignores the backoff and runs the inventory now.
+    shouldFail = false;
+    const forced = await indexer.refreshHostNow('dead', { force: true });
+    assert.equal(attempts, 2, 'force must actually run the transport, not skip');
+    assert.equal(forced.skipped, false);
+    const recovered = indexer.getRemoteHostState('dead');
+    assert.equal(recovered.consecutiveFailures, 0, 'a forced success clears the backoff');
+    assert.equal(recovered.nextAttemptAt, 0, 'no artificial delay is left behind');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshNow({force:true}) ignores backoff for every host and resets it on success', async () => {
+  const dataDir = tmp('idx-refreshall-force');
+  try {
+    const clock = fakeClock(0);
+    let shouldFail = true;
+    let attempts = 0;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'dead' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => {
+        attempts++;
+        if (shouldFail) throw new Error('ssh: connect to host dead port 22: timed out');
+        return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set() };
+      },
+    });
+
+    await indexer.refreshNow();
+    assert.equal(attempts, 1);
+    assert.ok(indexer.getRemoteHostState('dead').nextAttemptAt > clock());
+
+    const skipped = await indexer.refreshNow();
+    assert.equal(attempts, 1, 'the automatic refreshNow (periodic timer) must still respect the backoff');
+    assert.deepEqual(skipped.errors, []);
+
+    shouldFail = false;
+    const forced = await indexer.refreshNow({ force: true });
+    assert.equal(attempts, 2, 'force must run the transport for a backing-off host');
+    assert.deepEqual(forced.errors, []);
+    const recovered = indexer.getRemoteHostState('dead');
+    assert.equal(recovered.consecutiveFailures, 0);
+    assert.equal(recovered.nextAttemptAt, 0);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

@@ -4167,6 +4167,46 @@ body { display: flex; flex-direction: column; }
 .remote-host-dot.remote-host-unknown { background: #f5be3c; }
 .remote-host-dot.remote-host-empty { background: rgba(255,255,255,0.18); }
 .remote-host-dot.remote-host-live { background: #3ecf5a; }
+/* Manual reconnect in flight (issue #252) — same grey as "never synced",
+   pulsed so it reads as active rather than unknown. */
+.remote-host-dot.remote-host-connecting {
+  background: #f5be3c;
+  animation: pulse-dot 1s steps(4) infinite;
+}
+
+/* Project header manual reconnect button, next to the remote host dot */
+.remote-host-refresh-btn {
+  background: transparent;
+  border: none;
+  color: #7a7a90;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 0 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+  vertical-align: middle;
+  transition: all 0.15s;
+  opacity: 0;
+}
+
+.remote-host-refresh-btn svg {
+  display: block;
+}
+
+.project-header:hover .remote-host-refresh-btn {
+  opacity: 0.7;
+}
+
+.remote-host-refresh-btn:hover {
+  opacity: 1;
+  background: rgba(255,255,255,0.04);
+  color: #b0b0c4;
+}
 
 .remote-hosts-list {
   margin: 8px 0;

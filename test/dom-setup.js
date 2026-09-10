@@ -51,6 +51,11 @@ function setupSidebarDom() {
   const apiTarget = {
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
     onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
+    // Manual remote reconnect (issue #252) — explicit defaults so a test that
+    // doesn't care about these calls still gets a resolved promise; a test
+    // that does override them per-call, the same way archiveSession etc. do.
+    remoteHostsRefresh: () => Promise.resolve({ ok: true }),
+    remoteHostRefresh: () => Promise.resolve({ ok: true }),
   };
   window.api = new Proxy(apiTarget, {
     get(target, prop) {
