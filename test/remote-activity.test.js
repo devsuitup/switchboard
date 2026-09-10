@@ -1,8 +1,8 @@
 'use strict';
 
 // remote-activity.js: the uncoalesced transcript-write signal that feeds the
-// sidebar's activity pip. Properties proven here (issue #242, see
-// .ai/contexts/session-cache.md, "Remote hosts — activity pip"):
+// sidebar's busy spinner. Properties proven here (issue #242, see
+// .ai/contexts/session-cache.md, "Remote hosts — busy spinner (issue #242)"):
 //   1. A rel that doesn't decode to a plausible session id is dropped.
 //   2. A first sighting of a session is always forwarded.
 //   3. A second sighting inside the throttle window is swallowed, not forwarded.

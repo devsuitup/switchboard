@@ -117,6 +117,10 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
     cachedProjects: [],
     cachedAllProjects: [],
 
+    // remote-activity-ui.js is not loaded in this harness — renderProjects
+    // calls it unconditionally, and no fixture session here is remote.
+    seedRemoteActivity: () => {},
+
     // No-op function stubs (sidebar.js wires these in rebindSidebarEvents;
     // the real spies for openSession / showSubagentTranscript are installed
     // AFTER eval'ing sidebar.js + jsonl-viewer.js so the JS files don't

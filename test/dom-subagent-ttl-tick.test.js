@@ -66,6 +66,9 @@ function setupCombinedDom() {
     responseReadySessions: new Set(),
     sessionBusyState: new Map(),
     cachedAllProjects: [],
+    // remote-activity-ui.js is not loaded in this harness — renderProjects
+    // calls it unconditionally, and no fixture session here is remote.
+    seedRemoteActivity: () => {},
     pollActiveSessions: () => {},
     showNewSessionPopover: () => {},
     openSettingsViewer: () => {},

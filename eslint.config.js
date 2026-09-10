@@ -141,6 +141,8 @@ const rendererCrossFileGlobals = {
   setActivity: 'readonly',
   trackActivity: 'readonly',
   applyActivityClasses: 'readonly',
+  sessionItemEl: 'readonly',
+  seedRemoteActivity: 'readonly',
   rekeyActivityState: 'readonly',
   reconcileBusyState: 'readonly',
   currentActivitySeq: 'readonly',

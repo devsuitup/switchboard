@@ -82,9 +82,10 @@ function setupSidebarDom() {
     showTodayOnly: false,
     visibleSessionCount: 10,
     sessionMaxAgeDays: 3650, // generous so fixtures aren't filtered out by age
-    attentionSessions: new Set(),
-    responseReadySessions: new Set(),
-    sessionBusyState: new Map(),
+    // attentionSessions / responseReadySessions / sessionBusyState come from
+    // the real session-activity.js (evaluated below), not a stub here — that
+    // module owns them, and sidebar.js/remote-activity-ui.js must see the
+    // exact same Maps/Sets it mutates.
     cachedProjects: [],
     cachedAllProjects: [],
 
@@ -121,8 +122,19 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
 
-  // Finally, sidebar.js.
+  // session-activity.js owns attentionSessions/responseReadySessions/
+  // sessionBusyState and the setActivity/applyActivityClasses/sessionItemEl
+  // functions sidebar.js and remote-activity-ui.js call — load order mirrors
+  // index.html.
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
+
+  // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
+  // renderProjects).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
+
+  const ctx = dom.getInternalVMContext();
+  const read = (expr) => vm.runInContext(expr, ctx);
 
   return {
     window,
@@ -134,6 +146,12 @@ function setupSidebarDom() {
       folderId: window.folderId,
       showDeleteSessionDialog: window.showDeleteSessionDialog,
     },
+    // The real state owned by session-activity.js — same objects sidebar.js
+    // and remote-activity-ui.js read/mutate as bare identifiers.
+    sessionBusyState: read('sessionBusyState'),
+    attentionSessions: read('attentionSessions'),
+    responseReadySessions: read('responseReadySessions'),
+    setActivity: read('setActivity'),
     // Simulate the main process emitting subagent-spawned/subagent-completed
     // (session-transitions.js) by invoking the callback sidebar.js registered
     // via window.api.onSubagentSpawned/onSubagentCompleted at eval time.

@@ -186,6 +186,18 @@ the exact remote command, and the mutation proofs are in
   delete-then-insert path as the cold-start scan. Parsing 249 MB on the main
   thread would freeze the UI; `refreshFolder` is deliberately not the remote path.
 
+### Remote hosts — busy spinner (issue #242)
+
+Remote transcript-write activity feeds the same `setActivity(sessionId, active, via)`
+dispatcher in `session-activity.js` that local PTY output uses — `remote-activity-ui.js`
+calls `setActivity(sessionId, true, 'remote-watch')` on each `remote-activity` IPC event
+and arms a 20 s decay timer (one per session, reset on each event) that calls
+`setActivity(sessionId, false, 'remote-decay')` when it fires, and `seedRemoteActivity(session)`
+(called from `renderProjects`, before any row is built) applies the same call from
+`session.remoteActiveAt` on first paint so a row rendered inside the decay window starts
+busy without waiting for the next event; the visual is the shared `.cli-busy` braille
+spinner, not a separate indicator.
+
 ### Remote hosts file-level rescan (issue #216, first half)
 
 **The unit of rescan used to be the folder, not the file.** `syncMirror`

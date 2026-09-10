@@ -42,7 +42,7 @@ function projectWithLiveSubagent() {
 test('a busy session with no subagents carries cli-busy alone', () => {
   const ctx = setupSidebarDom();
   try {
-    ctx.window.sessionBusyState.set('s-top-1', true);
+    ctx.sessionBusyState.set('s-top-1', true);
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
 
     const parent = ctx.document.getElementById('si-s-top-1');
@@ -56,7 +56,7 @@ test('a busy session with no subagents carries cli-busy alone', () => {
 test('a busy session with live subagents carries cli-busy AND has-busy-agents at once', () => {
   const ctx = setupSidebarDom();
   try {
-    ctx.window.sessionBusyState.set('s-top-1', true);
+    ctx.sessionBusyState.set('s-top-1', true);
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 

@@ -9,9 +9,6 @@
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
-// see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
-const REMOTE_ACTIVITY_DECAY_MS = 20000;
-
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -522,6 +519,10 @@ function buildSlugGroup(slug, sessions, subagentIndex) {
 function renderProjects(projects, resort) {
   pruneStaleSubagents();
   pendingSubagentRest.clear();
+  // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
+  for (const project of projects) {
+    for (const session of project.sessions) seedRemoteActivity(session);
+  }
   const newSidebar = document.createElement('div');
 
   // Sort project groups using sortedOrder as source of truth
@@ -1302,16 +1303,6 @@ function buildSessionItem(session) {
   const dot = document.createElement('span');
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
 
-  // see .ai/contexts/session-cache.md ("Remote hosts — activity pip")
-  let activityDot = null;
-  if (session.remoteAlias) {
-    activityDot = document.createElement('span');
-    const isActive = Number.isFinite(session.remoteActiveAt) &&
-      (Date.now() - session.remoteActiveAt) < REMOTE_ACTIVITY_DECAY_MS;
-    activityDot.className = 'session-status-dot remote-activity-dot' + (isActive ? ' active' : '');
-    activityDot.title = 'Remote session is writing its transcript';
-  }
-
   // Info block
   const info = document.createElement('div');
   info.className = 'session-info';
@@ -1408,7 +1399,6 @@ function buildSessionItem(session) {
 
   row.appendChild(pin);
   row.appendChild(dot);
-  if (activityDot) row.appendChild(activityDot);
   row.appendChild(info);
   row.appendChild(actions);
   item.appendChild(row);
