@@ -14,12 +14,7 @@ function clearRemoteActivityTimer(sessionId) {
 function armRemoteDecayTimer(sessionId, ms) {
   remoteActivityDecayTimers.set(sessionId, setTimeout(() => {
     remoteActivityDecayTimers.delete(sessionId);
-    // 20s of transcript silence means "stopped writing", not "response
-    // ready" — a remote adapter has no PTY to confirm the turn actually
-    // ended (long tool call, parent delegating to subagents). Clear busy
-    // without arming the unread marker. Covers both onRemoteActivityEvent's
-    // decay and seedRemoteActivity's seed-decay — both arm through this
-    // function. See .ai/contexts/session-cache.md ("Remote hosts — busy spinner").
+    // silence is "stopped writing", not "response ready" — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
     setActivity(sessionId, false, 'remote-decay', { armReady: false });
   }, ms));
 }

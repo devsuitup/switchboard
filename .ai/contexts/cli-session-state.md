@@ -159,6 +159,17 @@ session. Both `seed()` and `handleFile()` apply this gate before writing to
 `statusBySession`; `handleFile()` also deletes the entry outright once the
 liveness check fails, same as it does when the file itself disappears.
 
+**That gate only runs on a file event — a CLI killed without a clean exit
+writes no such event, so its last status stayed cached forever until this app
+restarted (F2, audit-fable-2026-09-11).** `getStatus(sessionId)` now keeps the
+`pid` alongside the cached `{status, statusUpdatedAt}` and re-probes
+`isProcessAlive(pid)` itself, lazily, throttled to once per
+`GET_STATUS_PROBE_THROTTLE_MS` (5 s) per sessionId (`now()` is injected so
+tests use a fake clock instead of real delays) — a dead pid deletes the entry
+and the call returns `undefined`, same as a file event would have done. This
+still never touches disk and never arms `onIdle` — "the one invariant" above
+is unchanged, it is a read-path liveness check, not a new trigger.
+
 ## Canary tests
 
 `test/canary-*.test.js` is a convention this module introduces. A canary

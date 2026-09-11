@@ -17,9 +17,11 @@ const {
   createTmuxAttachAdapter,
   parseTmuxField,
   parseProbeOutput,
+  parseDiscoveryProbeOutput,
   buildProbeCommand,
   buildAttachCommand,
   buildRestoreCommand,
+  buildRemoteCommandArgs,
 } = require('../remote-attach');
 
 const PROBE_SEP = '';
@@ -498,10 +500,79 @@ test('no builder ever emits a backtick', () => {
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'on', mouse: 'off', windowSize: 'manual' }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: null, mouse: null, windowSize: null }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
+    buildRemoteCommandArgs('vps', 'echo hi').join(' '),
   ];
   for (const cmd of commands) {
     assert.ok(!cmd.includes('`'), `command must not contain a backtick: ${cmd}`);
   }
+});
+
+// F10 (audit-fable-2026-09-11): the probe and restore-on-detach ssh must not
+// hang past a broken/half-open connection waiting for the (much longer) kill
+// timer.
+test('buildRemoteCommandArgs adds ConnectTimeout=5 alongside BatchMode, alias last before the command', () => {
+  const args = buildRemoteCommandArgs('vps', 'echo hi');
+  assert.deepEqual(args, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-n', 'vps', 'echo hi']);
+});
+
+// --- F6 (audit-fable-2026-09-11): pid-reuse guard before a tmux attach -----
+
+test('parseDiscoveryProbeOutput reads the trailing cmdline-check segment as cmdlineHasClaude', () => {
+  const fields = (cmdline) => {
+    const base = [FAKE_SOCKET, '200x50', 'status on', '', '', '0'];
+    return (cmdline == null ? base : [...base, cmdline]).join(PROBE_SEP);
+  };
+  assert.equal(parseDiscoveryProbeOutput(fields('1')).cmdlineHasClaude, true);
+  assert.equal(parseDiscoveryProbeOutput(fields('0')).cmdlineHasClaude, false);
+  assert.equal(parseDiscoveryProbeOutput(fields(null)).cmdlineHasClaude, null,
+    'a probe predating this segment (old fixture/host script) must read as unknown, not false');
+});
+
+// Design note (see .ai/contexts/session-cache.md, "pid-reuse guard"): the
+// CLI's own `procStart` field is a Windows FILETIME-scale value in the one
+// sample this repo has measured (cli-session-state.md) -- there is no
+// evidence it lines up with Linux's /proc/<pid>/stat starttime (clock ticks
+// since boot) on a remote host, and ssh access to check was out of scope
+// here. Comparing the two numerically risks either shipping a check that
+// always mismatches (attach always refused) or one whose units silently
+// don't line up (false confidence). This adapter instead verifies
+// `/proc/<pid>/cmdline` still contains "claude" -- weaker than an exact
+// start-time match, but it catches the audited scenario (pid reused by an
+// unrelated process in another tmux server) without depending on an
+// unverified cross-platform format match. `descriptor.procStart != null` is
+// still what gates the check, per the interface asked for.
+test('attach() proceeds when the probed cmdline still says claude', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: ['200x50', 'status on', '', '', '0', '1'].join(PROBE_SEP),
+    spawnCalls,
+  });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
+  assert.equal(result.ok, true);
+  assert.equal(spawnCalls.length, 1);
+});
+
+test('attach() refuses before spawnPty when the probed cmdline no longer says claude', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: ['200x50', 'status on', '', '', '0', '0'].join(PROBE_SEP),
+    spawnCalls,
+  });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /pid 4242 now belongs to a process that is not a claude CLI/);
+  assert.equal(spawnCalls.length, 0, 'no pty may be spawned once the pid-reuse guard refuses');
+});
+
+test('attach() proceeds unverified when the probe carries no cmdline segment (older probe output)', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: ['200x50', 'status on', '', '', '0'].join(PROBE_SEP),
+    spawnCalls,
+  });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
+  assert.equal(result.ok, true, 'a probe without the cmdline segment cannot refuse');
+  assert.equal(spawnCalls.length, 1);
 });
 
 // Solo attach must actually apply the session-scoped option sets end-to-end

@@ -15,7 +15,7 @@ const { Readable } = require('stream');
 
 const {
   createSshTransport, parseInventory, parseSessions, splitListOutput,
-  LIST_COMMAND, SESSIONS_MARKER, MAX_SESSION_DESCRIPTORS, MAX_SESSION_DESCRIPTOR_BYTES,
+  LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, MAX_SESSION_DESCRIPTORS, MAX_SESSION_DESCRIPTOR_BYTES,
 } = require('../remote-transport');
 
 function fakeChild() {
@@ -109,9 +109,11 @@ test('LIST_COMMAND is pinned exactly — any widening of the sessions glob must 
     `find .claude/projects -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
     `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
     `find .claude/sessions -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
-    `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; done`;
+    `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +
+    `pid=$(basename "$f" .json); printf '\\002ALIVE:%s\\n' "$( [ -d "/proc/$pid" ] && echo 1 || echo 0 )"; done`;
   assert.equal(LIST_COMMAND, expected);
 });
+
 
 // issue #244: the projects find must list both the transcript and its sidecar.
 test('LIST_COMMAND lists .meta.json sidecars alongside .jsonl transcripts', () => {
@@ -270,8 +272,45 @@ test('parseSessions drops a descriptor with a missing or non-integer pid', () =>
 });
 
 test('parseSessions on a blank/empty block returns no sessions and no warnings', () => {
-  assert.deepEqual(parseSessions(''), { sessions: [], warnings: [] });
-  assert.deepEqual(parseSessions('\n\n'), { sessions: [], warnings: [] });
+  assert.deepEqual(parseSessions(''), { sessions: [], warnings: [], dropped: 0 });
+  assert.deepEqual(parseSessions('\n\n'), { sessions: [], warnings: [], dropped: 0 });
+});
+
+// F9 (audit-fable-2026-09-11): a block with one alive and one dead descriptor
+// keeps only the alive one, dropped is counted.
+test('parseSessions drops a descriptor marked dead by ALIVE_MARKER_PREFIX, keeps the alive one', () => {
+  const block = [
+    JSON.stringify({ pid: 1, sessionId: 'alive-one' }),
+    `${ALIVE_MARKER_PREFIX}1`,
+    JSON.stringify({ pid: 2, sessionId: 'dead-one' }),
+    `${ALIVE_MARKER_PREFIX}0`,
+  ].join('\n');
+  const { sessions, warnings, dropped } = parseSessions(block);
+  assert.deepEqual(sessions, [{ pid: 1, sessionId: 'alive-one' }]);
+  assert.deepEqual(warnings, []);
+  assert.equal(dropped, 1);
+});
+
+// Backward compatible: an older host script with no ALIVE marker at all must
+// keep behaving exactly as before this fix.
+test('parseSessions keeps a descriptor when the ALIVE marker is absent (older host script)', () => {
+  const block = JSON.stringify({ pid: 1, sessionId: 'no-marker' }) + '\n';
+  const { sessions, warnings, dropped } = parseSessions(block);
+  assert.deepEqual(sessions, [{ pid: 1, sessionId: 'no-marker' }]);
+  assert.deepEqual(warnings, []);
+  assert.equal(dropped, 0);
+});
+
+test('parseSessions: the ALIVE marker line is consumed and never itself warns as invalid JSON', () => {
+  const block = [
+    JSON.stringify({ pid: 1, sessionId: 'a' }),
+    `${ALIVE_MARKER_PREFIX}1`,
+    JSON.stringify({ pid: 2, sessionId: 'b' }),
+    `${ALIVE_MARKER_PREFIX}1`,
+  ].join('\n');
+  const { sessions, warnings } = parseSessions(block);
+  assert.deepEqual(sessions, [{ pid: 1, sessionId: 'a' }, { pid: 2, sessionId: 'b' }]);
+  assert.deepEqual(warnings, [], 'the marker lines must never be parsed as their own descriptor');
 });
 
 test('a non-zero ssh exit is an error, not an empty inventory', async () => {
