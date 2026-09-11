@@ -17,6 +17,7 @@
 // Main-process files (CommonJS) get a separate block with node globals.
 
 const globals = require('globals');
+const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .cli-busy/.needs-attention/.response-ready/.has-busy-agents — see .ai/contexts/session-state.md';
 
 // Cross-file renderer globals: vars defined in one file and consumed by
 // another. The list mirrors the dependency comment at the top of
@@ -373,10 +374,36 @@ module.exports = [
     files: ['public/**/*.js'],
     ignores: ['public/session-activity-dom.js'],
     rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "CallExpression[callee.object.property.name='classList'][callee.property.name=/^(add|remove|toggle)$/] > Literal[value=/^(cli-busy|needs-attention|response-ready|has-busy-agents)$/]",
-        message: 'Only public/session-activity-dom.js may write .cli-busy/.needs-attention/.response-ready/.has-busy-agents — see .ai/contexts/session-state.md',
-      }],
+      'no-restricted-syntax': ['error',
+        {
+          selector: "CallExpression[callee.object.property.name='classList'][callee.property.name=/^(add|remove|toggle|replace)$/] > Literal[value=/^(cli-busy|needs-attention|response-ready|has-busy-agents)$/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.object.property.name='classList'][callee.property.name=/^(add|remove|toggle|replace)$/] > TemplateLiteral > TemplateElement[value.raw=/(cli-busy|needs-attention|response-ready|has-busy-agents)/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.object.property.name='classList'][callee.computed=true]",
+          message: 'Computed classList[method](...) hides the class name from lint; call add/remove/toggle directly. See .ai/contexts/session-state.md',
+        },
+        {
+          selector: "AssignmentExpression[left.property.name=/^(className|innerHTML|outerHTML)$/] Literal[value=/(cli-busy|needs-attention|response-ready|has-busy-agents)/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+        {
+          selector: "AssignmentExpression[left.property.name=/^(className|innerHTML|outerHTML)$/] TemplateElement[value.raw=/(cli-busy|needs-attention|response-ready|has-busy-agents)/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.property.name=/^(setAttribute|insertAdjacentHTML)$/] Literal[value=/(cli-busy|needs-attention|response-ready|has-busy-agents)/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.property.name=/^(setAttribute|insertAdjacentHTML)$/] TemplateElement[value.raw=/(cli-busy|needs-attention|response-ready|has-busy-agents)/]",
+          message: ACTIVITY_CLASS_MESSAGE,
+        },
+      ],
     },
   },
 

@@ -84,13 +84,24 @@ is a later step, not part of this migration.
 
 ## Enforcement
 
-- `eslint.config.js`: a `no-restricted-syntax` rule forbids
-  `classList.add/remove/toggle('cli-busy' | 'needs-attention' | 'response-ready' | 'has-busy-agents', …)`
-  in every `public/**/*.js` file except `session-activity-dom.js` (tests are a
-  separate glob, exempt by construction). All prior direct writers
-  (`app.js`, `sidebar.js`, `session-activity.js` itself) were moved onto the
-  DOM file's `setNeedsAttention`/`setResponseReady`/`setCliBusy`/`setHasBusyAgents`
-  helpers so the rule starts at zero violations.
+- `eslint.config.js`: `no-restricted-syntax` selectors, in every `public/**/*.js`
+  file except `session-activity-dom.js` (tests are a separate glob, exempt by
+  construction), forbid the four class names (`cli-busy`, `needs-attention`,
+  `response-ready`, `has-busy-agents`) in: `classList.add/remove/toggle/replace`
+  (string or template literal), `className` / `innerHTML` / `outerHTML`
+  assignments, `setAttribute(...)` and `insertAdjacentHTML(...)`; any computed
+  `classList[method](...)` call is refused outright because it hides the name.
+  Verified 2026-09-11 with a probe file: six bypass shapes red, an unrelated
+  class name green, 0 errors on the real renderer. Not caught, by nature: a
+  class name held in a variable or built by concatenation — a review item, not
+  a lint item. All prior direct writers (`app.js`, `sidebar.js`,
+  `session-activity.js` itself) were moved onto the DOM file's
+  `setNeedsAttention`/`setResponseReady`/`setCliBusy`/`setHasBusyAgents`
+  helpers so the rules start at zero violations.
+- `session-activity-dom.js` resolves a busy + response-ready tie as busy
+  (`main` resolved it as response-ready). The tie is unreachable: `setActivity`
+  and `rekeyActivityState` keep the two sets exclusive before projection. Noted
+  so a future invariant break is read as such, not as a projection bug.
 - `test/session-state-boundary.test.js`: source-grep (no `require()`, same
   shape as `test/main-ctx-db-wiring.test.js`) asserting `session-state.js`
   never references `document`, `window`, `require('electron')` or `ipcRenderer`.
