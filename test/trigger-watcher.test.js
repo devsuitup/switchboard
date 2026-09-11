@@ -590,9 +590,10 @@ test('W4 concurrency cap: 12 simultaneous triggers all get processed', async () 
       writeTrigger(tmp, uuid, { sessionId: 'sess-' + uuid, command: '/compact' });
     }
 
-    // Wait for all 12 result files
+    // Wait for all 12 result files. Ceiling only: 12 triggers through
+    // MAX_INFLIGHT with real submit-verify windows take 4-6 s on an idle box.
     await Promise.all(uuids.map(uuid =>
-      waitForFile(path.join(tmp, 'processed', uuid + '.result.json'), 5000),
+      waitForFile(path.join(tmp, 'processed', uuid + '.result.json'), 20000),
     ));
 
     // All 12 should be ok:true
