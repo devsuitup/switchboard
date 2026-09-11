@@ -118,7 +118,11 @@ test('.cli-busy clears once the decay timer fires, and not before', () => {
   t.destroy();
 });
 
-test('decay routes through setActivity: a non-selected remote session lands in responseReadySessions, exactly like a local one', () => {
+test('decay routes through setActivity with armReady:false: a non-selected remote session clears busy WITHOUT landing in responseReadySessions', () => {
+  // F3: 20s of transcript silence means "stopped writing", not "the response
+  // is ready" — a remote adapter has no PTY to confirm a turn actually ended
+  // (a long tool call, or a parent delegating to subagents whose own
+  // transcript stays silent). Decay must not claim the turn is done.
   const t = setup(['s1']);
   t.window.activeSessionId = 's2'; // s1 is not the focused session
   t.emit({ sessionId: 's1' });
@@ -126,8 +130,10 @@ test('decay routes through setActivity: a non-selected remote session lands in r
 
   t.pending()[0].fn(); // decay fires
 
-  assert.equal(t.sessionBusyState.get('s1'), false);
-  assert.ok(t.responseReadySessions.has('s1'), 'going idle through setActivity marks the turn as an unread response, like a local session');
+  assert.equal(t.sessionBusyState.get('s1'), false, 'busy is cleared');
+  assert.ok(!t.responseReadySessions.has('s1'), 'decay must NOT arm the unread/response-ready marker');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'the spinner is off');
+  assert.ok(!t.item('s1').classList.contains('response-ready'), 'the row must not claim a finished response it never measured');
   t.destroy();
 });
 

@@ -27,6 +27,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+const { setupSidebarDom } = require('./dom-setup');
 
 // ---------------------------------------------------------------------------
 // Minimal DOM setup
@@ -337,6 +338,91 @@ test('updateRunningIndicators: empty pty-set — all sessions marked stopped', (
   }
 
   window.close();
+});
+
+// ---------------------------------------------------------------------------
+// F7 — remote rows are exempt from the PTY-set purge.
+//
+// Unlike the replica tests above (hand-rolled Maps/Sets), these drive the
+// REAL session-activity.js/sidebar.js/remote-activity-ui.js via dom-setup.js
+// (same technique as test/dom-sidebar-remote-session.test.js). The gating
+// loop itself is still a hand-mirror of updateRunningIndicators — app.js
+// cannot be eval'd in jsdom (see file header) — but the state it mutates
+// (sessionBusyState/responseReadySessions/attentionSessions, and the purge
+// itself) is the real purgeActivityFor from session-activity.js, not a
+// replica. Keep this mirror's remote-skip condition in sync with app.js's
+// `if (!running && !item.dataset.remoteAlias)`.
+// ---------------------------------------------------------------------------
+
+function runIndicatorPass(doc, activePtyIds) {
+  doc.querySelectorAll('.session-item').forEach(item => {
+    if (item.dataset.subagent) return;
+    const id = item.dataset.sessionId;
+    const running = activePtyIds.has(id);
+    item.classList.toggle('has-running-pty', running);
+    if (!running && !item.dataset.remoteAlias) {
+      item.classList.remove('has-busy-agents');
+      doc.defaultView.purgeActivityFor(id, 'pty-gone');
+    }
+  });
+}
+
+test('F7: a remote row busy via onRemoteActivityEvent stays .cli-busy across an unrelated local pty-set change', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const sidebarContent = ctx.document.getElementById('sidebar-content');
+    const localItem = ctx.document.createElement('div');
+    localItem.className = 'session-item';
+    localItem.dataset.sessionId = 'local-1';
+    localItem.innerHTML = '<span class="session-status-dot"></span>';
+    const remoteItem = ctx.document.createElement('div');
+    remoteItem.className = 'session-item';
+    remoteItem.dataset.sessionId = 'remote-1';
+    remoteItem.dataset.remoteAlias = 'vps';
+    remoteItem.innerHTML = '<span class="session-status-dot"></span>';
+    sidebarContent.append(localItem, remoteItem);
+
+    // Real onRemoteActivityEvent (remote-activity-ui.js), as the watch
+    // channel's IPC event would drive it — routes through the real setActivity.
+    ctx.window.onRemoteActivityEvent({ sessionId: 'remote-1' });
+    assert.ok(remoteItem.classList.contains('cli-busy'), 'precondition: remote row busy via the real dispatcher');
+    assert.equal(ctx.sessionBusyState.get('remote-1'), true);
+
+    runIndicatorPass(ctx.document, new Set(['local-1']));
+    assert.ok(remoteItem.classList.contains('cli-busy'), 'remote row still busy after a pass with local-1 running');
+
+    // local-1 stops — an unrelated local pty-set change.
+    runIndicatorPass(ctx.document, new Set());
+
+    assert.ok(remoteItem.classList.contains('cli-busy'), 'remote row must NOT be purged by an unrelated local pty-set change');
+    assert.equal(ctx.sessionBusyState.get('remote-1'), true, 'sessionBusyState for the remote row is untouched');
+    assert.ok(!localItem.classList.contains('has-running-pty'), 'the local row is still correctly marked not running');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('F7: a local non-running row is still purged through purgeActivityFor', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const sidebarContent = ctx.document.getElementById('sidebar-content');
+    const localItem = ctx.document.createElement('div');
+    localItem.className = 'session-item';
+    localItem.dataset.sessionId = 'local-1';
+    localItem.innerHTML = '<span class="session-status-dot"></span>';
+    sidebarContent.append(localItem);
+
+    ctx.setActivity('local-1', true, 'onCliBusyState');
+    runIndicatorPass(ctx.document, new Set(['local-1']));
+    assert.ok(localItem.classList.contains('cli-busy'), 'precondition: local row busy while its pty runs');
+
+    runIndicatorPass(ctx.document, new Set()); // the pty stops
+
+    assert.ok(!localItem.classList.contains('cli-busy'), 'a stopped local row must still be purged');
+    assert.equal(ctx.sessionBusyState.has('local-1'), false, 'sessionBusyState entry dropped for the stopped local row');
+  } finally {
+    ctx.destroy();
+  }
 });
 
 // ---------------------------------------------------------------------------

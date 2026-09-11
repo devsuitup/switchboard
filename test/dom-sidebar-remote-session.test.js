@@ -44,6 +44,8 @@ test('a remote session row carries a badge naming its host', () => {
     const badge = item.querySelector('.remote-badge');
     assert.ok(badge, 'a remote row must be visibly distinguishable from a local one');
     assert.equal(badge.textContent, 'planificator');
+    assert.equal(item.dataset.remoteAlias, 'planificator',
+      'app.js\'s updateRunningIndicators reads dataset.remoteAlias to exempt the row from the PTY-set purge (F7)');
   } finally { ctx.destroy(); }
 });
 
@@ -114,6 +116,7 @@ test('a local session is unaffected: no badge, and the click still opens it', ()
 
     const item = ctx.document.getElementById('si-local-1');
     assert.equal(item.querySelector('.remote-badge'), null);
+    assert.equal(item.dataset.remoteAlias, undefined, 'a local row must not carry dataset.remoteAlias');
 
     const opened = [];
     const viewed = [];
