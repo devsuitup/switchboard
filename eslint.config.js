@@ -149,6 +149,16 @@ const rendererCrossFileGlobals = {
   forgetActivitySeq: 'readonly',
   purgeActivityFor: 'readonly',
   pruneRemoteActivityTimers: 'readonly',
+  // public/session-state.js (pure domain, see .ai/contexts/session-state.md)
+  createSessionState: 'readonly',
+  renderSessionIcon: 'readonly',
+  // public/session-activity-dom.js — the only file allowed to write
+  // .cli-busy/.needs-attention/.response-ready/.has-busy-agents.
+  applyActivityClassesToElement: 'readonly',
+  setNeedsAttention: 'readonly',
+  setResponseReady: 'readonly',
+  setCliBusy: 'readonly',
+  setHasBusyAgents: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',
@@ -328,6 +338,45 @@ module.exports = [
       'no-undef': 'error',
       'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
       'no-redeclare': 'warn',
+    },
+  },
+
+  // Dual-mode pure domain module (public/session-state.js — see
+  // .ai/contexts/session-state.md): classic <script> in the renderer,
+  // require()-d in node:test with no DOM/window/electron. It declares
+  // createSessionState/renderSessionIcon rather than consuming them, so
+  // those two globals are switched off here (same reasoning as
+  // subagent-timing.js above).
+  {
+    files: ['public/session-state.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        module: 'writable',
+        createSessionState: 'off',
+        renderSessionIcon: 'off',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Enforcement (.ai/contexts/session-state.md, migration step 3): only
+  // public/session-activity-dom.js may write the four activity classes.
+  // Every other public/**/*.js file is checked; tests are exempt (they
+  // assert on these classes directly, e.g. `item.classList.contains(...)`).
+  {
+    files: ['public/**/*.js'],
+    ignores: ['public/session-activity-dom.js'],
+    rules: {
+      'no-restricted-syntax': ['error', {
+        selector: "CallExpression[callee.object.property.name='classList'][callee.property.name=/^(add|remove|toggle)$/] > Literal[value=/^(cli-busy|needs-attention|response-ready|has-busy-agents)$/]",
+        message: 'Only public/session-activity-dom.js may write .cli-busy/.needs-attention/.response-ready/.has-busy-agents — see .ai/contexts/session-state.md',
+      }],
     },
   },
 

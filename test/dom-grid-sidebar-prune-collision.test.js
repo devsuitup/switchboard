@@ -69,6 +69,12 @@ function setupCombinedDom() {
     responseReadySessions: new Set(),
     sessionBusyState: new Map(),
     cachedAllProjects: [],
+    // public/session-activity-dom.js is not loaded in this minimal harness
+    // (see .ai/contexts/session-state.md) — sidebar.js calls these directly.
+    setNeedsAttention: (el, on) => { if (el) el.classList.toggle('needs-attention', !!on); },
+    setResponseReady: (el, on) => { if (el) el.classList.toggle('response-ready', !!on); },
+    setCliBusy: (el, on) => { if (el) el.classList.toggle('cli-busy', !!on); },
+    setHasBusyAgents: (el, on) => { if (el) el.classList.toggle('has-busy-agents', !!on); },
     pollActiveSessions: () => {},
     showNewSessionPopover: () => {},
     openSettingsViewer: () => {},

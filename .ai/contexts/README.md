@@ -15,6 +15,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | New IPC, preload bridge changes, renderer ↔ main protocol | [ipc-bridge](ipc-bridge.md) |
 | File-trigger watcher, harness input injection, idle-wait | [trigger-watcher](trigger-watcher.md) |
 | Claude CLI state files, early subagent rescan, canary tests | [cli-session-state](cli-session-state.md) |
+| Busy/attention/response-ready state, the session-state domain module, the icon-slot projection | [session-state](session-state.md) |
 
 ## Reading order for a new contributor (~30 min)
 
