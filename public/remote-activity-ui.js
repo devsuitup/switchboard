@@ -1,7 +1,24 @@
-// See .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)").
+// See .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
+// and .ai/contexts/session-state.md (migration step 3: the remote-ssh adapter).
 
 const PIP_DECAY_MS = 20000;
 const remoteActivityDecayTimers = new Map();
+
+// remote-ssh adapter: one persistent state per remote session id — see .ai/contexts/session-state.md
+const remoteSessionStates = new Map();
+
+function remoteState(sessionId) {
+  let state = remoteSessionStates.get(sessionId);
+  if (!state) {
+    state = createSessionState('remote-ssh');
+    remoteSessionStates.set(sessionId, state);
+  }
+  return state;
+}
+
+function projectRemoteState(sessionId) {
+  applyStateClasses(sessionId, remoteState(sessionId).snapshot());
+}
 
 function clearRemoteActivityTimer(sessionId) {
   const t = remoteActivityDecayTimers.get(sessionId);
@@ -11,11 +28,27 @@ function clearRemoteActivityTimer(sessionId) {
   }
 }
 
+// Maps still fed in parallel for sidebar initial paint and grid dot — see session-state.md "migration status"
+function markRemoteBusy(sessionId, via, at) {
+  const state = remoteState(sessionId);
+  state.apply({ type: 'transcriptTouched', at: at || Date.now(), source: via });
+  state.apply({ type: 'busy', active: true });
+  setActivity(sessionId, true, via);
+  projectRemoteState(sessionId);
+}
+
+// silence is "stopped writing", not "response ready" — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
+function decayRemoteBusy(sessionId) {
+  const state = remoteState(sessionId);
+  state.apply({ type: 'busy', active: false, armReady: false });
+  setActivity(sessionId, false, 'remote-decay', { armReady: false });
+  projectRemoteState(sessionId);
+}
+
 function armRemoteDecayTimer(sessionId, ms) {
   remoteActivityDecayTimers.set(sessionId, setTimeout(() => {
     remoteActivityDecayTimers.delete(sessionId);
-    // silence is "stopped writing", not "response ready" — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
-    setActivity(sessionId, false, 'remote-decay', { armReady: false });
+    decayRemoteBusy(sessionId);
   }, ms));
 }
 
@@ -23,23 +56,47 @@ function pruneRemoteActivityTimers() {
   for (const sessionId of remoteActivityDecayTimers.keys()) {
     if (!sessionItemEl(sessionId)) clearRemoteActivityTimer(sessionId);
   }
+  for (const sessionId of remoteSessionStates.keys()) {
+    if (!sessionItemEl(sessionId)) remoteSessionStates.delete(sessionId);
+  }
 }
 
 function onRemoteActivityEvent(payload) {
   const sessionId = payload && payload.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) return;
-  setActivity(sessionId, true, 'remote-watch');
+  markRemoteBusy(sessionId, 'remote-watch', payload.at);
   clearRemoteActivityTimer(sessionId);
   armRemoteDecayTimer(sessionId, PIP_DECAY_MS);
 }
 
+// descriptor ports; absence stays 'unknown', never 'dead' — see session-state.md ports table
+function applyRemoteDescriptor(session) {
+  if (!session || !session.remoteAlias) return;
+  const state = remoteState(session.sessionId);
+  if (session.remoteDescriptorSeen) state.apply({ type: 'liveness', value: 'alive' });
+  if (session.status !== undefined) {
+    state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
+  }
+  projectRemoteState(session.sessionId);
+}
+
+// attached = a PTY/ssh attach exists for this row (activePtyIds signal from app.js)
+function setRemoteAttached(sessionId, attached) {
+  if (!attached && !remoteSessionStates.has(sessionId)) return; // nothing recorded yet, nothing to clear
+  const state = remoteState(sessionId);
+  state.apply({ type: 'attached', value: attached });
+  projectRemoteState(sessionId);
+}
+
 function seedRemoteActivity(session) {
   if (!session || !session.remoteAlias) return;
+  applyRemoteDescriptor(session);
+
   if (!Number.isFinite(session.remoteActiveAt)) return;
   const sessionId = session.sessionId;
   const remaining = session.remoteActiveAt + PIP_DECAY_MS - Date.now();
   if (remaining <= 0) return;
-  setActivity(sessionId, true, 'remote-seed');
+  markRemoteBusy(sessionId, 'remote-seed', session.remoteActiveAt);
   if (remoteActivityDecayTimers.has(sessionId)) return;
   armRemoteDecayTimer(sessionId, remaining);
 }

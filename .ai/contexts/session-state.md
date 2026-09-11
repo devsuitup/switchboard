@@ -6,15 +6,63 @@ what actually shipped, not the whole plan.
 
 ## Migration status
 
-- **Steps 1-2: done.** `public/session-activity.js` split into a state part
+- **Steps 1-3: done.** `public/session-activity.js` split into a state part
   (itself) and a DOM part (`public/session-activity-dom.js`); `public/session-state.js`
-  introduced and wired behind `applyActivityClasses` for **local-pty only**.
-- **Steps 3-5: pending.** `remote-activity-ui.js`/`remote-activity.js` still write
-  `sessionBusyState` directly instead of going through a `remote-ssh` adapter; there
-  is no `local-transcript` adapter; subagent attribution is not routed through
+  introduced and wired behind `applyActivityClasses` for local-pty, and behind
+  a persistent `remote-ssh` adapter (`public/remote-activity-ui.js`) for
+  remote sessions — see "The remote-ssh adapter" below.
+- **Steps 3b/4/5: pending.** The unified icon-slot markup (dot + age + spinner
+  in one element) is a separate PR (3b). There is no `local-transcript`
+  adapter (step 4). Subagent attribution is not routed through
   `session-state.js` (`agentsBusy` exists in the model but nothing local-pty feeds
   it yet — sidebar.js's `has-busy-agents` is still computed by
-  `parentHasActiveSubagent()`, independent of the domain module).
+  `parentHasActiveSubagent()`, independent of the domain module) (step 5).
+
+### The remote-ssh adapter (step 3)
+
+`public/remote-activity-ui.js` keeps one persistent `createSessionState('remote-ssh')`
+per remote session id in `remoteSessionStates` (a `Map`, pruned in
+`pruneRemoteActivityTimers()` alongside the decay timers, called after every
+`refreshSidebar()`). It is fed by:
+
+- **The watch channel** (`onRemoteActivityEvent`, `main.js`'s `remote-activity`
+  IPC): `transcriptTouched` + `busy: true`; the 20s decay timer then applies
+  `busy: false, armReady: false` — a remote row must never reach
+  `.response-ready`, it has no PTY to confirm a turn actually ended. Tested in
+  `test/remote-session-adapter.test.js` and mutation-proven (see below).
+- **The descriptor** (`applyRemoteDescriptor`, called from `seedRemoteActivity`
+  at every render for every remote session): `descriptorStatus(status, at)`
+  from `session.status`/`session.statusUpdatedAt`, and `liveness: 'alive'`
+  when `session.remoteDescriptorSeen` is true. `main.js`'s
+  `annotateRemoteAttachable` sets `remoteDescriptorSeen = !!descriptor` — the
+  descriptor list (`remoteIndexer.getRemoteSessions`) is already ALIVE-marker
+  filtered (#262), so a match means a live process. Absence is left
+  `'unknown'`, never asserted `'dead'` — a poll miss or host backoff is not
+  proof the process exited.
+- **Attach/detach of the remote tab** (`setRemoteAttached(sessionId, attached)`,
+  called from `app.js`'s `updateRunningIndicators` for rows carrying
+  `dataset.remoteAlias`): there is no dedicated open/close IPC event for a
+  remote attach, so this reuses the same per-row `activePtyIds` transition
+  `has-running-pty` already reads.
+
+**The adapter never writes DOM itself.** Every event ends in
+`projectRemoteState(sessionId)`, which calls `session-activity-dom.js`'s new
+`applyStateClasses(sessionId, snapshot)` — the same two-class output
+(`cli-busy`/`response-ready`) `applyActivityClasses` produces for local-pty,
+but computed from the adapter's own snapshot instead of the local-pty Maps.
+
+**`setActivity()`/the Maps in `session-activity.js` are still fed for remote
+ids in parallel** (`markRemoteBusy`/`decayRemoteBusy` call both). Two readers
+were not migrated onto the adapter in this step, so removing the dual-feed
+would regress them:
+- `sidebar.js`'s `buildSessionItem` reads `sessionBusyState`/
+  `responseReadySessions`/`attentionSessions` directly at initial paint.
+- `app.js`'s grid-card busy dot (`updateRunningIndicators`'s `gridCards`
+  loop) reads `sessionBusyState` directly.
+
+Both are driven by the same `active`/`armReady` inputs as the adapter, so the
+two projections never disagree in practice; the dual-feed is a known,
+temporary duplication, not a race.
 
 ## Shape
 
@@ -114,12 +162,13 @@ is a later step, not part of this migration.
 
 | event | local-pty | local-transcript | remote-ssh |
 |---|---|---|---|
-| `busy` / `attention` (OSC 0 / 9) | yes | never | only while attached |
-| `transcriptTouched(at)` | yes | yes (only signal) | yes (watch channel) |
-| `descriptorStatus(status, at)` | yes | no (no live CLI) | yes (`main.js:539`) |
+| `busy` / `attention` (OSC 0 / 9) | yes | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
+| `transcriptTouched(at)` | yes | yes (only signal) | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
+| `descriptorStatus(status, at)` / `liveness` | yes | no (no live CLI) | yes (`main.js:539` → `applyRemoteDescriptor`) |
+| `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition |
 | `subagentSpawned` / `subagentCompleted` | yes | no | no today |
 
 An adapter without a PTY must never claim `waitingForInput` or `responseReady`
-— it has no way to tell "thinking" from "done, unseen". It should only feed
-`busy: unknown` (not modeled as a tri-state yet — reserved for step 3/4) plus
-`lastActivityAt`.
+from a completion signal it cannot verify — that is why the remote-ssh
+`busy: false` transition always passes `armReady: false` (see "The remote-ssh
+adapter" above), not a tri-state `busy: unknown`.

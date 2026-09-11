@@ -244,19 +244,29 @@ the exact remote command, and the mutation proofs are in
   cleared and reset inside `stop()`, so a queued trailing event from before
   the stop can never reach `s.onEvent` afterwards.
 
-### Remote hosts — busy spinner (issue #242)
+### Remote hosts — busy spinner (issue #242, moved onto the remote-ssh adapter in #246 step 3)
 
-Remote transcript-write activity feeds the same `setActivity(sessionId, active, via)`
-dispatcher in `session-activity.js` that local PTY output uses — `remote-activity-ui.js`
-calls `setActivity(sessionId, true, 'remote-watch')` on each `remote-activity` IPC event
-and arms a 20 s decay timer (one per session, reset on each event) that calls
-`setActivity(sessionId, false, 'remote-decay')` when it fires, and `seedRemoteActivity(session)`
-(called from `renderProjects`, before any row is built) applies the same call from
-`session.remoteActiveAt` on first paint so a row rendered inside the decay window starts
-busy without waiting for the next event; the visual is the shared `.cli-busy` braille
-spinner, not a separate indicator.
+**Moved.** The mechanics below (decay timer, `armReady: false`, the F7 purge skip) are
+unchanged, but the entry point is now `public/remote-activity-ui.js`'s persistent
+`remote-ssh` `createSessionState()` adapter, not a bare `setActivity()` call — see
+`.ai/contexts/session-state.md` ("The remote-ssh adapter") for the full wiring
+(watch channel, descriptor, attach/detach) and why `setActivity()`/the Maps are
+still fed in parallel.
 
-The decay call passes `setActivity(sessionId, false, 'remote-decay', { armReady: false })`,
+Remote transcript-write activity feeds the adapter, which in turn still feeds the same
+`setActivity(sessionId, active, via)` dispatcher in `session-activity.js` that local PTY
+output uses (kept for two readers not yet migrated — sidebar's initial paint and the grid
+busy dot) — `remote-activity-ui.js` calls `setActivity(sessionId, true, 'remote-watch')` on
+each `remote-activity` IPC event and arms a 20 s decay timer (one per session, reset on each
+event) that calls `setActivity(sessionId, false, 'remote-decay', { armReady: false })` when
+it fires, and `seedRemoteActivity(session)` (called from `renderProjects`, before any row is
+built) applies the same call from `session.remoteActiveAt` on first paint so a row rendered
+inside the decay window starts busy without waiting for the next event; the visual is the
+shared `.cli-busy` braille spinner, not a separate indicator — the DOM write itself now goes
+through `session-activity-dom.js`'s `applyStateClasses(sessionId, snapshot)`, projecting the
+adapter's own snapshot rather than being computed inline.
+
+The decay call passes `armReady: false`,
 not the bare two-argument form local PTY callers use. 20 s of transcript silence means
 "stopped writing", not "the response is ready" — a remote adapter has no PTY to ask
 whether a turn actually ended, so a long tool call or a parent delegating to subagents
@@ -267,7 +277,8 @@ unviewed remote row as `.response-ready` on a plain inference. `armReady: false`
 you haven't looked." Separately, `app.js`'s `updateRunningIndicators` PTY-set purge skips
 rows carrying `dataset.remoteAlias` (F7) — a remote row's busy state is owned by this decay
 timer, not by local PTY presence, so it must not be cleared just because some unrelated
-local PTY started or stopped.
+local PTY started or stopped. That same per-row loop is also where `updateRunningIndicators`
+feeds the adapter's `attached` port (`setRemoteAttached(id, running)`).
 
 ### Remote hosts file-level rescan (issue #216, first half)
 

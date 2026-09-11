@@ -821,6 +821,7 @@ function updateRunningIndicators() {
         // drop the live-subagent state now instead of waiting for the TTL.
         clearActiveSubagentsFor(id);
       }
+      if (item.dataset.remoteAlias) setRemoteAttached(id, running);
       const dot = item.querySelector('.session-status-dot');
       if (dot) dot.classList.toggle('running', running);
       if (window.ATRACE) window.atrace('class.toggle', id, { el: item.id || null, cls: 'has-running-pty', on: running, dot: !!dot, fn: 'updateRunningIndicators' });

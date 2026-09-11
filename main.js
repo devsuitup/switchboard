@@ -555,6 +555,8 @@ function annotateRemoteAttachable(projects) {
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
+        // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
+        session.remoteDescriptorSeen = !!descriptor;
       } else {
         // Same descriptor vocabulary, read from the local ~/.claude/sessions/<pid>.json
         // instead of a remote host's mirror -- see .ai/contexts/cli-session-state.md
