@@ -1210,7 +1210,8 @@ body { display: flex; flex-direction: column; }
   display: none;
 }
 
-.session-item.has-running-pty .session-stop-btn {
+.session-item.has-running-pty .session-stop-btn,
+.session-item.is-alive .session-stop-btn {
   display: flex;
 }
 

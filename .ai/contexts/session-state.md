@@ -30,6 +30,85 @@ what actually shipped, not the whole plan.
   `localTranscriptStates`) so `has-busy-agents` survives a full
   `renderProjects()` re-render for those two kinds, the same way it already
   did for local-pty via `activeSubagentsByParent`.
+- **Lifecycle decisions (2026-09-11): done.** The two verbs — detach and
+  stop — are both real now; see "The two lifecycle verbs: detach and stop"
+  below.
+
+## The two lifecycle verbs: detach and stop
+
+Two facts the domain carries separately: **process liveness** (the CLI is
+running — local pid, or a remote descriptor with an ALIVE marker, #262) and
+**attached view** (Switchboard holds a PTY / an ssh attach for it). A row is
+active because the process is alive, not because a tab is open.
+
+| verb | local-pty | remote-ssh |
+|---|---|---|
+| detach | not offered — closing a session's view is a stop (unchanged) | `stop-session`'s pre-existing behavior: `killPty` → the tmux adapter's `detach()` (`remote-attach.js`) — ends the local ssh client, optionally restores tmux options (solo attach, #256). Still reachable today wherever `activeSessions` cleanup calls `killPty` on a `kind: 'remote-attach'` session without a preceding `remote-stop-session` call, and via `close-terminal`'s ordinary detach (marks `rendererAttached=false`, kills nothing). |
+| stop | kill the PTY (`stop-session`, unchanged) | **new**: `remote-stop-session` IPC (`{alias, sessionId}`) — kills the process on the host itself, same control and same confirmation dialog as local. No session locked by name or role. |
+
+**No new dialog component.** `public/stop-session-ui.js`'s `resolveSessionStop(session)`
+is the only thing that differs between a local and a remote stop: which IPC
+to call, and the `confirm()` text (the host alias is named for a remote
+session). `app.js`'s `confirmAndStopSession` is still the single call site of
+the dialog and the single stop control (the sidebar row's `.session-stop-btn`,
+the terminal header's stop button, and the grid card's stop button all funnel
+through it) — it now asks `resolveSessionStop` which IPC to call instead of
+always calling `stopSession`.
+
+**The remote stop, main-side (`remote-stop.js`).** `createRemoteStopAdapter().stop(alias, descriptor)`
+builds one non-interactive ssh command (same `buildRemoteCommandArgs` transport
+as `remote-attach.js`'s probe/restore calls) that: (1) reuses
+`remote-attach.js`'s `buildProcCmdlineCheck`/pid-reuse guard verbatim — a
+recycled pid is refused with the exact wording the attach path uses, not a
+forked copy; (2) when the descriptor's `tmux` field parses, discovers the
+socket from `/proc/<pid>/environ` (identical to the attach probe) and kills at
+the **narrowest matching scope, never the session**: `tmux kill-pane -t
+<target>` when the target names a pane, `tmux kill-window -t <target>` when it
+names only a window. `kill-session` is never emitted — the VPS harness runs
+several CLIs as windows/panes of one shared tmux session, and a session-wide
+kill would take every sibling down with the one being stopped; a tmux exit
+code of 0 only means tmux accepted the request, so this is confirmed with the
+same `/proc/<pid>` poll as step (3) below before the tmux success marker is
+reported — a survivor falls through to (3) instead; (3) otherwise, or if the
+tmux kill fails (or its target survives the poll), falls back to `kill -TERM
+<pid>`, polls `/proc/<pid>` for up to ~3s (six 0.5s ticks), then `kill -KILL`
+once if it is still there. Returns `{ok, method}` where `method` is
+`'tmux-pane' | 'tmux-window' | 'pid-term' | 'pid-kill'`, or `{ok:false, error}`.
+`targetHasPane()` reads the pane/window distinction off the target string
+itself (a "." after the session prefix means a pane component follows,
+matching the grammar `TMUX_FIELD_RE` already validates) — no new parsing of
+the descriptor is added. The pane-vs-window suffix convention itself comes
+from the CLI's own descriptor writer on the VPS side, not measured against
+that writer's source from here; the `/proc/<pid>` death poll after the tmux
+kill (above) is what bounds the blast radius if that assumption is ever
+wrong — a wrongly-classified target still ends up TERM'd/KILL'd by pid once
+the poll finds it still alive, instead of the stop silently reporting
+success on a process the tmux call never actually touched.
+
+**On a successful stop, `main.js`'s `remote-stop-session` handler**: drops the
+descriptor from `remote-index.js`'s in-memory list (`dropRemoteSession(alias,
+sessionId)`) and calls `notifyRendererProjectsChanged()` directly — a forced
+`refreshHostNow` alone does not reliably `notify()` (only a folder-level jsonl
+change does), so the row would otherwise wait for the next real host cycle
+to reflect the kill; `refreshHostNow(alias, {force:true})` still runs
+afterward, fire-and-forget, as the authoritative reconciliation once the host's
+own next descriptor list confirms the process is gone. If this app held a
+local ssh attach for the now-dead session (`session.kind === 'remote-attach'`),
+`killPty` closes it too — the remote process is already gone, so there is
+nothing left to detach *from*, but the local ssh client would otherwise linger
+until it notices the far end closed on its own.
+
+**The renderer side, immediately.** On a successful remote stop,
+`public/remote-activity-ui.js`'s `applyRemoteStopped(sessionId)` applies
+`liveness:'dead'`, `attached:false`, and — beyond what the issue text names,
+needed so the adapter's own snapshot does not keep claiming a dead process is
+still doing something — clears `busy`/`attention`/`agentsBusy` too, cancels
+both of the adapter's own decay timers (activity and subagent-attribution),
+and calls `purgeActivityFor(sessionId, 'remote-stop')` to drop the
+parallel-fed `sessionBusyState`/`responseReadySessions`/`attentionSessions`
+Map entries (see "migration status" above — two readers still consume those
+Maps directly). This repaints the row's icon slot before the next
+`get-projects` round-trip lands.
 
 ### The remote-ssh adapter (step 3)
 
@@ -380,3 +459,17 @@ from a completion signal it cannot verify — that is why the remote-ssh and
 local-transcript `busy: false` transitions always pass `armReady: false` (see
 "The remote-ssh adapter" and "The local-transcript adapter" above), not a
 tri-state `busy: unknown`.
+
+## Known limits
+
+- **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s
+  `buildRefusalGuard` (and `remote-attach.js`'s probe it reuses verbatim)
+  decides "is this still the claude CLI" with `grep -qi claude` against
+  `/proc/<pid>/cmdline` — a process a user happens to launch with "claude"
+  anywhere in its argv (not the CLI itself) passes the same guard and can be
+  killed. Deferred, not implemented: hardening candidates are the `comm`
+  field from `/proc/<pid>/stat` (the kernel-recorded executable basename,
+  harder to spoof by argv alone) and the process start time (`/proc/<pid>/stat`
+  field 22, jiffies since boot) compared against the descriptor's own
+  recorded start time — a pid recycled fast enough to still say "claude" in
+  argv is caught by a start-time mismatch even when the cmdline check is not.

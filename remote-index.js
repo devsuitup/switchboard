@@ -317,10 +317,21 @@ function createRemoteIndexer(ctx) {
     };
   }
 
+  // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+  function dropRemoteSession(alias, sessionId) {
+    const list = remoteSessions.get(alias);
+    if (!list || list.length === 0) return false;
+    const next = list.filter(s => s.sessionId !== sessionId);
+    if (next.length === list.length) return false;
+    remoteSessions.set(alias, next);
+    return true;
+  }
+
   return {
     start, stop, dispose, restart, refreshNow, refreshHostNow,
     isRunning: () => timer !== null,
     getRemoteSessions,
+    dropRemoteSession,
     getRemoteHostState,
   };
 }

@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+  remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),

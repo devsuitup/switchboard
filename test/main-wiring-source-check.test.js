@@ -191,6 +191,23 @@ test('main-wiring source check: stop-session kills through killPty', () => {
   );
 });
 
+test('main-wiring source check: remote-stop-session only drops/refreshes/kills on a successful stop', () => {
+  const args = argsOf("ipcMain.handle('remote-stop-session'", 'ipcMain.handle');
+  const guardIdx = args.indexOf('if (result.ok)');
+  assert.notEqual(guardIdx, -1, 'remote-stop-session must gate its cleanup on result.ok');
+  const before = args.slice(0, guardIdx);
+  const after = args.slice(guardIdx);
+  for (const marker of ['dropRemoteSession(', 'refreshHostNow(', 'killPty(']) {
+    assert.ok(!before.includes(marker),
+      `${marker} must not run before the result.ok guard — a failed stop must not drop or refresh anything`);
+    assert.ok(after.includes(marker), `${marker} must run inside the result.ok guard`);
+  }
+  assert.match(
+    after, /refreshHostNow\([^;]*\{\s*force:\s*true\s*\}/,
+    'the post-stop reconciliation must force a host refresh',
+  );
+});
+
 test('main-wiring source check: the keystroke path writes through pty-ops', () => {
   const inputSrc = fs.readFileSync(path.join(__dirname, '..', 'terminal-input.js'), 'utf8');
   assert.doesNotMatch(

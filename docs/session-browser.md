@@ -44,6 +44,12 @@ The confirmation dialog states what will be removed: the project, how many files
 
 If the session is still running it is stopped first when Switchboard knows it is live; otherwise the deletion is refused with a reason rather than pulling a transcript out from under a running process. Anything that resolves outside `~/.claude/projects` — a symlinked transcript, for instance — is refused and logged. A session that never started has no transcript to remove, so deleting it just clears the leftover card.
 
+## Stop a running session
+
+The stop button on a running session's card ends its process — for a local session and for a session on a declared remote host alike, with the same confirmation dialog. For a remote host session the dialog names the host, and stopping kills the process on that host, not just Switchboard's view of it.
+
+A remote session you are not currently viewing keeps running on the host even though Switchboard is not attached to it; opening it again reattaches to the same process instead of starting a new one. Only the stop button ends it.
+
 ## Star and archive
 
 - **Star** — right-click a session and choose Star, or use the star icon in the session header. Starred sessions appear at the top of their project group.

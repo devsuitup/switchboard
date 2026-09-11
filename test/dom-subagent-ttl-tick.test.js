@@ -72,6 +72,8 @@ function setupCombinedDom() {
     setResponseReady: (el, on) => { if (el) el.classList.toggle('response-ready', !!on); },
     setCliBusy: (el, on) => { if (el) el.classList.toggle('cli-busy', !!on); },
     setHasBusyAgents: (el, on) => { if (el) el.classList.toggle('has-busy-agents', !!on); },
+    setIsAlive: (el, on) => { if (el) el.classList.toggle('is-alive', !!on); },
+    isSessionAlive: () => false,
     // issue #246 step 3b — sidebar.js calls this to paint the .session-icon
     // slot; a no-op here is fine, this harness doesn't assert on it.
     paintSessionIcon: () => {},

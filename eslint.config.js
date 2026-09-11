@@ -162,9 +162,14 @@ const rendererCrossFileGlobals = {
   setResponseReady: 'readonly',
   setCliBusy: 'readonly',
   setHasBusyAgents: 'readonly',
+  setIsAlive: 'readonly',
+  isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
+  applyRemoteStopped: 'readonly',
+  // public/stop-session-ui.js (pure stop-vs-detach decision, see .ai/contexts/session-state.md)
+  resolveSessionStop: 'readonly',
   // read by sidebar.js's parentHasActiveSubagent() — see .ai/contexts/subagent-observability.md
   remoteSessionStates: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
@@ -317,7 +322,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/stop-session-ui.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',

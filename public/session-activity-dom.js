@@ -20,6 +20,17 @@ function setHasBusyAgents(el, on) {
   if (el) el.classList.toggle('has-busy-agents', !!on);
 }
 
+// process-alive-on-its-host signal, independent of attach state — see .ai/contexts/session-state.md
+function setIsAlive(el, on) {
+  if (el) el.classList.toggle('is-alive', !!on);
+}
+
+// the only reader other call sites (grid-view.js, app.js) should use
+function isSessionAlive(sessionId) {
+  const el = sessionItemEl(sessionId);
+  return !!(el && el.classList.contains('is-alive'));
+}
+
 // local-pty only for now — see session-state.md "migration status".
 function computeBusyReadyClasses(sessionId) {
   const busy = sessionBusyState.get(sessionId) === true;
@@ -54,11 +65,13 @@ function applyStateClasses(sessionId, snapshot) {
   const ready = icon.classes.includes('response-ready');
   const busy = icon.classes.includes('cli-busy');
   const agentsBusy = !!(snapshot && snapshot.agentsBusy);
+  const alive = !!(snapshot && snapshot.liveness === 'alive');
   setResponseReady(item, ready);
   setCliBusy(item, busy);
   setHasBusyAgents(item, agentsBusy);
+  setIsAlive(item, alive);
   writeIconSlot(item.querySelector('.session-icon'), icon);
-  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
+  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md

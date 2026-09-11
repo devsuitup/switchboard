@@ -233,6 +233,35 @@ test('getRemoteSessions keeps the last known descriptors, not wiped, after a cyc
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
+// Lifecycle decisions (2026-09-11): a successful remote-stop-session drops
+// the descriptor from the in-memory list immediately, ahead of the next poll.
+test('dropRemoteSession removes exactly the named descriptor and reports whether it found one', async () => {
+  const dataDir = tmp('idx-drop');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [{ pid: 1, sessionId: 'a' }, { pid: 2, sessionId: 'b' }],
+      }),
+    });
+    await indexer.refreshNow();
+
+    assert.equal(indexer.dropRemoteSession('vps', 'a'), true);
+    assert.deepEqual(indexer.getRemoteSessions('vps').sessions, [{ pid: 2, sessionId: 'b' }]);
+
+    assert.equal(indexer.dropRemoteSession('vps', 'a'), false, 'already gone — nothing to drop a second time');
+    assert.equal(indexer.dropRemoteSession('vps', 'never-seen'), false);
+    assert.equal(indexer.dropRemoteSession('unknown-alias', 'a'), false, 'an alias never refreshed has nothing to drop');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test('a mirror already on disk but absent from the cache is indexed once', async () => {
   const dataDir = tmp('idx-cold');
   try {

@@ -351,4 +351,7 @@ module.exports = {
   buildAttachCommand,
   buildRestoreCommand,
   buildRemoteCommandArgs,
+  isValidPid,
+  buildProcCmdlineCheck,
+  defaultRunRemoteCommand,
 };
