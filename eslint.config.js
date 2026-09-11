@@ -251,7 +251,7 @@ const rendererCrossFileGlobals = {
   setAppShortcuts: 'readonly',
 
   // Working-set restore decision (public/restore-plan.js)
-  planWorkingSetRestore: 'readonly',
+  createRestorePlanner: 'readonly',
 };
 
 module.exports = [

@@ -121,9 +121,10 @@ let restoringWorkingSet = false;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
 
-// Cold-cache retry: see .work-files/switchboard/restore-cold-cache-report.md
-let restorePendingRetry = false;
-let restoreRetryDone = false;
+// Cold-cache retry-until-indexed: see .ai/contexts/session-cache.md.
+let restorePlanner = null;
+let restoreMode = 'off';
+let restoreIndexingDone = false;
 let sessionOpenedOutsideRestore = false;
 
 // Serialise concurrent read-modify-write calls so two async persist paths
@@ -179,34 +180,46 @@ async function runRestore(list) {
 
 async function restoreWorkingSet() {
   const g = await window.api.getSetting('global');
-  const mode = (g && g.restoreOnStartup) || 'ask';
+  restoreMode = (g && g.restoreOnStartup) || 'ask';
   const savedSet = (g && g.openWorkingSet) || [];
 
   document.getElementById('restore-cold-toast')?.remove();
 
-  if (mode === 'off') return;
-
-  // Decision logic: restore-plan.js — see .work-files/switchboard/restore-cold-cache-report.md
-  const plan = planWorkingSetRestore({
-    savedSet,
-    sessionMap,
-    openSessions,
-    retryDone: restoreRetryDone,
-    sessionOpenedOutsideRestore,
-  });
-
-  if (plan.action === 'nothing') return;
-
-  if (plan.action === 'defer') {
-    restorePendingRetry = true;
-    if (mode === 'ask') showColdCacheNotice(savedSet.length);
+  if (restoreMode === 'off') {
+    restorePlanner = null;
     return;
   }
 
-  const candidates = plan.candidates;
-  restorePendingRetry = false;
+  // one planner per startup — see .ai/contexts/session-cache.md ("Working-set restore")
+  if (!restorePlanner) {
+    restorePlanner = createRestorePlanner({ savedSet, askOnce: restoreMode === 'ask' });
+  }
 
-  if (mode === 'auto') {
+  await tickRestorePlanner();
+}
+
+async function tickRestorePlanner() {
+  if (!restorePlanner) return;
+
+  const plan = restorePlanner.tick({
+    sessionMap,
+    openSessions,
+    indexingDone: restoreIndexingDone,
+    sessionOpenedOutsideRestore,
+  });
+
+  if (plan.action === 'wait') {
+    if (restoreMode === 'ask') showColdCacheNotice(plan.remaining);
+    return;
+  }
+
+  document.getElementById('restore-cold-toast')?.remove();
+
+  if (plan.action === 'nothing') return;
+
+  const candidates = plan.candidates;
+
+  if (restoreMode === 'auto') {
     restoringWorkingSet = true;
     try {
       await runRestore(candidates);
@@ -217,7 +230,7 @@ async function restoreWorkingSet() {
     return;
   }
 
-  // mode === 'ask': show a non-modal toast bar
+  // restoreMode === 'ask': non-modal toast; askOnce means it never re-asks mid-index
   const toast = document.createElement('div');
   toast.id = 'restore-toast';
   toast.className = 'restore-toast';
@@ -251,21 +264,12 @@ function showColdCacheNotice(count) {
   document.body.appendChild(toast);
   toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
     toast.remove();
-    restorePendingRetry = false;
-    restoreRetryDone = true;
+    restorePlanner?.dismiss();
   });
 }
 
 async function maybeRetryRestoreWorkingSet() {
-  if (!restorePendingRetry || restoreRetryDone) return;
-  if (sessionMap.size === 0) return;
-  restoreRetryDone = true;
-  restorePendingRetry = false;
-  if (sessionOpenedOutsideRestore) {
-    document.getElementById('restore-cold-toast')?.remove();
-    return;
-  }
-  await restoreWorkingSet();
+  await tickRestorePlanner();
 }
 
 // Expose for tests
@@ -1393,6 +1397,9 @@ let indexingBannerDismissed = false;
 function updateIndexingBanner(payload) {
   if (!payload || !payload.coldStart) return;
   if (payload.done) {
+    // indexing over: the planner's other stop condition — see .ai/contexts/session-cache.md
+    restoreIndexingDone = true;
+    tickRestorePlanner();
     if (payload.error) {
       // A failed scan used to just hide the banner, leaving the tiny status
       // text as the only trace of the failure. Show it where the user was
