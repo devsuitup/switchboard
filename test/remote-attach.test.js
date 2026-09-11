@@ -17,6 +17,9 @@ const {
   createTmuxAttachAdapter,
   parseTmuxField,
   parseProbeOutput,
+  buildProbeCommand,
+  buildAttachCommand,
+  buildRestoreCommand,
 } = require('../remote-attach');
 
 const PROBE_SEP = '';
@@ -67,19 +70,55 @@ test('parseTmuxField accepts the CLI-written format and rejects the rest', () =>
 
 // Property 1 -- sizing rule.
 test('parseProbeOutput sizes rows as height plus status lines (status on)', () => {
-  assert.deepEqual(parseProbeOutput('200x51' + PROBE_SEP + 'status on'), { cols: 200, rows: 52 });
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status on'),
+    { cols: 200, rows: 52, pre: { status: 'on', mouse: null, windowSize: null } },
+  );
 });
 
 test('parseProbeOutput sizes rows as height plus 0 when status is off', () => {
-  assert.deepEqual(parseProbeOutput('200x50' + PROBE_SEP + 'status off'), { cols: 200, rows: 50 });
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status off'),
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null } },
+  );
 });
 
 test('parseProbeOutput honors a rendered status line count beyond on/off', () => {
-  assert.deepEqual(parseProbeOutput('200x51' + PROBE_SEP + 'status 2'), { cols: 200, rows: 53 });
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status 2'),
+    { cols: 200, rows: 53, pre: { status: 2, mouse: null, windowSize: null } },
+  );
 });
 
 test('parseProbeOutput returns null when the size cannot be parsed', () => {
   assert.equal(parseProbeOutput('garbage'), null);
+});
+
+// issue #253 -- pre-attach mouse/window-size, present.
+test('parseProbeOutput parses pre-attach mouse and window-size when present', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status off' + PROBE_SEP + 'mouse on' + PROBE_SEP + 'window-size latest'),
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: 'on', windowSize: 'latest' } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: 'manual' } },
+  );
+});
+
+// issue #253 -- pre-attach mouse/window-size, absent/unset: the probe segment
+// is empty (as it would be if the remote tmux produced no matching line),
+// never guessed at.
+test('parseProbeOutput reports null for mouse and window-size when absent from the probe output', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + ''),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+  );
+  // No separators at all beyond size+status -- same as the pre-#253 wire format.
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status off'),
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null } },
+  );
 });
 
 // Property 1, through the adapter: the size handed to spawnPty must already
@@ -254,7 +293,7 @@ test('attach() opens at the local size and forwards resize to the ssh pty when n
   const raw = fakeRawPty();
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '0',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
     spawnCalls,
     rawPtyFactory: () => raw.pty,
   });
@@ -281,7 +320,7 @@ test('attach() keeps the fixed remote size and ignores resize when another clien
   const logLines = [];
   const log = { info: (msg) => logLines.push(msg), warn() {}, error() {} };
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '1',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '1',
     spawnCalls,
     rawPtyFactory: () => raw.pty,
     log,
@@ -307,7 +346,7 @@ test('attach() keeps the fixed remote size and ignores resize when another clien
 test('attach() fails closed to the fixed remote size when the client count cannot be parsed', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'garbage',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + 'garbage',
     spawnCalls,
   });
   const result = await adapter.attach(
@@ -327,7 +366,7 @@ test('the attached-client count rides the existing probe connection, never a sec
   const spawnCalls = [];
   const probeCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '0',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
     spawnCalls,
     probeCalls,
   });
@@ -338,4 +377,262 @@ test('the attached-client count rides the existing probe connection, never a sec
   assert.equal(result.ok, true);
   assert.equal(probeCalls.length, 1, 'reading the client count must not add a second ssh round trip');
   assert.match(probeCalls[0], /list-clients/, 'the probe command must ask tmux for the attached client count');
+});
+
+// --- Inherited (starred) option parsing, real-host measurement (tmux 3.6) -
+
+// `tmux show-options -A` marks an option with no session-scoped override
+// (inherited from a higher scope) with a trailing `*` right after the
+// option name -- e.g. "status* on". Sizing must react to the value exactly
+// like the unstarred form; only `pre` (below) treats it differently.
+test('parseProbeOutput sizes a starred (inherited) status option exactly like the unstarred form', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status* on'),
+    { cols: 200, rows: 52, pre: { status: null, mouse: null, windowSize: null } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status* off'),
+    { cols: 200, rows: 50, pre: { status: null, mouse: null, windowSize: null } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status* 2'),
+    { cols: 200, rows: 53, pre: { status: null, mouse: null, windowSize: null } },
+  );
+});
+
+// A session-scoped (unstarred) override must be preserved in `pre` for
+// restore-via-`set -t`; an inherited (starred) one must not.
+test('parseProbeOutput: pre.mouse is the value for a session-scoped override, null for an inherited one', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + ''),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: null } },
+    'unstarred "mouse off" is a real session override -- must be restored via set -t',
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse* on' + PROBE_SEP + ''),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+    'starred "mouse* on" is inherited -- no session override exists, restore must set -u',
+  );
+});
+
+test('parseProbeOutput: pre.windowSize follows the same starred/unstarred rule as status and mouse', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size manual'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: 'manual' } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size* latest'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+  );
+});
+
+// --- Solo attach parity (issue #253) ------------------------------------
+
+test('buildAttachCommand: solo prefixes session-scoped option sets before attach, in order', () => {
+  const cmd = buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true });
+  assert.equal(
+    cmd,
+    "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status off \\; " +
+      'set -t main:@0.%0 mouse on \\; ' +
+      'set -t main:@0.%0 window-size latest \\; ' +
+      'attach -t main:@0.%0',
+  );
+  const statusIdx = cmd.indexOf('status off');
+  const mouseIdx = cmd.indexOf('mouse on');
+  const windowSizeIdx = cmd.indexOf('window-size latest');
+  const attachIdx = cmd.indexOf('attach -t');
+  assert.ok(statusIdx < mouseIdx && mouseIdx < windowSizeIdx && windowSizeIdx < attachIdx, 'sets must precede attach, in order');
+  assert.ok(!cmd.includes('-g'), 'solo attach must never touch the global option scope');
+  assert.ok(!cmd.includes('-w'), 'solo attach must never touch window-scoped options');
+});
+
+test('buildAttachCommand: shared (solo false or omitted) emits the byte-identical unchanged command', () => {
+  const unchanged = "tmux -S '/tmp/tmux-0/main' attach -t main:@0.%0";
+  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }), unchanged);
+  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'), unchanged);
+});
+
+test('buildRestoreCommand: restores each probed value when non-null', () => {
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'on', mouse: 'off', windowSize: 'manual' });
+  assert.equal(
+    cmd,
+    "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status on \\; " +
+      'set -t main:@0.%0 mouse off \\; ' +
+      'set -t main:@0.%0 window-size manual',
+  );
+});
+
+test('buildRestoreCommand: restores a numeric status value', () => {
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 2, mouse: 'on', windowSize: 'latest' });
+  assert.match(cmd, /set -t main:@0\.%0 status 2 \\;/);
+});
+
+test('buildRestoreCommand: uses "set -u" for each probed value that was null', () => {
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: null, mouse: null, windowSize: null });
+  assert.equal(
+    cmd,
+    "tmux -S '/tmp/tmux-0/main' set -u -t main:@0.%0 status \\; " +
+      'set -u -t main:@0.%0 mouse \\; ' +
+      'set -u -t main:@0.%0 window-size',
+  );
+});
+
+test('buildRestoreCommand: mixes "set" and "set -u" per option independently', () => {
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'off', mouse: null, windowSize: 'latest' });
+  assert.equal(
+    cmd,
+    "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status off \\; " +
+      'set -u -t main:@0.%0 mouse \\; ' +
+      'set -t main:@0.%0 window-size latest',
+  );
+});
+
+// No remote command string may ever contain a backtick -- these run over ssh,
+// where a backtick executes (issue #253 acceptance criterion).
+test('no builder ever emits a backtick', () => {
+  const commands = [
+    buildProbeCommand(4242, 'main:@0.%0'),
+    buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'),
+    buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true }),
+    buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'on', mouse: 'off', windowSize: 'manual' }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: null, mouse: null, windowSize: null }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
+  ];
+  for (const cmd of commands) {
+    assert.ok(!cmd.includes('`'), `command must not contain a backtick: ${cmd}`);
+  }
+});
+
+// Solo attach must actually apply the session-scoped option sets end-to-end
+// through attach(), not just at the buildAttachCommand unit level.
+test('attach() applies the session-scoped option sets in the real ssh argv when solo', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
+    spawnCalls,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+  const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
+  assert.match(attachCommand, /set -t main:@0\.%0 status off \\; set -t main:@0\.%0 mouse on \\; set -t main:@0\.%0 window-size latest \\; attach -t main:@0\.%0/);
+});
+
+// Shared attach() must emit the byte-identical unchanged attach command --
+// never touch another attached client's view.
+test('attach() emits the unchanged attach command in the real ssh argv when shared', async () => {
+  const spawnCalls = [];
+  const adapter = makeAdapter({
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '1',
+    spawnCalls,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+  const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
+  assert.equal(attachCommand, "tmux -S '/tmp/tmux-0/test' attach -t main:@0.%0");
+});
+
+// Detach must run a best-effort restore ssh call using the probed pre-attach
+// values, only when the attach was solo.
+test('detach() runs a best-effort restore call with the probed pre-attach values when solo', async () => {
+  const raw = fakeRawPty();
+  const restoreCalls = [];
+  const runRemoteCommand = async (alias, command) => {
+    if (/^tmux -S /.test(command) && !command.includes('attach') && !/display-message|show-options|list-clients/.test(command)) {
+      restoreCalls.push(command);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return {
+      code: 0,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}0`,
+      stderr: '',
+    };
+  };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: () => raw.pty,
+    runRemoteCommand,
+    log: silentLog,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+
+  result.ptyProcess.kill();
+  // The restore call is fire-and-forget from inside kill(); let its microtask run.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(restoreCalls.length, 1, 'exactly one restore call must be sent on detach when solo');
+  assert.equal(
+    restoreCalls[0],
+    "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual",
+  );
+});
+
+// Shared attach must never restore anything on detach -- it never changed
+// anything in the first place, and another client's view must not move.
+test('detach() sends no restore call when shared', async () => {
+  const raw = fakeRawPty();
+  const restoreCalls = [];
+  const runRemoteCommand = async (alias, command) => {
+    if (/^tmux -S /.test(command) && !command.includes('attach') && !/display-message|show-options|list-clients/.test(command)) {
+      restoreCalls.push(command);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return {
+      code: 0,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}1`,
+      stderr: '',
+    };
+  };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: () => raw.pty,
+    runRemoteCommand,
+    log: silentLog,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+
+  result.ptyProcess.kill();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(restoreCalls.length, 0, 'a shared attach must never send a restore call on detach');
+});
+
+// A restore-on-detach failure must never throw out of kill()/detach(), and
+// must not prevent the local ssh client from being killed.
+test('detach() swallows a failing restore call without throwing', async () => {
+  const raw = fakeRawPty();
+  const runRemoteCommand = async (alias, command) => {
+    if (/^tmux -S /.test(command) && !command.includes('attach') && !/display-message|show-options|list-clients/.test(command)) {
+      throw new Error('ssh: connection refused');
+    }
+    return {
+      code: 0,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}0`,
+      stderr: '',
+    };
+  };
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: () => raw.pty,
+    runRemoteCommand,
+    log: silentLog,
+  });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+
+  assert.doesNotThrow(() => result.ptyProcess.kill());
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed even if the restore call rejects');
 });
