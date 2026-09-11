@@ -143,10 +143,48 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 (`cli-busy`/`response-ready`) `applyActivityClasses` produces for local-pty,
 but computed from the adapter's own snapshot instead of the local-pty Maps.
 
+### Row ownership: attached vs unattached (issue #273)
+
+An attached remote row (a tab open on it) is owned by the local-pty path —
+OSC busy/idle/attention/response-ready, exactly like a local session.  An
+unattached remote row is owned by the remote-ssh adapter — busy from the
+watch channel and seed, decayed, never response-ready (no PTY to confirm a
+turn ended). Only one side may write a given row at a time; `attached`
+(above) is the arbiter, not a cosmetic fact.
+
+Concretely, in `public/remote-activity-ui.js`: `markRemoteBusy`/
+`decayRemoteBusy` (fed by remote-watch, remote-seed and the decay timer) are
+a no-op while `remoteState(id).snapshot().attached` is true, and
+`projectRemoteState` refuses to paint the row at all while attached — both
+guards exist because two independent things write the row: the shared
+`sessionBusyState`/`responseReadySessions` Maps (`setActivity`, called from
+inside `markRemoteBusy`/`decayRemoteBusy`) and the adapter's own private
+`createSessionState('remote-ssh')` snapshot (painted by `applyRemoteDescriptor`
+on every render, regardless of what wrote busy last). Without both guards a
+descriptor-only render (no new remote event at all) can still repaint a
+stale, adapter-held `busy` value over whatever the local-pty path just wrote,
+which is what produced issue #273's ~53-cycle response-ready flap on an
+attached, otherwise-idle row.
+
+`setRemoteAttached(id, false)` — the true→false handoff (tab closed or the
+local ssh attach's own `pty.exit`) — clears busy at once instead of waiting
+out whatever decay was in flight (previously up to 20s), and records a
+per-session floor (`remoteSeedFloors`) so a
+`seedRemoteActivity` call carrying the *same*, now-stale `remoteActiveAt`
+(the process died; nothing refreshes it) cannot re-arm busy immediately
+after the handoff. A genuinely newer `remoteActiveAt` — real activity that
+resumes after detach — still arms busy normally.
+
+Mutation-proven: stripping the three `attached`/`snapshot.attached` guards in
+`markRemoteBusy`/`decayRemoteBusy`/`projectRemoteState` turns the response-
+ready-flap replay in `test/remote-row-ownership.test.js` red; disabling the
+`setRemoteAttached` handoff block turns the pty.exit/20s-tail replay in the
+same file red.
+
 **`setActivity()`/the Maps in `session-activity.js` are still fed for remote
-ids in parallel** (`markRemoteBusy`/`decayRemoteBusy` call both). Two readers
-were not migrated onto the adapter in this step, so removing the dual-feed
-would regress them:
+ids in parallel** (`markRemoteBusy`/`decayRemoteBusy` call both, when not
+attached). Two readers were not migrated onto the adapter in this step, so
+removing the dual-feed would regress them:
 - `sidebar.js`'s `buildSessionItem` reads `sessionBusyState`/
   `responseReadySessions`/`attentionSessions` directly at initial paint.
 - `app.js`'s grid-card busy dot (`updateRunningIndicators`'s `gridCards`
@@ -451,7 +489,7 @@ the others assert on the dot/slot element itself, only on row classes and
 | `busy` / `attention` (OSC 0 / 9) | yes | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
 | `transcriptTouched(at)` | yes | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
 | `descriptorStatus(status, at)` / `liveness` | yes | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
-| `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition |
+| `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition; also the row-ownership arbiter since #273 (see "Row ownership" above) |
 | `subagentSpawned` / `subagentCompleted` | yes — via `detectSubagentTransitions()` IPC | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 
 An adapter without a PTY must never claim `waitingForInput` or `responseReady`

@@ -138,10 +138,11 @@ test('applyRemoteDescriptor is a no-op for a session with no remoteAlias', () =>
   t.destroy();
 });
 
-test('setRemoteAttached toggles the attached flag without affecting busy/liveness', () => {
+test('setRemoteAttached(true) toggles the attached flag without affecting busy/liveness; setRemoteAttached(false) hands ownership back — see test/remote-row-ownership.test.js (#273) for the full handoff', () => {
   const t = setup(['s1']);
   t.setRemoteAttached('s1', true);
   assert.equal(t.snapshot('s1').attached, true);
+  assert.equal(t.snapshot('s1').busy, false, 'attaching must not touch busy');
 
   t.setRemoteAttached('s1', false);
   assert.equal(t.snapshot('s1').attached, false);

@@ -10,6 +10,9 @@ const remoteAgentsDecayTimers = new Map();
 // remote-ssh adapter: one persistent state per remote session id — see .ai/contexts/session-state.md
 const remoteSessionStates = new Map();
 
+// seed staleness floor per session, set at the attached handoff (#273) — see .ai/contexts/session-state.md
+const remoteSeedFloors = new Map();
+
 function remoteState(sessionId) {
   let state = remoteSessionStates.get(sessionId);
   if (!state) {
@@ -19,8 +22,11 @@ function remoteState(sessionId) {
   return state;
 }
 
+// An attached row is owned by the local-pty path (#273) — see .ai/contexts/session-state.md
 function projectRemoteState(sessionId) {
-  applyStateClasses(sessionId, remoteState(sessionId).snapshot());
+  const snapshot = remoteState(sessionId).snapshot();
+  if (snapshot.attached) return;
+  applyStateClasses(sessionId, snapshot);
 }
 
 function clearRemoteActivityTimer(sessionId) {
@@ -40,8 +46,10 @@ function clearRemoteAgentsTimer(sessionId) {
 }
 
 // Maps still fed in parallel for sidebar initial paint and grid dot — see session-state.md "migration status"
+// An attached row is owned by the local-pty path (#273): a no-op here.
 function markRemoteBusy(sessionId, via, at) {
   const state = remoteState(sessionId);
+  if (state.snapshot().attached) return;
   state.apply({ type: 'transcriptTouched', at: at || Date.now(), source: via });
   state.apply({ type: 'busy', active: true });
   setActivity(sessionId, true, via);
@@ -49,8 +57,10 @@ function markRemoteBusy(sessionId, via, at) {
 }
 
 // silence is "stopped writing", not "response ready" — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
+// An attached row is owned by the local-pty path (#273): a no-op here.
 function decayRemoteBusy(sessionId) {
   const state = remoteState(sessionId);
+  if (state.snapshot().attached) return;
   state.apply({ type: 'busy', active: false, armReady: false });
   setActivity(sessionId, false, 'remote-decay', { armReady: false });
   projectRemoteState(sessionId);
@@ -96,6 +106,9 @@ function pruneRemoteActivityTimers() {
   for (const sessionId of remoteSessionStates.keys()) {
     if (!sessionItemEl(sessionId)) remoteSessionStates.delete(sessionId);
   }
+  for (const sessionId of remoteSeedFloors.keys()) {
+    if (!sessionItemEl(sessionId)) remoteSeedFloors.delete(sessionId);
+  }
 }
 
 function onRemoteActivityEvent(payload) {
@@ -124,10 +137,18 @@ function applyRemoteDescriptor(session) {
 }
 
 // attached = a PTY/ssh attach exists for this row (activePtyIds signal from app.js)
+// true->false handoff clears busy at once and floors stale reseeds (#273) — see .ai/contexts/session-state.md
 function setRemoteAttached(sessionId, attached) {
   if (!attached && !remoteSessionStates.has(sessionId)) return; // nothing recorded yet, nothing to clear
   const state = remoteState(sessionId);
+  const wasAttached = state.snapshot().attached;
   state.apply({ type: 'attached', value: attached });
+  if (wasAttached && !attached) {
+    clearRemoteActivityTimer(sessionId);
+    remoteSeedFloors.set(sessionId, Date.now());
+    state.apply({ type: 'busy', active: false, armReady: false });
+    setActivity(sessionId, false, 'remote-attach-handoff', { armReady: false });
+  }
   projectRemoteState(sessionId);
 }
 
@@ -151,6 +172,8 @@ function seedRemoteActivity(session) {
 
   if (!Number.isFinite(session.remoteActiveAt)) return;
   const sessionId = session.sessionId;
+  const floor = remoteSeedFloors.get(sessionId);
+  if (floor !== undefined && session.remoteActiveAt <= floor) return; // stale — see setRemoteAttached, #273
   const remaining = session.remoteActiveAt + PIP_DECAY_MS - Date.now();
   if (remaining <= 0) return;
   markRemoteBusy(sessionId, 'remote-seed', session.remoteActiveAt);

@@ -305,7 +305,7 @@ function trackActivity(sessionId, data) {
 }
 
 function clearNotifications(sessionId) {
-  clearUnread(sessionId);
+  clearUnread(sessionId, 'clearNotifications');
   if (window.ATRACE && attentionSessions.has(sessionId)) window.atrace('store.mutate', sessionId, { map: 'attentionSessions', op: 'delete', from: true, to: false, fn: 'clearNotifications' });
   attentionSessions.delete(sessionId);
   setNeedsAttention(sessionItemEl(sessionId), false);
