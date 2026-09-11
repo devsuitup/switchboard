@@ -44,3 +44,15 @@ function applyActivityClassesToElement(item, sessionId) {
 function applyActivityClasses(sessionId) {
   applyActivityClassesToElement(sessionItemEl(sessionId), sessionId);
 }
+
+// Snapshot-driven projection for adapter-owned state — see .ai/contexts/session-state.md
+function applyStateClasses(sessionId, snapshot) {
+  const item = sessionItemEl(sessionId);
+  if (!item) return;
+  const classes = renderSessionIcon(snapshot).classes;
+  const ready = classes.includes('response-ready');
+  const busy = classes.includes('cli-busy');
+  setResponseReady(item, ready);
+  setCliBusy(item, busy);
+  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
+}

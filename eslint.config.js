@@ -156,10 +156,13 @@ const rendererCrossFileGlobals = {
   // public/session-activity-dom.js — the only file allowed to write
   // .cli-busy/.needs-attention/.response-ready/.has-busy-agents.
   applyActivityClassesToElement: 'readonly',
+  applyStateClasses: 'readonly',
   setNeedsAttention: 'readonly',
   setResponseReady: 'readonly',
   setCliBusy: 'readonly',
   setHasBusyAgents: 'readonly',
+  // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
+  setRemoteAttached: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',
