@@ -85,6 +85,11 @@ function parseProbeOutput(stdout) {
   };
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", pid-reuse guard)
+function buildProcCmdlineCheck(pid) {
+  return `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null | grep -qi claude && echo 1 || echo 0`;
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
 function buildProbeCommand(pid, target) {
   return `sock=$(tr '\\0' '\\n' < /proc/${pid}/environ 2>/dev/null | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1); ` +
@@ -94,7 +99,8 @@ function buildProbeCommand(pid, target) {
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} mouse 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} window-size 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l`;
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l` +
+    `; printf '${PROBE_SEP}'; ${buildProcCmdlineCheck(pid)}`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
@@ -132,7 +138,7 @@ function parseClientCount(text) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
-// parts: [socket, size, status, mouse, window-size, clientCount]; trailing ones optional
+// parts: [socket, size, status, mouse, window-size, clientCount, cmdlineHasClaude]; trailing ones optional
 function parseDiscoveryProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
@@ -141,7 +147,8 @@ function parseDiscoveryProbeOutput(stdout) {
   const probed = parseProbeOutput(parts.slice(1, 5).join(PROBE_SEP));
   if (!probed) return null;
   const clientCount = parseClientCount(parts[5]);
-  return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount };
+  const cmdlineHasClaude = parts[6] === '1' ? true : parts[6] === '0' ? false : null;
+  return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount, cmdlineHasClaude };
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -161,13 +168,18 @@ function defaultResolveSshPath() {
   return 'ssh';
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", ConnectTimeout on the probe/restore ssh)
+function buildRemoteCommandArgs(alias, command) {
+  return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-n', alias, command];
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 function defaultRunRemoteCommand(alias, command, { timeoutMs } = {}) {
   const { spawn } = require('child_process');
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn('ssh', ['-o', 'BatchMode=yes', '-n', alias, command], {
+      child = spawn('ssh', buildRemoteCommandArgs(alias, command), {
         windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
@@ -253,6 +265,11 @@ function createTmuxAttachAdapter(opts = {}) {
       return { ok: false, error: 'could not parse the remote window size' };
     }
 
+    // pid-reuse guard — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", pid-reuse guard)
+    if (discovery.cmdlineHasClaude === false) {
+      return { ok: false, error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
+    }
+
     // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo vs shared)
     const hasLocalSize = !!localSize
       && Number.isInteger(localSize.cols) && localSize.cols > 0
@@ -333,4 +350,5 @@ module.exports = {
   buildProbeCommand,
   buildAttachCommand,
   buildRestoreCommand,
+  buildRemoteCommandArgs,
 };

@@ -21,13 +21,18 @@ const SSH_BASE_OPTS = [
   '-o', `ConnectTimeout=${DEFAULT_CONNECT_TIMEOUT_S}`,
 ];
 
+// STX-prefixed liveness marker printed after each descriptor — see .ai/contexts/session-cache.md ("Remote SSH hosts", liveness)
+const ALIVE_MARKER_PREFIX = 'ALIVE:';
+
 // see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)" and
-// "Remote hosts — meta.json sidecars")
+// "Remote hosts — meta.json sidecars"). F9: each descriptor is followed by a
+// \002ALIVE:0|1 line so parseSessions() can drop dead pids without a 2nd ssh.
 const LIST_COMMAND =
   `find ${REMOTE_PROJECTS_REL} -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
   `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
   `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
-  `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; done`;
+  `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +
+  `pid=$(basename "$f" .json); printf '\\002ALIVE:%s\\n' "$( [ -d "/proc/$pid" ] && echo 1 || echo 0 )"; done`;
 
 function parseInventory(stdout) {
   const out = [];
@@ -56,13 +61,21 @@ function splitListOutput(stdout) {
   return { inventoryBlock: stdout.slice(0, idx), sessionsBlock: stdout.slice(afterIdx + 1) };
 }
 
-// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)")
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)", liveness marker)
 function parseSessions(block) {
+  const lines = block.split('\n');
   const sessions = [];
   const warnings = [];
-  for (const rawLine of block.split('\n')) {
-    const line = rawLine.replace(/\r$/, '');
+  let dropped = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
     if (!line) continue;
+
+    const next = i + 1 < lines.length ? lines[i + 1].replace(/\r$/, '') : undefined;
+    const hasMarker = next === `${ALIVE_MARKER_PREFIX}0` || next === `${ALIVE_MARKER_PREFIX}1`;
+    const alive = hasMarker ? next === `${ALIVE_MARKER_PREFIX}1` : null;
+    if (hasMarker) i++; // consume the marker line unconditionally, valid JSON or not
+
     let parsed;
     try {
       parsed = JSON.parse(line);
@@ -82,9 +95,13 @@ function parseSessions(block) {
       warnings.push('skipped a session descriptor: missing/invalid sessionId');
       continue;
     }
+    if (alive === false) {
+      dropped++;
+      continue;
+    }
     sessions.push(parsed);
   }
-  return { sessions, warnings };
+  return { sessions, warnings, dropped };
 }
 
 /**
@@ -169,8 +186,9 @@ function createSshTransport(opts = {}) {
     if (res.code !== 0) throw new Error(`ssh inventory failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
     const { inventoryBlock, sessionsBlock } = splitListOutput(res.stdout);
     const files = parseInventory(inventoryBlock);
-    const { sessions, warnings } = parseSessions(sessionsBlock);
+    const { sessions, warnings, dropped } = parseSessions(sessionsBlock);
     for (const w of warnings) log.warn(`[remote:${alias}] ${w}`);
+    if (dropped) log.warn(`[remote:${alias}] dropped ${dropped} dead session descriptor(s)`);
     return { files, sessions };
   }
 
@@ -243,6 +261,7 @@ module.exports = {
   parseSessions,
   splitListOutput,
   LIST_COMMAND,
+  ALIVE_MARKER_PREFIX,
   REMOTE_PROJECTS_REL,
   REMOTE_SESSIONS_REL,
   SESSIONS_MARKER,

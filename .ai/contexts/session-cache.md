@@ -434,6 +434,24 @@ untouched.
     plain array to `{ files, sessions }`; every stub of `transport.listFiles`
     across `remote-mirror.test.js`, `remote-index.test.js` and
     `remote-indexing-e2e.test.js` was updated to match in the same change.
+  - **A descriptor's pid is checked for liveness on the host itself (F9,
+    audit-fable-2026-09-11)** — until this fix `parseSessions` kept every
+    descriptor unconditionally, so a killed remote CLI's file (deleted only on
+    a clean exit, same as the local one — see `.ai/contexts/cli-session-state.md`)
+    surfaced as permanently live, and `sidebar.js`'s host-dot `liveCount`
+    counted it. `LIST_COMMAND`'s per-file loop now emits one more line after
+    each descriptor: `printf '\002ALIVE:%s\n' "$( [ -d "/proc/$pid" ] && echo
+    1 || echo 0 )"`, `$pid` taken from the filename via `basename "$f" .json`
+    — no second ssh round trip. `parseSessions` matches that exact
+    `ALIVE:0`/`ALIVE:1` line immediately following a descriptor,
+    consumes it either way (so it can never itself be mis-parsed as a bogus
+    descriptor), drops the descriptor on `ALIVE:0`, and counts the drops in
+    its returned `dropped` field; `listFiles` logs `dropped N dead session
+    descriptor(s)` when non-zero. **Backward compatible by construction, not
+    by a version check**: a descriptor with no marker line following it (an
+    older host script, or simply the last line of the block) is kept exactly
+    as before — the absence of the marker is the compatibility signal, there
+    is no protocol version field.
   - **`remote-index.js` keeps the latest descriptors per alias, keyed and
     pruned exactly like folder keys.** `createRemoteIndexer()`'s private
     `remoteSessions` map is set from `result.sessions` inside `refreshHost()`
@@ -659,6 +677,58 @@ Launching a new remote session (#222) and injection over the messaging socket
   a no-op on real data; it only changes routing for a hand-built or malformed
   descriptor.
 
+- **Pid-reuse guard (F6, audit-fable-2026-09-11).** Descriptors now survive a
+  failed refresh cycle for up to the backoff window (#255, above) — long
+  enough for the CLI to die and the OS to hand its pid to an unrelated
+  process on the same host. Before this fix, `buildProbeCommand` read
+  *whatever* process now holds that pid's `TMUX` environment variable and, if
+  it was solo, reconfigured and attached to whatever tmux session that
+  process happened to be in — no check that it was still the session the
+  descriptor named. `buildProbeCommand` now appends one more
+  `PROBE_SEP`-delimited segment: `tr '\0' ' ' < /proc/<pid>/cmdline | grep -qi
+  claude && echo 1 || echo 0` (`buildProcCmdlineCheck`), read back by
+  `parseDiscoveryProbeOutput` as `cmdlineHasClaude` (`true`/`false`, or `null`
+  for a probe predating this segment). `attach()` runs this check only when
+  `descriptor.procStart != null`; on a `false` result it returns `{ ok:
+  false, error: 'pid <n> no longer belongs to this session (process start
+  differs)' }` before any `spawnPty` call — no attach, no `set`. A descriptor
+  with no `procStart` keeps today's unverified behavior.
+  **Not what the finding asked for, and why:** the audit wanted
+  `descriptor.procStart` compared against `/proc/<pid>/stat`'s starttime
+  (field 22, clock ticks since boot). The one measured `procStart` sample
+  this repo has (`.ai/contexts/cli-session-state.md`) is
+  `"134319945380279381"`, captured on a **Windows** CLI — 18 digits, the
+  right order of magnitude for a Windows `FILETIME` (100 ns since 1601), not
+  for Linux clock ticks since boot (which would need centuries of uptime to
+  reach 18 digits at 100 Hz). Whether the CLI's own remote/Linux code path
+  produces something on the *same* scale as `/proc/<pid>/stat` field 22 is
+  unverified — ssh access to a real host to check was out of scope for this
+  fix (`no ssh to any host` was a hard constraint). Comparing two values on
+  possibly-incompatible scales risks shipping a check that either always
+  refuses (units never line up) or silently never refuses (units happen to
+  overlap by coincidence) — worse than the cmdline check in both directions.
+  The `cmdline`-contains-`claude` check is strictly weaker than an exact
+  start-time match (it would not catch a *second* claude CLI reusing the
+  pid), but it does catch the audited scenario — pid reused by an unrelated
+  process in another tmux server — without depending on that unverified
+  format match. `descriptor.procStart != null` is still the gate, matching
+  the interface the finding asked for.
+
+- **`ConnectTimeout=5` on the probe and restore-on-detach ssh calls (F10,
+  audit-fable-2026-09-11).** `defaultRunRemoteCommand`'s ssh spawn had a kill
+  timer (`DEFAULT_PROBE_TIMEOUT_MS`, 15 s) but no `ConnectTimeout` — a
+  half-open connection (portable asleep, NAT gone stale) took the full 15 s
+  to fail instead of failing fast at the TCP handshake. `buildRemoteCommandArgs
+  (alias, command)` now builds the argv (`-o BatchMode=yes -o
+  ConnectTimeout=5 -n <alias> <command>`), exported so the argv shape is
+  tested directly without spawning ssh. **Known, accepted gap: if the app
+  crashes mid-session, `before-quit`'s `detach()` never runs, so a solo
+  attach's restore-on-detach ssh call (`status off`/`mouse on`/…) never
+  fires** — the remote tmux session is left with the solo-attach options set
+  until something else attaches and detaches cleanly. `ConnectTimeout` bounds
+  how long a *reachable-but-slow* restore takes; it does nothing for a
+  restore that never gets scheduled at all.
+
 ### `stop()` cancels, `dispose()` ends -- they are not the same thing
 
 `createSshTransport().dispose()` is **terminal**: it sets a flag every later
@@ -686,7 +756,7 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`
-- `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, and a `.key` file plus a directory named like a descriptor must both be excluded from what reaches stdout
+- `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, a `.key` file plus a directory named like a descriptor must both be excluded from what reaches stdout, and (F9) the ALIVE marker reflects real `/proc` liveness for both a live pid (the shell's own `$$`, so it reads as alive on any host) and a dead one
 - `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning, and that `getRemoteSessions()` is cleared (not left stale) after a cycle whose `sync()` throws
 - `remote-indexing-e2e.test.js` — covers the `<alias>::` prefix reaching session rows, the search entries, the metrics and the sidebar
 - `dom-sidebar-remote-session.test.js` — covers the remote badge and the read-only click routing

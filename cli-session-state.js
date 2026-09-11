@@ -12,20 +12,23 @@ const RESCAN_STATUS = 'idle';
 const FLUSH_MS = 150;
 const MIN_RESCAN_INTERVAL_MS = 1000;
 const MAX_SEEDED_FILES = 200;
+const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
 let onIdle = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
+let now = Date.now;
 
 let watcher = null;
 let flushTimer = null;
 const pending = new Set();
 const known = new Map();
 const lastRescanAt = new Map();
-// sessionId -> { status, statusUpdatedAt } for live pids only -- see .ai/contexts/cli-session-state.md
+// sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
+const lastProbeAt = new Map();
 
 function defaultIsProcessAlive(pid) {
   try {
@@ -42,6 +45,7 @@ function init(ctx) {
   onIdle = ctx.onIdle;
   log = ctx.log || { info() {}, debug() {}, warn() {}, error() {} };
   isProcessAlive = ctx.isProcessAlive || defaultIsProcessAlive;
+  now = ctx.now || Date.now;
   stop();
 }
 
@@ -77,7 +81,7 @@ function handleFile(name) {
     text = fs.readFileSync(path.join(dir, name), 'utf8');
   } catch {
     const stale = known.get(name);
-    if (stale && stale.sessionId) statusBySession.delete(stale.sessionId);
+    if (stale && stale.sessionId) forgetSession(stale.sessionId);
     known.delete(name);
     return;
   }
@@ -86,12 +90,12 @@ function handleFile(name) {
   if (!state) return;
 
   const prev = known.get(name);
-  if (prev && prev.sessionId && prev.sessionId !== state.sessionId) statusBySession.delete(prev.sessionId);
+  if (prev && prev.sessionId && prev.sessionId !== state.sessionId) forgetSession(prev.sessionId);
   known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+    statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
-    statusBySession.delete(state.sessionId);
+    forgetSession(state.sessionId);
   }
 
   const reused = !!prev && prev.procStart !== state.procStart;
@@ -137,10 +141,15 @@ function seed() {
     if (state) {
       known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt });
+        statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       }
     }
   }
+}
+
+function forgetSession(sessionId) {
+  statusBySession.delete(sessionId);
+  lastProbeAt.delete(sessionId);
 }
 
 function ensureWatching() {
@@ -186,16 +195,24 @@ function stop() {
   known.clear();
   statusBySession.clear();
   lastRescanAt.clear();
+  lastProbeAt.clear();
 }
 
-/**
- * Pure lookup: the last {status, statusUpdatedAt} parsed for `sessionId`, or
- * undefined if no state file has ever named it. Never touches disk, never
- * arms anything -- see .ai/contexts/cli-session-state.md ("the one invariant").
- */
+// Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
 function getStatus(sessionId) {
   const entry = statusBySession.get(sessionId);
-  return entry ? { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt } : undefined;
+  if (!entry) return undefined;
+
+  const t = now();
+  const last = lastProbeAt.get(sessionId) || 0;
+  if (t - last >= GET_STATUS_PROBE_THROTTLE_MS) {
+    lastProbeAt.set(sessionId, t);
+    if (!isProcessAlive(entry.pid)) {
+      forgetSession(sessionId);
+      return undefined;
+    }
+  }
+  return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt };
 }
 
 module.exports = {

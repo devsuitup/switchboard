@@ -34,13 +34,7 @@ function applyActivityClasses(sessionId) {
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': item.classList.contains('cli-busy'), fn: 'applyActivityClasses' });
 }
 
-// Drop all busy/unread/attention state for a session outside the normal
-// active/idle transition — e.g. its PTY just stopped (app.js's
-// updateRunningIndicators, via: 'pty-gone'). Sole writer of the three
-// collections besides setActivity/rekeyActivityState, so a caller never
-// deletes from them directly. Does not touch has-busy-agents/subagent state
-// (sidebar.js's clearActiveSubagentsFor) or has-running-pty — those are
-// owned elsewhere.
+// Purge outside the active/idle transition (e.g. PTY gone); the only writer of the three collections besides setActivity/rekeyActivityState.
 function purgeActivityFor(sessionId, via) {
   if (window.ATRACE) window.atrace('store.purge', sessionId, { reason: via, busy: sessionBusyState.get(sessionId) ?? null, ready: responseReadySessions.has(sessionId), attention: attentionSessions.has(sessionId), fn: 'purgeActivityFor' });
   attentionSessions.delete(sessionId);
@@ -53,11 +47,7 @@ function purgeActivityFor(sessionId, via) {
 }
 
 // Central activity dispatcher. `via` is trace-only — see docs/activity-trace.md.
-// `opts.armReady` (default true) gates whether going idle may arm
-// response-ready; it is an explicit opt-out, never derived from `via`. Pass
-// `{ armReady: false }` for a source that can only infer "stopped writing"
-// from silence (no PTY to ask "is a response actually ready?") — see
-// .ai/contexts/session-cache.md ("Remote hosts — busy spinner").
+// opts.armReady=false: going idle must not arm response-ready — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
 function setActivity(sessionId, active, via, opts) {
   const armReady = !(opts && opts.armReady === false);
   if (active) {

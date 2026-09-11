@@ -58,6 +58,7 @@ function boot(dir, activeSessions, opts = {}) {
     activeSessions,
     log: silentLog,
     isProcessAlive: opts.isProcessAlive || (() => true),
+    now: opts.now,
     onIdle: (sessionId, session) => rescans.push({ sessionId, session }),
   });
   const attached = cliSessionState.ensureWatching();
@@ -385,4 +386,44 @@ test('parseState rejects everything that is not a usable state file', () => {
   assert.deepEqual(ok, {
     pid: 1, sessionId: 'a', status: 'idle', statusUpdatedAt: 5, procStart: '7',
   });
+});
+
+// F2 (audit-fable-2026-09-11): a CLI killed without a clean exit never fires
+// a file event, so getStatus() must re-probe liveness itself, throttled.
+test('getStatus re-probes liveness lazily and drops a pid that died between two calls, more than 5s apart', async () => {
+  const dir = mkTmp();
+  let alive = true;
+  let clock = 1_000_000;
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession(), { isProcessAlive: () => alive, now: () => clock });
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+
+    alive = false;
+    clock += 5000; // exactly at the throttle boundary — re-probe fires
+    assert.equal(cliSessionState.getStatus('sess-1'), undefined,
+      'a pid that died since the last probe must be dropped on the next getStatus() past the throttle');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getStatus keeps returning the cached status within the 5s probe throttle even after the pid dies', async () => {
+  const dir = mkTmp();
+  let alive = true;
+  let clock = 1_000_000;
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession(), { isProcessAlive: () => alive, now: () => clock });
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+
+    alive = false;
+    clock += 4999; // still inside the throttle window — no re-probe
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000 },
+      'within the throttle window the cached status must be served without probing');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
