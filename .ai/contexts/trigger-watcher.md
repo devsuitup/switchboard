@@ -1337,6 +1337,62 @@ Verified both mutations turn the test red: negating the comparison
 (`midBusy === true`) and deleting the clause entirely — both fail on the new
 step-level assertion with `actual: 'confirmed'`.
 
+## Timing tests and host load
+
+`test/trigger-watcher.test.js` uses real timers and real `fs.watch` against
+fixed wall-clock budgets (no fake-timer injection yet). It measures the host,
+not only the code under test, so it is far more sensitive to CPU contention
+than the rest of the suite. `npm test` / `npm run coverage` (`scripts/run-tests.js`)
+run it alone, serially, after every other test file, specifically to remove
+the self-inflicted contention of ~150 sibling test-file processes running
+concurrently — that alone fixed most of what issue #260 measured. What's left
+after serializing is contention from outside the suite (other agents,
+antivirus, a second `node --test` run): under a synthetic load of that kind
+(measured 2026-09-11 with 8 CPU-saturating processes on an 8-core machine),
+several timing-sensitive tests still failed:
+
+- `waitForFile`'s ceiling (`maxMs`) is a ceiling, not a measurement — it is
+  scaled by `SWITCHBOARD_TEST_TIME_SCALE` (env, default 1) inside the helper
+  itself, so every call site benefits without being touched individually.
+- A handful of assertions put a tight UPPER bound on elapsed time or
+  `waited_ms` (e.g. the chain instant-reply test's verify-window checks).
+  Those upper bounds are wrapped in the same `scaleUp()` helper. Lower bounds
+  that prove an ordering or a minimum wait happened are never scaled by this
+  factor — a mutation that breaks that ordering must still turn the test red
+  regardless of `SWITCHBOARD_TEST_TIME_SCALE`.
+- Two tests (`W7 dies during wait`, `waitForBusyFall settle window still
+  applies once a rise is observed`) and the shared `makeChainCtx` auto-turn
+  schedule had margins so tight that ordinary scheduling jitter under load
+  could produce a *smaller* measured value than the nominal minimum (e.g.
+  `waited_ms=128` against a `>=200` floor) — not because the code was slower,
+  but because the test's own local `setTimeout` schedule and the poll
+  detecting it are two independent clocks that can drift apart under
+  contention. These were widened **unconditionally** (not via
+  `SWITCHBOARD_TEST_TIME_SCALE`, since the pre-commit hook runs at the
+  default scale of 1) by multiplying every constant in the affected
+  schedule by the same factor — which is time-linear and so preserves the
+  exact margin between "the code is right" and "the code is wrong",
+  preserving mutation power.
+- `SWITCHBOARD_TEST_TIME_SCALE` is opt-in, for exceptionally loaded machines:
+  `SWITCHBOARD_TEST_TIME_SCALE=3 node --test test/trigger-watcher.test.js`.
+
+**What a real clock injection would take** (out of scope for issue #260;
+`trigger-watcher.js` has 29 `setTimeout`/`Date.now()` call sites across
+~1384 lines): thread a clock object (`{ now(), setTimeout(), clearTimeout() }`,
+the pattern already used in `remote-watch.js`, `remote-index.js`, and
+`remote-activity.js`) through `pollLoop`, `waitForIdle`, `waitForComposerFree`,
+`submitWithVerify`, and `waitForBusyFall` — the five functions that own a
+wall-clock wait — plus the `fs.watch` debounce in `start()`. Every test that
+asserts a specific `waited_ms`/`elapsed` value (roughly 20 of the ~120 tests
+in the file, concentrated in the "submit-verify", "chain", and "waitForBusyFall
+settle window" sections) would then drive a fake clock instead of real
+`setTimeout`, making the pass/fail boundary exact instead of a tolerance
+band, and removing sensitivity to host load entirely. The tests that exercise
+real `fs.watch` (the startup-scan and live-watcher dispatch tests) would stay
+on real timers as smoke tests, per the issue's own suggested direction, since
+`fs.watch` itself cannot be faked without swapping the whole file-system
+observation layer.
+
 ## Change-also checklist
 
 - If you rename `_cliBusy` on `session` in `main.js`, update `isSessionBusy` in `trigger-context.js`.

@@ -71,6 +71,12 @@ execution environment. Rules of thumb:
   visible in the Work Files sidebar tab for debugging.
 - **No `sleep N && command` to wait for background work** — if a task runs in the background,
   react to its completion signal; don't poll with a fixed sleep.
+- **`test/trigger-watcher.test.js` flaking under load is a known, tolerated pattern, not a
+  regression to chase** — it uses real timers and real `fs.watch`; `npm test` already runs it
+  serially and after everything else (see `.ai/contexts/trigger-watcher.md`, "timing tests and
+  host load"). If it still fails under a genuinely loaded machine, rerun with
+  `SWITCHBOARD_TEST_TIME_SCALE=<n> node --test test/trigger-watcher.test.js` (env, default 1)
+  before assuming the code broke.
 
 ## 5. Memory / notes hygiene
 
