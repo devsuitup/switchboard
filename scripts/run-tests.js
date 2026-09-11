@@ -31,13 +31,11 @@ function run(args) {
 
 const mainStatus = run(['--test', ...mainFiles]);
 
-// --test-timeout bounds a single test, not the whole file; generous because
-// this file's own per-test waitForFile ceilings already go up to several
-// seconds and SWITCHBOARD_TEST_TIME_SCALE can stretch them further under load.
+// No --test-timeout: with an explicit file operand node applies it to the
+// file-level entry too, and this file legitimately runs for minutes on CI.
 const isolatedStatus = run([
   '--test',
   '--test-concurrency=1',
-  '--test-timeout=60000',
   path.join('test', ISOLATED_FILE),
 ]);
 
