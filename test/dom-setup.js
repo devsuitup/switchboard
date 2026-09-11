@@ -127,10 +127,12 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
 
-  // session-activity.js owns attentionSessions/responseReadySessions/
-  // sessionBusyState and the setActivity/applyActivityClasses/sessionItemEl
-  // functions sidebar.js and remote-activity-ui.js call — load order mirrors
-  // index.html.
+  // session-state.js (pure domain) + session-activity-dom.js (DOM projection)
+  // + session-activity.js (Maps/Sets, setActivity/purgeActivityFor) — load
+  // order mirrors index.html. sidebar.js and remote-activity-ui.js call
+  // setActivity/applyActivityClasses/sessionItemEl from these.
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
 
   // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from

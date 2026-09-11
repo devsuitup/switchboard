@@ -464,8 +464,12 @@ test('public/app.js: pty-stop cleanup removes has-busy-agents and purges the sid
   assert.notEqual(scanStart, -1, 'the .session-item pty-set scan must still exist in public/app.js');
 
   const body = src.slice(scanStart, scanStart + 1200);
-  assert.match(body, /classList\.remove\([^)]*'has-busy-agents'[^)]*\)/,
-    "the !running cleanup must remove 'has-busy-agents' along with the other per-session state classes");
+  // Was a literal classList.remove('has-busy-agents', ...) before the DOM
+  // split in .ai/contexts/session-state.md — now routed through the
+  // projection file's setHasBusyAgents() (public/session-activity-dom.js),
+  // the only place allowed to touch this class (eslint.config.js).
+  assert.match(body, /setHasBusyAgents\(item,\s*false\)/,
+    "the !running cleanup must clear 'has-busy-agents' along with the other per-session state classes");
   assert.match(body, /clearActiveSubagentsFor\(id\)/,
     'the !running cleanup must purge activeSubagentsByParent via clearActiveSubagentsFor so a re-render cannot resurrect the indicator');
 });

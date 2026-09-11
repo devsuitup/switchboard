@@ -235,7 +235,7 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   // session's own states (needs-attention, response-ready, cli-busy)
   // precedence over it.
   const parentEl = document.getElementById('si-' + parentSessionId);
-  if (parentEl) parentEl.classList.toggle('has-busy-agents', parentHasActiveSubagent(parentSessionId));
+  setHasBusyAgents(parentEl, parentHasActiveSubagent(parentSessionId));
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
 }
 
@@ -285,9 +285,9 @@ function buildSubagentItem(session) {
   item.id = 'si-' + session.sessionId;
   const isRunning = isSubagentActive(session.parentSessionId, session.agentId);
   if (isRunning) item.classList.add('running');
-  if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
-  if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
-  if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
+  setNeedsAttention(item, attentionSessions.has(session.sessionId));
+  setResponseReady(item, responseReadySessions.has(session.sessionId));
+  setCliBusy(item, !!sessionBusyState.get(session.sessionId));
   if (window.ATRACE) window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, parent: session.parentSessionId || null, agentId: session.agentId || null, fn: 'buildSubagentItem' });
   item.dataset.sessionId = session.sessionId;
   item.dataset.subagent = '1';
@@ -1312,10 +1312,10 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
-  if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
-  if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
-  if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
-  if (parentHasActiveSubagent(session.sessionId)) item.classList.add('has-busy-agents');
+  setNeedsAttention(item, attentionSessions.has(session.sessionId));
+  setResponseReady(item, responseReadySessions.has(session.sessionId));
+  setCliBusy(item, !!sessionBusyState.get(session.sessionId));
+  setHasBusyAgents(item, parentHasActiveSubagent(session.sessionId));
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
   if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;

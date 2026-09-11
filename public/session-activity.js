@@ -1,5 +1,7 @@
 // Session activity state — busy / response-ready / attention.
-// See .ai/contexts/ipc-bridge.md "Busy-state reconciliation".
+// See .ai/contexts/ipc-bridge.md "Busy-state reconciliation" and
+// .ai/contexts/session-state.md (DOM projection split out to
+// session-activity-dom.js).
 
 const attentionSessions = new Set(); // sessions needing user action (OSC 9)
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
@@ -20,20 +22,6 @@ function forgetActivitySeq(sessionId) {
   activitySeqBySession.delete(sessionId);
 }
 
-function sessionItemEl(sessionId) {
-  return document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-}
-
-// The only writer of .cli-busy and .response-ready — they are mutually exclusive.
-function applyActivityClasses(sessionId) {
-  const item = sessionItemEl(sessionId);
-  if (!item) return;
-  const ready = responseReadySessions.has(sessionId);
-  item.classList.toggle('response-ready', ready);
-  item.classList.toggle('cli-busy', !ready && sessionBusyState.get(sessionId) === true);
-  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': item.classList.contains('cli-busy'), fn: 'applyActivityClasses' });
-}
-
 // Purge outside the active/idle transition (e.g. PTY gone); the only writer of the three collections besides setActivity/rekeyActivityState.
 function purgeActivityFor(sessionId, via) {
   if (window.ATRACE) window.atrace('store.purge', sessionId, { reason: via, busy: sessionBusyState.get(sessionId) ?? null, ready: responseReadySessions.has(sessionId), attention: attentionSessions.has(sessionId), fn: 'purgeActivityFor' });
@@ -41,8 +29,7 @@ function purgeActivityFor(sessionId, via) {
   responseReadySessions.delete(sessionId);
   sessionBusyState.delete(sessionId);
   forgetActivitySeq(sessionId);
-  const item = sessionItemEl(sessionId);
-  if (item) item.classList.remove('needs-attention');
+  setNeedsAttention(sessionItemEl(sessionId), false);
   applyActivityClasses(sessionId);
 }
 
@@ -83,7 +70,9 @@ function rekeyActivityState(oldId, newId) {
   if (oldId === newId) return;
   if (window.ATRACE) window.atrace('store.rekey', newId, { from: oldId, busy: sessionBusyState.get(oldId) ?? null, ready: responseReadySessions.has(oldId), attention: attentionSessions.has(oldId), fn: 'rekeyActivityState' });
   const oldItem = sessionItemEl(oldId);
-  if (oldItem) oldItem.classList.remove('cli-busy', 'response-ready', 'needs-attention');
+  setCliBusy(oldItem, false);
+  setResponseReady(oldItem, false);
+  setNeedsAttention(oldItem, false);
 
   if (sessionBusyState.has(oldId)) {
     sessionBusyState.set(newId, sessionBusyState.get(oldId));
@@ -92,8 +81,7 @@ function rekeyActivityState(oldId, newId) {
   if (responseReadySessions.delete(oldId)) responseReadySessions.add(newId);
   if (attentionSessions.delete(oldId)) {
     attentionSessions.add(newId);
-    const newItem = sessionItemEl(newId);
-    if (newItem) newItem.classList.add('needs-attention');
+    setNeedsAttention(sessionItemEl(newId), true);
   }
   const seq = activitySeqBySession.get(oldId);
   if (seq !== undefined) {

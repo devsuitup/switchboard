@@ -17,6 +17,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
+// session-activity.js was split (see .ai/contexts/session-state.md): the pure
+// domain module (session-state.js) and the DOM projection
+// (session-activity-dom.js) load alongside it, same order as index.html.
+const STATE_SRC = path.join(__dirname, '..', 'public', 'session-state.js');
+const DOM_SRC = path.join(__dirname, '..', 'public', 'session-activity-dom.js');
 const SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 
 function setup(sessionIds = ['s1', 's2']) {
@@ -31,6 +36,8 @@ function setup(sessionIds = ['s1', 's2']) {
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   const ctx = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(STATE_SRC, 'utf8'), ctx, { filename: STATE_SRC });
+  vm.runInContext(fs.readFileSync(DOM_SRC, 'utf8'), ctx, { filename: DOM_SRC });
   vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });
 
   const read = (expr) => vm.runInContext(expr, ctx);

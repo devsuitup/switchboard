@@ -113,8 +113,18 @@ test('style.css: needs-attention keeps precedence over the tinted spinner', () =
     'the tint must not paint over the attention indicator');
 });
 
-test('the tint can never collide with response-ready: applyActivityClasses keeps them exclusive', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'session-activity.js'), 'utf8');
-  assert.match(src, /toggle\('cli-busy',\s*!ready\s*&&/,
-    'cli-busy is only ever set when the session is not response-ready');
+test('the tint can never collide with response-ready: renderSessionIcon keeps them exclusive', () => {
+  // Moved from a source-level regex pin on session-activity.js to a real
+  // exercise of session-state.js (the split introduced in .ai/contexts/session-state.md).
+  const { createSessionState, renderSessionIcon } = require('../public/session-state.js');
+  const state = createSessionState('local-pty');
+
+  state.apply({ type: 'busy', active: true });
+  state.apply({ type: 'busy', active: false, armReady: true }); // idle, unseen → response-ready
+  assert.ok(renderSessionIcon(state.snapshot()).classes.includes('response-ready'), 'precondition: response-ready armed');
+
+  state.apply({ type: 'busy', active: true }); // busy again
+  const classes = renderSessionIcon(state.snapshot()).classes;
+  assert.ok(classes.includes('cli-busy'));
+  assert.ok(!classes.includes('response-ready'), 'cli-busy is only ever set when the session is not response-ready');
 });

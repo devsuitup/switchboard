@@ -38,7 +38,7 @@ function setup({ traceEnabled }) {
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   const ctx = dom.getInternalVMContext();
-  for (const file of ['activity-trace.js', 'session-activity.js']) {
+  for (const file of ['activity-trace.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
     const full = path.join(PUBLIC_DIR, file);
     vm.runInContext(fs.readFileSync(full, 'utf8'), ctx, { filename: full });
   }
@@ -130,7 +130,7 @@ test('probe sites survive a context with no preload bridge at all', () => {
   const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'http://localhost/', runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
   Object.defineProperty(dom.window, 'activeSessionId', { value: null, writable: true, configurable: true });
-  for (const file of ['activity-trace.js', 'session-activity.js']) {
+  for (const file of ['activity-trace.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
     const full = path.join(PUBLIC_DIR, file);
     vm.runInContext(fs.readFileSync(full, 'utf8'), ctx, { filename: full });
   }
