@@ -568,3 +568,191 @@ test('transcripts keep priority over .meta.json sidecars when a cycle is full', 
     assert.deepEqual(asked, [metaRel], 'the deferred sidecar is picked up once the transcripts are unchanged');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// issue #257 — incremental fetch by byte range. This fake transport records
+// exactly what fetchFiles (full) vs fetchIncremental (range) were asked for,
+// so the decision syncMirror makes is visible from the outside, not just its
+// end result.
+function fakeRangeTransport(files, opts = {}) {
+  const calls = { list: 0, fetchFiles: [], fetchIncremental: [] };
+  return {
+    calls,
+    async listFiles() {
+      calls.list++;
+      return {
+        files: Object.entries(files).map(([rel, f]) => ({
+          rel, size: f.content.length, mtimeMs: f.mtimeMs,
+        })),
+        sessions: [],
+      };
+    },
+    async fetchFiles(alias, rels, destRoot) {
+      calls.fetchFiles.push(...rels);
+      const fetched = [];
+      const failed = [];
+      for (const rel of rels) {
+        if (opts.failFull && opts.failFull.includes(rel)) { failed.push(rel); continue; }
+        const dest = path.join(destRoot, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, files[rel].content, 'utf8');
+        fetched.push(rel);
+      }
+      return { fetched, failed };
+    },
+    async fetchIncremental(alias, requests, destRoot) {
+      const fetched = [];
+      const failed = [];
+      for (const { rel, offset } of requests) {
+        const tail = files[rel].content.slice(offset);
+        calls.fetchIncremental.push({ rel, offset, bytesRequested: tail.length });
+        if (opts.failIncremental && opts.failIncremental.includes(rel)) { failed.push(rel); continue; }
+        const dest = path.join(destRoot, rel);
+        fs.appendFileSync(dest, tail, 'utf8');
+        fetched.push(rel);
+      }
+      return { fetched, failed };
+    },
+  };
+}
+
+test('a transcript that only grew is fetched incrementally: only the new bytes are requested', async () => {
+  const dir = tmp('mirror-incr-grow');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const files = { '-srv-a/a.jsonl': { content: line('/srv/a'), mtimeMs: 1000 } };
+    const t = fakeRangeTransport(files);
+    await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    t.calls.fetchFiles.length = 0;
+    const appended = 'z'.repeat(4096); // ~4 KB growth, matching the issue's acceptance case
+    files['-srv-a/a.jsonl'] = { content: files['-srv-a/a.jsonl'].content + appended, mtimeMs: 2000 };
+    const r = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(t.calls.fetchFiles.length, 0, 'must not fall back to a full fetch');
+    assert.equal(t.calls.fetchIncremental.length, 1);
+    assert.equal(t.calls.fetchIncremental[0].rel, '-srv-a/a.jsonl');
+    assert.equal(t.calls.fetchIncremental[0].bytesRequested, appended.length,
+      'the transfer is bounded by the growth, not the whole file');
+    assert.equal(r.fetched, 1);
+    assert.equal(
+      fs.readFileSync(path.join(projectsDir, '-srv-a', 'a.jsonl'), 'utf8'),
+      files['-srv-a/a.jsonl'].content
+    );
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Mutation guard: change the incremental branch's `localSize === prev.size` /
+// `offset + 1` computation and this line goes red — see remote-transport-
+// incremental.test.js for the byte-count assertion this depends on.
+test('a shrunk remote file (rotation/rewrite) falls back to a full fetch, never a byte range', async () => {
+  const dir = tmp('mirror-incr-shrink');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const files = { '-srv-a/a.jsonl': { content: line('/srv/a').repeat(50), mtimeMs: 1000 } };
+    const t = fakeRangeTransport(files);
+    await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+    t.calls.fetchFiles.length = 0;
+
+    files['-srv-a/a.jsonl'] = { content: 'rotated\n', mtimeMs: 2000 }; // much shorter
+    const r = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(t.calls.fetchIncremental.length, 0, 'a shrink must never be treated as an append');
+    assert.deepEqual(t.calls.fetchFiles, ['-srv-a/a.jsonl']);
+    assert.equal(r.fetched, 1);
+    assert.equal(fs.readFileSync(path.join(projectsDir, '-srv-a', 'a.jsonl'), 'utf8'), 'rotated\n');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a local mirror whose on-disk size no longer matches the manifest is never trusted as a prefix', async () => {
+  const dir = tmp('mirror-incr-stale-prefix');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const files = { '-srv-a/a.jsonl': { content: line('/srv/a'), mtimeMs: 1000 } };
+    const t = fakeRangeTransport(files);
+    await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+    t.calls.fetchFiles.length = 0;
+
+    // Something out-of-band touched the local mirror — e.g. a previous crash
+    // mid-write. Its size no longer agrees with what the manifest recorded.
+    const localPath = path.join(projectsDir, '-srv-a', 'a.jsonl');
+    fs.writeFileSync(localPath, 'tampered-or-torn');
+
+    files['-srv-a/a.jsonl'] = { content: files['-srv-a/a.jsonl'].content + 'more-bytes-appended', mtimeMs: 2000 };
+    const r = await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(t.calls.fetchIncremental.length, 0, 'a size mismatch against the manifest must never be trusted as a prefix');
+    assert.deepEqual(t.calls.fetchFiles, ['-srv-a/a.jsonl']);
+    assert.equal(fs.readFileSync(localPath, 'utf8'), files['-srv-a/a.jsonl'].content);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('.meta.json sidecars always fetch in full, even when they grow', async () => {
+  const dir = tmp('mirror-incr-meta-full');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'inventory.json');
+    const metaRel = '-srv-x/parent-uuid/subagents/agent-1.meta.json';
+    const files = { [metaRel]: { content: JSON.stringify({ agentType: 'Explore' }), mtimeMs: 1000 } };
+    const t = fakeRangeTransport(files);
+    await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+    t.calls.fetchFiles.length = 0;
+
+    files[metaRel] = { content: JSON.stringify({ agentType: 'Explore', description: 'grew' }), mtimeMs: 2000 };
+    await syncMirror({ alias: 'vps', transport: t, projectsDir, manifestPath });
+
+    assert.equal(t.calls.fetchIncremental.length, 0);
+    assert.deepEqual(t.calls.fetchFiles, [metaRel]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// issue #257: cycleFull used to be a single sticky flag — one file that did
+// not fit deferred every smaller file listed after it. Ascending-size
+// ordering plus a per-file (not per-cycle) budget check fixes this: the
+// smallest file must never be starved just because a straggler ahead of it
+// (in host `find` order) didn't fit.
+test('a single large straggler never defers a smaller file that still fits the cycle budget', async () => {
+  const dir = tmp('mirror-cycle-ordering');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    // Each file stays under the 64 MB per-file ceiling (MAX_FILE_BYTES) so
+    // none is refused outright; their sum (5 x 60 MB = 300 MB) still blows
+    // the 256 MB per-cycle ceiling (MAX_CYCLE_BYTES).
+    const size60 = 60 * 1024 * 1024;
+    const size10 = 10 * 1024 * 1024;
+    // Host order deliberately lists the small file LAST, behind five 60 MB
+    // files — the exact shape that starved it under the old sticky
+    // "cycle full" flag (the first straggler that didn't fit used to defer
+    // everything listed after it, this file included).
+    const entries = [
+      { rel: '-srv-a/big-0.jsonl', size: size60, mtimeMs: 1 },
+      { rel: '-srv-a/big-1.jsonl', size: size60, mtimeMs: 1 },
+      { rel: '-srv-a/big-2.jsonl', size: size60, mtimeMs: 1 },
+      { rel: '-srv-a/big-3.jsonl', size: size60, mtimeMs: 1 },
+      { rel: '-srv-a/big-4.jsonl', size: size60, mtimeMs: 1 },
+      { rel: '-srv-a/small.jsonl', size: size10, mtimeMs: 1 },
+    ];
+    const asked = [];
+    const transport = {
+      listFiles: async () => ({ files: entries, sessions: [] }),
+      fetchFiles: async (_alias, rels, destRoot) => {
+        asked.push(...rels);
+        for (const rel of rels) {
+          const p = path.join(destRoot, rel);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, 'x');
+        }
+        return { fetched: rels, failed: [] };
+      },
+    };
+    const r = await syncMirror({ alias: 'vps', transport, projectsDir, manifestPath });
+
+    assert.ok(asked.includes('-srv-a/small.jsonl'),
+      'the 10 MB file must not be starved by the 60 MB files listed ahead of it');
+    assert.equal(asked.length, 5, 'small plus four of the five 60 MB files fit the 256 MB budget');
+    assert.equal(r.fetched, 5);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -343,6 +343,108 @@ untouched.
   changed file (issue #216's second half) — a changed file discovered this
   way is still read in full by `readSessionFile`.
 
+### Remote hosts — incremental fetch (issue #257)
+
+**The fetch itself is now incremental for a growing transcript; the parse
+downstream of it is not (still issue #216's second half, unchanged).**
+Measured 2026-09-11 (v0.0.76, main.log): 65 poll cycles in 19 min, one live
+session's transcript re-`scp`'d whole in 52 of them — the dominant ssh
+traffic of the app, since a session that keeps writing never stops being "the
+one changed file" for `syncMirror`.
+
+- **Decision, per file, in `remote-mirror.js`'s `syncMirror`.** For a `rel`
+  already in the manifest (`previous[rel]` exists) whose remote `size` grew
+  and whose remote `mtimeMs` did not go backward (`meta.mtimeMs >=
+  prev.mtimeMs`), and whose **on-disk mirrored file still has exactly
+  `prev.size` bytes** (`fs.statSync(localPath).size === prev.size` — the
+  cheap proxy for "the manifest's record of this file is still true"),
+  `syncMirror` fetches only `[prev.size, meta.size)` and appends it, instead
+  of re-pulling the whole file. `.meta.json` sidecars are excluded outright
+  (small, never worth the extra round-trip logic).
+- **Invalidation rule — full fetch, never a range, when any of these hold:**
+  remote size shrank (`meta.size < prev.size` — rotation or truncation);
+  remote size is unchanged but `mtimeMs` differs (a same-size rewrite, not an
+  append — nothing to safely append to); `prev` doesn't exist yet (first
+  pull for this file); the rel is a `.meta.json` sidecar; or the local
+  mirrored file's on-disk size doesn't match `prev.size` (someone or
+  something touched the mirror out of band since the manifest was written —
+  a crash mid-write, a manual edit). **Mtime alone is not trusted as proof of
+  an untouched prefix** — a rewrite that happens to grow the file could carry
+  any mtime, and `find -printf %T@`'s resolution/clock skew across hosts is
+  not something this code verifies further; the *size* check against the
+  actual on-disk file is what protects the prefix, mtime only screens out the
+  going-backward case cheaply before bothering to `stat()`.
+- **The range fetch itself lives in `remote-transport.js`.**
+  `createSshTransport().fetchIncremental(alias, requests, destRoot)` takes
+  `requests: [{ rel, offset }]` and, per file, runs a single `ssh` command —
+  `` tail -c +${offset + 1} '.claude/projects/<rel>' `` (1-indexed: byte
+  `offset+1` is the first new byte) — capturing stdout as a raw `Buffer`
+  (`run(..., { binary: true })`), never through the utf8 string path the
+  inventory/list command uses, so a byte range that happens to split
+  multi-byte content is preserved exactly. The result is written
+  copy-then-append-then-rename: `fs.copyFileSync(dest, dest+'.part')`,
+  `fs.appendFileSync` the new bytes, `fs.renameSync` over `dest` — the
+  previous mirror is only ever replaced by that final atomic rename, so any
+  failure before it (ssh exit code, timeout, a size cap on the range output,
+  a disk error mid-append) leaves `dest` byte-identical to before the call
+  and removes the `.part`. A transport with no `fetchIncremental` (an older
+  fake in a test) gets the same files routed through `fetchFiles` instead —
+  additive, matching the `fileSubsets` precedent above.
+- **Cycle bytes are now the transfer size, not the remote file size** — an
+  incremental candidate counts against `MAX_CYCLE_BYTES` as `meta.size -
+  offset`, not `meta.size`. Counting the full remote size would silently
+  undo the point of this feature: a 60 MB transcript that only grew by 4 KB
+  would otherwise still eat 60 MB of a cycle's 256 MB budget.
+- **`cycleFull` is no longer a single sticky flag (issue #257).** The old
+  loop set one `cycleFull` boolean the first time a file didn't fit either
+  the file-count or the byte ceiling, and every file listed after it in host
+  `find` order was deferred too — even a much smaller file that would still
+  fit the remaining budget. `syncMirror` now (a) sorts every candidate
+  ascending by transfer size, transcripts before `.meta.json` sidecars (same
+  priority the sidecar fix already established), and (b) checks each file
+  independently against the remaining count/byte budget with no flag
+  latching a permanent "no more this cycle" state — a file that doesn't fit
+  is deferred on its own, the next (larger-or-equal, after sorting) file is
+  still evaluated on its own merits. Proven by
+  `test/remote-mirror.test.js`'s "a single large straggler never defers a
+  smaller file that still fits the cycle budget" (five 60 MB files plus one
+  10 MB file, budget 256 MB — the 10 MB file is always fetched, regardless of
+  where it sits in host order).
+- **A skip/defer that recurs every cycle logs once per doubling of its streak,
+  not once per cycle.** Same motivation as `onHostFailure`'s throttling in
+  `remote-index.js` (issue #215) — a transcript permanently over
+  `MAX_FILE_BYTES`, or a file that keeps losing the cycle-budget race, would
+  otherwise produce one warning per poll forever. `bumpStreak(manifestPath,
+  rel)` in `remote-mirror.js` keeps an **in-memory-only** `Map<manifestPath,
+  Map<rel, count>>` (module-level; same durability tradeoff as
+  `remote-index.js`'s `hostBackoff` — lost on restart, which just logs once
+  again, cheap) and logs on count 1, 2, 4, 8, 16, ... A file that stops being
+  skipped/deferred has its streak dropped (`pruneStreaks`), so a later
+  recurrence logs fresh rather than resuming at its old tier.
+- **Mutation-proven**: setting the incremental branch's `offset` to `0`
+  instead of `localSize` (i.e. breaking the range start so it always starts
+  from byte 0) reddens `test/remote-mirror.test.js`'s "a transcript that only
+  grew is fetched incrementally: only the new bytes are requested" — the
+  fake transport's recorded `bytesRequested` no longer matches the actual
+  growth (measured 4168 vs the expected 4096 for a 4 KB append with the
+  mutation live).
+- **Still out of scope**: parsing only the appended bytes. The mirrored file
+  on disk is now correct (fetched incrementally, but byte-identical to a
+  full fetch), and an incrementally-updated file still reaches
+  `scanFoldersViaWorker`/`readSessionFile` through the exact same
+  `fetched` → `changedFolders`/`changedFilesByFolder` → `fileSubsets` path a
+  fully-fetched file does (`syncMirror`'s return shape is unchanged by fetch
+  mode) — so the file-level rescan from issue #216 already re-reads only
+  this file, but still reads *all* of it, not just the new lines. Parse cost
+  is therefore unchanged by this issue; issue #216's second half remains the
+  place to fix that.
+- **Known gap, not fixed here**: a remote session with a live descriptor
+  (`~/.claude/sessions/<pid>.json`) but no `.jsonl` written yet (a session
+  that was launched but has not been prompted) is invisible to the
+  inventory — `LIST_COMMAND`'s `find .claude/projects` only ever sees files
+  that exist. Observed 2026-09-11. Candidate for a follow-up issue; not
+  addressed by issue #257.
+
 - **A remote project is never "missing".** `buildProjectsFromCache` sets
   `missing: false` for any aliased row. Probing the local filesystem for
   `/srv/supervision` would flag every remote project missing and offer it to the

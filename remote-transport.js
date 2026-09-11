@@ -15,6 +15,8 @@ const DEFAULT_LIST_TIMEOUT_MS = 60_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
+// see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
+const MAX_RANGE_FETCH_BYTES = 64 * 1024 * 1024;
 
 const SSH_BASE_OPTS = [
   '-o', 'BatchMode=yes',
@@ -119,22 +121,25 @@ function createSshTransport(opts = {}) {
   const live = new Set();
   let disposed = false;
 
-  function run(command, args, { timeoutMs, maxBytes }) {
+  // `binary: true` captures stdout as a raw Buffer. see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
+  function run(command, args, { timeoutMs, maxBytes, binary }) {
     return new Promise((resolve) => {
       if (disposed) {
-        resolve({ code: -1, stdout: '', stderr: 'transport disposed', timedOut: false });
+        resolve({ code: -1, stdout: '', stdoutBuffer: Buffer.alloc(0), stderr: 'transport disposed', timedOut: false });
         return;
       }
       let child;
       try {
         child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (err) {
-        resolve({ code: -1, stdout: '', stderr: err.message, timedOut: false });
+        resolve({ code: -1, stdout: '', stdoutBuffer: Buffer.alloc(0), stderr: err.message, timedOut: false });
         return;
       }
       live.add(child);
 
       let stdout = '';
+      const chunks = [];
+      let stdoutBytes = 0;
       let stderr = '';
       let truncated = false;
       let timedOut = false;
@@ -153,19 +158,38 @@ function createSshTransport(opts = {}) {
         settled = true;
         clearTimeout(timer);
         live.delete(child);
-        resolve({ code, stdout, stderr: stderr.slice(0, 4096), timedOut, truncated });
+        resolve({
+          code,
+          stdout,
+          stdoutBuffer: binary ? Buffer.concat(chunks) : undefined,
+          stderr: stderr.slice(0, 4096),
+          timedOut,
+          truncated,
+        });
       };
 
       if (child.stdout) {
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (chunk) => {
-          if (stdout.length + chunk.length > (maxBytes || MAX_LIST_BYTES)) {
-            truncated = true;
-            kill();
-            return;
-          }
-          stdout += chunk;
-        });
+        if (binary) {
+          child.stdout.on('data', (chunk) => {
+            stdoutBytes += chunk.length;
+            if (stdoutBytes > (maxBytes || MAX_RANGE_FETCH_BYTES)) {
+              truncated = true;
+              kill();
+              return;
+            }
+            chunks.push(chunk);
+          });
+        } else {
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk) => {
+            if (stdout.length + chunk.length > (maxBytes || MAX_LIST_BYTES)) {
+              truncated = true;
+              kill();
+              return;
+            }
+            stdout += chunk;
+          });
+        }
       }
       if (child.stderr) {
         child.stderr.setEncoding('utf8');
@@ -238,6 +262,62 @@ function createSshTransport(opts = {}) {
     return { fetched, failed };
   }
 
+  // offset comes from the local mirror's byte count — see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
+  async function fetchOneIncremental(alias, rel, offset, destRoot) {
+    if (!Number.isInteger(offset) || offset < 0) return false;
+    const destPath = path.join(destRoot, rel);
+    if (!fs.existsSync(destPath)) {
+      log.warn(`[remote:${alias}] range fetch ${rel} skipped — no local file to append to`);
+      return false;
+    }
+    const tmpPath = destPath + '.part';
+    const remoteRel = `${REMOTE_PROJECTS_REL}/${rel}`;
+    // tail -c is 1-indexed: offset+1 is the first new byte.
+    const rangeCommand = `tail -c +${offset + 1} '${remoteRel}'`;
+    const res = await run('ssh', [...SSH_BASE_OPTS, '-n', alias, rangeCommand], {
+      timeoutMs: fetchTimeoutMs,
+      binary: true,
+    });
+    if (res.code !== 0 || res.timedOut || res.truncated) {
+      const why = res.timedOut ? 'timed out' : res.truncated ? 'range exceeded the size cap' : `exit ${res.code}: ${res.stderr.trim()}`;
+      log.warn(`[remote:${alias}] range fetch ${rel} failed — ${why}`);
+      return false;
+    }
+    try {
+      // Copy-then-append-then-rename. see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
+      fs.copyFileSync(destPath, tmpPath);
+      fs.appendFileSync(tmpPath, res.stdoutBuffer);
+      fs.renameSync(tmpPath, destPath);
+    } catch (err) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch {}
+      log.warn(`[remote:${alias}] could not append ${rel}: ${err.message}`);
+      return false;
+    }
+    return true;
+  }
+
+  // `requests` is [{ rel, offset }]. Same fetched/failed shape as fetchFiles.
+  async function fetchIncremental(alias, requests, destRoot) {
+    const fetched = [];
+    const failed = [];
+    const queue = (Array.isArray(requests) ? requests : [])
+      .filter(r => r && isSafeMirrorRelPath(r.rel) && Number.isInteger(r.offset) && r.offset >= 0);
+    let cursor = 0;
+
+    const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      while (!disposed) {
+        const i = cursor++;
+        if (i >= queue.length) return;
+        const { rel, offset } = queue[i];
+        if (await fetchOneIncremental(alias, rel, offset, destRoot)) fetched.push(rel);
+        else failed.push(rel);
+      }
+    });
+    await Promise.all(workers);
+    for (let i = cursor; i < queue.length; i++) failed.push(queue[i].rel);
+    return { fetched, failed };
+  }
+
   // Kill what is running without ending the transport -- see
   // .ai/contexts/session-cache.md, "Remote hosts".
   function cancelInFlight() {
@@ -252,7 +332,7 @@ function createSshTransport(opts = {}) {
     cancelInFlight();
   }
 
-  return { listFiles, fetchFiles, cancelInFlight, dispose, liveCount: () => live.size };
+  return { listFiles, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
 module.exports = {
@@ -267,4 +347,5 @@ module.exports = {
   SESSIONS_MARKER,
   MAX_SESSION_DESCRIPTORS,
   MAX_SESSION_DESCRIPTOR_BYTES,
+  MAX_RANGE_FETCH_BYTES,
 };
