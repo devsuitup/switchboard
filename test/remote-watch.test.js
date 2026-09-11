@@ -9,6 +9,12 @@
 //   3. A burst of events collapses to a coalesced signal, not one per line.
 //   4. A line that does not parse to a safe path is dropped, not forwarded.
 //   5. A child that exits restarts on the same backoff shape as remote-index.
+//   6. A child's handlers are bound to that child, not to the alias state:
+//      a superseded child's late close/data must never touch the state a
+//      newer child owns (audit finding F1). The fake child below does NOT
+//      emit 'close' on kill() — a real ssh process reports its exit on its
+//      own asynchronous schedule — so a test drives that arrival explicitly
+//      with child.emitClose(), on whatever tick reproduces the race.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -28,7 +34,10 @@ function fakeChild() {
   child.stdout = new Readable({ read() {} });
   child.stderr = new Readable({ read() {} });
   child.killed = 0;
-  child.kill = () => { child.killed++; child.emit('close', null); };
+  // Deliberately does NOT emit 'close' here: a real ssh process's exit is
+  // reported asynchronously, independent of when kill() was called (F1).
+  child.kill = () => { child.killed++; };
+  child.emitClose = (code = null) => child.emit('close', code);
   return child;
 }
 
@@ -57,12 +66,25 @@ function fakeTimers() {
 test('buildSshArgs passes -tt, BatchMode, and keeps alias/command as separate argv elements', () => {
   const args = buildSshArgs('planificator');
   assert.ok(args.includes('-tt'), '-tt is mandatory: without it a killed ssh leaves the remote inotifywait running');
+  assert.equal(args[0], '-tt', '-tt must come first');
   assert.ok(args.includes('BatchMode=yes'));
   assert.equal(args[args.length - 2], 'planificator', 'alias is its own argv element, never concatenated');
   const command = args[args.length - 1];
   assert.match(command, /inotifywait/);
   assert.ok(command.includes(REMOTE_PROJECTS_REL));
   assert.ok(command.includes(REMOTE_SESSIONS_REL));
+});
+
+test('buildSshArgs adds a connect timeout and keepalive so a half-open ssh does not hang silently forever (F4)', () => {
+  const args = buildSshArgs('planificator');
+  const aliasIdx = args.indexOf('planificator');
+  assert.ok(aliasIdx > 0, 'alias must still be present as its own argv element');
+  for (const opt of ['ConnectTimeout=10', 'ServerAliveInterval=30', 'ServerAliveCountMax=3']) {
+    const idx = args.indexOf(opt);
+    assert.ok(idx !== -1, `${opt} must be present`);
+    assert.ok(idx < aliasIdx, `${opt} must come before the alias`);
+    assert.equal(args[idx - 1], '-o', `${opt} must be introduced by its own -o flag`);
+  }
 });
 
 test('parseWatchLine recovers kind and rel path for a well-formed line', () => {
@@ -219,6 +241,90 @@ test('a live watcher restarts on exit using the same backoff shape as remote-ind
     pending.fn();
   }
   assert.equal(spawn.calls.length, 4, 'each scheduled restart actually respawns the watcher');
+});
+
+test('a quick failing exit logs once with the stderr tail; a duplicate close on the same child never re-logs (F4)', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const warnings = [];
+  const log = { info() {}, warn: (msg) => warnings.push(msg), error() {} };
+  const watcher = createRemoteWatcher({ spawn, log, timers });
+
+  watcher.start('vps', () => {});
+  const a = spawn.calls[0].child;
+  a.stderr.push('Host key verification failed.\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  a.emit('close', 255); // dies almost immediately -> counts as a failure, tier 1
+
+  assert.equal(warnings.length, 1, 'the first quick failure at a new backoff tier must log once');
+  assert.match(warnings[0], /Host key verification failed\./, 'the captured stderr tail must appear in the warning');
+  assert.match(warnings[0], /255/, 'the exit code must appear in the warning');
+
+  // A duplicate 'close' on the very same, already-handled child (the kind of
+  // glitch a real child_process can produce) must be a no-op: the F1
+  // identity guard already nulled s.child, so this can never log again.
+  a.emit('close', 255);
+  assert.equal(warnings.length, 1, 'a duplicate close on the same already-handled child must not log again');
+});
+
+test('a stop() immediately followed by start() does not let A\'s late async close orphan B (F1)', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const watcher = createRemoteWatcher({ spawn, log: silentLog, timers });
+  const events = [];
+  const onEvent = (alias, kind) => events.push({ alias, kind });
+
+  watcher.start('vps', onEvent);
+  const a = spawn.calls[0].child;
+
+  watcher.stop('vps');
+  assert.equal(a.killed, 1, 'A must be killed by stop()');
+
+  watcher.start('vps', onEvent);
+  assert.equal(spawn.calls.length, 2, 'start() spawns B right away, without waiting for A to actually close');
+  const b = spawn.calls[1].child;
+
+  // A's real ssh process reports its exit on its own schedule, independent
+  // of when kill() was called — arriving here, after B already owns
+  // s.child, is exactly the race.
+  a.emitClose(0);
+  for (const h of timers.scheduled) if (!h.cleared) h.fn();
+  assert.equal(spawn.calls.length, 2, "A's late close must never spawn a third child (C) behind B's back");
+  assert.equal(watcher.isRunning('vps'), true, 'B must remain the tracked, live watcher');
+
+  // A data chunk delivered after supersession must never reach onEvent.
+  a.stdout.push(`P|${REMOTE_PROJECTS_REL}/-srv-a/session.jsonl\n`);
+  a.stdout.push(null);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.length, 0, 'a chunk from the superseded child A must never reach onEvent');
+
+  watcher.stopAll();
+  assert.equal(b.killed, 1, 'stopAll() must still be able to kill B — it must never be orphaned');
+});
+
+test('stop() clears a pending coalesce cooldown so it cannot fire onEvent after stop (F11)', async () => {
+  const spawn = spawnRecorder();
+  const timers = fakeTimers();
+  const watcher = createRemoteWatcher({ spawn, log: silentLog, timers });
+  const events = [];
+
+  watcher.start('vps', (alias, kind) => events.push({ alias, kind }));
+  const { child } = spawn.calls[0];
+  const rel = `${REMOTE_PROJECTS_REL}/-srv-a/session.jsonl`;
+
+  child.stdout.push(`P|${rel}\n`);
+  child.stdout.push(`P|${rel}\n`); // second event while still in cooldown -> queued as pending
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.length, 1, 'the leading edge fires once; the second event is only pending');
+
+  const cooldown = timers.scheduled.filter(h => !h.cleared).pop();
+  assert.ok(cooldown, 'a cooldown timer must be pending with a queued trailing event');
+
+  watcher.stop('vps');
+  assert.ok(cooldown.cleared, 'stop() must clear the pending coalesce cooldown, not just the restart timer');
+
+  cooldown.fn(); // simulate the timer firing anyway, in case the clear alone were reverted
+  assert.equal(events.length, 1, 'a cooldown that outlives stop() must never re-fire onEvent');
 });
 
 test('stop() kills the live child and cancels any pending restart', () => {

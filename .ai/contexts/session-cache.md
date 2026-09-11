@@ -212,6 +212,36 @@ the exact remote command, and the mutation proofs are in
   delete-then-insert path as the cold-start scan. Parsing 249 MB on the main
   thread would freeze the UI; `refreshFolder` is deliberately not the remote path.
 
+- **Every child's handlers are bound to that child, not to the alias state**
+  (audit finding F1, 2026-09-11). `restartWatcherForAlias`'s synchronous
+  `stop()` then `start()` — and `syncRemoteWatchers` doing the same on a host
+  toggle — kills child A and immediately spawns child B into the same state;
+  A's `'close'` (and any late stdout `'data'`) arrives afterwards, on ssh's own
+  schedule, not kill()'s. `close`/`data` handlers close over the specific
+  `child` they were attached to and check `s.child === child` before touching
+  state, so a superseded child's late events are dropped instead of nulling
+  B out from under `stop()`/`stopAll()` and spawning an unkillable third
+  child. Proven in `test/remote-watch.test.js` with a fake child whose `kill()`
+  does not itself emit `'close'` (a real ssh process doesn't either) — a test
+  drives the late close explicitly via `child.emitClose()`, after the
+  replacement child already exists.
+
+- **The ssh child gets a connect timeout and keepalive, and a quick failure is
+  logged with its stderr tail** (audit finding F4). `buildSshArgs` adds `-o
+  ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3` (before
+  the alias, after `-tt`/`BatchMode`) so a half-open TCP session (laptop sleep,
+  NAT) is detected and reaped instead of leaving `isRunning()` reporting a
+  channel that receives nothing, forever. The last ≤200 bytes of stderr are
+  kept per child and logged once per backoff-tier change on a quick failure
+  (`< HEALTHY_MS`), same throttle as `onHostFailure` above — never on every
+  attempt, never for a healthy long run that just happened to exit.
+
+- **A pending coalesce cooldown cannot fire after `stop()`** (audit finding
+  F11, minor). `killChild` only ever cleared `restartTimer`; a coalesce
+  cooldown timer (and its `pending` flag) from `emitCoalesced` is now also
+  cleared and reset inside `stop()`, so a queued trailing event from before
+  the stop can never reach `s.onEvent` afterwards.
+
 ### Remote hosts — busy spinner (issue #242)
 
 Remote transcript-write activity feeds the same `setActivity(sessionId, active, via)`

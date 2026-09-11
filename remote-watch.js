@@ -24,7 +24,12 @@ function buildWatchCommand() {
 }
 
 function buildSshArgs(alias) {
-  return ['-tt', '-o', 'BatchMode=yes', alias, buildWatchCommand()];
+  // see .ai/contexts/session-cache.md ("Remote hosts — watch channel")
+  return [
+    '-tt', '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+    alias, buildWatchCommand(),
+  ];
 }
 
 function parseWatchLine(line) {
@@ -68,10 +73,12 @@ function createRemoteWatcher(opts = {}) {
     s.onEvent(s.alias, kind);
     s.cooldown[kind] = true;
     const t = setT(() => {
+      s.cooldownTimer[kind] = null;
       s.cooldown[kind] = false;
       if (s.pending[kind]) { s.pending[kind] = false; emitCoalesced(s, kind); }
     }, COALESCE_MS);
     if (t && t.unref) t.unref();
+    s.cooldownTimer[kind] = t;
   }
 
   function handleLine(s, rawLine) {
@@ -106,10 +113,20 @@ function createRemoteWatcher(opts = {}) {
     if (s.restartTimer && s.restartTimer.unref) s.restartTimer.unref();
   }
 
-  function onExit(s) {
+  // identity-guarded: a superseded child's late close must not touch the state — see .ai/contexts/session-cache.md ("watch channel")
+  function onExit(s, child, code) {
+    if (s.child !== child) return;
     s.child = null;
     if (s.stopped || s.unwatchable) return;
-    s.failures = (Date.now() - s.spawnedAt) < HEALTHY_MS ? s.failures + 1 : 0;
+    const isFailure = (Date.now() - s.spawnedAt) < HEALTHY_MS;
+    const prevDelay = backoffDelayMs(s.failures, RESTART_BASE_MS);
+    s.failures = isFailure ? s.failures + 1 : 0;
+    const delay = backoffDelayMs(s.failures, RESTART_BASE_MS);
+    if (isFailure && delay !== prevDelay) {
+      const tail = s.stderrTail ? ` — stderr: ${s.stderrTail}` : '';
+      log.warn(`[remote-watch:${s.alias}] ssh exited (code ${code}) after ${s.failures} consecutive quick ` +
+        `failure(s), retrying in ${Math.round(delay / 1000)}s${tail}`);
+    }
     scheduleRestart(s);
   }
 
@@ -127,13 +144,20 @@ function createRemoteWatcher(opts = {}) {
     s.child = child;
     s.buf = '';
     s.spawnedAt = Date.now();
+    s.stderrTail = '';
     if (child.stdout) {
       child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk) => onData(s, chunk));
+      child.stdout.on('data', (chunk) => { if (s.child === child) onData(s, chunk); });
     }
-    if (child.stderr) child.stderr.on('data', () => {});
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => {
+        if (s.child !== child) return;
+        s.stderrTail = (s.stderrTail + chunk).slice(-200);
+      });
+    }
     child.on('error', () => {});
-    child.on('close', () => onExit(s));
+    child.on('close', (code) => onExit(s, child, code));
   }
 
   function getState(alias) {
@@ -142,8 +166,10 @@ function createRemoteWatcher(opts = {}) {
       s = {
         alias, child: null, buf: '', stopped: true, unwatchable: false,
         failures: 0, spawnedAt: 0, restartTimer: null, onEvent: null, onActivity: null,
+        stderrTail: '',
         cooldown: { project: false, session: false },
         pending: { project: false, session: false },
+        cooldownTimer: { project: null, session: null },
       };
       states.set(alias, s);
     }
@@ -167,6 +193,11 @@ function createRemoteWatcher(opts = {}) {
     if (!s) return;
     s.stopped = true;
     killChild(s);
+    for (const kind of Object.keys(s.cooldownTimer)) {
+      if (s.cooldownTimer[kind]) { clearT(s.cooldownTimer[kind]); s.cooldownTimer[kind] = null; }
+      s.cooldown[kind] = false;
+      s.pending[kind] = false;
+    }
   }
 
   function stopAll() {
