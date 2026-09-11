@@ -393,19 +393,20 @@ test('busy wins over response-ready: the two classes are mutually exclusive by c
   t.destroy();
 });
 
-test('style.css: even if both classes were set, the cli-busy spinner still wins on the dot', () => {
-  // Belt and braces for the mutual exclusion above — jsdom does not resolve
-  // ::before content, so this pins the cascade at the source level. The
-  // response-ready rule (.session-item.response-ready .session-status-dot)
-  // comes LATER in the file, so without !important + the extra :not() class
-  // it would repaint the dot over the spinner.
+test('style.css: the busy icon-slot rung always wins over .session-icon.running', () => {
+  // Issue #246 step 3b (coordinator follow-up, 2026-09-11): renderSessionIcon()
+  // now resolves rung exclusivity in JS (the mutual exclusion tested above),
+  // so the slot's CSS no longer arbitrates between row classes — it keys on
+  // session-icon--busy alone. jsdom does not resolve ::before content, so
+  // this pins the cascade at the source level: background is !important
+  // because a busy row is very often also .session-icon.running (green).
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
-  const busyRule = css.match(/\.session-item\.cli-busy:not\(\.needs-attention\) \.session-status-dot,[\s\S]*?\}/);
-  assert.ok(busyRule, 'the cli-busy status-dot rule must still exist');
+  const busyRule = css.match(/\.session-icon--busy \{[\s\S]*?\}/);
+  assert.ok(busyRule, 'the cli-busy icon-slot rule must still exist');
   assert.match(busyRule[0], /background:\s*transparent\s*!important/,
-    'the cli-busy dot must clear its background with !important so response-ready cannot repaint over the spinner');
-  assert.match(css, /\.session-item\.cli-busy:not\(\.needs-attention\) \.session-status-dot::before/,
-    'the braille spinner ::before must still be keyed on cli-busy');
+    'the cli-busy slot must clear its background with !important so .session-icon.running cannot repaint over the spinner');
+  assert.match(css, /\.session-icon--busy::before/,
+    'the braille spinner ::before must still be keyed on the busy rung');
 });
 
 // ---------------------------------------------------------------------------

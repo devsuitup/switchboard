@@ -39,10 +39,10 @@ function buildDom() {
       <div class="slug-group" id="sg1">
         <div class="slug-group-dot"></div>
         <div class="session-item" data-session-id="s1">
-          <div class="session-status-dot"></div>
+          <div class="session-icon"></div>
         </div>
         <div class="session-item" data-session-id="s2">
-          <div class="session-status-dot"></div>
+          <div class="session-icon"></div>
         </div>
       </div>
     </div>
@@ -82,8 +82,8 @@ function makeIndicatorFn(doc, state) {
           // clearActiveSubagentsFor) instead of waiting for the 60s TTL.
           if (state.clearActiveSubagentsFor) state.clearActiveSubagentsFor(id);
         }
-        const dot = item.querySelector('.session-status-dot');
-        if (dot) dot.classList.toggle('running', running);
+        const icon = item.querySelector('.session-icon');
+        if (icon) icon.classList.toggle('running', running);
       });
       doc.querySelectorAll('.slug-group').forEach(group => {
         const hasRunning = group.querySelector('.session-item.has-running-pty') !== null;
@@ -290,7 +290,7 @@ test('makeIndicatorFn replica: subagent items (dataset.subagent) are untouched b
   subagentItem.className = 'session-item running';
   subagentItem.dataset.sessionId = 'sub:s-top-1:agent-1';
   subagentItem.dataset.subagent = '1';
-  subagentItem.innerHTML = '<div class="session-status-dot running"></div>';
+  subagentItem.innerHTML = '<div class="session-icon running"></div>';
   sidebarContent.appendChild(subagentItem);
 
   const state = {
@@ -308,7 +308,7 @@ test('makeIndicatorFn replica: subagent items (dataset.subagent) are untouched b
   update();
 
   assert.ok(subagentItem.classList.contains('running'), 'subagent item keeps .running across an unrelated pty-set change');
-  assert.ok(subagentItem.querySelector('.session-status-dot').classList.contains('running'), 'subagent dot keeps .running');
+  assert.ok(subagentItem.querySelector('.session-icon').classList.contains('running'), 'subagent icon slot keeps .running');
   assert.ok(!subagentItem.classList.contains('has-running-pty'), 'subagent item never gets has-running-pty (no PTY, guard short-circuits before that toggle)');
 
   window.close();

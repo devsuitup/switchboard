@@ -822,9 +822,9 @@ function updateRunningIndicators() {
         clearActiveSubagentsFor(id);
       }
       if (item.dataset.remoteAlias) setRemoteAttached(id, running);
-      const dot = item.querySelector('.session-status-dot');
-      if (dot) dot.classList.toggle('running', running);
-      if (window.ATRACE) window.atrace('class.toggle', id, { el: item.id || null, cls: 'has-running-pty', on: running, dot: !!dot, fn: 'updateRunningIndicators' });
+      const icon = item.querySelector('.session-icon');
+      if (icon) icon.classList.toggle('running', running);
+      if (window.ATRACE) window.atrace('class.toggle', id, { el: item.id || null, cls: 'has-running-pty', on: running, icon: !!icon, fn: 'updateRunningIndicators' });
     });
     // Update slug group running dots
     document.querySelectorAll('.slug-group').forEach(group => {
