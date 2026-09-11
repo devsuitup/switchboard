@@ -34,8 +34,32 @@ function applyActivityClasses(sessionId) {
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': item.classList.contains('cli-busy'), fn: 'applyActivityClasses' });
 }
 
+// Drop all busy/unread/attention state for a session outside the normal
+// active/idle transition — e.g. its PTY just stopped (app.js's
+// updateRunningIndicators, via: 'pty-gone'). Sole writer of the three
+// collections besides setActivity/rekeyActivityState, so a caller never
+// deletes from them directly. Does not touch has-busy-agents/subagent state
+// (sidebar.js's clearActiveSubagentsFor) or has-running-pty — those are
+// owned elsewhere.
+function purgeActivityFor(sessionId, via) {
+  if (window.ATRACE) window.atrace('store.purge', sessionId, { reason: via, busy: sessionBusyState.get(sessionId) ?? null, ready: responseReadySessions.has(sessionId), attention: attentionSessions.has(sessionId), fn: 'purgeActivityFor' });
+  attentionSessions.delete(sessionId);
+  responseReadySessions.delete(sessionId);
+  sessionBusyState.delete(sessionId);
+  forgetActivitySeq(sessionId);
+  const item = sessionItemEl(sessionId);
+  if (item) item.classList.remove('needs-attention');
+  applyActivityClasses(sessionId);
+}
+
 // Central activity dispatcher. `via` is trace-only — see docs/activity-trace.md.
-function setActivity(sessionId, active, via) {
+// `opts.armReady` (default true) gates whether going idle may arm
+// response-ready; it is an explicit opt-out, never derived from `via`. Pass
+// `{ armReady: false }` for a source that can only infer "stopped writing"
+// from silence (no PTY to ask "is a response actually ready?") — see
+// .ai/contexts/session-cache.md ("Remote hosts — busy spinner").
+function setActivity(sessionId, active, via, opts) {
+  const armReady = !(opts && opts.armReady === false);
   if (active) {
     if (window.ATRACE && responseReadySessions.has(sessionId)) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'setActivity', via });
     responseReadySessions.delete(sessionId);
@@ -50,7 +74,7 @@ function setActivity(sessionId, active, via) {
   activitySeqBySession.set(sessionId, activitySeq);
   if (window.ATRACE) window.atrace('store.mutate', sessionId, { map: 'sessionBusyState', op: 'set', from: wasActive, to: active, actSeq: activitySeq, fn: 'setActivity', via });
 
-  if (wasActive && !active && sessionId !== activeSessionId) {
+  if (wasActive && !active && sessionId !== activeSessionId && armReady) {
     if (window.ATRACE) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'add', from: false, to: true, fn: 'setActivity', via });
     responseReadySessions.add(sessionId);
   }

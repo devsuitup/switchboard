@@ -1318,6 +1318,9 @@ function buildSessionItem(session) {
   if (parentHasActiveSubagent(session.sessionId)) item.classList.add('has-busy-agents');
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
+  // Read by app.js's updateRunningIndicators — a remote row's busy state is
+  // owned by the remote adapter, not local PTY presence (F7).
+  if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;
 
   const modified = new Date(session.modified);
   const timeStr = formatDate(modified);

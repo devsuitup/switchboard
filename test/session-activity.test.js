@@ -44,6 +44,7 @@ function setup(sessionIds = ['s1', 's2']) {
     reconcileBusyState: read('reconcileBusyState'),
     currentActivitySeq: read('currentActivitySeq'),
     forgetActivitySeq: read('forgetActivitySeq'),
+    purgeActivityFor: read('purgeActivityFor'),
     responseReadySessions: read('responseReadySessions'),
     sessionBusyState: read('sessionBusyState'),
     attentionSessions: read('attentionSessions'),
@@ -146,6 +147,90 @@ test('clearUnread re-exposes the spinner when the session is still generating', 
   assert.ok(t.item('s1').classList.contains('cli-busy'), 'cli-busy restored from sessionBusyState');
   assert.ok(!t.item('s1').classList.contains('response-ready'));
 
+  t.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// F3: opts.armReady — a source that can only infer silence, not completion
+// ---------------------------------------------------------------------------
+
+test('setActivity(id, false, via, { armReady: false }) clears busy without arming response-ready', () => {
+  const t = setup();
+  t.window.activeSessionId = 's2'; // s1 not focused — the case that normally arms response-ready
+
+  t.setActivity('s1', true, 'remote-watch');
+  t.setActivity('s1', false, 'remote-decay', { armReady: false });
+
+  assert.equal(t.sessionBusyState.get('s1'), false, 'busy still clears');
+  assert.ok(!t.responseReadySessions.has('s1'), 'armReady:false must suppress the response-ready transition');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('response-ready'));
+  t.destroy();
+});
+
+test('a local PTY source (no opts) going idle while unfocused still arms response-ready', () => {
+  // The default must stay armed — only an explicit opt-out (F3) changes it.
+  const t = setup();
+  t.window.activeSessionId = 's2';
+
+  t.setActivity('s1', true, 'onCliBusyState');
+  t.setActivity('s1', false, 'onCliBusyState');
+
+  assert.ok(t.responseReadySessions.has('s1'), 'local PTY idle must still claim an unread response');
+  assert.ok(t.item('s1').classList.contains('response-ready'));
+  t.destroy();
+});
+
+test('armReady:false does not block the response-ready CLEAR when the session goes busy again', () => {
+  // Symmetry check: armReady only gates the idle→response-ready transition;
+  // it must not interfere with the existing "busy always clears the stale
+  // marker" behavior.
+  const t = setup();
+  t.window.activeSessionId = 's2';
+
+  t.setActivity('s1', true);
+  t.setActivity('s1', false); // response-ready armed via the normal path
+  assert.ok(t.responseReadySessions.has('s1'));
+
+  t.setActivity('s1', true, 'remote-watch', { armReady: false });
+  assert.ok(!t.responseReadySessions.has('s1'), 'going busy always clears the stale unread marker regardless of armReady');
+  t.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// F7: purgeActivityFor — the single writer for the PTY-gone purge
+// ---------------------------------------------------------------------------
+
+test('purgeActivityFor drops busy/unread/attention state and their classes', () => {
+  const t = setup();
+  t.window.activeSessionId = 's2';
+
+  t.setActivity('s1', true);
+  t.setActivity('s1', false); // response-ready armed
+  t.attentionSessions.add('s1');
+  t.item('s1').classList.add('needs-attention');
+  assert.ok(t.responseReadySessions.has('s1') && t.attentionSessions.has('s1'), 'preconditions');
+
+  t.purgeActivityFor('s1', 'pty-gone');
+
+  assert.ok(!t.attentionSessions.has('s1'), 'attentionSessions cleared');
+  assert.ok(!t.responseReadySessions.has('s1'), 'responseReadySessions cleared');
+  assert.ok(!t.sessionBusyState.has('s1'), 'sessionBusyState cleared');
+  assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  assert.ok(!t.item('s1').classList.contains('response-ready'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
+  t.destroy();
+});
+
+test('purgeActivityFor on a busy session removes .cli-busy too', () => {
+  const t = setup();
+  t.setActivity('s1', true);
+  assert.ok(t.item('s1').classList.contains('cli-busy'));
+
+  t.purgeActivityFor('s1', 'pty-gone');
+
+  assert.ok(!t.sessionBusyState.has('s1'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
   t.destroy();
 });
 
@@ -343,14 +428,25 @@ test('public/app.js: the poll reconciles busy state and re-keys it on fork/detec
   assert.match(detected, /rekeyActivityState\(tempId, realId\)/, 'session detection must carry the activity state to the real id');
 });
 
-test('public/app.js: the pty-stop cleanup also purges the activity counter', () => {
-  // activitySeqBySession is the one activity collection updateRunningIndicators
-  // cannot see directly; without this call a long-lived window accumulates one
-  // entry per session that ever ran.
+test('public/app.js: the pty-stop cleanup routes through purgeActivityFor and skips remote rows (F7)', () => {
+  // purgeActivityFor (session-activity.js) is the single writer for
+  // sessionBusyState/responseReadySessions/attentionSessions/activitySeqBySession
+  // outside setActivity/rekeyActivityState — app.js must not touch those maps
+  // directly, and must not purge a row whose busy state is owned by the
+  // remote watch channel instead of local PTY presence.
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const scanStart = src.indexOf("document.querySelectorAll('.session-item').forEach(item => {");
   assert.notEqual(scanStart, -1, 'the .session-item pty-set scan must still exist');
   const body = src.slice(scanStart, scanStart + 1200);
-  assert.match(body, /sessionBusyState\.delete\(id\);\s*\n\s*forgetActivitySeq\(id\);/,
-    'forgetActivitySeq must sit with the other per-session purges in the !running branch');
+
+  assert.match(body, /if\s*\(!running\s*&&\s*!item\.dataset\.remoteAlias\)\s*\{/,
+    'the purge branch must skip rows carrying dataset.remoteAlias');
+  assert.match(body, /purgeActivityFor\(id,\s*'pty-gone'\)/,
+    'the purge must go through the shared dispatcher');
+  assert.ok(!/sessionBusyState\.delete\(id\)/.test(body),
+    'app.js must not delete from sessionBusyState directly anymore');
+  assert.ok(!/responseReadySessions\.delete\(id\)/.test(body),
+    'app.js must not delete from responseReadySessions directly anymore');
+  assert.ok(!/attentionSessions\.delete\(id\)/.test(body),
+    'app.js must not delete from attentionSessions directly anymore');
 });

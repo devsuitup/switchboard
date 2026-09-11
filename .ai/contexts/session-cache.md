@@ -254,6 +254,19 @@ and arms a 20 s decay timer (one per session, reset on each event) that calls
 busy without waiting for the next event; the visual is the shared `.cli-busy` braille
 spinner, not a separate indicator.
 
+The decay call passes `setActivity(sessionId, false, 'remote-decay', { armReady: false })`,
+not the bare two-argument form local PTY callers use. 20 s of transcript silence means
+"stopped writing", not "the response is ready" — a remote adapter has no PTY to ask
+whether a turn actually ended, so a long tool call or a parent delegating to subagents
+(its own transcript silent while children write theirs) would otherwise light every
+unviewed remote row as `.response-ready` on a plain inference. `armReady: false` clears
+`.cli-busy` and `sessionBusyState` through the normal path but skips adding the session to
+`responseReadySessions`, so a remote row falls idle without ever claiming "Claude finished,
+you haven't looked." Separately, `app.js`'s `updateRunningIndicators` PTY-set purge skips
+rows carrying `dataset.remoteAlias` (F7) — a remote row's busy state is owned by this decay
+timer, not by local PTY presence, so it must not be cleared just because some unrelated
+local PTY started or stopped.
+
 ### Remote hosts file-level rescan (issue #216, first half)
 
 **The unit of rescan used to be the folder, not the file.** `syncMirror`

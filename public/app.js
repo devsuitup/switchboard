@@ -809,13 +809,14 @@ function updateRunningIndicators() {
       const id = item.dataset.sessionId;
       const running = activePtyIds.has(id);
       item.classList.toggle('has-running-pty', running);
-      if (!running) {
-        if (window.ATRACE) window.atrace('store.purge', id, { reason: 'pty-gone', busy: sessionBusyState.get(id) ?? null, ready: responseReadySessions.has(id), attention: attentionSessions.has(id), fn: 'updateRunningIndicators' });
-        item.classList.remove('needs-attention', 'response-ready', 'cli-busy', 'has-busy-agents');
-        attentionSessions.delete(id);
-        responseReadySessions.delete(id);
-        sessionBusyState.delete(id);
-        forgetActivitySeq(id);
+      // A remote row's busy state is owned by the remote adapter (the watch
+      // channel), not by local PTY presence — it never enters activePtyIds,
+      // so purging it here on every unrelated local PTY start/stop would wipe
+      // its spinner. See .ai/contexts/session-cache.md ("Remote hosts — busy
+      // spinner").
+      if (!running && !item.dataset.remoteAlias) {
+        item.classList.remove('has-busy-agents');
+        purgeActivityFor(id, 'pty-gone');
         // A stopped PTY can never emit subagent-completed (stop-session kills
         // the process; detectSubagentTransitions skips exited sessions), so
         // drop the live-subagent state now instead of waiting for the TTL.
