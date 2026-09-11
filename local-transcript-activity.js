@@ -1,6 +1,8 @@
 // see .ai/contexts/session-state.md
 'use strict';
 
+const { subagentParentFromParts } = require('./subagent-attribution');
+
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_IPC_MIN_MS = 1000;
 
@@ -23,13 +25,26 @@ function createLocalTranscriptTracker(opts = {}) {
 
   function record(parts) {
     const sessionId = sessionIdFromWatchParts(parts);
-    if (!sessionId) return null;
-    if (hasPty(sessionId)) return null;
+    if (sessionId) {
+      if (hasPty(sessionId)) return null;
+      const t = now();
+      const last = ipcAt.has(sessionId) ? ipcAt.get(sessionId) : -Infinity;
+      if (t - last < ipcMinMs) return null;
+      ipcAt.set(sessionId, t);
+      return { sessionId, at: t };
+    }
+
+    // subagent leg fallback (issue #247) — see .ai/contexts/subagent-observability.md
+    const attribution = subagentParentFromParts(parts);
+    if (!attribution) return null;
+    const { parentSessionId, agentId } = attribution;
+    if (hasPty(parentSessionId)) return null;
+    const key = 'sub:' + parentSessionId; // distinct namespace: never collides with a UUID sessionId key
     const t = now();
-    const last = ipcAt.has(sessionId) ? ipcAt.get(sessionId) : -Infinity;
+    const last = ipcAt.has(key) ? ipcAt.get(key) : -Infinity;
     if (t - last < ipcMinMs) return null;
-    ipcAt.set(sessionId, t);
-    return { sessionId, at: t };
+    ipcAt.set(key, t);
+    return { parentSessionId, agentId, at: t, kind: 'subagent' };
   }
 
   return { record };

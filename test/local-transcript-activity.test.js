@@ -76,3 +76,57 @@ test('two sessions never share coalescing state', () => {
   assert.ok(tracker.record(['folder-name', `${UUID_B}.jsonl`]),
     'session B has never been seen — its own throttle window must be independent of A');
 });
+
+// Subagent attribution (issue #247) — see .ai/contexts/subagent-observability.md.
+// A parent with no PTY in this app never reaches the IPC path
+// (session-transitions.js:detectSubagentTransitions() only scans
+// activeSessions), so this out-of-band signal is its only source.
+
+test('record() attributes a subagent leg (preferred layout) to its parent when the parent has no PTY', () => {
+  const c = clock(5000);
+  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: () => false });
+  const result = tracker.record(['folder-name', UUID_A, 'subagents', 'agent-7.jsonl']);
+  assert.deepEqual(result, { parentSessionId: UUID_A, agentId: '7', at: 5000, kind: 'subagent' });
+});
+
+test('record() attributes a subagent leg (legacy layout) to its parent when the parent has no PTY', () => {
+  const c = clock(5000);
+  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: () => false });
+  const result = tracker.record(['folder-name', UUID_A, 'agent-7.jsonl']);
+  assert.deepEqual(result, { parentSessionId: UUID_A, agentId: '7', at: 5000, kind: 'subagent' });
+});
+
+test('record() drops a subagent leg whose parent already has a PTY in this app', () => {
+  const c = clock(0);
+  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: (id) => id === UUID_A });
+  assert.equal(tracker.record(['folder-name', UUID_A, 'subagents', 'agent-7.jsonl']), null,
+    'the IPC path (detectSubagentTransitions) already owns this parent');
+  assert.ok(tracker.record(['folder-name', UUID_B, 'subagents', 'agent-9.jsonl']),
+    'a different, PTY-less parent is unaffected');
+});
+
+test('record() coalesces subagent attribution for the same parent independently of the parent\'s own top-level throttle', () => {
+  const c = clock(0);
+  const tracker = createLocalTranscriptTracker({ now: c.now, ipcMinMs: 1000 });
+  const subParts = [`folder-name`, UUID_A, 'subagents', 'agent-1.jsonl'];
+
+  assert.ok(tracker.record(subParts), 'first sighting always forwards');
+  c.advance(400);
+  assert.equal(tracker.record(subParts), null, 'a sighting inside the coalescing window must not forward again');
+  // The parent's own top-level transcript signal has its own, independent throttle key.
+  assert.ok(tracker.record(['folder-name', `${UUID_A}.jsonl`]),
+    'the parent\'s own transcript signal is not throttled by the subagent leg\'s window');
+
+  c.advance(700); // total 1100ms since the subagent leg's first forward
+  const third = tracker.record(subParts);
+  assert.ok(third, 'once ipcMinMs has elapsed, the next subagent sighting forwards again');
+  assert.equal(third.at, 1100);
+});
+
+test('record() returns null for a top-level transcript when treated as a subagent leg (no false attribution)', () => {
+  const c = clock(0);
+  const tracker = createLocalTranscriptTracker({ now: c.now });
+  // A top-level transcript resolves via sessionIdFromWatchParts, never falls
+  // through to subagent attribution.
+  assert.ok(tracker.record(['folder-name', `${UUID_A}.jsonl`]));
+});

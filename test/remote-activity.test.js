@@ -79,6 +79,40 @@ test('two hosts never share activity state for the same session id', () => {
   assert.equal(tracker.activeAt('vps-b', UUID), null, 'alias must be part of the key, not just the session id');
 });
 
+// Subagent attribution (issue #247) — see .ai/contexts/subagent-observability.md.
+// Previously sessionIdFromRel simply dropped a subagent leg (basename
+// "agent-N", not a UUID); record() now attributes it to its parent instead.
+
+test('record() attributes a subagent leg to its parent instead of dropping it', () => {
+  const c = clock(5000);
+  const tracker = createRemoteActivityTracker({ now: c.now });
+  const result = tracker.record('vps', `-srv-a/${UUID}/subagents/agent-7.jsonl`);
+  assert.deepEqual(result, { alias: 'vps', parentSessionId: UUID, agentId: '7', at: 5000, kind: 'subagent' });
+});
+
+test('record() attributes the legacy subagent layout too', () => {
+  const c = clock(5000);
+  const tracker = createRemoteActivityTracker({ now: c.now });
+  const result = tracker.record('vps', `-srv-a/${UUID}/agent-7.jsonl`);
+  assert.deepEqual(result, { alias: 'vps', parentSessionId: UUID, agentId: '7', at: 5000, kind: 'subagent' });
+});
+
+test('record() throttles repeated subagent attribution for the same parent, independently per alias', () => {
+  const c = clock(0);
+  const tracker = createRemoteActivityTracker({ now: c.now, ipcMinMs: 1000 });
+  const rel = `-srv-a/${UUID}/subagents/agent-1.jsonl`;
+
+  assert.ok(tracker.record('vps', rel), 'first sighting always forwards');
+  c.advance(400);
+  assert.equal(tracker.record('vps', rel), null, 'a sighting inside the throttle window must not forward again');
+  assert.ok(tracker.record('vps-b', rel), 'a different alias is not throttled by vps\'s window');
+
+  c.advance(700); // total 1100ms since the first forward
+  const third = tracker.record('vps', rel);
+  assert.ok(third, 'once ipcMinMs has elapsed, the next sighting forwards again');
+  assert.equal(third.at, 1100);
+});
+
 test('neither map grows without bound: both are pruned past the decay window', () => {
   let t = 1000;
   const tracker = createRemoteActivityTracker({ now: () => t, decayMs: 20000, ipcMinMs: 1000 });
