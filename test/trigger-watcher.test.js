@@ -29,6 +29,20 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
+// This file runs with real timers and real fs.watch against fixed wall-clock
+// budgets, so it measures the host, not just the code under test. Under host
+// load (see .ai/contexts/trigger-watcher.md, "timing tests and host load") a
+// ceiling can be exceeded, or an elapsed-time UPPER bound can be crossed by a
+// few hundred ms even though the code is correct. SWITCHBOARD_TEST_TIME_SCALE
+// (default 1, opt-in) stretches those ceilings/upper bounds only -- never a
+// LOWER bound that proves an ordering or a minimum wait happened, since a
+// mutation that breaks that ordering must still turn the test red.
+const TIME_SCALE = (() => {
+  const raw = Number(process.env.SWITCHBOARD_TEST_TIME_SCALE);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+})();
+function scaleUp(ms) { return Math.round(ms * TIME_SCALE); }
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function mkTmp() {
@@ -118,6 +132,9 @@ function writeTrigger(dir, uuid, payload) {
  * Wait up to `maxMs` for a file to appear, polling every `pollMs`.
  */
 function waitForFile(filePath, maxMs = 2000, pollMs = 20) {
+  // maxMs is a ceiling, not a measurement -- stretch it under host load
+  // (SWITCHBOARD_TEST_TIME_SCALE) rather than tighten it.
+  maxMs = scaleUp(maxMs);
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + maxMs;
     function poll() {
@@ -999,7 +1016,7 @@ test('W7 dead on arrival: liveness false at lookup → ok:false, no wait, no wri
     assert.equal(result.ok, false);
     assert.equal(result.error, 'target process not running');
     assert.deepEqual(ctx._written, [], 'no PTY write when child is dead');
-    assert.ok(elapsed < 1500, `should fail fast, not wait idle timeout; got ${elapsed}ms`);
+    assert.ok(elapsed < scaleUp(1500), `should fail fast, not wait idle timeout; got ${elapsed}ms`);
 
   } finally {
     if (watcher) watcher.close();
@@ -1021,19 +1038,21 @@ test('W7 dies during wait: alive at lookup, dead before write → ok:false with 
     const SESSION_ID = 'sess-dies-' + Date.now();
     let busy = true;
     const ctx = makeCtx(SESSION_ID, () => busy);
-    setTimeout(() => { busy = false; ctx._killPty(); }, 300);
+    // Widened unconditionally from 300ms -- see .ai/contexts/trigger-watcher.md,
+    // "timing tests and host load".
+    setTimeout(() => { busy = false; ctx._killPty(); }, 1000);
 
     watcher = start(ctx);
     const uuid = 'dies-' + Date.now();
     writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', wait: 'idle' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    await waitForFile(resultPath, 2000);
+    await waitForFile(resultPath, 4000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, false);
     assert.equal(result.error, 'target process not running');
-    assert.ok(typeof result.waited_ms === 'number' && result.waited_ms >= 200,
+    assert.ok(typeof result.waited_ms === 'number' && result.waited_ms >= 300,
       `waited_ms should reflect the wait that happened; got ${result.waited_ms}`);
     assert.deepEqual(ctx._written, [], 'no PTY write when child died during wait');
 
@@ -1085,7 +1104,10 @@ test('W7 default helper: real-pid mock passes default signal-0 probe → happy p
  *
  * When opts.noAutoTurn is true, no busy/idle simulation happens automatically
  * on write — the test controls state manually via ctx._setBusy().
- * Otherwise, each write schedules: busy after 50ms, idle after 200ms.
+ * Otherwise, each write schedules: busy after 50ms, idle after 600ms. The
+ * 550ms plateau (widened unconditionally from 150ms) is margin against poll
+ * jitter under host load -- see .ai/contexts/trigger-watcher.md, "timing
+ * tests and host load".
  */
 function makeChainCtx(sessionId, opts = {}) {
   const written = [];
@@ -1100,10 +1122,10 @@ function makeChainCtx(sessionId, opts = {}) {
       if (opts.ptyThrows) throw new Error('PTY closed');
       written.push(data);
       // A turn only starts on submit (the discrete Enter), not when the command
-      // text lands. Auto-simulate: busy after 50ms, then idle after 200ms.
+      // text lands. Auto-simulate: busy after 50ms, then idle after 600ms.
       if (!opts.noAutoTurn && data === '\r') {
         setTimeout(() => { busy = true; }, 50);
-        setTimeout(() => { busy = false; }, 200);
+        setTimeout(() => { busy = false; }, 600);
       }
     },
   };
@@ -1684,12 +1706,13 @@ test('chain instant-reply mid-chain: step 1 never sets busy → verify-retries t
     assert.equal(result.steps[0].submit_retries, 0, 'step 0 rose (busy@20ms) → no retry');
     assert.equal(result.steps[1].submit_retries, 1, 'step 1 never rose → one verify-retry');
     assert.equal(result.steps[2].submit_retries, 1, 'step 2 (final) never rose → one verify-retry');
-    // Step 1 spent two verify windows (~2 × SWITCHBOARD_SUBMIT_VERIFY_MS=400ms) probing
-    // for the rising edge across the initial submit and the retry.
-    assert.ok(result.steps[1].waited_ms >= 700 && result.steps[1].waited_ms <= 1400,
+    // Step 1 spent two verify windows (~2 × SWITCHBOARD_SUBMIT_VERIFY_MS=400ms)
+    // probing for the rising edge. Upper bounds widened + scaleUp()'d, lower
+    // bounds untouched -- see .ai/contexts/trigger-watcher.md, "timing tests
+    // and host load".
+    assert.ok(result.steps[1].waited_ms >= 700 && result.steps[1].waited_ms <= scaleUp(2400),
       `step 1 should have waited ~2 verify windows for the rising edge; got ${result.steps[1].waited_ms}ms`);
-    // Total elapsed dominated by steps 1 & 2's verify+retry windows.
-    assert.ok(elapsed >= 1500 && elapsed <= 3500,
+    assert.ok(elapsed >= 1500 && elapsed <= scaleUp(5000),
       `total elapsed should reflect the verify+retry windows; got ${elapsed}ms`);
 
   } finally {
@@ -1853,7 +1876,7 @@ test('submit-verify chain happy: auto-turn rises every step → submit_retries:0
 
     const { start } = require('../trigger-watcher');
     const SESSION_ID = 'sess-verify-happy-' + Date.now();
-    const ctx = makeChainCtx(SESSION_ID); // auto-turn: busy@50, idle@200 per '\r'
+    const ctx = makeChainCtx(SESSION_ID); // auto-turn: busy@50, idle@600 per '\r'
     watcher = start(ctx);
 
     const uuid = 'verify-happy-' + Date.now();
@@ -2203,7 +2226,7 @@ test('submitted: activity seen after our write yields "activity", never "confirm
 
     const { start } = require('../trigger-watcher');
     const SESSION_ID = 'sess-submitted-confirmed-' + Date.now();
-    const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r'
+    const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r' (idle@600)
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
     ctx._ptyProcess.write = function (data) {
       origWrite(data);
@@ -2246,7 +2269,7 @@ test('submitted: an ordinary clean write — idle beforehand, activity observed,
 
     const { start } = require('../trigger-watcher');
     const SESSION_ID = 'sess-submitted-genuine-confirmed-' + Date.now();
-    const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r'; composer untouched
+    const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r' (idle@600); composer untouched
     watcher = start(ctx);
 
     const uuid = 'submitted-genuine-confirmed-' + Date.now();
@@ -5202,7 +5225,11 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
     // loop (inFlight.size is checked and incremented before any await), so
     // this wait is only to let the dispatched triggers' first isSessionBusy
     // poll tick fire -- it resolves via a microtask, well within 150ms.
-    await new Promise((r) => setTimeout(r, 150));
+    // Fixed grace period, not a proof of a minimum wait: it only needs to be
+    // long enough for the already-admitted triggers' first poll tick to run.
+    // Waiting longer never admits more (only freeing a busy slot below does),
+    // so stretching this under host load is safe.
+    await new Promise((r) => setTimeout(r, scaleUp(150)));
 
     assert.equal(startedSessions.size, 8,
       'exactly MAX_INFLIGHT (8) triggers should have begun their idle-wait poll after the scan; the rest must be queued, not dropped and not all dispatched at once');
@@ -5218,7 +5245,11 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
 
     // Give scheduleNext() + the newly-admitted triggers' first poll tick room
     // to run.
-    await new Promise((r) => setTimeout(r, 150));
+    // Fixed grace period, not a proof of a minimum wait: it only needs to be
+    // long enough for the already-admitted triggers' first poll tick to run.
+    // Waiting longer never admits more (only freeing a busy slot below does),
+    // so stretching this under host load is safe.
+    await new Promise((r) => setTimeout(r, scaleUp(150)));
 
     assert.equal(startedSessions.size, 11,
       'freeing 3 in-flight slots must let 3 of the queued triggers start -- the queue must not be silently dropped or ignored');
@@ -5461,7 +5492,10 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
   try {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '8000';
-    process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '300';
+    // Schedule below doubled unconditionally from the original 300ms settle /
+    // 50-250-400-600 breakpoints / 850ms floor -- see
+    // .ai/contexts/trigger-watcher.md, "timing tests and host load".
+    process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '600';
     process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS       = '2000'; // generous -- not what's under test here
 
     const { start } = require('../trigger-watcher');
@@ -5469,7 +5503,7 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
     // Busy rises quickly (well inside the rise-wait bound), then oscillates
-    // true/false with no gap ever reaching the 300ms settle window, then
+    // true/false with no gap ever reaching the 600ms settle window, then
     // falls for good. If the settle invariant (idleSince reset on every
     // re-assertion) still holds after the rise-wait change, this can only
     // resolve on the FINAL, sustained fall -- never on one of the oscillation
@@ -5480,15 +5514,15 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
       origWrite(data);
       if (scheduleStart === null) scheduleStart = Date.now();
     };
-    // [0,50) false (pre-rise), [50,250) busy, [250,400) false (150ms gap,
-    // under the 300ms settle), [400,600) busy, then false for good from 600.
+    // [0,100) false (pre-rise), [100,500) busy, [500,800) false (300ms gap,
+    // under the 600ms settle), [800,1200) busy, then false for good from 1200.
     ctx.isSessionBusy = (id) => {
       if (id !== SESSION_ID || scheduleStart === null) return false;
       const t = Date.now() - scheduleStart;
-      if (t < 50) return false;
-      if (t < 250) return true;
-      if (t < 400) return false;
-      if (t < 600) return true;
+      if (t < 100) return false;
+      if (t < 500) return true;
+      if (t < 800) return false;
+      if (t < 1200) return true;
       return false;
     };
 
@@ -5499,22 +5533,22 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
       sessionId: SESSION_ID,
       wait: 'none',
       chain: [{ command: '/compact' }, { command: 'resume the task' }],
-      timeout_ms: 4000,
+      timeout_ms: 8000,
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    await waitForFile(resultPath, 4500);
+    await waitForFile(resultPath, 9000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true);
-    // Correct behavior resolves only after the FINAL fall at 600ms plus a
-    // full 300ms settle (~900ms total, submit-verify included). A settle
-    // window that fails to reset idleSince on the 400ms re-assertion instead
-    // reaches 300ms of (wrongly accumulated) idle at ~600ms -- ~300ms early.
-    // The 850ms floor sits strictly between the two so it catches that
+    // Correct behavior resolves only after the FINAL fall at 1200ms plus a
+    // full 600ms settle (~1800ms total, submit-verify included). A settle
+    // window that fails to reset idleSince on the 800ms re-assertion instead
+    // reaches 600ms of (wrongly accumulated) idle at ~1100ms -- far early.
+    // The 1700ms floor sits strictly between the two so it catches that
     // regression without being tight enough to flake on scheduling jitter.
-    assert.ok(result.steps[0].waited_ms >= 850,
-      `step 0 must resolve on the final sustained fall (~900ms), not the 150ms oscillation gap; got waited_ms=${result.steps[0].waited_ms}`);
+    assert.ok(result.steps[0].waited_ms >= 1700,
+      `step 0 must resolve on the final sustained fall (~1800ms), not the 300ms oscillation gap; got waited_ms=${result.steps[0].waited_ms}`);
 
   } finally {
     if (watcher) watcher.close();
@@ -5529,9 +5563,9 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
 // Mutation to confirm this test is load-bearing: remove the `idleSince =
 // null;` reset in the `if (ctx.isSessionBusy(sessionId)) { hasRisen = true;
 // idleSince = null; }` branch of `waitForBusyFall` -- idleSince then stays
-// set from the FIRST false sample at t=250 and never resets on the
-// re-assertion at t=400, so by t=550 (250+300ms settle) the function
-// wrongly resolves on the 150ms gap instead of the real fall; this test goes
+// set from the FIRST false sample at t=500 and never resets on the
+// re-assertion at t=800, so by t=1100 (500+600ms settle) the function
+// wrongly resolves on the 300ms gap instead of the real fall; this test goes
 // red.
 
 // ── steps_total (issue #193) ────────────────────────────────────────────────
