@@ -27,13 +27,17 @@ function isSafeSocketPath(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/['"\\\s]/.test(value);
 }
 
+function escapeRegExpLiteral(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", sizing rule)
-// Also parses the raw pre-attach `mouse` and `window-size` option values
-// (null when unset/absent in the probe output) — see "solo attach parity,
-// issue #253" in the same doc section.
+// "status* on" = inherited, "status on" = session override — see .ai/contexts/session-cache.md ("solo attach parity, issue #253")
 function parseOptionToken(part, name) {
-  const m = new RegExp(`${name}\\s+(\\S+)`).exec(part || '');
-  return m ? m[1] : null;
+  const re = new RegExp(`${escapeRegExpLiteral(name)}(\\*?)\\s+(\\S+)`);
+  const m = re.exec(part || '');
+  if (!m) return { value: null, inherited: false };
+  return { value: m[2], inherited: m[1] === '*' };
 }
 
 function parseProbeOutput(stdout) {
@@ -51,25 +55,34 @@ function parseProbeOutput(stdout) {
 
   let statusLines = DEFAULT_STATUS_LINES;
   let status = null;
-  const statusToken = parseOptionToken(statusPart, 'status');
-  if (statusToken != null) {
-    if (statusToken === 'off') { statusLines = 0; status = 'off'; }
-    else if (statusToken === 'on') { statusLines = 1; status = 'on'; }
+  const statusParsed = parseOptionToken(statusPart, 'status');
+  if (statusParsed.value != null) {
+    if (statusParsed.value === 'off') { statusLines = 0; status = 'off'; }
+    else if (statusParsed.value === 'on') { statusLines = 1; status = 'on'; }
     else {
-      const n = Number.parseInt(statusToken, 10);
+      const n = Number.parseInt(statusParsed.value, 10);
       if (Number.isFinite(n) && n >= 0) { statusLines = n; status = n; }
     }
   }
 
   let mouse = null;
-  const mouseToken = parseOptionToken(mousePart, 'mouse');
-  if (mouseToken === 'on' || mouseToken === 'off') mouse = mouseToken;
+  const mouseParsed = parseOptionToken(mousePart, 'mouse');
+  if (mouseParsed.value === 'on' || mouseParsed.value === 'off') mouse = mouseParsed.value;
 
   let windowSize = null;
-  const windowSizeToken = parseOptionToken(windowSizePart, 'window-size');
-  if (['latest', 'largest', 'smallest', 'manual'].includes(windowSizeToken)) windowSize = windowSizeToken;
+  const windowSizeParsed = parseOptionToken(windowSizePart, 'window-size');
+  if (['latest', 'largest', 'smallest', 'manual'].includes(windowSizeParsed.value)) windowSize = windowSizeParsed.value;
 
-  return { cols: width, rows: height + statusLines, pre: { status, mouse, windowSize } };
+  // pre.<opt> non-null only for a session-scoped override; null means restore by `set -u`
+  return {
+    cols: width,
+    rows: height + statusLines,
+    pre: {
+      status: statusParsed.inherited ? null : status,
+      mouse: mouseParsed.inherited ? null : mouse,
+      windowSize: windowSizeParsed.inherited ? null : windowSize,
+    },
+  };
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
@@ -119,9 +132,7 @@ function parseClientCount(text) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
-// parts layout: [socket, size, status, mouse, window-size, clientCount] —
-// clientCount and the mouse/window-size options are optional trailing
-// segments, absent-safe by construction (see parseProbeOutput/parseClientCount).
+// parts: [socket, size, status, mouse, window-size, clientCount]; trailing ones optional
 function parseDiscoveryProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
@@ -274,10 +285,7 @@ function createTmuxAttachAdapter(opts = {}) {
       detaching = true;
       try { raw.kill(); } catch {}
       if (solo) {
-        // Best-effort: restore the host's pre-attach status/mouse/window-size
-        // so a plain-terminal user sees the host's own config again. Never
-        // blocks or throws out of detach() — see .ai/contexts/session-cache.md
-        // ("Remote hosts — tmux attach", solo attach parity, issue #253).
+        // best-effort restore — see .ai/contexts/session-cache.md ("solo attach parity, issue #253")
         try {
           const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre);
           Promise.resolve(runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS }))

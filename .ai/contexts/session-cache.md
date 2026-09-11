@@ -555,7 +555,15 @@ Launching a new remote session (#222) and injection over the messaging socket
   (`buildProbeCommand`) now also reads `mouse` and `window-size` alongside
   `status`, and `parseProbeOutput` returns their raw pre-attach values as
   `pre: { status, mouse, windowSize }` (`null` when an option is absent
-  from the probe output) in addition to the existing `cols`/`rows`. On
+  from the probe output) in addition to the existing `cols`/`rows`.
+  `tmux show-options -A` marks an option inherited from a higher scope
+  with a trailing `*` on the option name (e.g. `status* on`, measured on
+  tmux 3.6) — `pre.<opt>` is `null` for both "absent" and "inherited
+  (starred)", since both mean no session override exists and restore
+  must `set -u`; it is non-null only for an actual session-scoped
+  override (unstarred), restored via `set -t`. The star never affects
+  the sizing rule — a starred `status* off`/`on`/`<n>` sizes
+  `statusLines` exactly like its unstarred form. On
   detach, when the attach was solo, the adapter fires a best-effort,
   fire-and-forget `buildRestoreCommand(socket, target, pre)` ssh call that
   sets each option back to its probed value (`set -t <target> <name>

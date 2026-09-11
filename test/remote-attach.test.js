@@ -379,6 +379,53 @@ test('the attached-client count rides the existing probe connection, never a sec
   assert.match(probeCalls[0], /list-clients/, 'the probe command must ask tmux for the attached client count');
 });
 
+// --- Inherited (starred) option parsing, real-host measurement (tmux 3.6) -
+
+// `tmux show-options -A` marks an option with no session-scoped override
+// (inherited from a higher scope) with a trailing `*` right after the
+// option name -- e.g. "status* on". Sizing must react to the value exactly
+// like the unstarred form; only `pre` (below) treats it differently.
+test('parseProbeOutput sizes a starred (inherited) status option exactly like the unstarred form', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status* on'),
+    { cols: 200, rows: 52, pre: { status: null, mouse: null, windowSize: null } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status* off'),
+    { cols: 200, rows: 50, pre: { status: null, mouse: null, windowSize: null } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x51' + PROBE_SEP + 'status* 2'),
+    { cols: 200, rows: 53, pre: { status: null, mouse: null, windowSize: null } },
+  );
+});
+
+// A session-scoped (unstarred) override must be preserved in `pre` for
+// restore-via-`set -t`; an inherited (starred) one must not.
+test('parseProbeOutput: pre.mouse is the value for a session-scoped override, null for an inherited one', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + ''),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: null } },
+    'unstarred "mouse off" is a real session override -- must be restored via set -t',
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse* on' + PROBE_SEP + ''),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+    'starred "mouse* on" is inherited -- no session override exists, restore must set -u',
+  );
+});
+
+test('parseProbeOutput: pre.windowSize follows the same starred/unstarred rule as status and mouse', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size manual'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: 'manual' } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size* latest'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+  );
+});
+
 // --- Solo attach parity (issue #253) ------------------------------------
 
 test('buildAttachCommand: solo prefixes session-scoped option sets before attach, in order', () => {
