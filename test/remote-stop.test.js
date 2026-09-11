@@ -83,6 +83,26 @@ test('buildStopCommand waits roughly 3s before escalating to kill -KILL', () => 
   assert.match(cmd, /-lt 6/, '6 ticks of 0.5s bounds the wait at ~3s');
 });
 
+test('buildStopCommand: a successful tmux kill-pane still polls /proc before declaring success (mutation target: dropping the post-tmux poll)', () => {
+  const cmd = buildStopCommand(4242, 'main:@0.%0');
+  const killPaneIdx = cmd.indexOf('kill-pane -t main:@0.%0');
+  const thenIdx = cmd.indexOf('then', killPaneIdx);
+  const markerIdx = cmd.indexOf(TMUX_PANE_KILLED_MARKER, thenIdx);
+  const pollIdx = cmd.indexOf('while [ -d /proc/4242 ]', thenIdx);
+  assert.ok(thenIdx > killPaneIdx && markerIdx > thenIdx, 'sanity: tmux kill precedes its own success marker');
+  assert.ok(pollIdx > thenIdx && pollIdx < markerIdx,
+    'a /proc poll must run between the tmux kill and its success marker');
+  assert.match(cmd.slice(thenIdx, markerIdx), /if \[ ! -d \/proc\/4242 \]/,
+    'the tmux success marker must be gated on the pid actually being gone, not just on tmux\'s exit code');
+});
+
+test('buildStopCommand: a tmux-killed pid that survives the poll falls through to the pid-kill path (mutation target: dropping the fallthrough)', () => {
+  const cmd = buildStopCommand(4242, 'main:@0.%0');
+  const tail = cmd.slice(cmd.indexOf('kill-pane'));
+  assert.match(tail, /kill -TERM 4242 2>\/dev\/null;[\s\S]*kill -KILL 4242/,
+    'the pid TERM->KILL fallback must still be reachable after a tmux kill whose target never actually dies');
+});
+
 test('no builder ever emits a backtick', () => {
   assert.ok(!buildStopCommand(4242, null).includes('`'));
   assert.ok(!buildStopCommand(4242, 'main:@0.%0').includes('`'));

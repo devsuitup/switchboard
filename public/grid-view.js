@@ -191,10 +191,11 @@ function wrapInGridCard(sessionId) {
   stopBtn.className = 'grid-card-stop-btn';
   stopBtn.title = 'Stop session';
   stopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
-  stopBtn.style.display = activePtyIds.has(sessionId) ? '' : 'none';
+  // is-alive: process alive on its host though unattached — see .ai/contexts/session-state.md
+  stopBtn.style.display = (activePtyIds.has(sessionId) || isSessionAlive(sessionId)) ? '' : 'none';
   stopBtn.onclick = (e) => {
     e.stopPropagation();
-    confirmAndStopSession(sessionId);
+    confirmAndStopSession(sessionId, stopBtn);
   };
   header.appendChild(stopBtn);
 

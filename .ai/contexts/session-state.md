@@ -66,15 +66,24 @@ the **narrowest matching scope, never the session**: `tmux kill-pane -t
 <target>` when the target names a pane, `tmux kill-window -t <target>` when it
 names only a window. `kill-session` is never emitted — the VPS harness runs
 several CLIs as windows/panes of one shared tmux session, and a session-wide
-kill would take every sibling down with the one being stopped; (3) otherwise,
-or if the tmux kill fails, falls back to `kill -TERM <pid>`, polls
-`/proc/<pid>` for up to ~3s (six 0.5s ticks), then `kill -KILL` once if it is
-still there. Returns `{ok, method}` where `method` is
+kill would take every sibling down with the one being stopped; a tmux exit
+code of 0 only means tmux accepted the request, so this is confirmed with the
+same `/proc/<pid>` poll as step (3) below before the tmux success marker is
+reported — a survivor falls through to (3) instead; (3) otherwise, or if the
+tmux kill fails (or its target survives the poll), falls back to `kill -TERM
+<pid>`, polls `/proc/<pid>` for up to ~3s (six 0.5s ticks), then `kill -KILL`
+once if it is still there. Returns `{ok, method}` where `method` is
 `'tmux-pane' | 'tmux-window' | 'pid-term' | 'pid-kill'`, or `{ok:false, error}`.
 `targetHasPane()` reads the pane/window distinction off the target string
 itself (a "." after the session prefix means a pane component follows,
 matching the grammar `TMUX_FIELD_RE` already validates) — no new parsing of
-the descriptor is added.
+the descriptor is added. The pane-vs-window suffix convention itself comes
+from the CLI's own descriptor writer on the VPS side, not measured against
+that writer's source from here; the `/proc/<pid>` death poll after the tmux
+kill (above) is what bounds the blast radius if that assumption is ever
+wrong — a wrongly-classified target still ends up TERM'd/KILL'd by pid once
+the poll finds it still alive, instead of the stop silently reporting
+success on a process the tmux call never actually touched.
 
 **On a successful stop, `main.js`'s `remote-stop-session` handler**: drops the
 descriptor from `remote-index.js`'s in-memory list (`dropRemoteSession(alias,
@@ -450,3 +459,17 @@ from a completion signal it cannot verify — that is why the remote-ssh and
 local-transcript `busy: false` transitions always pass `armReady: false` (see
 "The remote-ssh adapter" and "The local-transcript adapter" above), not a
 tri-state `busy: unknown`.
+
+## Known limits
+
+- **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s
+  `buildRefusalGuard` (and `remote-attach.js`'s probe it reuses verbatim)
+  decides "is this still the claude CLI" with `grep -qi claude` against
+  `/proc/<pid>/cmdline` — a process a user happens to launch with "claude"
+  anywhere in its argv (not the CLI itself) passes the same guard and can be
+  killed. Deferred, not implemented: hardening candidates are the `comm`
+  field from `/proc/<pid>/stat` (the kernel-recorded executable basename,
+  harder to spoof by argv alone) and the process start time (`/proc/<pid>/stat`
+  field 22, jiffies since boot) compared against the descriptor's own
+  recorded start time — a pid recycled fast enough to still say "claude" in
+  argv is caught by a start-time mismatch even when the cmdline check is not.

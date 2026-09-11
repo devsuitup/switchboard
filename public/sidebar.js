@@ -1224,7 +1224,7 @@ function rebindSidebarEvents(projects) {
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
-        confirmAndStopSession(session.sessionId);
+        confirmAndStopSession(session.sessionId, stopBtn);
       };
     }
 
@@ -1330,6 +1330,8 @@ function buildSessionItem(session) {
   setResponseReady(item, responseReadySessions.has(session.sessionId));
   setCliBusy(item, !!sessionBusyState.get(session.sessionId));
   setHasBusyAgents(item, parentHasActiveSubagent(session.sessionId));
+  // initial-paint mirror of the remote-ssh adapter's liveness — see .ai/contexts/session-state.md
+  setIsAlive(item, !!session.remoteDescriptorSeen);
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
   if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;

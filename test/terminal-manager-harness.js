@@ -146,6 +146,8 @@ function setupTerminalDom(opts = {}) {
     hideAllViewers: () => {},
     showTerminalHeader: () => {},
     updateRunningIndicators: () => {},
+    // public/session-activity-dom.js is not loaded in this harness — grid-view.js calls this directly.
+    isSessionAlive: () => false,
     placeholder: window.document.createElement('div'),
     terminalHeader: window.document.createElement('div'),
     gridViewer: window.document.createElement('div'),

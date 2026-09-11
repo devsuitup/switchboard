@@ -742,15 +742,26 @@ async function triggerRebuildAndSearch() {
 
 // --- Stop session helper ---
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
-async function confirmAndStopSession(sessionId) {
+// btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
+async function confirmAndStopSession(sessionId, btn) {
   const plan = resolveSessionStop(sessionMap.get(sessionId));
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
     : await window.api.stopSession(sessionId);
   if (result && result.ok === false) {
-    console.error('[stop-session]', result.error || 'unknown error');
-  } else if (plan.remote && typeof applyRemoteStopped === 'function') {
+    const message = result.error || 'unknown error';
+    console.error('[stop-session]', message);
+    // leave activePtyIds/the open view untouched on failure
+    if (btn) {
+      if (typeof window.flashButtonText === 'function') window.flashButtonText(btn, 'Failed', 1500);
+      const originalTitle = btn.title;
+      btn.title = message;
+      setTimeout(() => { btn.title = originalTitle; }, 3000);
+    }
+    return;
+  }
+  if (plan.remote && typeof applyRemoteStopped === 'function') {
     applyRemoteStopped(sessionId);
   }
   activePtyIds.delete(sessionId);
@@ -764,7 +775,7 @@ async function confirmAndStopSession(sessionId) {
 
 // --- Terminal header controls ---
 terminalStopBtn.addEventListener('click', () => {
-  if (activeSessionId) confirmAndStopSession(activeSessionId);
+  if (activeSessionId) confirmAndStopSession(activeSessionId, terminalStopBtn);
 });
 
 
@@ -860,7 +871,8 @@ function updateRunningIndicators() {
     const footer = card.querySelector('.grid-card-footer');
     if (footer) footer.children[0].textContent = running ? 'Running' : 'Stopped';
     const stopBtn = card.querySelector('.grid-card-stop-btn');
-    if (stopBtn) stopBtn.style.display = running ? '' : 'none';
+    // is-alive: process alive on its host though unattached — see .ai/contexts/session-state.md
+    if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sid)) ? '' : 'none';
   }
 }
 

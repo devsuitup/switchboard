@@ -26,9 +26,13 @@ function buildRefusalGuard(pid) {
   return `alive=$(${check}); if [ "$alive" != "1" ]; then echo ${NOT_CLAUDE_MARKER}; exit ${NOT_CLAUDE_EXIT_CODE}; fi;`;
 }
 
+// shared /proc poll, no signal sent here — see .ai/contexts/session-state.md
+function buildDeathPoll(pid) {
+  return `i=0; while [ -d /proc/${pid} ] && [ $i -lt ${TERM_WAIT_TICKS} ]; do sleep ${TERM_WAIT_STEP_S}; i=$((i+1)); done;`;
+}
+
 function buildKillByPidSegment(pid) {
-  return `kill -TERM ${pid} 2>/dev/null; i=0; ` +
-    `while [ -d /proc/${pid} ] && [ $i -lt ${TERM_WAIT_TICKS} ]; do sleep ${TERM_WAIT_STEP_S}; i=$((i+1)); done; ` +
+  return `kill -TERM ${pid} 2>/dev/null; ${buildDeathPoll(pid)} ` +
     `if [ -d /proc/${pid} ]; then kill -KILL ${pid} 2>/dev/null; echo ${PID_FORCE_MARKER}; else echo ${PID_TERM_MARKER}; fi; exit 0`;
 }
 
@@ -51,8 +55,11 @@ function buildStopCommand(pid, tmuxTarget) {
   const tmuxMarker = hasPane ? TMUX_PANE_KILLED_MARKER : TMUX_WINDOW_KILLED_MARKER;
 
   const sockDiscovery = `sock=$(tr '\\0' '\\n' < /proc/${pid}/environ 2>/dev/null | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1);`;
+  // confirm death before declaring success — see .ai/contexts/session-state.md
+  const deathPoll = buildDeathPoll(pid);
   return `${guard} ${sockDiscovery} ` +
-    `if [ -n "$sock" ] && tmux -S "$sock" ${tmuxSubcommand} -t ${tmuxTarget} 2>/dev/null; then echo ${tmuxMarker}; exit 0; fi; ` +
+    `if [ -n "$sock" ] && tmux -S "$sock" ${tmuxSubcommand} -t ${tmuxTarget} 2>/dev/null; then ` +
+    `${deathPoll} if [ ! -d /proc/${pid} ]; then echo ${tmuxMarker}; exit 0; fi; fi; ` +
     killByPid;
 }
 

@@ -107,6 +107,8 @@ function setupGridDom({ stored = null } = {}) {
     lruTouch: noop,
     updateRunningIndicators: noop,
     confirmAndStopSession: noop,
+    // public/session-activity-dom.js is not loaded in this minimal harness — grid-view.js calls this directly.
+    isSessionAlive: () => false,
     suspendTerminalWebgl: noop,
     restoreTerminalWebgl: noop,
     formatDate: () => '',
