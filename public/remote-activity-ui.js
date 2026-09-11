@@ -131,6 +131,20 @@ function setRemoteAttached(sessionId, attached) {
   projectRemoteState(sessionId);
 }
 
+// see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+function applyRemoteStopped(sessionId) {
+  clearRemoteActivityTimer(sessionId);
+  clearRemoteAgentsTimer(sessionId);
+  const state = remoteState(sessionId);
+  state.apply({ type: 'busy', active: false, armReady: false });
+  state.apply({ type: 'attention', active: false });
+  state.apply({ type: 'subagentCompleted', stillActive: false });
+  state.apply({ type: 'liveness', value: 'dead' });
+  state.apply({ type: 'attached', value: false });
+  projectRemoteState(sessionId);
+  purgeActivityFor(sessionId, 'remote-stop');
+}
+
 function seedRemoteActivity(session) {
   if (!session || !session.remoteAlias) return;
   applyRemoteDescriptor(session);

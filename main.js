@@ -81,6 +81,7 @@ const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
+const { createRemoteStopAdapter } = require('./remote-stop');
 
 setPtyOpLogger(log);
 
@@ -528,6 +529,9 @@ const remoteAttachAdapter = createTmuxAttachAdapter({
   spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanPtyEnv }),
   log,
 });
+
+// see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+const remoteStopAdapter = createRemoteStopAdapter({ log });
 
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
@@ -1659,6 +1663,31 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   if (!session || session.exited) return { ok: false, error: 'not running' };
   killPty(session, sessionId);
   return { ok: true };
+});
+
+// --- IPC: remote-stop-session ---
+// see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+ipcMain.handle('remote-stop-session', async (_event, payload) => {
+  const alias = payload && payload.alias;
+  const sessionId = payload && payload.sessionId;
+  if (typeof alias !== 'string' || !alias || typeof sessionId !== 'string' || !sessionId) {
+    return { ok: false, error: 'invalid request' };
+  }
+  const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
+  if (!descriptor) return { ok: false, error: 'session not found on that host' };
+
+  const result = await remoteStopAdapter.stop(alias, descriptor);
+  if (result.ok) {
+    remoteIndexer.dropRemoteSession(alias, sessionId);
+    // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+    notifyRendererProjectsChanged();
+    remoteIndexer.refreshHostNow(alias, { force: true }).catch(() => {});
+    const attachedSession = activeSessions.get(sessionId);
+    if (attachedSession && attachedSession.kind === 'remote-attach' && !attachedSession.exited) {
+      killPty(attachedSession, sessionId);
+    }
+  }
+  return result;
 });
 
 // --- IPC: toggle-star ---

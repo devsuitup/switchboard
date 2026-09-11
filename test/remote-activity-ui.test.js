@@ -79,8 +79,12 @@ function setup(sessionIds = ['s1']) {
     pending: () => scheduled.filter(h => !h.cleared),
     pruneRemoteActivityTimers: read('pruneRemoteActivityTimers'),
     remoteActivityDecayTimers: read('remoteActivityDecayTimers'),
+    remoteAgentsDecayTimers: read('remoteAgentsDecayTimers'),
+    remoteSessionStates: read('remoteSessionStates'),
+    applyRemoteStopped: read('applyRemoteStopped'),
     sessionBusyState: read('sessionBusyState'),
     responseReadySessions: read('responseReadySessions'),
+    attentionSessions: read('attentionSessions'),
     destroy: () => window.close(),
   };
 }
@@ -160,6 +164,41 @@ test('a second event before decay resets the timer instead of stacking one', () 
   second.fn();
   assert.ok(!t.item('s1').classList.contains('cli-busy'));
   t.destroy();
+});
+
+// Lifecycle decisions (2026-09-11): a successful remote-stop-session must
+// reflect immediately — liveness dead, attached false, no lingering busy
+// state or decay timer waiting to repaint the row as busy again.
+test('applyRemoteStopped marks the row dead/detached, clears busy state, and cancels its decay timers', () => {
+  const t = setup(['s1']);
+  t.emit({ sessionId: 's1' }); // busy, with a live decay timer
+  assert.ok(t.item('s1').classList.contains('cli-busy'), 'precondition: row is busy');
+  assert.equal(t.pending().length, 1, 'precondition: a decay timer is armed');
+
+  t.applyRemoteStopped('s1');
+
+  const snapshot = t.remoteSessionStates.get('s1').snapshot();
+  assert.equal(snapshot.liveness, 'dead');
+  assert.equal(snapshot.attached, false);
+  assert.equal(snapshot.busy, false);
+
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'the row must stop looking busy');
+  assert.ok(!t.item('s1').classList.contains('response-ready'), 'a killed process never claims a finished response');
+  assert.equal(t.pending().length, 0, 'the decay timer must be cancelled, not left to fire later');
+  assert.equal(t.sessionBusyState.has('s1'), false, 'purgeActivityFor must drop the parallel-fed busy Map entry');
+  assert.equal(t.responseReadySessions.has('s1'), false);
+});
+
+test('applyRemoteStopped also cancels a pending subagent-attribution decay timer', () => {
+  const t = setup(['s1']);
+  t.emit({ sessionId: 's1', kind: 'subagent', parentSessionId: 's1' });
+  assert.equal(t.remoteAgentsDecayTimers.has('s1'), true, 'precondition: an agents-busy decay timer is armed');
+
+  t.applyRemoteStopped('s1');
+
+  assert.equal(t.remoteAgentsDecayTimers.has('s1'), false);
+  assert.equal(t.remoteSessionStates.get('s1').snapshot().agentsBusy, false,
+    'a dead session cannot still have subagents running under it');
 });
 
 test('pruneRemoteActivityTimers cancels a timer whose row no longer exists', () => {

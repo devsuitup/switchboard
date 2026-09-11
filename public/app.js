@@ -741,9 +741,18 @@ async function triggerRebuildAndSearch() {
 }
 
 // --- Stop session helper ---
+// see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 async function confirmAndStopSession(sessionId) {
-  if (!confirm('Stop this session?')) return;
-  await window.api.stopSession(sessionId);
+  const plan = resolveSessionStop(sessionMap.get(sessionId));
+  if (!confirm(plan.confirmText)) return;
+  const result = plan.remote
+    ? await window.api.remoteStopSession(plan.alias, sessionId)
+    : await window.api.stopSession(sessionId);
+  if (result && result.ok === false) {
+    console.error('[stop-session]', result.error || 'unknown error');
+  } else if (plan.remote && typeof applyRemoteStopped === 'function') {
+    applyRemoteStopped(sessionId);
+  }
   activePtyIds.delete(sessionId);
   if (!gridViewActive && activeSessionId === sessionId) {
     setActiveSession(null);

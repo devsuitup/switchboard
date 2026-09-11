@@ -48,6 +48,33 @@ test('flushTerminalBuffer after destroySession is a safe no-op', () => {
   }
 });
 
+// Lifecycle decisions (2026-09-11): closing a tab is a detach for a remote
+// session (current close-terminal behavior, unchanged), never the new "stop"
+// path — only the dedicated stop control (app.js's confirmAndStopSession,
+// via resolveSessionStop) may call stopSession/remoteStopSession.
+// See .ai/contexts/session-state.md.
+test('destroySession never calls stopSession or remoteStopSession — only closeTerminal (detach)', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    let stopCalls = 0;
+    let remoteStopCalls = 0;
+    window.api.stopSession = () => { stopCalls++; return Promise.resolve({ ok: true }); };
+    window.api.remoteStopSession = () => { remoteStopCalls++; return Promise.resolve({ ok: true }); };
+
+    // A remote session's entry carries the same shape terminal-manager.js
+    // already handles — remoteAlias is opaque to this file, by design: the
+    // tab-close path never branches on it.
+    window.createTerminalEntry({ sessionId: 's1', remoteAlias: 'vps' });
+    window.destroySession('s1');
+
+    assert.strictEqual(spies.closeTerminal, 1, 'closing a tab still detaches via close-terminal');
+    assert.strictEqual(stopCalls, 0, 'destroySession must never stop the local pty');
+    assert.strictEqual(remoteStopCalls, 0, 'destroySession must never kill the remote process');
+  } finally {
+    destroy();
+  }
+});
+
 test('destroySession on unknown sessionId is a no-op', () => {
   const { window, spies, destroy } = setupTerminalDom();
   try {
