@@ -14,11 +14,14 @@ what actually shipped, not the whole plan.
   `.session-icon` slot per sidebar row, replacing `.session-status-dot` for
   session/subagent rows) shipped separately — see "The icon slot (step 3b)"
   below.
-- **Steps 4/5: pending.** There is no `local-transcript` adapter (step 4).
-  Subagent attribution is not routed through `session-state.js` (`agentsBusy`
-  exists in the model but nothing local-pty feeds it yet — sidebar.js's
-  `has-busy-agents` row class is still computed by `parentHasActiveSubagent()`,
-  independent of the domain module) (step 5).
+- **Step 4: done.** The `local-transcript` adapter (`public/local-transcript-adapter.js`)
+  gives a session launched outside Switchboard (no PTY in this app) a busy
+  signal from transcript growth — see "The local-transcript adapter (step 4)"
+  below.
+- **Step 5: pending.** Subagent attribution is not routed through
+  `session-state.js` (`agentsBusy` exists in the model but nothing local-pty
+  feeds it yet — sidebar.js's `has-busy-agents` row class is still computed by
+  `parentHasActiveSubagent()`, independent of the domain module).
 
 ### The remote-ssh adapter (step 3)
 
@@ -65,6 +68,70 @@ would regress them:
 Both are driven by the same `active`/`armReady` inputs as the adapter, so the
 two projections never disagree in practice; the dual-feed is a known,
 temporary duplication, not a race.
+
+### The local-transcript adapter (step 4)
+
+`public/local-transcript-adapter.js` keeps one persistent
+`createSessionState('local-transcript')` per session id, in
+`localTranscriptStates` — same shape as `remoteSessionStates` above, pruned
+by `pruneLocalTranscriptTimers()` (called from `refreshSidebar()` alongside
+`pruneRemoteActivityTimers()`). Unlike the remote-ssh adapter it has no
+watch-channel descriptor list to poll; its only inputs are:
+
+- **`session-transcript-activity`** (`window.api.onSessionTranscriptActivity`,
+  main.js's raw watcher callback — see "The `~/.claude/projects` watcher…"
+  in `.ai/contexts/session-cache.md` and the channel doc in
+  `.ai/contexts/ipc-bridge.md`): `transcriptTouched` + `busy: true`, then a
+  20s decay timer (the same constant as the remote-ssh adapter,
+  `PIP_DECAY_MS`/`LOCAL_TRANSCRIPT_DECAY_MS`, duplicated rather than shared
+  across the two files — no common module currently holds cross-adapter
+  constants) applies `busy: false, armReady: false` — never
+  `responseReady`, exactly like the remote-ssh decay, because this adapter
+  has no PTY to confirm a turn actually ended either.
+- **The session object's own `status`/`statusUpdatedAt`**
+  (`seedLocalTranscriptDescriptor`, called from inside the activity handler,
+  reading `sessionMap.get(sessionId)`): `liveness: 'alive'` +
+  `descriptorStatus(status, at)`, the same two calls `applyRemoteDescriptor`
+  makes for remote-ssh. **This is a deliberate widening of the issue's
+  original ports table**, which listed `descriptorStatus`/`liveness` as "no
+  (no live CLI)" for `local-transcript` — written before `cli-session-state.js`
+  (issue #245) established that a local session without a PTY *in this app*
+  can still be a live CLI process elsewhere, discoverable via
+  `~/.claude/sessions/<pid>.json` exactly the way `snapshotForLocal` already
+  reads it for the local-pty kind. Feeding it here keeps the two kinds'
+  snapshots consistent when a row transitions between them; neither field is
+  consumed by `renderSessionIcon`'s priority ladder yet (see "Ports table"
+  below), so this has no visible effect today beyond that consistency.
+- **Nothing else.** No `attention`, no `waitingForInput` claimed from a
+  completion signal — see the ports-table note below the table.
+
+**The main-process half has its own two guards, in `local-transcript-activity.js`
+(a pure factory, `createLocalTranscriptTracker`, unit-tested without Electron —
+same pattern as `remote-activity.js`).** `sessionIdFromWatchParts(parts)`
+only resolves a session id for a top-level transcript — exactly
+`<folder>/<sessionId>.jsonl`, two path segments; a subagent leg
+(`<parent>/subagents/agent-X.jsonl`, or the legacy `<parent>/agent-X.jsonl`)
+has three-plus and is out of scope here (step 5, a separate issue). The
+injected `hasPty(sessionId)` (main.js wires in `sessionHasPty`, which walks
+`activeSessions` the same way `cli-session-state.js`'s `findSession` does —
+skip `exited`, match `session.realSessionId || key`) skips a session the OSC
+path already owns, mirroring the renderer-side guard below one layer down.
+
+**Guarded against a PTY takeover in both directions**:
+`onLocalTranscriptActivity` checks `activePtyIds.has(sessionId)` and refuses
+to even allocate state for a session already carrying a PTY in this app (the
+OSC path owns it — see `session-activity-dom.js`'s `applyActivityClassesToElement`,
+fed by `main.js`'s OSC 0/9 parsing, not this adapter). Going the other way,
+`app.js`'s `updateRunningIndicators()` calls `localTranscriptPtyTakeover(id)`
+for a non-remote row the instant it transitions into `activePtyIds` (the user
+opened it), which clears the pending decay timer and deletes the row's
+adapter state — a stale decay firing later must not repaint a row the
+local-pty path now owns. `updateRunningIndicators()` also force-repaints that
+row via `paintSessionIcon()` in the same pass, so the icon slot doesn't wait
+for the next OSC event to reflect the handoff.
+
+Same non-writer discipline as remote-ssh: every path ends in
+`projectLocalTranscriptState(sessionId)` → `applyStateClasses()`.
 
 ## Shape
 
@@ -295,12 +362,13 @@ the others assert on the dot/slot element itself, only on row classes and
 | event | local-pty | local-transcript | remote-ssh |
 |---|---|---|---|
 | `busy` / `attention` (OSC 0 / 9) | yes | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
-| `transcriptTouched(at)` | yes | yes (only signal) | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
-| `descriptorStatus(status, at)` / `liveness` | yes | no (no live CLI) | yes (`main.js:539` → `applyRemoteDescriptor`) |
+| `transcriptTouched(at)` | yes | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
+| `descriptorStatus(status, at)` / `liveness` | yes | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition |
 | `subagentSpawned` / `subagentCompleted` | yes | no | no today |
 
 An adapter without a PTY must never claim `waitingForInput` or `responseReady`
-from a completion signal it cannot verify — that is why the remote-ssh
-`busy: false` transition always passes `armReady: false` (see "The remote-ssh
-adapter" above), not a tri-state `busy: unknown`.
+from a completion signal it cannot verify — that is why the remote-ssh and
+local-transcript `busy: false` transitions always pass `armReady: false` (see
+"The remote-ssh adapter" and "The local-transcript adapter" above), not a
+tri-state `busy: unknown`.

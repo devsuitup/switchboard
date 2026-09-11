@@ -465,6 +465,7 @@ const { createSshTransport } = require('./remote-transport');
 const { createRemoteIndexer } = require('./remote-index');
 const { createRemoteWatcher } = require('./remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');
+const { createLocalTranscriptTracker } = require('./local-transcript-activity');
 
 const remoteTransport = createSshTransport({ log });
 const remoteIndexer = createRemoteIndexer({
@@ -2570,6 +2571,16 @@ cliSessionState.init({
   },
 });
 
+// a session with a live PTY is owned by the OSC path — see .ai/contexts/session-state.md
+function sessionHasPty(sessionId) {
+  for (const [key, session] of activeSessions) {
+    if (!session || session.exited) continue;
+    if ((session.realSessionId || key) === sessionId) return true;
+  }
+  return false;
+}
+const localTranscriptTracker = createLocalTranscriptTracker({ hasPty: sessionHasPty });
+
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
 
@@ -2643,6 +2654,11 @@ function startProjectsWatcher() {
         // Specific .jsonl changed — targeted refresh on just this file
         const rel = parts.slice(1).join(path.sep);
         recordChange(folder, rel);
+        // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
+        const activity = localTranscriptTracker.record(parts);
+        if (activity && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('session-transcript-activity', activity);
+        }
       } else {
         return;
       }

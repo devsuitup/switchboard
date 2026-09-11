@@ -165,6 +165,9 @@ const rendererCrossFileGlobals = {
   paintSessionIcon: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
+  // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
+  localTranscriptPtyTakeover: 'readonly',
+  pruneLocalTranscriptTimers: 'readonly',
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
   // (see .ai/contexts/session-state.md, "The icon slot (step 3b)")
   parentHasActiveSubagent: 'readonly',

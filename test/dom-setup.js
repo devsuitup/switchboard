@@ -51,6 +51,9 @@ function setupSidebarDom() {
   const apiTarget = {
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
     onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
+    // local-transcript-adapter.js registers this once at eval time — see
+    // .ai/contexts/session-state.md (migration step 4).
+    onSessionTranscriptActivity: (cb) => { apiTarget._sessionTranscriptActivityCb = cb; },
     // Manual remote reconnect (issue #252) — explicit defaults so a test that
     // doesn't care about these calls still gets a resolved promise; a test
     // that does override them per-call, the same way archiveSession etc. do.
@@ -136,9 +139,10 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
 
   // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
-  // renderProjects).
+  // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
 
   const ctx = dom.getInternalVMContext();
   const read = (expr) => vm.runInContext(expr, ctx);
@@ -167,6 +171,11 @@ function setupSidebarDom() {
     },
     emitSubagentCompleted(payload) {
       if (typeof apiTarget._subagentCompletedCb === 'function') apiTarget._subagentCompletedCb(payload);
+    },
+    // Simulate the main process emitting session-transcript-activity
+    // (local-transcript-adapter.js) — see .ai/contexts/session-state.md.
+    emitSessionTranscriptActivity(payload) {
+      if (typeof apiTarget._sessionTranscriptActivityCb === 'function') apiTarget._sessionTranscriptActivityCb(payload);
     },
     destroy() {
       window.close();

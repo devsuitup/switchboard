@@ -103,6 +103,9 @@ contextBridge.exposeInMainWorld('api', {
   onRemoteActivity: (callback) => {
     ipcRenderer.on('remote-activity', (_event, payload) => callback(payload));
   },
+  onSessionTranscriptActivity: (callback) => {
+    ipcRenderer.on('session-transcript-activity', (_event, payload) => callback(payload));
+  },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));
   },
