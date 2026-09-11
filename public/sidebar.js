@@ -150,9 +150,19 @@ function isSubagentActive(parentSessionId, agentId) {
   return !!map && map.has(agentId);
 }
 
+// remote-ssh/local-transcript parents have no PTY to feed activeSubagentsByParent — see .ai/contexts/subagent-observability.md
 function parentHasActiveSubagent(parentSessionId) {
   const map = activeSubagentsByParent.get(parentSessionId);
-  return !!map && map.size > 0;
+  if (map && map.size > 0) return true;
+  if (typeof remoteSessionStates !== 'undefined') {
+    const remote = remoteSessionStates.get(parentSessionId);
+    if (remote && remote.snapshot().agentsBusy) return true;
+  }
+  if (typeof localTranscriptStates !== 'undefined') {
+    const local = localTranscriptStates.get(parentSessionId);
+    if (local && local.snapshot().agentsBusy) return true;
+  }
+  return false;
 }
 
 function pruneStaleSubagents() {

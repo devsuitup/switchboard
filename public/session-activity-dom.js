@@ -46,17 +46,19 @@ function applyActivityClasses(sessionId) {
   applyActivityClassesToElement(sessionItemEl(sessionId), sessionId);
 }
 
-// Snapshot-driven projection for adapter-owned state — see .ai/contexts/session-state.md
+// Snapshot-driven projection for adapter-owned state; has-busy-agents read off the snapshot — see .ai/contexts/session-state.md
 function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const icon = renderSessionIcon(snapshot);
   const ready = icon.classes.includes('response-ready');
   const busy = icon.classes.includes('cli-busy');
+  const agentsBusy = !!(snapshot && snapshot.agentsBusy);
   setResponseReady(item, ready);
   setCliBusy(item, busy);
+  setHasBusyAgents(item, agentsBusy);
   writeIconSlot(item.querySelector('.session-icon'), icon);
-  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
+  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md

@@ -4,6 +4,9 @@
 const LOCAL_TRANSCRIPT_DECAY_MS = 20000;
 const localTranscriptDecayTimers = new Map();
 
+// separate decay for subagent attribution (agentsBusy) — see .ai/contexts/subagent-observability.md
+const localTranscriptAgentsDecayTimers = new Map();
+
 // one persistent state per session id, same shape as remoteSessionStates — see .ai/contexts/session-state.md
 const localTranscriptStates = new Map();
 
@@ -25,6 +28,14 @@ function clearLocalTranscriptTimer(sessionId) {
   if (t) {
     clearTimeout(t);
     localTranscriptDecayTimers.delete(sessionId);
+  }
+}
+
+function clearLocalTranscriptAgentsTimer(sessionId) {
+  const t = localTranscriptAgentsDecayTimers.get(sessionId);
+  if (t) {
+    clearTimeout(t);
+    localTranscriptAgentsDecayTimers.delete(sessionId);
   }
 }
 
@@ -52,8 +63,27 @@ function armLocalTranscriptDecayTimer(sessionId) {
   }, LOCAL_TRANSCRIPT_DECAY_MS));
 }
 
+// silence means the subagent stopped, not finished — see .ai/contexts/subagent-observability.md
+function decayLocalTranscriptAgentsBusy(sessionId) {
+  const state = localTranscriptState(sessionId);
+  state.apply({ type: 'subagentCompleted', stillActive: false });
+  projectLocalTranscriptState(sessionId);
+}
+
+function armLocalTranscriptAgentsDecayTimer(sessionId) {
+  clearLocalTranscriptAgentsTimer(sessionId);
+  localTranscriptAgentsDecayTimers.set(sessionId, setTimeout(() => {
+    localTranscriptAgentsDecayTimers.delete(sessionId);
+    decayLocalTranscriptAgentsBusy(sessionId);
+  }, LOCAL_TRANSCRIPT_DECAY_MS));
+}
+
 // never claims waitingForInput/attention — see .ai/contexts/session-state.md
 function onLocalTranscriptActivity(payload) {
+  if (payload && payload.kind === 'subagent') {
+    onLocalTranscriptSubagentActivity(payload);
+    return;
+  }
   const sessionId = payload && payload.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) return;
   if (activePtyIds.has(sessionId)) return;
@@ -65,16 +95,32 @@ function onLocalTranscriptActivity(payload) {
   armLocalTranscriptDecayTimer(sessionId);
 }
 
+// attributes a subagent write to its parent's own state — see .ai/contexts/subagent-observability.md
+function onLocalTranscriptSubagentActivity(payload) {
+  const parentSessionId = payload && payload.parentSessionId;
+  if (typeof parentSessionId !== 'string' || !parentSessionId) return;
+  if (activePtyIds.has(parentSessionId)) return;
+  const state = localTranscriptState(parentSessionId);
+  state.apply({ type: 'subagentSpawned' });
+  seedLocalTranscriptDescriptor(parentSessionId);
+  projectLocalTranscriptState(parentSessionId);
+  armLocalTranscriptAgentsDecayTimer(parentSessionId);
+}
+
 // called once a row gains a PTY; the local-pty path takes over from here — see .ai/contexts/session-state.md
 function localTranscriptPtyTakeover(sessionId) {
   if (!localTranscriptStates.has(sessionId)) return;
   clearLocalTranscriptTimer(sessionId);
+  clearLocalTranscriptAgentsTimer(sessionId);
   localTranscriptStates.delete(sessionId);
 }
 
 function pruneLocalTranscriptTimers() {
   for (const sessionId of localTranscriptDecayTimers.keys()) {
     if (!sessionItemEl(sessionId)) clearLocalTranscriptTimer(sessionId);
+  }
+  for (const sessionId of localTranscriptAgentsDecayTimers.keys()) {
+    if (!sessionItemEl(sessionId)) clearLocalTranscriptAgentsTimer(sessionId);
   }
   for (const sessionId of localTranscriptStates.keys()) {
     if (!sessionItemEl(sessionId)) localTranscriptStates.delete(sessionId);

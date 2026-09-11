@@ -157,3 +157,80 @@ test('a mutant decay that arms response-ready would be caught here', () => {
   assert.equal(t.snapshot('s1').responseReady, false);
   t.destroy();
 });
+
+// Subagent attribution (issue #247) — a subagent write whose parent has no
+// PTY in this app is attributed to the parent's own local-transcript state.
+// See .ai/contexts/subagent-observability.md ("Attribution across sources").
+
+test('a subagent activity event marks the parent agentsBusy, then decay clears it (parent has no PTY)', () => {
+  const t = setup(['p1']);
+  let snap = t.snapshot('p1');
+  assert.equal(snap.agentsBusy, false, 'precondition: no subagents');
+
+  t.emit({ parentSessionId: 'p1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  snap = t.snapshot('p1');
+  assert.equal(snap.agentsBusy, true, 'the subagent write marks the parent agentsBusy');
+  assert.ok(t.item('p1').classList.contains('has-busy-agents'), 'projected onto the parent row');
+
+  const timer = t.pending()[0];
+  assert.ok(timer, 'a decay timer must be scheduled');
+  timer.fn(); // simulate the 20s elapsing
+
+  snap = t.snapshot('p1');
+  assert.equal(snap.agentsBusy, false, 'decay clears agentsBusy');
+  assert.ok(!t.item('p1').classList.contains('has-busy-agents'));
+  t.destroy();
+});
+
+test('a subagent activity event is dropped outright when the parent already has a PTY in this app', () => {
+  const t = setup(['p1']);
+  t.setPty('p1', true);
+  t.emit({ parentSessionId: 'p1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  assert.equal(t.hasState('p1'), false, 'the IPC path (detectSubagentTransitions) already owns this parent');
+  assert.ok(!t.item('p1').classList.contains('has-busy-agents'));
+  t.destroy();
+});
+
+test('the subagent decay timer is independent of the parent\'s own busy decay timer', () => {
+  const t = setup(['p1']);
+  t.emit({ sessionId: 'p1', at: Date.now() }); // parent's own transcript activity
+  const busyTimer = t.pending()[0];
+  t.emit({ parentSessionId: 'p1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  assert.equal(t.pending().length, 2, 'busy decay and agentsBusy decay are two separate timers');
+  const agentsTimer = t.pending()[1];
+
+  const before = t.snapshot('p1');
+  assert.equal(before.busy, true);
+  assert.equal(before.agentsBusy, true);
+
+  agentsTimer.fn(); // resolve the subagent decay only
+  const afterAgents = t.snapshot('p1');
+  assert.equal(afterAgents.busy, true, 'the parent\'s own busy signal must be unaffected');
+  assert.equal(afterAgents.agentsBusy, false, 'the subagent decay cleared agentsBusy alone');
+
+  busyTimer.fn(); // resolve the parent's own busy decay
+  const afterBoth = t.snapshot('p1');
+  assert.equal(afterBoth.busy, false);
+  assert.equal(afterBoth.agentsBusy, false);
+  t.destroy();
+});
+
+test('PTY takeover also clears a pending subagent decay timer', () => {
+  const t = setup(['p1']);
+  t.emit({ parentSessionId: 'p1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  assert.equal(t.pending().length, 1);
+
+  t.ptyTakeover('p1');
+  assert.equal(t.hasState('p1'), false);
+  assert.equal(t.pending().length, 0, 'the subagent decay timer must not fire after takeover');
+  t.destroy();
+});
+
+test('a mutant subagent decay that leaves agentsBusy stillActive would be caught here', () => {
+  // Mutation proof: flip stillActive to true on decay and this test goes red.
+  const t = setup(['p1']);
+  t.emit({ parentSessionId: 'p1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  t.pending()[0].fn();
+  assert.equal(t.snapshot('p1').agentsBusy, false);
+  t.destroy();
+});

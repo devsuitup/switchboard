@@ -18,10 +18,18 @@ what actually shipped, not the whole plan.
   gives a session launched outside Switchboard (no PTY in this app) a busy
   signal from transcript growth — see "The local-transcript adapter (step 4)"
   below.
-- **Step 5: pending.** Subagent attribution is not routed through
-  `session-state.js` (`agentsBusy` exists in the model but nothing local-pty
-  feeds it yet — sidebar.js's `has-busy-agents` row class is still computed by
-  `parentHasActiveSubagent()`, independent of the domain module).
+- **Step 5: done** (issue #247). A subagent transcript write for a **remote**
+  or **local-transcript** parent (no PTY in this app) is attributed to that
+  parent and applied through its own adapter's `subagentSpawned`/
+  `subagentCompleted` — see `.ai/contexts/subagent-observability.md`
+  ("Attribution across sources") for the full wiring. A **local-pty** parent
+  is untouched: it keeps going through the IPC path
+  (`session-transitions.js:detectSubagentTransitions()`), never double-fed.
+  `sidebar.js`'s `parentHasActiveSubagent()` now also consults the remote-ssh
+  and local-transcript adapters' own snapshots (`remoteSessionStates` /
+  `localTranscriptStates`) so `has-busy-agents` survives a full
+  `renderProjects()` re-render for those two kinds, the same way it already
+  did for local-pty via `activeSubagentsByParent`.
 
 ### The remote-ssh adapter (step 3)
 
@@ -365,7 +373,7 @@ the others assert on the dot/slot element itself, only on row classes and
 | `transcriptTouched(at)` | yes | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
 | `descriptorStatus(status, at)` / `liveness` | yes | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition |
-| `subagentSpawned` / `subagentCompleted` | yes | no | no today |
+| `subagentSpawned` / `subagentCompleted` | yes — via `detectSubagentTransitions()` IPC | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 
 An adapter without a PTY must never claim `waitingForInput` or `responseReady`
 from a completion signal it cannot verify — that is why the remote-ssh and

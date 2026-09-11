@@ -4,6 +4,9 @@
 const PIP_DECAY_MS = 20000;
 const remoteActivityDecayTimers = new Map();
 
+// separate decay for subagent attribution (agentsBusy) — see .ai/contexts/subagent-observability.md
+const remoteAgentsDecayTimers = new Map();
+
 // remote-ssh adapter: one persistent state per remote session id — see .ai/contexts/session-state.md
 const remoteSessionStates = new Map();
 
@@ -25,6 +28,14 @@ function clearRemoteActivityTimer(sessionId) {
   if (t) {
     clearTimeout(t);
     remoteActivityDecayTimers.delete(sessionId);
+  }
+}
+
+function clearRemoteAgentsTimer(sessionId) {
+  const t = remoteAgentsDecayTimers.get(sessionId);
+  if (t) {
+    clearTimeout(t);
+    remoteAgentsDecayTimers.delete(sessionId);
   }
 }
 
@@ -52,9 +63,35 @@ function armRemoteDecayTimer(sessionId, ms) {
   }, ms));
 }
 
+// silence means the subagent stopped, not finished — see .ai/contexts/subagent-observability.md
+function decayRemoteAgentsBusy(sessionId) {
+  const state = remoteState(sessionId);
+  state.apply({ type: 'subagentCompleted', stillActive: false });
+  projectRemoteState(sessionId);
+}
+
+function armRemoteAgentsDecayTimer(sessionId) {
+  clearRemoteAgentsTimer(sessionId);
+  remoteAgentsDecayTimers.set(sessionId, setTimeout(() => {
+    remoteAgentsDecayTimers.delete(sessionId);
+    decayRemoteAgentsBusy(sessionId);
+  }, PIP_DECAY_MS));
+}
+
+// attributes a subagent write to its parent's own state — see .ai/contexts/subagent-observability.md
+function markRemoteSubagentBusy(sessionId) {
+  const state = remoteState(sessionId);
+  state.apply({ type: 'subagentSpawned' });
+  projectRemoteState(sessionId);
+  armRemoteAgentsDecayTimer(sessionId);
+}
+
 function pruneRemoteActivityTimers() {
   for (const sessionId of remoteActivityDecayTimers.keys()) {
     if (!sessionItemEl(sessionId)) clearRemoteActivityTimer(sessionId);
+  }
+  for (const sessionId of remoteAgentsDecayTimers.keys()) {
+    if (!sessionItemEl(sessionId)) clearRemoteAgentsTimer(sessionId);
   }
   for (const sessionId of remoteSessionStates.keys()) {
     if (!sessionItemEl(sessionId)) remoteSessionStates.delete(sessionId);
@@ -62,6 +99,12 @@ function pruneRemoteActivityTimers() {
 }
 
 function onRemoteActivityEvent(payload) {
+  if (payload && payload.kind === 'subagent') {
+    const parentSessionId = payload.parentSessionId;
+    if (typeof parentSessionId !== 'string' || !parentSessionId) return;
+    markRemoteSubagentBusy(parentSessionId);
+    return;
+  }
   const sessionId = payload && payload.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) return;
   markRemoteBusy(sessionId, 'remote-watch', payload.at);

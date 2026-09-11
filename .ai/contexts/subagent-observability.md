@@ -93,6 +93,115 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   prune until PR #137. Keep cross-file names distinct;
   `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
 
+## Attribution across sources (issue #247)
+
+`.has-busy-agents` used to light only for a parent reachable from
+`activeSessions` — the IPC pair `subagent-spawned`/`subagent-completed`
+emitted by `detectSubagentTransitions()` (see above), which only scans
+sessions with a PTY in this app. Two parents never lit: a **remote** parent
+(the watch channel hears every `agent-<id>.jsonl` write, but
+`remote-activity.js`'s `sessionIdFromRel` required a UUID basename and
+dropped the subagent leg) and a **local** parent launched outside Switchboard
+(no PTY, so `detectSubagentTransitions()` never scans it).
+
+**`subagent-attribution.js`** (repo root, pure, `require()`-able from both
+main-process trackers and `node:test`) is the single function this now goes
+through: `subagentParentFromParts(parts)` takes a path already split into
+segments (`[folder, ...rest]` — the same shape a `fs.watch` filename or a
+remote mirror's rel path is split into) and returns
+`{ parentSessionId, agentId }` for either real subagent layout
+(`enumerateSessionFiles()`'s preferred `<parent>/subagents/agent-<id>.jsonl`
+or the legacy `<parent>/agent-<id>.jsonl`), `null` for a top-level transcript
+or anything else. Tested in `test/subagent-attribution.test.js` against both
+layouts and the top-level/garbage-input null cases, with a mutation proof
+(swapping which path segment is reported as the parent turns two tests red).
+
+Each source's own main-process tracker calls it as a **fallback**, after its
+existing top-level check fails:
+
+- **`local-transcript-activity.js`**: `record(parts)` tries
+  `sessionIdFromWatchParts(parts)` first (top-level, unchanged); on `null`,
+  tries `subagentParentFromParts(parts)`. A resolved attribution is dropped
+  if `hasPty(parentSessionId)` — the parent already has a PTY in this app, so
+  `detectSubagentTransitions()` owns it and must not be double-fed. Otherwise
+  it's coalesced (same `ipcMinMs` throttle, keyed `'sub:' + parentSessionId`
+  — a namespace no UUID sessionId can collide with) and returned as
+  `{ parentSessionId, agentId, at, kind: 'subagent' }` on the same
+  `session-transcript-activity` channel the top-level signal already uses —
+  one channel, discriminated by `kind`, not a second IPC event.
+- **`remote-activity.js`**: `record(alias, rel)` tries `sessionIdFromRel(rel)`
+  first (unchanged); on `null`, splits `rel` on `/` and tries
+  `subagentParentFromParts`. No `hasPty` gate here — a remote session has no
+  local PTY concept the same way. Coalesced independently of the top-level
+  signal (again `'sub:' + parentSessionId` inside the existing `alias`-keyed
+  map) and returned as `{ alias, parentSessionId, agentId, at, kind:
+  'subagent' }` on the existing `remote-activity` channel.
+
+On the renderer side, each adapter's `on*ActivityEvent` branches on
+`payload.kind === 'subagent'` and applies `subagentSpawned` to the **parent's
+own persistent state** (`localTranscriptState(parentSessionId)` /
+`remoteState(parentSessionId)` — the same map the parent's own transcript
+signal would use if it had one), then arms a **separate** 20 s decay timer
+(`localTranscriptAgentsDecayTimers` / `remoteAgentsDecayTimers` — distinct
+maps from the busy-decay timers, so one signal's timer never clobbers the
+other's window) that applies `subagentCompleted({stillActive:false})`. Silence
+means the subagent stopped writing, not that it finished — same posture as
+the busy decay's `armReady:false` (`.ai/contexts/session-state.md`).
+`localTranscriptPtyTakeover()` clears both timers, not just the busy one.
+
+`session-activity-dom.js`'s `applyStateClasses(sessionId, snapshot)` — the
+shared DOM projection for both adapters — now also writes the `has-busy-agents`
+row class, read straight off `snapshot.agentsBusy` rather than off the
+winning icon rung (`renderSessionIcon` only reports one rung, and `agentsBusy`
+never wins the priority race while `busy` is active — see
+`.ai/contexts/session-state.md`, "The slot's CSS keys on its own rung class
+alone"). The icon slot itself follows `renderSessionIcon`'s normal priority
+resolution, so a parent with no higher-priority rung active shows
+`session-icon--agents-busy` exactly like a local-pty parent does.
+
+**Surviving a full re-render.** `buildSessionItem`'s `setHasBusyAgents(item,
+parentHasActiveSubagent(session.sessionId))` call fires on every
+`renderProjects()`, local and remote rows alike. For local-pty,
+`parentHasActiveSubagent()` reads the persistent `activeSubagentsByParent`
+map, so the tint survives. For remote/local-transcript there was no such
+persistent map to read — a periodic re-render (remote hosts refresh on a
+15 s-coalesced watch channel or a ≥60 s poll, well inside the 20 s decay
+window) would otherwise wipe `has-busy-agents` moments after the live event
+set it. Fixed by having `parentHasActiveSubagent()` (`public/sidebar.js`)
+also consult the adapters' own snapshots directly
+(`remoteSessionStates.get(id).snapshot().agentsBusy` /
+`localTranscriptStates.get(id).snapshot().agentsBusy`, guarded by
+`typeof ... !== 'undefined'` for harnesses that don't load those adapter
+files) — reading the source of truth instead of adding a third duplicate
+map. Both new identifiers are declared in `eslint.config.js`'s
+`rendererCrossFileGlobals`. Pinned by
+`test/dom-sidebar-remote-subagent-attribution.test.js` (re-render survival for
+both kinds) and the acceptance test in `test/remote-session-adapter.test.js`
+(live event → `has-busy-agents` + `session-icon--agents-busy` within the
+coalescing window, decay clears both).
+
+**Remote subagent label — verified, not forked.** JB's complaint (issue #246
+thread) was that a remote subagent row shows the generic "SUB" fallback
+instead of its real agent type. `buildSubagentItem()` (`public/sidebar.js`)
+reads `session.subagentType` unconditionally — it never branches on
+`session.remoteAlias` — and `subagentType` is populated identically for local
+and mirrored rows by the same reader (`readSubagentMeta()` in
+`read-session-file.js`, called from both `readSessionFile()` and
+`readSessionDisplayHeader()`, local file or mirror path alike) and carried
+through `session_cache.subagentType` into `buildProjectsFromCache()`'s
+`subagentType: row.subagentType || null` (`session-cache.js`). No fork exists
+to add or remove. Pinned by
+`test/dom-sidebar-remote-subagent-attribution.test.js`'s first test (a
+`remoteAlias`-carrying subagent session renders its real type through the
+same `buildSubagentItem()` a local one uses). The residual "SUB" a user can
+still see transiently is a **mirror-sync latency**, not a rendering gap: a
+subagent's `.meta.json` sidecar can mirror on a later cycle than its
+transcript (transcripts are sorted ahead of sidecars under the per-cycle
+budget — `.ai/contexts/session-cache.md`, "Remote hosts — meta.json
+sidecars"), and the type backfills once the sidecar arrives and the
+transcript is re-reported dirty. Not fixed here — it is a remote-mirror
+scheduling question, out of scope for this issue.
+
 ## Not resurrecting finished subagents
 
 A subagent's `agent-<id>.jsonl` is never deleted, so **every directory rescan

@@ -161,3 +161,49 @@ test('seeding a session inside the decay window marks it busy and arms exactly o
   assert.equal(t.pending().length, 1);
   t.destroy();
 });
+
+// Subagent attribution (issue #247) — a remote agent-<id>.jsonl write,
+// previously dropped by sessionIdFromRel, is now attributed to its parent
+// and lights that parent's has-busy-agents. See
+// .ai/contexts/subagent-observability.md ("Attribution across sources").
+
+test('a subagent activity event marks the parent agentsBusy, projects has-busy-agents + the agents-busy icon slot, then decay clears both', () => {
+  const t = setup(['s1']);
+  let snap = t.snapshot('s1');
+  assert.equal(snap.agentsBusy, false, 'precondition: no subagents');
+
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  snap = t.snapshot('s1');
+  assert.equal(snap.agentsBusy, true, 'the subagent write marks the parent agentsBusy');
+  const item = t.item('s1');
+  assert.ok(item.classList.contains('has-busy-agents'), 'projected onto the parent row');
+
+  const timer = t.pending()[0];
+  assert.ok(timer, 'a decay timer must be scheduled');
+  timer.fn(); // simulate the 20s elapsing
+
+  snap = t.snapshot('s1');
+  assert.equal(snap.agentsBusy, false, 'decay clears agentsBusy');
+  assert.ok(!t.item('s1').classList.contains('has-busy-agents'));
+  t.destroy();
+});
+
+test('within the coalescing window, the parent shows the agents-busy icon rung when nothing higher is active', () => {
+  const t = setup(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+
+  const { renderSessionIcon } = require('../public/session-state.js');
+  const icon = renderSessionIcon(t.snapshot('s1'));
+  assert.ok(icon.slotClasses.includes('session-icon--agents-busy'),
+    'agentsBusy is the winning rung when busy/attention/responseReady are all inactive');
+  t.destroy();
+});
+
+test('a mutant subagent decay that leaves agentsBusy stillActive would be caught here', () => {
+  // Mutation proof: flip stillActive to true on decay and this test goes red.
+  const t = setup(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  t.pending()[0].fn();
+  assert.equal(t.snapshot('s1').agentsBusy, false);
+  t.destroy();
+});

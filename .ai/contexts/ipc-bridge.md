@@ -102,6 +102,16 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 `terminal-data`, `session-detected`, `process-exited`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `session-transcript-activity`
 
+`session-transcript-activity` and (not listed above; see
+`.ai/contexts/session-cache.md`, "Remote hosts — busy spinner") `remote-activity`
+each carry one of two payload shapes on the same channel — a subagent write is
+never a second event (issue #247): `{ sessionId, at }` for a top-level
+transcript, or `{ parentSessionId, agentId, at, kind: 'subagent' }` (plus
+`alias` for `remote-activity`) when the write is a subagent leg attributed to
+its parent. See `.ai/contexts/subagent-observability.md` ("Attribution across
+sources") for the attribution and `.ai/contexts/session-state.md` for how each
+adapter applies it.
+
 - **`indexing-progress`**: `{coldStart, current, total, sessionsSoFar, done, error?}`. Fired only from `populateCacheViaWorker()` when the `initial_scan_complete` marker was absent at call time (a genuine first launch, a post-migration reset, or the resume of an interrupted first scan) — never on a routine warm-start rebuild. Throttled to ~4 events/s; the first event and the final `done:true` always pass. `done:true` with `error` means the scan failed and the renderer shows the failure in the banner instead of hiding it. Drives the renderer's dismissible first-run banner (`public/app.js`'s `updateIndexingBanner`); see `.ai/contexts/session-cache.md`.
 - **`session-transcript-activity`**: `{sessionId, at}`. Fired from inside the raw `fs.watch(PROJECTS_DIR, ...)` callback in `startProjectsWatcher()` — deliberately **not** routed through the debounced `flushChanges()` / `notifyRendererProjectsChanged()` path that also lives there, so it reaches the renderer well before the 500ms debounce plus the cache refresh it triggers. Only fires for a top-level session transcript (`<folder>/<sessionId>.jsonl`, two path segments — a subagent leg is out of scope, see `.ai/contexts/session-state.md` ports table) whose sessionId has no live PTY in `activeSessions` (`sessionHasPty()`, main.js — the OSC busy/attention path already owns a PTY-backed row). Coalesced to at most one emission per second per session by `local-transcript-activity.js`'s `createLocalTranscriptTracker()`. Feeds `public/local-transcript-adapter.js` (`window.api.onSessionTranscriptActivity`) — the `local-transcript` adapter in `.ai/contexts/session-state.md`.
 
