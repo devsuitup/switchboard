@@ -507,6 +507,7 @@ function refreshSidebar({ resort = false } = {}) {
 
   renderProjects(projects, resort);
   pruneRemoteActivityTimers();
+  pruneLocalTranscriptTimers();
 }
 
 // --- Archive toggle ---
@@ -822,8 +823,13 @@ function updateRunningIndicators() {
         clearActiveSubagentsFor(id);
       }
       if (item.dataset.remoteAlias) setRemoteAttached(id, running);
+      // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md
+      if (running && !item.dataset.remoteAlias) localTranscriptPtyTakeover(id);
       const icon = item.querySelector('.session-icon');
-      if (icon) icon.classList.toggle('running', running);
+      if (icon) {
+        icon.classList.toggle('running', running);
+        if (running && !item.dataset.remoteAlias) paintSessionIcon(icon, id);
+      }
       if (window.ATRACE) window.atrace('class.toggle', id, { el: item.id || null, cls: 'has-running-pty', on: running, icon: !!icon, fn: 'updateRunningIndicators' });
     });
     // Update slug group running dots
