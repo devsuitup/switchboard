@@ -955,7 +955,7 @@ body { display: flex; flex-direction: column; }
   color: #f5be3c;
 }
 
-/* ---- Running dot ---- */
+/* ---- Running dot ---- kept for .remote-host-dot — see .ai/contexts/session-state.md */
 .session-status-dot {
   width: 6px;
   height: 6px;
@@ -969,18 +969,32 @@ body { display: flex; flex-direction: column; }
   background: #3ecf5a;
 }
 
+/* ---- Icon slot ---- see .ai/contexts/session-state.md */
+.session-icon {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 7px;
+  background: rgba(255,255,255,0.18);
+}
+
+.session-icon.running {
+  background: #3ecf5a;
+}
+
+/* ---- Icon slot rungs ---- keyed on session-icon--<rung> alone, no :not() chains — see .ai/contexts/session-state.md */
+
 /* ---- CLI busy spinner (braille spinner detected) ---- */
-/* needs-attention takes precedence — when both are set, the attention indicator shows */
 /* Braille spinner via content keyframes — see docs/decisions/0002 */
-.session-item.cli-busy:not(.needs-attention) .session-status-dot,
-.session-item.cli-busy:not(.needs-attention) .session-status-dot.running {
+.session-icon--busy {
   background: transparent !important;
   animation: none !important;
   box-shadow: none !important;
   position: relative;
 }
 
-.session-item.cli-busy:not(.needs-attention) .session-status-dot::before {
+.session-icon--busy::before {
   content: "\280B";
   animation: braille-spin 0.8s steps(1) infinite;
   color: #4fc3f7;
@@ -1015,21 +1029,18 @@ body { display: flex; flex-direction: column; }
 
 /* ---- Subagents running under this session (has-busy-agents) ---- */
 /* Parent is at the prompt while spawned subagents still work in the
-   background. The session's own states win: needs-attention,
-   response-ready and the cli-busy braille spinner all take precedence,
-   so this only shows on an otherwise-idle parent item.
+   background — see .ai/contexts/session-state.md.
    Static full braille cell in violet — deliberately no animation
    (docs/decisions/0002: new indicators default to static), and both hue
    and stillness distinguish it from the light-blue animated cli-busy
    spinner. */
-.session-item.has-busy-agents:not(.cli-busy):not(.needs-attention):not(.response-ready) .session-status-dot,
-.session-item.has-busy-agents:not(.cli-busy):not(.needs-attention):not(.response-ready) .session-status-dot.running {
+.session-icon--agents-busy {
   background: transparent !important;
   box-shadow: none !important;
   position: relative;
 }
 
-.session-item.has-busy-agents:not(.cli-busy):not(.needs-attention):not(.response-ready) .session-status-dot::before {
+.session-icon--agents-busy::before {
   content: "\283F"; /* ⠿ — all dots lit: agents at work */
   color: #8088ff;
   font-size: 11px;
@@ -1040,8 +1051,8 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Busy session WITH live subagents: the same spinner, same cadence, violet
-   hue. See docs/subagents.md "Live status". */
-.session-item.cli-busy.has-busy-agents:not(.needs-attention) .session-status-dot::before {
+   hue — see .ai/contexts/session-state.md. See docs/subagents.md "Live status". */
+.session-item.has-busy-agents .session-icon--busy::before {
   color: #8088ff;
 }
 
@@ -1216,8 +1227,9 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Response ready indicator (Claude finished, unread output) ---- */
-.session-item.response-ready .session-status-dot {
-  background: #4fc3f7;
+/* background is !important — see .ai/contexts/session-state.md */
+.session-icon--response-ready {
+  background: #4fc3f7 !important;
   box-shadow: 0 0 8px rgba(79,195,247,0.7);
   animation: none;
 }
@@ -1236,10 +1248,9 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Needs attention indicator (blinking LED + halo) ---- */
-/* Replaces the ripple — see docs/decisions/0002 */
-.session-item.needs-attention .session-status-dot,
-.session-item.needs-attention .session-status-dot.running {
-  background: #f0a050;
+/* Replaces the ripple — see docs/decisions/0002. background is !important — see .ai/contexts/session-state.md */
+.session-icon--attention {
+  background: #f0a050 !important;
   box-shadow: 0 0 0 3px rgba(240,160,80,0.25);
   animation: led-blink 1s steps(1) infinite;
   position: relative;
@@ -4225,7 +4236,7 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Terminal sessions: green status dot */
-.session-item.is-terminal .session-status-dot.running {
+.session-item.is-terminal .session-icon.running {
   background: #3ecf5a;
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }

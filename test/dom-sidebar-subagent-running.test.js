@@ -60,7 +60,7 @@ test('subagent-spawned: .running lands on the subagent item + its dot', () => {
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
     assert.ok(item.classList.contains('running'), '.running set on the subagent item after spawn');
-    const dot = item.querySelector('.session-status-dot');
+    const dot = item.querySelector('.session-icon');
     assert.ok(dot.classList.contains('running'), '.running set on the dot after spawn');
   } finally {
     ctx.destroy();
@@ -78,7 +78,7 @@ test('subagent-completed: .running is removed again', () => {
 
     ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-1' });
     assert.ok(!item.classList.contains('running'), '.running removed after completed');
-    assert.ok(!item.querySelector('.session-status-dot').classList.contains('running'), 'dot no longer running');
+    assert.ok(!item.querySelector('.session-icon').classList.contains('running'), 'dot no longer running');
   } finally {
     ctx.destroy();
   }

@@ -224,8 +224,8 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   const el = document.getElementById(subagentDomId(parentSessionId, agentId));
   if (el) {
     el.classList.toggle('running', running);
-    const dot = el.querySelector('.session-status-dot');
-    if (dot) dot.classList.toggle('running', running);
+    const icon = el.querySelector('.session-icon');
+    if (icon) icon.classList.toggle('running', running);
   }
   const caret = document.getElementById(caretIdFor(parentSessionId));
   if (caret) caret.classList.toggle('has-running-child', parentHasActiveSubagent(parentSessionId));
@@ -236,6 +236,8 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   // precedence over it.
   const parentEl = document.getElementById('si-' + parentSessionId);
   setHasBusyAgents(parentEl, parentHasActiveSubagent(parentSessionId));
+  // Re-paint the parent's icon slot too — see .ai/contexts/session-state.md
+  if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
 }
 
@@ -304,8 +306,10 @@ function buildSubagentItem(session) {
   typePill.style.background = bg;
   typePill.style.borderColor = border;
 
-  const dot = document.createElement('span');
-  dot.className = 'session-status-dot' + (isRunning ? ' running' : '');
+  // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
+  const icon = document.createElement('span');
+  icon.className = 'session-icon' + (isRunning ? ' running' : '');
+  paintSessionIcon(icon, session.sessionId, session);
 
   const info = document.createElement('div');
   info.className = 'session-info';
@@ -322,7 +326,7 @@ function buildSubagentItem(session) {
   info.appendChild(metaEl);
 
   row.appendChild(typePill);
-  row.appendChild(dot);
+  row.appendChild(icon);
   row.appendChild(info);
   item.appendChild(row);
 
@@ -1334,9 +1338,10 @@ function buildSessionItem(session) {
     ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>'
     : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>';
 
-  // Running status dot
-  const dot = document.createElement('span');
-  dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
+  // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
+  const icon = document.createElement('span');
+  icon.className = 'session-icon' + (activePtyIds.has(session.sessionId) ? ' running' : '');
+  paintSessionIcon(icon, session.sessionId, session);
 
   // Info block
   const info = document.createElement('div');
@@ -1432,7 +1437,7 @@ function buildSessionItem(session) {
   }
 
   row.appendChild(pin);
-  row.appendChild(dot);
+  row.appendChild(icon);
   row.appendChild(info);
   row.appendChild(actions);
   item.appendChild(row);

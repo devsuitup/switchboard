@@ -175,8 +175,8 @@ test('priority: archived is the lowest rung', () => {
 });
 
 test('priority: an empty snapshot resolves to idle', () => {
-  assert.deepEqual(renderSessionIcon({}), { classes: [], glyph: '', title: 'Idle' });
-  assert.deepEqual(renderSessionIcon(undefined), { classes: [], glyph: '', title: 'Idle' });
+  assert.deepEqual(renderSessionIcon({}), { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' });
+  assert.deepEqual(renderSessionIcon(undefined), { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' });
 });
 
 // ---------------------------------------------------------------------------
@@ -200,4 +200,36 @@ test('renderSessionIcon: every rung returns a distinct, well-shaped icon', () =>
   for (const snap of [{ waitingForInput: true }, { stale: true }, { archived: true }, {}]) {
     assert.deepEqual(renderSessionIcon(snap).classes, []);
   }
+});
+
+// ---------------------------------------------------------------------------
+// slotClasses — the icon slot's own namespace (step 3b, issue #246), distinct
+// from `classes` (the legacy row-level names) so the slot never trips the
+// eslint rule guarding cli-busy/needs-attention/response-ready/has-busy-agents.
+// ---------------------------------------------------------------------------
+
+test('renderSessionIcon: every rung carries exactly one session-icon-- slot class', () => {
+  const cases = [
+    [{ attention: true }, 'session-icon--attention'],
+    [{ responseReady: true }, 'session-icon--response-ready'],
+    [{ busy: true }, 'session-icon--busy'],
+    [{ agentsBusy: true }, 'session-icon--agents-busy'],
+    [{ waitingForInput: true }, 'session-icon--waiting'],
+    [{ stale: true }, 'session-icon--stale'],
+    [{ archived: true }, 'session-icon--archived'],
+    [{}, 'session-icon--idle'],
+  ];
+  for (const [snap, slotCls] of cases) {
+    const icon = renderSessionIcon(snap);
+    assert.deepEqual(icon.slotClasses, [slotCls], `expected slot class ${slotCls} for ${JSON.stringify(snap)}`);
+  }
+});
+
+// Mutation-provable: swapping any two rungs' table entries must turn this red.
+test('renderSessionIcon: slot class, glyph and title move together with the rung', () => {
+  const busy = renderSessionIcon({ busy: true });
+  const agentsBusy = renderSessionIcon({ agentsBusy: true });
+  assert.deepEqual(busy, { classes: ['cli-busy'], slotClasses: ['session-icon--busy'], glyph: '⠋', title: 'Working' });
+  assert.deepEqual(agentsBusy, { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' });
+  assert.notDeepEqual(busy, agentsBusy);
 });

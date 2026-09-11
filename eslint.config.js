@@ -154,15 +154,20 @@ const rendererCrossFileGlobals = {
   createSessionState: 'readonly',
   renderSessionIcon: 'readonly',
   // public/session-activity-dom.js — the only file allowed to write
-  // .cli-busy/.needs-attention/.response-ready/.has-busy-agents.
+  // .cli-busy/.needs-attention/.response-ready/.has-busy-agents, and the only
+  // file allowed to write the .session-icon slot (issue #246, step 3b).
   applyActivityClassesToElement: 'readonly',
   applyStateClasses: 'readonly',
   setNeedsAttention: 'readonly',
   setResponseReady: 'readonly',
   setCliBusy: 'readonly',
   setHasBusyAgents: 'readonly',
+  paintSessionIcon: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
+  // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
+  // (see .ai/contexts/session-state.md, "The icon slot (step 3b)")
+  parentHasActiveSubagent: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',

@@ -3,15 +3,16 @@
 
 const PRIORITY = ['attention', 'responseReady', 'busy', 'agentsBusy', 'waitingForInput', 'idle', 'stale', 'archived'];
 
+// slotClasses use their own session-icon--* namespace, distinct from classes — see .ai/contexts/session-state.md
 const ICON_BY_RUNG = {
-  attention: { classes: ['needs-attention'], glyph: '!', title: 'Needs your attention' },
-  responseReady: { classes: ['response-ready'], glyph: '●', title: 'Response ready' },
-  busy: { classes: ['cli-busy'], glyph: '⠋', title: 'Working' },
-  agentsBusy: { classes: ['has-busy-agents'], glyph: '◆', title: 'Subagents running' },
-  waitingForInput: { classes: [], glyph: '○', title: 'Waiting for input' },
-  idle: { classes: [], glyph: '', title: 'Idle' },
-  stale: { classes: [], glyph: '', title: 'Stale' },
-  archived: { classes: [], glyph: '', title: 'Archived' },
+  attention: { classes: ['needs-attention'], slotClasses: ['session-icon--attention'], glyph: '!', title: 'Needs your attention' },
+  responseReady: { classes: ['response-ready'], slotClasses: ['session-icon--response-ready'], glyph: '●', title: 'Response ready' },
+  busy: { classes: ['cli-busy'], slotClasses: ['session-icon--busy'], glyph: '⠋', title: 'Working' },
+  agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' },
+  waitingForInput: { classes: [], slotClasses: ['session-icon--waiting'], glyph: '○', title: 'Waiting for input' },
+  idle: { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' },
+  stale: { classes: [], slotClasses: ['session-icon--stale'], glyph: '', title: 'Stale' },
+  archived: { classes: [], slotClasses: ['session-icon--archived'], glyph: '', title: 'Archived' },
 };
 
 function createSessionState(kind) {
@@ -134,11 +135,11 @@ function renderSessionIcon(snapshot) {
   for (const rung of PRIORITY) {
     if (rungActive(s, rung)) {
       const icon = ICON_BY_RUNG[rung];
-      return { classes: icon.classes.slice(), glyph: icon.glyph, title: icon.title };
+      return { classes: icon.classes.slice(), slotClasses: icon.slotClasses.slice(), glyph: icon.glyph, title: icon.title };
     }
   }
   const idle = ICON_BY_RUNG.idle;
-  return { classes: idle.classes.slice(), glyph: idle.glyph, title: idle.title };
+  return { classes: idle.classes.slice(), slotClasses: idle.slotClasses.slice(), glyph: idle.glyph, title: idle.title };
 }
 
 function rungActive(s, rung) {
