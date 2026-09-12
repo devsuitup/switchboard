@@ -11,6 +11,7 @@ const {
   manifestPathFor,
 } = require('./remote-hosts');
 const { syncMirror } = require('./remote-mirror');
+const { encodeProjectPath } = require('./encode-project-path');
 
 const NOOP_LOG = { info() {}, warn() {}, error() {} };
 
@@ -21,6 +22,34 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 function backoffDelayMs(failures, intervalMs) {
   if (failures <= 0) return 0;
   return Math.min(intervalMs * Math.pow(2, failures - 1), MAX_BACKOFF_MS);
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function placeholderTitle(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return null;
+  const trimmed = cwd.replace(/[\\/]+$/, '');
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || cwd;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function buildPlaceholderSession(alias, descriptor) {
+  const id = (typeof descriptor.sessionId === 'string' && descriptor.sessionId)
+    ? descriptor.sessionId
+    : `pid:${descriptor.pid}`;
+  return {
+    sessionId: id,
+    remoteAlias: alias,
+    projectPath: descriptor.cwd,
+    folder: encodeProjectPath(descriptor.cwd),
+    remoteDescriptorSeen: true,
+    status: descriptor.status || null,
+    statusUpdatedAt: descriptor.statusUpdatedAt || null,
+    modified: descriptor.statusUpdatedAt || descriptor.startedAt || null,
+    messageCount: 0,
+    summary: placeholderTitle(descriptor.cwd),
+    placeholder: true,
+  };
 }
 
 /**
@@ -317,6 +346,32 @@ function createRemoteIndexer(ctx) {
     };
   }
 
+  // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+  function getPlaceholderSessions(alias) {
+    const list = remoteSessions.get(alias) || [];
+    const out = [];
+    for (const descriptor of list) {
+      if (!descriptor || !descriptor.descriptorOnly) continue;
+      if (typeof descriptor.cwd !== 'string' || !descriptor.cwd) continue;
+      out.push(buildPlaceholderSession(alias, descriptor));
+    }
+    return out;
+  }
+
+  function getAllPlaceholderSessions() {
+    const out = [];
+    for (const alias of remoteSessions.keys()) out.push(...getPlaceholderSessions(alias));
+    return out;
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+  function findSessionAlias(sessionId) {
+    for (const [alias, list] of remoteSessions) {
+      if (list.some(s => s && s.sessionId === sessionId)) return alias;
+    }
+    return null;
+  }
+
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   function dropRemoteSession(alias, sessionId) {
     const list = remoteSessions.get(alias);
@@ -331,9 +386,12 @@ function createRemoteIndexer(ctx) {
     start, stop, dispose, restart, refreshNow, refreshHostNow,
     isRunning: () => timer !== null,
     getRemoteSessions,
+    getPlaceholderSessions,
+    getAllPlaceholderSessions,
+    findSessionAlias,
     dropRemoteSession,
     getRemoteHostState,
   };
 }
 
-module.exports = { createRemoteIndexer, backoffDelayMs };
+module.exports = { createRemoteIndexer, backoffDelayMs, buildPlaceholderSession, placeholderTitle };

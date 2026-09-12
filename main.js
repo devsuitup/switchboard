@@ -574,6 +574,53 @@ function annotateRemoteAttachable(projects) {
   return projects;
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function toSidebarPlaceholderSession(ph) {
+  return {
+    sessionId: ph.sessionId,
+    summary: ph.summary,
+    firstPrompt: null,
+    created: null,
+    modified: ph.modified,
+    messageCount: 0,
+    projectPath: ph.projectPath,
+    slug: null,
+    aiTitle: null,
+    parentSessionId: null,
+    agentId: null,
+    subagentType: null,
+    description: null,
+    name: null,
+    starred: 0,
+    archived: 0,
+    remoteAlias: ph.remoteAlias,
+    remoteDescriptorSeen: ph.remoteDescriptorSeen,
+    status: ph.status,
+    statusUpdatedAt: ph.statusUpdatedAt,
+    placeholder: true,
+  };
+}
+
+function mergePlaceholderSessions(projects) {
+  const placeholders = remoteIndexer.getAllPlaceholderSessions();
+  for (const ph of placeholders) {
+    const project = projects.find(p => p.remoteAlias === ph.remoteAlias && p.projectPath === ph.projectPath);
+    if (project) {
+      if (project.sessions.some(s => s.sessionId === ph.sessionId)) continue;
+      project.sessions.push(toSidebarPlaceholderSession(ph));
+    } else {
+      projects.push({
+        folder: joinFolderKey(ph.remoteAlias, ph.folder),
+        projectPath: ph.projectPath,
+        remoteAlias: ph.remoteAlias,
+        sessions: [toSidebarPlaceholderSession(ph)],
+        missing: false,
+      });
+    }
+  }
+  return projects;
+}
+
 /** Directory holding a folder key's transcripts, local or mirrored. */
 function projectsDirForFolder(folder) {
   return resolveFolderDir(folder);
@@ -1030,7 +1077,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       reconcileCacheFromFilesystem();
     }
 
-    return annotateRemoteAttachable(buildProjectsFromCache(showArchived));
+    return annotateRemoteAttachable(mergePlaceholderSessions(buildProjectsFromCache(showArchived)));
   } catch (err) {
     console.error('Error listing projects:', err);
     return [];
@@ -2125,8 +2172,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   if (!isNew) {
     let cachedFolder = null;
     try { cachedFolder = getCachedFolder(sessionId); } catch {}
-    if (isRemoteFolder(cachedFolder)) {
-      const { alias } = parseFolderKey(cachedFolder);
+    // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+    const alias = isRemoteFolder(cachedFolder)
+      ? parseFolderKey(cachedFolder).alias
+      : (cachedFolder ? null : remoteIndexer.findSessionAlias(sessionId));
+    if (alias) {
       const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
       const localPtySize = normalizePtySize(initialSize);
       const attachResult = descriptor

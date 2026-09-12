@@ -721,6 +721,134 @@ test('refreshHostNow({force:true}) ignores backoff, runs the transport, and clea
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
+// Issue #278 — see .ai/contexts/session-cache.md ("Remote hosts —
+// descriptor-only sessions"). A live descriptor with no transcript yet gets a
+// synthesized placeholder session; one with a transcript already indexed
+// (descriptorOnly: false, or the field simply absent, as older/local fixtures
+// never carry it) does not.
+test('getPlaceholderSessions synthesizes a row for a descriptor-only session, not for one with a transcript', async () => {
+  const dataDir = tmp('idx-placeholder');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [
+          { pid: 1, sessionId: 'no-transcript', cwd: '/srv/echanges/switchboard-test', status: 'busy', statusUpdatedAt: 123, descriptorOnly: true },
+          { pid: 2, sessionId: 'has-transcript', cwd: '/srv/echanges/other', descriptorOnly: false },
+        ],
+      }),
+    });
+    await indexer.refreshNow();
+
+    const placeholders = indexer.getPlaceholderSessions('vps');
+    assert.equal(placeholders.length, 1, 'only the descriptor-only session gets a placeholder');
+    const ph = placeholders[0];
+    assert.equal(ph.sessionId, 'no-transcript', 'prefers the descriptor\'s own session id');
+    assert.equal(ph.remoteAlias, 'vps');
+    assert.equal(ph.remoteDescriptorSeen, true);
+    assert.equal(ph.status, 'busy');
+    assert.equal(ph.statusUpdatedAt, 123);
+    assert.equal(ph.placeholder, true);
+    assert.equal(ph.summary, 'switchboard-test', 'title is the cwd basename');
+    assert.equal(ph.projectPath, '/srv/echanges/switchboard-test');
+
+    assert.deepEqual(indexer.getAllPlaceholderSessions(), placeholders,
+      'getAllPlaceholderSessions aggregates across every known alias');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+// Mutation proof for the deliverable's acceptance criterion: with the
+// synthesis line commented out, this test goes red (empty array instead of
+// one placeholder) — see the HANDOFF for the exact line.
+test('getPlaceholderSessions skips a descriptor with no cwd (nothing to group it under)', async () => {
+  const dataDir = tmp('idx-placeholder-no-cwd');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [{ pid: 1, sessionId: 'no-cwd', descriptorOnly: true }],
+      }),
+    });
+    await indexer.refreshNow();
+
+    assert.deepEqual(indexer.getPlaceholderSessions('vps'), []);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+// Replacement in place: once the transcript is indexed, the transport stops
+// reporting the descriptor as descriptorOnly (test/remote-transport.test.js
+// covers that half) — the index side of "no duplicate row" is that the
+// placeholder simply stops being offered under the SAME session id the real
+// row already uses, so the sidebar's key-by-sessionId merge is a no-op swap,
+// not an add.
+test('getPlaceholderSessions stops offering a placeholder once its transcript is indexed', async () => {
+  const dataDir = tmp('idx-placeholder-replace');
+  try {
+    let descriptorOnly = true;
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [{ pid: 1, sessionId: 'same-id', cwd: '/srv/a', descriptorOnly }],
+      }),
+    });
+
+    await indexer.refreshNow();
+    assert.equal(indexer.getPlaceholderSessions('vps').length, 1, 'placeholder present before the transcript appears');
+
+    descriptorOnly = false; // the next cycle's transport saw the .jsonl
+    await indexer.refreshNow();
+    assert.deepEqual(indexer.getPlaceholderSessions('vps'), [], 'no placeholder once the real transcript is indexed');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+// main.js's open-terminal falls back to this when getCachedFolder(sessionId)
+// finds nothing — the normal case for a placeholder, which has no
+// session_cache row. see .ai/contexts/session-cache.md ("Remote hosts —
+// descriptor-only sessions").
+test('findSessionAlias finds the host owning a live descriptor, by sessionId alone', async () => {
+  const dataDir = tmp('idx-find-alias');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }, { alias: 'other' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async ({ alias }) => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: alias === 'vps' ? [{ pid: 1, sessionId: 'mine', cwd: '/srv/a', descriptorOnly: true }] : [],
+      }),
+    });
+    await indexer.refreshNow();
+
+    assert.equal(indexer.findSessionAlias('mine'), 'vps');
+    assert.equal(indexer.findSessionAlias('nobody-has-this'), null);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test('refreshNow({force:true}) ignores backoff for every host and resets it on success', async () => {
   const dataDir = tmp('idx-refreshall-force');
   try {

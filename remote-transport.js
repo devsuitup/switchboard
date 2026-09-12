@@ -63,6 +63,17 @@ function splitListOutput(stdout) {
   return { inventoryBlock: stdout.slice(0, idx), sessionsBlock: stdout.slice(afterIdx + 1) };
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function transcriptSessionIds(files) {
+  const ids = new Set();
+  for (const f of files) {
+    if (!f || typeof f.rel !== 'string' || !f.rel.endsWith('.jsonl')) continue;
+    const base = f.rel.slice(f.rel.lastIndexOf('/') + 1, -'.jsonl'.length);
+    if (base) ids.add(base);
+  }
+  return ids;
+}
+
 // see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)", liveness marker)
 function parseSessions(block) {
   const lines = block.split('\n');
@@ -210,9 +221,11 @@ function createSshTransport(opts = {}) {
     if (res.code !== 0) throw new Error(`ssh inventory failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
     const { inventoryBlock, sessionsBlock } = splitListOutput(res.stdout);
     const files = parseInventory(inventoryBlock);
-    const { sessions, warnings, dropped } = parseSessions(sessionsBlock);
+    const { sessions: rawSessions, warnings, dropped } = parseSessions(sessionsBlock);
     for (const w of warnings) log.warn(`[remote:${alias}] ${w}`);
     if (dropped) log.warn(`[remote:${alias}] dropped ${dropped} dead session descriptor(s)`);
+    const transcriptIds = transcriptSessionIds(files);
+    const sessions = rawSessions.map(s => ({ ...s, descriptorOnly: !transcriptIds.has(s.sessionId) }));
     return { files, sessions };
   }
 
@@ -340,6 +353,7 @@ module.exports = {
   parseInventory,
   parseSessions,
   splitListOutput,
+  transcriptSessionIds,
   LIST_COMMAND,
   ALIVE_MARKER_PREFIX,
   REMOTE_PROJECTS_REL,

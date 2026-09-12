@@ -532,6 +532,20 @@ local-transcript `busy: false` transitions always pass `armReady: false` (see
 "The remote-ssh adapter" and "The local-transcript adapter" above), not a
 tri-state `busy: unknown`.
 
+## Placeholder rows (issue #278)
+
+A remote-ssh row synthesized from a live descriptor with no transcript yet
+(`main.js`'s `mergePlaceholderSessions`, `remote-index.js`'s
+`getPlaceholderSessions` — see `.ai/contexts/session-cache.md`, "Remote hosts
+— descriptor-only sessions") carries `placeholder: true` alongside the exact
+same `remoteAlias`/`status`/`statusUpdatedAt` fields a real remote session
+does. It goes through `annotateRemoteAttachable()` unchanged, so it gets
+`remoteAttachable`/`remoteActiveAt` from the same descriptor and its lifecycle
+is the ordinary remote-ssh one described above — nothing here adds a third
+liveness/attach state. The only thing this row's absent transcript changes is
+in the renderer: `sidebar.js` does not render the `.session-jsonl-btn` for a
+`placeholder` row, since there is nothing to view.
+
 ## Known limits
 
 - **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s
