@@ -2,10 +2,21 @@
 
 'use strict';
 
+// Accepted sessionId shapes — see .ai/contexts/changes-view.md ("cwd resolution").
+const PLAIN_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
+const PLACEHOLDER_SESSION_ID_RE = /^pid:[1-9][0-9]*$/;
+
+function isValidChangesSessionId(id) {
+  if (typeof id !== 'string' || id === '') return false;
+  if (id === '.' || id === '..') return false;
+  if (PLAIN_SESSION_ID_RE.test(id)) return true;
+  return PLACEHOLDER_SESSION_ID_RE.test(id);
+}
+
 // deps: {getCachedFolder, isRemoteFolder, parseFolderKey, getRemoteSessions, activeSessions, resolveSessionRealCwd, existsSync, projectsDir}
 function resolveGitChangesTarget(sessionId, deps) {
   const id = String(sessionId || '');
-  if (!id) return { ok: false, error: 'invalid session id' };
+  if (!isValidChangesSessionId(id)) return { ok: false, error: 'invalid session id' };
 
   let folder = null;
   try { folder = deps.getCachedFolder(id); } catch {}
@@ -29,4 +40,4 @@ function resolveGitChangesTarget(sessionId, deps) {
   return { ok: false, error: 'could not resolve a working directory for this session' };
 }
 
-module.exports = { resolveGitChangesTarget };
+module.exports = { resolveGitChangesTarget, isValidChangesSessionId };

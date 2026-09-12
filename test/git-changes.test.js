@@ -20,7 +20,7 @@ test('branch header: head, upstream, ahead/behind', () => {
     '# branch.head main',
     '# branch.upstream origin/main',
     '# branch.ab +2 -1',
-  ].join('\n');
+  ].join('\0');
   const { branch } = parseStatusPorcelainV2(text);
   assert.deepEqual(branch, { head: 'main', upstream: 'origin/main', ahead: 2, behind: 1 });
 });
@@ -36,7 +36,7 @@ test('ordinary entry: staged and unstaged are independent booleans (mutation tar
     '1 M. N... 100644 100644 100644 abc123 def456 staged-only.js',
     '1 .M N... 100644 100644 100644 abc123 def456 unstaged-only.js',
     '1 MM N... 100644 100644 100644 abc123 def456 both.js',
-  ].join('\n'));
+  ].join('\0'));
 
   const byPath = Object.fromEntries(files.map(f => [f.path, f]));
   assert.deepEqual(
@@ -58,7 +58,7 @@ test('ordinary entry: state reflects the staged code when present, else the unst
   const { files } = parseStatusPorcelainV2([
     '1 A. N... 000000 100644 100644 0000000 abc1234 added.js',
     '1 .D N... 100644 100644 000000 abc1234 0000000 deleted.js',
-  ].join('\n'));
+  ].join('\0'));
   const byPath = Object.fromEntries(files.map(f => [f.path, f]));
   assert.equal(byPath['added.js'].state, 'A');
   assert.equal(byPath['deleted.js'].state, 'D');
@@ -77,9 +77,9 @@ test('ignored entries are dropped, not surfaced as files', () => {
   assert.deepEqual(files, []);
 });
 
-test('rename entry: renamed:true and origPath carried through (mutation target: dropping rename handling)', () => {
+test('rename entry (-z): renamed:true and origPath carried through as the next NUL-terminated token, no tab embedded (mutation target: dropping rename handling)', () => {
   const { files } = parseStatusPorcelainV2(
-    '2 R. N... 100644 100644 100644 abc1234 def5678 R100 new/path.js\told/path.js'
+    ['2 R. N... 100644 100644 100644 abc1234 def5678 R100 new/path.js', 'old/path.js'].join('\0')
   );
   assert.equal(files.length, 1);
   const f = files[0];
@@ -91,7 +91,7 @@ test('rename entry: renamed:true and origPath carried through (mutation target: 
 
 test('rename entry without renamed handling would collapse to a bare path with no origPath — pinned distinctly from an ordinary entry', () => {
   const renamed = parseStatusPorcelainV2(
-    '2 R. N... 100644 100644 100644 abc1234 def5678 R100 b.js\ta.js'
+    ['2 R. N... 100644 100644 100644 abc1234 def5678 R100 b.js', 'a.js'].join('\0')
   ).files[0];
   const ordinary = parseStatusPorcelainV2(
     '1 M. N... 100644 100644 100644 abc1234 def5678 b.js'
@@ -102,11 +102,26 @@ test('rename entry without renamed handling would collapse to a bare path with n
 
 test('copy entry (score C): renamed:true, state "C"', () => {
   const f = parseStatusPorcelainV2(
-    '2 C. N... 100644 100644 100644 abc1234 def5678 C90 copy.js\tsource.js'
+    ['2 C. N... 100644 100644 100644 abc1234 def5678 C90 copy.js', 'source.js'].join('\0')
   ).files[0];
   assert.equal(f.renamed, true);
   assert.equal(f.state, 'C');
   assert.equal(f.origPath, 'source.js');
+});
+
+test('rename entry (-z): a non-ASCII path round-trips byte-for-byte, no core.quotepath escaping to undo', () => {
+  const f = parseStatusPorcelainV2(
+    ['2 R. N... 100644 100644 100644 abc1234 def5678 R100 café-new.txt', 'café-old.txt'].join('\0')
+  ).files[0];
+  assert.equal(f.path, 'café-new.txt');
+  assert.equal(f.origPath, 'café-old.txt');
+});
+
+test('ordinary entry (-z): a path with an embedded space is not quoted or truncated', () => {
+  const f = parseStatusPorcelainV2(
+    '1 .M N... 100644 100644 100644 abc123 def456 my file.js'
+  ).files[0];
+  assert.equal(f.path, 'my file.js');
 });
 
 test('unmerged entry: staged and unstaged both true, state carries a letter', () => {
@@ -120,7 +135,7 @@ test('unmerged entry: staged and unstaged both true, state carries a letter', ()
 
 test('unknown/future record types are skipped without throwing', () => {
   assert.doesNotThrow(() => {
-    const { files } = parseStatusPorcelainV2('x SOMETHING new-record-type\n? real.js');
+    const { files } = parseStatusPorcelainV2(['x SOMETHING new-record-type', '? real.js'].join('\0'));
     assert.equal(files.length, 1);
     assert.equal(files[0].path, 'real.js');
   });
@@ -135,31 +150,36 @@ test('empty input produces an empty, well-formed result', () => {
   });
 });
 
-// --- parseNumstat --------------------------------------------------------
+// --- parseNumstat (-z, NUL-separated) -------------------------------------
 
-test('numstat: plain added/deleted counts keyed by path', () => {
-  const result = parseNumstat('3\t1\tfoo.js\n0\t5\tbar.js\n');
+test('numstat -z: plain added/deleted counts keyed by path', () => {
+  const result = parseNumstat(['3\t1\tfoo.js', '0\t5\tbar.js'].join('\0') + '\0');
   assert.deepEqual(result, { 'foo.js': { added: 3, deleted: 1 }, 'bar.js': { added: 0, deleted: 5 } });
 });
 
-test('numstat: binary file reports null, not 0 (mutation target: treating "-" as zero)', () => {
-  const result = parseNumstat('-\t-\timage.png\n');
+test('numstat -z: binary file reports null, not 0 (mutation target: treating "-" as zero)', () => {
+  const result = parseNumstat('-\t-\timage.png\0');
   assert.deepEqual(result, { 'image.png': { added: null, deleted: null } });
 });
 
-test('numstat: a full rename ("old => new") is keyed on the new path', () => {
-  const result = parseNumstat('2\t1\told/name.js => new/name.js\n');
+test('numstat -z: a rename is reported as an empty path field followed by two NUL-terminated tokens (old, new), keyed on the new path', () => {
+  const result = parseNumstat(['2\t1\t', 'old/name.js', 'new/name.js'].join('\0') + '\0');
   assert.deepEqual(result, { 'new/name.js': { added: 2, deleted: 1 } });
 });
 
-test('numstat: a partial common-directory rename ("prefix/{old => new}/suffix") resolves to the new path', () => {
-  const result = parseNumstat('4\t0\tsrc/{old => new}/file.js\n');
-  assert.deepEqual(result, { 'src/new/file.js': { added: 4, deleted: 0 } });
+test('numstat -z: a non-ASCII rename path round-trips byte-for-byte', () => {
+  const result = parseNumstat(['1\t0\t', 'café-old.txt', 'café-new.txt'].join('\0') + '\0');
+  assert.deepEqual(result, { 'café-new.txt': { added: 1, deleted: 0 } });
 });
 
-test('numstat: blank lines and malformed lines are ignored, not throwing', () => {
+test('numstat -z: a path with an embedded space is not quoted or truncated', () => {
+  const result = parseNumstat('2\t0\tmy file.js\0');
+  assert.deepEqual(result, { 'my file.js': { added: 2, deleted: 0 } });
+});
+
+test('numstat -z: blank/malformed tokens are ignored, not throwing', () => {
   assert.doesNotThrow(() => {
-    const result = parseNumstat('\n\nnot a numstat line\n2\t1\tok.js\n');
+    const result = parseNumstat(['', 'not a numstat token', '2\t1\tok.js'].join('\0') + '\0');
     assert.deepEqual(result, { 'ok.js': { added: 2, deleted: 1 } });
   });
 });

@@ -10,6 +10,10 @@ const DEFAULT_LOCAL_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TIMEOUT_MS = 20_000;
 const MAX_DIFF_BYTES = 512 * 1024;
 const LOCAL_MAX_BUFFER = 20 * 1024 * 1024;
+// Remote stdout caps — see .ai/contexts/changes-view.md ("Remote transport stdout cap").
+const STATUS_MAX_STDOUT_BYTES = 2 * 1024 * 1024;
+const DIFF_STDOUT_SLACK_BYTES = 64 * 1024;
+const DIFF_MAX_STDOUT_BYTES = MAX_DIFF_BYTES + DIFF_STDOUT_SLACK_BYTES;
 
 // Denylist, not allowlist — see .ai/contexts/changes-view.md ("Quoting rule")
 function isSafeShellArg(s) {
@@ -20,10 +24,33 @@ function isSafeCwd(cwd) {
   return isSafeShellArg(cwd);
 }
 
+// Denylist plus a leading-':' shape check — see .ai/contexts/changes-view.md ("Quoting rule").
 function isSafeGitPath(p) {
   if (!isSafeShellArg(p)) return false;
   if (p.includes('..')) return false;
+  if (p[0] === ':') return false;
   return true;
+}
+
+// --literal-pathspecs on every invocation — see .ai/contexts/changes-view.md ("Quoting rule").
+function buildGitArgs(args) {
+  return ['--literal-pathspecs', ...args];
+}
+
+// Cut on a line boundary at or under maxBytes, measured in UTF-8 bytes — see .ai/contexts/changes-view.md ("Runner interface")
+function truncateDiffContent(content, maxBytes) {
+  if (Buffer.byteLength(content, 'utf8') <= maxBytes) return { content, truncated: false };
+  const lines = content.split('\n');
+  let acc = '';
+  let accBytes = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const chunk = i < lines.length - 1 ? lines[i] + '\n' : lines[i];
+    const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+    if (accBytes + chunkBytes > maxBytes) break;
+    acc += chunk;
+    accBytes += chunkBytes;
+  }
+  return { content: acc, truncated: true };
 }
 
 // POSIX single-quote escaping — see .ai/contexts/changes-view.md ("Quoting rule")
@@ -35,9 +62,18 @@ function buildRemoteGitCommand(cwd, args) {
   return ['git', '-C', shQuote(cwd), ...args.map(shQuote)].join(' ');
 }
 
+// The session's cwd is authoritative: inherited repo-location vars must not redirect git — see .ai/contexts/changes-view.md
+const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE'];
+
+function localGitEnv() {
+  const env = { ...process.env };
+  for (const k of GIT_LOCATION_ENV) delete env[k];
+  return env;
+}
+
 function defaultLocalExec(args, { cwd, timeoutMs }) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: timeoutMs, maxBuffer: LOCAL_MAX_BUFFER, windowsHide: true },
+    execFile('git', args, { cwd, env: localGitEnv(), timeout: timeoutMs, maxBuffer: LOCAL_MAX_BUFFER, windowsHide: true },
       (err, stdout, stderr) => {
         if (err) {
           resolve({ code: typeof err.code === 'number' ? err.code : -1, stdout: stdout || '', stderr: stderr || err.message || String(err) });
@@ -68,19 +104,24 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
 
   const runExec = exec || (kind === 'local'
     ? (args) => defaultLocalExec(args, { cwd, timeoutMs: effectiveTimeout })
-    : (command) => defaultRunRemoteCommand(alias, command, { timeoutMs: effectiveTimeout }));
+    : (command, remoteOpts) => defaultRunRemoteCommand(alias, command, {
+        timeoutMs: effectiveTimeout,
+        maxStdoutBytes: remoteOpts && remoteOpts.maxStdoutBytes,
+      }));
 
-  function invoke(args) {
-    return kind === 'local' ? runExec(args) : runExec(buildRemoteGitCommand(cwd, args));
+  // remoteOpts (maxStdoutBytes) matter only for the remote transport — see .ai/contexts/changes-view.md ("Remote transport stdout cap")
+  function invoke(args, remoteOpts) {
+    const fullArgs = buildGitArgs(args);
+    return kind === 'local' ? runExec(fullArgs) : runExec(buildRemoteGitCommand(cwd, fullArgs), remoteOpts);
   }
 
   async function status() {
     let results;
     try {
       results = await Promise.all([
-        invoke(['status', '--porcelain=v2', '--branch']),
-        invoke(['diff', '--numstat']),
-        invoke(['diff', '--cached', '--numstat']),
+        invoke(['status', '--porcelain=v2', '--branch', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+        invoke(['diff', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+        invoke(['diff', '--cached', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
       ]);
     } catch (err) {
       return { ok: false, error: err.message };
@@ -103,15 +144,14 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
 
     let result;
     try {
-      result = await invoke(args);
+      result = await invoke(args, { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
     if (result.code !== 0) return { ok: false, error: firstError(result) };
 
-    const content = result.stdout || '';
-    const truncated = content.length > MAX_DIFF_BYTES;
-    return { ok: true, content: truncated ? content.slice(0, MAX_DIFF_BYTES) : content, truncated };
+    const { content, truncated } = truncateDiffContent(result.stdout || '', MAX_DIFF_BYTES);
+    return { ok: true, content, truncated };
   }
 
   return { status, diff, kind, cwd, alias: alias || null };
@@ -120,8 +160,12 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
 module.exports = {
   createGitChangesRunner,
   buildRemoteGitCommand,
+  buildGitArgs,
+  truncateDiffContent,
   shQuote,
   isSafeCwd,
   isSafeGitPath,
   MAX_DIFF_BYTES,
+  STATUS_MAX_STDOUT_BYTES,
+  DIFF_MAX_STDOUT_BYTES,
 };

@@ -69,7 +69,8 @@ function setActivity(sessionId, active, via, opts) {
   }
 
   applyActivityClasses(sessionId);
-  if (!active) notifySessionIdle(sessionId);
+  // Fire only on a genuine busy->idle edge — see .ai/contexts/changes-view.md ("Refresh triggers").
+  if (wasActive && !active) notifySessionIdle(sessionId);
 }
 
 function clearUnread(sessionId, via) {

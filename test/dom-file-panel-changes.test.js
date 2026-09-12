@@ -258,6 +258,52 @@ test('zero git invocations while a session stays busy, or idle with no new event
   } finally { ctx.destroy(); }
 });
 
+// --- armReady:false duplicate idle (adversarial review, MINOR finding 5) ---
+// A remote row's decay/detach path calls setActivity(id, false, ..., {armReady:false})
+// (see .ai/contexts/session-cache.md, "Remote hosts — busy spinner") — that
+// opt-out means the response-ready lock never arms, so two such idle calls in
+// a row with no busy in between must not double-fire the refresh on their own.
+
+test('two consecutive setActivity(id, false, ..., {armReady:false}) idles refresh only once (mutation target: firing notifySessionIdle on every !active call)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.calls.status.length, 1, 'the initial open');
+
+    ctx.setActivity('s1', true, 'remote-seed');
+    await flush();
+    ctx.setActivity('s1', false, 'remote-decay', { armReady: false });
+    await flush();
+    assert.equal(ctx.calls.status.length, 2, 'the busy->idle edge must refresh once');
+
+    ctx.setActivity('s1', false, 'remote-decay', { armReady: false });
+    await flush();
+    assert.equal(ctx.calls.status.length, 2, 'a second armReady:false idle with no new busy edge must not refresh again');
+  } finally { ctx.destroy(); }
+});
+
+test('busy, then idle, then busy again, then idle again: two edges, two refreshes — not swallowed by the armReady:false dedup', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.calls.status.length, 1);
+
+    ctx.setActivity('s1', true, 'remote-seed');
+    ctx.setActivity('s1', false, 'remote-decay', { armReady: false });
+    await flush();
+    assert.equal(ctx.calls.status.length, 2, 'first busy->idle edge');
+
+    ctx.setActivity('s1', true, 'remote-seed');
+    ctx.setActivity('s1', false, 'remote-decay', { armReady: false });
+    await flush();
+    assert.equal(ctx.calls.status.length, 3, 'second busy->idle edge must still refresh');
+  } finally { ctx.destroy(); }
+});
+
 test('a session with no Changes tab open never calls gitChangesStatus, however often it goes idle', async () => {
   const ctx = setupFilePanelDom();
   try {
