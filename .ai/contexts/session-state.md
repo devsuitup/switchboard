@@ -55,6 +55,40 @@ the terminal header's stop button, and the grid card's stop button all funnel
 through it) — it now asks `resolveSessionStop` which IPC to call instead of
 always calling `stopSession`.
 
+### Archive/delete are stop-then-archive/delete (issue #271)
+
+`public/sidebar.js`'s four archive/delete call sites (`.project-archive-btn`,
+`.slug-group-archive-btn`, `.session-delete-btn`, `.session-archive-btn`) used
+to call bare `stopSession` gated on `activePtyIds` — a detach for an attached
+remote row, and nothing at all for an unattached one, while the archive/delete
+proceeded regardless. They now share `stop-session-ui.js`'s `stopBeforeArchive(session)`,
+built on `resolveSessionStop` plus `isRemoteSessionAlive(session)` (the
+`remote-ssh` adapter's own `remoteSessionStates` snapshot when one exists —
+authoritative over a stale `session.remoteDescriptorSeen` right after this app
+itself just stopped it — falling back to `remoteDescriptorSeen` otherwise):
+
+| kind | alive / has PTY | call |
+|---|---|---|
+| remote | alive | `remoteStopSession(alias, sessionId)` |
+| remote | not alive | nothing — `{ok:true}` |
+| local | has PTY (`activePtyIds`) | `stopSession(sessionId)` |
+| local | no PTY | nothing — `{ok:true}` |
+
+A `{ok:false, error}` return skips that session's archive/delete and surfaces
+the failure on its own button — `sidebar.js`'s `surfaceStopFailure(btn, message)`,
+the same flash-and-title-with-restore convention `confirmAndStopSession` uses.
+For the two group archives (project header, slug group), one session's
+refusal only skips that session; the loop continues to the rest. The project
+header's confirmation names the host alias(es) it is about to stop, computed
+with the same `isRemoteSessionAlive` check.
+
+**Delete never calls `stopBeforeArchive` for a remote session.** `delete-session`
+is refused server-side for remote regardless (`REMOTE_READ_ONLY`, main.js) —
+stopping the process first would strand a killed remote session behind a
+delete that never happens, so the delete site checks
+`resolveSessionStop(session).remote` itself and skips the stop entirely for
+that kind, local sessions unaffected.
+
 **The remote stop, main-side (`remote-stop.js`).** `createRemoteStopAdapter().stop(alias, descriptor)`
 builds one non-interactive ssh command (same `buildRemoteCommandArgs` transport
 as `remote-attach.js`'s probe/restore calls) that: (1) reuses

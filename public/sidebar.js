@@ -7,7 +7,7 @@
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
-// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
+// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js)
 
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -15,6 +15,16 @@ function slugId(slug) {
 
 function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// Surfaces a stopBeforeArchive() failure on the button — see .ai/contexts/session-state.md ("The two lifecycle verbs").
+function surfaceStopFailure(btn, message) {
+  console.error('[stop-before-archive]', message);
+  if (!btn) return;
+  if (typeof window.flashButtonText === 'function') window.flashButtonText(btn, 'Failed', 1500);
+  const originalTitle = btn.title;
+  btn.title = message;
+  setTimeout(() => { btn.title = originalTitle; }, 3000);
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") and
@@ -1036,10 +1046,21 @@ function rebindSidebarEvents(projects) {
         const sessions = project.sessions.filter(s => !s.parentSessionId && !s.archived);
         if (sessions.length === 0) return;
         const shortName = shortProjectPath(project.projectPath);
-        if (!confirm(`Archive all ${sessions.length} session${sessions.length > 1 ? 's' : ''} in ${shortName}?`)) return;
+        // issue #271 / .ai/contexts/session-state.md: archive is stop-then-archive.
+        const aliasesToStop = [...new Set(
+          sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
+        )];
+        let message = `Archive all ${sessions.length} session${sessions.length > 1 ? 's' : ''} in ${shortName}?`;
+        if (aliasesToStop.length > 0) {
+          message += ` This stops the running session${aliasesToStop.length > 1 ? 's' : ''} on ${aliasesToStop.join(', ')} first.`;
+        }
+        if (!confirm(message)) return;
         for (const s of sessions) {
-          if (activePtyIds.has(s.sessionId)) {
-            await window.api.stopSession(s.sessionId);
+          const stopResult = await stopBeforeArchive(s);
+          if (!stopResult.ok) {
+            const item = document.getElementById('si-' + s.sessionId);
+            surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
+            continue;
           }
           await window.api.archiveSession(s.sessionId, 1);
           s.archived = 1;
@@ -1137,7 +1158,11 @@ function rebindSidebarEvents(projects) {
           const sid = item.dataset.sessionId;
           const session = sessionMap.get(sid);
           if (!session || session.archived) continue;
-          if (activePtyIds.has(sid)) await window.api.stopSession(sid);
+          const stopResult = await stopBeforeArchive(session);
+          if (!stopResult.ok) {
+            surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error);
+            continue;
+          }
           await window.api.archiveSession(sid, 1);
           session.archived = 1;
         }
@@ -1264,8 +1289,13 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const ok = await showDeleteSessionDialog(session);
         if (!ok) return;
-        if (activePtyIds.has(session.sessionId)) {
-          await window.api.stopSession(session.sessionId);
+        // issue #271: delete is refused server-side for remote — see .ai/contexts/session-state.md.
+        if (!resolveSessionStop(session).remote) {
+          const stopResult = await stopBeforeArchive(session);
+          if (!stopResult.ok) {
+            surfaceStopFailure(deleteBtn, stopResult.error);
+            return;
+          }
           pollActiveSessions();
         }
         const res = await window.api.deleteSession(session.sessionId);
@@ -1297,8 +1327,12 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
-        if (newVal && activePtyIds.has(session.sessionId)) {
-          await window.api.stopSession(session.sessionId);
+        if (newVal) {
+          const stopResult = await stopBeforeArchive(session);
+          if (!stopResult.ok) {
+            surfaceStopFailure(archiveBtn, stopResult.error);
+            return;
+          }
           pollActiveSessions();
         }
         await window.api.archiveSession(session.sessionId, newVal);

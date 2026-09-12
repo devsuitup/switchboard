@@ -42,7 +42,7 @@ Use **archive** instead if you only want the session out of the way — archivin
 
 The confirmation dialog states what will be removed: the project, how many files are on disk, and how many subagent transcripts belong to the session. Subagent transcripts are removed with their parent, and their search/index entries with them.
 
-If the session is still running it is stopped first when Switchboard knows it is live; otherwise the deletion is refused with a reason rather than pulling a transcript out from under a running process. Anything that resolves outside `~/.claude/projects` — a symlinked transcript, for instance — is refused and logged. A session that never started has no transcript to remove, so deleting it just clears the leftover card.
+If a local session is still running it is stopped first; otherwise the deletion is refused with a reason rather than pulling a transcript out from under a running process. A session on a declared remote host is never stopped for a delete — Switchboard only observes remote sessions, so deleting one is refused outright regardless of whether it is still running; use the stop button first if you also want the process on the host ended. Anything that resolves outside `~/.claude/projects` — a symlinked transcript, for instance — is refused and logged. A session that never started has no transcript to remove, so deleting it just clears the leftover card.
 
 ## Stop a running session
 
@@ -53,7 +53,7 @@ A remote session you are not currently viewing keeps running on the host even th
 ## Star and archive
 
 - **Star** — right-click a session and choose Star, or use the star icon in the session header. Starred sessions appear at the top of their project group.
-- **Archive** — right-click and choose Archive to hide a session from the default view. Archived sessions reappear when you enable the Archived filter.
+- **Archive** — right-click and choose Archive to hide a session from the default view. Archived sessions reappear when you enable the Archived filter. Archiving a running session stops it first — on its declared remote host, not just Switchboard's local view of it — the same as the stop button; the "archive all" buttons on a project or a same-slug group do this for every session they archive, and skip (and flag) any one that fails to stop rather than leaving it silently unarchived.
 
 ## Session count limits
 

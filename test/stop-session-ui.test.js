@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveSessionStop } = require('../public/stop-session-ui');
+const { resolveSessionStop, isRemoteSessionAlive } = require('../public/stop-session-ui');
 
 test('a local session (no remoteAlias) resolves to the plain stop dialog and the local IPC', () => {
   const plan = resolveSessionStop({ sessionId: 's1' });
@@ -25,4 +25,21 @@ test('a remote session resolves to the remote IPC with the host alias named in t
   assert.equal(plan.alias, 'vps');
   assert.match(plan.confirmText, /vps/, 'the host alias must be shown, same text shape as the local dialog');
   assert.match(plan.confirmText, /^Stop this session/, 'same text shape as the local confirm()');
+});
+
+// --- isRemoteSessionAlive (issue #271) ---
+// No remoteSessionStates global exists under plain require() — these pin the
+// fallback path (session.remoteDescriptorSeen). The adapter-snapshot path
+// (authoritative over a stale descriptor flag right after this app stopped
+// the session itself) needs jsdom and is covered in
+// test/dom-sidebar-stop-before-archive.test.js.
+
+test('isRemoteSessionAlive: undefined session is never alive', () => {
+  assert.equal(isRemoteSessionAlive(undefined), false);
+});
+
+test('isRemoteSessionAlive: falls back to remoteDescriptorSeen when no adapter snapshot exists', () => {
+  assert.equal(isRemoteSessionAlive({ sessionId: 's1', remoteAlias: 'vps', remoteDescriptorSeen: true }), true);
+  assert.equal(isRemoteSessionAlive({ sessionId: 's1', remoteAlias: 'vps', remoteDescriptorSeen: false }), false);
+  assert.equal(isRemoteSessionAlive({ sessionId: 's1', remoteAlias: 'vps' }), false, 'missing field must not read as alive');
 });
