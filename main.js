@@ -82,6 +82,8 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
+const { createGitChangesRunner } = require('./git-changes-runner');
+const gitChangesTarget = require('./git-changes-target');
 
 setPtyOpLogger(log);
 
@@ -1735,6 +1737,48 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     }
   }
   return result;
+});
+
+// --- IPC: git-changes-status / git-changes-diff — see .ai/contexts/changes-view.md ---
+function resolveGitChangesTarget(sessionId) {
+  return gitChangesTarget.resolveGitChangesTarget(sessionId, {
+    getCachedFolder,
+    isRemoteFolder,
+    parseFolderKey,
+    getRemoteSessions: (alias) => remoteIndexer.getRemoteSessions(alias),
+    activeSessions,
+    resolveSessionRealCwd,
+    existsSync: (p) => fs.existsSync(p),
+    projectsDir: PROJECTS_DIR,
+  });
+}
+
+function gitChangesRunnerFor(target) {
+  return target.kind === 'remote'
+    ? createGitChangesRunner({ kind: 'remote', cwd: target.cwd, alias: target.alias })
+    : createGitChangesRunner({ kind: 'local', cwd: target.cwd });
+}
+
+ipcMain.handle('git-changes-status', async (_event, sessionId) => {
+  const target = resolveGitChangesTarget(sessionId);
+  if (!target.ok) return target;
+  try {
+    return await gitChangesRunnerFor(target).status();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// filePath is a git pathspec, not a filesystem path — see .ai/contexts/changes-view.md
+ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path' };
+  const target = resolveGitChangesTarget(sessionId);
+  if (!target.ok) return target;
+  try {
+    return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // --- IPC: toggle-star ---

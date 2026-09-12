@@ -10,6 +10,7 @@ This is the documentation for the [devsuitup/switchboard](https://github.com/dev
 - [Terminal](terminal.md) — built-in terminal, right-click menu, drag-and-drop, in-terminal find
 - [Grid Overview](grid-overview.md) — bird's-eye live grid of all open sessions
 - [IDE Emulation](ide-emulation.md) — file diffs in a side panel, inline and side-by-side, partial accept
+- [Changes View](changes-view.md) — read-only git-status panel, same for local and remote sessions
 - [Subagents](subagents.md) — subagent index, hierarchy, live status, read-only transcript viewer
 - [Session Restore](session-restore.md) — persist open sessions and restore them on restart
 - [Keyboard Shortcuts](keyboard-shortcuts.md) — editor/terminal shortcuts and rebindable session-nav keys

@@ -7,6 +7,18 @@ const attentionSessions = new Set(); // sessions needing user action (OSC 9)
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 
+// see .ai/contexts/changes-view.md ("Refresh triggers")
+const idleListeners = new Set();
+function onSessionIdle(cb) {
+  idleListeners.add(cb);
+  return () => idleListeners.delete(cb);
+}
+function notifySessionIdle(sessionId) {
+  for (const cb of idleListeners) {
+    try { cb(sessionId); } catch {}
+  }
+}
+
 // Monotonic transition counter, plus its value at each session's last change.
 let activitySeq = 0;
 const activitySeqBySession = new Map();
@@ -57,6 +69,8 @@ function setActivity(sessionId, active, via, opts) {
   }
 
   applyActivityClasses(sessionId);
+  // Fire only on a genuine busy->idle edge — see .ai/contexts/changes-view.md ("Refresh triggers").
+  if (wasActive && !active) notifySessionIdle(sessionId);
 }
 
 function clearUnread(sessionId, via) {

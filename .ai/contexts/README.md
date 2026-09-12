@@ -1,6 +1,6 @@
 # Context engineering — Switchboard
 
-Seven sub-system docs (76 to 526 lines as of 2026-09, most have grown well past
+Eight sub-system docs (76 to 526 lines as of 2026-09, most have grown well past
 their original size), written for AI agents who need to make a focused change
 without re-reading `main.js`, now ~2600 LOC.
 
@@ -16,6 +16,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | File-trigger watcher, harness input injection, idle-wait | [trigger-watcher](trigger-watcher.md) |
 | Claude CLI state files, early subagent rescan, canary tests | [cli-session-state](cli-session-state.md) |
 | Busy/attention/response-ready state, the session-state domain module, the icon-slot projection | [session-state](session-state.md) |
+| The Changes panel: git-status parser, local/remote runner, cwd resolution, no-polling refresh | [changes-view](changes-view.md) |
 
 ## Reading order for a new contributor (~30 min)
 

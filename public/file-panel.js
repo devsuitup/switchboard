@@ -33,6 +33,13 @@ let diffBodyEl = null;
 let diffActionsEl = null;
 let diffToggleBtn = null;
 
+// Changes-specific DOM (issue #251)
+let changesContainerEl = null;
+let changesSummaryEl = null;
+let changesListEl = null;
+let changesDiffEl = null;
+let changesToggleBtn = null;
+
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
 const MIN_PANEL_WIDTH = 280;
@@ -131,12 +138,78 @@ function initFilePanel() {
   diffActionsEl.style.display = 'none';
   diffContainer.appendChild(diffActionsEl);
 
+  // ── Changes mode (issue #251, git-status-sourced, read-only) ──
+  changesContainerEl = document.createElement('div');
+  changesContainerEl.id = 'file-panel-changes';
+  changesContainerEl.style.display = 'none';
+  filePanelContentEl.appendChild(changesContainerEl);
+
+  const changesToolbarEl = document.createElement('div');
+  changesToolbarEl.className = 'viewer-toolbar';
+
+  const changesInfo = document.createElement('div');
+  changesInfo.className = 'viewer-toolbar-info';
+  const changesTitleEl = document.createElement('span');
+  changesTitleEl.className = 'viewer-toolbar-title';
+  changesTitleEl.textContent = 'Changes';
+  const changesBranchInfoEl = document.createElement('span');
+  changesBranchInfoEl.className = 'viewer-toolbar-path';
+  changesBranchInfoEl.id = 'changes-branch-info';
+  changesInfo.appendChild(changesTitleEl);
+  changesInfo.appendChild(changesBranchInfoEl);
+  changesToolbarEl.appendChild(changesInfo);
+
+  const changesControls = document.createElement('div');
+  changesControls.className = 'viewer-toolbar-controls';
+
+  const changesRefreshBtn = document.createElement('button');
+  changesRefreshBtn.className = 'fp-toolbar-btn';
+  changesRefreshBtn.textContent = 'Refresh';
+  changesRefreshBtn.addEventListener('click', () => {
+    if (currentPanelSessionId) refreshChanges(currentPanelSessionId);
+  });
+  changesControls.appendChild(changesRefreshBtn);
+
+  const changesCloseBtn = document.createElement('button');
+  changesCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
+  changesCloseBtn.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
+  changesCloseBtn.title = 'Close panel';
+  changesCloseBtn.addEventListener('click', handleClose);
+  changesControls.appendChild(changesCloseBtn);
+
+  changesToolbarEl.appendChild(changesControls);
+  changesContainerEl.appendChild(changesToolbarEl);
+
+  changesSummaryEl = document.createElement('div');
+  changesSummaryEl.id = 'changes-summary';
+  changesContainerEl.appendChild(changesSummaryEl);
+
+  changesListEl = document.createElement('div');
+  changesListEl.id = 'changes-list';
+  changesContainerEl.appendChild(changesListEl);
+
+  changesDiffEl = document.createElement('div');
+  changesDiffEl.id = 'changes-diff-view';
+  changesDiffEl.style.display = 'none';
+  changesContainerEl.appendChild(changesDiffEl);
+
   terminalSplitEl.appendChild(filePanelEl);
   terminalArea.appendChild(terminalSplitEl);
 
   wireIpcListeners();
   setupPanelResizeHandle();
   addMcpToggle();
+  addChangesToggle();
+
+  // see .ai/contexts/changes-view.md ("Refresh triggers")
+  if (typeof onSessionIdle === 'function') {
+    onSessionIdle((sessionId) => {
+      const state = filePanelState.get(sessionId);
+      if (state && state.currentTab && state.currentTab.type === 'changes') {
+        refreshChanges(sessionId);
+      }
+    });
+  }
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -408,17 +481,25 @@ function renderTabContent(sessionId, tab) {
   if (!tab) {
     vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
+    changesContainerEl.style.display = 'none';
     return;
   }
 
   if (tab.type === 'file') {
     // Use ViewerPanel
     diffContainer.style.display = 'none';
+    changesContainerEl.style.display = 'none';
     vpContainer.style.display = 'flex';
     fpViewerPanel.open(tab.label, tab.filePath, tab.content);
-  } else {
-    // Diff mode
+  } else if (tab.type === 'changes') {
     vpContainer.style.display = 'none';
+    diffContainer.style.display = 'none';
+    changesContainerEl.style.display = 'flex';
+    renderChangesContent(sessionId, tab);
+  } else {
+    // MCP diff mode
+    vpContainer.style.display = 'none';
+    changesContainerEl.style.display = 'none';
     diffContainer.style.display = 'flex';
     renderDiffContent(sessionId, tab);
   }
@@ -507,6 +588,275 @@ function handleDiffAction(sessionId, tab, action) {
   diffActionsEl.style.display = 'none';
 }
 
+// ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────
+
+function toggleChangesTab(sessionId) {
+  const state = getSessionState(sessionId);
+  if (state.currentTab && state.currentTab.type === 'changes') {
+    destroyCurrentTab(state);
+    state.currentTab = null;
+    state.panelVisible = false;
+    if (currentPanelSessionId === sessionId) hidePanel();
+    return;
+  }
+  return openChangesTab(sessionId);
+}
+
+function openChangesTab(sessionId) {
+  const state = getSessionState(sessionId);
+  destroyCurrentTab(state);
+  state.currentTab = {
+    type: 'changes',
+    label: 'Changes',
+    loading: true,
+    error: null,
+    data: null,
+    selectedFile: null,
+    diffLoading: false,
+    diffError: null,
+    diffContent: null,
+    diffTruncated: false,
+    diffUntracked: false,
+  };
+  state.panelVisible = true;
+
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+  return refreshChanges(sessionId);
+}
+
+async function refreshChanges(sessionId) {
+  const state = filePanelState.get(sessionId);
+  if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
+  const tab = state.currentTab;
+
+  tab.loading = true;
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+
+  const result = await window.api.gitChangesStatus(sessionId);
+
+  // tab may have been closed/replaced while the IPC round-trip was in flight
+  const stillState = filePanelState.get(sessionId);
+  if (!stillState || stillState.currentTab !== tab) return;
+
+  tab.loading = false;
+  if (!result || result.ok === false) {
+    tab.error = (result && result.error) || 'failed to load changes';
+    tab.data = null;
+  } else {
+    tab.error = null;
+    tab.data = result;
+  }
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+async function openChangesDiff(sessionId, file) {
+  const state = filePanelState.get(sessionId);
+  if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
+  const tab = state.currentTab;
+
+  tab.selectedFile = file;
+  tab.diffError = null;
+  tab.diffContent = null;
+  tab.diffTruncated = false;
+  tab.diffUntracked = !!file.untracked;
+
+  if (file.untracked) {
+    // git diff never reports an untracked file — nothing to fetch.
+    tab.diffLoading = false;
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
+  }
+
+  tab.diffLoading = true;
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+
+  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged);
+
+  const stillState = filePanelState.get(sessionId);
+  if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
+
+  tab.diffLoading = false;
+  if (!result || result.ok === false) {
+    tab.diffError = (result && result.error) || 'failed to load diff';
+  } else {
+    tab.diffContent = result.content;
+    tab.diffTruncated = !!result.truncated;
+  }
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+function closeChangesDiff(sessionId) {
+  const state = filePanelState.get(sessionId);
+  if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
+  state.currentTab.selectedFile = null;
+  state.currentTab.diffContent = null;
+  state.currentTab.diffError = null;
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+function renderChangesContent(sessionId, tab) {
+  if (tab.selectedFile) {
+    changesSummaryEl.style.display = 'none';
+    changesListEl.style.display = 'none';
+    changesDiffEl.style.display = 'flex';
+    renderChangesDiff(sessionId, tab);
+    return;
+  }
+  changesDiffEl.style.display = 'none';
+  changesSummaryEl.style.display = 'block';
+  changesListEl.style.display = 'block';
+
+  const branchInfoEl = document.getElementById('changes-branch-info');
+
+  if (tab.loading && !tab.data) {
+    changesSummaryEl.textContent = 'Loading changes…';
+    changesListEl.innerHTML = '';
+    if (branchInfoEl) branchInfoEl.textContent = '';
+    return;
+  }
+  if (tab.error) {
+    changesSummaryEl.textContent = '';
+    changesListEl.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'changes-error';
+    err.textContent = tab.error;
+    changesListEl.appendChild(err);
+    if (branchInfoEl) branchInfoEl.textContent = '';
+    return;
+  }
+
+  const data = tab.data;
+  if (!data) return;
+  const { branch, files, totals } = data;
+
+  changesSummaryEl.textContent = totals.files === 0
+    ? 'No changes'
+    : `${totals.files} file${totals.files === 1 ? '' : 's'} changed +${totals.added} −${totals.deleted}`;
+
+  if (branchInfoEl) {
+    const parts = [];
+    if (branch.head) parts.push(branch.head);
+    if (branch.ahead) parts.push('↑' + branch.ahead);
+    if (branch.behind) parts.push('↓' + branch.behind);
+    branchInfoEl.textContent = parts.join(' ');
+  }
+
+  changesListEl.innerHTML = '';
+  for (const file of files) {
+    changesListEl.appendChild(buildChangesFileRow(sessionId, file));
+  }
+}
+
+function buildChangesFileRow(sessionId, file) {
+  const row = document.createElement('div');
+  row.className = 'changes-file-row';
+  row.dataset.path = file.path;
+
+  const state = document.createElement('span');
+  state.className = 'changes-file-state changes-state-' + (file.state || '?').toLowerCase();
+  state.textContent = file.state || '?';
+  row.appendChild(state);
+
+  const pathEl = document.createElement('span');
+  pathEl.className = 'changes-file-path';
+  pathEl.textContent = (file.renamed && file.origPath) ? `${file.origPath} → ${file.path}` : file.path;
+  row.appendChild(pathEl);
+
+  if (typeof file.added === 'number' || typeof file.deleted === 'number') {
+    const counts = document.createElement('span');
+    counts.className = 'changes-file-counts';
+    const added = document.createElement('span');
+    added.className = 'changes-added';
+    added.textContent = '+' + (file.added || 0);
+    const deleted = document.createElement('span');
+    deleted.className = 'changes-deleted';
+    deleted.textContent = '−' + (file.deleted || 0);
+    counts.appendChild(added);
+    counts.appendChild(deleted);
+    row.appendChild(counts);
+  }
+
+  row.addEventListener('click', () => {
+    // prefer the unstaged (worktree) diff when a file has both
+    const staged = !!file.staged && !file.unstaged;
+    openChangesDiff(sessionId, { path: file.path, staged, untracked: !!file.untracked });
+  });
+  return row;
+}
+
+function renderChangesDiff(sessionId, tab) {
+  changesDiffEl.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'viewer-toolbar';
+
+  const info = document.createElement('div');
+  info.className = 'viewer-toolbar-info';
+  const titleEl = document.createElement('span');
+  titleEl.className = 'viewer-toolbar-title';
+  titleEl.textContent = tab.selectedFile.path;
+  info.appendChild(titleEl);
+  header.appendChild(info);
+
+  const controls = document.createElement('div');
+  controls.className = 'viewer-toolbar-controls';
+  const backBtn = document.createElement('button');
+  backBtn.className = 'fp-toolbar-btn';
+  backBtn.textContent = 'Back';
+  backBtn.addEventListener('click', () => closeChangesDiff(sessionId));
+  controls.appendChild(backBtn);
+  header.appendChild(controls);
+
+  changesDiffEl.appendChild(header);
+
+  const body = document.createElement('pre');
+  body.className = 'changes-diff-body';
+
+  if (tab.diffLoading) {
+    body.textContent = 'Loading diff…';
+  } else if (tab.diffError) {
+    body.textContent = tab.diffError;
+    body.classList.add('changes-error');
+  } else if (tab.diffUntracked) {
+    body.textContent = 'Untracked file — nothing to diff yet.';
+  } else if (!tab.diffContent) {
+    body.textContent = 'No differences.';
+  } else {
+    renderDiffLines(body, tab.diffContent);
+  }
+  changesDiffEl.appendChild(body);
+
+  if (tab.diffTruncated) {
+    const note = document.createElement('div');
+    note.className = 'changes-diff-truncated';
+    note.textContent = 'Diff truncated at 512 KB.';
+    changesDiffEl.appendChild(note);
+  }
+}
+
+// see .ai/contexts/changes-view.md ("why not ViewerPanel for the diff")
+function renderDiffLines(container, text) {
+  const frag = document.createDocumentFragment();
+  for (const line of text.split('\n')) {
+    const div = document.createElement('div');
+    div.className = 'changes-diff-line ' + classifyDiffLine(line);
+    div.textContent = line;
+    frag.appendChild(div);
+  }
+  container.appendChild(frag);
+}
+
+function classifyDiffLine(line) {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'changes-diff-file-header';
+  if (line.startsWith('@@')) return 'changes-diff-hunk';
+  if (line.startsWith('+')) return 'changes-diff-add';
+  if (line.startsWith('-')) return 'changes-diff-del';
+  return 'changes-diff-ctx';
+}
+
 // ── IDE Emulation Indicator ─────────────────────────────────────────
 
 let mcpIndicatorEl = null;
@@ -526,6 +876,28 @@ function addMcpToggle() {
     controls.insertBefore(mcpIndicatorEl, stopBtn);
   } else {
     controls.appendChild(mcpIndicatorEl);
+  }
+}
+
+// Terminal header entry point for Changes mode — see .ai/contexts/changes-view.md
+function addChangesToggle() {
+  const controls = document.getElementById('terminal-header-controls');
+  if (!controls) return;
+
+  changesToggleBtn = document.createElement('button');
+  changesToggleBtn.id = 'changes-toggle-btn';
+  changesToggleBtn.className = 'fp-toolbar-btn';
+  changesToggleBtn.textContent = 'Changes';
+  changesToggleBtn.title = 'Show working tree changes for this session';
+  changesToggleBtn.addEventListener('click', () => {
+    if (currentPanelSessionId) toggleChangesTab(currentPanelSessionId);
+  });
+
+  const stopBtn = document.getElementById('terminal-stop-btn');
+  if (stopBtn) {
+    controls.insertBefore(changesToggleBtn, stopBtn);
+  } else {
+    controls.appendChild(changesToggleBtn);
   }
 }
 

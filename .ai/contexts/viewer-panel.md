@@ -73,6 +73,14 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 - `public/file-panel.js` — has its own `fpViewerPanel = new ViewerPanel(...)` for the file-diff side panel; might need same opt
 - If you add a new file-type-aware button, mirror the `_isJsonish()` / `_isMarkdown()` pattern with an `_isXyz()` helper rather than inlining the extension check
 
+## Changes mode (issue #251)
+
+`public/file-panel.js`'s side panel gained a third tab type, `'changes'`,
+alongside the pre-existing `'file'` and `'diff'` (MCP) types on the same
+per-session `filePanelState`. Full design (why it skips `ViewerPanel`, the
+entry point, the no-polling refresh trigger): `.ai/contexts/changes-view.md`.
+User-facing behavior: `docs/changes-view.md`.
+
 ## Gotchas
 
 - **CodeMirror state holds DOM references** — calling `destroy()` then immediately `open()` on the SAME container works because `_createEditor` rebuilds it, but if you reorder this, the editor can dangle.

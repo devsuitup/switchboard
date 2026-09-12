@@ -80,6 +80,17 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `read-file-for-panel` / `save-file-for-panel` | Arbitrary file IO inside the user's projects |
 | `watch-file` / `unwatch-file` | fs.watch wrapper, emits `file-changed` event |
 
+### Changes panel (issue #251)
+
+Read-only git-status view in the same right-hand file panel, for local and
+remote sessions alike. Full design (parser, runner, quoting, cwd resolution,
+refresh triggers): `.ai/contexts/changes-view.md`. User-facing: `docs/changes-view.md`.
+
+| IPC | Args | Returns | Notes |
+|---|---|---|---|
+| `git-changes-status` | `(sessionId)` | `{ok, branch, files, totals} \| {ok:false, error}` | `git status --porcelain=v2 --branch` + `git diff --numstat` + `git diff --cached --numstat`, merged by `git-changes.js`'s `mergeChanges()`. |
+| `git-changes-diff` | `(sessionId, filePath, staged)` | `{ok, content, truncated} \| {ok:false, error}` | `git diff [--cached] -- <filePath>`, capped at 512 KB. |
+
 ### Misc
 
 | IPC | Notes |
@@ -145,6 +156,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
 | `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
+| `git-changes-diff` | `isSafeGitPath` (`git-changes-runner.js`) | not a filesystem path — a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist |
 
 ### Non-obvious behaviors
 

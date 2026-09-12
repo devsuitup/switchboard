@@ -150,6 +150,8 @@ const rendererCrossFileGlobals = {
   forgetActivitySeq: 'readonly',
   purgeActivityFor: 'readonly',
   pruneRemoteActivityTimers: 'readonly',
+  // Changes panel no-polling refresh hook (issue #251, public/file-panel.js)
+  onSessionIdle: 'readonly',
   // public/session-state.js (pure domain, see .ai/contexts/session-state.md)
   createSessionState: 'readonly',
   renderSessionIcon: 'readonly',
@@ -455,6 +457,9 @@ module.exports = [
       'read-session-file.js',
       'derive-project-path.js',
       'encode-project-path.js',
+      'git-changes.js',
+      'git-changes-runner.js',
+      'git-changes-target.js',
       'folder-index-state.js',
       'pty-size.js',
       'claude-auth.js',

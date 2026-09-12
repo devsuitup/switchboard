@@ -173,9 +173,13 @@ function buildRemoteCommandArgs(alias, command) {
   return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-n', alias, command];
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
-function defaultRunRemoteCommand(alias, command, { timeoutMs } = {}) {
-  const { spawn } = require('child_process');
+// Default stdout cap for a single ssh exec — see .ai/contexts/changes-view.md ("Remote transport stdout cap").
+const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap")
+function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn } = {}) {
+  const spawn = spawnFn || require('child_process').spawn;
+  const stdoutCap = typeof maxStdoutBytes === 'number' ? maxStdoutBytes : DEFAULT_MAX_STDOUT_BYTES;
   return new Promise((resolve) => {
     let child;
     try {
@@ -187,16 +191,31 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs } = {}) {
       return;
     }
     let stdout = '';
+    let stdoutBytes = 0;
     let stderr = '';
     let settled = false;
+    let overflowed = false;
     const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutMs || DEFAULT_PROBE_TIMEOUT_MS);
     const finish = (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (overflowed) {
+        resolve({ code: -1, stdout: '', stderr: `stdout exceeded ${stdoutCap} bytes` });
+        return;
+      }
       resolve({ code, stdout, stderr: stderr.slice(0, 4096) });
     };
-    if (child.stdout) child.stdout.on('data', (c) => { stdout += c; });
+    if (child.stdout) child.stdout.on('data', (c) => {
+      if (overflowed) return;
+      stdoutBytes += Buffer.byteLength(c);
+      if (stdoutBytes > stdoutCap) {
+        overflowed = true;
+        try { child.kill('SIGKILL'); } catch {}
+        return;
+      }
+      stdout += c;
+    });
     if (child.stderr) child.stderr.on('data', (c) => { if (stderr.length < 4096) stderr += c; });
     child.on('error', (err) => { stderr += err.message; finish(-1); });
     child.on('close', (code) => finish(code == null ? -1 : code));
@@ -354,4 +373,5 @@ module.exports = {
   isValidPid,
   buildProcCmdlineCheck,
   defaultRunRemoteCommand,
+  DEFAULT_MAX_STDOUT_BYTES,
 };

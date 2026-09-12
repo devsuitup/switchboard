@@ -16,6 +16,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change busy/attention/response-ready state or the session-state domain module | [contexts/session-state.md](contexts/session-state.md) |
 | Read the Claude CLI's own session state files | [contexts/cli-session-state.md](contexts/cli-session-state.md) |
 | Change Memory/.work-files panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
+| Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
