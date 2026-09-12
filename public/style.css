@@ -4469,6 +4469,128 @@ body { display: flex; flex-direction: column; }
   vertical-align: middle;
 }
 
+/* --- Changes mode (issue #251) --- */
+#file-panel-changes {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#changes-summary {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #c0c0d0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+#changes-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.changes-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.changes-file-row:hover {
+  background: rgba(120,130,255,0.06);
+}
+
+.changes-file-state {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+  font-family: monospace;
+  color: #9090a8;
+}
+
+.changes-state-a { color: #3ecf5a; }
+.changes-state-m { color: #e0a030; }
+.changes-state-d { color: #e05070; }
+.changes-state-r,
+.changes-state-c { color: #8088ff; }
+.changes-state-\? { color: #9090a8; }
+
+.changes-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d0d0e0;
+}
+
+.changes-file-counts {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.changes-added { color: #3ecf5a; }
+.changes-deleted { color: #e05070; }
+
+.changes-error {
+  padding: 12px;
+  color: #e05070;
+  font-size: 12px;
+}
+
+#changes-diff-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.changes-diff-body {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 0;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
+.changes-diff-line {
+  padding: 0 12px;
+}
+
+.changes-diff-add {
+  background: rgba(63, 185, 80, 0.12);
+  color: #3ecf5a;
+}
+
+.changes-diff-del {
+  background: rgba(248, 81, 73, 0.12);
+  color: #e05070;
+}
+
+.changes-diff-hunk {
+  color: #8088ff;
+}
+
+.changes-diff-file-header {
+  color: #9090a8;
+}
+
+.changes-diff-truncated {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #9090a8;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
 /* --- Diagnostics: activity trace --- */
 #activity-trace-viewer {
   position: absolute;
