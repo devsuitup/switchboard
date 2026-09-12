@@ -45,17 +45,21 @@ function makeHandler(mocks) {
   const fn = new Function(
     'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
     'populateCacheViaWorker',
-    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'annotateRemoteAttachable', 'showArchived',
+    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
+    'annotateRemoteAttachable', 'showArchived',
     body
   );
-  // annotateRemoteAttachable (remote-attach join, issue #221) is irrelevant to
-  // the populate/reconcile/build ordering this file locks down -- a passthrough
-  // stands in for it unless a test overrides it.
+  // annotateRemoteAttachable (remote-attach join, issue #221) and
+  // mergePlaceholderSessions (descriptor-only sessions, issue #278) are both
+  // irrelevant to the populate/reconcile/build ordering this file locks down
+  // -- a passthrough stands in for each unless a test overrides it.
   const annotateRemoteAttachable = mocks.annotateRemoteAttachable || (projects => projects);
+  const mergePlaceholderSessions = mocks.mergePlaceholderSessions || (projects => projects);
   return () => fn(
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
-    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, annotateRemoteAttachable, false
+    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
+    annotateRemoteAttachable, false
   );
 }
 

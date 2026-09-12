@@ -97,7 +97,7 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
   assert.ok(command.includes('find .claude/sessions'), 'the session descriptors must ride the same command');
   assert.deepEqual(result, {
     files: [{ rel: '-srv-a/a.jsonl', size: 9, mtimeMs: 1757200000000 }],
-    sessions: [{ pid: 123, sessionId: 'abc' }],
+    sessions: [{ pid: 123, sessionId: 'abc', descriptorOnly: true }],
   });
   assert.equal(t.liveCount(), 0, 'the child is unregistered once it closes');
 });
@@ -174,7 +174,7 @@ test('the real wire-format marker (raw SOH-framed bytes) is recognized with zero
 
   const result = await t.listFiles('vps');
 
-  assert.deepEqual(result.sessions, [{ pid: 1, sessionId: 'x' }]);
+  assert.deepEqual(result.sessions, [{ pid: 1, sessionId: 'x', descriptorOnly: true }]);
   assert.deepEqual(warnings, [], 'a well-formed descriptor after the real marker must never warn');
 });
 
@@ -311,6 +311,68 @@ test('parseSessions: the ALIVE marker line is consumed and never itself warns as
   const { sessions, warnings } = parseSessions(block);
   assert.deepEqual(sessions, [{ pid: 1, sessionId: 'a' }, { pid: 2, sessionId: 'b' }]);
   assert.deepEqual(warnings, [], 'the marker lines must never be parsed as their own descriptor');
+});
+
+// Issue #278: a CLI launched in tmux writes its descriptor at once but no
+// transcript until the first prompt — see .ai/contexts/session-cache.md
+// ("Remote hosts — descriptor-only sessions").
+test('listFiles marks a live descriptor with no matching transcript as descriptorOnly', async () => {
+  const spawn = spawnRecorder((child) => {
+    // Inventory has no file for this session at all.
+    child.stdout.push('1757200000.0\t9\t-srv-a/other-session.jsonl\n');
+    child.stdout.push(SESSIONS_MARKER + '\n');
+    child.stdout.push(JSON.stringify({ pid: 1, sessionId: 'no-transcript-yet', cwd: '/srv/a' }) + '\n');
+    child.stdout.push(`${ALIVE_MARKER_PREFIX}1\n`);
+    child.stdout.push(null);
+    child.emit('close', 0);
+  });
+  const t = createSshTransport({ spawn });
+
+  const result = await t.listFiles('vps');
+
+  assert.deepEqual(result.sessions, [
+    { pid: 1, sessionId: 'no-transcript-yet', cwd: '/srv/a', descriptorOnly: true },
+  ]);
+});
+
+test('listFiles marks a live descriptor as NOT descriptorOnly once its transcript is in the inventory', async () => {
+  const spawn = spawnRecorder((child) => {
+    child.stdout.push('1757200000.0\t9\t-srv-a/has-transcript.jsonl\n');
+    child.stdout.push(SESSIONS_MARKER + '\n');
+    child.stdout.push(JSON.stringify({ pid: 1, sessionId: 'has-transcript', cwd: '/srv/a' }) + '\n');
+    child.stdout.push(`${ALIVE_MARKER_PREFIX}1\n`);
+    child.stdout.push(null);
+    child.emit('close', 0);
+  });
+  const t = createSshTransport({ spawn });
+
+  const result = await t.listFiles('vps');
+
+  assert.deepEqual(result.sessions, [
+    { pid: 1, sessionId: 'has-transcript', cwd: '/srv/a', descriptorOnly: false },
+  ]);
+});
+
+// Acceptance (issue #278): a live descriptor-only entry survives, a dead one
+// (ALIVE:0) is still dropped — in the same cycle.
+test('a live descriptor-only entry is kept and a dead descriptor is still dropped', async () => {
+  const spawn = spawnRecorder((child) => {
+    child.stdout.push('1757200000.0\t9\t-srv-a/unrelated.jsonl\n');
+    child.stdout.push(SESSIONS_MARKER + '\n');
+    child.stdout.push(JSON.stringify({ pid: 1, sessionId: 'alive-no-transcript', cwd: '/srv/a' }) + '\n');
+    child.stdout.push(`${ALIVE_MARKER_PREFIX}1\n`);
+    child.stdout.push(JSON.stringify({ pid: 2, sessionId: 'dead-no-transcript', cwd: '/srv/a' }) + '\n');
+    child.stdout.push(`${ALIVE_MARKER_PREFIX}0\n`);
+    child.stdout.push(null);
+    child.emit('close', 0);
+  });
+  const t = createSshTransport({ spawn });
+
+  const result = await t.listFiles('vps');
+
+  assert.deepEqual(result.sessions, [
+    { pid: 1, sessionId: 'alive-no-transcript', cwd: '/srv/a', descriptorOnly: true },
+  ]);
 });
 
 test('a non-zero ssh exit is an error, not an empty inventory', async () => {

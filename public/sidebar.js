@@ -1476,7 +1476,8 @@ function buildSessionItem(session) {
   actions.appendChild(stopBtn);
   if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
-    actions.appendChild(jsonlBtn);
+    // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+    if (!session.placeholder) actions.appendChild(jsonlBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);
     actions.appendChild(deleteBtn);

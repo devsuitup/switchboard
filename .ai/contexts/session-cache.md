@@ -438,12 +438,81 @@ one changed file" for `syncMirror`.
   this file, but still reads *all* of it, not just the new lines. Parse cost
   is therefore unchanged by this issue; issue #216's second half remains the
   place to fix that.
-- **Known gap, not fixed here**: a remote session with a live descriptor
-  (`~/.claude/sessions/<pid>.json`) but no `.jsonl` written yet (a session
-  that was launched but has not been prompted) is invisible to the
-  inventory — `LIST_COMMAND`'s `find .claude/projects` only ever sees files
-  that exist. Observed 2026-09-11. Candidate for a follow-up issue; not
-  addressed by issue #257.
+- **Gap closed by issue #278 (below)**: a remote session with a live
+  descriptor (`~/.claude/sessions/<pid>.json`) but no `.jsonl` written yet (a
+  session that was launched but has not been prompted) used to be invisible —
+  `LIST_COMMAND`'s `find .claude/projects` only ever sees files that exist.
+  Observed 2026-09-11; not addressed by issue #257 itself, since fixed by a
+  placeholder session synthesized from the descriptor alone.
+
+### Remote hosts — descriptor-only sessions (issue #278)
+
+A CLI launched in tmux on the host writes its descriptor
+(`~/.claude/sessions/<pid>.json`) immediately; the transcript
+(`~/.claude/projects/<encoded cwd>/<sessionId>.jsonl`) only appears after the
+first prompt. Measured 2026-09-12 on host `planificator`: launched 00:47,
+invisible in the sidebar (and unstoppable) until a first prompt at 00:50
+created the `.jsonl`; a manual host refresh did not help.
+
+- **`descriptorOnly` is computed in `remote-transport.js`'s `listFiles()`**,
+  against the SAME ssh call's own inventory — no second round trip.
+  `transcriptSessionIds(files)` collects every inventory rel's basename (minus
+  `.jsonl`); a session whose `sessionId` is not among them gets
+  `descriptorOnly: true` on the object `parseSessions()` already produced.
+  Dead descriptors (`ALIVE:0`) are dropped exactly as before — that filter
+  runs first, inside `parseSessions()`, unchanged.
+- **The placeholder itself is synthesized in `remote-index.js`**, lazily, from
+  whatever the last successful cycle stored — never persisted, never mirrored.
+  `getPlaceholderSessions(alias)` filters `descriptorOnly` sessions that also
+  carry a `cwd` (nothing to group under, otherwise) and builds a session-shaped
+  object via `buildPlaceholderSession()`: `sessionId` is the descriptor's own
+  id (parseSessions already requires one; a `pid:<n>` fallback exists only for
+  a descriptor shape this build has never produced — that path cannot
+  smoothly replace itself once a transcript appears, since the real row's id
+  would then differ from the placeholder's `pid:<n>`),
+  `folder` is `encodeProjectPath(cwd)` (the same derivation a real session's
+  folder gets), `remoteDescriptorSeen: true`, `status`/`statusUpdatedAt` from
+  the descriptor, `placeholder: true`, and `summary` set to the cwd's
+  basename. `getAllPlaceholderSessions()` aggregates across every alias
+  `remoteSessions` currently knows about.
+- **`main.js`'s `mergePlaceholderSessions(projects)` folds these into the
+  `get-projects` payload**, BEFORE `annotateRemoteAttachable()` runs — so a
+  placeholder gets the exact same `status`/`remoteAttachable`/`remoteActiveAt`
+  annotation a real remote session does, off the same descriptor. For each
+  placeholder it finds the project group matching `remoteAlias` +
+  `projectPath` and appends the session (skipping it if a real session with
+  the same id already won the race), or creates a new project group when the
+  host has no other indexed session under that cwd yet.
+- **Replacement is "same id, same row", not a swap main.js orchestrates.**
+  Once the transcript is scanned, the very next `listFiles()` cycle sees the
+  matching inventory entry and reports `descriptorOnly: false`, so
+  `getPlaceholderSessions()` simply stops offering that session — and the real
+  row (now present via `buildProjectsFromCache()`, same `sessionId`) is what
+  the sidebar's key-by-`sessionId` render already treats as the same row. No
+  code anywhere diffs "was this a placeholder a moment ago" — there is nothing
+  to reconcile because only one of the two sources is ever offering that id at
+  a time.
+- **`open-terminal`'s remote-attach lookup had to change to reach this row at
+  all.** It used to derive the alias solely from `getCachedFolder(sessionId)`
+  (a `session_cache` row) — a placeholder has none, by design (nothing is
+  mirrored or indexed for it), so that lookup silently found nothing and fell
+  through to the local-spawn path instead of attaching. It now falls back to
+  `remoteIndexer.findSessionAlias(sessionId)` — a plain in-memory scan of the
+  last known descriptors — whenever `getCachedFolder` returns nothing at all
+  (a folder that IS cached but local is left alone: `alias` stays `null`,
+  exactly as before).
+- **Stop, delete-guard and the DOM row needed no such fix.** `remote-stop-session`
+  and the sidebar's `resolveSessionStop`/`stopBeforeArchive` already take
+  `alias`/`sessionId` straight from the session object the renderer holds, never
+  from a DB lookup — a placeholder's `remoteAlias` is set directly by
+  `mergePlaceholderSessions`, so stop works unmodified. `read-session-jsonl`
+  (transcript viewer), `list-subagents` and the subagent-meta paths all key off
+  `getCachedFolder`/`getCachedSession`/`getCachedByParent`, which return
+  nothing for an unindexed id and already degrade to an error object rather
+  than throwing — a placeholder is skipped there, not crashed, with no code
+  change needed. The one renderer-side change is `sidebar.js`'s
+  `buildSessionItem`: the `.session-jsonl-btn` ("View messages") is not
+  rendered for a `session.placeholder` row, since there is nothing to view yet.
 
 - **A remote project is never "missing".** `buildProjectsFromCache` sets
   `missing: false` for any aliased row. Probing the local filesystem for
@@ -871,11 +940,13 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
-- `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`
+- `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one
 - `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, a `.key` file plus a directory named like a descriptor must both be excluded from what reaches stdout, and (F9) the ALIVE marker reflects real `/proc` liveness for both a live pid (the shell's own `$$`, so it reads as alive on any host) and a dead one
-- `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning, and that `getRemoteSessions()` is cleared (not left stale) after a cycle whose `sync()` throws
+- `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning, and that `getRemoteSessions()` is cleared (not left stale) after a cycle whose `sync()` throws; and (issue #278) `getPlaceholderSessions()`/`getAllPlaceholderSessions()` synthesizing and then dropping a placeholder once its transcript is indexed, and `findSessionAlias()`
 - `remote-indexing-e2e.test.js` — covers the `<alias>::` prefix reaching session rows, the search entries, the metrics and the sidebar
+- `merge-placeholder-sessions.test.js` — covers `main.js`'s `mergePlaceholderSessions()` (issue #278): appending to an existing project group, creating a new one, and never duplicating a session id a real row already won
 - `dom-sidebar-remote-session.test.js` — covers the remote badge and the read-only click routing
+- `dom-sidebar-remote-placeholder.test.js` — covers the placeholder row (issue #278): renders `.is-alive`, a stop control and status/age, has no transcript affordance, and an attachable placeholder opens a terminal rather than the transcript viewer
 - `derive-project-path.test.js` — covers the worktree-collapse + cwd extraction paths
 - `db-daily-activity.test.js` — covers heatmap aggregation
 - `read-session-file.test.js` — covers header parsing
