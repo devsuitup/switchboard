@@ -168,8 +168,10 @@ const rendererCrossFileGlobals = {
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
   applyRemoteStopped: 'readonly',
-  // public/stop-session-ui.js (pure stop-vs-detach decision, see .ai/contexts/session-state.md)
+  // public/stop-session-ui.js — see .ai/contexts/session-state.md (issue #271)
   resolveSessionStop: 'readonly',
+  isRemoteSessionAlive: 'readonly',
+  stopBeforeArchive: 'readonly',
   // read by sidebar.js's parentHasActiveSubagent() — see .ai/contexts/subagent-observability.md
   remoteSessionStates: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)

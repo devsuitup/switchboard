@@ -54,7 +54,16 @@ test('delete button: rendered on session cards and confirms before deleting', ()
   const handler = sidebar.slice(start, sidebar.indexOf('const archiveBtn', start));
   assert.match(handler, /await showDeleteSessionDialog\(session\)/,
     'an irreversible action must be confirmed, via the styled dialog');
-  assert.match(handler, /stopSession/, 'a running session must be stopped before deletion');
+  // issue #271: a running LOCAL session is stopped via the shared
+  // stop-then-archive/delete helper (stopBeforeArchive, public/stop-session-ui.js);
+  // a REMOTE session must skip the stop entirely — delete is refused
+  // server-side for remote regardless (REMOTE_READ_ONLY, main.js), so
+  // stopping first would strand a killed process behind a delete that never
+  // happens.
+  assert.match(handler, /stopBeforeArchive\(session\)/,
+    'a running session must be stopped before deletion, via the shared helper');
+  assert.match(handler, /resolveSessionStop\(session\)\.remote/,
+    'the stop must be skipped for a remote session — delete is refused server-side for remote anyway');
   assert.match(handler, /window\.api\.deleteSession/);
   assert.doesNotMatch(handler, /window\.alert\(/,
     'alert() is modal and hard to dismiss — a failure must not block the renderer');

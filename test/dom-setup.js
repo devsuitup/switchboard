@@ -138,6 +138,9 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
 
+  // stop-session-ui.js: sidebar.js's archive/delete stop helper (issue #271, see .ai/contexts/session-state.md).
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'stop-session-ui.js'));
+
   // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
   // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
@@ -163,6 +166,8 @@ function setupSidebarDom() {
     attentionSessions: read('attentionSessions'),
     responseReadySessions: read('responseReadySessions'),
     setActivity: read('setActivity'),
+    // remote-activity-ui.js's per-session adapter state (const, not a window property — see .ai/contexts/session-state.md).
+    remoteSessionStates: read('remoteSessionStates'),
     // Simulate the main process emitting subagent-spawned/subagent-completed
     // (session-transitions.js) by invoking the callback sidebar.js registered
     // via window.api.onSubagentSpawned/onSubagentCompleted at eval time.
