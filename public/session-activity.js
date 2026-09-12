@@ -59,8 +59,8 @@ function setActivity(sessionId, active, via, opts) {
   applyActivityClasses(sessionId);
 }
 
-function clearUnread(sessionId) {
-  if (window.ATRACE && responseReadySessions.has(sessionId)) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'clearUnread' });
+function clearUnread(sessionId, via) {
+  if (window.ATRACE && responseReadySessions.has(sessionId)) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'clearUnread', via });
   responseReadySessions.delete(sessionId);
   applyActivityClasses(sessionId);
 }
