@@ -4470,11 +4470,7 @@ test('session serialization: two triggers on different sessions still run in par
 
     let busyA = true;
     let busyC = false;
-    // Captured the instant C's own write happens -- a state check, not a wall
-    // clock threshold, so this stays reliable under heavy system load: as long
-    // as C's dispatch isn't stalled for the whole 3s A is blocked for (a load
-    // spike no other assertion in this suite tolerates either), the check
-    // holds regardless of how long C itself actually took.
+    // state check, not a clock: C's write both records busyA and releases A — see .ai/contexts/trigger-watcher.md
     let busyAWhenCWrote;
     const composerA = { pending: 0, lastInputAt: 0 };
     const composerC = { pending: 0, lastInputAt: 0 };
@@ -4492,7 +4488,11 @@ test('session serialization: two triggers on different sessions still run in par
       write(data) {
         if (busyAWhenCWrote === undefined) busyAWhenCWrote = busyA;
         writtenC.push(data);
-        if (data === '\r') { busyC = true; setTimeout(() => { busyC = false; }, 60); }
+        if (data === '\r') {
+          busyC = true; setTimeout(() => { busyC = false; }, 60);
+          // C's own write releases A: if C were serialized behind A, A would hit the 3 s idle timeout instead
+          busyA = false;
+        }
       },
     };
     const ctx = {
@@ -4515,7 +4515,6 @@ test('session serialization: two triggers on different sessions still run in par
       },
     };
 
-    setTimeout(() => { busyA = false; }, 3000); // unblocks A's wait:'idle'
     watcher = start(ctx);
 
     const uuidA = 'serialize-parallel-a-' + Date.now();
@@ -4525,7 +4524,7 @@ test('session serialization: two triggers on different sessions still run in par
     writeTrigger(tmp, uuidC, { sessionId: SESSION_C, command: 'CCCC', wait: 'none' });
 
     const resultPathC = path.join(tmp, 'processed', uuidC + '.result.json');
-    await waitForFile(resultPathC, 2500);
+    await waitForFile(resultPathC, scaleUp(10000));
 
     const resultC = readResult(path.join(tmp, 'processed'), uuidC);
     assert.equal(resultC.ok, true);
@@ -4535,9 +4534,10 @@ test('session serialization: two triggers on different sessions still run in par
       'flipped false yet) -- session C must not have waited behind session A to get there');
 
     const resultPathA = path.join(tmp, 'processed', uuidA + '.result.json');
-    await waitForFile(resultPathA, 5000);
+    await waitForFile(resultPathA, scaleUp(10000));
     const resultA = readResult(path.join(tmp, 'processed'), uuidA);
-    assert.equal(resultA.ok, true);
+    assert.equal(resultA.ok, true,
+      'A must complete once C released it -- false means A timed out on wait:"idle", i.e. C was serialized behind A');
 
   } finally {
     if (watcher) watcher.close();
