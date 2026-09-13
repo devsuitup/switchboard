@@ -130,3 +130,20 @@ test('symptom 2 (#273): pty.exit of a remote attach clears busy at once, no 20s 
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'a stale seed window must not re-arm busy after the handoff');
   t.destroy();
 });
+
+// Adversarial review of PR #282 (item 4): the true->false handoff routes
+// through setActivity() (the two-legacy-reader dual feed), which creates a
+// shadow localPtyStates entry for the remote id — left alone, that entry is
+// never purged, since app.js's pty-set purge explicitly skips remote rows
+// (dataset.remoteAlias). See .ai/contexts/session-state.md ("The local-pty adapter").
+test('setRemoteAttached(id, false) purges the shadow local-pty entry it just fed, not just the busy flag', () => {
+  const t = setup(['s1']);
+  t.emit({ sessionId: 's1', at: Date.now() });
+  t.setRemoteAttached('s1', true);
+  assert.equal(t.sessionBusyState.has('s1'), true, 'precondition: the dual-feed created a shadow entry');
+
+  t.setRemoteAttached('s1', false);
+
+  assert.equal(t.sessionBusyState.has('s1'), false, 'the shadow local-pty entry must be dropped on detach, not left idle forever');
+  t.destroy();
+});

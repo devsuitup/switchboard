@@ -152,7 +152,9 @@ function setAttention(sessionId, on, via) {
 
 // Mirrors activeSubagentsByParent into the adapter's own agentsBusy — see .ai/contexts/session-state.md ("The local-pty adapter")
 function syncLocalPtyAgentsBusy(sessionId, active) {
-  const state = localPtyState(sessionId);
+  // Touch only if an entry already exists, never auto-vivify — see .ai/contexts/session-state.md ("The local-pty adapter")
+  const state = localPtyStates.get(sessionId);
+  if (!state) return;
   if (state.snapshot().agentsBusy === !!active) return;
   state.apply(active ? { type: 'subagentSpawned' } : { type: 'subagentCompleted', stillActive: false });
 }

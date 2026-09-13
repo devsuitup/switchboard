@@ -97,13 +97,29 @@ test('setAttention feeds the same persisted state (event sequence -> snapshot)',
   t.destroy();
 });
 
-test('syncLocalPtyAgentsBusy feeds agentsBusy into the same persisted state', () => {
+test('syncLocalPtyAgentsBusy feeds agentsBusy into an existing persisted state', () => {
   const t = setup();
+  t.setActivity('s1', true); // an entry must already exist — see the next test
+
   t.syncLocalPtyAgentsBusy('s1', true);
   assert.equal(t.snapshot('s1').agentsBusy, true);
 
   t.syncLocalPtyAgentsBusy('s1', false);
   assert.equal(t.snapshot('s1').agentsBusy, false);
+  t.destroy();
+});
+
+// Adversarial review of PR #282 (item 4): syncLocalPtyAgentsBusy used to call
+// the auto-vivifying localPtyState(), leaking a blank entry for every parent
+// id reflectSubagentRunningState is ever called with — including a parent
+// whose row is gone, filtered, or that will never be a local-pty row at all.
+test('syncLocalPtyAgentsBusy never creates a state for a parent with no existing entry', () => {
+  const t = setup();
+  assert.equal(t.hasState('s1'), false, 'precondition: untouched');
+
+  t.syncLocalPtyAgentsBusy('s1', true);
+
+  assert.equal(t.hasState('s1'), false, 'must not auto-vivify — see .ai/contexts/session-state.md ("The local-pty adapter")');
   t.destroy();
 });
 
@@ -133,7 +149,7 @@ test('busy and response-ready can never both be true through the public API', ()
   t.destroy();
 });
 
-test('attention while busy clears busy in the persisted snapshot — no API path leaves both true', () => {
+test('attention fired while busy clears busy — an attention edge still wins', () => {
   const t = setup();
   t.setActivity('s1', true);
   assert.equal(t.snapshot('s1').busy, true);
@@ -141,7 +157,33 @@ test('attention while busy clears busy in the persisted snapshot — no API path
   t.setAttention('s1', true, 'onTerminalNotification');
   const snap = t.snapshot('s1');
   assert.equal(snap.attention, true);
-  assert.equal(snap.busy, false, 'attention wins — the domain\'s exclusivity invariant, not a setActivity special case');
+  assert.equal(snap.busy, false, 'an attention EVENT still clears busy — only a later busy edge must not clear attention back (see the next test)');
+  t.destroy();
+});
+
+// Regression (adversarial review of PR #282): an OSC-0 busy title arriving
+// while a permission prompt is open (two independent IPC streams) used to
+// wipe needs-attention. Decided: attention is cleared only by an explicit
+// attention:false (clearNotifications) — never by a busy edge. See
+// .ai/contexts/session-state.md ("The local-pty adapter").
+test('a busy edge after attention does NOT clear attention — attention is orthogonal to busy', () => {
+  const t = setup();
+  t.setAttention('s1', true, 'onTerminalNotification');
+  assert.equal(t.snapshot('s1').attention, true);
+
+  t.setActivity('s1', true, 'onCliBusyState'); // OSC 0 busy title fires independently
+  const busySnap = t.snapshot('s1');
+  assert.equal(busySnap.attention, true, 'a busy edge must never clear attention');
+  assert.equal(busySnap.busy, true);
+  assert.ok(t.item('s1').classList.contains('needs-attention'));
+  assert.ok(t.item('s1').classList.contains('cli-busy'));
+
+  t.setAttention('s1', false, 'clearNotifications'); // only an explicit clear removes it
+  const clearedSnap = t.snapshot('s1');
+  assert.equal(clearedSnap.attention, false);
+  assert.equal(clearedSnap.busy, true, 'busy remains untouched by the attention clear');
+  assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  assert.ok(t.item('s1').classList.contains('cli-busy'));
   t.destroy();
 });
 
@@ -185,6 +227,44 @@ test('decided (not a regression): attention after response-ready, then clearing 
   assert.equal(snap.responseReady, false, 'must NOT fall back to response-ready — that fact is gone, not hidden');
   assert.ok(!t.item('s1').classList.contains('response-ready'));
   assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  t.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// Decided: a local row idling while active (or armReady:false) now shows
+// "Waiting for input", not "Idle" — see .ai/contexts/session-state.md
+// ("The local-pty adapter").
+// ---------------------------------------------------------------------------
+
+test('decided: a local row going idle while active shows "Waiting for input", not "Idle"', () => {
+  const t = setup();
+  t.window.activeSessionId = 's1'; // s1 IS the focused session
+
+  t.setActivity('s1', true);
+  t.setActivity('s1', false); // idle while active -> must not arm response-ready
+  const snap = t.snapshot('s1');
+  assert.equal(snap.busy, false);
+  assert.equal(snap.waitingForInput, true);
+  assert.equal(snap.responseReady, false);
+
+  const icon = t.icon('s1');
+  assert.ok(icon.classList.contains('session-icon--waiting'));
+  assert.equal(icon.title, 'Waiting for input');
+  t.destroy();
+});
+
+test('decided: a local row going idle NOT active still arms response-ready (unchanged)', () => {
+  const t = setup();
+  t.window.activeSessionId = 's2'; // s1 not focused
+
+  t.setActivity('s1', true);
+  t.setActivity('s1', false);
+  const snap = t.snapshot('s1');
+  assert.equal(snap.responseReady, true);
+
+  const icon = t.icon('s1');
+  assert.ok(icon.classList.contains('session-icon--response-ready'));
+  assert.equal(icon.title, 'Response ready');
   t.destroy();
 });
 

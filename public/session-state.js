@@ -34,7 +34,6 @@ function createSessionState(kind) {
   function clearExclusive() {
     busy = false;
     waitingForInput = false;
-    attention = false;
     responseReady = false;
   }
 

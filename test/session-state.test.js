@@ -104,17 +104,17 @@ test('exclusivity: attention while busy clears busy and any pending unread', () 
   assert.equal(snap.responseReady, false);
 });
 
-test('exclusivity: going busy again clears attention and waitingForInput/responseReady', () => {
+test('exclusivity: going busy again clears waitingForInput/responseReady but NOT attention (decided: attention is cleared only by an explicit attention:false, never by a busy edge)', () => {
   const s = createSessionState('local-pty');
   s.apply({ type: 'attention', active: true });
   s.apply({ type: 'busy', active: true });
   const snap = s.snapshot();
   assert.equal(snap.busy, true);
-  assert.equal(snap.attention, false);
+  assert.equal(snap.attention, true, 'attention outranks busy in the priority ladder and survives a busy edge — see .ai/contexts/session-state.md');
   assert.equal(snap.waitingForInput, false);
 });
 
-test('exclusivity: at most one of busy/waitingForInput/attention is ever true', () => {
+test('exclusivity: at most one of busy/waitingForInput is ever true; attention is orthogonal to busy', () => {
   const s = createSessionState('local-pty');
   const events = [
     { type: 'busy', active: true },
@@ -128,9 +128,32 @@ test('exclusivity: at most one of busy/waitingForInput/attention is ever true', 
   for (const e of events) {
     s.apply(e);
     const snap = s.snapshot();
-    const trueCount = [snap.busy, snap.waitingForInput, snap.attention].filter(Boolean).length;
-    assert.ok(trueCount <= 1, `busy/waitingForInput/attention must stay exclusive, got ${trueCount} true after ${JSON.stringify(e)}`);
+    const trueCount = [snap.busy, snap.waitingForInput].filter(Boolean).length;
+    assert.ok(trueCount <= 1, `busy/waitingForInput must stay exclusive, got ${trueCount} true after ${JSON.stringify(e)}`);
   }
+});
+
+test('exclusivity: attention set while already busy leaves busy untouched — orthogonal in both directions', () => {
+  const s = createSessionState('local-pty');
+  s.apply({ type: 'busy', active: true });
+  s.apply({ type: 'attention', active: true });
+  s.apply({ type: 'busy', active: true }); // a second, independent busy edge (e.g. re-armed OSC 0 title)
+  const snap = s.snapshot();
+  assert.equal(snap.busy, true);
+  assert.equal(snap.attention, true, 'a busy edge must never clear attention');
+});
+
+test('exclusivity: attention is exclusive with responseReady only — clearing attention does not resurrect it', () => {
+  const s = createSessionState('local-pty');
+  s.apply({ type: 'busy', active: true });
+  s.apply({ type: 'busy', active: false, armReady: true }); // idle, unseen -> responseReady armed
+  assert.equal(s.snapshot().responseReady, true);
+
+  s.apply({ type: 'attention', active: true });
+  assert.equal(s.snapshot().responseReady, false, 'attention consumes the pending unread state');
+
+  s.apply({ type: 'attention', active: false });
+  assert.equal(s.snapshot().responseReady, false, 'clearing attention must not restore responseReady — see .ai/contexts/session-state.md');
 });
 
 // ---------------------------------------------------------------------------

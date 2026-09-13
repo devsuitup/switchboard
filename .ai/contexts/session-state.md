@@ -271,11 +271,14 @@ Inputs:
   already use for their own reasons.
 - **`attention` (OSC 9, not a busy/idle notification)** — `setAttention(sessionId, on, via)`,
   called from `app.js`'s `onTerminalNotification` (set) and `clearNotifications`
-  (clear). Setting attention clears busy/waitingForInput/responseReady in the
-  domain (`clearExclusive()`, `session-state.js`) — clearing attention does
-  not restore whatever was cleared; that is `session-state.js`'s own,
-  pre-existing contract (`test/session-state.test.js`, "exclusivity: attention
-  while busy..."), not a new local-pty special case.
+  (clear). An `attention` event still clears `busy`/`waitingForInput`/`responseReady`
+  (`clearExclusive()`, `session-state.js`) — clearing attention does not
+  restore whatever was cleared. But the reverse no longer holds (**revised
+  2026-09-13**): a `busy` event never clears `attention` — an OSC-0 busy
+  title and an OSC-9 permission prompt are independent IPC streams, and a
+  busy edge arriving mid-prompt must not silently dismiss it. `attention` is
+  cleared only by an explicit `attention: false`. See the exclusivity
+  invariant below "Shape" for the full statement.
 - **`subagentSpawned`/`subagentCompleted`** — not a second IPC feed. `sidebar.js`'s
   `activeSubagentsByParent` (precise spawn/complete events plus a 60s TTL for
   a parent that stops emitting) stays the ground truth for the row-level
@@ -345,6 +348,44 @@ One remaining consequence flagged, not fixed: `.has()` on
 shipped behavior currently depends on reading a stale `responseReady`/`busy`
 value after an attention transition, but a future feature reintroducing that
 combination would need its own domain field, not a Set-level workaround.
+
+#### Decided: a local row idling while active (or with `armReady:false`) now shows "Waiting for input", not "Idle"
+
+**Behavior change, kept deliberately.** Before this migration,
+`snapshotForLocal`'s predecessor (`computeBusyReadyClasses` combined with the
+throwaway per-render reconstruction) only ever applied a `busy` event to its
+scratch domain object when the session was busy, or idle-and-unseen
+(`responseReady`) — a session that went idle while **focused**, or via a
+`setActivity(id, false, via, { armReady: false })` call, got no event applied
+at all, so `waitingForInput` stayed at its default `false` and
+`renderSessionIcon` fell through every named rung to the `idle` fallback:
+empty glyph, title "Idle".
+
+Now `setActivity` always applies a real `busy: false` event to the
+**persisted** local-pty state on every idle transition, focused or not,
+`armReady` true or false — `session-state.js`'s `apply()` unconditionally sets
+`waitingForInput = true` on that branch regardless of `armReady` (`armReady`
+only gates `responseReady`). So a focused session idling, or any session
+idling via an `armReady:false` source, now resolves to the `waitingForInput`
+rung: `session-icon--waiting`, title "Waiting for input" — where main showed
+nothing (`idle`, title "Idle").
+
+**Kept, not reverted**, because it converges local-pty with the other two
+kinds: `remote-ssh` and `local-transcript` already report `waitingForInput`
+(never `idle`) the instant they go quiet with `armReady:false` — a CLI
+sitting at its prompt genuinely *is* waiting for input, whether or not
+Switchboard currently has a tab open on it, and whether or not the last idle
+edge happened to arm the unseen-response marker. The `idle` rung still exists
+in `renderSessionIcon`'s priority ladder (a session `apply()` has literally
+never touched resolves there, e.g. a brand-new `localPtyState()` before any
+event lands), it is simply no longer reachable for a local session that has
+gone through at least one busy→idle cycle.
+
+`test/local-pty-adapter.test.js`'s "a local row going idle while active shows
+'Waiting for input', not 'Idle'" and "...idle NOT active still arms
+response-ready (unchanged)" pin both branches of the decision — the icon
+slot's `session-icon--waiting`/`session-icon--response-ready` class and
+title, side by side, so a future reader finds the split intentional.
 
 ### The local-transcript adapter (step 4)
 
@@ -448,21 +489,42 @@ persistent per-session-id adapter (`localPtyStates` / `localTranscriptStates` /
 | `attachable` | reserved, unused |
 | `archived` / `stale` | reserved, unused |
 
-Invariant enforced by `apply()`: `busy` / `waitingForInput` / `attention` are
-mutually exclusive — going busy or attention clears the other two (and
-`responseReady`, which only means something under `waitingForInput`).
+Invariant enforced by `apply()` (**revised 2026-09-13, adversarial review of
+PR #282**): `busy` and `waitingForInput` (and `responseReady`, which only
+means something under `waitingForInput`) are mutually exclusive — going busy
+clears the other two. `attention` is **orthogonal to busy**: an `attention`
+event still clears `busy`/`waitingForInput`/`responseReady` (unchanged), but
+a `busy` event — either direction — never clears `attention`. `attention` is
+exclusive with `responseReady` only, one-directionally: setting it clears
+`responseReady` (consumes the unseen-response fact, see "Decided" below), but
+clearing `attention` does not resurrect anything. Rationale: an OSC-0 busy
+title and an OSC-9 permission prompt are two independent IPC streams: a busy
+edge arriving while attention is pending must not silently dismiss the
+prompt's indicator. `attention` is cleared only by an explicit
+`attention: false` (`clearNotifications`) — never as a side effect of a busy
+edge. `test/session-state.test.js`'s "exclusivity: going busy again clears
+waitingForInput/responseReady but NOT attention" and
+`test/local-pty-adapter.test.js`'s "a busy edge after attention does NOT
+clear attention" pin this at the domain and adapter levels respectively.
 
 `renderSessionIcon(snapshot)` resolves the priority order — attention >
 responseReady > busy > agentsBusy > waitingForInput > idle+age > stale >
 archived — defensively (it does not trust the caller kept exclusivity) and
-returns `{ classes, slotClasses, glyph, title }` for **one icon slot**. Only
-the four rungs that map to an existing row-level CSS class (`needs-attention`,
-`response-ready`, `cli-busy`, `has-busy-agents`, in `classes`) carry one; every
-rung — including those four — also carries exactly one `slotClasses` entry
+returns `{ classes, slotClasses, glyph, title }` for **one icon slot**: only
+the single winning rung's `classes`/`slotClasses`/`glyph`/`title` come back,
+never a union across rungs. Every rung carries exactly one `slotClasses` entry
 (`session-icon--attention`, `session-icon--response-ready`, `session-icon--busy`,
 `session-icon--agents-busy`, `session-icon--waiting`, `session-icon--idle`,
-`session-icon--stale`, `session-icon--archived`). See "The icon slot (step 3b)"
-below for how `classes` and `slotClasses` are used differently.
+`session-icon--stale`, `session-icon--archived`), the only thing `writeIconSlot`
+reads — see "The icon slot (step 3b)" below. **`classes` is no longer read by
+`applyStateClasses` for the row-level classes** (revised 2026-09-13, PR #282
+review): `needs-attention`/`response-ready`/`cli-busy` are read straight off
+`snapshot.attention`/`.responseReady`/`.busy` instead, because those three can
+now coexist with `busy` (attention) in a way the single-winning-rung `classes`
+array cannot represent — deriving row classes from the priority winner alone
+was silently dropping `cli-busy` whenever `attention` also won the rung.
+`classes` remains on the return value (pinned by `test/session-state.test.js`'s
+priority-order tests) but has no other production reader today.
 
 ## The icon slot (step 3b)
 

@@ -36,9 +36,10 @@ function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const icon = renderSessionIcon(snapshot);
-  const attention = icon.classes.includes('needs-attention');
-  const ready = icon.classes.includes('response-ready');
-  const busy = icon.classes.includes('cli-busy');
+  // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")
+  const attention = !!(snapshot && snapshot.attention);
+  const ready = !!(snapshot && snapshot.responseReady);
+  const busy = !!(snapshot && snapshot.busy);
   const agentsBusy = !!(snapshot && snapshot.agentsBusy);
   const alive = !!(snapshot && snapshot.liveness === 'alive');
   setNeedsAttention(item, attention);
