@@ -235,6 +235,42 @@ tool call must not read as idle). `PRIORITY` in `session-state.js` is
 unchanged — this only changes which decay duration a renderer-side timer
 picks, never the priority ladder.
 
+**`seedRemoteActivity` (cold-start / rebuild paint) is migrated too, not just
+the live-touch path.** Its own arm used to stay `PIP_DECAY_MS`-based
+regardless of `agentsBusy`, computing `remaining = remoteActiveAt +
+PIP_DECAY_MS - now`. `renderProjects()` calls `seedRemoteActivity` on every
+full sidebar rebuild, and a rebuild is itself commonly provoked by the
+subagent's own writes — so a parent whose short decay had *already* fired
+got put back on the animated busy rung for up to 20s at the very next
+rebuild (measured: touch t=0, spawn t=1000 reschedules the decay to fire at
+t=4000, busy correctly false at t=4000, then a rebuild at t=5000 re-armed
+busy for another ~15s). Fixed by using `remoteBusyDecayMs(sessionId)` in that
+same arithmetic (`remaining = remoteActiveAt + remoteBusyDecayMs(sessionId) -
+now`) — with `agentsBusy` true the seed window is 3s from `remoteActiveAt`
+instead of 20s, so a seed older than that does nothing, exactly mirroring
+what the live-touch path already does. A seed with `agentsBusy` false is
+byte-identical to before (`remoteBusyDecayMs` returns `PIP_DECAY_MS`), which
+is why `test/dom-sidebar-remote-activity-pip.test.js` (no subagent in any of
+its fixtures) needed no changes.
+
+**Accepted trade-off, not a bug: with a subagent running, a genuinely busy
+parent can visibly flap between the `busy` and `agentsBusy` rungs.** If the
+parent's own transcript stays silent for more than `SUBAGENT_PARENT_DECAY_MS`
+(3s) — a long tool call — its `busy` decays to `agentsBusy` until the next
+write brings it back to `busy`. Both rungs are violet-tinted
+(`.has-busy-agents .session-icon--busy::before` / `.session-icon--agents-busy::before`),
+so the visible change is animation only (spinner vs. static diamond), not a
+color or row-class change. This is deliberate: the alternative — decaying at
+the full `PIP_DECAY_MS` (20s) whenever `agentsBusy` is true — is exactly
+issue #284's original symptom, a parent idling on `busy` long after it
+stopped producing output. **The local-pty row has no equivalent gap**: its
+busy signal is the OSC title stream, edge-triggered on the CLI's own
+idle/busy transitions rather than decayed from silence, so it never flaps
+while genuinely idle-but-subagent-running. This asymmetry between local and
+remote is a known, accepted consequence of the remote-ssh adapter having no
+edge-triggered signal to key off — only transcript touches — not an
+oversight to fix later.
+
 ### Row ownership: attached vs unattached (issue #273)
 
 An attached remote row (a tab open on it) is owned by the local-pty path —

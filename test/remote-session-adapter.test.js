@@ -266,11 +266,16 @@ function setupWithClock(sessionIds = ['s1']) {
   vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
   vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });
 
+  const call = (fnName, ...args) => vm.runInContext(
+    `${fnName}(${args.map((a) => JSON.stringify(a)).join(',')})`, ctx
+  );
+
   return {
     window,
     now: () => clock,
     emit: (payload) => onRemoteActivityCb(payload),
     snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
+    seedRemoteActivity: (session) => call('seedRemoteActivity', session),
     advance(ms) {
       clock += ms;
       for (const t of timers) {
@@ -350,5 +355,46 @@ test('(4) a parent with no subagent keeps the full 20s decay', () => {
 
   t.advance(5001); // -> 20001, past the 20s decay
   assert.equal(t.snapshot('s1').busy, false, 'busy false once the 20s decay elapses');
+  t.destroy();
+});
+
+// seedRemoteActivity's own arm used to stay PIP_DECAY_MS-based regardless of
+// agentsBusy — renderProjects calls it on every full rebuild, and rebuilds
+// are themselves triggered by the subagent's own writes, so a waiting parent
+// whose short decay had already fired got re-armed onto the animated busy
+// rung for up to 20s at the very next rebuild. See .ai/contexts/session-state.md.
+
+test('(5) a rebuild after the short decay already fired must not re-arm busy for 20s', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @0
+  t.advance(1000); // -> 1000
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t.now(), kind: 'subagent' }); // spawn @1000, reschedules the decay to fire @4000
+
+  t.advance(3000); // -> 4000, the short decay fires
+  let snap = t.snapshot('s1');
+  assert.equal(snap.busy, false, 'precondition: the short decay already cleared busy at t=4000');
+
+  t.advance(1000); // -> 5000, renderProjects rebuilds (often provoked by the subagent's own write)
+  t.seedRemoteActivity({ sessionId: 's1', remoteAlias: 'vps', remoteActiveAt: 1000, remoteDescriptorSeen: true });
+
+  snap = t.snapshot('s1');
+  assert.equal(snap.busy, false, 'a rebuild at t=5000 must not re-arm busy for another 20s');
+  assert.equal(snap.agentsBusy, true, 'agentsBusy is untouched by the seed path');
+  t.destroy();
+});
+
+test('(6) a rebuild inside the short window re-arms only for what is left of it, not the full 20s', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t.now(), kind: 'subagent' }); // spawn @0, no busy touch emitted live
+
+  t.advance(2000); // -> 2000, a rebuild seeds from the descriptor's last-seen activity at t=0
+  t.seedRemoteActivity({ sessionId: 's1', remoteAlias: 'vps', remoteActiveAt: 0, remoteDescriptorSeen: true });
+  assert.equal(t.snapshot('s1').busy, true, 'seed arms busy from the short window (0 + 3000 - 2000 = 1000ms left)');
+
+  t.advance(999); // -> 2999, just before the window (0 + 3000) closes
+  assert.equal(t.snapshot('s1').busy, true, 'busy still held just before t=3000');
+
+  t.advance(2); // -> 3001, past t=3000
+  assert.equal(t.snapshot('s1').busy, false, 'busy decays at t=3000 — the short window, not the full 20s');
   t.destroy();
 });

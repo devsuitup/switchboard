@@ -210,7 +210,8 @@ function seedRemoteActivity(session) {
   const sessionId = session.sessionId;
   const floor = remoteSeedFloors.get(sessionId);
   if (floor !== undefined && session.remoteActiveAt <= floor) return; // stale — see setRemoteAttached, #273
-  const remaining = session.remoteActiveAt + PIP_DECAY_MS - Date.now();
+  // see .ai/contexts/session-state.md (issue #284)
+  const remaining = session.remoteActiveAt + remoteBusyDecayMs(sessionId) - Date.now();
   if (remaining <= 0) return;
   markRemoteBusy(sessionId, 'remote-seed', session.remoteActiveAt);
   if (remoteActivityDecayTimers.has(sessionId)) return;
