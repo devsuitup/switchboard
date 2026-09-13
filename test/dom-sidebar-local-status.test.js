@@ -37,7 +37,7 @@ test('a local session with a status renders the state+age line', () => {
   } finally { ctx.destroy(); }
 });
 
-test('a local session with no status renders no status line', () => {
+test('a local session with no status renders an empty status slot (issue #286: slot stays in the DOM to keep layout stable)', () => {
   const ctx = setupSidebarDom();
   try {
     const session = {
@@ -51,7 +51,9 @@ test('a local session with no status renders no status line', () => {
 
     const item = ctx.sidebar.buildSessionItem(session);
 
-    assert.equal(item.querySelector('.session-status'), null, 'no status field must mean no status line');
+    const statusEl = item.querySelector('.session-status');
+    assert.ok(statusEl, 'no status field must still render the status slot, empty');
+    assert.equal(statusEl.textContent, '', 'no status field must mean no status text');
   } finally { ctx.destroy(); }
 });
 
@@ -83,6 +85,30 @@ test('a remote session still renders both its remote badge and the status line',
       assert.match(statusEl.textContent, /busy.*5s ago/);
     } finally {
       ctx.window.Date.now = realNow;
+    }
+  } finally { ctx.destroy(); }
+});
+
+test('.session-meta renders the same three children in the same order whether session.status is set or not (issue #286)', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const base = {
+      summary: 'local session',
+      modified: '2026-09-09T11:59:00.000Z',
+      starred: false,
+      archived: 0,
+      messageCount: 1,
+    };
+
+    const withStatus = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'meta-order-with-status', status: 'idle', statusUpdatedAt: Date.now() });
+    const withoutStatus = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'meta-order-without-status' });
+
+    for (const item of [withStatus, withoutStatus]) {
+      const meta = item.querySelector('.session-meta');
+      assert.ok(meta, '.session-meta must exist');
+      const classes = Array.from(meta.children).map((el) => el.className);
+      assert.deepEqual(classes, ['session-time', 'session-short-id', 'session-status'],
+        '.session-meta must always render the same three children in the same order');
     }
   } finally { ctx.destroy(); }
 });

@@ -734,6 +734,20 @@ liveness/attach state. The only thing this row's absent transcript changes is
 in the renderer: `sidebar.js` does not render the `.session-jsonl-btn` for a
 `placeholder` row, since there is nothing to view.
 
+## Surfacing status on the session object (`.session-meta` layout, issue #286)
+
+`buildSessionItem`'s `.session-meta` row used to append `statusEl` only when
+`session.status` was truthy, and the row was laid out with
+`justify-content: space-between` — with two children (time, short id) that
+pins the short id to the far right, with three (status appended) it lands in
+the middle, so the short id visibly jumped depending on whether that session
+happened to have a live process. `statusEl` is now always created (empty
+`textContent` when there is no status), keeping the DOM order
+(`session-time`, `session-short-id`, `session-status`) and child count
+constant; the CSS dropped `space-between` for a plain `gap`, with
+`margin-left: auto` on `.session-status` alone so it — not the short id —
+is the element whose position depends on how much room is left.
+
 ## Known limits
 
 - **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s
