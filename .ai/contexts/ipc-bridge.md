@@ -206,7 +206,7 @@ session object exists.
 Three things make that safe:
 
 - **The response-ready lock only blocks idle.** `setActivity(id, true)` always writes, and drops the session from `responseReadySessions` — a session that resumed generating has no unread answer left to announce. `setActivity(id, false)` on a response-ready session is still ignored, so an unread marker survives duplicate idle signals. Before that split, a session that finished a turn off-screen and restarted without a click (cron, trigger-watcher, resume) had *every* subsequent busy event swallowed.
-- **`cli-busy` and `response-ready` are mutually exclusive.** `applyActivityClasses()` is the only writer of either class. The cascade would in fact favour the spinner anyway (`.session-item.cli-busy:not(.needs-attention) .session-status-dot` carries `!important` and one more class than the response-ready rule that follows it in `style.css`), but the state, not the cascade, is what decides.
+- **`cli-busy` and `response-ready` are mutually exclusive.** `applyStateClasses()` (`public/session-activity-dom.js`) is the only writer of either class, and the exclusivity itself is the domain's own invariant (`public/session-state.js`'s `apply()`) — see `.ai/contexts/session-state.md` ("The local-pty adapter"). The state, not the cascade, is what decides.
 - **A poll reply cannot overwrite a fresher event.** `setActivity` bumps a monotonic counter per session; the poll snapshots it via `currentActivitySeq()` *before* the IPC round-trip and `reconcileBusyState` skips any session that moved in between.
 
 ### The OSC 0 title is the primary busy channel

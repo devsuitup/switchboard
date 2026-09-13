@@ -249,6 +249,11 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   }
   const caret = document.getElementById(caretIdFor(parentSessionId));
   if (caret) caret.classList.toggle('has-running-child', parentHasActiveSubagent(parentSessionId));
+  // Mirror the live-subagent count into the local-pty adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
+  if (typeof syncLocalPtyAgentsBusy === 'function') {
+    const localMap = activeSubagentsByParent.get(parentSessionId);
+    syncLocalPtyAgentsBusy(parentSessionId, !!(localMap && localMap.size > 0));
+  }
   // Parent session item: "subagents are working under this session" indicator.
   // Unlike the caret badge, the parent item is always visible, so this shows
   // whether the subagent group is expanded or collapsed. CSS gives the

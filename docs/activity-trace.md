@@ -174,8 +174,8 @@ no `sent`.
 | `store.purge` | State dropped because the PTY is gone | `reason`, `busy`, `ready`, `attention` |
 | `store.rekey` | Activity state carried across a fork | `from`, `busy`, `ready`, `attention` |
 | `subagents.prune` | The 60 s TTL sweep ran | `parents`, `agents` |
-| `class.apply` | `cli-busy` / `response-ready` written | `el`, both class states |
-| `class.toggle` | `needs-attention` / `has-running-pty` written | `el`, `cls`, `on` |
+| `class.apply` | `needs-attention` / `cli-busy` / `response-ready` / `has-busy-agents` / `is-alive` written (`applyStateClasses`, all three session kinds) | `el`, `needs-attention`, `cli-busy`, `response-ready`, `has-busy-agents`, `is-alive`, `kind` |
+| `class.toggle` | `has-running-pty` written | `el`, `cls`, `on` |
 | `class.subagent` | Subagent `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
 | `class.render` | A full sidebar render reconstructed an item's classes from the stores | `el`, `cls` |
 | `poll.recv` | The poll reply reaches the renderer | `sinceSeq`, `entries` |

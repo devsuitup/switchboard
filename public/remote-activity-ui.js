@@ -148,6 +148,8 @@ function setRemoteAttached(sessionId, attached) {
     remoteSeedFloors.set(sessionId, Date.now());
     state.apply({ type: 'busy', active: false, armReady: false });
     setActivity(sessionId, false, 'remote-attach-handoff', { armReady: false });
+    // Drops the shadow local-pty entry setActivity() just touched above — see .ai/contexts/session-state.md ("The local-pty adapter")
+    purgeActivityFor(sessionId, 'remote-detach');
   }
   projectRemoteState(sessionId);
 }

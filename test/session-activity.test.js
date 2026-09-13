@@ -139,19 +139,19 @@ test('a focused session going idle is not marked response-ready', () => {
   t.destroy();
 });
 
-test('clearUnread re-exposes the spinner when the session is still generating', () => {
+test('clearUnread does not clear cli-busy when the session is generating again', () => {
   const t = setup();
   t.window.activeSessionId = 's2';
 
   t.setActivity('s1', true);
-  t.setActivity('s1', false);
-  t.setActivity('s1', true); // busy again, marker already dropped
-  t.responseReadySessions.add('s1'); // force the stale combination
-  t.item('s1').classList.add('response-ready');
+  t.setActivity('s1', false); // response-ready armed
+  t.setActivity('s1', true); // busy again — going busy already drops the marker
+  assert.ok(!t.responseReadySessions.has('s1'), 'precondition: marker already cleared by the busy transition itself');
+  assert.ok(t.item('s1').classList.contains('cli-busy'), 'precondition: busy');
 
   t.clearUnread('s1');
 
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'cli-busy restored from sessionBusyState');
+  assert.ok(t.item('s1').classList.contains('cli-busy'), 'cli-busy untouched by clearUnread');
   assert.ok(!t.item('s1').classList.contains('response-ready'));
 
   t.destroy();
@@ -208,24 +208,37 @@ test('armReady:false does not block the response-ready CLEAR when the session go
 // F7: purgeActivityFor — the single writer for the PTY-gone purge
 // ---------------------------------------------------------------------------
 
-test('purgeActivityFor drops busy/unread/attention state and their classes', () => {
+test('purgeActivityFor drops response-ready state and its class', () => {
   const t = setup();
   t.window.activeSessionId = 's2';
 
   t.setActivity('s1', true);
   t.setActivity('s1', false); // response-ready armed
+  assert.ok(t.responseReadySessions.has('s1'), 'precondition');
+
+  t.purgeActivityFor('s1', 'pty-gone');
+
+  assert.ok(!t.responseReadySessions.has('s1'), 'responseReadySessions cleared');
+  assert.ok(!t.sessionBusyState.has('s1'), 'sessionBusyState cleared');
+  assert.ok(!t.item('s1').classList.contains('response-ready'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
+  t.destroy();
+});
+
+test('purgeActivityFor drops attention state and its class', () => {
+  // Attention alone (not combined with busy/response-ready — the domain's own
+  // exclusivity invariant, session-state.js apply(), makes that combination
+  // unreachable through the public API; see test/local-pty-adapter.test.js).
+  const t = setup();
+
   t.attentionSessions.add('s1');
   t.item('s1').classList.add('needs-attention');
-  assert.ok(t.responseReadySessions.has('s1') && t.attentionSessions.has('s1'), 'preconditions');
+  assert.ok(t.attentionSessions.has('s1'), 'precondition');
 
   t.purgeActivityFor('s1', 'pty-gone');
 
   assert.ok(!t.attentionSessions.has('s1'), 'attentionSessions cleared');
-  assert.ok(!t.responseReadySessions.has('s1'), 'responseReadySessions cleared');
-  assert.ok(!t.sessionBusyState.has('s1'), 'sessionBusyState cleared');
   assert.ok(!t.item('s1').classList.contains('needs-attention'));
-  assert.ok(!t.item('s1').classList.contains('response-ready'));
-  assert.ok(!t.item('s1').classList.contains('cli-busy'));
   t.destroy();
 });
 
@@ -262,23 +275,37 @@ test('rekeyActivityState carries busy state and DOM class from oldId to newId', 
   t.destroy();
 });
 
-test('rekeyActivityState carries response-ready and needs-attention too', () => {
+test('rekeyActivityState carries response-ready too', () => {
   const t = setup(['old', 'new']);
   t.window.activeSessionId = 'other';
 
   t.setActivity('old', true);
   t.setActivity('old', false);
-  t.attentionSessions.add('old');
-  t.item('old').classList.add('needs-attention');
   assert.ok(t.responseReadySessions.has('old'));
 
   t.rekeyActivityState('old', 'new');
 
   assert.ok(t.responseReadySessions.has('new') && !t.responseReadySessions.has('old'));
-  assert.ok(t.attentionSessions.has('new') && !t.attentionSessions.has('old'));
   assert.ok(t.item('new').classList.contains('response-ready'));
-  assert.ok(t.item('new').classList.contains('needs-attention'));
   assert.ok(!t.item('old').classList.contains('response-ready'));
+
+  t.destroy();
+});
+
+test('rekeyActivityState carries needs-attention too', () => {
+  // Attention alone — see the "purgeActivityFor drops attention state" note
+  // above for why it is not combined with response-ready here.
+  const t = setup(['old', 'new']);
+  t.window.activeSessionId = 'other';
+
+  t.attentionSessions.add('old');
+  t.item('old').classList.add('needs-attention');
+  assert.ok(t.attentionSessions.has('old'));
+
+  t.rekeyActivityState('old', 'new');
+
+  assert.ok(t.attentionSessions.has('new') && !t.attentionSessions.has('old'));
+  assert.ok(t.item('new').classList.contains('needs-attention'));
   assert.ok(!t.item('old').classList.contains('needs-attention'));
 
   t.destroy();
@@ -378,8 +405,10 @@ test('reconcileBusyState ignores malformed payloads', () => {
 
 test('busy wins over response-ready: the two classes are mutually exclusive by construction', () => {
   // Decision: a session that resumed generating is busy, not "answer waiting".
-  // applyActivityClasses is the only writer of both classes and never sets
-  // them together, so the CSS cascade is never asked to arbitrate.
+  // applyStateClasses (session-activity-dom.js) is the only writer of both
+  // classes, and the domain's own exclusivity invariant (session-state.js
+  // apply()) keeps them from ever being true together, so the CSS cascade is
+  // never asked to arbitrate.
   const t = setup();
   t.window.activeSessionId = 's2';
 

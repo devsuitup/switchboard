@@ -141,7 +141,8 @@ const rendererCrossFileGlobals = {
   saveExpandedSlugs: 'readonly',
   setActivity: 'readonly',
   trackActivity: 'readonly',
-  applyActivityClasses: 'readonly',
+  setAttention: 'readonly',
+  syncLocalPtyAgentsBusy: 'readonly',
   sessionItemEl: 'readonly',
   seedRemoteActivity: 'readonly',
   rekeyActivityState: 'readonly',
@@ -150,6 +151,9 @@ const rendererCrossFileGlobals = {
   forgetActivitySeq: 'readonly',
   purgeActivityFor: 'readonly',
   pruneRemoteActivityTimers: 'readonly',
+  // public/session-activity.js's persisted per-session state — see .ai/contexts/session-state.md ("The local-pty adapter")
+  localPtyState: 'readonly',
+  localPtyStates: 'readonly',
   // Changes panel no-polling refresh hook (issue #251, public/file-panel.js)
   onSessionIdle: 'readonly',
   // public/session-state.js (pure domain, see .ai/contexts/session-state.md)
@@ -158,7 +162,6 @@ const rendererCrossFileGlobals = {
   // public/session-activity-dom.js — the only file allowed to write
   // .cli-busy/.needs-attention/.response-ready/.has-busy-agents, and the only
   // file allowed to write the .session-icon slot (issue #246, step 3b).
-  applyActivityClassesToElement: 'readonly',
   applyStateClasses: 'readonly',
   setNeedsAttention: 'readonly',
   setResponseReady: 'readonly',

@@ -95,6 +95,18 @@ test('an enabled trace forwards each mutation with its before/after and caller',
   const cls = sent.find(e => e.cat === 'class.apply');
   assert.equal(cls.fields.el, 'si-s1');
   assert.equal(cls.fields['cli-busy'], true);
+  assert.equal(cls.fields['needs-attention'], false, 'class.apply carries needs-attention on every kind now, not just cli-busy/response-ready');
+});
+
+test('class.apply — not class.toggle — is the needs-attention writer (docs/activity-trace.md)', () => {
+  const { sent, run } = setup({ traceEnabled: true });
+  run('setAttention("s1", true, "onTerminalNotification")');
+
+  const cls = sent.find(e => e.cat === 'class.apply');
+  assert.ok(cls, 'setAttention must go through the same applyStateClasses projection as busy/responseReady');
+  assert.equal(cls.fields['needs-attention'], true);
+  assert.equal(sent.some(e => e.cat === 'class.toggle' && e.fields && e.fields.cls === 'needs-attention'), false,
+    'needs-attention is no longer written via class.toggle — see docs/activity-trace.md');
 });
 
 test('an enabled trace records the response-ready lock that swallows an idle', () => {
