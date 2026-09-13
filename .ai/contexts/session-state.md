@@ -189,6 +189,32 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 `projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
 remote-ssh adapter's own snapshot instead.
 
+### A coincident parent-file touch must not outrank a fresh subagent spawn (issue #284)
+
+A Task-tool invocation typically appends to the parent's own top-level
+transcript (recording the tool_use/tool_result around the spawn) at almost
+the same moment it appends to the subagent's own file. On the remote-ssh
+adapter this used to mean a plain `busy` edge could win the icon rung over
+`agentsBusy` for its full 20s decay, even though the top-level agent was
+really just idle waiting on the subagent — visibly different from a local-pty
+row, which reflects the OSC-driven busy edge instantly and clears it just as
+fast. Fixed with a **3s coincidence window** (`SUBAGENT_BUSY_COINCIDENCE_MS`,
+`public/remote-activity-ui.js`) keyed off the moment `agentsBusy` transitions
+false→true (`remoteSubagentSpawnAt`), not every subsequent subagent touch: a
+plain busy touch inside that window of a fresh spawn is recorded
+(`transcriptTouched`) but not applied as `busy`, and a spawn arriving shortly
+after an already-live busy touch retroactively demotes it (cancels its decay
+timer, applies `busy:false`). A busy touch outside the window — the top-level
+agent genuinely still producing output — is unaffected and wins the rung
+normally, tinted violet by the existing `.has-busy-agents .session-icon--busy::before`
+rule. The window is deliberately keyed off the *spawn edge*, not a
+continuously-refreshed "last subagent touch" timestamp: a chatty subagent
+writes roughly once a second (`remote-activity.js`'s `DEFAULT_IPC_MIN_MS`
+throttle), which would otherwise keep re-arming the window for the entire
+run and permanently suppress a genuinely concurrent busy parent. `PRIORITY`
+in `session-state.js` is unchanged — this is a renderer-side demotion of
+which events reach `apply()`, not a reordering of the ladder.
+
 ### Row ownership: attached vs unattached (issue #273)
 
 An attached remote row (a tab open on it) is owned by the local-pty path —

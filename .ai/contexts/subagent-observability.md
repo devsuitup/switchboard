@@ -93,6 +93,42 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   prune until PR #137. Keep cross-file names distinct;
   `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
 
+## The child row's own `.running` dot, for every source (issue #285)
+
+`activeSubagentsByParent` (above) used to be fed only by the local
+`subagent-spawned`/`subagent-completed` IPC pair, so a remote or
+local-transcript subagent's own row never got `.running` — not even after a
+full rebuild — even though both sources' `kind:'subagent'` payload already
+carries `agentId` (`remote-activity.js`, `local-transcript-activity.js`).
+`noteSubagentActivity(parentSessionId, agentId)` (`public/sidebar.js`) is now
+the single write path into that map: the local IPC handler, `onRemoteActivityEvent`'s
+subagent branch (`remote-activity-ui.js`) and `onLocalTranscriptSubagentActivity`
+(`local-transcript-adapter.js`) all call it, so all three share the same 60s
+TTL/decay convention `isSubagentActive`/`pruneStaleSubagents` already
+implement — no second, independently-tuned decay was added.
+
+A suspected second cause (`reflectSubagentRunningState`'s DOM lookup,
+`subagentDomId(parent, agentId)` vs. the row's own id) turned out not to
+reproduce: every subagent row's `sessionId` is built by
+`subagentSessionId(parent, agentId)` = `'sub:'+parent+':'+agentId`
+(`read-session-file.js`), for local, remote-mirrored and legacy-layout rows
+alike, so `'si-' + session.sessionId` and `subagentDomId(parent, agentId)`
+are byte-identical by construction. `test/dom-sidebar-subagent-running.test.js`
+already pinned this for the local IPC path with no rebuild; the actual gap
+was purely the missing feed, not the lookup.
+
+One landmine found while wiring this: `reflectSubagentRunningState` also
+repaints the **parent's** icon slot via `paintSessionIcon`, which paints from
+the local-pty adapter's snapshot (`snapshotForLocal` auto-vivifies a
+`localPtyState` entry). Calling it for a remote/local-transcript parent would
+have overwritten the icon the remote-ssh/local-transcript adapter's own
+`projectRemoteState`/`projectLocalTranscriptState` had just painted, with an
+empty local-pty snapshot. `reflectSubagentRunningState` now skips that
+repaint when `remoteSessionStates`/`localTranscriptStates` already holds an
+entry for the parent — the calling adapter has already repainted its own
+slot by that point (it creates the entry before calling
+`noteSubagentActivity`).
+
 ## Attribution across sources (issue #247)
 
 `.has-busy-agents` used to light only for a parent reachable from

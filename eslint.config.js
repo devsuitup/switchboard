@@ -186,6 +186,8 @@ const rendererCrossFileGlobals = {
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
   // (see .ai/contexts/session-state.md, "The icon slot (step 3b)")
   parentHasActiveSubagent: 'readonly',
+  // public/sidebar.js — see .ai/contexts/subagent-observability.md
+  noteSubagentActivity: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',

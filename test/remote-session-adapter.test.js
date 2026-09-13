@@ -208,3 +208,55 @@ test('a mutant subagent decay that leaves agentsBusy stillActive would be caught
   assert.equal(t.snapshot('s1').agentsBusy, false);
   t.destroy();
 });
+
+// Issue #284 — a Task-tool invocation touches the parent's own transcript as
+// well as the subagent leg; the parent-file touch used to win the busy rung
+// for its full 20s decay even though the top-level agent was really just
+// idle waiting on the subagent. See .ai/contexts/session-state.md.
+
+test('a parent-file busy touch immediately followed by a fresh subagent spawn is demoted — the rung lands on agentsBusy', () => {
+  const t = setup(['s1']);
+  t.emit({ sessionId: 's1', at: Date.now() });
+  assert.equal(t.snapshot('s1').busy, true, 'precondition: the parent-file touch marks busy');
+
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  const snap = t.snapshot('s1');
+  assert.equal(snap.busy, false, 'the coincident spawn demotes the busy it just won');
+  assert.equal(snap.agentsBusy, true);
+
+  const { renderSessionIcon } = require('../public/session-state.js');
+  assert.ok(renderSessionIcon(snap).slotClasses.includes('session-icon--agents-busy'),
+    'rung is agentsBusy, not busy');
+  t.destroy();
+});
+
+test('a fresh subagent spawn immediately followed by a parent-file busy touch keeps the rung on agentsBusy', () => {
+  const t = setup(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+  assert.equal(t.snapshot('s1').agentsBusy, true);
+
+  t.emit({ sessionId: 's1', at: Date.now() });
+  const snap = t.snapshot('s1');
+  assert.equal(snap.busy, false, 'the busy touch coincident with the fresh spawn is suppressed');
+  assert.equal(snap.agentsBusy, true);
+
+  const { renderSessionIcon } = require('../public/session-state.js');
+  assert.ok(renderSessionIcon(snap).slotClasses.includes('session-icon--agents-busy'),
+    'rung is agentsBusy, not busy');
+  t.destroy();
+});
+
+test('a busy touch well after the coincidence window still wins the rung — a genuinely busy parent must still show busy', () => {
+  const t = setup(['s1']);
+  const t0 = 1000000;
+  t.window.Date.now = () => t0;
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t0, kind: 'subagent' });
+  assert.equal(t.snapshot('s1').agentsBusy, true);
+
+  t.window.Date.now = () => t0 + 5000; // past the 3s coincidence window
+  t.emit({ sessionId: 's1', at: t0 + 5000 });
+  const snap = t.snapshot('s1');
+  assert.equal(snap.busy, true, 'a later, non-coincident busy touch is not suppressed');
+  assert.equal(snap.agentsBusy, true, 'agentsBusy is unaffected');
+  t.destroy();
+});
