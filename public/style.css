@@ -1106,12 +1106,15 @@ body { display: flex; flex-direction: column; }
   margin-top: 3px;
 }
 
-/* Sidebar session items: time on the left, short session id on the right */
+/* Sidebar session items: time, short id, then status pinned right — see .ai/contexts/session-state.md */
 .session-item .session-meta {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 8px;
+}
+
+.session-item .session-meta .session-status {
+  margin-left: auto;
 }
 
 .session-short-id {

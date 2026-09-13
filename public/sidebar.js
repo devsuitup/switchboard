@@ -1414,7 +1414,15 @@ function buildSessionItem(session) {
   shortIdEl.className = 'session-short-id';
   shortIdEl.title = session.sessionId;
   shortIdEl.textContent = session.sessionId.split('-')[0];
-  metaEl.append(timeEl, shortIdEl);
+
+  // see .ai/contexts/session-state.md ("Surfacing status on the session object")
+  const statusEl = document.createElement('span');
+  statusEl.className = 'session-status';
+  if (session.status) {
+    const age = formatStatusAge(session.statusUpdatedAt);
+    statusEl.textContent = session.status + (age ? ' · ' + age : '');
+  }
+  metaEl.append(timeEl, shortIdEl, statusEl);
 
   if (session.remoteAlias) {
     const badge = document.createElement('span');
@@ -1424,15 +1432,6 @@ function buildSessionItem(session) {
       : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
     badge.textContent = session.remoteAlias;
     summaryEl.prepend(badge);
-  }
-
-  // see .ai/contexts/cli-session-state.md ("Surfacing status on the session object")
-  if (session.status) {
-    const age = formatStatusAge(session.statusUpdatedAt);
-    const statusEl = document.createElement('span');
-    statusEl.className = 'session-status';
-    statusEl.textContent = session.status + (age ? ' · ' + age : '');
-    metaEl.appendChild(statusEl);
   }
 
   if (session.type === 'terminal') {
