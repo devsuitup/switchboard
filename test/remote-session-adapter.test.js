@@ -210,53 +210,145 @@ test('a mutant subagent decay that leaves agentsBusy stillActive would be caught
 });
 
 // Issue #284 — a Task-tool invocation touches the parent's own transcript as
-// well as the subagent leg; the parent-file touch used to win the busy rung
-// for its full 20s decay even though the top-level agent was really just
-// idle waiting on the subagent. See .ai/contexts/session-state.md.
+// well as the subagent leg. Two designs were tried and rejected before this
+// one (see .ai/contexts/session-state.md for why): the current fix shortens
+// the parent's busy DECAY to SUBAGENT_PARENT_DECAY_MS (3s) while agentsBusy is
+// true, instead of a coincidence window keyed off the spawn edge — no edge,
+// so a second/third spawned agent is covered exactly like the first, and
+// `busy` is never cleared synchronously, only its pending decay rescheduled.
+//
+// These tests need a clock genuinely independent of wall time: `advance(ms)`
+// below moves a virtual clock, backs both `Date.now()` and `setTimeout`'s
+// scheduled fire time, and fires any timer whose deadline has been crossed —
+// the same shape as dom-sidebar-remote-activity-pip.test.js's
+// installFakeTimers, plus the Date.now stub these assertions also need.
 
-test('a parent-file busy touch immediately followed by a fresh subagent spawn is demoted — the rung lands on agentsBusy', () => {
-  const t = setup(['s1']);
-  t.emit({ sessionId: 's1', at: Date.now() });
-  assert.equal(t.snapshot('s1').busy, true, 'precondition: the parent-file touch marks busy');
+function setupWithClock(sessionIds = ['s1']) {
+  const items = sessionIds
+    .map(id => `<div class="session-item" data-session-id="${id}"><span class="session-status-dot"></span></div>`)
+    .join('');
+  const dom = new JSDOM(`<!DOCTYPE html><html><body>${items}</body></html>`,
+    { url: 'http://localhost/', runScripts: 'outside-only' });
+  const { window } = dom;
 
-  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
-  const snap = t.snapshot('s1');
-  assert.equal(snap.busy, false, 'the coincident spawn demotes the busy it just won');
-  assert.equal(snap.agentsBusy, true);
+  Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
-  const { renderSessionIcon } = require('../public/session-state.js');
-  assert.ok(renderSessionIcon(snap).slotClasses.includes('session-icon--agents-busy'),
-    'rung is agentsBusy, not busy');
+  let onRemoteActivityCb = null;
+  Object.defineProperty(window, 'api', {
+    value: { onRemoteActivity: (cb) => { onRemoteActivityCb = cb; } },
+    writable: true, configurable: true,
+  });
+
+  let clock = 0;
+  window.Date.now = () => clock;
+
+  const timers = [];
+  let nextId = 1;
+  Object.defineProperty(window, 'setTimeout', {
+    value: (fn, ms) => {
+      const t = { id: nextId++, at: clock + ms, fn, cleared: false, fired: false };
+      timers.push(t);
+      return t.id;
+    },
+    writable: true, configurable: true,
+  });
+  Object.defineProperty(window, 'clearTimeout', {
+    value: (id) => {
+      const t = timers.find(t => t.id === id);
+      if (t) t.cleared = true;
+    },
+    writable: true, configurable: true,
+  });
+
+  const ctx = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(STATE_SRC, 'utf8'), ctx, { filename: STATE_SRC });
+  vm.runInContext(fs.readFileSync(DOM_SRC, 'utf8'), ctx, { filename: DOM_SRC });
+  vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
+  vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });
+
+  return {
+    window,
+    now: () => clock,
+    emit: (payload) => onRemoteActivityCb(payload),
+    snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
+    advance(ms) {
+      clock += ms;
+      for (const t of timers) {
+        if (!t.cleared && !t.fired && t.at <= clock) { t.fired = true; t.fn(); }
+      }
+    },
+    destroy: () => window.close(),
+  };
+}
+
+test('(1) a genuinely busy parent (touch every ~1s) with a running subagent never lets busy lapse', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @0
+
+  t.advance(1000); // -> 1000
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @1000
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t.now(), kind: 'subagent' }); // spawn @1000
+
+  t.advance(200); // -> 1200
+  assert.equal(t.snapshot('s1').busy, true, 'busy at t=1200');
+
+  t.advance(800); // -> 2000
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @2000
+  t.advance(500); // -> 2500
+  assert.equal(t.snapshot('s1').busy, true, 'busy at t=2500');
+
+  t.advance(500); // -> 3000
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @3000
+  t.advance(1000); // -> 4000
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @4000
+  assert.equal(t.snapshot('s1').busy, true, 'busy at t=4000');
   t.destroy();
 });
 
-test('a fresh subagent spawn immediately followed by a parent-file busy touch keeps the rung on agentsBusy', () => {
-  const t = setup(['s1']);
-  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
-  assert.equal(t.snapshot('s1').agentsBusy, true);
+test('(2) a touch coincident with a fresh spawn still shows busy briefly, then decays to agentsBusy alone', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t.now(), kind: 'subagent' }); // spawn @0
 
-  t.emit({ sessionId: 's1', at: Date.now() });
-  const snap = t.snapshot('s1');
-  assert.equal(snap.busy, false, 'the busy touch coincident with the fresh spawn is suppressed');
+  t.advance(100); // -> 100
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @100
+
+  t.advance(900); // -> 1000
+  let snap = t.snapshot('s1');
+  assert.equal(snap.busy, true, 'busy at t=1000');
   assert.equal(snap.agentsBusy, true);
 
-  const { renderSessionIcon } = require('../public/session-state.js');
-  assert.ok(renderSessionIcon(snap).slotClasses.includes('session-icon--agents-busy'),
-    'rung is agentsBusy, not busy');
+  t.advance(2200); // -> 3200, the 3s decay armed at t=100 (fires at 3100) has elapsed
+  snap = t.snapshot('s1');
+  assert.equal(snap.busy, false, 'busy false at t=3200');
+  assert.equal(snap.agentsBusy, true, 'agentsBusy stays true — only busy decayed');
   t.destroy();
 });
 
-test('a busy touch well after the coincidence window still wins the rung — a genuinely busy parent must still show busy', () => {
-  const t = setup(['s1']);
-  const t0 = 1000000;
-  t.window.Date.now = () => t0;
-  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t0, kind: 'subagent' });
-  assert.equal(t.snapshot('s1').agentsBusy, true);
+test('(3) a second subagent spawned while the first still runs still shortens a coincident touch\'s decay — no edge needed', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-1', at: t.now(), kind: 'subagent' }); // 1st spawn @0
 
-  t.window.Date.now = () => t0 + 5000; // past the 3s coincidence window
-  t.emit({ sessionId: 's1', at: t0 + 5000 });
-  const snap = t.snapshot('s1');
-  assert.equal(snap.busy, true, 'a later, non-coincident busy touch is not suppressed');
-  assert.equal(snap.agentsBusy, true, 'agentsBusy is unaffected');
+  t.advance(10000); // -> 10000, well before the 1st spawn's own 20s agentsBusy decay
+  assert.equal(t.snapshot('s1').agentsBusy, true, 'precondition: agentsBusy already true, no edge available');
+
+  t.emit({ alias: 'vps', parentSessionId: 's1', agentId: 'agent-2', at: t.now(), kind: 'subagent' }); // 2nd spawn @10000
+
+  t.advance(100); // -> 10100
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @10100
+
+  t.advance(3100); // -> 13200, past the 3s decay armed at t=10100 (fires at 13100)
+  assert.equal(t.snapshot('s1').busy, false, 'busy false at t=13200 — the touch got the short decay despite no edge');
+  t.destroy();
+});
+
+test('(4) a parent with no subagent keeps the full 20s decay', () => {
+  const t = setupWithClock(['s1']);
+  t.emit({ sessionId: 's1', at: t.now() }); // touch @0
+
+  t.advance(15000); // -> 15000
+  assert.equal(t.snapshot('s1').busy, true, 'busy still true at t=15000, well inside 20s');
+
+  t.advance(5001); // -> 20001, past the 20s decay
+  assert.equal(t.snapshot('s1').busy, false, 'busy false once the 20s decay elapses');
   t.destroy();
 });

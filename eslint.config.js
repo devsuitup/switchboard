@@ -179,6 +179,8 @@ const rendererCrossFileGlobals = {
   stopBeforeArchive: 'readonly',
   // read by sidebar.js's parentHasActiveSubagent() — see .ai/contexts/subagent-observability.md
   remoteSessionStates: 'readonly',
+  // see .ai/contexts/subagent-observability.md
+  isRemoteRowOwned: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
   localTranscriptPtyTakeover: 'readonly',
   pruneLocalTranscriptTimers: 'readonly',

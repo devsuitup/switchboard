@@ -189,7 +189,7 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 `projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
 remote-ssh adapter's own snapshot instead.
 
-### A coincident parent-file touch must not outrank a fresh subagent spawn (issue #284)
+### A parent's busy decay shortens while a subagent is running (issue #284)
 
 A Task-tool invocation typically appends to the parent's own top-level
 transcript (recording the tool_use/tool_result around the spawn) at almost
@@ -198,22 +198,42 @@ adapter this used to mean a plain `busy` edge could win the icon rung over
 `agentsBusy` for its full 20s decay, even though the top-level agent was
 really just idle waiting on the subagent — visibly different from a local-pty
 row, which reflects the OSC-driven busy edge instantly and clears it just as
-fast. Fixed with a **3s coincidence window** (`SUBAGENT_BUSY_COINCIDENCE_MS`,
-`public/remote-activity-ui.js`) keyed off the moment `agentsBusy` transitions
-false→true (`remoteSubagentSpawnAt`), not every subsequent subagent touch: a
-plain busy touch inside that window of a fresh spawn is recorded
-(`transcriptTouched`) but not applied as `busy`, and a spawn arriving shortly
-after an already-live busy touch retroactively demotes it (cancels its decay
-timer, applies `busy:false`). A busy touch outside the window — the top-level
-agent genuinely still producing output — is unaffected and wins the rung
-normally, tinted violet by the existing `.has-busy-agents .session-icon--busy::before`
-rule. The window is deliberately keyed off the *spawn edge*, not a
-continuously-refreshed "last subagent touch" timestamp: a chatty subagent
-writes roughly once a second (`remote-activity.js`'s `DEFAULT_IPC_MIN_MS`
-throttle), which would otherwise keep re-arming the window for the entire
-run and permanently suppress a genuinely concurrent busy parent. `PRIORITY`
-in `session-state.js` is unchanged — this is a renderer-side demotion of
-which events reach `apply()`, not a reordering of the ladder.
+fast.
+
+**First attempt (reverted in review): a 3s coincidence window keyed off the
+`agentsBusy` false→true edge.** Two adversarial-review findings killed it.
+First, a genuinely busy parent that spawns a subagent lost `busy` outright:
+every touch inside the post-spawn window was swallowed and never re-applied,
+so a parent writing every ~1s could sit at `agentsBusy` even while it was
+still producing output itself. Second, the edge only fires once — a second
+subagent spawned while the first was still running had no edge to key off,
+`remoteSubagentSpawnAt` stayed stale, and its coincident parent-file touch
+armed the full 20s `busy` decay again: the original bug, for the ordinary
+sequential-agents case.
+
+**Current design: no window, no edge — the decay *length* itself depends on
+`agentsBusy`.** `remoteBusyDecayMs(sessionId)` (`public/remote-activity-ui.js`)
+returns `SUBAGENT_PARENT_DECAY_MS` (3000ms) when `agentsBusy` is true,
+`PIP_DECAY_MS` (20000ms) otherwise; `onRemoteActivityEvent`'s plain-touch
+branch arms the decay with whichever value applies at that instant. Every
+`busy` touch still applies `busy:true` unconditionally — nothing is ever
+swallowed or synchronously cleared. `markRemoteSubagentBusy` runs on **every**
+subagent touch, not only the first: if a busy decay is currently pending with
+more than `SUBAGENT_PARENT_DECAY_MS` left, it reschedules that pending timer
+down to 3s from now (`remoteActivityDecayRemaining`, tracked as `fireAt` on
+`remoteActivityDecayTimers`'s entries) — it never touches `busy` itself,
+only how soon its decay fires. The outcome: a parent genuinely still writing
+while a subagent runs re-touches at the ~1s IPC throttle, always inside the
+3s window, so `busy` never lapses — it keeps the same violet-tinted spinner a
+local row would show in the same situation
+(`.has-busy-agents .session-icon--busy::before`). A parent that only
+bookends the spawn (one touch at spawn, one at completion) has its single
+post-spawn touch decay in 3s instead of 20s, landing on `agentsBusy` — the
+same rung as the local row — within a few seconds instead of up to 20. A
+parent with **no** subagent keeps the full 20s decay unchanged (a long silent
+tool call must not read as idle). `PRIORITY` in `session-state.js` is
+unchanged — this only changes which decay duration a renderer-side timer
+picks, never the priority ladder.
 
 ### Row ownership: attached vs unattached (issue #273)
 

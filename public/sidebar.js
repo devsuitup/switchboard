@@ -262,7 +262,7 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   const parentEl = document.getElementById('si-' + parentSessionId);
   setHasBusyAgents(parentEl, parentHasActiveSubagent(parentSessionId));
   // parent slot repainted only when local-pty owns it — see .ai/contexts/subagent-observability.md
-  const remoteOwned = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.has(parentSessionId);
+  const remoteOwned = typeof isRemoteRowOwned === 'function' && isRemoteRowOwned(parentSessionId);
   const localTranscriptOwned = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(parentSessionId);
   if (parentEl && !remoteOwned && !localTranscriptOwned) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });

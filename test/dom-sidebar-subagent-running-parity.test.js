@@ -178,3 +178,79 @@ test('local IPC subagent-spawned still sets .running on the child row immediatel
     ctx.destroy();
   }
 });
+
+// Adversarial-review MAJOR finding: reflectSubagentRunningState's parent-icon
+// repaint guard checked mere presence in remoteSessionStates, which stays
+// true for the rest of a remote row's life once touched — attached or not,
+// since setRemoteAttached never deletes the entry. An attached remote row is
+// owned by the local-pty path (#273) and DOES need this repaint; only an
+// unattached one must skip it. Fixed with isRemoteRowOwned(sessionId)
+// (remote-activity-ui.js): remote state exists AND is not attached. See
+// .ai/contexts/subagent-observability.md.
+
+test('(5) an attached remote parent gets its icon repainted by a local subagent-spawned IPC, immediately', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = makeSampleProject({
+      remoteAlias: 'vps',
+      sessions: [{
+        sessionId: 'r-attached-1',
+        remoteAlias: 'vps',
+        name: 'attached remote session',
+        summary: 'attached',
+        modified: '2026-05-22T10:00:00.000Z',
+        starred: false,
+        archived: 0,
+        messageCount: 1,
+      }],
+    });
+    ctx.sidebar.renderProjects([project], true);
+
+    // A real attach marks the row attached (#273) and, via the OSC busy/idle
+    // stream, already carries a local-pty entry before any subagent event.
+    ctx.window.setRemoteAttached('r-attached-1', true);
+    ctx.setActivity('r-attached-1', false, 'seed');
+
+    ctx.emitSubagentSpawned({ parentSessionId: 'r-attached-1', agentId: 'agent-1' });
+
+    const icon = ctx.document.getElementById('si-r-attached-1').querySelector('.session-icon');
+    assert.ok(icon.classList.contains('session-icon--agents-busy'),
+      'attached row is local-pty owned — its icon slot must repaint immediately, no rebuild');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(6) an unattached remote parent icon, once painted by the remote adapter, survives a local subagent-spawned IPC', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = makeSampleProject({
+      remoteAlias: 'vps',
+      sessions: [{
+        sessionId: 'r-unattached-1',
+        remoteAlias: 'vps',
+        name: 'unattached remote session',
+        summary: 'unattached',
+        modified: '2026-05-22T10:00:00.000Z',
+        starred: false,
+        archived: 0,
+        messageCount: 1,
+      }],
+    });
+    ctx.sidebar.renderProjects([project], true);
+
+    // The remote watch channel already lit agentsBusy and painted the slot.
+    ctx.window.onRemoteActivityEvent({ alias: 'vps', parentSessionId: 'r-unattached-1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+    const icon = ctx.document.getElementById('si-r-unattached-1').querySelector('.session-icon');
+    assert.ok(icon.classList.contains('session-icon--agents-busy'), 'precondition: remote adapter painted agents-busy');
+
+    // Adversarial: a local subagent-spawned IPC for the same parent must not
+    // let the local-pty repaint run and overwrite it with an empty snapshot.
+    ctx.emitSubagentSpawned({ parentSessionId: 'r-unattached-1', agentId: 'agent-2' });
+
+    assert.ok(icon.classList.contains('session-icon--agents-busy'),
+      'unattached remote row stays owned by the remote-ssh adapter — the local-pty repaint must not run');
+  } finally {
+    ctx.destroy();
+  }
+});

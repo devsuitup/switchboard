@@ -123,11 +123,24 @@ the local-pty adapter's snapshot (`snapshotForLocal` auto-vivifies a
 `localPtyState` entry). Calling it for a remote/local-transcript parent would
 have overwritten the icon the remote-ssh/local-transcript adapter's own
 `projectRemoteState`/`projectLocalTranscriptState` had just painted, with an
-empty local-pty snapshot. `reflectSubagentRunningState` now skips that
-repaint when `remoteSessionStates`/`localTranscriptStates` already holds an
-entry for the parent — the calling adapter has already repainted its own
-slot by that point (it creates the entry before calling
-`noteSubagentActivity`).
+empty local-pty snapshot.
+
+**Corrected in review**: the first pass skipped that repaint whenever
+`remoteSessionStates.has(parentSessionId)` was true — wrong, because
+`setRemoteAttached` never deletes the entry, so it stays true for the rest of
+the row's life whether or not a tab is currently attached. An **attached**
+remote row is owned by the local-pty path (#273: OSC busy/idle governs it,
+exactly like an ordinary local row), so it still needs this repaint — with
+the old check it never got one on a live subagent toggle, leaving
+`has-busy-agents` set on the row while the icon itself stayed
+`session-icon--idle` until the next full rebuild. The guard is now
+`isRemoteRowOwned(parentSessionId)` (`remote-activity-ui.js`) — remote state
+exists **and** is not attached — matching the exact ownership test #273
+already established (`projectRemoteState`, `markRemoteBusy`,
+`decayRemoteBusy` all gate on `snapshot().attached` the same way).
+`localTranscriptStates` needs no equivalent check: there is no "attached"
+state for that kind — `localTranscriptPtyTakeover` deletes the entry outright
+once a PTY takes the row over, so `.has()` alone stays correct.
 
 ## Attribution across sources (issue #247)
 
