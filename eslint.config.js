@@ -179,6 +179,8 @@ const rendererCrossFileGlobals = {
   stopBeforeArchive: 'readonly',
   // read by sidebar.js's parentHasActiveSubagent() — see .ai/contexts/subagent-observability.md
   remoteSessionStates: 'readonly',
+  // see .ai/contexts/subagent-observability.md
+  isRemoteRowOwned: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
   localTranscriptPtyTakeover: 'readonly',
   pruneLocalTranscriptTimers: 'readonly',
@@ -186,6 +188,8 @@ const rendererCrossFileGlobals = {
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
   // (see .ai/contexts/session-state.md, "The icon slot (step 3b)")
   parentHasActiveSubagent: 'readonly',
+  // public/sidebar.js — see .ai/contexts/subagent-observability.md
+  noteSubagentActivity: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',

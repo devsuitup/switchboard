@@ -105,6 +105,11 @@ function onLocalTranscriptSubagentActivity(payload) {
   seedLocalTranscriptDescriptor(parentSessionId);
   projectLocalTranscriptState(parentSessionId);
   armLocalTranscriptAgentsDecayTimer(parentSessionId);
+  // per-(parent, agentId) running set for the child row's own dot — see .ai/contexts/subagent-observability.md
+  const agentId = payload.agentId;
+  if (typeof agentId === 'string' && agentId && typeof noteSubagentActivity === 'function') {
+    noteSubagentActivity(parentSessionId, agentId);
+  }
 }
 
 // called once a row gains a PTY; the local-pty path takes over from here — see .ai/contexts/session-state.md

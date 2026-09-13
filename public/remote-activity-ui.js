@@ -2,10 +2,14 @@
 // and .ai/contexts/session-state.md (migration step 3: the remote-ssh adapter).
 
 const PIP_DECAY_MS = 20000;
+// value: { handle, fireAt } — see .ai/contexts/session-state.md (issue #284)
 const remoteActivityDecayTimers = new Map();
 
 // separate decay for subagent attribution (agentsBusy) — see .ai/contexts/subagent-observability.md
 const remoteAgentsDecayTimers = new Map();
+
+// short busy decay while a subagent is running — see .ai/contexts/session-state.md (issue #284)
+const SUBAGENT_PARENT_DECAY_MS = 3000;
 
 // remote-ssh adapter: one persistent state per remote session id — see .ai/contexts/session-state.md
 const remoteSessionStates = new Map();
@@ -22,6 +26,12 @@ function remoteState(sessionId) {
   return state;
 }
 
+// see .ai/contexts/session-state.md ("Row ownership: attached vs unattached")
+function isRemoteRowOwned(sessionId) {
+  const state = remoteSessionStates.get(sessionId);
+  return !!state && !state.snapshot().attached;
+}
+
 // An attached row is owned by the local-pty path (#273) — see .ai/contexts/session-state.md
 function projectRemoteState(sessionId) {
   const snapshot = remoteState(sessionId).snapshot();
@@ -30,11 +40,16 @@ function projectRemoteState(sessionId) {
 }
 
 function clearRemoteActivityTimer(sessionId) {
-  const t = remoteActivityDecayTimers.get(sessionId);
-  if (t) {
-    clearTimeout(t);
+  const entry = remoteActivityDecayTimers.get(sessionId);
+  if (entry) {
+    clearTimeout(entry.handle);
     remoteActivityDecayTimers.delete(sessionId);
   }
+}
+
+function remoteActivityDecayRemaining(sessionId) {
+  const entry = remoteActivityDecayTimers.get(sessionId);
+  return entry ? entry.fireAt - Date.now() : null;
 }
 
 function clearRemoteAgentsTimer(sessionId) {
@@ -45,12 +60,18 @@ function clearRemoteAgentsTimer(sessionId) {
   }
 }
 
+// see .ai/contexts/session-state.md (issue #284)
+function remoteBusyDecayMs(sessionId) {
+  return remoteState(sessionId).snapshot().agentsBusy ? SUBAGENT_PARENT_DECAY_MS : PIP_DECAY_MS;
+}
+
 // Maps still fed in parallel for sidebar initial paint and grid dot — see session-state.md "migration status"
 // An attached row is owned by the local-pty path (#273): a no-op here.
 function markRemoteBusy(sessionId, via, at) {
   const state = remoteState(sessionId);
   if (state.snapshot().attached) return;
-  state.apply({ type: 'transcriptTouched', at: at || Date.now(), source: via });
+  const t = at || Date.now();
+  state.apply({ type: 'transcriptTouched', at: t, source: via });
   state.apply({ type: 'busy', active: true });
   setActivity(sessionId, true, via);
   projectRemoteState(sessionId);
@@ -67,10 +88,11 @@ function decayRemoteBusy(sessionId) {
 }
 
 function armRemoteDecayTimer(sessionId, ms) {
-  remoteActivityDecayTimers.set(sessionId, setTimeout(() => {
+  const handle = setTimeout(() => {
     remoteActivityDecayTimers.delete(sessionId);
     decayRemoteBusy(sessionId);
-  }, ms));
+  }, ms);
+  remoteActivityDecayTimers.set(sessionId, { handle, fireAt: Date.now() + ms });
 }
 
 // silence means the subagent stopped, not finished — see .ai/contexts/subagent-observability.md
@@ -92,6 +114,12 @@ function armRemoteAgentsDecayTimer(sessionId) {
 function markRemoteSubagentBusy(sessionId) {
   const state = remoteState(sessionId);
   state.apply({ type: 'subagentSpawned' });
+  // see .ai/contexts/session-state.md (issue #284)
+  const remaining = remoteActivityDecayRemaining(sessionId);
+  if (remaining !== null && remaining > SUBAGENT_PARENT_DECAY_MS) {
+    clearRemoteActivityTimer(sessionId);
+    armRemoteDecayTimer(sessionId, SUBAGENT_PARENT_DECAY_MS);
+  }
   projectRemoteState(sessionId);
   armRemoteAgentsDecayTimer(sessionId);
 }
@@ -116,13 +144,18 @@ function onRemoteActivityEvent(payload) {
     const parentSessionId = payload.parentSessionId;
     if (typeof parentSessionId !== 'string' || !parentSessionId) return;
     markRemoteSubagentBusy(parentSessionId);
+    // per-(parent, agentId) running set for the child row's own dot — see .ai/contexts/subagent-observability.md
+    const agentId = payload.agentId;
+    if (typeof agentId === 'string' && agentId && typeof noteSubagentActivity === 'function') {
+      noteSubagentActivity(parentSessionId, agentId);
+    }
     return;
   }
   const sessionId = payload && payload.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) return;
   markRemoteBusy(sessionId, 'remote-watch', payload.at);
   clearRemoteActivityTimer(sessionId);
-  armRemoteDecayTimer(sessionId, PIP_DECAY_MS);
+  armRemoteDecayTimer(sessionId, remoteBusyDecayMs(sessionId));
 }
 
 // descriptor ports; absence stays 'unknown', never 'dead' — see session-state.md ports table
@@ -158,6 +191,7 @@ function setRemoteAttached(sessionId, attached) {
 function applyRemoteStopped(sessionId) {
   clearRemoteActivityTimer(sessionId);
   clearRemoteAgentsTimer(sessionId);
+  if (typeof clearActiveSubagentsFor === 'function') clearActiveSubagentsFor(sessionId);
   const state = remoteState(sessionId);
   state.apply({ type: 'busy', active: false, armReady: false });
   state.apply({ type: 'attention', active: false });
@@ -176,7 +210,8 @@ function seedRemoteActivity(session) {
   const sessionId = session.sessionId;
   const floor = remoteSeedFloors.get(sessionId);
   if (floor !== undefined && session.remoteActiveAt <= floor) return; // stale — see setRemoteAttached, #273
-  const remaining = session.remoteActiveAt + PIP_DECAY_MS - Date.now();
+  // see .ai/contexts/session-state.md (issue #284)
+  const remaining = session.remoteActiveAt + remoteBusyDecayMs(sessionId) - Date.now();
   if (remaining <= 0) return;
   markRemoteBusy(sessionId, 'remote-seed', session.remoteActiveAt);
   if (remoteActivityDecayTimers.has(sessionId)) return;

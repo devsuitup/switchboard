@@ -261,9 +261,23 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   // precedence over it.
   const parentEl = document.getElementById('si-' + parentSessionId);
   setHasBusyAgents(parentEl, parentHasActiveSubagent(parentSessionId));
-  // Re-paint the parent's icon slot too — see .ai/contexts/session-state.md
-  if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
+  // parent slot repainted only when local-pty owns it — see .ai/contexts/subagent-observability.md
+  const remoteOwned = typeof isRemoteRowOwned === 'function' && isRemoteRowOwned(parentSessionId);
+  const localTranscriptOwned = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(parentSessionId);
+  if (parentEl && !remoteOwned && !localTranscriptOwned) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
+}
+
+// single write path into activeSubagentsByParent — see .ai/contexts/subagent-observability.md
+function noteSubagentActivity(parentSessionId, agentId) {
+  let map = activeSubagentsByParent.get(parentSessionId);
+  if (!map) {
+    map = new Map();
+    activeSubagentsByParent.set(parentSessionId, map);
+  }
+  map.set(agentId, Date.now());
+  scheduleSubagentTtlTick();
+  reflectSubagentRunningState(parentSessionId, agentId);
 }
 
 (function initSubagentLiveListeners() {
@@ -273,21 +287,15 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
     window.api.onSubagentSpawned((payload) => {
       const { parentSessionId, agentId, _heartbeat } = payload || {};
       if (!parentSessionId || !agentId) return;
-      let map = activeSubagentsByParent.get(parentSessionId);
+      const map = activeSubagentsByParent.get(parentSessionId);
       // A heartbeat means "still alive", never "started": it must not create
       // an entry for an agent we are not tracking.
       if (_heartbeat && !(map && map.has(agentId))) {
         if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'ignore', agentId, heartbeat: true, applied: false, reason: 'heartbeat-for-untracked-agent', fn: 'onSubagentSpawned' });
         return;
       }
-      if (!map) {
-        map = new Map();
-        activeSubagentsByParent.set(parentSessionId, map);
-      }
-      if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from: map.get(agentId) ?? null, applied: true, bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat, fn: 'onSubagentSpawned' });
-      map.set(agentId, Date.now());
-      scheduleSubagentTtlTick();
-      reflectSubagentRunningState(parentSessionId, agentId);
+      if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from: map ? (map.get(agentId) ?? null) : null, applied: true, bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat, fn: 'onSubagentSpawned' });
+      noteSubagentActivity(parentSessionId, agentId);
     });
   }
 

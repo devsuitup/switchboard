@@ -189,6 +189,88 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 `projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
 remote-ssh adapter's own snapshot instead.
 
+### A parent's busy decay shortens while a subagent is running (issue #284)
+
+A Task-tool invocation typically appends to the parent's own top-level
+transcript (recording the tool_use/tool_result around the spawn) at almost
+the same moment it appends to the subagent's own file. On the remote-ssh
+adapter this used to mean a plain `busy` edge could win the icon rung over
+`agentsBusy` for its full 20s decay, even though the top-level agent was
+really just idle waiting on the subagent — visibly different from a local-pty
+row, which reflects the OSC-driven busy edge instantly and clears it just as
+fast.
+
+**First attempt (reverted in review): a 3s coincidence window keyed off the
+`agentsBusy` false→true edge.** Two adversarial-review findings killed it.
+First, a genuinely busy parent that spawns a subagent lost `busy` outright:
+every touch inside the post-spawn window was swallowed and never re-applied,
+so a parent writing every ~1s could sit at `agentsBusy` even while it was
+still producing output itself. Second, the edge only fires once — a second
+subagent spawned while the first was still running had no edge to key off,
+`remoteSubagentSpawnAt` stayed stale, and its coincident parent-file touch
+armed the full 20s `busy` decay again: the original bug, for the ordinary
+sequential-agents case.
+
+**Current design: no window, no edge — the decay *length* itself depends on
+`agentsBusy`.** `remoteBusyDecayMs(sessionId)` (`public/remote-activity-ui.js`)
+returns `SUBAGENT_PARENT_DECAY_MS` (3000ms) when `agentsBusy` is true,
+`PIP_DECAY_MS` (20000ms) otherwise; `onRemoteActivityEvent`'s plain-touch
+branch arms the decay with whichever value applies at that instant. Every
+`busy` touch still applies `busy:true` unconditionally — nothing is ever
+swallowed or synchronously cleared. `markRemoteSubagentBusy` runs on **every**
+subagent touch, not only the first: if a busy decay is currently pending with
+more than `SUBAGENT_PARENT_DECAY_MS` left, it reschedules that pending timer
+down to 3s from now (`remoteActivityDecayRemaining`, tracked as `fireAt` on
+`remoteActivityDecayTimers`'s entries) — it never touches `busy` itself,
+only how soon its decay fires. The outcome: a parent genuinely still writing
+while a subagent runs re-touches at the ~1s IPC throttle, always inside the
+3s window, so `busy` never lapses — it keeps the same violet-tinted spinner a
+local row would show in the same situation
+(`.has-busy-agents .session-icon--busy::before`). A parent that only
+bookends the spawn (one touch at spawn, one at completion) has its single
+post-spawn touch decay in 3s instead of 20s, landing on `agentsBusy` — the
+same rung as the local row — within a few seconds instead of up to 20. A
+parent with **no** subagent keeps the full 20s decay unchanged (a long silent
+tool call must not read as idle). `PRIORITY` in `session-state.js` is
+unchanged — this only changes which decay duration a renderer-side timer
+picks, never the priority ladder.
+
+**`seedRemoteActivity` (cold-start / rebuild paint) is migrated too, not just
+the live-touch path.** Its own arm used to stay `PIP_DECAY_MS`-based
+regardless of `agentsBusy`, computing `remaining = remoteActiveAt +
+PIP_DECAY_MS - now`. `renderProjects()` calls `seedRemoteActivity` on every
+full sidebar rebuild, and a rebuild is itself commonly provoked by the
+subagent's own writes — so a parent whose short decay had *already* fired
+got put back on the animated busy rung for up to 20s at the very next
+rebuild (measured: touch t=0, spawn t=1000 reschedules the decay to fire at
+t=4000, busy correctly false at t=4000, then a rebuild at t=5000 re-armed
+busy for another ~15s). Fixed by using `remoteBusyDecayMs(sessionId)` in that
+same arithmetic (`remaining = remoteActiveAt + remoteBusyDecayMs(sessionId) -
+now`) — with `agentsBusy` true the seed window is 3s from `remoteActiveAt`
+instead of 20s, so a seed older than that does nothing, exactly mirroring
+what the live-touch path already does. A seed with `agentsBusy` false is
+byte-identical to before (`remoteBusyDecayMs` returns `PIP_DECAY_MS`), which
+is why `test/dom-sidebar-remote-activity-pip.test.js` (no subagent in any of
+its fixtures) needed no changes.
+
+**Accepted trade-off, not a bug: with a subagent running, a genuinely busy
+parent can visibly flap between the `busy` and `agentsBusy` rungs.** If the
+parent's own transcript stays silent for more than `SUBAGENT_PARENT_DECAY_MS`
+(3s) — a long tool call — its `busy` decays to `agentsBusy` until the next
+write brings it back to `busy`. Both rungs are violet-tinted
+(`.has-busy-agents .session-icon--busy::before` / `.session-icon--agents-busy::before`),
+so the visible change is animation only (spinner vs. static diamond), not a
+color or row-class change. This is deliberate: the alternative — decaying at
+the full `PIP_DECAY_MS` (20s) whenever `agentsBusy` is true — is exactly
+issue #284's original symptom, a parent idling on `busy` long after it
+stopped producing output. **The local-pty row has no equivalent gap**: its
+busy signal is the OSC title stream, edge-triggered on the CLI's own
+idle/busy transitions rather than decayed from silence, so it never flaps
+while genuinely idle-but-subagent-running. This asymmetry between local and
+remote is a known, accepted consequence of the remote-ssh adapter having no
+edge-triggered signal to key off — only transcript touches — not an
+oversight to fix later.
+
 ### Row ownership: attached vs unattached (issue #273)
 
 An attached remote row (a tab open on it) is owned by the local-pty path —

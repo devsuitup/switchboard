@@ -93,6 +93,55 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   prune until PR #137. Keep cross-file names distinct;
   `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
 
+## The child row's own `.running` dot, for every source (issue #285)
+
+`activeSubagentsByParent` (above) used to be fed only by the local
+`subagent-spawned`/`subagent-completed` IPC pair, so a remote or
+local-transcript subagent's own row never got `.running` — not even after a
+full rebuild — even though both sources' `kind:'subagent'` payload already
+carries `agentId` (`remote-activity.js`, `local-transcript-activity.js`).
+`noteSubagentActivity(parentSessionId, agentId)` (`public/sidebar.js`) is now
+the single write path into that map: the local IPC handler, `onRemoteActivityEvent`'s
+subagent branch (`remote-activity-ui.js`) and `onLocalTranscriptSubagentActivity`
+(`local-transcript-adapter.js`) all call it, so all three share the same 60s
+TTL/decay convention `isSubagentActive`/`pruneStaleSubagents` already
+implement — no second, independently-tuned decay was added.
+
+A suspected second cause (`reflectSubagentRunningState`'s DOM lookup,
+`subagentDomId(parent, agentId)` vs. the row's own id) turned out not to
+reproduce: every subagent row's `sessionId` is built by
+`subagentSessionId(parent, agentId)` = `'sub:'+parent+':'+agentId`
+(`read-session-file.js`), for local, remote-mirrored and legacy-layout rows
+alike, so `'si-' + session.sessionId` and `subagentDomId(parent, agentId)`
+are byte-identical by construction. `test/dom-sidebar-subagent-running.test.js`
+already pinned this for the local IPC path with no rebuild; the actual gap
+was purely the missing feed, not the lookup.
+
+One landmine found while wiring this: `reflectSubagentRunningState` also
+repaints the **parent's** icon slot via `paintSessionIcon`, which paints from
+the local-pty adapter's snapshot (`snapshotForLocal` auto-vivifies a
+`localPtyState` entry). Calling it for a remote/local-transcript parent would
+have overwritten the icon the remote-ssh/local-transcript adapter's own
+`projectRemoteState`/`projectLocalTranscriptState` had just painted, with an
+empty local-pty snapshot.
+
+**Corrected in review**: the first pass skipped that repaint whenever
+`remoteSessionStates.has(parentSessionId)` was true — wrong, because
+`setRemoteAttached` never deletes the entry, so it stays true for the rest of
+the row's life whether or not a tab is currently attached. An **attached**
+remote row is owned by the local-pty path (#273: OSC busy/idle governs it,
+exactly like an ordinary local row), so it still needs this repaint — with
+the old check it never got one on a live subagent toggle, leaving
+`has-busy-agents` set on the row while the icon itself stayed
+`session-icon--idle` until the next full rebuild. The guard is now
+`isRemoteRowOwned(parentSessionId)` (`remote-activity-ui.js`) — remote state
+exists **and** is not attached — matching the exact ownership test #273
+already established (`projectRemoteState`, `markRemoteBusy`,
+`decayRemoteBusy` all gate on `snapshot().attached` the same way).
+`localTranscriptStates` needs no equivalent check: there is no "attached"
+state for that kind — `localTranscriptPtyTakeover` deletes the entry outright
+once a PTY takes the row over, so `.has()` alone stays correct.
+
 ## Attribution across sources (issue #247)
 
 `.has-busy-agents` used to light only for a parent reachable from
