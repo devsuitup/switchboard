@@ -131,9 +131,10 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
 
   // session-state.js (pure domain) + session-activity-dom.js (DOM projection)
-  // + session-activity.js (Maps/Sets, setActivity/purgeActivityFor) — load
-  // order mirrors index.html. sidebar.js and remote-activity-ui.js call
-  // setActivity/applyActivityClasses/sessionItemEl from these.
+  // + session-activity.js (the local-pty adapter: localPtyStates,
+  // setActivity/setAttention/purgeActivityFor) — load order mirrors
+  // index.html. sidebar.js and remote-activity-ui.js call
+  // setActivity/applyStateClasses/sessionItemEl from these.
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));

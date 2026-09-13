@@ -31,47 +31,23 @@ function isSessionAlive(sessionId) {
   return !!(el && el.classList.contains('is-alive'));
 }
 
-// local-pty only for now — see session-state.md "migration status".
-function computeBusyReadyClasses(sessionId) {
-  const busy = sessionBusyState.get(sessionId) === true;
-  const ready = !busy && responseReadySessions.has(sessionId);
-  const state = createSessionState('local-pty');
-  if (busy) state.apply({ type: 'busy', active: true });
-  else if (ready) state.apply({ type: 'busy', active: false, armReady: true });
-  return renderSessionIcon(state.snapshot()).classes;
-}
-
-// The only writer of .cli-busy and .response-ready — they are mutually exclusive.
-function applyActivityClassesToElement(item, sessionId) {
-  if (!item) return;
-  const classes = computeBusyReadyClasses(sessionId);
-  const ready = classes.includes('response-ready');
-  const busy = classes.includes('cli-busy');
-  setResponseReady(item, ready);
-  setCliBusy(item, busy);
-  paintSessionIcon(item.querySelector('.session-icon'), sessionId);
-  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, fn: 'applyActivityClasses' });
-}
-
-function applyActivityClasses(sessionId) {
-  applyActivityClassesToElement(sessionItemEl(sessionId), sessionId);
-}
-
-// Snapshot-driven projection for adapter-owned state; has-busy-agents read off the snapshot — see .ai/contexts/session-state.md
+// Snapshot-driven projection — the one path for all three kinds — see .ai/contexts/session-state.md ("The local-pty adapter")
 function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const icon = renderSessionIcon(snapshot);
+  const attention = icon.classes.includes('needs-attention');
   const ready = icon.classes.includes('response-ready');
   const busy = icon.classes.includes('cli-busy');
   const agentsBusy = !!(snapshot && snapshot.agentsBusy);
   const alive = !!(snapshot && snapshot.liveness === 'alive');
+  setNeedsAttention(item, attention);
   setResponseReady(item, ready);
   setCliBusy(item, busy);
   setHasBusyAgents(item, agentsBusy);
   setIsAlive(item, alive);
   writeIconSlot(item.querySelector('.session-icon'), icon);
-  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
+  if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'needs-attention': attention, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md
@@ -85,17 +61,9 @@ function writeIconSlot(el, icon) {
   el.dataset.glyph = icon.glyph || '';
 }
 
-// local-pty snapshot for the icon slot (full priority ladder, unlike computeBusyReadyClasses) — see .ai/contexts/session-state.md
+// Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session) {
-  const state = createSessionState('local-pty');
-  const busy = sessionBusyState.get(sessionId) === true;
-  const ready = !busy && responseReadySessions.has(sessionId);
-  if (busy) state.apply({ type: 'busy', active: true });
-  else if (ready) state.apply({ type: 'busy', active: false, armReady: true });
-  if (attentionSessions.has(sessionId)) state.apply({ type: 'attention', active: true });
-  if (typeof parentHasActiveSubagent === 'function' && parentHasActiveSubagent(sessionId)) {
-    state.apply({ type: 'subagentSpawned' });
-  }
+  const state = localPtyState(sessionId);
   const sess = session || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md

@@ -306,9 +306,7 @@ function trackActivity(sessionId, data) {
 
 function clearNotifications(sessionId) {
   clearUnread(sessionId, 'clearNotifications');
-  if (window.ATRACE && attentionSessions.has(sessionId)) window.atrace('store.mutate', sessionId, { map: 'attentionSessions', op: 'delete', from: true, to: false, fn: 'clearNotifications' });
-  attentionSessions.delete(sessionId);
-  setNeedsAttention(sessionItemEl(sessionId), false);
+  setAttention(sessionId, false, 'clearNotifications');
 }
 // Terminal themes, utils (cleanDisplayName, formatDate, escapeHtml, shellEscape)
 // are defined in terminal-themes.js and utils.js (loaded before app.js).
@@ -460,11 +458,7 @@ window.api.onTerminalNotification((sessionId, message) => {
   // 3. "Claude needs your permission to use {tool}"   → permission, needs your
   // 4. "Claude Code wants to enter plan mode"         → wants to enter
   if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
-    if (window.ATRACE) window.atrace('store.mutate', sessionId, { map: 'attentionSessions', op: 'add', from: attentionSessions.has(sessionId), to: true, fn: 'onTerminalNotification' });
-    attentionSessions.add(sessionId);
-    const item = sessionItemEl(sessionId);
-    if (window.ATRACE) window.atrace('class.toggle', sessionId, { el: item ? item.id : null, cls: 'needs-attention', on: true, fn: 'onTerminalNotification' });
-    setNeedsAttention(item, true);
+    setAttention(sessionId, true, 'onTerminalNotification');
   } else if (/waiting for your input/i.test(message)) {
     // "Claude is waiting for your input" — delayed idle notification, mark response-ready
     setActivity(sessionId, false, 'onTerminalNotification');
@@ -836,11 +830,12 @@ function updateRunningIndicators() {
       // remote rows are owned by the remote adapter — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
       if (!running && !item.dataset.remoteAlias) {
         setHasBusyAgents(item, false);
-        purgeActivityFor(id, 'pty-gone');
         // A stopped PTY can never emit subagent-completed (stop-session kills
         // the process; detectSubagentTransitions skips exited sessions), so
         // drop the live-subagent state now instead of waiting for the TTL.
         clearActiveSubagentsFor(id);
+        // Runs after clearActiveSubagentsFor — see .ai/contexts/session-state.md ("The local-pty adapter")
+        purgeActivityFor(id, 'pty-gone');
       }
       if (item.dataset.remoteAlias) setRemoteAttached(id, running);
       // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md

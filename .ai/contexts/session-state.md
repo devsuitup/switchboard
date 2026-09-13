@@ -6,11 +6,16 @@ what actually shipped, not the whole plan.
 
 ## Migration status
 
+**Complete.** All three kinds (`local-pty`, `remote-ssh`, `local-transcript`)
+are persistent-state adapters of the same shape: one `createSessionState(kind)`
+per session id, events applied to it, `session-activity-dom.js`'s
+`applyStateClasses(sessionId, snapshot)` as the single DOM projection path.
+Issue #246 is closed.
+
 - **Steps 1-3b: done.** `public/session-activity.js` split into a state part
   (itself) and a DOM part (`public/session-activity-dom.js`); `public/session-state.js`
-  introduced and wired behind `applyActivityClasses` for local-pty, and behind
-  a persistent `remote-ssh` adapter (`public/remote-activity-ui.js`) for
-  remote sessions — see "The remote-ssh adapter" below. Step 3b (one
+  introduced, and a persistent `remote-ssh` adapter (`public/remote-activity-ui.js`)
+  shipped for remote sessions — see "The remote-ssh adapter" below. Step 3b (one
   `.session-icon` slot per sidebar row, replacing `.session-status-dot` for
   session/subagent rows) shipped separately — see "The icon slot (step 3b)"
   below.
@@ -24,15 +29,21 @@ what actually shipped, not the whole plan.
   `subagentCompleted` — see `.ai/contexts/subagent-observability.md`
   ("Attribution across sources") for the full wiring. A **local-pty** parent
   is untouched: it keeps going through the IPC path
-  (`session-transitions.js:detectSubagentTransitions()`), never double-fed.
-  `sidebar.js`'s `parentHasActiveSubagent()` now also consults the remote-ssh
-  and local-transcript adapters' own snapshots (`remoteSessionStates` /
-  `localTranscriptStates`) so `has-busy-agents` survives a full
-  `renderProjects()` re-render for those two kinds, the same way it already
-  did for local-pty via `activeSubagentsByParent`.
+  (`session-transitions.js:detectSubagentTransitions()`), never double-fed —
+  `sidebar.js`'s `reflectSubagentRunningState()` mirrors
+  `activeSubagentsByParent`'s live count into the local-pty adapter's own
+  state (`syncLocalPtyAgentsBusy`, see "The local-pty adapter" below) instead
+  of a second IPC feed. `sidebar.js`'s `parentHasActiveSubagent()` still
+  consults `activeSubagentsByParent` plus the remote-ssh and local-transcript
+  adapters' own snapshots (`remoteSessionStates` / `localTranscriptStates`)
+  for the row-level `has-busy-agents` class — see "migration status" note
+  under "The local-pty adapter" for why that reader is not migrated onto the
+  adapter's own `agentsBusy` field.
 - **Lifecycle decisions (2026-09-11): done.** The two verbs — detach and
   stop — are both real now; see "The two lifecycle verbs: detach and stop"
   below.
+- **The local-pty adapter: done** (this pass, closing #246). See "The
+  local-pty adapter" below.
 
 ## The two lifecycle verbs: detach and stop
 
@@ -172,10 +183,11 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
   `has-running-pty` already reads.
 
 **The adapter never writes DOM itself.** Every event ends in
-`projectRemoteState(sessionId)`, which calls `session-activity-dom.js`'s new
-`applyStateClasses(sessionId, snapshot)` — the same two-class output
-(`cli-busy`/`response-ready`) `applyActivityClasses` produces for local-pty,
-but computed from the adapter's own snapshot instead of the local-pty Maps.
+`projectRemoteState(sessionId)`, which calls `session-activity-dom.js`'s
+`applyStateClasses(sessionId, snapshot)` — the same single projection path
+`setActivity`/`clearUnread`/`setAttention` use for local-pty (via
+`projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
+remote-ssh adapter's own snapshot instead.
 
 ### Row ownership: attached vs unattached (issue #273)
 
@@ -215,10 +227,12 @@ ready-flap replay in `test/remote-row-ownership.test.js` red; disabling the
 `setRemoteAttached` handoff block turns the pty.exit/20s-tail replay in the
 same file red.
 
-**`setActivity()`/the Maps in `session-activity.js` are still fed for remote
-ids in parallel** (`markRemoteBusy`/`decayRemoteBusy` call both, when not
-attached). Two readers were not migrated onto the adapter in this step, so
-removing the dual-feed would regress them:
+**`setActivity()` is still called for remote ids in parallel**
+(`markRemoteBusy`/`decayRemoteBusy` call both, when not attached) — see "The
+local-pty adapter" below for what `setActivity` now writes underneath
+`sessionBusyState`/`responseReadySessions`. Two readers were not migrated
+onto a persistent adapter snapshot in this step, so removing the dual-feed
+would regress them:
 - `sidebar.js`'s `buildSessionItem` reads `sessionBusyState`/
   `responseReadySessions`/`attentionSessions` directly at initial paint.
 - `app.js`'s grid-card busy dot (`updateRunningIndicators`'s `gridCards`
@@ -227,6 +241,110 @@ removing the dual-feed would regress them:
 Both are driven by the same `active`/`armReady` inputs as the adapter, so the
 two projections never disagree in practice; the dual-feed is a known,
 temporary duplication, not a race.
+
+### The local-pty adapter
+
+`public/session-activity.js` keeps one persistent `createSessionState('local-pty')`
+per session id, in `localPtyStates` — same shape as `remoteSessionStates` /
+`localTranscriptStates` above. `setActivity`/`clearUnread`/`setAttention`/
+`syncLocalPtyAgentsBusy`/`rekeyActivityState`/`purgeActivityFor` all apply
+events to it (`localPtyState(sessionId)`, auto-vivifying); every path ends in
+`projectLocalPtyState(sessionId)` → `applyStateClasses()`, the same projection
+the other two adapters use. The busy/waitingForInput/attention/responseReady
+exclusivity invariant that `setActivity`'s bookkeeping used to encode by hand
+(deleting from three independent collections in the right order) now lives
+only in `session-state.js`'s `apply()` — `test/local-pty-adapter.test.js`
+pins that forcing busy and response-ready (or attention and response-ready)
+together is no longer reachable through the public API, only through
+`session-state.js`'s own domain tests directly.
+
+Inputs:
+
+- **`busy` (OSC 0 / OSC 9;4)** — `setActivity(sessionId, active, via, opts)`,
+  called from `app.js`'s `onCliBusyState` and `onTerminalNotification`
+  ("waiting for your input"), and from `reconcileBusyState` (the
+  `get-active-sessions` poll). `opts.armReady` and the "was this session
+  focused" check are adapter-level judgments the pure domain cannot make on
+  its own (it has no notion of `activeSessionId` or "was busy a moment ago");
+  `setActivity` computes them and passes the result in as the `busy` event's
+  `armReady`, the same contract the remote-ssh/local-transcript adapters
+  already use for their own reasons.
+- **`attention` (OSC 9, not a busy/idle notification)** — `setAttention(sessionId, on, via)`,
+  called from `app.js`'s `onTerminalNotification` (set) and `clearNotifications`
+  (clear). Setting attention clears busy/waitingForInput/responseReady in the
+  domain (`clearExclusive()`, `session-state.js`) — clearing attention does
+  not restore whatever was cleared; that is `session-state.js`'s own,
+  pre-existing contract (`test/session-state.test.js`, "exclusivity: attention
+  while busy..."), not a new local-pty special case.
+- **`subagentSpawned`/`subagentCompleted`** — not a second IPC feed. `sidebar.js`'s
+  `activeSubagentsByParent` (precise spawn/complete events plus a 60s TTL for
+  a parent that stops emitting) stays the ground truth for the row-level
+  `has-busy-agents` class and the per-agent `.running` toggle; `syncLocalPtyAgentsBusy(sessionId, active)`
+  mirrors its live count into the adapter's own `agentsBusy` field from
+  `sidebar.js`'s `reflectSubagentRunningState()` — the one repaint point every
+  `activeSubagentsByParent` mutation (spawn, complete, the pty-gone bulk
+  clear, and the TTL prune) already funnels through — so `snapshot()` is
+  complete for a local row without a second, independently-decayed source of
+  truth for the same fact.
+- **`liveness`/`descriptorStatus`** — seeded on every icon paint from the
+  session object's `status`/`statusUpdatedAt` (`snapshotForLocal`,
+  `session-activity-dom.js`), the same two calls `applyRemoteDescriptor`/
+  `seedLocalTranscriptDescriptor` make for the other two kinds.
+
+**Two readers still bypass the adapter's snapshot on purpose** — see "Row
+ownership" above for why removing them isn't free in this pass:
+`sidebar.js`'s `buildSessionItem`/`buildSubagentItem` (initial paint of
+`cli-busy`/`response-ready`/`needs-attention`/`has-busy-agents`) and `app.js`'s
+grid-card busy dot read `sessionBusyState`/`responseReadySessions`/
+`attentionSessions` directly rather than `localPtyState(id).snapshot()`. Those
+three names are no longer independent `Map`/`Set` instances, though — they are
+thin views over `localPtyStates` (`.get`/`.has`/`.set`/`.add`/`.delete`/`.size`),
+so a direct write through them (as `reconcileBusyState`'s initial poll, or a
+test's precondition setup, legitimately does before any row or `setActivity`
+call exists) lands in the same persisted object `snapshotForLocal`/
+`paintSessionIcon` read from.
+
+#### Decided: attention supersedes and consumes the unseen-response state
+
+**Behavior change, not a regression to fix.** Before this migration,
+`responseReadySessions` and `attentionSessions` were two independent `Set`s: a
+row could carry both `response-ready` and `needs-attention` at once (CSS gave
+`needs-attention` visual precedence over `response-ready`), and clearing
+attention left `responseReadySessions` untouched — the row fell back to
+showing `response-ready`, "Claude finished, you haven't looked", because that
+fact had never actually been erased underneath the attention overlay.
+
+Concretely, the old sequence: session goes idle unseen (`response-ready`
+armed) → an OSC 9 notification fires (`needs-attention`, drawn on top) → the
+user handles it and attention clears → the row reverts to `response-ready`,
+because the unseen-response fact was still sitting in the Set the whole time.
+
+Now the two facts live as fields on one persisted object
+(`localPtyState(id)`), and `session-state.js`'s `apply()` treats `attention`,
+`busy` and `waitingForInput` (which `responseReady` is a subset of) as
+mutually exclusive: setting `attention: true` calls `clearExclusive()`, which
+zeroes `responseReady` along with `busy`/`waitingForInput`, not just the
+rung the icon happens to render. Clearing attention afterwards does not
+restore it — the row lands on plain idle, not back on `response-ready`. Same
+sequence today: idle unseen → attention fires (response-ready fact erased,
+not just outshone) → attention clears → idle, unread marker gone.
+
+This is a deliberate consequence of unifying local-pty into the same domain
+model the remote-ssh/local-transcript adapters already used (`test/session-state.test.js`'s
+pre-existing "exclusivity: attention while busy..." pins the same
+`clearExclusive()` behavior for those kinds) — not something to special-case
+back for local-pty. Read "attention" as *consuming* whatever unseen-response
+state it interrupts, the same way going busy again already consumed it before
+this change. `test/local-pty-adapter.test.js`'s "attention after
+response-ready, then clearing attention does not restore response-ready" pins
+this exact scenario so a future reader finds it intentional, not a bug to fix.
+
+One remaining consequence flagged, not fixed: `.has()` on
+`attentionSessions`/`responseReadySessions` (the legacy views above) now means
+"that facet is currently true", not "was ever added and not yet removed" — no
+shipped behavior currently depends on reading a stale `responseReady`/`busy`
+value after an attention transition, but a future feature reintroducing that
+combination would need its own domain field, not a Set-level workaround.
 
 ### The local-transcript adapter (step 4)
 
@@ -279,8 +397,9 @@ path already owns, mirroring the renderer-side guard below one layer down.
 **Guarded against a PTY takeover in both directions**:
 `onLocalTranscriptActivity` checks `activePtyIds.has(sessionId)` and refuses
 to even allocate state for a session already carrying a PTY in this app (the
-OSC path owns it — see `session-activity-dom.js`'s `applyActivityClassesToElement`,
-fed by `main.js`'s OSC 0/9 parsing, not this adapter). Going the other way,
+OSC path owns it — see `session-activity.js`'s `setActivity`, fed by
+`main.js`'s OSC 0/9 parsing via `onCliBusyState`/`onTerminalNotification`, not
+this adapter). Going the other way,
 `app.js`'s `updateRunningIndicators()` calls `localTranscriptPtyTakeover(id)`
 for a non-remote row the instant it transitions into `activePtyIds` (the user
 opened it), which clears the pending decay timer and deletes the row's
@@ -301,14 +420,18 @@ public/session-state.js          pure domain — no DOM, no IPC, no electron
 public/session-activity-dom.js   DOM projection — the only file allowed to
                                   write .cli-busy/.needs-attention/
                                   .response-ready/.has-busy-agents
-public/session-activity.js       Maps/Sets + setActivity/purgeActivityFor/
+public/session-activity.js       the local-pty adapter — one persistent
+                                  createSessionState('local-pty') per session
+                                  id (localPtyStates) + setActivity/clearUnread/
+                                  setAttention/purgeActivityFor/
                                   rekeyActivityState/reconcileBusyState —
                                   calls into session-activity-dom.js to render
 ```
 
 `createSessionState(kind)` returns `{ apply(event), snapshot() }`. `kind` is
-`'local-pty' | 'local-transcript' | 'remote-ssh'` (only `'local-pty'` is fed
-today). Snapshot fields:
+`'local-pty' | 'local-transcript' | 'remote-ssh'` — all three are fed by a
+persistent per-session-id adapter (`localPtyStates` / `localTranscriptStates` /
+`remoteSessionStates`). Snapshot fields:
 
 | field | meaning |
 |---|---|
@@ -320,7 +443,7 @@ today). Snapshot fields:
 | `attention` | OSC 9 — needs the user right now (permission/approval/plan) |
 | `responseReady` | subset of `waitingForInput`: idle **and** unseen when it went idle (the legacy "Claude finished, you haven't looked" rung). Not in the issue's original field list — added because the priority order names it as its own rung, distinct from plain `waitingForInput`; see "Design notes" below. |
 | `agentsBusy` | subagents running under this session |
-| `lastActivityAt` / `lastActivitySource` | last touch, for `local-transcript`/`remote-ssh` (unused by local-pty today) |
+| `lastActivityAt` / `lastActivitySource` | last touch — `transcriptTouched`/`descriptorStatus` events carry `at`/`source`; local-pty now feeds `descriptorStatus` too (`snapshotForLocal`'s seed from `session.status`), so this is populated on all three kinds. Not read by `renderSessionIcon` on any kind today. |
 | `label` / `labelConfidence` | reserved, unused |
 | `attachable` | reserved, unused |
 | `archived` / `stale` | reserved, unused |
@@ -363,34 +486,35 @@ underneath it changes.
   distinct from the row-level `classes` (`cli-busy` etc.) both for the eslint
   boundary (see "Enforcement" below) and so a reader never confuses "this
   paints the row" with "this paints the slot".
-- `session-activity-dom.js` also references `parentHasActiveSubagent`
-  (`sidebar.js`) and `sessionMap` (`app.js`) now, alongside the pre-existing
-  `sessionBusyState`/`responseReadySessions`/`attentionSessions`
-  (`session-activity.js`). Safe despite loading before all three in
-  index.html's script order — every reference is inside a function body,
-  resolved at call time after the whole page has loaded, same pattern
-  `sidebar.js`'s own header comment documents for its dependencies.
-- `snapshotForLocal(sessionId, session)` builds a local-pty snapshot the same
-  way `computeBusyReadyClasses` does for busy/responseReady, extended with
-  `attention` (`attentionSessions`), `agentsBusy` (`parentHasActiveSubagent()`),
-  and `liveness`/`descriptorStatus` from `session.status`/`statusUpdatedAt`
-  when present — cli-session-state.js only keeps an entry while the pid is
-  alive (`.ai/contexts/cli-session-state.md`), so `session.status` being
-  present at all is itself the local liveness signal; `session` is optional
-  and falls back to a `sessionMap` lookup for call sites that only have a
-  sessionId.
+- `session-activity-dom.js` also references `localPtyState` and `sessionMap`
+  (`app.js`) now, alongside the pre-existing `sessionBusyState`/
+  `responseReadySessions`/`attentionSessions` view objects (`session-activity.js`).
+  Safe despite loading before `session-activity.js` in index.html's script
+  order — every reference is inside a function body, resolved at call time
+  after the whole page has loaded, same pattern `sidebar.js`'s own header
+  comment documents for its dependencies.
+- `snapshotForLocal(sessionId, session)` is a thin wrapper over the local-pty
+  adapter's own persisted state (`localPtyState(sessionId).snapshot()`) — see
+  "The local-pty adapter" above. It seeds `liveness`/`descriptorStatus` from
+  `session.status`/`statusUpdatedAt` on every call, idempotently — cli-session-state.js
+  only keeps an entry while the pid is alive (`.ai/contexts/cli-session-state.md`),
+  so `session.status` being present at all is itself the local liveness
+  signal; `session` is optional and falls back to a `sessionMap` lookup for
+  call sites that only have a sessionId. `busy`/`attention`/`responseReady`/
+  `agentsBusy` are already on the persisted state (fed by `setActivity`/
+  `setAttention`/`syncLocalPtyAgentsBusy`), not recomputed here.
 - `paintSessionIcon(el, sessionId, session)` composes the two:
   `writeIconSlot(el, renderSessionIcon(snapshotForLocal(sessionId, session)))`.
   Called from `sidebar.js` at row construction (both `buildSessionItem` and
-  `buildSubagentItem`), from `applyActivityClassesToElement` on every local
-  busy/ready/attention/subagent transition, and from
-  `reflectSubagentRunningState` on the **parent** row (agentsBusy is part of
-  the priority ladder the slot resolves, so a subagent spawn/complete must
-  repaint the parent's slot, not just its `has-busy-agents` row class).
-- `applyStateClasses(sessionId, snapshot)` (the remote-ssh path, called from
-  `remote-activity-ui.js`'s `projectRemoteState`) now also calls
-  `writeIconSlot` with the same `renderSessionIcon(snapshot)` result it uses
-  for the row's `cli-busy`/`response-ready` classes — this is what makes a
+  `buildSubagentItem`) and from `reflectSubagentRunningState` on the
+  **parent** row (agentsBusy is part of the priority ladder the slot
+  resolves, so a subagent spawn/complete must repaint the parent's slot, not
+  just its `has-busy-agents` row class).
+- `applyStateClasses(sessionId, snapshot)` — the single projection path all
+  three kinds' transitions go through (`projectLocalPtyState`/
+  `projectRemoteState`/`projectLocalTranscriptState`) — calls `writeIconSlot`
+  with the same `renderSessionIcon(snapshot)` result it uses for the row's
+  `needs-attention`/`cli-busy`/`response-ready` classes. This is what makes a
   local busy row and a remote busy row render the identical slot markup
   (classes, title, glyph), pinned in `test/dom-sidebar-icon-slot.test.js`.
 
@@ -483,10 +607,12 @@ the others assert on the dot/slot element itself, only on row classes and
   cannot stand in for "the user is looking at this row right now". The
   `armReady` flag on the `busy` event carries that judgment in from the
   adapter, same as before the split.
-- Ports (`transcriptTouched`, `descriptorStatus`, `subagentSpawned/Completed`,
-  `attachable`, `label`, `archived`, `stale`) are implemented in `apply()` but
-  **not fed by any adapter yet** — they exist so steps 3-5 don't need another
-  domain-shape change.
+- Ports (`attachable`, `label`, `archived`, `stale`) are implemented in
+  `apply()` but **not fed by any adapter yet** — they exist so a future step
+  doesn't need another domain-shape change. `transcriptTouched`,
+  `descriptorStatus` and `subagentSpawned`/`subagentCompleted` are all wired
+  now (see the ports table below) — this bullet used to list them too, before
+  the local-pty adapter closed the last gap.
 
 ## Enforcement
 
@@ -520,11 +646,11 @@ the others assert on the dot/slot element itself, only on row classes and
 
 | event | local-pty | local-transcript | remote-ssh |
 |---|---|---|---|
-| `busy` / `attention` (OSC 0 / 9) | yes | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
-| `transcriptTouched(at)` | yes | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
-| `descriptorStatus(status, at)` / `liveness` | yes | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
+| `busy` / `attention` (OSC 0 / 9) | yes — `setActivity`/`setAttention` | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
+| `transcriptTouched(at)` | no — local-pty's busy signal is the OSC title, not a transcript write; a real PTY makes this port redundant for it | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
+| `descriptorStatus(status, at)` / `liveness` | yes — `snapshotForLocal`'s seed from `session.status`/`statusUpdatedAt`, same two calls the other kinds make | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition; also the row-ownership arbiter since #273 (see "Row ownership" above) |
-| `subagentSpawned` / `subagentCompleted` | yes — via `detectSubagentTransitions()` IPC | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
+| `subagentSpawned` / `subagentCompleted` | yes — `syncLocalPtyAgentsBusy`, mirroring `activeSubagentsByParent` (fed by `detectSubagentTransitions()` IPC) rather than a second IPC feed — see "The local-pty adapter" above | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 
 An adapter without a PTY must never claim `waitingForInput` or `responseReady`
 from a completion signal it cannot verify — that is why the remote-ssh and
