@@ -45,12 +45,7 @@ function parseTitleStringToken(part, name) {
   const re = new RegExp(`${escapeRegExpLiteral(name)}(\\*?)\\s+([\\s\\S]*)`);
   const m = re.exec(part || '');
   if (!m) return { value: null, inherited: false };
-  const inherited = m[1] === '*';
-  const raw = m[2].replace(/\r?\n+$/, '');
-  const value = raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"'
-    ? raw.slice(1, -1).replace(/\\(["\\])/g, '$1')
-    : raw;
-  return { value, inherited };
+  return { value: m[2].replace(/\r?\n+$/, ''), inherited: m[1] === '*' };
 }
 
 function parseProbeOutput(stdout) {
@@ -158,15 +153,21 @@ function buildRestoreOptionSegment(target, name, value, opts = {}) {
   return `set -t ${target} ${name} ${opts.quote ? shellSingleQuote(value) : value}`;
 }
 
-function buildRestoreCommand(socket, target, pre) {
+// titlesOnly — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function buildRestoreCommand(socket, target, pre, opts = {}) {
   const p = pre || {};
-  const segments = [
-    buildRestoreOptionSegment(target, 'status', p.status),
-    buildRestoreOptionSegment(target, 'mouse', p.mouse),
-    buildRestoreOptionSegment(target, 'window-size', p.windowSize),
+  const titleSegments = [
     buildRestoreOptionSegment(target, 'set-titles', p.setTitles),
     buildRestoreOptionSegment(target, 'set-titles-string', p.setTitlesString, { quote: true }),
   ];
+  const segments = opts.titlesOnly
+    ? titleSegments
+    : [
+        buildRestoreOptionSegment(target, 'status', p.status),
+        buildRestoreOptionSegment(target, 'mouse', p.mouse),
+        buildRestoreOptionSegment(target, 'window-size', p.windowSize),
+        ...titleSegments,
+      ];
   return `tmux -S '${socket}' ${segments.join(' \\; ')}`;
 }
 
@@ -362,15 +363,13 @@ function createTmuxAttachAdapter(opts = {}) {
       if (detaching || !alive) return;
       detaching = true;
       try { raw.kill(); } catch {}
-      if (solo) {
-        // best-effort restore — see .ai/contexts/session-cache.md ("solo attach parity, issue #253")
-        try {
-          const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre);
-          Promise.resolve(runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS }))
-            .catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
-        } catch (err) {
-          log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`);
-        }
+      // best-effort restore, every detach — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+      try {
+        const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { titlesOnly: !solo });
+        Promise.resolve(runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS }))
+          .catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
+      } catch (err) {
+        log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`);
       }
     }
 

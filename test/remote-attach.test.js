@@ -145,24 +145,26 @@ test('parseProbeOutput reports setTitles null when absent or inherited (starred)
 });
 
 // Host measurement (tmux 3.6): the default set-titles-string is
-// `#S:#I:#W - "#T" #{session_alerts}`, which `show-options -A` quotes and
-// backslash-escapes because it contains spaces and embedded double quotes --
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles).
-const DEFAULT_SET_TITLES_STRING = '#S:#I:#W - "#T" #{session_alerts}';
-const QUOTED_DEFAULT_SET_TITLES_STRING = '"#S:#I:#W - \\"#T\\" #{session_alerts}"';
+// `#S:#I:#W - "#T" #{session_alerts}`, and `show-options -A` prints it in
+// tmux's own re-parsable quoting: `"#S:#I:#W - \"#T\" #{session_alerts}"`.
+// `pre.setTitlesString` is kept as this RAW printed token, unmodified --
+// restoring it is shell-single-quoting only, leaving tmux's own parser to
+// unquote it back on `set` -- see .ai/contexts/session-cache.md ("Remote
+// hosts — tmux attach", set-titles).
+const RAW_DEFAULT_SET_TITLES_STRING = '"#S:#I:#W - \\"#T\\" #{session_alerts}"';
 
-test('parseProbeOutput unescapes a quoted set-titles-string value with embedded quotes and spaces', () => {
+test('parseProbeOutput keeps set-titles-string as the raw printed token, unmodified', () => {
   const probed = parseProbeOutput(
     '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
-      PROBE_SEP + `set-titles-string ${QUOTED_DEFAULT_SET_TITLES_STRING}`,
+      PROBE_SEP + `set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}`,
   );
-  assert.equal(probed.pre.setTitlesString, DEFAULT_SET_TITLES_STRING);
+  assert.equal(probed.pre.setTitlesString, RAW_DEFAULT_SET_TITLES_STRING, 'no unescaping -- the raw token is kept as printed');
 });
 
 test('parseProbeOutput reports setTitlesString null when starred (inherited)', () => {
   const probed = parseProbeOutput(
     '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
-      PROBE_SEP + `set-titles-string* ${QUOTED_DEFAULT_SET_TITLES_STRING}`,
+      PROBE_SEP + `set-titles-string* ${RAW_DEFAULT_SET_TITLES_STRING}`,
   );
   assert.equal(probed.pre.setTitlesString, null);
 });
@@ -572,27 +574,30 @@ test('buildRestoreCommand: mixes "set" and "set -u" per option independently', (
   );
 });
 
-// issue #290 -- the round trip must reproduce the default set-titles-string
-// (spaces and embedded double quotes) byte for byte. No real shell runs here,
-// so this test undoes the single-quoting itself (bash/sh single-quote
-// removal is: strip the wrapping quotes, "'\''" becomes "'") to prove the
-// segment, once shell-unquoted, is exactly the probed value.
+// issue #290 -- restore only shell-single-quotes the raw probed token; it
+// never re-interprets tmux's own quoting (that unquoting is left to tmux's
+// own parser when `set` receives it). No real shell runs here, so this test
+// undoes the single-quoting itself (bash/sh single-quote removal is: strip
+// the wrapping quotes, "'\''" becomes "'") to prove the segment, once
+// shell-unquoted, carries the exact same byte sequence the probe produced.
 function unshellSingleQuote(word) {
   assert.equal(word[0], "'", `expected a single-quoted word: ${word}`);
   assert.equal(word[word.length - 1], "'", `expected a single-quoted word: ${word}`);
   return word.slice(1, -1).replace(/'\\''/g, "'");
 }
 
-test('buildRestoreCommand: set-titles-string quoting round-trips the default tmux value byte for byte', () => {
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
-    status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: DEFAULT_SET_TITLES_STRING,
-  });
+test('buildRestoreCommand: set-titles-string round-trips the raw probed token byte for byte, quoting only', () => {
+  const probed = parseProbeOutput(
+    '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
+      PROBE_SEP + `set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}`,
+  );
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', probed.pre);
   const m = /set -t main:@0\.%0 set-titles-string (.+)$/.exec(cmd);
   assert.ok(m, `restore command must set-titles-string: ${cmd}`);
-  assert.equal(unshellSingleQuote(m[1]), DEFAULT_SET_TITLES_STRING);
+  assert.equal(unshellSingleQuote(m[1]), RAW_DEFAULT_SET_TITLES_STRING, 'the probe output token must reappear byte for byte inside single quotes');
 });
 
-test('buildRestoreCommand: set-titles-string quoting round-trips a value containing a literal single quote', () => {
+test('buildRestoreCommand: set-titles-string quoting handles a raw token containing a literal single quote', () => {
   const withQuote = `it's "#T"`;
   const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
     status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: withQuote,
@@ -623,12 +628,13 @@ test('no builder ever emits a backtick', () => {
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true }),
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
-      status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING,
+      status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'on', setTitlesString: RAW_DEFAULT_SET_TITLES_STRING,
     }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
       status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
     }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { setTitles: 'on', setTitlesString: RAW_DEFAULT_SET_TITLES_STRING }, { titlesOnly: true }),
     buildRemoteCommandArgs('vps', 'echo hi').join(' '),
   ];
   for (const cmd of commands) {
@@ -754,7 +760,7 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${QUOTED_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
       stderr: '',
     };
   };
@@ -777,14 +783,18 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
   assert.equal(
     restoreCalls[0],
     "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual \\; " +
-      `set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '${DEFAULT_SET_TITLES_STRING}'`,
-    'the set-titles-string round trip must reproduce the original value byte for byte',
+      `set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '${RAW_DEFAULT_SET_TITLES_STRING}'`,
+    'solo detach must restore all five options, the raw set-titles-string token reappearing byte for byte',
   );
 });
 
-// Shared attach must never restore anything on detach -- it never changed
-// anything in the first place, and another client's view must not move.
-test('detach() sends no restore call when shared', async () => {
+// issue #290 (MAJOR) -- a shared attach still turns title forwarding on
+// (see buildAttachCommand), so leaving the session at `set-titles on` /
+// `'#T'` forever after the first shared attach would silently ratchet the
+// baseline every later probe restores against. A shared detach must restore
+// the two title options -- and only those two, since status/mouse/window-size
+// were never touched in shared mode and must stay untouched.
+test('detach() restores only set-titles/set-titles-string on a shared detach, leaving status/mouse/window-size untouched', async () => {
   const raw = fakeRawPty();
   const restoreCalls = [];
   const runRemoteCommand = async (alias, command) => {
@@ -794,7 +804,7 @@ test('detach() sends no restore call when shared', async () => {
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}1`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles* off${PROBE_SEP}${PROBE_SEP}1`,
       stderr: '',
     };
   };
@@ -812,7 +822,12 @@ test('detach() sends no restore call when shared', async () => {
   await Promise.resolve();
   await Promise.resolve();
 
-  assert.equal(restoreCalls.length, 0, 'a shared attach must never send a restore call on detach');
+  assert.equal(restoreCalls.length, 1, 'a shared detach must still restore the title options');
+  assert.equal(
+    restoreCalls[0],
+    "tmux -S '/tmp/tmux-0/test' set -u -t main:@0.%0 set-titles \\; set -u -t main:@0.%0 set-titles-string",
+    'shared detach restores only the two title options, using set -u since both were inherited (starred) before attach',
+  );
 });
 
 // A restore-on-detach failure must never throw out of kill()/detach(), and
