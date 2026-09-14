@@ -6,6 +6,7 @@
 const TMUX_FIELD_RE = /^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$/;
 const PROBE_SEP = '\u0001';
 const DEFAULT_PROBE_TIMEOUT_MS = 15000;
+const DETACH_CLIENT_COUNT_TIMEOUT_MS = 5000;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
 const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
@@ -40,6 +41,35 @@ function parseOptionToken(part, name) {
   return { value: m[2], inherited: m[1] === '*' };
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function unescapeTmuxOptionString(raw) {
+  let body = raw;
+  if (body.length >= 2 && (body[0] === '"' || body[0] === "'") && body[body.length - 1] === body[0]) {
+    body = body.slice(1, -1);
+  }
+  let out = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '\\' && i + 1 < body.length) {
+      const next = body[i + 1];
+      out += next === 'n' ? '\n' : next === 't' ? '\t' : next;
+      i++;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function parseTitleStringToken(part, name) {
+  const re = new RegExp(`${escapeRegExpLiteral(name)}(\\*?)\\s+([\\s\\S]*)`);
+  const m = re.exec(part || '');
+  if (!m) return { value: null, inherited: false };
+  const raw = m[2].replace(/\r?\n+$/, '');
+  return { value: unescapeTmuxOptionString(raw), inherited: m[1] === '*' };
+}
+
 function parseProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
@@ -47,6 +77,8 @@ function parseProbeOutput(stdout) {
   const statusPart = parts[1] || '';
   const mousePart = parts[2] || '';
   const windowSizePart = parts[3] || '';
+  const setTitlesPart = parts[4] || '';
+  const setTitlesStringPart = parts[5] || '';
 
   const sizeMatch = /(\d+)x(\d+)/.exec(sizePart);
   if (!sizeMatch) return null;
@@ -73,6 +105,12 @@ function parseProbeOutput(stdout) {
   const windowSizeParsed = parseOptionToken(windowSizePart, 'window-size');
   if (['latest', 'largest', 'smallest', 'manual'].includes(windowSizeParsed.value)) windowSize = windowSizeParsed.value;
 
+  let setTitles = null;
+  const setTitlesParsed = parseOptionToken(setTitlesPart, 'set-titles');
+  if (setTitlesParsed.value === 'on' || setTitlesParsed.value === 'off') setTitles = setTitlesParsed.value;
+
+  const setTitlesStringParsed = parseTitleStringToken(setTitlesStringPart, 'set-titles-string');
+
   // pre.<opt> non-null only for a session-scoped override; null means restore by `set -u`
   return {
     cols: width,
@@ -81,6 +119,8 @@ function parseProbeOutput(stdout) {
       status: statusParsed.inherited ? null : status,
       mouse: mouseParsed.inherited ? null : mouse,
       windowSize: windowSizeParsed.inherited ? null : windowSize,
+      setTitles: setTitlesParsed.inherited ? null : setTitles,
+      setTitlesString: setTitlesStringParsed.inherited ? null : setTitlesStringParsed.value,
     },
   };
 }
@@ -99,34 +139,62 @@ function buildProbeCommand(pid, target) {
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} mouse 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} window-size 2>/dev/null` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles 2>/dev/null` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles-string 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l` +
     `; printf '${PROBE_SEP}'; ${buildProcCmdlineCheck(pid)}`;
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function shellSingleQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
 function buildAttachCommand(socket, target, opts = {}) {
+  const titleSegments = [
+    `set -t ${target} set-titles on`,
+    `set -t ${target} set-titles-string '#T'`,
+  ];
   if (!opts.solo) {
-    return `tmux -S '${socket}' attach -t ${target}`;
+    return `tmux -S '${socket}' ${[...titleSegments, `attach -t ${target}`].join(' \\; ')}`;
   }
-  return `tmux -S '${socket}' set -t ${target} status off \\; ` +
-    `set -t ${target} mouse on \\; ` +
-    `set -t ${target} window-size latest \\; ` +
-    `attach -t ${target}`;
-}
-
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
-function buildRestoreOptionSegment(target, name, value) {
-  return value == null ? `set -u -t ${target} ${name}` : `set -t ${target} ${name} ${value}`;
-}
-
-function buildRestoreCommand(socket, target, pre) {
-  const p = pre || {};
   const segments = [
-    buildRestoreOptionSegment(target, 'status', p.status),
-    buildRestoreOptionSegment(target, 'mouse', p.mouse),
-    buildRestoreOptionSegment(target, 'window-size', p.windowSize),
+    `set -t ${target} status off`,
+    `set -t ${target} mouse on`,
+    `set -t ${target} window-size latest`,
+    ...titleSegments,
+    `attach -t ${target}`,
   ];
   return `tmux -S '${socket}' ${segments.join(' \\; ')}`;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
+function buildRestoreOptionSegment(target, name, value, opts = {}) {
+  if (value == null) return `set -u -t ${target} ${name}`;
+  return `set -t ${target} ${name} ${opts.quote ? shellSingleQuote(value) : value}`;
+}
+
+// includeBase/includeTitles — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function buildRestoreCommand(socket, target, pre, opts = {}) {
+  const p = pre || {};
+  const includeBase = opts.includeBase !== false;
+  const includeTitles = opts.includeTitles !== false;
+  const segments = [];
+  if (includeBase) {
+    segments.push(
+      buildRestoreOptionSegment(target, 'status', p.status),
+      buildRestoreOptionSegment(target, 'mouse', p.mouse),
+      buildRestoreOptionSegment(target, 'window-size', p.windowSize),
+    );
+  }
+  if (includeTitles) {
+    segments.push(
+      buildRestoreOptionSegment(target, 'set-titles', p.setTitles),
+      buildRestoreOptionSegment(target, 'set-titles-string', p.setTitlesString, { quote: true }),
+    );
+  }
+  return segments.length ? `tmux -S '${socket}' ${segments.join(' \\; ')}` : null;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo vs shared)
@@ -137,17 +205,23 @@ function parseClientCount(text) {
   return Number.parseInt(trimmed, 10);
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function buildClientCountProbeCommand(socket, target) {
+  return `tmux -S '${socket}' list-clients -t ${target} 2>/dev/null | wc -l`;
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
-// parts: [socket, size, status, mouse, window-size, clientCount, cmdlineHasClaude]; trailing ones optional
+// parts: [socket, size, status, mouse, window-size, set-titles, set-titles-string,
+// clientCount, cmdlineHasClaude]; trailing ones optional
 function parseDiscoveryProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
   const socket = parts[0] || '';
   if (parts.length < 3 || !isSafeSocketPath(socket)) return null;
-  const probed = parseProbeOutput(parts.slice(1, 5).join(PROBE_SEP));
+  const probed = parseProbeOutput(parts.slice(1, 7).join(PROBE_SEP));
   if (!probed) return null;
-  const clientCount = parseClientCount(parts[5]);
-  const cmdlineHasClaude = parts[6] === '1' ? true : parts[6] === '0' ? false : null;
+  const clientCount = parseClientCount(parts[7]);
+  const cmdlineHasClaude = parts[8] === '1' ? true : parts[8] === '0' ? false : null;
   return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount, cmdlineHasClaude };
 }
 
@@ -244,7 +318,12 @@ function createTmuxAttachAdapter(opts = {}) {
   }
   const runRemoteCommand = opts.runRemoteCommand || defaultRunRemoteCommand;
   const resolveSshPath = opts.resolveSshPath || defaultResolveSshPath;
-  const log = opts.log || { info() {}, warn() {}, error() {} };
+  const log = opts.log || { info() {}, warn() {}, error() {}, debug() {} };
+  // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+  function logDebug(msg) {
+    if (typeof log.debug === 'function') log.debug(msg);
+    else if (typeof log.info === 'function') log.info(msg);
+  }
 
   /** Whether this descriptor names a multiplexer this adapter can attach to. */
   function supports(descriptor) {
@@ -315,21 +394,35 @@ function createTmuxAttachAdapter(opts = {}) {
     // loses its pty and tmux drops it, leaving the session running. Sending a
     // prefix keystroke instead would assume this host's prefix, and land as
     // literal text in the remote session on any host that remapped it.
-    // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+    // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+    async function restoreOnDetach() {
+      let includeTitles = true;
+      try {
+        const clientProbe = await runRemoteCommand(alias, buildClientCountProbeCommand(discovery.socket, parsed.target), { timeoutMs: DETACH_CLIENT_COUNT_TIMEOUT_MS });
+        if (clientProbe && clientProbe.code === 0) {
+          const count = parseClientCount(clientProbe.stdout);
+          if (count != null) includeTitles = count <= 1;
+        }
+      } catch {
+        // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+      }
+      if (!includeTitles) {
+        logDebug(`[remote-attach:${alias}] skipping title restore on detach — another client is still attached to ${parsed.target}`);
+      }
+      try { raw.kill(); } catch {}
+      const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { includeBase: solo, includeTitles });
+      if (!restoreCmd) return;
+      const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+      if (!result || result.code !== 0) {
+        const reason = result ? `exit ${result.code}: ${(result.stderr || '').trim() || 'no stderr'}` : 'no response';
+        log.warn(`[remote-attach:${alias}] restore-on-detach failed (${reason})`);
+      }
+    }
+
     function detach() {
       if (detaching || !alive) return;
       detaching = true;
-      try { raw.kill(); } catch {}
-      if (solo) {
-        // best-effort restore — see .ai/contexts/session-cache.md ("solo attach parity, issue #253")
-        try {
-          const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre);
-          Promise.resolve(runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS }))
-            .catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
-        } catch (err) {
-          log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`);
-        }
-      }
+      restoreOnDetach().catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
     }
 
     const ptyProcess = {
@@ -370,6 +463,8 @@ module.exports = {
   buildAttachCommand,
   buildRestoreCommand,
   buildRemoteCommandArgs,
+  buildClientCountProbeCommand,
+  shellSingleQuote,
   isValidPid,
   buildProcCmdlineCheck,
   defaultRunRemoteCommand,
