@@ -254,3 +254,123 @@ test('(6) an unattached remote parent icon, once painted by the remote adapter, 
     ctx.destroy();
   }
 });
+
+// Issue #291 — noteSubagentActivity() is the single write path into
+// activeSubagentsByParent AND the single place that traces
+// recv.subagent-spawned, so every source gets one trace line tagged with
+// where it came from, and the local-ipc handler (which used to trace its
+// own "applied" line before calling noteSubagentActivity) does not double it.
+// See docs/activity-trace.md.
+
+test('(7) recv.subagent-spawned tags source:"local-ipc", exactly once', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithLocalSubagent()], true);
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1' });
+
+    const events = sent.filter(e => e.cat === 'recv.subagent-spawned');
+    assert.equal(events.length, 1, 'not traced twice now that the handler no longer traces its own copy');
+    assert.equal(events[0].fields.source, 'local-ipc');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(8) recv.subagent-spawned tags source:"remote-watch"', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithRemoteSubagent()], true);
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    ctx.window.onRemoteActivityEvent({ alias: 'vps', parentSessionId: 'r-top-1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+
+    const events = sent.filter(e => e.cat === 'recv.subagent-spawned');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].fields.source, 'remote-watch');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(9) recv.subagent-spawned tags source:"local-transcript"', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithLocalTranscriptSubagent()], true);
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    ctx.emitSessionTranscriptActivity({ parentSessionId: 'l-top-1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+
+    const events = sent.filter(e => e.cat === 'recv.subagent-spawned');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].fields.source, 'local-transcript');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(10) recv.subagent-completed via:"ipc" for the direct completed IPC', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithLocalSubagent()], true);
+    ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1' });
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-1' });
+
+    const ev = sent.find(e => e.cat === 'recv.subagent-completed');
+    assert.ok(ev);
+    assert.equal(ev.fields.via, 'ipc');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(11) recv.subagent-completed via:"parent-cleared" from clearActiveSubagentsFor', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithLocalSubagent()], true);
+    ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1' });
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    ctx.window.clearActiveSubagentsFor('s-top-1');
+
+    const ev = sent.find(e => e.cat === 'recv.subagent-completed');
+    assert.ok(ev);
+    assert.equal(ev.fields.via, 'parent-cleared');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('(12) recv.subagent-completed via:"ttl" — the only completion remote-watch ever gets', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.sidebar.renderProjects([projectWithRemoteSubagent()], true);
+    ctx.window.onRemoteActivityEvent({ alias: 'vps', parentSessionId: 'r-top-1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
+    const sent = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, fields) => sent.push({ cat, sid, fields });
+
+    const t0 = ctx.window.Date.now();
+    ctx.window.Date.now = () => t0 + 61000; // past the 60s TTL
+    ctx.sidebar.renderProjects([projectWithRemoteSubagent()], false);
+
+    const ev = sent.find(e => e.cat === 'recv.subagent-completed');
+    assert.ok(ev, 'the TTL prune traces the completion since remote-watch never sends one itself');
+    assert.equal(ev.fields.via, 'ttl');
+  } finally {
+    ctx.destroy();
+  }
+});

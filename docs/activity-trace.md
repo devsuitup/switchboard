@@ -168,7 +168,8 @@ no `sent`.
 | `cat` | Fires when | Key fields |
 |---|---|---|
 | `recv.*` | An IPC event arrives (`cli-busy-state`, `terminal-notification`, `session-forked`, `session-detected`, `process-exited`, `subagent-spawned`, `subagent-completed`) | per event |
-| `recv.subagent-spawned` | …with `applied` telling whether it changed anything. `applied:false` + `reason:"heartbeat-for-untracked-agent"` is a heartbeat deliberately dropped | `agentId`, `applied`, `bootstrap`, `heartbeat`, `from` |
+| `recv.subagent-spawned` | `noteSubagentActivity()` recorded a sighting — the single write path into `activeSubagentsByParent`, whichever of the three sources called it. `applied` tells whether it changed anything; `applied:false` + `reason:"heartbeat-for-untracked-agent"` is a heartbeat deliberately dropped **before** reaching `noteSubagentActivity` (still traced, from `onSubagentSpawned`, so it never gets a `source`) | `agentId`, `applied`, `source` (`local-ipc` / `remote-watch` / `local-transcript`), `bootstrap`, `heartbeat` (both `local-ipc`-only), `from` |
+| `recv.subagent-completed` | An agent left `activeSubagentsByParent`, however that was discovered — `via` says how: `ipc` (the real `subagent-completed` event, local-ipc only), `ttl` (`pruneStaleSubagents`'s 60s sweep — the only "completed" `remote-watch`/`local-transcript` ever get, since neither source has a completed IPC of its own), or `parent-cleared` (`clearActiveSubagentsFor`, on a parent PTY exit or a remote session marked stopped) | `agentId`, `from`, `via` |
 | `store.mutate` | A state store changes | `map`, `op`, `from`, `to`, `fn`, `via` |
 | `store.skip` | A write was **refused** by a guard | `map`, `reason`, `fn` |
 | `store.purge` | State dropped because the PTY is gone | `reason`, `busy`, `ready`, `attention` |
