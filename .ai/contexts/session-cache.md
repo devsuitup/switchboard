@@ -913,11 +913,13 @@ Launching a new remote session (#222) and injection over the messaging socket
       confirmed on the host (`set -t t set-titles-string '#T'` then
       `show-options` prints `"#T"`; `set -u` brings back the inherited
       default).
-    - **The unescaping rule, reverse-engineered from a 20-case table
+    - **The unescaping rule, reverse-engineered from a 23-case table
       measured live on tmux 3.6, 2026-09-14** (`SET_TITLES_STRING_CASES` in
       `test/remote-attach.test.js`, one input value per row, mapped to
-      exactly what `show-options` printed for it): if the token starts and
-      ends with the same quote character (`'` or `"`, length ≥ 2), strip
+      exactly what `show-options` printed for it — 20 rows from the first
+      measurement pass, 3 more added later: empty string, and a value that
+      is itself entirely wrapped in `'...'` or `"..."`): if the token starts
+      and ends with the same quote character (`'` or `"`, length ≥ 2), strip
       that outer pair; then scan left to right unescaping `\n`→LF, `\t`→TAB,
       and `\<any other char>`→that char (drop the backslash). This one rule
       reproduces every measured case without needing to model *why* tmux
@@ -926,26 +928,94 @@ Launching a new remote session (#222) and injection over the messaging socket
       `~`/bare backslash/bare LF/TAB do not; the wrapper quote is whichever
       of `'`/`"` avoids escaping an embedded quote of that kind, defaulting
       to `"` when both or neither are present) — the strip-then-unescape
-      algorithm is symmetric to whichever choice tmux made. Proven in
-      `test/remote-attach.test.js`, table-driven over the 20 measured pairs:
-      `parseProbeOutput` on tmux's printed form recovers the original input,
-      and `buildRestoreCommand`'s `set-titles-string` segment is exactly
-      `set -t <target> set-titles-string ` + `shellSingleQuote(input)`.
+      algorithm is symmetric to whichever choice tmux made, which is also
+      why the 3 later rows needed no rule change: a value that already
+      looks quoted on the outside is still just one more case of "matching
+      outer pair, strip it." Proven in `test/remote-attach.test.js`,
+      table-driven over the 23 measured pairs: `parseProbeOutput` on tmux's
+      printed form recovers the original input; `buildRestoreCommand`'s
+      `set-titles-string` segment is exactly `set -t <target>
+      set-titles-string ` + `shellSingleQuote(input)`; and, independent of
+      the production encoder, the segment is structurally checked to start
+      and end with `'` and to carry no bare (unescaped) `'` once every
+      `'\''` escape is removed.
   - **Restore now runs on every detach, shared included — solo restores all
-    five options, shared restores only the two title options.** Earlier this
-    fix gated the whole restore on `solo`, matching `status`/`mouse`/
-    `window-size` — but since the `set` for titles now also fires in shared
-    mode, that left a **baseline ratchet**: after one shared attach the
-    session stayed at `set-titles on` / `set-titles-string '#T'` forever,
-    and every later probe would read that back as the pre-existing baseline
-    to restore *to*, permanently losing whatever the session had before its
-    first shared attach. `buildRestoreCommand(socket, target, pre, {
-    titlesOnly })` now takes a `titlesOnly` option; `detach()` always fires
-    a restore call, passing `titlesOnly: !solo` — a solo detach restores
-    `status`/`mouse`/`window-size`/`set-titles`/`set-titles-string` exactly
-    as before, a shared detach restores only `set-titles`/`set-titles-string`
-    (never `status`/`mouse`/`window-size`, which a shared attach never
-    touched in the first place).
+    five options, shared restores only the two title options, subject to the
+    live-client-count gate below.** Earlier this fix gated the whole restore
+    on `solo`, matching `status`/`mouse`/`window-size` — but since the `set`
+    for titles now also fires in shared mode, that left a **baseline
+    ratchet**: after one shared attach the session stayed at `set-titles on`
+    / `set-titles-string '#T'` forever, and every later probe would read
+    that back as the pre-existing baseline to restore *to*, permanently
+    losing whatever the session had before its first shared attach.
+    `buildRestoreCommand(socket, target, pre, { includeBase, includeTitles })`
+    takes two independent flags (each defaults `true`) instead of one
+    `titlesOnly` switch — three of the four combinations are real:
+    both true (today's solo full restore), titles-only (today's shared
+    restore), and base-only (new, see below); all-false returns `null`
+    (nothing to send) rather than an empty `tmux -S '<socket>' ` command.
+    `detach()` always calls it, computing `includeBase: solo` (unchanged --
+    still exactly the pre-#290 solo rule) and `includeTitles` from the
+    live-client-count probe immediately below.
+  - **Multi-client race, follow-up fix.** Two Switchboard clients attached to
+    the same remote tmux session (two machines, or two windows) raced each
+    other's title restore: client A detaching restored `set-titles`/
+    `set-titles-string` to A's own probed pre-attach baseline, turning
+    forwarding off (or back to A's idea of "before") **while client B was
+    still attached and relying on it** — B's row would go mute mid-session
+    with no detach of its own. Symmetrically, if B detached afterwards, B's
+    own restore (based on B's probed baseline, captured while A's forwarding
+    was already on) could re-apply `on`/`'#T'` *after* A had genuinely
+    restored the pristine original, leaving the session's title-forwarding
+    state permanently wrong relative to what it was before either client
+    ever attached. Fix, bounded to the title options only: right before
+    building the restore command, `detach()` runs one more small,
+    non-interactive probe — `buildClientCountProbeCommand(socket, target)`
+    (`tmux -S '<socket>' list-clients -t <target> 2>/dev/null | wc -l`,
+    the same `list-clients` query and `parseClientCount()` the attach-time
+    probe already uses, just against the socket/target this call already
+    has rather than rediscovering them) — and sets `includeTitles: count <=
+    1` (our own about-to-close client may still show up in the count, hence
+    `<= 1` and not `=== 0`). `count > 1` means at least one other real
+    client is still attached: the title restore is skipped entirely and
+    logged at debug (`log.debug`, falling back to `log.info` if the
+    injected `log` carries no `debug()`), never at warn — this is an
+    expected, routine outcome, not a failure. **`status`/`mouse`/
+    `window-size` are untouched by this fix** — `includeBase` stays exactly
+    `solo`, per the instruction that started this fix: those three already
+    had their own correct-by-construction rule (a shared attach never sets
+    them, so a shared detach has nothing to put back), and reopening that
+    rule was out of scope. **If the client-count probe itself fails or
+    returns something `parseClientCount` can't parse, `includeTitles` falls
+    back to `true`** — restoring is the pre-existing (safe-by-comparison)
+    behavior, and a probe failure is not treated as evidence that someone
+    else is still attached.
+    - **What this coordinates, and what it deliberately does not.** This
+      makes "the last client out restores the title options" hold in the
+      common case (a probe running right before the restore catches almost
+      every real multi-client overlap). It does **not** make the two
+      options fully consistent across an overlapping multi-client episode
+      in every case — **no cross-instance state exists**: two Switchboard
+      processes (or two hand-run `ssh`/`tmux attach` sessions) never
+      coordinate with each other directly, only through what the live
+      `list-clients` count happens to read at the moment of each one's own
+      detach, which is inherently racy between concurrent detaches. The
+      accepted residual gap: a **solo** attach that happens *after* a
+      multi-client episode probes whatever `set-titles`/`set-titles-string`
+      were left at (typically `on`/`'#T'`, since some client's shared
+      attach turned them on and no detach happened to be the qualifying
+      "last one out") as *its own* pre-attach baseline, and will faithfully
+      restore back to that value on its own later detach — carrying forward
+      a value that was arguably never the session's true original. This
+      residual is bounded to the two title options (never `status`/`mouse`/
+      `window-size`) and is accepted rather than solved here: solving it
+      fully would need either a shared external ledger of "what was here
+      before anyone touched it" or a lock across attach attempts, both out
+      of scope for a fix whose brief was "bounded and simple." Proven in
+      `test/remote-attach.test.js`: detach-time count 0 or 1 still restores
+      the titles; count 2 restores only `status`/`mouse`/`window-size` (the
+      solo case) and skips the title segment, logging why; a failing
+      client-count probe falls back to restoring the titles.
 
 - **This is the first thing to populate the session-handle seam from issue
   #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a

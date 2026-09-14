@@ -22,6 +22,7 @@ const {
   buildAttachCommand,
   buildRestoreCommand,
   buildRemoteCommandArgs,
+  buildClientCountProbeCommand,
   shellSingleQuote,
 } = require('../remote-attach');
 const { classifyTitleActivity } = require('../classify-title-activity');
@@ -604,6 +605,9 @@ const SET_TITLES_STRING_CASES = [
   { name: 'double quote then newline', input: `dq"nl\nx`, printed: `'dq"nl\\nx'` },
   { name: 'double quote then dollar before name char', input: `dq"dollar$x`, printed: `"dq\\"dollar\\$x"` },
   { name: 'newline then double quote', input: `nl\nx"dq`, printed: `'nl\\nx"dq'` },
+  { name: 'empty', input: ``, printed: `''` },
+  { name: 'entirely single-quoted content', input: `'abc'`, printed: `"'abc'"` },
+  { name: 'entirely double-quoted content', input: `"abc"`, printed: `'"abc"'` },
 ];
 
 for (const { name, input, printed } of SET_TITLES_STRING_CASES) {
@@ -620,6 +624,15 @@ for (const { name, input, printed } of SET_TITLES_STRING_CASES) {
     const m = /set -t main:@0\.%0 set-titles-string ([\s\S]+)$/.exec(cmd);
     assert.ok(m, `restore command must set set-titles-string: ${cmd}`);
     assert.equal(m[1], shellSingleQuote(input), 'the restore segment must be exactly set-titles-string + shellSingleQuote(input)');
+
+    // Structural check independent of the production encoder: a valid shell
+    // single-quoted word starts and ends with `'`, and once every `'\''`
+    // escape is removed, no bare `'` remains inside.
+    const quoted = m[1];
+    assert.equal(quoted[0], "'", `restore segment must start with a single quote: ${quoted}`);
+    assert.equal(quoted[quoted.length - 1], "'", `restore segment must end with a single quote: ${quoted}`);
+    const withoutEscapes = quoted.slice(1, -1).split(`'\\''`).join('');
+    assert.ok(!withoutEscapes.includes("'"), `no unescaped single quote may remain inside the quoted segment: ${quoted}`);
   });
 }
 
@@ -633,6 +646,15 @@ test('buildProbeCommand reads both set-titles and set-titles-string', () => {
   const setTitlesStringIdx = cmd.indexOf('show-options -A -t main:@0.%0 set-titles-string 2');
   const listClientsIdx = cmd.indexOf('list-clients');
   assert.ok(setTitlesIdx < setTitlesStringIdx && setTitlesStringIdx < listClientsIdx, 'both option probes must precede the trailing client-count/cmdline segments');
+});
+
+// issue #290 (follow-up) -- the small, standalone detach-time probe reuses
+// the same list-clients command and the same parseClientCount() the
+// attach-time probe already uses, just against the already-known socket/
+// target instead of rediscovering them.
+test('buildClientCountProbeCommand builds the same list-clients query the attach-time probe uses', () => {
+  const cmd = buildClientCountProbeCommand('/tmp/tmux-0/main', 'main:@0.%0');
+  assert.equal(cmd, "tmux -S '/tmp/tmux-0/main' list-clients -t main:@0.%0 2>/dev/null | wc -l");
 });
 
 // No remote command string may ever contain a backtick -- these run over ssh,
@@ -650,7 +672,7 @@ test('no builder ever emits a backtick', () => {
       status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
     }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
-    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING }, { titlesOnly: true }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING }, { includeBase: false }),
     buildRemoteCommandArgs('vps', 'echo hi').join(' '),
   ];
   for (const cmd of commands) {
@@ -843,6 +865,102 @@ test('detach() restores only set-titles/set-titles-string on a shared detach, le
     restoreCalls[0],
     "tmux -S '/tmp/tmux-0/test' set -u -t main:@0.%0 set-titles \\; set -u -t main:@0.%0 set-titles-string",
     'shared detach restores only the two title options, using set -u since both were inherited (starred) before attach',
+  );
+});
+
+// --- issue #290 (follow-up): two Switchboard clients attached to the same
+// remote session must not race each other's title restore -- see
+// .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles).
+
+const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
+
+// Builds a fake runRemoteCommand that tells apart the three kinds of calls
+// detach() can now make: the detach-time client-count probe (list-clients,
+// answered with a bare count), the restore call itself, and (falling through
+// to the default) the original attach-time discovery probe.
+function makeDetachClientCountFake({ clientCountAtDetach, clientCountProbeFails = false } = {}) {
+  const restoreCalls = [];
+  const clientCountProbeCalls = [];
+  const runRemoteCommand = async (alias, command) => {
+    if (/^tmux -S '.*' list-clients -t /.test(command)) {
+      clientCountProbeCalls.push(command);
+      if (clientCountProbeFails) return { code: 1, stdout: '', stderr: 'ssh: connection refused' };
+      return { code: 0, stdout: `${clientCountAtDetach}\n`, stderr: '' };
+    }
+    if (/^tmux -S /.test(command) && !command.includes('attach') && !/display-message|show-options|list-clients/.test(command)) {
+      restoreCalls.push(command);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return {
+      code: 0,
+      // discoveryClientCount 0 + a supplied localSize -> solo attach, so the
+      // "other three still restored" half of the fix is exercised too.
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${PRINTED_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
+      stderr: '',
+    };
+  };
+  return { runRemoteCommand, restoreCalls, clientCountProbeCalls };
+}
+
+for (const count of [0, 1]) {
+  test(`detach() still restores the title options when the detach-time client count is ${count} ("ours may still be counted")`, async () => {
+    const raw = fakeRawPty();
+    const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: count });
+    const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+    const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
+    assert.equal(result.ok, true);
+
+    result.ptyProcess.kill();
+    await flushAsync();
+
+    assert.equal(clientCountProbeCalls.length, 1, 'detach must probe the live client count exactly once');
+    assert.equal(restoreCalls.length, 1);
+    assert.match(
+      restoreCalls[0],
+      /set -t main:@0\.%0 set-titles on \\; set -t main:@0\.%0 set-titles-string/,
+      `title options must be restored when the detach-time count is ${count}`,
+    );
+  });
+}
+
+test('detach() skips the title restore, but still restores status/mouse/window-size, when another client is attached at detach time (count 2)', async () => {
+  const raw = fakeRawPty();
+  const logLines = [];
+  const log = { info() {}, warn() {}, error() {}, debug: (msg) => logLines.push(msg) };
+  const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: 2 });
+  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
+  assert.equal(result.ok, true);
+
+  result.ptyProcess.kill();
+  await flushAsync();
+
+  assert.equal(clientCountProbeCalls.length, 1);
+  assert.equal(restoreCalls.length, 1, 'status/mouse/window-size must still be restored -- their solo rule is unchanged by this fix');
+  assert.equal(
+    restoreCalls[0],
+    "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual",
+    'no set-titles/set-titles-string segment when another client is still attached at detach time',
+  );
+  assert.ok(logLines.some((l) => /skipping title restore/i.test(l)), 'must log at debug why the title restore was skipped');
+});
+
+test('detach() falls back to restoring the title options when the detach-time client-count probe fails', async () => {
+  const raw = fakeRawPty();
+  const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: 0, clientCountProbeFails: true });
+  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
+  assert.equal(result.ok, true);
+
+  result.ptyProcess.kill();
+  await flushAsync();
+
+  assert.equal(clientCountProbeCalls.length, 1);
+  assert.equal(restoreCalls.length, 1);
+  assert.match(
+    restoreCalls[0],
+    /set -t main:@0\.%0 set-titles on \\; set -t main:@0\.%0 set-titles-string/,
+    'a failed client-count probe must fall back to restoring the titles, same as before this fix',
   );
 });
 
