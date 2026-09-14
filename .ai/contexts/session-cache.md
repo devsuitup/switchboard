@@ -968,28 +968,67 @@ Launching a new remote session (#222) and injection over the messaging socket
     was already on) could re-apply `on`/`'#T'` *after* A had genuinely
     restored the pristine original, leaving the session's title-forwarding
     state permanently wrong relative to what it was before either client
-    ever attached. Fix, bounded to the title options only: right before
-    building the restore command, `detach()` runs one more small,
-    non-interactive probe — `buildClientCountProbeCommand(socket, target)`
-    (`tmux -S '<socket>' list-clients -t <target> 2>/dev/null | wc -l`,
-    the same `list-clients` query and `parseClientCount()` the attach-time
-    probe already uses, just against the socket/target this call already
-    has rather than rediscovering them) — and sets `includeTitles: count <=
-    1` (our own about-to-close client may still show up in the count, hence
-    `<= 1` and not `=== 0`). `count > 1` means at least one other real
-    client is still attached: the title restore is skipped entirely and
-    logged at debug (`log.debug`, falling back to `log.info` if the
-    injected `log` carries no `debug()`), never at warn — this is an
-    expected, routine outcome, not a failure. **`status`/`mouse`/
-    `window-size` are untouched by this fix** — `includeBase` stays exactly
-    `solo`, per the instruction that started this fix: those three already
-    had their own correct-by-construction rule (a shared attach never sets
-    them, so a shared detach has nothing to put back), and reopening that
-    rule was out of scope. **If the client-count probe itself fails or
-    returns something `parseClientCount` can't parse, `includeTitles` falls
-    back to `true`** — restoring is the pre-existing (safe-by-comparison)
-    behavior, and a probe failure is not treated as evidence that someone
-    else is still attached.
+    ever attached. Fix, bounded to the title options only: `detach()` runs
+    one more small, non-interactive probe — `buildClientCountProbeCommand
+    (socket, target)` (`tmux -S '<socket>' list-clients -t <target>
+    2>/dev/null | wc -l`, the same `list-clients` query and
+    `parseClientCount()` the attach-time probe already uses, just against
+    the socket/target this call already has rather than rediscovering
+    them) — and sets `includeTitles: count <= 1`.
+    - **Ordering, corrected 2026-09-14 — the probe must run BEFORE
+      `raw.kill()`, not after.** The first cut killed the local ssh client
+      first and only then ran the client-count probe, reasoning that "our
+      own about-to-close client may still show up in the count" as a
+      possibility to tolerate with `<=` instead of `<`. That reasoning was
+      backwards: on a fast network the local ssh process is very likely
+      already gone (or its tmux client already dropped) by the time the
+      probe's own ssh round trip lands, so with exactly one real peer still
+      attached the probe would read back `1`, `1 <= 1` would restore, and
+      forwarding would be switched off under that peer — **the exact
+      failure this fix exists to prevent, masked in easy conditions and
+      live in exactly the conditions (slower networks, slower tmux) where
+      it would matter most.** `restoreOnDetach()` now runs the client-count
+      probe **first**, while our own client is unconditionally still
+      attached, and only calls `raw.kill()` afterward (still guarded by its
+      own try/catch, same as before). With that ordering, "our own client
+      counts as one of the attached clients" is not a possibility to
+      tolerate — it is guaranteed, every time, by construction: `count <=
+      1` now means "nobody but us," not "maybe just us, maybe we already
+      left." `count >= 2` means at least one other real client was attached
+      at the moment we checked; the title restore is skipped and logged at
+      debug (`log.debug`, falling back to `log.info` if the injected `log`
+      carries no `debug()`), never at warn — this is an expected, routine
+      outcome, not a failure.
+    - **Accepted trade-off: detach now waits for this probe, bounded by
+      `DETACH_CLIENT_COUNT_TIMEOUT_MS` (5 s, shorter than the 15 s attach
+      probe because the user is watching the tab close), before the local
+      ssh client is killed.** `ptyProcess.kill()` no longer ends the local client
+      synchronously; it starts `restoreOnDetach()`, which is awaited by
+      nothing (still fire-and-forget from the caller's perspective) but now
+      performs the probe, then the kill, then the restore call, in that
+      order. The alternative — kill first, then require the live count to
+      read exactly `0` (proof our own client is provably gone) before
+      trusting a "last one out" restore — was rejected: it does not avoid a
+      wait, it relocates and lengthens it (now needing the *post-kill*
+      count to visibly drop, which depends on tmux noticing the disconnect
+      *after* the ssh teardown completes, on top of the same probe round
+      trip), and it adds a genuinely new failure mode (poll until `0`, or
+      guess a single retry, either more code or a coin flip) for no
+      correctness gain over probing first. Probing first costs one ssh
+      round trip of added latency before the local terminal visibly closes
+      — the same order of magnitude as the attach-time probe already
+      accepted, and worst-case bounded by a 5 s kill timer; a probe that
+      times out falls back to restoring.
+    - **`status`/`mouse`/`window-size` are untouched by this fix** —
+      `includeBase` stays exactly `solo`, per the instruction that started
+      this fix: those three already had their own correct-by-construction
+      rule (a shared attach never sets them, so a shared detach has nothing
+      to put back), and reopening that rule was out of scope. **If the
+      client-count probe itself fails or returns something
+      `parseClientCount` can't parse, `includeTitles` falls back to
+      `true`** — restoring is the pre-existing (safe-by-comparison)
+      behavior, and a probe failure is not treated as evidence that someone
+      else is still attached.
     - **What this coordinates, and what it deliberately does not.** This
       makes "the last client out restores the title options" hold in the
       common case (a probe running right before the restore catches almost
@@ -1013,9 +1052,16 @@ Launching a new remote session (#222) and injection over the messaging socket
       before anyone touched it" or a lock across attach attempts, both out
       of scope for a fix whose brief was "bounded and simple." Proven in
       `test/remote-attach.test.js`: detach-time count 0 or 1 still restores
-      the titles; count 2 restores only `status`/`mouse`/`window-size` (the
-      solo case) and skips the title segment, logging why; a failing
-      client-count probe falls back to restoring the titles.
+      the titles (solo case, all five options); count 2 restores only
+      `status`/`mouse`/`window-size` (solo) and skips the title segment,
+      logging why; the same count-2 case on a **shared** attach sends no
+      restore call at all (`buildRestoreCommand` returns `null` — nothing
+      was ever eligible); a failing client-count probe falls back to
+      restoring the titles. Every one of those cases also asserts the
+      ordering directly — a fake `runRemoteCommand` snapshots the local
+      pty's `killedCount()` at the moment the client-count probe runs and
+      the test checks it is still `0` there, then `1` once the whole detach
+      has settled.
 
 - **This is the first thing to populate the session-handle seam from issue
   #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a

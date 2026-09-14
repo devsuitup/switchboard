@@ -6,6 +6,7 @@
 const TMUX_FIELD_RE = /^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$/;
 const PROBE_SEP = '\u0001';
 const DEFAULT_PROBE_TIMEOUT_MS = 15000;
+const DETACH_CLIENT_COUNT_TIMEOUT_MS = 5000;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
 const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
@@ -397,7 +398,7 @@ function createTmuxAttachAdapter(opts = {}) {
     async function restoreOnDetach() {
       let includeTitles = true;
       try {
-        const clientProbe = await runRemoteCommand(alias, buildClientCountProbeCommand(discovery.socket, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+        const clientProbe = await runRemoteCommand(alias, buildClientCountProbeCommand(discovery.socket, parsed.target), { timeoutMs: DETACH_CLIENT_COUNT_TIMEOUT_MS });
         if (clientProbe && clientProbe.code === 0) {
           const count = parseClientCount(clientProbe.stdout);
           if (count != null) includeTitles = count <= 1;
@@ -408,6 +409,7 @@ function createTmuxAttachAdapter(opts = {}) {
       if (!includeTitles) {
         logDebug(`[remote-attach:${alias}] skipping title restore on detach — another client is still attached to ${parsed.target}`);
       }
+      try { raw.kill(); } catch {}
       const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { includeBase: solo, includeTitles });
       if (!restoreCmd) return;
       const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
@@ -420,8 +422,6 @@ function createTmuxAttachAdapter(opts = {}) {
     function detach() {
       if (detaching || !alive) return;
       detaching = true;
-      try { raw.kill(); } catch {}
-      // best-effort restore, every detach — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
       restoreOnDetach().catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
     }
 

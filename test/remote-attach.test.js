@@ -29,6 +29,10 @@ const { classifyTitleActivity } = require('../classify-title-activity');
 
 const PROBE_SEP = '';
 const silentLog = { info() {}, warn() {}, error() {} };
+// Flushes every pending microtask (any depth of chained awaits), unlike a
+// fixed count of `await Promise.resolve()` calls -- see
+// .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
 
 /** A minimal IPty-like double: onData/onExit/write/resize/kill/pid. */
 function fakeRawPty() {
@@ -311,6 +315,10 @@ test('the returned ptyProcess pilots the fake remote pty through write() and kil
   assert.equal(ptyProcess.pid, 4242);
 
   ptyProcess.kill();
+  // The local ssh client is now only killed once the detach-time
+  // client-count probe settles -- see .ai/contexts/session-cache.md
+  // ("Remote hosts — tmux attach", set-titles, issue #290).
+  await flushAsync();
   // Detaching means ending the local ssh client and nothing else: any prefix
   // keystroke would assume this host's tmux prefix and land as literal text
   // in the remote session on a host that remapped it. Measured on the live
@@ -813,9 +821,8 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
   assert.equal(result.ok, true);
 
   result.ptyProcess.kill();
-  // The restore call is fire-and-forget from inside kill(); let its microtask run.
-  await Promise.resolve();
-  await Promise.resolve();
+  // The restore call is fire-and-forget from inside kill(); let it settle.
+  await flushAsync();
 
   assert.equal(restoreCalls.length, 1, 'exactly one restore call must be sent on detach when solo');
   assert.equal(
@@ -857,8 +864,7 @@ test('detach() restores only set-titles/set-titles-string on a shared detach, le
   assert.equal(result.ok, true);
 
   result.ptyProcess.kill();
-  await Promise.resolve();
-  await Promise.resolve();
+  await flushAsync();
 
   assert.equal(restoreCalls.length, 1, 'a shared detach must still restore the title options');
   assert.equal(
@@ -872,18 +878,23 @@ test('detach() restores only set-titles/set-titles-string on a shared detach, le
 // remote session must not race each other's title restore -- see
 // .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles).
 
-const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
-
 // Builds a fake runRemoteCommand that tells apart the three kinds of calls
 // detach() can now make: the detach-time client-count probe (list-clients,
 // answered with a bare count), the restore call itself, and (falling through
-// to the default) the original attach-time discovery probe.
-function makeDetachClientCountFake({ clientCountAtDetach, clientCountProbeFails = false } = {}) {
+// to the default) the original attach-time discovery probe. `raw` is the
+// fake local pty -- the probe handler snapshots raw.killedCount() at the
+// moment it runs, proving the probe is sent while our own client is still
+// unconditionally attached, before raw.kill() ever runs (issue #290
+// follow-up: a probe taken after killing our own client would undercount by
+// one and misread "one real peer left" as "we were the last client out").
+function makeDetachClientCountFake({ raw, clientCountAtDetach, clientCountProbeFails = false } = {}) {
   const restoreCalls = [];
   const clientCountProbeCalls = [];
+  let killedCountAtProbeTime = null;
   const runRemoteCommand = async (alias, command) => {
     if (/^tmux -S '.*' list-clients -t /.test(command)) {
       clientCountProbeCalls.push(command);
+      killedCountAtProbeTime = raw.killedCount();
       if (clientCountProbeFails) return { code: 1, stdout: '', stderr: 'ssh: connection refused' };
       return { code: 0, stdout: `${clientCountAtDetach}\n`, stderr: '' };
     }
@@ -899,13 +910,13 @@ function makeDetachClientCountFake({ clientCountAtDetach, clientCountProbeFails 
       stderr: '',
     };
   };
-  return { runRemoteCommand, restoreCalls, clientCountProbeCalls };
+  return { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime: () => killedCountAtProbeTime };
 }
 
 for (const count of [0, 1]) {
   test(`detach() still restores the title options when the detach-time client count is ${count} ("ours may still be counted")`, async () => {
     const raw = fakeRawPty();
-    const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: count });
+    const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: count });
     const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
     const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
     assert.equal(result.ok, true);
@@ -914,6 +925,8 @@ for (const count of [0, 1]) {
     await flushAsync();
 
     assert.equal(clientCountProbeCalls.length, 1, 'detach must probe the live client count exactly once');
+    assert.equal(killedCountAtProbeTime(), 0, 'the client-count probe must be sent before the local ssh client is killed');
+    assert.equal(raw.killedCount(), 1, 'the local ssh client must be killed once the probe has settled');
     assert.equal(restoreCalls.length, 1);
     assert.match(
       restoreCalls[0],
@@ -927,7 +940,7 @@ test('detach() skips the title restore, but still restores status/mouse/window-s
   const raw = fakeRawPty();
   const logLines = [];
   const log = { info() {}, warn() {}, error() {}, debug: (msg) => logLines.push(msg) };
-  const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: 2 });
+  const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: 2 });
   const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
   assert.equal(result.ok, true);
@@ -936,6 +949,8 @@ test('detach() skips the title restore, but still restores status/mouse/window-s
   await flushAsync();
 
   assert.equal(clientCountProbeCalls.length, 1);
+  assert.equal(killedCountAtProbeTime(), 0, 'the client-count probe must be sent before the local ssh client is killed');
+  assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed once the probe has settled');
   assert.equal(restoreCalls.length, 1, 'status/mouse/window-size must still be restored -- their solo rule is unchanged by this fix');
   assert.equal(
     restoreCalls[0],
@@ -945,9 +960,53 @@ test('detach() skips the title restore, but still restores status/mouse/window-s
   assert.ok(logLines.some((l) => /skipping title restore/i.test(l)), 'must log at debug why the title restore was skipped');
 });
 
+// Test gap: a shared attach (never touches status/mouse/window-size) whose
+// detach-time client count is >= 2 must send no restore call at all --
+// includeBase is false (shared) and includeTitles is false (another client
+// still attached), so buildRestoreCommand returns null.
+test('detach() sends no restore call at all on a shared detach when another client is attached at detach time (count 2)', async () => {
+  const raw = fakeRawPty();
+  const restoreCalls = [];
+  const clientCountProbeCalls = [];
+  let killedCountAtProbeTime = null;
+  const runRemoteCommand = async (alias, command) => {
+    if (/^tmux -S '.*' list-clients -t /.test(command)) {
+      clientCountProbeCalls.push(command);
+      killedCountAtProbeTime = raw.killedCount();
+      return { code: 0, stdout: '2\n', stderr: '' };
+    }
+    if (/^tmux -S /.test(command) && !command.includes('attach') && !/display-message|show-options|list-clients/.test(command)) {
+      restoreCalls.push(command);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return {
+      code: 0,
+      // discovery-time clientCount 1 -> shared (non-solo) attach.
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${PRINTED_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}1`,
+      stderr: '',
+    };
+  };
+  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+  const result = await adapter.attach(
+    'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
+  );
+  assert.equal(result.ok, true);
+
+  result.ptyProcess.kill();
+  await flushAsync();
+
+  assert.equal(clientCountProbeCalls.length, 1, 'detach must still probe the live client count on a shared attach');
+  assert.equal(killedCountAtProbeTime, 0, 'the client-count probe must be sent before the local ssh client is killed');
+  assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed');
+  assert.equal(
+    restoreCalls.length, 0,
+    'a shared detach with another client still attached must send no restore call at all -- base was never touched and titles are skipped',
+  );
+});
+
 test('detach() falls back to restoring the title options when the detach-time client-count probe fails', async () => {
   const raw = fakeRawPty();
-  const { runRemoteCommand, restoreCalls, clientCountProbeCalls } = makeDetachClientCountFake({ clientCountAtDetach: 0, clientCountProbeFails: true });
+  const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: 0, clientCountProbeFails: true });
   const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
   assert.equal(result.ok, true);
@@ -956,6 +1015,8 @@ test('detach() falls back to restoring the title options when the detach-time cl
   await flushAsync();
 
   assert.equal(clientCountProbeCalls.length, 1);
+  assert.equal(killedCountAtProbeTime(), 0, 'the client-count probe must be sent before the local ssh client is killed, even when the probe fails');
+  assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed after a failed probe');
   assert.equal(restoreCalls.length, 1);
   assert.match(
     restoreCalls[0],
@@ -989,8 +1050,7 @@ test('detach() swallows a failing restore call without throwing', async () => {
   assert.equal(result.ok, true);
 
   assert.doesNotThrow(() => result.ptyProcess.kill());
-  await Promise.resolve();
-  await Promise.resolve();
+  await flushAsync();
   assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed even if the restore call rejects');
 });
 
