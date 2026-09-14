@@ -797,7 +797,8 @@ Launching a new remote session (#222) and injection over the messaging socket
   prefixes the attach with three session-scoped (never `-g`, never `-w`)
   `tmux ... \; ...` sets — `status off`, `mouse on`, `window-size latest` —
   when `solo` is true, and emits the unchanged pre-#253 command when it
-  isn't (shared attach never touches another client's view). The probe
+  isn't (shared attach never touches another client's view — qualified by
+  issue #290 below: title forwarding is the one exception). The probe
   (`buildProbeCommand`) now also reads `mouse` and `window-size` alongside
   `status`, and `parseProbeOutput` returns their raw pre-attach values as
   `pre: { status, mouse, windowSize }` (`null` when an option is absent
@@ -819,6 +820,78 @@ Launching a new remote session (#222) and injection over the messaging socket
   throws out of `detach()` and never blocks the local ssh client from being
   killed. No shared-attach restore is ever sent, because a shared attach
   never applied the options in the first place.
+
+- **Title forwarding, issue #290.** An attached remote row went mute
+  overnight (v0.0.79 field trace, `.work-files/switchboard/trace-2026-09-13-
+  nuit.md`): two VPS sessions attached 9+ hours, transcripts still being
+  written, zero busy signal on either row. Cause: since #273, an attached
+  row is driven only by the OSC title sequences the CLI writes to its own
+  terminal — and inside tmux those sequences update the *pane* title, which
+  tmux forwards to the outer terminal (what an ssh client actually sees)
+  only when the session option `set-titles` is on, formatted by
+  `set-titles-string`. Measured on the target host: tmux 3.6, `set-titles`
+  off, `set-titles-string` at its built-in default,
+  `` #S:#I:#W - "#T" #{session_alerts} `` — which additionally wraps the pane
+  title in surrounding text, defeating `classifyTitleActivity`'s reliance on
+  the *first code point* of the title even if forwarding were on. Fix:
+  `buildAttachCommand` now always prefixes the attach with `set -t <target>
+  set-titles on \; set -t <target> set-titles-string '#T'` — `#T` alone,
+  no wrapper — **in both solo and shared mode**, unlike `status`/`mouse`/
+  `window-size`. This is deliberately not solo-gated: those three change
+  what a shared session's screen or input behavior looks like to every
+  attached human, which is exactly the case #253 refuses to disturb; title
+  forwarding only changes the *outer terminal's own title* for whichever
+  client asks for it (an ssh/tmux-client-local rendering choice, not a
+  property of the shared pane content), so a second human already attached
+  never sees anything change on their screen because of it.
+  - **`#T` must be quoted.** The attach command executes over `ssh -tt
+    <alias> <command>` with the whole `buildAttachCommand(...)` return value
+    passed as a single argv element — ssh joins it back into one string and
+    hands it to the remote's login shell (`$SHELL -c command`), it is never
+    exec'd directly. In POSIX shell, an unquoted `#` at the start of a word
+    starts a comment that swallows the rest of the line — `set-titles-string
+    #T` would silently delete `\; attach -t <target>` and every attach would
+    hang with no pty ever spawned. Wrapping it as `'#T'` keeps the `#`
+    inside a quoted context, where the comment rule never applies, and tmux
+    still receives the literal two-character format string `#T` (single
+    quotes are removed by the shell before tmux ever sees the argument).
+  - **The probe reads back both options the same way as `status`/`mouse`/
+    `window-size`.** `buildProbeCommand` appends two more `show-options -A`
+    segments (`set-titles`, `set-titles-string`) ahead of the existing
+    `list-clients`/cmdline-check tail, and `parseProbeOutput` adds
+    `pre.setTitles`/`pre.setTitlesString` to its return value, following the
+    same starred/inherited-is-null rule as the other three options.
+    `parseDiscoveryProbeOutput`'s slice widened from `parts.slice(1, 5)` to
+    `parts.slice(1, 7)` to carry the two extra fields through to
+    `parseProbeOutput`; `clientCount`/`cmdlineHasClaude` shifted two
+    positions later (now `parts[7]`/`parts[8]`) — this is regenerated and
+    consumed by the same call, never persisted, so there is no wire-format
+    compatibility concern across a version boundary the way there would be
+    for a value the CLI itself writes to disk.
+  - **`set-titles-string` is a string option, not a bare word like the
+    other three — a dedicated parser and a dedicated restore quoting path
+    exist because of it.** `tmux show-options -A` quotes a string-valued
+    option in double quotes whenever it contains spaces, backslash-escaping
+    any embedded `"` or `\` (this is why the measured default prints as
+    `` "#S:#I:#W - \"#T\" #{session_alerts}" `` on the wire) — `bare \S+`
+    parsing (used for `status`/`mouse`/`window-size`) cannot capture a value
+    with spaces at all. `parseTitleStringToken` matches to the end of the
+    segment instead, strips one layer of surrounding `"..."` when present,
+    and unescapes `\"`/`\\`. On restore, the value must be **shell-quoted**
+    (single-quote-wrapped, with any embedded `'` escaped as `'\''`) because
+    it goes back through the same remote-shell-then-tmux path as the attach
+    command — an unquoted restore of the default value would both split on
+    its spaces and hit the same `#`-starts-a-comment problem as `#T` above.
+    Round-trip proven byte-for-byte in `test/remote-attach.test.js` against
+    the measured default value (spaces and embedded quotes) and against a
+    value containing a literal single quote.
+  - **Restore stays solo-gated, same as `status`/`mouse`/`window-size`.** On
+    detach, `buildRestoreCommand` puts `set-titles`/`set-titles-string` back
+    to their probed values (or `set -u` when they were `null`) only when the
+    attach was solo — a shared session keeps forwarding titles after this
+    app's client detaches, which is harmless (the CLI's own title-writing
+    behavior is unaffected either way) and avoids the asymmetry of
+    restoring only some of what a shared attach turned on.
 
 - **This is the first thing to populate the session-handle seam from issue
   #220** (see `.ai/contexts/trigger-watcher.md`, "Session handle"): a

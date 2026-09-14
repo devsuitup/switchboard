@@ -23,6 +23,7 @@ const {
   buildRestoreCommand,
   buildRemoteCommandArgs,
 } = require('../remote-attach');
+const { classifyTitleActivity } = require('../classify-title-activity');
 
 const PROBE_SEP = '';
 const silentLog = { info() {}, warn() {}, error() {} };
@@ -74,21 +75,21 @@ test('parseTmuxField accepts the CLI-written format and rejects the rest', () =>
 test('parseProbeOutput sizes rows as height plus status lines (status on)', () => {
   assert.deepEqual(
     parseProbeOutput('200x51' + PROBE_SEP + 'status on'),
-    { cols: 200, rows: 52, pre: { status: 'on', mouse: null, windowSize: null } },
+    { cols: 200, rows: 52, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
 });
 
 test('parseProbeOutput sizes rows as height plus 0 when status is off', () => {
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status off'),
-    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null } },
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
 });
 
 test('parseProbeOutput honors a rendered status line count beyond on/off', () => {
   assert.deepEqual(
     parseProbeOutput('200x51' + PROBE_SEP + 'status 2'),
-    { cols: 200, rows: 53, pre: { status: 2, mouse: null, windowSize: null } },
+    { cols: 200, rows: 53, pre: { status: 2, mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
 });
 
@@ -100,11 +101,11 @@ test('parseProbeOutput returns null when the size cannot be parsed', () => {
 test('parseProbeOutput parses pre-attach mouse and window-size when present', () => {
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status off' + PROBE_SEP + 'mouse on' + PROBE_SEP + 'window-size latest'),
-    { cols: 200, rows: 50, pre: { status: 'off', mouse: 'on', windowSize: 'latest' } },
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: 'on', windowSize: 'latest', setTitles: null, setTitlesString: null } },
   );
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual'),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: 'manual' } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: 'manual', setTitles: null, setTitlesString: null } },
   );
 });
 
@@ -114,13 +115,56 @@ test('parseProbeOutput parses pre-attach mouse and window-size when present', ()
 test('parseProbeOutput reports null for mouse and window-size when absent from the probe output', () => {
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + ''),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
   // No separators at all beyond size+status -- same as the pre-#253 wire format.
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status off'),
-    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null } },
+    { cols: 200, rows: 50, pre: { status: 'off', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
+});
+
+// --- set-titles / set-titles-string probe parsing (issue #290) ------------
+
+test('parseProbeOutput parses a session-scoped set-titles override', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + 'set-titles on'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: 'on', setTitlesString: null } },
+  );
+});
+
+test('parseProbeOutput reports setTitles null when absent or inherited (starred)', () => {
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
+  );
+  assert.deepEqual(
+    parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + 'set-titles* off'),
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
+  );
+});
+
+// Host measurement (tmux 3.6): the default set-titles-string is
+// `#S:#I:#W - "#T" #{session_alerts}`, which `show-options -A` quotes and
+// backslash-escapes because it contains spaces and embedded double quotes --
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles).
+const DEFAULT_SET_TITLES_STRING = '#S:#I:#W - "#T" #{session_alerts}';
+const QUOTED_DEFAULT_SET_TITLES_STRING = '"#S:#I:#W - \\"#T\\" #{session_alerts}"';
+
+test('parseProbeOutput unescapes a quoted set-titles-string value with embedded quotes and spaces', () => {
+  const probed = parseProbeOutput(
+    '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
+      PROBE_SEP + `set-titles-string ${QUOTED_DEFAULT_SET_TITLES_STRING}`,
+  );
+  assert.equal(probed.pre.setTitlesString, DEFAULT_SET_TITLES_STRING);
+});
+
+test('parseProbeOutput reports setTitlesString null when starred (inherited)', () => {
+  const probed = parseProbeOutput(
+    '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
+      PROBE_SEP + `set-titles-string* ${QUOTED_DEFAULT_SET_TITLES_STRING}`,
+  );
+  assert.equal(probed.pre.setTitlesString, null);
 });
 
 // Property 1, through the adapter: the size handed to spawnPty must already
@@ -295,7 +339,7 @@ test('attach() opens at the local size and forwards resize to the ssh pty when n
   const raw = fakeRawPty();
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '0',
     spawnCalls,
     rawPtyFactory: () => raw.pty,
   });
@@ -322,7 +366,7 @@ test('attach() keeps the fixed remote size and ignores resize when another clien
   const logLines = [];
   const log = { info: (msg) => logLines.push(msg), warn() {}, error() {} };
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '1',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '1',
     spawnCalls,
     rawPtyFactory: () => raw.pty,
     log,
@@ -348,7 +392,7 @@ test('attach() keeps the fixed remote size and ignores resize when another clien
 test('attach() fails closed to the fixed remote size when the client count cannot be parsed', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + 'garbage',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + 'garbage',
     spawnCalls,
   });
   const result = await adapter.attach(
@@ -368,7 +412,7 @@ test('the attached-client count rides the existing probe connection, never a sec
   const spawnCalls = [];
   const probeCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '0',
     spawnCalls,
     probeCalls,
   });
@@ -390,15 +434,15 @@ test('the attached-client count rides the existing probe connection, never a sec
 test('parseProbeOutput sizes a starred (inherited) status option exactly like the unstarred form', () => {
   assert.deepEqual(
     parseProbeOutput('200x51' + PROBE_SEP + 'status* on'),
-    { cols: 200, rows: 52, pre: { status: null, mouse: null, windowSize: null } },
+    { cols: 200, rows: 52, pre: { status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status* off'),
-    { cols: 200, rows: 50, pre: { status: null, mouse: null, windowSize: null } },
+    { cols: 200, rows: 50, pre: { status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
   assert.deepEqual(
     parseProbeOutput('200x51' + PROBE_SEP + 'status* 2'),
-    { cols: 200, rows: 53, pre: { status: null, mouse: null, windowSize: null } },
+    { cols: 200, rows: 53, pre: { status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
 });
 
@@ -407,12 +451,12 @@ test('parseProbeOutput sizes a starred (inherited) status option exactly like th
 test('parseProbeOutput: pre.mouse is the value for a session-scoped override, null for an inherited one', () => {
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + ''),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: null } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: 'off', windowSize: null, setTitles: null, setTitlesString: null } },
     'unstarred "mouse off" is a real session override -- must be restored via set -t',
   );
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse* on' + PROBE_SEP + ''),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
     'starred "mouse* on" is inherited -- no session override exists, restore must set -u',
   );
 });
@@ -420,11 +464,11 @@ test('parseProbeOutput: pre.mouse is the value for a session-scoped override, nu
 test('parseProbeOutput: pre.windowSize follows the same starred/unstarred rule as status and mouse', () => {
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size manual'),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: 'manual' } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: 'manual', setTitles: null, setTitlesString: null } },
   );
   assert.deepEqual(
     parseProbeOutput('200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + 'window-size* latest'),
-    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null } },
+    { cols: 200, rows: 51, pre: { status: 'on', mouse: null, windowSize: null, setTitles: null, setTitlesString: null } },
   );
 });
 
@@ -437,30 +481,52 @@ test('buildAttachCommand: solo prefixes session-scoped option sets before attach
     "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status off \\; " +
       'set -t main:@0.%0 mouse on \\; ' +
       'set -t main:@0.%0 window-size latest \\; ' +
+      "set -t main:@0.%0 set-titles on \\; " +
+      "set -t main:@0.%0 set-titles-string '#T' \\; " +
       'attach -t main:@0.%0',
   );
   const statusIdx = cmd.indexOf('status off');
   const mouseIdx = cmd.indexOf('mouse on');
   const windowSizeIdx = cmd.indexOf('window-size latest');
+  const setTitlesIdx = cmd.indexOf('set-titles on');
+  const setTitlesStringIdx = cmd.indexOf("set-titles-string '#T'");
   const attachIdx = cmd.indexOf('attach -t');
-  assert.ok(statusIdx < mouseIdx && mouseIdx < windowSizeIdx && windowSizeIdx < attachIdx, 'sets must precede attach, in order');
+  assert.ok(
+    statusIdx < mouseIdx && mouseIdx < windowSizeIdx && windowSizeIdx < setTitlesIdx && setTitlesIdx < setTitlesStringIdx && setTitlesStringIdx < attachIdx,
+    'sets must precede attach, in order',
+  );
   assert.ok(!cmd.includes('-g'), 'solo attach must never touch the global option scope');
   assert.ok(!cmd.includes('-w'), 'solo attach must never touch window-scoped options');
 });
 
-test('buildAttachCommand: shared (solo false or omitted) emits the byte-identical unchanged command', () => {
-  const unchanged = "tmux -S '/tmp/tmux-0/main' attach -t main:@0.%0";
-  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }), unchanged);
-  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'), unchanged);
+// issue #290 -- title forwarding is applied in shared mode too (it only
+// changes each client's own outer-terminal title, unlike status/mouse/
+// window-size, which stay untouched for a shared attach).
+test('buildAttachCommand: shared still turns on title forwarding, quoting #T so the shell does not treat it as a comment', () => {
+  const cmd = buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false });
+  assert.equal(
+    cmd,
+    "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 set-titles on \\; " +
+      "set -t main:@0.%0 set-titles-string '#T' \\; " +
+      'attach -t main:@0.%0',
+  );
+  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'), cmd, 'solo omitted behaves like solo: false');
+  assert.ok(!cmd.includes('status'), 'shared attach must never touch status');
+  assert.ok(!cmd.includes('mouse'), 'shared attach must never touch mouse');
+  assert.ok(!cmd.includes('window-size'), 'shared attach must never touch window-size');
 });
 
 test('buildRestoreCommand: restores each probed value when non-null', () => {
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'on', mouse: 'off', windowSize: 'manual' });
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+    status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'off', setTitlesString: 'plain',
+  });
   assert.equal(
     cmd,
     "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status on \\; " +
       'set -t main:@0.%0 mouse off \\; ' +
-      'set -t main:@0.%0 window-size manual',
+      'set -t main:@0.%0 window-size manual \\; ' +
+      'set -t main:@0.%0 set-titles off \\; ' +
+      "set -t main:@0.%0 set-titles-string 'plain'",
   );
 });
 
@@ -470,23 +536,82 @@ test('buildRestoreCommand: restores a numeric status value', () => {
 });
 
 test('buildRestoreCommand: uses "set -u" for each probed value that was null', () => {
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: null, mouse: null, windowSize: null });
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+    status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
+  });
   assert.equal(
     cmd,
     "tmux -S '/tmp/tmux-0/main' set -u -t main:@0.%0 status \\; " +
       'set -u -t main:@0.%0 mouse \\; ' +
-      'set -u -t main:@0.%0 window-size',
+      'set -u -t main:@0.%0 window-size \\; ' +
+      'set -u -t main:@0.%0 set-titles \\; ' +
+      'set -u -t main:@0.%0 set-titles-string',
+  );
+});
+
+test('buildRestoreCommand: defaults every option to "set -u" when pre is empty/absent', () => {
+  assert.equal(
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+      status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
+    }),
   );
 });
 
 test('buildRestoreCommand: mixes "set" and "set -u" per option independently', () => {
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'off', mouse: null, windowSize: 'latest' });
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+    status: 'off', mouse: null, windowSize: 'latest', setTitles: 'on', setTitlesString: null,
+  });
   assert.equal(
     cmd,
     "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status off \\; " +
       'set -u -t main:@0.%0 mouse \\; ' +
-      'set -t main:@0.%0 window-size latest',
+      'set -t main:@0.%0 window-size latest \\; ' +
+      'set -t main:@0.%0 set-titles on \\; ' +
+      'set -u -t main:@0.%0 set-titles-string',
   );
+});
+
+// issue #290 -- the round trip must reproduce the default set-titles-string
+// (spaces and embedded double quotes) byte for byte. No real shell runs here,
+// so this test undoes the single-quoting itself (bash/sh single-quote
+// removal is: strip the wrapping quotes, "'\''" becomes "'") to prove the
+// segment, once shell-unquoted, is exactly the probed value.
+function unshellSingleQuote(word) {
+  assert.equal(word[0], "'", `expected a single-quoted word: ${word}`);
+  assert.equal(word[word.length - 1], "'", `expected a single-quoted word: ${word}`);
+  return word.slice(1, -1).replace(/'\\''/g, "'");
+}
+
+test('buildRestoreCommand: set-titles-string quoting round-trips the default tmux value byte for byte', () => {
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+    status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: DEFAULT_SET_TITLES_STRING,
+  });
+  const m = /set -t main:@0\.%0 set-titles-string (.+)$/.exec(cmd);
+  assert.ok(m, `restore command must set-titles-string: ${cmd}`);
+  assert.equal(unshellSingleQuote(m[1]), DEFAULT_SET_TITLES_STRING);
+});
+
+test('buildRestoreCommand: set-titles-string quoting round-trips a value containing a literal single quote', () => {
+  const withQuote = `it's "#T"`;
+  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+    status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: withQuote,
+  });
+  const m = /set -t main:@0\.%0 set-titles-string (.+)$/.exec(cmd);
+  assert.ok(m, `restore command must set-titles-string: ${cmd}`);
+  assert.equal(unshellSingleQuote(m[1]), withQuote);
+});
+
+// issue #290 -- the probe must read back both new options so a restore has
+// something to put back.
+test('buildProbeCommand reads both set-titles and set-titles-string', () => {
+  const cmd = buildProbeCommand(4242, 'main:@0.%0');
+  assert.match(cmd, /show-options -A -t main:@0\.%0 set-titles 2>\/dev\/null/);
+  assert.match(cmd, /show-options -A -t main:@0\.%0 set-titles-string 2>\/dev\/null/);
+  const setTitlesIdx = cmd.indexOf('show-options -A -t main:@0.%0 set-titles 2');
+  const setTitlesStringIdx = cmd.indexOf('show-options -A -t main:@0.%0 set-titles-string 2');
+  const listClientsIdx = cmd.indexOf('list-clients');
+  assert.ok(setTitlesIdx < setTitlesStringIdx && setTitlesStringIdx < listClientsIdx, 'both option probes must precede the trailing client-count/cmdline segments');
 });
 
 // No remote command string may ever contain a backtick -- these run over ssh,
@@ -497,8 +622,12 @@ test('no builder ever emits a backtick', () => {
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'),
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true }),
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }),
-    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: 'on', mouse: 'off', windowSize: 'manual' }),
-    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { status: null, mouse: null, windowSize: null }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+      status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING,
+    }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+      status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
+    }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
     buildRemoteCommandArgs('vps', 'echo hi').join(' '),
   ];
@@ -519,7 +648,7 @@ test('buildRemoteCommandArgs adds ConnectTimeout=5 alongside BatchMode, alias la
 
 test('parseDiscoveryProbeOutput reads the trailing cmdline-check segment as cmdlineHasClaude', () => {
   const fields = (cmdline) => {
-    const base = [FAKE_SOCKET, '200x50', 'status on', '', '', '0'];
+    const base = [FAKE_SOCKET, '200x50', 'status on', '', '', '', '', '0'];
     return (cmdline == null ? base : [...base, cmdline]).join(PROBE_SEP);
   };
   assert.equal(parseDiscoveryProbeOutput(fields('1')).cmdlineHasClaude, true);
@@ -544,7 +673,7 @@ test('parseDiscoveryProbeOutput reads the trailing cmdline-check segment as cmdl
 test('attach() proceeds when the probed cmdline still says claude', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: ['200x50', 'status on', '', '', '0', '1'].join(PROBE_SEP),
+    probeStdout: ['200x50', 'status on', '', '', '', '', '0', '1'].join(PROBE_SEP),
     spawnCalls,
   });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
@@ -555,7 +684,7 @@ test('attach() proceeds when the probed cmdline still says claude', async () => 
 test('attach() refuses before spawnPty when the probed cmdline no longer says claude', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: ['200x50', 'status on', '', '', '0', '0'].join(PROBE_SEP),
+    probeStdout: ['200x50', 'status on', '', '', '', '', '0', '0'].join(PROBE_SEP),
     spawnCalls,
   });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
@@ -567,7 +696,7 @@ test('attach() refuses before spawnPty when the probed cmdline no longer says cl
 test('attach() proceeds unverified when the probe carries no cmdline segment (older probe output)', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: ['200x50', 'status on', '', '', '0'].join(PROBE_SEP),
+    probeStdout: ['200x50', 'status on', '', '', '', '', '0'].join(PROBE_SEP),
     spawnCalls,
   });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart: '123456' });
@@ -580,7 +709,7 @@ test('attach() proceeds unverified when the probe carries no cmdline segment (ol
 test('attach() applies the session-scoped option sets in the real ssh argv when solo', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '0',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '0',
     spawnCalls,
   });
   const result = await adapter.attach(
@@ -588,15 +717,18 @@ test('attach() applies the session-scoped option sets in the real ssh argv when 
   );
   assert.equal(result.ok, true);
   const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
-  assert.match(attachCommand, /set -t main:@0\.%0 status off \\; set -t main:@0\.%0 mouse on \\; set -t main:@0\.%0 window-size latest \\; attach -t main:@0\.%0/);
+  assert.match(
+    attachCommand,
+    /set -t main:@0\.%0 status off \\; set -t main:@0\.%0 mouse on \\; set -t main:@0\.%0 window-size latest \\; set -t main:@0\.%0 set-titles on \\; set -t main:@0\.%0 set-titles-string '#T' \\; attach -t main:@0\.%0/,
+  );
 });
 
-// Shared attach() must emit the byte-identical unchanged attach command --
-// never touch another attached client's view.
-test('attach() emits the unchanged attach command in the real ssh argv when shared', async () => {
+// issue #290 -- title forwarding is turned on in shared mode too, unlike
+// status/mouse/window-size which stay untouched for a shared attach.
+test('attach() turns on title forwarding in the real ssh argv when shared, leaving everything else unchanged', async () => {
   const spawnCalls = [];
   const adapter = makeAdapter({
-    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '1',
+    probeStdout: '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + 'mouse off' + PROBE_SEP + 'window-size manual' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '1',
     spawnCalls,
   });
   const result = await adapter.attach(
@@ -604,7 +736,10 @@ test('attach() emits the unchanged attach command in the real ssh argv when shar
   );
   assert.equal(result.ok, true);
   const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
-  assert.equal(attachCommand, "tmux -S '/tmp/tmux-0/test' attach -t main:@0.%0");
+  assert.equal(
+    attachCommand,
+    "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '#T' \\; attach -t main:@0.%0",
+  );
 });
 
 // Detach must run a best-effort restore ssh call using the probed pre-attach
@@ -619,7 +754,7 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}0`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${QUOTED_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
       stderr: '',
     };
   };
@@ -641,7 +776,9 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
   assert.equal(restoreCalls.length, 1, 'exactly one restore call must be sent on detach when solo');
   assert.equal(
     restoreCalls[0],
-    "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual",
+    "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual \\; " +
+      `set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '${DEFAULT_SET_TITLES_STRING}'`,
+    'the set-titles-string round trip must reproduce the original value byte for byte',
   );
 });
 
@@ -657,7 +794,7 @@ test('detach() sends no restore call when shared', async () => {
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}1`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}1`,
       stderr: '',
     };
   };
@@ -688,7 +825,7 @@ test('detach() swallows a failing restore call without throwing', async () => {
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}0`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}0`,
       stderr: '',
     };
   };
@@ -706,4 +843,19 @@ test('detach() swallows a failing restore call without throwing', async () => {
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(raw.killedCount(), 1, 'the local ssh client must still be killed even if the restore call rejects');
+});
+
+// issue #290 -- pins that '#T' is the right choice: once set-titles-string is
+// '#T', the pane title tmux forwards through the OSC 0 sequence IS the CLI's
+// own title, unwrapped by any surrounding format (no "#S:#I:#W - ..." around
+// it) -- so the same OSC-extraction regex wireSessionPty() uses on a local
+// PTY (main.js, see .ai/contexts/session-cache.md) classifies it identically.
+test('a tmux-forwarded #T title reaches classifyTitleActivity as busy, same as a local OSC 0 title', () => {
+  const data = '\x1b]0;⠋ Claude Code\x07';
+  const oscMatches = [...data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)];
+  assert.equal(oscMatches.length, 1);
+  assert.equal(oscMatches[0][1], '0');
+  const payload = oscMatches[0][2];
+  assert.equal(payload, '⠋ Claude Code');
+  assert.deepEqual(classifyTitleActivity(payload), { busy: true, idle: false, via: 'glyph' });
 });

@@ -40,6 +40,19 @@ function parseOptionToken(part, name) {
   return { value: m[2], inherited: m[1] === '*' };
 }
 
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function parseTitleStringToken(part, name) {
+  const re = new RegExp(`${escapeRegExpLiteral(name)}(\\*?)\\s+([\\s\\S]*)`);
+  const m = re.exec(part || '');
+  if (!m) return { value: null, inherited: false };
+  const inherited = m[1] === '*';
+  const raw = m[2].replace(/\r?\n+$/, '');
+  const value = raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"'
+    ? raw.slice(1, -1).replace(/\\(["\\])/g, '$1')
+    : raw;
+  return { value, inherited };
+}
+
 function parseProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
@@ -47,6 +60,8 @@ function parseProbeOutput(stdout) {
   const statusPart = parts[1] || '';
   const mousePart = parts[2] || '';
   const windowSizePart = parts[3] || '';
+  const setTitlesPart = parts[4] || '';
+  const setTitlesStringPart = parts[5] || '';
 
   const sizeMatch = /(\d+)x(\d+)/.exec(sizePart);
   if (!sizeMatch) return null;
@@ -73,6 +88,12 @@ function parseProbeOutput(stdout) {
   const windowSizeParsed = parseOptionToken(windowSizePart, 'window-size');
   if (['latest', 'largest', 'smallest', 'manual'].includes(windowSizeParsed.value)) windowSize = windowSizeParsed.value;
 
+  let setTitles = null;
+  const setTitlesParsed = parseOptionToken(setTitlesPart, 'set-titles');
+  if (setTitlesParsed.value === 'on' || setTitlesParsed.value === 'off') setTitles = setTitlesParsed.value;
+
+  const setTitlesStringParsed = parseTitleStringToken(setTitlesStringPart, 'set-titles-string');
+
   // pre.<opt> non-null only for a session-scoped override; null means restore by `set -u`
   return {
     cols: width,
@@ -81,6 +102,8 @@ function parseProbeOutput(stdout) {
       status: statusParsed.inherited ? null : status,
       mouse: mouseParsed.inherited ? null : mouse,
       windowSize: windowSizeParsed.inherited ? null : windowSize,
+      setTitles: setTitlesParsed.inherited ? null : setTitles,
+      setTitlesString: setTitlesStringParsed.inherited ? null : setTitlesStringParsed.value,
     },
   };
 }
@@ -99,24 +122,40 @@ function buildProbeCommand(pid, target) {
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} mouse 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} window-size 2>/dev/null` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles 2>/dev/null` +
+    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles-string 2>/dev/null` +
     `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l` +
     `; printf '${PROBE_SEP}'; ${buildProcCmdlineCheck(pid)}`;
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function shellSingleQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
 function buildAttachCommand(socket, target, opts = {}) {
+  const titleSegments = [
+    `set -t ${target} set-titles on`,
+    `set -t ${target} set-titles-string '#T'`,
+  ];
   if (!opts.solo) {
-    return `tmux -S '${socket}' attach -t ${target}`;
+    return `tmux -S '${socket}' ${[...titleSegments, `attach -t ${target}`].join(' \\; ')}`;
   }
-  return `tmux -S '${socket}' set -t ${target} status off \\; ` +
-    `set -t ${target} mouse on \\; ` +
-    `set -t ${target} window-size latest \\; ` +
-    `attach -t ${target}`;
+  const segments = [
+    `set -t ${target} status off`,
+    `set -t ${target} mouse on`,
+    `set -t ${target} window-size latest`,
+    ...titleSegments,
+    `attach -t ${target}`,
+  ];
+  return `tmux -S '${socket}' ${segments.join(' \\; ')}`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
-function buildRestoreOptionSegment(target, name, value) {
-  return value == null ? `set -u -t ${target} ${name}` : `set -t ${target} ${name} ${value}`;
+function buildRestoreOptionSegment(target, name, value, opts = {}) {
+  if (value == null) return `set -u -t ${target} ${name}`;
+  return `set -t ${target} ${name} ${opts.quote ? shellSingleQuote(value) : value}`;
 }
 
 function buildRestoreCommand(socket, target, pre) {
@@ -125,6 +164,8 @@ function buildRestoreCommand(socket, target, pre) {
     buildRestoreOptionSegment(target, 'status', p.status),
     buildRestoreOptionSegment(target, 'mouse', p.mouse),
     buildRestoreOptionSegment(target, 'window-size', p.windowSize),
+    buildRestoreOptionSegment(target, 'set-titles', p.setTitles),
+    buildRestoreOptionSegment(target, 'set-titles-string', p.setTitlesString, { quote: true }),
   ];
   return `tmux -S '${socket}' ${segments.join(' \\; ')}`;
 }
@@ -138,16 +179,17 @@ function parseClientCount(text) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
-// parts: [socket, size, status, mouse, window-size, clientCount, cmdlineHasClaude]; trailing ones optional
+// parts: [socket, size, status, mouse, window-size, set-titles, set-titles-string,
+// clientCount, cmdlineHasClaude]; trailing ones optional
 function parseDiscoveryProbeOutput(stdout) {
   const text = typeof stdout === 'string' ? stdout : '';
   const parts = text.split(PROBE_SEP);
   const socket = parts[0] || '';
   if (parts.length < 3 || !isSafeSocketPath(socket)) return null;
-  const probed = parseProbeOutput(parts.slice(1, 5).join(PROBE_SEP));
+  const probed = parseProbeOutput(parts.slice(1, 7).join(PROBE_SEP));
   if (!probed) return null;
-  const clientCount = parseClientCount(parts[5]);
-  const cmdlineHasClaude = parts[6] === '1' ? true : parts[6] === '0' ? false : null;
+  const clientCount = parseClientCount(parts[7]);
+  const cmdlineHasClaude = parts[8] === '1' ? true : parts[8] === '0' ? false : null;
   return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount, cmdlineHasClaude };
 }
 
