@@ -22,6 +22,7 @@ const {
   buildAttachCommand,
   buildRestoreCommand,
   buildRemoteCommandArgs,
+  shellSingleQuote,
 } = require('../remote-attach');
 const { classifyTitleActivity } = require('../classify-title-activity');
 
@@ -147,24 +148,24 @@ test('parseProbeOutput reports setTitles null when absent or inherited (starred)
 // Host measurement (tmux 3.6): the default set-titles-string is
 // `#S:#I:#W - "#T" #{session_alerts}`, and `show-options -A` prints it in
 // tmux's own re-parsable quoting: `"#S:#I:#W - \"#T\" #{session_alerts}"`.
-// `pre.setTitlesString` is kept as this RAW printed token, unmodified --
-// restoring it is shell-single-quoting only, leaving tmux's own parser to
-// unquote it back on `set` -- see .ai/contexts/session-cache.md ("Remote
-// hosts — tmux attach", set-titles).
-const RAW_DEFAULT_SET_TITLES_STRING = '"#S:#I:#W - \\"#T\\" #{session_alerts}"';
+// `parseTitleStringToken` reverses that quoting (see the full escaping table
+// below) -- see .ai/contexts/session-cache.md ("Remote hosts — tmux attach",
+// set-titles).
+const DEFAULT_SET_TITLES_STRING = '#S:#I:#W - "#T" #{session_alerts}';
+const PRINTED_DEFAULT_SET_TITLES_STRING = '"#S:#I:#W - \\"#T\\" #{session_alerts}"';
 
-test('parseProbeOutput keeps set-titles-string as the raw printed token, unmodified', () => {
+test('parseProbeOutput unescapes the default set-titles-string back to its real value', () => {
   const probed = parseProbeOutput(
     '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
-      PROBE_SEP + `set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}`,
+      PROBE_SEP + `set-titles-string ${PRINTED_DEFAULT_SET_TITLES_STRING}`,
   );
-  assert.equal(probed.pre.setTitlesString, RAW_DEFAULT_SET_TITLES_STRING, 'no unescaping -- the raw token is kept as printed');
+  assert.equal(probed.pre.setTitlesString, DEFAULT_SET_TITLES_STRING);
 });
 
 test('parseProbeOutput reports setTitlesString null when starred (inherited)', () => {
   const probed = parseProbeOutput(
     '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
-      PROBE_SEP + `set-titles-string* ${RAW_DEFAULT_SET_TITLES_STRING}`,
+      PROBE_SEP + `set-titles-string* ${PRINTED_DEFAULT_SET_TITLES_STRING}`,
   );
   assert.equal(probed.pre.setTitlesString, null);
 });
@@ -574,38 +575,53 @@ test('buildRestoreCommand: mixes "set" and "set -u" per option independently', (
   );
 });
 
-// issue #290 -- restore only shell-single-quotes the raw probed token; it
-// never re-interprets tmux's own quoting (that unquoting is left to tmux's
-// own parser when `set` receives it). No real shell runs here, so this test
-// undoes the single-quoting itself (bash/sh single-quote removal is: strip
-// the wrapping quotes, "'\''" becomes "'") to prove the segment, once
-// shell-unquoted, carries the exact same byte sequence the probe produced.
-function unshellSingleQuote(word) {
-  assert.equal(word[0], "'", `expected a single-quoted word: ${word}`);
-  assert.equal(word[word.length - 1], "'", `expected a single-quoted word: ${word}`);
-  return word.slice(1, -1).replace(/'\\''/g, "'");
-}
+// issue #290, corrected 2026-09-14 -- live measurement on tmux 3.6 (a
+// throwaway server) proved the earlier "keep the raw token, let tmux
+// re-parse it" restore approach wrong: `set -t t set-titles-string
+// '"<raw-with-escapes>"'` stores the quotes and backslashes LITERALLY --
+// tmux's argv is never re-parsed by tmux's own quoting rules. Each `printed`
+// value below is exactly what `show-options -t t set-titles-string` printed
+// after the option name for that `input` value on that host. See
+// .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles).
+const SET_TITLES_STRING_CASES = [
+  { name: 'plain', input: `plain`, printed: `plain` },
+  { name: 'space', input: `has space`, printed: `"has space"` },
+  { name: 'double quote', input: `dq"in`, printed: `'dq"in'` },
+  { name: 'backslash', input: `bs\\in`, printed: `bs\\\\in` },
+  { name: 'dollar before name char', input: `dollar$x`, printed: `"dollar\\$x"` },
+  { name: 'semicolon', input: `semi;colon`, printed: `"semi;colon"` },
+  { name: 'tilde', input: `tilde~x`, printed: `tilde~x` },
+  { name: 'single quote', input: `sq'in`, printed: `"sq'in"` },
+  { name: 'hash', input: `hash#T`, printed: `"hash#T"` },
+  { name: 'unicode', input: `uni é⠋`, printed: `"uni é⠋"` },
+  { name: 'newline', input: `nl\nx`, printed: `nl\\nx` },
+  { name: 'tab', input: `tab\tx`, printed: `tab\\tx` },
+  { name: 'trailing backslash', input: `trail\\`, printed: `trail\\\\` },
+  { name: 'single and double quote', input: `both'and"q`, printed: `"both'and\\"q"` },
+  { name: 'double quote then trailing dollar (unescaped)', input: `dq"and$`, printed: `"dq\\"and$"` },
+  { name: 'single quote then backslash', input: `sq'and\\bs`, printed: `"sq'and\\\\bs"` },
+  { name: 'double quote then backslash', input: `dq"bs\\x`, printed: `'dq"bs\\\\x'` },
+  { name: 'double quote then newline', input: `dq"nl\nx`, printed: `'dq"nl\\nx'` },
+  { name: 'double quote then dollar before name char', input: `dq"dollar$x`, printed: `"dq\\"dollar\\$x"` },
+  { name: 'newline then double quote', input: `nl\nx"dq`, printed: `'nl\\nx"dq'` },
+];
 
-test('buildRestoreCommand: set-titles-string round-trips the raw probed token byte for byte, quoting only', () => {
-  const probed = parseProbeOutput(
-    '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
-      PROBE_SEP + `set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}`,
-  );
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', probed.pre);
-  const m = /set -t main:@0\.%0 set-titles-string (.+)$/.exec(cmd);
-  assert.ok(m, `restore command must set-titles-string: ${cmd}`);
-  assert.equal(unshellSingleQuote(m[1]), RAW_DEFAULT_SET_TITLES_STRING, 'the probe output token must reappear byte for byte inside single quotes');
-});
+for (const { name, input, printed } of SET_TITLES_STRING_CASES) {
+  test(`set-titles-string escaping (${name}): parse(printed) recovers the input, and restore re-quotes the input`, () => {
+    const probed = parseProbeOutput(
+      '200x50' + PROBE_SEP + 'status on' + PROBE_SEP + '' + PROBE_SEP + '' + PROBE_SEP + '' +
+        PROBE_SEP + `set-titles-string ${printed}`,
+    );
+    assert.equal(probed.pre.setTitlesString, input, `parse(${JSON.stringify(printed)}) must recover the original input`);
 
-test('buildRestoreCommand: set-titles-string quoting handles a raw token containing a literal single quote', () => {
-  const withQuote = `it's "#T"`;
-  const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
-    status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: withQuote,
+    const cmd = buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
+      status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: input,
+    });
+    const m = /set -t main:@0\.%0 set-titles-string ([\s\S]+)$/.exec(cmd);
+    assert.ok(m, `restore command must set set-titles-string: ${cmd}`);
+    assert.equal(m[1], shellSingleQuote(input), 'the restore segment must be exactly set-titles-string + shellSingleQuote(input)');
   });
-  const m = /set -t main:@0\.%0 set-titles-string (.+)$/.exec(cmd);
-  assert.ok(m, `restore command must set-titles-string: ${cmd}`);
-  assert.equal(unshellSingleQuote(m[1]), withQuote);
-});
+}
 
 // issue #290 -- the probe must read back both new options so a restore has
 // something to put back.
@@ -628,13 +644,13 @@ test('no builder ever emits a backtick', () => {
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true }),
     buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
-      status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'on', setTitlesString: RAW_DEFAULT_SET_TITLES_STRING,
+      status: 'on', mouse: 'off', windowSize: 'manual', setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING,
     }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {
       status: null, mouse: null, windowSize: null, setTitles: null, setTitlesString: null,
     }),
     buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', {}),
-    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { setTitles: 'on', setTitlesString: RAW_DEFAULT_SET_TITLES_STRING }, { titlesOnly: true }),
+    buildRestoreCommand('/tmp/tmux-0/main', 'main:@0.%0', { setTitles: 'on', setTitlesString: DEFAULT_SET_TITLES_STRING }, { titlesOnly: true }),
     buildRemoteCommandArgs('vps', 'echo hi').join(' '),
   ];
   for (const cmd of commands) {
@@ -760,7 +776,7 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
     }
     return {
       code: 0,
-      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${RAW_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
+      stdout: `${FAKE_SOCKET}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}mouse off${PROBE_SEP}window-size manual${PROBE_SEP}set-titles on${PROBE_SEP}set-titles-string ${PRINTED_DEFAULT_SET_TITLES_STRING}${PROBE_SEP}0`,
       stderr: '',
     };
   };
@@ -783,8 +799,8 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
   assert.equal(
     restoreCalls[0],
     "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 status on \\; set -t main:@0.%0 mouse off \\; set -t main:@0.%0 window-size manual \\; " +
-      `set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '${RAW_DEFAULT_SET_TITLES_STRING}'`,
-    'solo detach must restore all five options, the raw set-titles-string token reappearing byte for byte',
+      `set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string ${shellSingleQuote(DEFAULT_SET_TITLES_STRING)}`,
+    'solo detach must restore all five options, set-titles-string unescaped from the probe and re-quoted for the shell',
   );
 });
 

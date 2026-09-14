@@ -41,11 +41,32 @@ function parseOptionToken(part, name) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
+function unescapeTmuxOptionString(raw) {
+  let body = raw;
+  if (body.length >= 2 && (body[0] === '"' || body[0] === "'") && body[body.length - 1] === body[0]) {
+    body = body.slice(1, -1);
+  }
+  let out = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '\\' && i + 1 < body.length) {
+      const next = body[i + 1];
+      out += next === 'n' ? '\n' : next === 't' ? '\t' : next;
+      i++;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
 function parseTitleStringToken(part, name) {
   const re = new RegExp(`${escapeRegExpLiteral(name)}(\\*?)\\s+([\\s\\S]*)`);
   const m = re.exec(part || '');
   if (!m) return { value: null, inherited: false };
-  return { value: m[2].replace(/\r?\n+$/, ''), inherited: m[1] === '*' };
+  const raw = m[2].replace(/\r?\n+$/, '');
+  return { value: unescapeTmuxOptionString(raw), inherited: m[1] === '*' };
 }
 
 function parseProbeOutput(stdout) {
@@ -411,6 +432,7 @@ module.exports = {
   buildAttachCommand,
   buildRestoreCommand,
   buildRemoteCommandArgs,
+  shellSingleQuote,
   isValidPid,
   buildProcCmdlineCheck,
   defaultRunRemoteCommand,

@@ -882,27 +882,55 @@ Launching a new remote session (#222) and injection over the messaging socket
     for a value the CLI itself writes to disk.
   - **`set-titles-string` is a string option, not a bare word like the
     other three — a dedicated parser and a dedicated restore quoting path
-    exist because of it.** `tmux show-options -A` quotes a string-valued
-    option in double quotes whenever it contains spaces, backslash-escaping
-    any embedded `"` or `\` (this is why the measured default prints as
-    `` "#S:#I:#W - \"#T\" #{session_alerts}" `` on the wire) — `bare \S+`
-    parsing (used for `status`/`mouse`/`window-size`) cannot capture a value
-    with spaces at all. `parseTitleStringToken` matches to the end of the
-    segment instead and keeps **the raw printed token exactly as tmux wrote
-    it** (`"#S:#I:#W - \"#T\" #{session_alerts}"`, quote marks and backslash
-    escapes included as literal characters) — it does not unquote or
-    unescape it; starred (inherited) still reads as `null`, same rule as the
-    other three. On restore, `buildRestoreCommand` puts that raw token back
-    with **shell single-quoting only** (`'<raw token>'`, any embedded `'`
-    escaped as `'\''`) and lets **tmux's own command-line parser** undo
-    tmux's own quoting when `set -t <target> set-titles-string <arg>`
-    receives it — the same division of labor as `#T` above (the shell only
-    protects the argument from word-splitting and the `#`-comment rule,
-    tmux does the rest). Attempting to unescape and re-serialize the value
-    in this adapter would risk a mismatch against tmux's actual quoting
-    rules; forwarding the untouched raw token sidesteps that risk entirely.
-    Proven in `test/remote-attach.test.js`: a probed raw token reappears
-    byte for byte inside the restore command's single quotes.
+    exist because of it.** `tmux show-options -A` prints a string-valued
+    option in tmux's own escaped form whenever it contains characters that
+    need it — quoting with `'` or `"` and backslash-escaping — which `bare
+    \S+` parsing (used for `status`/`mouse`/`window-size`) cannot capture at
+    all once the value contains a space. `parseTitleStringToken` matches to
+    the end of the segment, then **unescapes it into the real value** (the
+    quote marks and backslashes are tmux's printing artifact, not part of
+    the option's actual content); starred (inherited) still reads as `null`,
+    same rule as the other three.
+    - **Corrected 2026-09-14 — the first version of this fix was wrong,
+      caught by live measurement on tmux 3.6 (a throwaway server).** It kept
+      the raw printed token untouched and restored it as `set -t <target>
+      set-titles-string '<raw token with tmux's own quoting still in it>'`,
+      reasoning that tmux's own command-line parser would undo tmux's own
+      quoting the way it does for a `.tmux.conf` line. Measured instead:
+      `tmux set -t t set-titles-string '"#S:#I:#W - \"#T\" #{session_alerts}"'`
+      stores the value **literally**, quote marks, backslashes and all —
+      `show-options` then prints it back double-escaped
+      (`` "\"#S:#I:#W - \\"#T\\" #{session_alerts}\"" ``). **An argv value
+      tmux receives on its own command line is never re-parsed through
+      tmux's config-file/command-prompt quoting** — only the text `tmux
+      show-options` *prints* goes through that quoting, to make it
+      re-typeable at the `:` prompt or in a `.tmux.conf` line, not to be
+      re-quoted proof against a shell-passed argv. The fix is to do the
+      unescaping ourselves: `parseTitleStringToken` reverses tmux's printed
+      form back to the real value, and `buildRestoreCommand` sends that real
+      value back with **shell single-quoting only** (`'<value>'`, any
+      embedded `'` escaped as `'\''`), which tmux then stores literally —
+      confirmed on the host (`set -t t set-titles-string '#T'` then
+      `show-options` prints `"#T"`; `set -u` brings back the inherited
+      default).
+    - **The unescaping rule, reverse-engineered from a 20-case table
+      measured live on tmux 3.6, 2026-09-14** (`SET_TITLES_STRING_CASES` in
+      `test/remote-attach.test.js`, one input value per row, mapped to
+      exactly what `show-options` printed for it): if the token starts and
+      ends with the same quote character (`'` or `"`, length ≥ 2), strip
+      that outer pair; then scan left to right unescaping `\n`→LF, `\t`→TAB,
+      and `\<any other char>`→that char (drop the backslash). This one rule
+      reproduces every measured case without needing to model *why* tmux
+      picked a given wrapper quote or which characters it decided to escape
+      (space/`;`/`$`-before-a-name-char/quotes/non-ASCII trigger quoting;
+      `~`/bare backslash/bare LF/TAB do not; the wrapper quote is whichever
+      of `'`/`"` avoids escaping an embedded quote of that kind, defaulting
+      to `"` when both or neither are present) — the strip-then-unescape
+      algorithm is symmetric to whichever choice tmux made. Proven in
+      `test/remote-attach.test.js`, table-driven over the 20 measured pairs:
+      `parseProbeOutput` on tmux's printed form recovers the original input,
+      and `buildRestoreCommand`'s `set-titles-string` segment is exactly
+      `set -t <target> set-titles-string ` + `shellSingleQuote(input)`.
   - **Restore now runs on every detach, shared included — solo restores all
     five options, shared restores only the two title options.** Earlier this
     fix gated the whole restore on `solo`, matching `status`/`mouse`/
