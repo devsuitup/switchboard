@@ -179,7 +179,11 @@ function pruneStaleSubagents() {
   const cutoff = Date.now() - SUBAGENT_LIVE_TTL_MS;
   for (const [parentId, map] of activeSubagentsByParent) {
     for (const [agentId, lastSeenAt] of map) {
-      if (lastSeenAt < cutoff) map.delete(agentId);
+      if (lastSeenAt < cutoff) {
+        // see docs/activity-trace.md (recv.subagent-completed via:ttl)
+        if (window.ATRACE) window.atrace('recv.subagent-completed', parentId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: lastSeenAt, to: null, via: 'ttl', fn: 'pruneStaleSubagents' });
+        map.delete(agentId);
+      }
     }
     if (map.size === 0) activeSubagentsByParent.delete(parentId);
   }
@@ -227,6 +231,8 @@ function clearActiveSubagentsFor(parentSessionId) {
   if (window.ATRACE) window.atrace('store.mutate', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete-parent', from: map.size, to: 0, agentIds, fn: 'clearActiveSubagentsFor' });
   activeSubagentsByParent.delete(parentSessionId);
   for (const agentId of agentIds) {
+    // see docs/activity-trace.md (recv.subagent-completed via:parent-cleared)
+    if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: map.get(agentId) ?? null, to: null, via: 'parent-cleared', fn: 'clearActiveSubagentsFor' });
     reflectSubagentRunningState(parentSessionId, agentId);
   }
 }
@@ -268,14 +274,16 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
 }
 
-// single write path into activeSubagentsByParent — see .ai/contexts/subagent-observability.md
-function noteSubagentActivity(parentSessionId, agentId) {
+// single write path into activeSubagentsByParent, sole emitter of recv.subagent-spawned — see docs/activity-trace.md
+function noteSubagentActivity(parentSessionId, agentId, source, extra) {
   let map = activeSubagentsByParent.get(parentSessionId);
+  const from = map ? (map.get(agentId) ?? null) : null;
   if (!map) {
     map = new Map();
     activeSubagentsByParent.set(parentSessionId, map);
   }
   map.set(agentId, Date.now());
+  if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from, applied: true, source: source || 'local-ipc', fn: 'noteSubagentActivity', ...(extra || {}) });
   scheduleSubagentTtlTick();
   reflectSubagentRunningState(parentSessionId, agentId);
 }
@@ -294,8 +302,7 @@ function noteSubagentActivity(parentSessionId, agentId) {
         if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'ignore', agentId, heartbeat: true, applied: false, reason: 'heartbeat-for-untracked-agent', fn: 'onSubagentSpawned' });
         return;
       }
-      if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from: map ? (map.get(agentId) ?? null) : null, applied: true, bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat, fn: 'onSubagentSpawned' });
-      noteSubagentActivity(parentSessionId, agentId);
+      noteSubagentActivity(parentSessionId, agentId, 'local-ipc', { bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat });
     });
   }
 
@@ -304,7 +311,7 @@ function noteSubagentActivity(parentSessionId, agentId) {
       const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
       const map = activeSubagentsByParent.get(parentSessionId);
-      if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: map ? (map.get(agentId) ?? null) : null, to: null, fn: 'onSubagentCompleted' });
+      if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: map ? (map.get(agentId) ?? null) : null, to: null, via: 'ipc', fn: 'onSubagentCompleted' });
       if (map) {
         map.delete(agentId);
         if (map.size === 0) activeSubagentsByParent.delete(parentSessionId);

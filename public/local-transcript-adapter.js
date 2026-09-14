@@ -108,7 +108,7 @@ function onLocalTranscriptSubagentActivity(payload) {
   // per-(parent, agentId) running set for the child row's own dot — see .ai/contexts/subagent-observability.md
   const agentId = payload.agentId;
   if (typeof agentId === 'string' && agentId && typeof noteSubagentActivity === 'function') {
-    noteSubagentActivity(parentSessionId, agentId);
+    noteSubagentActivity(parentSessionId, agentId, 'local-transcript');
   }
 }
 
