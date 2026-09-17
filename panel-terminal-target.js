@@ -5,6 +5,12 @@
 const REMOTE_REFUSAL = 'a remote session cannot host a panel shell';
 const UNRESOLVED = 'could not resolve a working directory for this session';
 
+// A panel shell is a PTY the panel owns, not a session: it has no sidebar row
+// to restore and no JSONL to protect.
+function isPanelShellSession(session) {
+  return !!(session && session.panelFor);
+}
+
 // resolveTarget: (sessionId) => the resolveGitChangesTarget result for the
 // session that owns the panel, i.e. {ok, kind, cwd} or {ok:false, error}.
 function resolvePanelTerminalCwd(ownerSessionId, resolveTarget) {
@@ -22,4 +28,4 @@ function resolvePanelTerminalCwd(ownerSessionId, resolveTarget) {
   return { ok: true, cwd: target.cwd };
 }
 
-module.exports = { resolvePanelTerminalCwd, REMOTE_REFUSAL };
+module.exports = { resolvePanelTerminalCwd, isPanelShellSession, REMOTE_REFUSAL };

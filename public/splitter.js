@@ -1,11 +1,8 @@
 // Drag-to-resize handle shared by the renderer's splitters.
 // see .ai/contexts/panel-terminal.md ("The third splitter")
 
-// handle: the element the user grabs.
-// opts.axis: 'x' (horizontal drag) or 'y' (vertical drag).
-// opts.getSize: () => the size being resized, read at mousedown.
-// opts.onDrag: (sizeAtMouseDown, delta) => void, delta positive right/down.
-// opts.onCommit: () => void, called once on mouseup.
+// opts: {axis: 'x'|'y', getSize(), onDrag(sizeAtMouseDown, delta), onCommit()}
+// — delta is positive rightwards/downwards.
 function createSplitter(handle, opts) {
   if (!handle || !opts || typeof opts.getSize !== 'function' || typeof opts.onDrag !== 'function') return null;
   const vertical = opts.axis === 'y';
@@ -19,12 +16,16 @@ function createSplitter(handle, opts) {
     opts.onDrag(startSize, coordOf(e) - start);
   }
 
-  function onMouseUp() {
+  function endDrag() {
     handle.classList.remove('dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+  }
+
+  function onMouseUp() {
+    endDrag();
     if (typeof opts.onCommit === 'function') opts.onCommit();
   }
 
@@ -40,5 +41,10 @@ function createSplitter(handle, opts) {
   }
 
   handle.addEventListener('mousedown', onMouseDown);
-  return { destroy: () => handle.removeEventListener('mousedown', onMouseDown) };
+  return {
+    destroy: () => {
+      handle.removeEventListener('mousedown', onMouseDown);
+      endDrag();
+    },
+  };
 }

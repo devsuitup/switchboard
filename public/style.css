@@ -4367,6 +4367,9 @@ body { display: flex; flex-direction: column; }
   display: none;
   height: 4px;
   flex-shrink: 0;
+  /* With no tab open the flexible children above are display:none, so the
+     region would otherwise stack at the top of the panel. */
+  margin-top: auto;
   cursor: row-resize;
   background: transparent;
   border-top: 1px solid rgba(255,255,255,0.06);
@@ -4382,7 +4385,6 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.3);
 }
 
-/* Own positioning context: .terminal-container is absolute against #terminals. */
 #panel-terminal-region {
   display: none;
   flex-shrink: 0;

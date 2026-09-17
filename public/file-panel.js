@@ -436,6 +436,7 @@ function hidePanel() {
   if (!filePanelEl) return;
   // The shell region keeps the panel open with no tab — see .ai/contexts/panel-terminal.md
   if (typeof panelTerminalIsOpen === 'function' && panelTerminalIsOpen(currentPanelSessionId)) {
+    renderTabContent(currentPanelSessionId, null);
     showPanel(getSessionState(currentPanelSessionId));
     return;
   }

@@ -85,7 +85,7 @@ const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
-const { resolvePanelTerminalCwd } = require('./panel-terminal-target');
+const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 
 setPtyOpLogger(log);
 
@@ -769,6 +769,9 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
     // (our snapshot + rename would silently drop lines appended between read
     // and rename). The user must stop all sessions for this project first.
     for (const [, session] of activeSessions) {
+      // A panel shell appends to no transcript and has no row to stop it from
+      // — see .ai/contexts/panel-terminal.md
+      if (isPanelShellSession(session)) continue;
       if (!session.exited && encodeProjectPath(session.projectPath) === folder) {
         return { error: 'Active sessions for this project — stop them first' };
       }
@@ -1691,7 +1694,7 @@ ipcMain.handle('get-active-terminals', () => {
   const terminals = [];
   for (const [sessionId, session] of activeSessions) {
     // see .ai/contexts/panel-terminal.md
-    if (!session.exited && session.isPlainTerminal && !session.panelFor) {
+    if (!session.exited && session.isPlainTerminal && !isPanelShellSession(session)) {
       terminals.push({ sessionId, projectPath: session.projectPath });
     }
   }

@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolvePanelTerminalCwd, REMOTE_REFUSAL } = require('../panel-terminal-target');
+const { resolvePanelTerminalCwd, isPanelShellSession, REMOTE_REFUSAL } = require('../panel-terminal-target');
 
 test('a local session resolves to its own working directory (worktree included)', () => {
   const calls = [];
@@ -31,6 +31,16 @@ test('a resolver failure is passed through verbatim', () => {
 test('a missing resolver result still fails closed', () => {
   assert.equal(resolvePanelTerminalCwd('abc-123', () => undefined).ok, false);
   assert.equal(resolvePanelTerminalCwd('abc-123', () => ({ ok: true, kind: 'local', cwd: '' })).ok, false);
+});
+
+// isPanelShellSession is what keeps a panel shell out of the plain-terminal
+// restore list and out of the missing-project remap's active-session guard,
+// both of which list something the user can act on. A panel shell is neither.
+test('isPanelShellSession recognises a session spawned for a panel', () => {
+  assert.equal(isPanelShellSession({ isPlainTerminal: true, panelFor: 'owner-1' }), true);
+  assert.equal(isPanelShellSession({ isPlainTerminal: true, panelFor: null }), false);
+  assert.equal(isPanelShellSession({ isPlainTerminal: false }), false);
+  assert.equal(isPanelShellSession(undefined), false);
 });
 
 test('an empty or non-string owner id is refused before the resolver runs', () => {

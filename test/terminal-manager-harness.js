@@ -108,6 +108,7 @@ function setupTerminalDom(opts = {}) {
 
   window.api = new Proxy({ platform: 'linux' }, {
     get(target, prop) {
+      if (opts.api && Object.prototype.hasOwnProperty.call(opts.api, prop)) return opts.api[prop];
       if (prop in target) return target[prop];
       if (prop === 'closeTerminal') return () => { spies.closeTerminal++; };
       if (prop === 'resizeTerminal') return (id, cols, rows) => { spies.resizeTerminal.push({ id, cols, rows }); };
@@ -174,6 +175,13 @@ function setupTerminalDom(opts = {}) {
     terminalHeader: window.document.createElement('div'),
     gridViewer: window.document.createElement('div'),
     gridViewerCount: window.document.createElement('span'),
+    // Read by grid-view.js's showGridView/layoutGridCards.
+    terminalArea: window.document.getElementById('terminal-area'),
+    sidebarContent: window.document.createElement('div'),
+    statsViewer: window.document.createElement('div'),
+    memoryViewer: window.document.createElement('div'),
+    settingsViewer: window.document.createElement('div'),
+    jsonlViewer: window.document.createElement('div'),
   };
   for (const [k, v] of Object.entries(stubGlobals)) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });

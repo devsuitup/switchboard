@@ -22,7 +22,13 @@ in.
 One shell per session. Switching to another session leaves it running and puts
 it back, with whatever it printed meanwhile, when you come back. Click **Shell**
 again to close it, which stops it. It also stops when the session's terminal
-goes away (relaunching a session, stopping it, quitting the app).
+goes away (relaunching a session, stopping it, quitting the app). If the shell
+exits by itself — `exit`, or a command that kills it — the region keeps its
+output so you can read it, and says so; toggle **Shell** off and on for a new
+one.
+
+A panel shell is not a session: it never appears in the sidebar, never counts
+towards "N running" in the status bar, and is never restored at startup.
 
 Remote sessions get no panel shell — Switchboard attaches to an existing remote
 tmux session but has no way to start a new remote one. The panel says so
