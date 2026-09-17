@@ -16,7 +16,7 @@ const os     = require('os');
 const path   = require('path');
 const { spawnSync } = require('child_process');
 
-const { scanMdFiles } = require('../scan-md-files');
+const { scanMdFiles, acceptMdFile } = require('../scan-md-files');
 
 function rig() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-scan-md-')));
@@ -172,5 +172,82 @@ test('scanMdFiles: a directory that does not exist scans to an empty list, not a
   const r = rig();
   try {
     assert.deepEqual(scanMdFiles(path.join(r.root, 'nope')), []);
+  } finally { r.cleanup(); }
+});
+
+// ── acceptMdFile ─────────────────────────────────────────────────────────────
+// The project-root CLAUDE.md / GEMINI.md / agents.md are looked up by name
+// rather than scanned, so they reach the list through this function directly.
+// It is the single acceptance rule behind both paths — the memory listing had
+// two of them, and only one carried the guards.
+
+test('acceptMdFile: accepts an ordinary file and reports its own name and mtime', () => {
+  const r = rig();
+  try {
+    const fp = path.join(r.dir, 'CLAUDE.md');
+    fs.writeFileSync(fp, 'project instructions');
+    const out = acceptMdFile(fp);
+    assert.equal(out.filename, 'CLAUDE.md');
+    assert.equal(out.filePath, fp);
+    assert.equal(out.modified, fs.statSync(fp).mtime.toISOString());
+  } finally { r.cleanup(); }
+});
+
+test('acceptMdFile: refuses a root CLAUDE.md that is a link to a credential location', (t) => {
+  const r = rig();
+  try {
+    // A cloned repository added as a project brings its own CLAUDE.md. Reading
+    // one that points at a key puts the key in the searchable FTS index.
+    const sshDir = path.join(r.elsewhere, '.ssh');
+    fs.mkdirSync(sshDir, { recursive: true });
+    const key = path.join(sshDir, 'id_rsa');
+    fs.writeFileSync(key, '-----BEGIN OPENSSH PRIVATE KEY-----');
+    const fp = path.join(r.dir, 'CLAUDE.md');
+    if (!symlink(key, fp, t)) return;
+
+    assert.equal(acceptMdFile(fp, () => true), null);
+  } finally { r.cleanup(); }
+});
+
+test('acceptMdFile: refuses a file the allowlist does not cover', (t) => {
+  const r = rig();
+  try {
+    const outside = path.join(r.elsewhere, 'notes.md');
+    fs.writeFileSync(outside, 'content kept elsewhere');
+    const fp = path.join(r.dir, 'CLAUDE.md');
+    if (!symlink(outside, fp, t)) return;
+
+    const allowed = (p) => {
+      const real = fs.realpathSync(p);
+      return real === r.dir || real.startsWith(r.dir + path.sep);
+    };
+    assert.equal(acceptMdFile(fp, allowed), null);
+    assert.ok(acceptMdFile(fp), 'without an allowlist the link itself is fine');
+  } finally { r.cleanup(); }
+});
+
+test('acceptMdFile: refuses a FIFO instead of blocking forever on it', (t) => {
+  const r = rig();
+  try {
+    // Same hazard as the scan, reached by name instead: a project root holding
+    // a FIFO called CLAUDE.md would freeze the Electron main process, which
+    // runs this synchronously. See the scan's FIFO test for why a regression
+    // here hangs the suite rather than reddening it.
+    const fifo = path.join(r.dir, 'CLAUDE.md');
+    const mk = spawnSync('mkfifo', [fifo]);
+    if (mk.error || mk.status !== 0) return t.skip('mkfifo unavailable on this machine');
+
+    assert.equal(acceptMdFile(fifo), null);
+  } finally { r.cleanup(); }
+});
+
+test('acceptMdFile: refuses an absent path, a directory and an empty file', () => {
+  const r = rig();
+  try {
+    assert.equal(acceptMdFile(path.join(r.dir, 'nothing-here.md')), null);
+    assert.equal(acceptMdFile(r.dir), null);
+    const empty = path.join(r.dir, 'empty.md');
+    fs.writeFileSync(empty, '   \n');
+    assert.equal(acceptMdFile(empty), null);
   } finally { r.cleanup(); }
 });

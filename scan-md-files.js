@@ -1,5 +1,6 @@
-// scan-md-files.js — non-recursive scan of a directory for the Markdown files
-// the Memory/brain tab lists. Electron-free so it can be tested directly.
+// scan-md-files.js — the Markdown files the Memory/brain tab lists: one
+// acceptance rule, and a non-recursive scan built on it. Electron-free so it
+// can be tested directly.
 // See .ai/contexts/ipc-bridge.md, "IPC path-guard inventory".
 'use strict';
 
@@ -8,7 +9,27 @@ const path = require('path');
 const { isSensitivePath } = require('./ipc-path-validator');
 
 /**
- * Scan `dir` for non-empty `.md` files (non-recursive).
+ * Accept `filePath` as a listable Markdown file, or return null.
+ *
+ * @param {string} filePath
+ * @param {(filePath: string) => boolean} [isAllowed] - caller's allowlist, given the literal path
+ * @returns {{filename: string, filePath: string, modified: string}|null}
+ */
+function acceptMdFile(filePath, isAllowed) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    if (isSensitivePath(filePath)) return null;
+    if (isAllowed && !isAllowed(filePath)) return null;
+    if (!fs.readFileSync(filePath, 'utf8').trim()) return null;
+    return { filename: path.basename(filePath), filePath, modified: stat.mtime.toISOString() };
+  } catch {
+    return null; // unreadable, dangling or absent
+  }
+}
+
+/**
+ * Scan `dir` for listable `.md` files (non-recursive).
  *
  * @param {string} dir
  * @param {(filePath: string) => boolean} [isAllowed] - caller's allowlist, given the literal path
@@ -18,24 +39,14 @@ function scanMdFiles(dir, isAllowed) {
   const results = [];
   try {
     if (!fs.existsSync(dir)) return results;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const e of entries) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!e.name.endsWith('.md')) continue;
       if (!e.isFile() && !e.isSymbolicLink()) continue;
-      const fp = path.join(dir, e.name);
-      try {
-        const stat = fs.statSync(fp);
-        if (!stat.isFile()) continue;
-        if (isSensitivePath(fp)) continue;
-        if (isAllowed && !isAllowed(fp)) continue;
-        const content = fs.readFileSync(fp, 'utf8').trim();
-        if (content) {
-          results.push({ filename: e.name, filePath: fp, modified: stat.mtime.toISOString() });
-        }
-      } catch { /* unreadable or dangling — skip this entry, keep the rest */ }
+      const accepted = acceptMdFile(path.join(dir, e.name), isAllowed);
+      if (accepted) results.push(accepted);
     }
   } catch { /* unreadable directory */ }
   return results;
 }
 
-module.exports = { scanMdFiles };
+module.exports = { scanMdFiles, acceptMdFile };

@@ -73,7 +73,7 @@ function spawnPty(file, args, opts) {
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
-const { scanMdFiles } = require('./scan-md-files');
+const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
@@ -1273,16 +1273,11 @@ ipcMain.handle('get-memories', () => {
         if (projectPath) {
           for (const name of ['CLAUDE.md', 'GEMINI.md', 'agents.md']) {
             const fp = path.join(projectPath, name);
-            try {
-              if (fs.existsSync(fp)) {
-                const content = fs.readFileSync(fp, 'utf8').trim();
-                if (content && !seenPaths.has(fp)) {
-                  const stat = fs.statSync(fp);
-                  files.push({ filename: name, filePath: fp, modified: stat.mtime.toISOString(), displayPath: shortName + '/', source: 'project' });
-                  seenPaths.add(fp);
-                }
-              }
-            } catch {}
+            const accepted = acceptMdFile(fp, isAllowedMemoryPath);
+            if (accepted && !seenPaths.has(fp)) {
+              files.push({ ...accepted, displayPath: shortName + '/', source: 'project' });
+              seenPaths.add(fp);
+            }
           }
 
           // 3. {projectPath}/.claude/ — commands/*.md and other .md files
