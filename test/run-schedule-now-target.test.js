@@ -32,9 +32,10 @@ function rig() {
 const allowAll = () => true;
 
 // The predicate stands in for isAllowedMemoryPath: containment in an allowed
-// root, not an exact match on one file. The guard asks it about the project
-// root as well as the file, since the two are no longer the same branch of
-// the filesystem once a schedule is symlinked in.
+// root, including the root itself. The guard asks it about the project root as
+// well as the file, and a stub without the equality branch answers false for
+// the root — which refuses on the project check and leaves the check on the
+// file untested.
 const allowUnder = (root) => (p) => {
   const real = fs.realpathSync(root);
   return p === real || p.startsWith(real + path.sep);
@@ -52,14 +53,14 @@ test('resolveRunNowTarget: accepts a schedule-*.md file inside a project .claude
   } finally { r.cleanup(); }
 });
 
-test('resolveRunNowTarget: accepts a schedule linked in from outside the project, and roots the run at the listing project', (t) => {
+test('resolveRunNowTarget: accepts a schedule linked in from a versioned repo elsewhere under the allowed root, and roots the run at the listing project', (t) => {
   const r = rig();
   try {
-    // The shape a versioned dotfiles setup produces: the schedule file lives
-    // in a repo somewhere else on disk, and the project's .claude/commands
-    // holds a symlink to it. Both the link's target and the project root are
-    // inside the allowed root here (a repo checked out under the workspace),
-    // which is what makes it different from the escaping case below.
+    // The shape a versioned dotfiles setup produces: the schedule file lives in
+    // a repo of its own, outside .claude/commands, and the project's
+    // .claude/commands holds a symlink to it. The repo is under the allowed
+    // root here — that is the boundary, and the two tests below pin both sides
+    // of it.
     const repoDir = path.join(r.projectPath, 'dotfiles', 'switchboard');
     fs.mkdirSync(repoDir, { recursive: true });
     const realFile = path.join(repoDir, 'schedule-audit.md');
@@ -74,6 +75,89 @@ test('resolveRunNowTarget: accepts a schedule linked in from outside the project
     assert.equal(out.realPath, fs.realpathSync(realFile), 'the file read is the link target');
     assert.equal(out.projectPath, fs.realpathSync(r.projectPath),
       'the run is rooted at the project whose .claude/commands lists it, not at the repo the file happens to live in');
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: a project reached through a symlinked ancestor is rooted at its canonical path', (t) => {
+  const r = rig();
+  try {
+    // The project root goes through disk resolution in its own right. Handing
+    // back the spelling that was asked for would give the spawn a cwd the
+    // allowlist never saw, and compare unequal against the known project list.
+    const alias = path.join(r.root, 'alias');
+    try { fs.symlinkSync(r.projectPath, alias, 'dir'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const filePath = path.join(r.commandsDir, 'schedule-nightly.md');
+    fs.writeFileSync(filePath, '---\nname: nightly\n---\ndo the thing');
+
+    const viaAlias = path.join(alias, '.claude', 'commands', 'schedule-nightly.md');
+    const out = resolveRunNowTarget(viaAlias, allowUnder(r.projectPath));
+    assert.equal(out.ok, true, out.error);
+    assert.equal(out.projectPath, fs.realpathSync(r.projectPath));
+    assert.equal(out.realPath, fs.realpathSync(filePath));
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: refuses a link whose target is not itself named schedule-*.md, however the link is named', (t) => {
+  const r = rig();
+  try {
+    // The listing directory decides where a schedule may be *linked from*; it
+    // does not decide what the link may point at. Without this, any file the
+    // allowlist reaches — a project file, anything under ~/.claude — becomes
+    // the prompt of a spawned `claude -p` by being linked under a
+    // schedule-shaped name.
+    const secret = path.join(r.projectPath, 'credentials.json');
+    fs.writeFileSync(secret, '{"token":"sk-not-a-real-token"}');
+
+    const linkPath = path.join(r.commandsDir, 'schedule-weekly.md');
+    try { fs.symlinkSync(secret, linkPath, 'file'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const out = resolveRunNowTarget(linkPath, allowUnder(r.projectPath));
+    assert.equal(out.ok, false);
+    assert.equal(out.error, 'not a schedule file');
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: refuses a link to a sensitive location even under a schedule-shaped name at both ends', (t) => {
+  const r = rig();
+  try {
+    // The denylist answers for the resolved target as well: a name that passes
+    // both filename checks still must not open a credential store.
+    const sshDir = path.join(r.projectPath, '.ssh');
+    fs.mkdirSync(sshDir, { recursive: true });
+    const target = path.join(sshDir, 'schedule-keys.md');
+    fs.writeFileSync(target, 'id_rsa contents');
+
+    const linkPath = path.join(r.commandsDir, 'schedule-keys.md');
+    try { fs.symlinkSync(target, linkPath, 'file'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const out = resolveRunNowTarget(linkPath, allowUnder(r.projectPath));
+    assert.equal(out.ok, false);
+    assert.equal(out.error, 'path not allowed');
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: refuses a schedule linked in from a repo outside every allowed root', (t) => {
+  const r = rig();
+  try {
+    // The counterpart of the accepting case above: a dotfiles repo the user has
+    // never opened as a project is not a place this handler reads and spawns
+    // from, however correctly the link is named and placed.
+    const repoDir = path.join(r.outsideDir, 'dotfiles');
+    fs.mkdirSync(repoDir, { recursive: true });
+    const realFile = path.join(repoDir, 'schedule-audit.md');
+    fs.writeFileSync(realFile, '---\nname: audit\ncron: 17 12 * * 1\n---\naudit');
+
+    const linkPath = path.join(r.commandsDir, 'schedule-audit.md');
+    try { fs.symlinkSync(realFile, linkPath, 'file'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const out = resolveRunNowTarget(linkPath, allowUnder(r.projectPath));
+    assert.equal(out.ok, false);
+    assert.equal(out.error, 'path not allowed');
   } finally { r.cleanup(); }
 });
 
@@ -180,10 +264,12 @@ test('resolveRunNowTarget: a symlinked commands directory escaping the project i
     catch { linked = false; }
     if (!linked) return t.skip('cannot create a symlink on this machine');
 
-    // isPathAllowed only allows the known project root, not the outside one.
-    const isPathAllowed = (p) => p.startsWith(fs.realpathSync(r.projectPath) + path.sep);
-    const out = resolveRunNowTarget(linkPath, isPathAllowed);
+    // allowUnder allows the known project root and everything under it, so the
+    // project check passes and the refusal can only come from the check on the
+    // resolved file — the one this test is about.
+    const out = resolveRunNowTarget(linkPath, allowUnder(r.projectPath));
     assert.equal(out.ok, false, 'the resolved real target lives outside the known project');
+    assert.equal(out.error, 'path not allowed');
   } finally { r.cleanup(); }
 });
 
