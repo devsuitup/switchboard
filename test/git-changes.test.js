@@ -10,7 +10,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions } = require('../git-changes');
+const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions, diffHeaderNamesPath } = require('../git-changes');
 
 // --- parseStatusPorcelainV2 --------------------------------------------
 
@@ -289,6 +289,39 @@ test('countNewFileDiffAdditions: a missing-final-newline marker is not an additi
 test('countNewFileDiffAdditions: empty/missing input is 0', () => {
   assert.equal(countNewFileDiffAdditions(''), 0);
   assert.equal(countNewFileDiffAdditions(null), 0);
+});
+
+// --- diffHeaderNamesPath -----------------------------------------------
+
+test('diffHeaderNamesPath: the first line must name the requested path, twice (mutation target: accepting any "diff --git" line)', () => {
+  assert.equal(diffHeaderNamesPath('diff --git a/new.txt b/new.txt\n+++ b/new.txt\n', 'new.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git a/sub/new.txt b/sub/new.txt\n', 'sub/new.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git a/new.txt b/other.txt\n', 'new.txt'), false);
+});
+
+test('diffHeaderNamesPath: a path git appended a basename to is not the path that was asked for — this is the operand-pairing leak', () => {
+  assert.equal(diffHeaderNamesPath('diff --git a/dirlink/null b/dirlink/null\n+++ b/dirlink/null\n', 'dirlink'), false);
+  assert.equal(diffHeaderNamesPath('diff --git a/dirlink/null b/dirlink/null\n', 'dirlink/null'), true, 'a file genuinely named null is still its own path');
+});
+
+test('diffHeaderNamesPath: a name git prints verbatim — spaces, unicode under core.quotepath=false — matches', () => {
+  assert.equal(diffHeaderNamesPath('diff --git a/a space.txt b/a space.txt\n', 'a space.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git a/café.txt b/café.txt\n', 'café.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git a/has..dots.txt b/has..dots.txt\n', 'has..dots.txt'), true);
+});
+
+test('diffHeaderNamesPath: a name git C-quotes matches its quoted spelling (mutation target: comparing only the verbatim form)', () => {
+  assert.equal(diffHeaderNamesPath('diff --git "a/quote\\".txt" "b/quote\\".txt"\n', 'quote".txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git "a/tab\\there.txt" "b/tab\\there.txt"\n', 'tab\there.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git "a/back\\\\slash.txt" "b/back\\\\slash.txt"\n', 'back\\slash.txt'), true);
+  assert.equal(diffHeaderNamesPath('diff --git "a/quote\\".txt" "b/other\\".txt"\n', 'quote".txt'), false);
+});
+
+test('diffHeaderNamesPath: anything that is not a diff header is a refusal, including empty output', () => {
+  assert.equal(diffHeaderNamesPath('', 'new.txt'), false);
+  assert.equal(diffHeaderNamesPath(null, 'new.txt'), false);
+  assert.equal(diffHeaderNamesPath('error: Could not access \'new.txt\'\n', 'new.txt'), false);
+  assert.equal(diffHeaderNamesPath('diff --git a/new.txt b/new.txt\n', ''), false);
 });
 
 test('mergeChanges: branch pass-through defaults when status is missing', () => {

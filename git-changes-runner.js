@@ -6,7 +6,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { defaultRunRemoteCommand } = require('./remote-attach');
-const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions } = require('./git-changes');
+const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions, diffHeaderNamesPath } = require('./git-changes');
 
 const DEFAULT_LOCAL_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TIMEOUT_MS = 20_000;
@@ -53,12 +53,24 @@ function isSafeNoIndexPath(p) {
 const DEFAULT_FS_OPS = {
   realpath: (p) => fs.realpathSync.native(p),
   lstat: (p) => fs.lstatSync(p),
+  stat: (p) => fs.statSync(p),
 };
 
 function isInsideRoot(root, candidate) {
   if (candidate === root) return true;
   const rel = path.relative(root, candidate);
   return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+// git follows a symlink to a directory — see .ai/contexts/changes-view.md ("Untracked files")
+function leafSymlinkIsDiffable(resolved, fsOps) {
+  let target;
+  try {
+    target = fsOps.stat(resolved);
+  } catch {
+    return true;
+  }
+  return target.isFile();
 }
 
 // Containment for a --no-index operand — see .ai/contexts/changes-view.md ("Untracked files")
@@ -74,6 +86,7 @@ function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS) {
     const resolved = path.join(parent, path.basename(absolute));
     const stat = fsOps.lstat(resolved);
     if (!stat.isFile() && !stat.isSymbolicLink()) return null;
+    if (stat.isSymbolicLink() && !leafSymlinkIsDiffable(resolved, fsOps)) return null;
 
     const operand = path.relative(root, resolved);
     return isSafeNoIndexPath(operand) ? operand : null;
@@ -138,6 +151,12 @@ function firstError(result) {
   return (result.stderr || '').trim() || `git exited with code ${result.code}`;
 }
 
+// The two stdout-cap overruns: the remote transport's own, and execFile's maxBuffer — see .ai/contexts/changes-view.md ("Untracked files")
+function isStdoutCapFailure(result) {
+  const stderr = (result && result.stderr) || '';
+  return /stdout exceeded \d+ bytes/.test(stderr) || /maxBuffer length exceeded/i.test(stderr);
+}
+
 // {kind, cwd, alias, exec, timeoutMs, fsOps} — see .ai/contexts/changes-view.md ("Runner interface")
 function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {}) {
   if (kind !== 'local' && kind !== 'remote') {
@@ -184,6 +203,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     // A repo too large for -uall falls back to git's collapsed listing — see .ai/contexts/changes-view.md ("Untracked files")
     let untrackedCollapsed = false;
     if (st.code !== 0) {
+      if (!isStdoutCapFailure(st)) return { ok: false, error: firstError(st) };
       let fallback;
       try {
         fallback = await invoke(['status', '--porcelain=v2', '--branch', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES });
@@ -228,13 +248,15 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
 
     let result;
     try {
-      result = await invoke(['diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, contained.operand], { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
+      result = await invoke(['-c', 'core.quotepath=false', 'diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, contained.operand],
+        { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
     if (result.code !== 0 && result.code !== 1) return { ok: false, error: firstError(result) };
     const stdout = result.stdout || '';
     if (!stdout && (result.stderr || '').trim()) return { ok: false, error: firstError(result) };
+    if (!diffHeaderNamesPath(stdout, contained.operand)) return { ok: false, error: 'invalid path' };
 
     const { content, truncated } = truncateDiffContent(stdout, MAX_DIFF_BYTES);
     const added = truncated ? null : countNewFileDiffAdditions(content);

@@ -205,7 +205,41 @@ test('real git: a symlinked directory inside the repo does not open a way out �
   }
 });
 
-test('real git: a leaf symlink stays openable and leaks nothing — git lstats it, so the diff is the link target string, not the target\'s content', async (t) => {
+test('real git: a leaf symlink to a DIRECTORY leaks a file named "null" unless the guard stops it — git follows that one and pairs the --no-index operands by basename', async (t) => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const outsideDir = path.join(tmp, 'outside');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'null'), 'PAIRED_SECRET_VIA_NULL_BASENAME\n');
+    try {
+      fs.symlinkSync(outsideDir, path.join(repoDir, 'dirlink'), 'dir');
+    } catch {
+      t.skip('this platform does not allow creating a directory symlink unprivileged');
+      return;
+    }
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const status = await runner.status();
+    assert.ok(status.files.some((f) => f.path === 'dirlink'), 'git lists the symlink as a row of its own — this needs no crafted path, just a click');
+
+    // What raw git does with that row's own path, pinned.
+    const raw = spawnSync('git', ['--literal-pathspecs', 'diff', '--no-index', '--', '/dev/null', 'dirlink'],
+      { cwd: repoDir, encoding: 'utf8', env: scratchGitEnv() });
+    assert.match(raw.stdout, /PAIRED_SECRET_VIA_NULL_BASENAME/, 'raw git follows the directory symlink and diffs <dirlink>/null');
+    assert.match(raw.stdout, /^\+\+\+ b\/dirlink\/null$/m, 'and says so in the header: the path it diffed is not the path it was given');
+
+    const result = await runner.diff('dirlink', { untracked: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'invalid path');
+    assert.ok(!String(result.content || '').includes('PAIRED_SECRET_VIA_NULL_BASENAME'));
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: a leaf symlink to a FILE stays openable and leaks nothing — git lstats that one, so the diff is the link target string, not the target\'s content', async (t) => {
   const tmp = mkTmp();
   try {
     const repoDir = path.join(tmp, 'repo');

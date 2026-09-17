@@ -128,6 +128,30 @@ function countNewFileDiffAdditions(text) {
   return added;
 }
 
+const C_QUOTE_ESCAPES = { 7: 'a', 8: 'b', 9: 't', 10: 'n', 11: 'v', 12: 'f', 13: 'r', 34: '"', 92: '\\' };
+
+// git's C-style path quoting, as emitted under core.quotepath=false — see .ai/contexts/changes-view.md ("Untracked files")
+function gitQuotePath(p) {
+  let out = '"';
+  for (const ch of String(p)) {
+    const code = ch.codePointAt(0);
+    if (Object.prototype.hasOwnProperty.call(C_QUOTE_ESCAPES, code)) out += '\\' + C_QUOTE_ESCAPES[code];
+    else if (code < 0x20 || code === 0x7f) out += '\\' + code.toString(8).padStart(3, '0');
+    else out += ch;
+  }
+  return out + '"';
+}
+
+// A diff's first line names its file twice — see .ai/contexts/changes-view.md ("Untracked files")
+function diffHeaderNamesPath(content, filePath) {
+  if (typeof filePath !== 'string' || !filePath) return false;
+  const first = String(content || '').split('\n', 1)[0];
+  if (!first.startsWith('diff --git ')) return false;
+  const operands = first.slice('diff --git '.length);
+  return operands === `a/${filePath} b/${filePath}`
+    || operands === `${gitQuotePath('a/' + filePath)} ${gitQuotePath('b/' + filePath)}`;
+}
+
 function combineCounts(a, b) {
   if ((a && a.added === null) || (b && b.added === null)) return { added: null, deleted: null };
   const added = (a ? a.added || 0 : 0) + (b ? b.added || 0 : 0);
@@ -159,4 +183,4 @@ function mergeChanges(status, numstatStaged, numstatUnstaged) {
   };
 }
 
-module.exports = { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions };
+module.exports = { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions, diffHeaderNamesPath };

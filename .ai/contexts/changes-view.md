@@ -22,6 +22,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 - `parseStatusPorcelainV2(text)` → `{branch:{head,upstream,ahead,behind}, files:[{path,origPath,staged,unstaged,untracked,renamed,state}]}`. Record types `1` (ordinary), `2` (rename/copy — `origPath` and `renamed:true`), `u` (unmerged), `?` (untracked, `state:'?'`). Type `!` (ignored) and any future/unrecognized record type are dropped rather than thrown on.
 - `parseNumstat(text)` → `{[path]: {added, deleted}}`. Binary files report `-` in git's own output; that becomes `null` here, not `0`, so a caller can tell "no lines changed" apart from "line count unknown".
 - `mergeChanges(status, numstatStaged, numstatUnstaged)` → the panel's model: each file gets `added`/`deleted` summed across whichever of the two numstat maps have an entry for it (a file modified in both the index and the worktree has two independent diffs; a file already staged and now edited again is a real, common case, not an edge case). An untracked file's counts stay `null` at this stage — `git diff --numstat` never reports untracked files at all, and status makes no per-file call to find out (see "Untracked files" below). `totals` sums only the known (non-null) counts.
+- `diffHeaderNamesPath(content, path)` → whether a diff's `diff --git a/<p> b/<p>` first line names exactly `path`, in either the verbatim or the C-quoted spelling. The containment layer that needs no filesystem — see "Untracked files".
 - `countNewFileDiffAdditions(text)` → the added-line count of a new-file unified diff, or `null` when the diff is binary (`Binary files … differ`). It counts only lines *after* the first `@@` hunk header, so a file whose own content starts with `+++ ` or `@@ ` is counted like any other line — a plain "starts with `+` but not `+++`" test miscounts exactly there.
 - **Both parsers consume `-z` (NUL-separated) output — see "Quoting rule" below.** They walk an explicit index into `String(text).split('\0')` rather than a plain `for...of` over lines, because a rename/copy record spans TWO tokens instead of one:
   - **Status** (`2 <xy> ... <score> <path>\0<origPath>\0`): the origPath is the very next token — no tab embedded in the first one the way non-`-z` porcelain v2 does it.
@@ -80,12 +81,20 @@ every busy→idle edge, volume is not. At ~28 bytes per row for short paths, and
 untracked files. That cap is a **hard error** (`stdout exceeded …`, empty
 stdout), so taking it at face value would blank the whole panel — including the
 tracked changes, which cost nothing and are usually the reason the panel is
-open. So a failing `-uall` status is retried once with git's default untracked
-mode; if that succeeds the result comes back `untrackedCollapsed: true` and the
-panel renders the tracked rows, the collapsed `? dir/` rows, and a note saying
-the untracked listing is coarse. If the retry fails too, the original error is
-returned unchanged — a broken repository is still an error, not a degraded
-listing.
+open. So a `-uall` status that fails **that specific way** is retried once with
+git's default untracked mode; if the retry succeeds the result comes back
+`untrackedCollapsed: true` and the panel renders the tracked rows, the collapsed
+`? dir/` rows, and a note saying the untracked listing is coarse.
+
+The retry is gated on the failure signature (`isStdoutCapFailure`: the remote
+transport's own `stdout exceeded <n> bytes`, or `execFile`'s
+`stdout maxBuffer length exceeded` — both non-localized, one ours and one
+Node's). Any other failure returns its own error untouched: retrying on every
+non-zero exit would tell a user whose repository is unreadable
+(`could not read directory: Permission denied`) that they have too many
+untracked files, and discard the real message on the way. If the retry itself
+fails, the original error is returned unchanged — a broken repository is still
+an error, not a degraded listing.
 
 The renderer holds the other end: `MAX_CHANGES_ROWS` (500) in
 `public/file-panel.js` caps how many rows are built, with a `+N more files not
@@ -154,27 +163,56 @@ does, in two layers:
   - **Local** (`resolveLocalNoIndexOperand`): `fs.realpathSync.native` on the
     cwd and on the operand's **parent directory**, and the parent must be the
     resolved root or below it (`path.relative`, not a string prefix — a sibling
-    named `/repo-evil` shares the prefix but is not inside `/repo`). The parent,
-    not the leaf: git `lstat`s the operand itself, so a leaf symlink diffs as
-    `new file mode 120000` plus the link target *string* and leaks no content —
-    resolving the leaf would instead refuse a row git legitimately lists. An
-    `lstat` on the leaf then requires a regular file or a symlink, which also
-    keeps a FIFO (where `git diff --no-index` blocks until the timeout) away
-    from git. This is the `resolveOnDisk` + realpath-containment shape
-    `ipc-path-validator.js` documents, including its TOCTOU rule: what git
-    receives is the **guard's** operand (relative to the resolved root), never
-    the caller's string.
-  - **Remote**: there is no local filesystem to resolve against, so git's own
-    view of the repository is the oracle —
+    named `/repo-evil` shares the prefix but is not inside `/repo`). The parent
+    rather than the leaf, because git treats the leaf differently depending on
+    what it is (see the next bullet). An `lstat` on the leaf then requires a
+    regular file or a symlink, which also keeps a FIFO — where
+    `git diff --no-index` blocks until the timeout — away from git. This is the
+    `resolveOnDisk` + realpath-containment shape `ipc-path-validator.js`
+    documents, including its TOCTOU rule: what git receives is the **guard's**
+    operand (relative to the resolved root), never the caller's string.
+  - **A leaf symlink is only safe when it points at a file.** Measured: git
+    `lstat`s a symlink to a *file*, so the diff is `new file mode 120000` plus
+    the link target *string* — the target's content never appears, and the row
+    stays openable. Git **follows** a symlink to a *directory*, and
+    `--no-index` then pairs the two operands by basename, so `/dev/null` ↔
+    `<dirlink>/null`: a symlink pointing anywhere with a file called `null` in
+    it reads that file. `git status -uall` lists such a symlink as a row of its
+    own, so this needs no crafted path — only a click. The leaf therefore gets a
+    `stat()` as well as an `lstat()`, and a symlink whose target is not a
+    regular file is refused. A dangling symlink is allowed: there is nothing for
+    git to follow, and it renders as its target string like any other link.
+  - **The diff must name the file that was asked for** (`diffHeaderNamesPath` in
+    `git-changes.js`) — the layer that does not need a filesystem, and therefore
+    the one that covers the remote transport. Every `--no-index` diff opens with
+    `diff --git a/<path> b/<path>`, including a binary one (which has no `+++`
+    line at all) and an empty new file (which has neither `+++` nor a hunk). The
+    operand-pairing case says `a/dirlink/null b/dirlink/null` for a requested
+    `dirlink`, so comparing that line against the requested path catches it
+    wherever it happens. The call runs under `-c core.quotepath=false`, which
+    leaves non-ASCII verbatim, so the comparison is against two candidate
+    spellings — the verbatim one and git's C-quoted one (`gitQuotePath`, for a
+    name containing a quote, a backslash or a control character). A line
+    matching neither is a refusal, not an empty diff.
+  - **Remote**: with no local filesystem to resolve against, git's own view of
+    the repository is the first oracle —
     `git ls-files --others --exclude-standard -z -- <path>` must return exactly
     that path before any diff is sent. Measured: it lists a genuine untracked
-    file, and returns nothing for a path behind a symlinked directory (git's
-    traversal does not descend symlinks), for a tracked file, or for a FIFO.
-    Cost: one extra ssh round-trip per untracked row click, sequential (running
-    it alongside the diff would mean the far host had already read the file).
-  - `fsOps` (`{realpath, lstat}`) is dependency injection for tests only, the
-    same seam `remote-attach.js` uses for `spawnFn`; production always takes the
-    real fs.
+    file, and returns nothing for a path *behind* a symlinked directory (git's
+    traversal does not descend symlinks), for a tracked file, or for a FIFO. It
+    does list a symlink *itself*, so on this transport the header check above is
+    what closes the directory-symlink case. Cost: one extra ssh round-trip per
+    untracked row click, sequential (running it alongside the diff would mean
+    the far host had already read the file).
+  - `fsOps` (`{realpath, lstat, stat}`) is dependency injection for tests only,
+    the same seam `remote-attach.js` uses for `spawnFn`; production always takes
+    the real fs.
+
+A symlink row is diffed, not rendered as a `symbolic link → target` widget of
+its own: `new file mode 120000` plus the target as the single added line is
+git's own rendering of a symlink, this panel is a git viewer, and the two
+guards above mean the only symlinks that reach git are the ones for which that
+rendering is the whole truth.
 
 The untracked calls go through the same `invoke()` →
 `buildRemoteGitCommand`/`shQuote` path as every other command, so `/dev/null`
