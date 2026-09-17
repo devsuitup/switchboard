@@ -326,15 +326,16 @@ path. The renderer never learns where the repository is: the session's cwd is
 re-resolved through `resolveGitChangesTarget` on **every** call, the absolute
 path is built from it, used, and discarded main-side.
 
-`git-changes-file` returns `{ok, original, current, binary, truncated}`.
+`git-changes-file` returns `{ok, original, current, version, binary, truncated}`.
 `original` is the side `git diff` itself compares against, so the diff the
 panel draws and the diff `git diff` would print cannot disagree: the index
 (`:<path>`) for the unstaged view, `HEAD:<path>` for the staged one. A path
-absent from that tree exits 128 — that is the untracked/new-file case, and it
-yields `original: ''` rather than an error. The repository's own validity is
-established before that call (`git rev-parse --show-toplevel` has already
-succeeded), which is what makes "non-zero means the path is not in this tree"
-safe to read that way.
+absent from that tree exits **128** — that is the untracked/new-file case, and
+it alone yields `original: ''`. Every other exit code is an error
+(`reason: 'git'`): a timeout, a killed child, a missing binary and an unreadable
+object are not "this file is new", and rendering them as an all-additions diff
+would contradict the panel's own contract that what it marks as changed is what
+git would report.
 
 ### `git cat-file blob`, not `git show`
 
@@ -364,9 +365,15 @@ syntax from revision magic. So the operand carries its own pair of guards
 (`git-changes-file.js`):
 
 - `isSafeRepoRelativePath` — non-empty, ≤ 4096 chars, no control characters
-  (NUL, newline, carriage return included), no `..`, not absolute (`/`, `\`,
-  `X:`), no leading `-`, no leading `:`. This is what `git-changes-save` uses,
-  because its operand is a filesystem path and nothing else.
+  (NUL, newline, carriage return included), not absolute (`/`, `\`, `X:`), no
+  leading `-`, no leading `:`, and no `..` or `.git` **segment**. This is what
+  `git-changes-save` uses, because its operand is a filesystem path and nothing
+  else. Both segment rules are split on `/` and `\` rather than matched as
+  substrings: `a..b.txt` and `dotgit.md` are ordinary filenames, while `a/../b`
+  and `.git/config` are not paths this panel will touch. `.git` is inside the
+  repository root, so containment alone does not exclude it, and `.git/config`
+  carries `core.pager`, `core.fsmonitor` and `[alias]` — writing it is command
+  execution the next time any git command runs there.
 - `isSafeRevPathOperand` — the above **plus** no `^[0-9]+:` prefix, which would
   turn `:<path>` into `:<n>:<path>`, git's conflict-stage syntax. A file
   literally named `1:f.txt` is therefore not editable from the panel: an
@@ -384,9 +391,15 @@ relative to the root, and a session whose cwd is a subdirectory of the repo
 must still open its own repository's files. The root is computed by git from
 the already-resolved cwd — it is never a renderer-supplied string.
 
-`resolveTargetInsideRepo` resolves both the root and `path.join(root, relPath)`
-**on disk** (`resolveOnDisk`), requires the real target to be the real root or
-beneath it, applies `isSensitivePath`, and requires a regular file. It returns
+`resolveTargetInsideRepo` `lstat`s `path.join(root, relPath)` first and refuses
+a **symbolic link** outright (`reason: 'symlink'`): a symlink's content in a git
+working tree is its target string, so the pair would be the link text against
+the target's content, and a save would land on a file the row does not name.
+It then resolves both the root and the joined path **on disk**
+(`resolveOnDisk`), requires the real target to be the real root or beneath it —
+which is what catches an escape through a symlinked *directory*, whose last
+component is an ordinary file — applies `isSensitivePath`, and requires a
+regular file. It returns
 that single resolved path, and the read and the write run on **that** value —
 the TOCTOU rule `ipc-path-validator.js` documents for
 `resolveAllowedMemoryPath`: two independent resolutions of the same string are
@@ -399,14 +412,52 @@ at all — it takes an absolute path from an OSC 8 terminal hyperlink and checks
 only `isSensitivePath`. A handler whose entire input is a *relative* path from
 the renderer has no such excuse, so it does not inherit that shape.
 
-### Caps, and why an oversized file is refused rather than truncated
+### Saving over a file that moved
+
+The premise of this panel is that it sits beside a session writing the same
+files, so "the file changed since it was read" is the normal case, not an edge
+case. Two independent layers:
+
+1. **A version token.** `git-changes-file` returns `version` — the SHA-1 of the
+   bytes it read, plus their length — as opaque data. `git-changes-save`
+   requires it back, re-reads the file, and refuses with `reason: 'stale'` when
+   it no longer matches; the write never happens. A save with no token at all is
+   refused the same way (`reason: 'invalid-version'`), so a caller that forgets
+   it cannot clobber anything. Every successful save returns the token of the
+   bytes it just wrote, which is what the next save must carry. The hash, rather
+   than an mtime, is what makes two writes inside the same clock tick
+   distinguishable.
+2. **A watcher.** `git-changes-watch` resolves the same guard, `fs.watch`es the
+   resolved path, and sends `git-changes-file-changed(sessionId, relPath)` —
+   never an absolute path. The renderer re-reads on it, so the user is told (or
+   the clean buffer is refreshed) as it happens, rather than at the next
+   busy→idle edge. The watch is keyed by session + repo-relative path and is
+   dropped when the file is closed, the tab is closed, or another file is
+   opened.
+
+### Caps, line endings and encoding
 
 Same two limits the other panel reads use (`PANEL_FILE_MAX_BYTES`, 2 MB, and a
 NUL byte anywhere means binary), applied to both sides of the pair, and the
-refusal says **which** of the two it was (`reason: 'binary'` vs
-`'too-large'`) so the panel can explain itself and fall back to the read-only
-unified diff. Neither side is ever truncated: a truncated buffer in an editor
-that can save is a data-loss device, not a preview.
+refusal says **which** limit it was (`reason: 'binary'` vs `'too-large'`) so
+the panel can explain itself and fall back to the read-only unified diff.
+Neither side is ever truncated: a truncated buffer in an editor that can save is
+a data-loss device, not a preview.
+
+Two more properties of the round trip, both belonging main-side because the
+editor cannot preserve them:
+
+- **Line endings.** CodeMirror normalises `\r\n` to `\n` when it builds a
+  document and joins with `\n` on the way out, so a CRLF file edited in the
+  panel would come back LF and rewrite every line. The read returns LF-only text
+  (which also keeps the dirty comparison honest — otherwise a CRLF buffer is
+  "modified" the instant it opens), and the write re-applies the file's dominant
+  ending, measured from the very bytes the version token was computed from.
+- **Encoding.** The binary gate is NUL bytes, which Latin-1 text does not
+  contain: decoded as UTF-8 it becomes U+FFFD and would be written back as
+  those replacement bytes, irreversibly. Both sides are therefore decoded
+  strictly (`TextDecoder` with `fatal: true`) and a file that is not valid UTF-8
+  is refused with `reason: 'encoding'`, not repaired.
 
 ### Remote sessions are refused
 
@@ -442,11 +493,24 @@ The Changes tab re-renders on every busy→idle edge (see "Refresh triggers"), s
 
 Both are pinned by tests that go red if a render clears the host (a `MutationObserver` on the host records zero child mutations across an idle refresh) or rebuilds the instance.
 
-### A dirty buffer is never overwritten
+### A dirty buffer is never overwritten, and never lied to
 
-An idle refresh reloads the file list unconditionally — the counts must follow what the session did. The open editor is a different matter: when its content differs from the last content known on disk (`tab.savedContent`), the refresh does **not** re-read the file and does not touch the buffer. It marks the tab stale, and the notice line says the view may be out of date while the unsaved edits are kept. A clean buffer is re-read, and replaced only when the content actually differs.
+A refresh — from a busy→idle edge, the Refresh button, or the watcher — always re-reads the file, and what it does with the answer depends on the buffer:
 
-Saving is `gitChangesSave(sessionId, path, content)` from the Save button or from the `cm-save` event the bundle dispatches for `Cmd/Ctrl+S`; on success it refreshes the status so the row's counts follow the write. The buffer is read back from `view.b.state.doc` for side-by-side and from `view.state.doc` for inline and plain — the same asymmetry the MCP diff tab navigates.
+- **Clean**: the selection is first re-pointed at its own row in the new status payload, so a file the session has just staged is compared against `HEAD` from then on rather than against an index that now equals the working tree. The pair is then replaced, and the editor rebuilt, only when the content actually differs.
+- **Dirty**: nothing in the buffer is touched. The notice line says the file changed on disk *only when the version token says it did* — a warning that fires on every refresh, whether or not anything happened, is one the user learns to ignore.
+
+A file that stops being readable (deleted, or refused) and a status refresh that fails are both reported in that same notice line while a file is open; the file list's own error branch is not reachable from the diff view.
+
+Saving is `gitChangesSave(sessionId, path, content, version)` from the Save button or from the `cm-save` event the bundle dispatches for `Cmd/Ctrl+S`; on success it refreshes the status so the row's counts follow the write. A save is refused while another is in flight (`tab.saving`, which also disables the button), so a double press cannot put two writes in the air with the filesystem deciding the order. A refusal for `reason: 'stale'` keeps the buffer and turns the notice into "reload before saving"; **Reload** re-reads the file, after a confirm when there are unsaved edits.
+
+The buffer is read back from `view.b.state.doc` for side-by-side and from `view.state.doc` for inline and plain — the same asymmetry the MCP diff tab navigates.
+
+Back, closing the tab and closing the panel all ask before discarding unsaved edits (`window.confirm`, as `ViewerPanel` already does for its own destructive action). A tab replaced by an MCP-driven open (`openDiffTab` / `openFileTab`) does not prompt: nothing user-initiated is happening at that moment and an IPC event cannot wait on a dialog.
+
+One host element holds one editor: another session's tab keeps its instance, detached, and `mountChangesEditor` removes any foreign child before attaching. Without that, switching between two sessions with files open stacks both editors in the same column, and a user typing into the visible-but-not-current one has the keystrokes read from the other buffer on save.
+
+Inline mode asks for `mergeControls: false`. The default `unifiedMergeView` renders Accept/**Reject** buttons per chunk, and Reject restores the original side into the document — reverting a working-tree change, which this panel does not do.
 
 An untracked file's added-line count comes from the pair rather than a second git call: its original side is empty, so its additions are its own lines (`countAddedLines`). The read-only fallback still takes the count from the diff (`countNewFileDiffAdditions`).
 

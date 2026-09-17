@@ -97,8 +97,14 @@ things about that editor are not `ViewerPanel`'s:
   from `view.b.state.doc`, the inline and plain views from `view.state.doc` —
   the same asymmetry `handleDiffAction` already navigates for the MCP tab.
 - **The save is an IPC by session, not by path**: `gitChangesSave(sessionId,
-  repoRelativePath, content)`, not `saveFileForPanel`. The renderer never holds
-  an absolute path for a Changes row.
+  repoRelativePath, content, version)`, not `saveFileForPanel`. The renderer
+  never holds an absolute path for a Changes row, and the version token is what
+  stops it overwriting a file the session has written in the meantime.
+
+`ViewerPanel`'s own protections have Changes-panel equivalents rather than
+reuses, for the same reason: watching goes through `git-changes-watch` instead
+of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
+lives on the tab instead of the component.
 
 `Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
 the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts
@@ -107,6 +113,17 @@ its own (on its container).
 The merge-view CSS in `public/style.css` is written for two hosts in one rule
 list — `#file-panel-body` (MCP tab) and `#changes-diff-host` (Changes tab).
 A new host means a new selector in those groups, not a copied block.
+
+`createMergeViewer`'s `b` side and `createUnifiedMergeViewer` carry the editing
+extensions a writing surface needs — `history()` (Ctrl/Cmd+Z), `defaultKeymap`,
+`indentWithTab`, `indentOnInput`, `drawSelection` — and `cmSaveKeymap`, which is
+what turns Ctrl/Cmd+S into the `cm-save` event the panels listen for. A
+read-only viewer gets `cmSaveDomHandler` instead; an editable one must not have
+both, or one keystroke raises two saves. `createUnifiedMergeViewer` takes
+`{mergeControls}`: the MCP diff tab keeps the per-chunk Accept/Reject buttons,
+the Changes panel turns them off. `test/codemirror-merge-editing.test.js`
+drives all of this against the real CodeMirror under jsdom — a stub that
+dispatches `cm-save` itself proves nothing about the keymap.
 
 ## Gotchas
 

@@ -44,8 +44,17 @@ On a local session, the open file is a live editor, not a picture of a diff. Typ
 - **Save** with the Save button or `Ctrl/Cmd+S`. The file list refreshes on save, so the row's counts follow what you wrote.
 - The button next to Back cycles three views: **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right), **Inline** (one column, changes marked in place) and **Plain** (just the file, no diff decoration). The choice is remembered.
 - The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
-- If the session writes to files while you have unsaved edits, the list refreshes but your buffer is left alone, with a note that the view may be out of date. Nothing you typed is thrown away without you.
-- A remote session, a binary file, and a file over 2 MB stay read-only, and the panel says which of those it is.
+- A remote session, a binary file, a file that is not UTF-8 text, and a file over 2 MB stay read-only, and the panel says which of those it is.
+
+### When the session writes the same file
+
+The session you are watching writes these files, so the panel assumes it is not the only writer.
+
+- While the file is open it is watched. If the session writes it and **your buffer has no unsaved edits**, the editor reloads to what is now on disk.
+- If you **do** have unsaved edits, your buffer is left exactly as it is and the panel says the file changed on disk. **Reload** replaces it with the version on disk — it asks first, because that discards what you typed.
+- A save of a file that changed since you opened it is **refused**, not merged and not forced: the panel tells you to reload first, and the session's work stays on disk. Saving again after a reload writes normally.
+- Back, closing the tab and closing the panel all ask before discarding unsaved edits.
+- Line endings are preserved: a CRLF file is still CRLF after you save it, so a save with no edits leaves git with nothing to report.
 
 ## A shell under the list
 
@@ -58,8 +67,9 @@ sets how much room each gets. Local sessions only — see
 
 ## What it doesn't do
 
-- No staging, committing, or reverting from the UI — you can type in it, but it is not a git client.
+- No staging, committing, or reverting from the UI — you can type in it, but it is not a git client. Inline mode deliberately has no per-change accept/reject buttons.
 - No creating, deleting or renaming files, and no editing on a remote session.
+- Nothing under `.git/`, and no symbolic links.
 - It doesn't replace the CLI's `/diff` pane in a non-IDE session; the two coexist.
 - IDE mode itself is not available for remote sessions (that's a separate, larger feature — an `ssh -R` tunnel plus a lock file on the host); Changes does not depend on it and works today for both local and remote sessions.
 
