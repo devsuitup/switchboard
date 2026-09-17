@@ -31,16 +31,64 @@ function rig() {
 
 const allowAll = () => true;
 
+// The predicate stands in for isAllowedMemoryPath: containment in an allowed
+// root, not an exact match on one file. The guard asks it about the project
+// root as well as the file, since the two are no longer the same branch of
+// the filesystem once a schedule is symlinked in.
+const allowUnder = (root) => (p) => {
+  const real = fs.realpathSync(root);
+  return p === real || p.startsWith(real + path.sep);
+};
+
 test('resolveRunNowTarget: accepts a schedule-*.md file inside a project .claude/commands dir that is allowed', () => {
   const r = rig();
   try {
     const filePath = path.join(r.commandsDir, 'schedule-nightly.md');
     fs.writeFileSync(filePath, '---\nname: nightly\n---\ndo the thing');
-    const isPathAllowed = (p) => p === fs.realpathSync(filePath);
-    const out = resolveRunNowTarget(filePath, isPathAllowed);
+    const out = resolveRunNowTarget(filePath, allowUnder(r.projectPath));
     assert.equal(out.ok, true);
     assert.equal(out.realPath, fs.realpathSync(filePath));
     assert.equal(out.projectPath, fs.realpathSync(r.projectPath));
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: accepts a schedule linked in from outside the project, and roots the run at the listing project', (t) => {
+  const r = rig();
+  try {
+    // The shape a versioned dotfiles setup produces: the schedule file lives
+    // in a repo somewhere else on disk, and the project's .claude/commands
+    // holds a symlink to it. Both the link's target and the project root are
+    // inside the allowed root here (a repo checked out under the workspace),
+    // which is what makes it different from the escaping case below.
+    const repoDir = path.join(r.projectPath, 'dotfiles', 'switchboard');
+    fs.mkdirSync(repoDir, { recursive: true });
+    const realFile = path.join(repoDir, 'schedule-audit.md');
+    fs.writeFileSync(realFile, '---\nname: audit\ncron: 17 12 * * 1\n---\naudit the memory');
+
+    const linkPath = path.join(r.commandsDir, 'schedule-audit.md');
+    try { fs.symlinkSync(realFile, linkPath, 'file'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const out = resolveRunNowTarget(linkPath, allowUnder(r.projectPath));
+    assert.equal(out.ok, true, out.error);
+    assert.equal(out.realPath, fs.realpathSync(realFile), 'the file read is the link target');
+    assert.equal(out.projectPath, fs.realpathSync(r.projectPath),
+      'the run is rooted at the project whose .claude/commands lists it, not at the repo the file happens to live in');
+  } finally { r.cleanup(); }
+});
+
+test('resolveRunNowTarget: refuses a schedule whose project root is not allowed, even when the file itself is', () => {
+  const r = rig();
+  try {
+    const filePath = path.join(r.commandsDir, 'schedule-nightly.md');
+    fs.writeFileSync(filePath, '---\nname: nightly\n---\ndo the thing');
+    // The file passes, the project the run would be spawned in does not: the
+    // cwd of the spawn is its own thing to allowlist, not something to infer
+    // from the file once the two can live apart.
+    const isPathAllowed = (p) => p === fs.realpathSync(filePath);
+    const out = resolveRunNowTarget(filePath, isPathAllowed);
+    assert.equal(out.ok, false);
+    assert.equal(out.error, 'path not allowed');
   } finally { r.cleanup(); }
 });
 
