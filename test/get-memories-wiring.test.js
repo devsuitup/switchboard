@@ -28,7 +28,11 @@ test('get-memories: every listing goes through the shared acceptance rule', () =
   // The project-root files are looked up by name, the rest by directory scan.
   // Both must end up in acceptMdFile — a second hand-rolled lookup beside it is
   // how the gate came to be missing from the root files in the first place.
-  assert.match(handler, /acceptMdFile\(/, 'the project-root files must go through acceptMdFile');
+  // Asserted as the whole assignment, not just a call somewhere in the handler:
+  // `null && acceptMdFile(fp, isAllowed)` stops listing the root files entirely
+  // and still contains the call.
+  assert.match(handler, /const accepted = acceptMdFile\(fp, isAllowed\);/,
+    'the project-root files must go through acceptMdFile, unconditionally');
   assert.doesNotMatch(handler, /existsSync\([^)]*\bfp\b/,
     'a by-name lookup must not probe the file itself — acceptMdFile owns that');
 });
