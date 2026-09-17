@@ -147,6 +147,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | IPC | Guard | Kind |
 |---|---|---|
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
+| `get-memories` (the list, and the FTS bodies it indexes) | `scanMdFiles` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | `isSensitivePath` | disk-resolved denylist |
 | `delete-worktree` / `worktree-status` | `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
 | `delete-session-preview` / `delete-session` | `resolveDeletionTargets` (`delete-session-target.js`) | disk-resolved containment |

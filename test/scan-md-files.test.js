@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const { spawnSync } = require('child_process');
 
 const { scanMdFiles } = require('../scan-md-files');
 
@@ -33,11 +34,15 @@ function symlink(target, linkPath, t) {
 
 const names = (files) => files.map(f => f.filename).sort();
 
-test('scanMdFiles: lists plain .md files and ignores other extensions', () => {
+test('scanMdFiles: lists plain .md files and ignores every other extension, including ones containing .md', () => {
   const r = rig();
   try {
     fs.writeFileSync(path.join(r.dir, 'CLAUDE.md'), 'hello');
     fs.writeFileSync(path.join(r.dir, 'notes.txt'), 'hello');
+    // '.md' as a substring rather than a suffix: an editor backup and an MDX
+    // file are not Markdown notes this list should carry.
+    fs.writeFileSync(path.join(r.dir, 'notes.md.bak'), 'hello');
+    fs.writeFileSync(path.join(r.dir, 'README.mdx'), 'hello');
     assert.deepEqual(names(scanMdFiles(r.dir)), ['CLAUDE.md']);
   } finally { r.cleanup(); }
 });
@@ -45,7 +50,11 @@ test('scanMdFiles: lists plain .md files and ignores other extensions', () => {
 test('scanMdFiles: lists a .md file that is a symlink to a file kept outside the directory', (t) => {
   const r = rig();
   try {
-    const real = path.join(r.elsewhere, 'schedule-audit.md');
+    // Deliberately different names at the two ends: the renderer decides
+    // whether to draw the "run now" play button from the *listed* name
+    // (memory-workfiles-view.js keys on filename.startsWith('schedule-')), so a
+    // scan that reported the target's name would move that button.
+    const real = path.join(r.elsewhere, 'audit.md');
     fs.writeFileSync(real, '---\ncron: 0 9 * * 1\n---\naudit');
     const link = path.join(r.dir, 'schedule-audit.md');
     if (!symlink(real, link, t)) return;
@@ -55,7 +64,9 @@ test('scanMdFiles: lists a .md file that is a symlink to a file kept outside the
     // The link's own path is what the renderer shows and hands back to
     // read-memory / run-schedule-now — not the target it resolves to.
     assert.equal(files[0].filePath, link);
-    assert.ok(!Number.isNaN(Date.parse(files[0].modified)));
+    // computeIndexSignature and the project sort both parse this back.
+    assert.match(files[0].modified, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.equal(files[0].modified, fs.statSync(real).mtime.toISOString());
   } finally { r.cleanup(); }
 });
 
@@ -94,6 +105,66 @@ test('scanMdFiles: skips empty and whitespace-only files, including through a sy
     if (!symlink(real, path.join(r.dir, 'also-empty.md'), t)) return;
 
     assert.deepEqual(names(scanMdFiles(r.dir)), []);
+  } finally { r.cleanup(); }
+});
+
+test('scanMdFiles: skips a symlink to a FIFO instead of blocking forever on it', (t) => {
+  const r = rig();
+  try {
+    // readFileSync on a FIFO with no writer never returns, and this scan runs
+    // synchronously inside an ipcMain.handle — a hang here is the whole
+    // Electron main process, with no way back. stat() on a FIFO does not
+    // block, so resolving the entry first is what keeps the read unreachable.
+    // A regression here shows up as a suite that hangs rather than one that
+    // goes red: the block is synchronous, so no test timeout can interrupt it.
+    const fifo = path.join(r.elsewhere, 'pipe.md');
+    const mk = spawnSync('mkfifo', [fifo]);
+    if (mk.error || mk.status !== 0) return t.skip('mkfifo unavailable on this machine');
+    if (!symlink(fifo, path.join(r.dir, 'linked.md'), t)) return;
+    fs.writeFileSync(path.join(r.dir, 'real.md'), 'still here');
+
+    assert.deepEqual(names(scanMdFiles(r.dir)), ['real.md']);
+  } finally { r.cleanup(); }
+});
+
+test('scanMdFiles: refuses a link to a credential location even when the allowlist would accept it', (t) => {
+  const r = rig();
+  try {
+    // The denylist is not the caller's to choose: a cloned repository added as
+    // a project carries its own .ssh/.env, which containment in an allowed root
+    // says nothing about. Reading one here would put its content in the FTS
+    // index, which is searchable by substring.
+    const sshDir = path.join(r.elsewhere, '.ssh');
+    fs.mkdirSync(sshDir, { recursive: true });
+    const key = path.join(sshDir, 'id_rsa.md');
+    fs.writeFileSync(key, '-----BEGIN OPENSSH PRIVATE KEY-----');
+    if (!symlink(key, path.join(r.dir, 'notes.md'), t)) return;
+    fs.writeFileSync(path.join(r.dir, 'ordinary.md'), 'an ordinary note');
+
+    // allowAll: only the denylist can refuse it here.
+    assert.deepEqual(names(scanMdFiles(r.dir, () => true)), ['ordinary.md']);
+  } finally { r.cleanup(); }
+});
+
+test('scanMdFiles: a file the caller\'s allowlist refuses is not listed', (t) => {
+  const r = rig();
+  try {
+    // The list feeds readers that apply this allowlist before opening a file
+    // (read-memory, save-memory) and an FTS indexer that reads the body with no
+    // guard at all. Listing a file the allowlist refuses puts its content in
+    // the search index while the panel that displays it stays empty.
+    const outside = path.join(r.elsewhere, 'creds.md');
+    fs.writeFileSync(outside, 'SECRET=value');
+    if (!symlink(outside, path.join(r.dir, 'notes.md'), t)) return;
+    fs.writeFileSync(path.join(r.dir, 'allowed.md'), 'ordinary note');
+
+    const allowed = (fp) => {
+      const real = fs.realpathSync(fp);
+      return real === r.dir || real.startsWith(r.dir + path.sep);
+    };
+    assert.deepEqual(names(scanMdFiles(r.dir, allowed)), ['allowed.md']);
+    // Without a predicate the scan lists both — the allowlist is the caller's.
+    assert.deepEqual(names(scanMdFiles(r.dir)), ['allowed.md', 'notes.md']);
   } finally { r.cleanup(); }
 });
 

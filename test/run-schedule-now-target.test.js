@@ -99,6 +99,36 @@ test('resolveRunNowTarget: a project reached through a symlinked ancestor is roo
   } finally { r.cleanup(); }
 });
 
+test('resolveRunNowTarget: a schedule linked between two known projects reads one and roots the run in the other', (t) => {
+  const r = rig();
+  try {
+    // The file and the cwd are resolved and allowlisted independently, so when
+    // both land in allowed roots they may legitimately be different roots: the
+    // bytes come from projB, the run belongs to projA because projA's
+    // .claude/commands is what lists it. Pinned so it is not "fixed" either way
+    // by accident — see .ai/contexts/schedule-runner.md.
+    const projB = path.join(r.root, 'project-b');
+    const bCommands = path.join(projB, '.claude', 'commands');
+    fs.mkdirSync(bCommands, { recursive: true });
+    const realFile = path.join(bCommands, 'schedule-shared.md');
+    fs.writeFileSync(realFile, '---\nname: shared\n---\nrun the shared task');
+
+    const linkPath = path.join(r.commandsDir, 'schedule-shared.md');
+    try { fs.symlinkSync(realFile, linkPath, 'file'); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+
+    const bothKnown = (p) => [r.projectPath, projB].some((root) => {
+      const real = fs.realpathSync(root);
+      return p === real || p.startsWith(real + path.sep);
+    });
+
+    const out = resolveRunNowTarget(linkPath, bothKnown);
+    assert.equal(out.ok, true, out.error);
+    assert.equal(out.realPath, fs.realpathSync(realFile), 'content comes from project B');
+    assert.equal(out.projectPath, fs.realpathSync(r.projectPath), 'cwd is project A, which lists it');
+  } finally { r.cleanup(); }
+});
+
 test('resolveRunNowTarget: refuses a link whose target is not itself named schedule-*.md, however the link is named', (t) => {
   const r = rig();
   try {
