@@ -1781,9 +1781,8 @@ ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, u
 // filePath is a repo-relative path, resolved and contained main-side — see .ai/contexts/changes-view.md ("Editing a changed file")
 ipcMain.handle('git-changes-file', async (_event, sessionId, filePath, opts) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
-  const target = resolveGitChangesTarget(sessionId);
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
   if (!target.ok) return target;
-  if (target.kind !== 'local') return { ok: false, error: 'editing is not available for a remote session', reason: 'remote' };
   try {
     return await gitChangesFile.readChangesFile({
       cwd: target.cwd,
@@ -1798,9 +1797,8 @@ ipcMain.handle('git-changes-file', async (_event, sessionId, filePath, opts) => 
 
 ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
-  const target = resolveGitChangesTarget(sessionId);
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
   if (!target.ok) return target;
-  if (target.kind !== 'local') return { ok: false, error: 'editing is not available for a remote session', reason: 'remote' };
   try {
     const result = await gitChangesFile.writeChangesFile({
       cwd: target.cwd,

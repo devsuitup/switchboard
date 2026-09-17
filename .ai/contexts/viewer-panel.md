@@ -78,8 +78,35 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 `public/file-panel.js`'s side panel gained a third tab type, `'changes'`,
 alongside the pre-existing `'file'` and `'diff'` (MCP) types on the same
 per-session `filePanelState`. Full design (why it skips `ViewerPanel`, the
-entry point, the no-polling refresh trigger): `.ai/contexts/changes-view.md`.
+entry point, the no-polling refresh trigger, editing): `.ai/contexts/changes-view.md`.
 User-facing behavior: `docs/changes-view.md`.
+
+A local session's selected file is edited in one of the same CodeMirror views
+this component builds its own editors from — `createMergeViewer` (default),
+`createUnifiedMergeViewer` or `createEditableViewer`, picked by a three-way
+mode button and persisted under `localStorage.changesDiffMode` (the MCP diff
+tab's `filePanelDiffMode` is a separate key with a separate meaning). Three
+things about that editor are not `ViewerPanel`'s:
+
+- **The tab owns the instance, not the panel.** It lives on `tab.editorView`
+  the way the MCP `'diff'` tab's does, keyed by path + staged + mode, and a
+  re-render reuses it instead of rebuilding — the Changes tab re-renders on
+  every busy→idle edge, which would otherwise land on the user's cursor.
+  `destroyCurrentTab()` and `closeChangesDiff()` are what end its life.
+- **Reading the buffer back is asymmetric.** A side-by-side `MergeView` is read
+  from `view.b.state.doc`, the inline and plain views from `view.state.doc` —
+  the same asymmetry `handleDiffAction` already navigates for the MCP tab.
+- **The save is an IPC by session, not by path**: `gitChangesSave(sessionId,
+  repoRelativePath, content)`, not `saveFileForPanel`. The renderer never holds
+  an absolute path for a Changes row.
+
+`Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
+the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts
+its own (on its container).
+
+The merge-view CSS in `public/style.css` is written for two hosts in one rule
+list — `#file-panel-body` (MCP tab) and `#changes-diff-host` (Changes tab).
+A new host means a new selector in those groups, not a copied block.
 
 ## Gotchas
 

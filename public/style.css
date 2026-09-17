@@ -4411,18 +4411,23 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.10);
 }
 
-#file-panel-body {
+/* Editor hosts: the MCP diff tab and the Changes panel's editable diff share
+   every rule below — a merge view looks the same wherever it is mounted. */
+#file-panel-body,
+#changes-diff-host {
   flex: 1;
   min-height: 0;
   position: relative;
   overflow: hidden;
 }
 
-#file-panel-body .cm-editor {
+#file-panel-body .cm-editor,
+#changes-diff-host .cm-editor {
   height: 100%;
 }
 
-#file-panel-body .cm-merge-view {
+#file-panel-body .cm-merge-view,
+#changes-diff-host .cm-merge-view {
   height: 100%;
   overflow: auto;
   font-size: 12.5px;
@@ -4430,18 +4435,24 @@ body { display: flex; flex-direction: column; }
 
 /* Diff line backgrounds */
 #file-panel-body .cm-merge-a .cm-changedLine,
-#file-panel-body .cm-deletedChunk {
+#file-panel-body .cm-deletedChunk,
+#changes-diff-host .cm-merge-a .cm-changedLine,
+#changes-diff-host .cm-deletedChunk {
   background-color: rgba(248, 81, 73, 0.12) !important;
 }
-#file-panel-body .cm-merge-b .cm-changedLine {
+#file-panel-body .cm-merge-b .cm-changedLine,
+#changes-diff-host .cm-merge-b .cm-changedLine {
   background-color: rgba(63, 185, 80, 0.12) !important;
 }
 /* Inner word-level change highlighting (replace underlines with backgrounds) */
 #file-panel-body .cm-merge-a .cm-changedText,
-#file-panel-body .cm-deletedChunk .cm-deletedText {
+#file-panel-body .cm-deletedChunk .cm-deletedText,
+#changes-diff-host .cm-merge-a .cm-changedText,
+#changes-diff-host .cm-deletedChunk .cm-deletedText {
   background: rgba(248, 81, 73, 0.35) !important;
 }
-#file-panel-body .cm-merge-b .cm-changedText {
+#file-panel-body .cm-merge-b .cm-changedText,
+#changes-diff-host .cm-merge-b .cm-changedText {
   background: rgba(63, 185, 80, 0.35) !important;
 }
 
@@ -4653,6 +4664,26 @@ body { display: flex; flex-direction: column; }
   font-size: 11px;
   color: #9090a8;
   border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+#changes-diff-notice {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #9090a8;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+#changes-diff-notice.changes-error {
+  color: #e05070;
+}
+
+#changes-diff-host {
+  display: flex;
+  flex-direction: column;
+}
+
+#changes-diff-host .changes-diff-body {
+  min-height: 0;
 }
 
 /* --- Diagnostics: activity trace --- */

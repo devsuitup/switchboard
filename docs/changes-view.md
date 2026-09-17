@@ -1,6 +1,6 @@
 # Changes View
 
-**Changes** is a read-only, git-status-sourced view of a session's working tree, shown in the same right-hand side panel as [IDE Emulation](ide-emulation.md)'s file/diff tabs. It exists because IDE-mode sessions never get the CLI's own `/diff` pane — Switchboard impersonates the IDE, and the IDE protocol never pushes "these files changed", only per-file diffs at permission time. A remote session shows `/diff` inside its terminal, but that view scrolls away with the session and isn't clickable from Switchboard. Changes gives both kinds the same panel.
+**Changes** is a git-status-sourced view of a session's working tree — and, for a local session, an editor for the files in it — shown in the same right-hand side panel as [IDE Emulation](ide-emulation.md)'s file/diff tabs. It exists because IDE-mode sessions never get the CLI's own `/diff` pane — Switchboard impersonates the IDE, and the IDE protocol never pushes "these files changed", only per-file diffs at permission time. A remote session shows `/diff` inside its terminal, but that view scrolls away with the session and isn't clickable from Switchboard. Changes gives both kinds the same panel.
 
 ## Opening it
 
@@ -10,7 +10,7 @@ Click the **Changes** button in the terminal header, next to the stop button. Cl
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
 - One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts.
-- Clicking a row opens a read-only diff for that file, including an untracked one — a brand-new file shows up as an all-additions diff. A binary file shows a one-line note instead of its bytes.
+- Clicking a row opens that file's diff, including an untracked one — a brand-new file shows up as an all-additions diff. A binary file shows a one-line note instead of its bytes.
 - A brand-new directory is listed file by file, not as a single folder row.
 - A **Refresh** button for a manual pull.
 
@@ -37,6 +37,16 @@ refresh (and one ssh round-trip each, for a remote session), which a repo with a
 large untracked tree would feel. Refreshing resets them, since the files may
 have changed since.
 
+## Editing a file
+
+On a local session, the open file is a live editor, not a picture of a diff. Type on the right-hand side and the diff recomputes as you go.
+
+- **Save** with the Save button or `Ctrl/Cmd+S`. The file list refreshes on save, so the row's counts follow what you wrote.
+- The button next to Back cycles three views: **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right), **Inline** (one column, changes marked in place) and **Plain** (just the file, no diff decoration). The choice is remembered.
+- The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
+- If the session writes to files while you have unsaved edits, the list refreshes but your buffer is left alone, with a note that the view may be out of date. Nothing you typed is thrown away without you.
+- A remote session, a binary file, and a file over 2 MB stay read-only, and the panel says which of those it is.
+
 ## A shell under the list
 
 **Shell** in the terminal header opens a shell in the same panel, below the
@@ -48,7 +58,8 @@ sets how much room each gets. Local sessions only — see
 
 ## What it doesn't do
 
-- No staging, committing, or reverting from the UI — this is a viewer, not a git client.
+- No staging, committing, or reverting from the UI — you can type in it, but it is not a git client.
+- No creating, deleting or renaming files, and no editing on a remote session.
 - It doesn't replace the CLI's `/diff` pane in a non-IDE session; the two coexist.
 - IDE mode itself is not available for remote sessions (that's a separate, larger feature — an `ssh -R` tunnel plus a lock file on the host); Changes does not depend on it and works today for both local and remote sessions.
 

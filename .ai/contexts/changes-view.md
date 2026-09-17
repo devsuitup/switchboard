@@ -1,8 +1,9 @@
 # Context: changes-view
 
-**Purpose**: A read-only, git-status-sourced view of a session's working
-tree, in the same right-hand file panel IDE Emulation already uses — for
-local and remote sessions alike. Issue #251. User-facing behavior:
+**Purpose**: A git-status-sourced view of a session's working tree, in the
+same right-hand file panel IDE Emulation already uses — for local and remote
+sessions alike, and editable in place on a local one. Issue #251.
+User-facing behavior:
 `docs/changes-view.md`. IPC names and the path-guard table entry:
 `.ai/contexts/ipc-bridge.md` ("Changes panel"). The panel's tab-type
 integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
@@ -424,9 +425,30 @@ the only one.
 
 `file-panel.js` references `onSessionIdle` even though `session-activity.js` loads *after* it in `index.html` — safe because the reference lives inside `initFilePanel()`'s body, which only runs once `app.js` (the last script) calls it, by which point every script has already evaluated. Same reasoning `.ai/contexts/session-state.md` documents for `session-activity-dom.js`'s own out-of-order cross-file references.
 
-## Renderer: why not `ViewerPanel` for the diff
+## Renderer: two ways to show a file
 
-`public/file-panel.js`'s Changes mode is a third tab type (`'changes'`), alongside the pre-existing `'file'` and `'diff'` (MCP) types, on the same per-session `filePanelState` — opening one replaces whatever the other was showing. It does not route the diff through `ViewerPanel`'s CodeMirror editor or the MCP diff tab's merge-view: both expect an old/new content pair, and a `git diff` result is a unified-diff text blob. The bundled CodeMirror also has no diff/patch language mode to color it with. The fallback is deliberately plain: one `<div class="changes-diff-line">` per line, classed by its `+`/`-`/`@@` prefix (`classifyDiffLine()`), set via `textContent` (no HTML injection risk from diff content, which can contain arbitrary user code).
+`public/file-panel.js`'s Changes mode is a third tab type (`'changes'`), alongside the pre-existing `'file'` and `'diff'` (MCP) types, on the same per-session `filePanelState`. Opening one replaces whatever the other was showing. It does not route anything through `ViewerPanel`, which owns one file and one path; a Changes tab owns a list, a selection, and a session.
+
+A **local** session's selected file is a live editor over the content pair from `git-changes-file` — `createMergeViewer` (side-by-side, original read-only on the left, working tree editable on the right), `createUnifiedMergeViewer` (inline) or `createEditableViewer` (plain, no diff decoration), cycled by one button and persisted under `localStorage.changesDiffMode`. CodeMirror recomputes the diff on every keystroke by construction, so "live update" is a property of using the merge view at all, not a feature built on top of it.
+
+A **remote** session, and any file the main process refuses to open for editing (binary, over the cap, outside the repository), fall back to the unified-diff text from `git-changes-diff`: one `<div class="changes-diff-line">` per line, classed by its `+`/`-`/`@@` prefix (`classifyDiffLine()`), set via `textContent` (no HTML injection risk from diff content, which can contain arbitrary user code). The bundled CodeMirror has no diff/patch language mode to colour that blob with, which is why the fallback is deliberately plain. The panel says which of the two it is in, in its notice line, and the refusal's `reason` is what that line reports.
+
+### The render path is not a teardown
+
+The Changes tab re-renders on every busy→idle edge (see "Refresh triggers"), so a render that rebuilt its own DOM would destroy the editor under the user's cursor and discard unsaved edits once per turn the session finishes. Two rules prevent that:
+
+- The diff view's chrome — title, Back, mode button, Save, notice line, editor host — is **built once**, in `initFilePanel()`. A render updates text and visibility; it never clears `#changes-diff-view`.
+- The editor instance lives on the tab (`tab.editorView`, keyed by `tab.editorKey` = path + staged, and `tab.editorMode`) and is **reused** whenever those still match. It is destroyed on Back, on closing the tab, on a mode change, and when a clean buffer is reloaded — nowhere else. `destroyCurrentTab()` carries a `'changes'` branch for the same reason the `'diff'` branch exists.
+
+Both are pinned by tests that go red if a render clears the host (a `MutationObserver` on the host records zero child mutations across an idle refresh) or rebuilds the instance.
+
+### A dirty buffer is never overwritten
+
+An idle refresh reloads the file list unconditionally — the counts must follow what the session did. The open editor is a different matter: when its content differs from the last content known on disk (`tab.savedContent`), the refresh does **not** re-read the file and does not touch the buffer. It marks the tab stale, and the notice line says the view may be out of date while the unsaved edits are kept. A clean buffer is re-read, and replaced only when the content actually differs.
+
+Saving is `gitChangesSave(sessionId, path, content)` from the Save button or from the `cm-save` event the bundle dispatches for `Cmd/Ctrl+S`; on success it refreshes the status so the row's counts follow the write. The buffer is read back from `view.b.state.doc` for side-by-side and from `view.state.doc` for inline and plain — the same asymmetry the MCP diff tab navigates.
+
+An untracked file's added-line count comes from the pair rather than a second git call: its original side is empty, so its additions are its own lines (`countAddedLines`). The read-only fallback still takes the count from the diff (`countNewFileDiffAdditions`).
 
 ## What's untested for remote
 

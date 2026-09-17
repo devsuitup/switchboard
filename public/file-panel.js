@@ -39,6 +39,11 @@ let changesSummaryEl = null;
 let changesListEl = null;
 let changesDiffEl = null;
 let changesToggleBtn = null;
+let changesDiffTitleEl = null;
+let changesDiffModeBtn = null;
+let changesDiffSaveBtn = null;
+let changesDiffNoticeEl = null;
+let changesDiffHostEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
 const MAX_CHANGES_ROWS = 500;
@@ -49,6 +54,13 @@ const MIN_PANEL_WIDTH = 280;
 
 const DIFF_MODE_KEY = 'filePanelDiffMode';
 let diffMode = localStorage.getItem(DIFF_MODE_KEY) || 'side-by-side';
+
+const CHANGES_DIFF_MODE_KEY = 'changesDiffMode';
+const CHANGES_DIFF_MODES = ['side-by-side', 'inline', 'plain'];
+const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side', inline: 'Inline', plain: 'Plain' };
+let changesDiffMode = CHANGES_DIFF_MODES.includes(localStorage.getItem(CHANGES_DIFF_MODE_KEY))
+  ? localStorage.getItem(CHANGES_DIFF_MODE_KEY)
+  : 'side-by-side';
 
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -141,7 +153,7 @@ function initFilePanel() {
   diffActionsEl.style.display = 'none';
   diffContainer.appendChild(diffActionsEl);
 
-  // ── Changes mode (issue #251, git-status-sourced, read-only) ──
+  // ── Changes mode (issue #251, git-status-sourced) ──
   changesContainerEl = document.createElement('div');
   changesContainerEl.id = 'file-panel-changes';
   changesContainerEl.style.display = 'none';
@@ -196,6 +208,7 @@ function initFilePanel() {
   changesDiffEl.style.display = 'none';
   changesContainerEl.appendChild(changesDiffEl);
 
+  buildChangesDiffChrome();
   // Shell region below every tab type — see .ai/contexts/panel-terminal.md
   if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
 
@@ -232,6 +245,9 @@ function handleClose() {
     if (tab.type === 'diff' && tab.editorView) {
       tab.editorView.destroy();
       tab.editorView = null;
+    }
+    if (tab.type === 'changes') {
+      destroyChangesEditor(tab);
     }
     if (tab.type === 'file') {
       fpViewerPanel.destroy();
@@ -386,6 +402,9 @@ function destroyCurrentTab(state) {
       delete diffBodyEl._cmSearchBar;
       delete diffBodyEl._cmGotoLine;
     }
+  }
+  if (tab.type === 'changes') {
+    destroyChangesEditor(tab);
   }
   if (tab.type === 'file') {
     fpViewerPanel.destroy();
@@ -624,11 +643,23 @@ function openChangesTab(sessionId) {
     loading: true,
     error: null,
     data: null,
+    remote: false,
     selectedFile: null,
     diffLoading: false,
     diffError: null,
     diffContent: null,
     diffTruncated: false,
+    editable: false,
+    original: null,
+    current: null,
+    savedContent: null,
+    editorView: null,
+    editorKey: null,
+    editorMode: null,
+    editorPending: null,
+    fallbackReason: null,
+    saveError: null,
+    stale: false,
   };
   state.panelVisible = true;
 
@@ -660,7 +691,35 @@ async function refreshChanges(sessionId) {
   } else {
     tab.error = null;
     tab.data = result;
+    tab.remote = result.kind === 'remote';
   }
+  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+  return syncOpenChangesFile(sessionId, tab);
+}
+
+// A refresh may never replace what the user is typing into — see .ai/contexts/changes-view.md
+async function syncOpenChangesFile(sessionId, tab) {
+  if (!tab.selectedFile || !tab.editable || !tab.editorView) return;
+
+  if (isChangesBufferDirty(tab)) {
+    tab.stale = true;
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
+  }
+
+  const file = tab.selectedFile;
+  const result = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+
+  const stillState = filePanelState.get(sessionId);
+  if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
+  if (isChangesBufferDirty(tab)) return;
+  if (!result || result.ok === false) return;
+  if (result.current === tab.current && result.original === tab.original) return;
+
+  tab.original = result.original;
+  tab.current = result.current;
+  tab.savedContent = result.current;
+  destroyChangesEditor(tab);
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
 
@@ -674,9 +733,36 @@ async function openChangesDiff(sessionId, file) {
   tab.diffContent = null;
   tab.diffTruncated = false;
   const dataAtRequest = tab.data;
+  tab.editable = false;
+  tab.original = null;
+  tab.current = null;
+  tab.savedContent = null;
+  tab.fallbackReason = null;
+  tab.saveError = null;
+  tab.stale = false;
+  destroyChangesEditor(tab);
 
   tab.diffLoading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+
+  if (!tab.remote) {
+    const pair = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+
+    const pairState = filePanelState.get(sessionId);
+    if (!pairState || pairState.currentTab !== tab || tab.selectedFile !== file) return;
+
+    if (pair && pair.ok) {
+      tab.diffLoading = false;
+      tab.editable = true;
+      tab.original = pair.original;
+      tab.current = pair.current;
+      tab.savedContent = pair.current;
+      if (file.untracked) applyUntrackedCounts(tab, file.path, countAddedLines(pair.current), 0);
+      if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+      return;
+    }
+    tab.fallbackReason = describeFallback(pair);
+  }
 
   const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged, file.untracked);
 
@@ -692,6 +778,20 @@ async function openChangesDiff(sessionId, file) {
     if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+function describeFallback(pair) {
+  if (!pair) return 'this file could not be opened for editing';
+  if (pair.reason === 'binary') return 'binary file';
+  if (pair.reason === 'too-large') return 'file too large to edit';
+  return pair.error || 'this file could not be opened for editing';
+}
+
+function countAddedLines(content) {
+  if (!content) return 0;
+  const lines = content.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
 }
 
 // Untracked counts arrive with the diff, not with status — see .ai/contexts/changes-view.md
@@ -716,9 +816,18 @@ function applyUntrackedCounts(tab, expectedData, filePath, added, deleted) {
 function closeChangesDiff(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
-  state.currentTab.selectedFile = null;
-  state.currentTab.diffContent = null;
-  state.currentTab.diffError = null;
+  const tab = state.currentTab;
+  destroyChangesEditor(tab);
+  tab.selectedFile = null;
+  tab.diffContent = null;
+  tab.diffError = null;
+  tab.editable = false;
+  tab.original = null;
+  tab.current = null;
+  tab.savedContent = null;
+  tab.fallbackReason = null;
+  tab.saveError = null;
+  tab.stale = false;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
 
@@ -826,31 +935,79 @@ function buildChangesFileRow(sessionId, file) {
   return row;
 }
 
-function renderChangesDiff(sessionId, tab) {
-  changesDiffEl.innerHTML = '';
-
+// Built once: a render must never tear the open editor down — see .ai/contexts/changes-view.md
+function buildChangesDiffChrome() {
   const header = document.createElement('div');
   header.className = 'viewer-toolbar';
 
   const info = document.createElement('div');
   info.className = 'viewer-toolbar-info';
-  const titleEl = document.createElement('span');
-  titleEl.className = 'viewer-toolbar-title';
-  titleEl.textContent = tab.selectedFile.path;
-  info.appendChild(titleEl);
+  changesDiffTitleEl = document.createElement('span');
+  changesDiffTitleEl.className = 'viewer-toolbar-title';
+  changesDiffTitleEl.id = 'changes-diff-path';
+  info.appendChild(changesDiffTitleEl);
   header.appendChild(info);
 
   const controls = document.createElement('div');
   controls.className = 'viewer-toolbar-controls';
+
   const backBtn = document.createElement('button');
   backBtn.className = 'fp-toolbar-btn';
   backBtn.textContent = 'Back';
-  backBtn.addEventListener('click', () => closeChangesDiff(sessionId));
+  backBtn.addEventListener('click', () => {
+    if (currentPanelSessionId) closeChangesDiff(currentPanelSessionId);
+  });
   controls.appendChild(backBtn);
-  header.appendChild(controls);
 
+  changesDiffModeBtn = document.createElement('button');
+  changesDiffModeBtn.className = 'fp-toolbar-btn';
+  changesDiffModeBtn.id = 'changes-diff-mode-btn';
+  changesDiffModeBtn.addEventListener('click', handleChangesDiffModeToggle);
+  controls.appendChild(changesDiffModeBtn);
+
+  changesDiffSaveBtn = document.createElement('button');
+  changesDiffSaveBtn.className = 'fp-toolbar-btn fp-save-btn';
+  changesDiffSaveBtn.id = 'changes-diff-save-btn';
+  changesDiffSaveBtn.textContent = 'Save';
+  changesDiffSaveBtn.title = 'Save this file (Ctrl/Cmd+S)';
+  changesDiffSaveBtn.addEventListener('click', () => {
+    if (currentPanelSessionId) handleChangesSave(currentPanelSessionId);
+  });
+  controls.appendChild(changesDiffSaveBtn);
+
+  header.appendChild(controls);
   changesDiffEl.appendChild(header);
 
+  changesDiffNoticeEl = document.createElement('div');
+  changesDiffNoticeEl.id = 'changes-diff-notice';
+  changesDiffNoticeEl.style.display = 'none';
+  changesDiffEl.appendChild(changesDiffNoticeEl);
+
+  changesDiffHostEl = document.createElement('div');
+  changesDiffHostEl.id = 'changes-diff-host';
+  changesDiffEl.appendChild(changesDiffHostEl);
+
+  changesDiffEl.addEventListener('cm-save', () => {
+    if (currentPanelSessionId) handleChangesSave(currentPanelSessionId);
+  });
+}
+
+function renderChangesDiff(sessionId, tab) {
+  changesDiffTitleEl.textContent = tab.selectedFile.path;
+
+  changesDiffModeBtn.style.display = tab.editable ? '' : 'none';
+  changesDiffModeBtn.textContent = CHANGES_DIFF_MODE_LABELS[changesDiffMode];
+  changesDiffModeBtn.title = 'Diff view mode — click to cycle';
+  changesDiffSaveBtn.style.display = tab.editable ? '' : 'none';
+
+  renderChangesNotice(tab);
+
+  if (tab.editable) {
+    ensureChangesEditor(sessionId, tab);
+    return;
+  }
+
+  destroyChangesEditor(tab);
   const body = document.createElement('pre');
   body.className = 'changes-diff-body';
 
@@ -864,14 +1021,138 @@ function renderChangesDiff(sessionId, tab) {
   } else {
     renderDiffLines(body, tab.diffContent);
   }
-  changesDiffEl.appendChild(body);
 
-  if (tab.diffTruncated) {
-    const note = document.createElement('div');
-    note.className = 'changes-diff-truncated';
-    note.textContent = 'Diff truncated at 512 KB.';
-    changesDiffEl.appendChild(note);
+  changesDiffHostEl.innerHTML = '';
+  changesDiffHostEl.appendChild(body);
+}
+
+function renderChangesNotice(tab) {
+  const notes = [];
+  if (tab.remote) notes.push('Remote session — read-only.');
+  if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
+  if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
+  if (tab.stale) notes.push('This session changed files while you were editing — your unsaved edits are kept, the diff may be out of date.');
+  if (tab.saveError) notes.push(`Save failed: ${tab.saveError}`);
+
+  changesDiffNoticeEl.textContent = notes.join(' ');
+  changesDiffNoticeEl.style.display = notes.length ? '' : 'none';
+  changesDiffNoticeEl.classList.toggle('changes-error', !!tab.saveError);
+  changesDiffNoticeEl.classList.toggle('changes-diff-truncated', !tab.saveError);
+}
+
+// see .ai/contexts/changes-view.md ("The render path is not a teardown")
+function ensureChangesEditor(sessionId, tab) {
+  const key = changesEditorKey(tab);
+  if (tab.editorView && tab.editorKey === key && tab.editorMode === changesDiffMode) {
+    if (tab.editorView.dom.parentNode !== changesDiffHostEl) changesDiffHostEl.appendChild(tab.editorView.dom);
+    return;
   }
+  if (tab.editorPending === key + ' ' + changesDiffMode) return;
+
+  destroyChangesEditor(tab);
+  changesDiffHostEl.innerHTML = '';
+
+  const token = key + ' ' + changesDiffMode;
+  const mode = changesDiffMode;
+  tab.editorPending = token;
+
+  window.loadCodeMirrorBundle().then(() => {
+    const state = filePanelState.get(sessionId);
+    if (!state || state.currentTab !== tab || tab.editorPending !== token) return;
+    tab.editorPending = null;
+    if (!tab.selectedFile || !tab.editable) return;
+
+    const filename = tab.selectedFile.path;
+    if (mode === 'plain') {
+      tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename);
+    } else if (mode === 'inline') {
+      tab.editorView = window.createUnifiedMergeViewer(changesDiffHostEl, tab.original, tab.current, filename);
+    } else {
+      tab.editorView = window.createMergeViewer(changesDiffHostEl, tab.original, tab.current, filename);
+    }
+    tab.editorKey = key;
+    tab.editorMode = mode;
+  }).catch((err) => {
+    tab.editorPending = null;
+    console.error('[file-panel] Failed to load codemirror-bundle:', err);
+  });
+}
+
+function changesEditorKey(tab) {
+  const file = tab.selectedFile;
+  return file ? file.path + ' ' + (file.staged ? '1' : '0') : '';
+}
+
+function destroyChangesEditor(tab) {
+  tab.editorPending = null;
+  if (!tab.editorView) return;
+  try { tab.editorView.destroy(); } catch {}
+  tab.editorView = null;
+  tab.editorKey = null;
+  tab.editorMode = null;
+  if (changesDiffHostEl) {
+    delete changesDiffHostEl._cmSearchBar;
+    delete changesDiffHostEl._cmGotoLine;
+  }
+}
+
+// see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten")
+function readChangesEditorContent(tab) {
+  const view = tab.editorView;
+  if (!view) return null;
+  if (tab.editorMode === 'side-by-side') {
+    return view.b ? view.b.state.doc.toString() : null;
+  }
+  return view.state ? view.state.doc.toString() : null;
+}
+
+function isChangesBufferDirty(tab) {
+  const content = readChangesEditorContent(tab);
+  return content != null && content !== tab.savedContent;
+}
+
+function handleChangesDiffModeToggle() {
+  const next = (CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length;
+  changesDiffMode = CHANGES_DIFF_MODES[next];
+  localStorage.setItem(CHANGES_DIFF_MODE_KEY, changesDiffMode);
+
+  if (!currentPanelSessionId) return;
+  const state = filePanelState.get(currentPanelSessionId);
+  const tab = state && state.currentTab;
+  if (!tab || tab.type !== 'changes') return;
+
+  const pending = readChangesEditorContent(tab);
+  if (pending != null) tab.current = pending;
+  destroyChangesEditor(tab);
+  renderPanel(currentPanelSessionId);
+}
+
+async function handleChangesSave(sessionId) {
+  const state = filePanelState.get(sessionId);
+  const tab = state && state.currentTab;
+  if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile) return;
+
+  const content = readChangesEditorContent(tab);
+  if (content == null) return;
+
+  const file = tab.selectedFile;
+  const result = await window.api.gitChangesSave(sessionId, file.path, content);
+
+  const stillState = filePanelState.get(sessionId);
+  if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
+
+  if (!result || result.ok === false) {
+    tab.saveError = (result && result.error) || 'failed to save';
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
+  }
+
+  tab.saveError = null;
+  tab.stale = false;
+  tab.current = content;
+  tab.savedContent = content;
+  if (typeof window.flashButtonText === 'function') window.flashButtonText(changesDiffSaveBtn, 'Saved!');
+  return refreshChanges(sessionId);
 }
 
 // see .ai/contexts/changes-view.md ("why not ViewerPanel for the diff")

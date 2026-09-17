@@ -88,6 +88,15 @@ function resolveTargetInsideRepo(repoRoot, relPath, deps) {
   return { ok: true, path: real, size: stat.size, repoRoot: realRoot };
 }
 
+// There is no file-write path to a remote host anywhere in this app — see .ai/contexts/changes-view.md
+function requireLocalTarget(target) {
+  if (!target || target.ok !== true) return target;
+  if (target.kind !== 'local') {
+    return { ok: false, error: 'editing is not available for a remote session', reason: 'remote' };
+  }
+  return target;
+}
+
 async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   const fs = deps.fs || realFs;
   if (!isSafeRevPathOperand(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
@@ -141,6 +150,7 @@ async function writeChangesFile({ cwd, relPath, content, maxBytes }, deps = {}) 
 module.exports = {
   readChangesFile,
   writeChangesFile,
+  requireLocalTarget,
   resolveTargetInsideRepo,
   resolveRepoRoot,
   isSafeRepoRelativePath,

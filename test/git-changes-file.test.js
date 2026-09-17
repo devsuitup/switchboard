@@ -12,6 +12,7 @@ const {
   isSafeRepoRelativePath,
   isSafeRevPathOperand,
   buildBlobRev,
+  requireLocalTarget,
 } = require('../git-changes-file');
 
 const ADVERSARIAL = [
@@ -58,6 +59,19 @@ test('isSafeRevPathOperand rejects the `:<n>:<path>` stage syntax that isSafeRep
   assert.equal(isSafeRepoRelativePath('1:f.txt'), true, 'a file literally named "1:f.txt" is a legal filesystem path');
   assert.equal(isSafeRevPathOperand('1:f.txt'), false);
   assert.equal(isSafeRevPathOperand('23:f.txt'), false);
+});
+
+test('requireLocalTarget refuses a remote session and passes a local one through (mutation target: the remote-write refusal)', () => {
+  const remote = requireLocalTarget({ ok: true, kind: 'remote', alias: 'box', cwd: '/srv/app' });
+  assert.equal(remote.ok, false);
+  assert.equal(remote.reason, 'remote');
+  assert.ok(!('cwd' in remote), 'a refused target hands back no working directory');
+
+  const local = { ok: true, kind: 'local', cwd: '/home/u/repo' };
+  assert.equal(requireLocalTarget(local), local);
+
+  const unresolved = { ok: false, error: 'invalid session id' };
+  assert.equal(requireLocalTarget(unresolved), unresolved, 'an unresolved target keeps its own error');
 });
 
 test('buildBlobRev names the index for the unstaged view and HEAD for the staged one', () => {

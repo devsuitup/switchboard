@@ -40,6 +40,7 @@ function evalInWindow(dom, file) {
 function makeStatusResult(overrides = {}) {
   return {
     ok: true,
+    kind: 'local',
     branch: { head: 'main', upstream: 'origin/main', ahead: 1, behind: 0 },
     files: [
       { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
@@ -50,11 +51,36 @@ function makeStatusResult(overrides = {}) {
   };
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl } = {}) {
+const DEFAULT_PAIR = { ok: true, original: 'old\n', current: 'new\n', binary: false, truncated: false };
+
+// A stand-in for a CodeMirror view: it owns a DOM node, reports a document
+// the test can rewrite (typing), and records its own destruction — enough for
+// the reuse, dirty-buffer and save paths, none of the bundle.
+function makeEditorStub(window, mode, doc, created) {
+  const dom = window.document.createElement('div');
+  dom.className = 'fake-editor fake-editor-' + mode;
+  const box = { text: doc, destroyed: false, mode };
+  const docSide = { state: { doc: { toString: () => box.text } } };
+  const view = {
+    dom,
+    box,
+    destroy() {
+      box.destroyed = true;
+      if (dom.parentNode) dom.parentNode.removeChild(dom);
+    },
+  };
+  if (mode === 'side-by-side') view.b = docSide;
+  else view.state = docSide.state;
+  created.push(view);
+  return view;
+}
+
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [] };
+  const calls = { status: [], diff: [], file: [], save: [] };
+  const editors = [];
 
   window.api = {
     onMcpOpenDiff: () => {},
@@ -69,6 +95,36 @@ function setupFilePanelDom({ statusImpl, diffImpl } = {}) {
       calls.diff.push({ sessionId, filePath, staged, untracked });
       return Promise.resolve((diffImpl || (() => ({ ok: true, content: '@@ -1 +1 @@\n-old\n+new\n context\n', truncated: false })))(sessionId, filePath, staged, untracked));
     },
+    gitChangesFile: (sessionId, filePath, opts) => {
+      calls.file.push({ sessionId, filePath, staged: !!(opts && opts.staged) });
+      return Promise.resolve((fileImpl || (() => DEFAULT_PAIR))(sessionId, filePath, opts));
+    },
+    gitChangesSave: (sessionId, filePath, content) => {
+      calls.save.push({ sessionId, filePath, content });
+      return Promise.resolve((saveImpl || (() => ({ ok: true })))(sessionId, filePath, content));
+    },
+  };
+
+  // file-panel.js defers every editor to the lazy bundle loader; the suite
+  // stands in for both the loader and the factories it would provide.
+  window.loadCodeMirrorBundle = () => Promise.resolve();
+  window.createMergeViewer = (parent, original, modified, filename) => {
+    const view = makeEditorStub(window, 'side-by-side', modified, editors);
+    view.opened = { original, modified, filename };
+    parent.appendChild(view.dom);
+    return view;
+  };
+  window.createUnifiedMergeViewer = (parent, original, modified, filename) => {
+    const view = makeEditorStub(window, 'inline', modified, editors);
+    view.opened = { original, modified, filename };
+    parent.appendChild(view.dom);
+    return view;
+  };
+  window.createEditableViewer = (parent, content, filename) => {
+    const view = makeEditorStub(window, 'plain', content, editors);
+    view.opened = { original: null, modified: content, filename };
+    parent.appendChild(view.dom);
+    return view;
   };
 
   Object.defineProperty(window, 'ViewerPanel', {
@@ -92,14 +148,33 @@ function setupFilePanelDom({ statusImpl, diffImpl } = {}) {
     window,
     document: window.document,
     calls,
+    editors,
     setActivity: read('setActivity'),
     destroy: () => window.close(),
   };
 }
 
 function flush() {
-  // Two microtask turns: one for the IPC promise, one for whatever chains off it.
-  return Promise.resolve().then(() => Promise.resolve());
+  // Four microtask turns: the status IPC, the content-pair IPC chained off it,
+  // the bundle loader, and whatever chains off that.
+  return Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve()).then(() => Promise.resolve());
+}
+
+function clickRow(ctx, filePath) {
+  ctx.document.querySelector(`.changes-file-row[data-path="${filePath}"]`)
+    .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+}
+
+function backBtn(ctx) {
+  return Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find((b) => b.textContent === 'Back');
+}
+
+async function openFile(ctx, sessionId, filePath) {
+  ctx.window.switchPanel(sessionId);
+  await ctx.window.openChangesTab(sessionId);
+  await flush();
+  clickRow(ctx, filePath);
+  await flush();
 }
 
 // --- Rendering ---------------------------------------------------------
@@ -141,8 +216,10 @@ test('an error from gitChangesStatus renders as an error message, not a crash', 
   } finally { ctx.destroy(); }
 });
 
-test('clicking a file row opens a read-only diff colored by line prefix', async () => {
-  const ctx = setupFilePanelDom();
+const REMOTE_STATUS = () => makeStatusResult({ kind: 'remote' });
+
+test('clicking a file row on a remote session opens a read-only diff colored by line prefix', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: REMOTE_STATUS });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -152,6 +229,7 @@ test('clicking a file row opens a read-only diff colored by line prefix', async 
     row.dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
     await flush();
 
+    assert.equal(ctx.calls.file.length, 0, 'a remote session never asks for an editable content pair');
     assert.equal(ctx.calls.diff.length, 1);
     assert.deepEqual(ctx.calls.diff[0], { sessionId: 's1', filePath: 'src/a.js', staged: true, untracked: false });
 
@@ -179,7 +257,7 @@ const UNTRACKED_DIFF_RESULT = {
 };
 
 test('clicking an untracked file fetches its diff like any other row, flagged untracked (mutation target: the old short-circuit)', async () => {
-  const ctx = setupFilePanelDom({ diffImpl: () => UNTRACKED_DIFF_RESULT });
+  const ctx = setupFilePanelDom({ statusImpl: REMOTE_STATUS, diffImpl: () => UNTRACKED_DIFF_RESULT });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -202,7 +280,7 @@ test('clicking an untracked file fetches its diff like any other row, flagged un
 });
 
 test('an untracked file\'s counts and the header totals pick up the additions its diff reported', async () => {
-  const ctx = setupFilePanelDom({ diffImpl: () => UNTRACKED_DIFF_RESULT });
+  const ctx = setupFilePanelDom({ statusImpl: REMOTE_STATUS, diffImpl: () => UNTRACKED_DIFF_RESULT });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -230,7 +308,10 @@ test('an untracked file\'s counts and the header totals pick up the additions it
 
 test('an untracked binary file keeps null counts — the row stays countless and the totals do not move', async () => {
   const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null };
-  const ctx = setupFilePanelDom({ diffImpl: () => binary });
+  const ctx = setupFilePanelDom({
+    fileImpl: () => ({ ok: false, error: 'binary file', reason: 'binary' }),
+    diffImpl: () => binary,
+  });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -348,7 +429,10 @@ test('the row list is capped, with a note for the remainder (mutation target: re
 });
 
 test('a failed untracked diff surfaces the error and leaves the counts alone', async () => {
-  const ctx = setupFilePanelDom({ diffImpl: () => ({ ok: false, error: 'fatal: bad thing' }) });
+  const ctx = setupFilePanelDom({
+    fileImpl: () => ({ ok: false, error: 'fatal: bad thing', reason: 'repo' }),
+    diffImpl: () => ({ ok: false, error: 'fatal: bad thing' }),
+  });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -511,6 +595,274 @@ test('the Changes header button opens and closes the tab for the active session'
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
 
     btn.click();
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+  } finally { ctx.destroy(); }
+});
+
+// --- Editing in place ----------------------------------------------------
+
+test('a local changed file opens in an editable diff over the content pair, with Save and the mode toggle', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    assert.deepEqual(ctx.calls.file, [{ sessionId: 's1', filePath: 'src/a.js', staged: true }]);
+    assert.equal(ctx.calls.diff.length, 0, 'the editable path does not also fetch a unified diff');
+
+    assert.equal(ctx.editors.length, 1);
+    assert.deepEqual(ctx.editors[0].opened, { original: 'old\n', modified: 'new\n', filename: 'src/a.js' });
+    assert.equal(ctx.editors[0].box.mode, 'side-by-side', 'the default mode');
+    assert.ok(ctx.document.querySelector('#changes-diff-host .fake-editor'), 'the editor is mounted in the diff host');
+    assert.equal(ctx.document.querySelector('.changes-diff-body'), null, 'no inert diff text alongside the editor');
+
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, '');
+    assert.equal(ctx.document.getElementById('changes-diff-mode-btn').style.display, '');
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('a remote session keeps the read-only renderer and offers no Save button (mutation target: the remote-write refusal)', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: REMOTE_STATUS });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    assert.equal(ctx.editors.length, 0, 'a remote session never builds an editor');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, 'none');
+    assert.equal(ctx.document.getElementById('changes-diff-mode-btn').style.display, 'none');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Remote session — read-only/);
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    ctx.document.getElementById('changes-diff-view').dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
+    await flush();
+    assert.deepEqual(ctx.calls.save, [], 'neither the button nor Ctrl+S may write to a remote host');
+  } finally { ctx.destroy(); }
+});
+
+test('a file the main process refuses to open for editing falls back to the read-only diff and says which limit it hit', async () => {
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: false, error: 'file too large to edit', reason: 'too-large' }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    assert.equal(ctx.editors.length, 0);
+    assert.equal(ctx.calls.diff.length, 1, 'the read-only diff is the fallback');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /file too large to edit/);
+    assert.ok(ctx.document.querySelector('.changes-diff-add'), 'the unified diff still renders');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('an idle refresh with the same file open reuses the editor instead of rebuilding it (mutation target: tearing the render down every time)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const editor = ctx.editors[0];
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.status.length, 2, 'the file list still refreshes');
+    assert.equal(ctx.editors.length, 1, 'no second editor was built');
+    assert.equal(editor.box.destroyed, false, 'the editor under the cursor survives the refresh');
+    assert.equal(ctx.document.querySelector('#changes-diff-host .fake-editor'), editor.dom, 'and stays mounted');
+  } finally { ctx.destroy(); }
+});
+
+test('an idle refresh does not detach the editor from the DOM either (mutation target: clearing the host on every render)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const host = ctx.document.getElementById('changes-diff-host');
+
+    const records = [];
+    const observer = new ctx.window.MutationObserver((list) => records.push(...list));
+    observer.observe(host, { childList: true });
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    await flush();
+
+    observer.disconnect();
+    assert.deepEqual(records, [], 'the editor node is neither removed nor re-inserted — a detach loses focus and scroll');
+  } finally { ctx.destroy(); }
+});
+
+test('an idle refresh leaves a dirty buffer alone and says it may be out of date (mutation target: the dirty-buffer guard)', async () => {
+  let current = 'new\n';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const editor = ctx.editors[0];
+
+    editor.box.text = 'typed by the user\n';
+    current = 'written by the session\n';
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.file.length, 1, 'a dirty buffer is never re-read from disk');
+    assert.equal(ctx.editors.length, 1);
+    assert.equal(editor.box.destroyed, false);
+    assert.equal(editor.box.text, 'typed by the user\n', 'the unsaved edit survives');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /out of date/);
+  } finally { ctx.destroy(); }
+});
+
+test('an idle refresh does reload a clean buffer when the file changed underneath', async () => {
+  let current = 'new\n';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const first = ctx.editors[0];
+
+    current = 'written by the session\n';
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.file.length, 2);
+    assert.equal(ctx.editors.length, 2, 'a clean buffer picks up the new content');
+    assert.equal(first.box.destroyed, true);
+    assert.equal(ctx.editors[1].opened.modified, 'written by the session\n');
+  } finally { ctx.destroy(); }
+});
+
+test('Save writes the edited buffer through git-changes-save and refreshes the status so the counts follow', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'edited\n';
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited\n' }]);
+    assert.equal(ctx.calls.status.length, 2, 'the row counts are re-read after a save');
+    assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('Ctrl/Cmd+S from the editor saves the same way the button does', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'edited by keyboard\n';
+
+    ctx.editors[0].dom.dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
+    await flush();
+
+    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited by keyboard\n' }]);
+  } finally { ctx.destroy(); }
+});
+
+test('a refused save surfaces the reason and keeps the buffer', async () => {
+  const ctx = setupFilePanelDom({ saveImpl: () => ({ ok: false, error: 'path resolves outside the repository', reason: 'outside' }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'edited\n';
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Save failed: path resolves outside the repository/);
+    assert.equal(ctx.editors.length, 1);
+    assert.equal(ctx.editors[0].box.text, 'edited\n');
+    assert.equal(ctx.calls.status.length, 1, 'a failed save must not claim the tree changed');
+  } finally { ctx.destroy(); }
+});
+
+test('the mode toggle cycles side-by-side → inline → plain, persists under its own key, and carries unsaved edits over', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'edited\n';
+
+    const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
+    assert.equal(modeBtn.textContent, 'Side-by-side');
+
+    modeBtn.click();
+    await flush();
+    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'inline');
+    assert.equal(ctx.window.localStorage.getItem('filePanelDiffMode'), null, 'the MCP diff tab keeps its own key');
+    assert.equal(ctx.editors[1].box.mode, 'inline');
+    assert.equal(ctx.editors[1].opened.modified, 'edited\n', 'an unsaved edit is carried into the new view');
+
+    modeBtn.click();
+    await flush();
+    assert.equal(ctx.editors[2].box.mode, 'plain');
+    assert.equal(ctx.editors[2].opened.original, null, 'plain mode is the file, with no diff decoration');
+
+    modeBtn.click();
+    await flush();
+    assert.equal(ctx.editors[3].box.mode, 'side-by-side');
+    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'side-by-side');
+  } finally { ctx.destroy(); }
+});
+
+test('an inline editor is read back from the view itself, a side-by-side one from its right-hand side', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    const sideBySide = ctx.editors[0];
+    assert.ok(sideBySide.b, 'the side-by-side view edits its b side');
+    sideBySide.box.text = 'from the b side\n';
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+    assert.equal(ctx.calls.save[0].content, 'from the b side\n');
+
+    ctx.document.getElementById('changes-diff-mode-btn').click();
+    await flush();
+    const inline = ctx.editors[ctx.editors.length - 1];
+    assert.equal(inline.b, undefined, 'the inline view has no b side');
+    inline.box.text = 'from the single view\n';
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+    assert.equal(ctx.calls.save[1].content, 'from the single view\n');
+  } finally { ctx.destroy(); }
+});
+
+test('an untracked local file opens with an empty original and its own lines as the added count', async () => {
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: '', current: 'first\nsecond\n' }) });
+  try {
+    await openFile(ctx, 's1', 'new.txt');
+
+    assert.deepEqual(ctx.calls.file, [{ sessionId: 's1', filePath: 'new.txt', staged: false }]);
+    assert.equal(ctx.editors[0].opened.original, '');
+
+    backBtn(ctx).click();
+    const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(counts.textContent, '+2−0');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+5 −1/);
+  } finally { ctx.destroy(); }
+});
+
+test('closing the panel and going back to the list both destroy the editor (mutation target: a leaked view)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    backBtn(ctx).click();
+    assert.equal(ctx.editors[0].box.destroyed, true, 'Back destroys the editor');
+    assert.equal(ctx.document.querySelector('#changes-diff-host .fake-editor'), null);
+
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    assert.equal(ctx.editors.length, 2);
+
+    ctx.document.getElementById('changes-toggle-btn').click();
+    assert.equal(ctx.editors[1].box.destroyed, true, 'closing the tab destroys the editor');
+  } finally { ctx.destroy(); }
+});
+
+test('the panel close button destroys the editor too', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+    assert.equal(ctx.editors[0].box.destroyed, true);
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
   } finally { ctx.destroy(); }
 });

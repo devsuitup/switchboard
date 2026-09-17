@@ -321,6 +321,33 @@ test('real git: a save refuses every adversarial path shape and writes nothing (
   } finally { cleanup(tmp); }
 });
 
+// The guard resolves the target once; the write must run on that value and not
+// on a second resolution of the same string — see .ai/contexts/changes-view.md.
+test('real git: the save writes the path the guard returned, not a re-derived join (mutation target: re-resolving after the check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, 'real'));
+    fs.writeFileSync(path.join(repoDir, 'real', 'f.txt'), 'before\n');
+    fs.symlinkSync(path.join(repoDir, 'real'), path.join(repoDir, 'link'));
+
+    const written = [];
+    const fakeFs = {
+      statSync: (p) => fs.statSync(p),
+      writeFileSync: (p, content, enc) => { written.push(p); fs.writeFileSync(p, content, enc); },
+    };
+
+    const result = await writeChangesFile(
+      { cwd: repoDir, relPath: 'link/f.txt', content: 'after\n', maxBytes: MAX_BYTES },
+      { fs: fakeFs },
+    );
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(written, [path.join(repoDir, 'real', 'f.txt')], 'the symlink-free path from the guard, not repo/link/f.txt');
+    assert.equal(fs.readFileSync(path.join(repoDir, 'real', 'f.txt'), 'utf8'), 'after\n');
+  } finally { cleanup(tmp); }
+});
+
 test('real git: a save refuses content over the cap and non-string content', async () => {
   const tmp = mkTmp();
   try {
