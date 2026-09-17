@@ -37,9 +37,10 @@ extra)`) is the pre-existing plain-terminal path, unchanged.
 
 **Local sessions only.** `open-terminal`'s remote branch only ever *attaches* to
 an existing tmux target; there is no path to spawn a new remote shell.
-`resolvePanelTerminalCwd` refuses a `kind: 'remote'` target, the renderer shows
-that refusal as the region's message, and no terminal is mounted. The message
-text comes from the main process, so there is one wording, not two.
+`resolvePanelTerminalCwd` refuses a `kind: 'remote'` target and the renderer
+shows that refusal in the region, with no terminal mounted. The message text
+comes from the main process, so there is one wording, not two. What the refusal
+has to do to be *visible* is in "The refusal" below.
 
 The spawned session carries `panelFor`, which `isPanelShellSession(session)`
 reads. It *is* listed by `get-active-sessions`, which is what puts it in the
@@ -72,8 +73,11 @@ holds ids and nothing else.
    to an invisible terminal — the exact failure it exists to prevent. Both are
    now `.terminal-container:not(.panel-terminal)`, and re-widening either turns
    a test red. `hideGridView`'s blanket `suspendTerminalWebgl` is the same root
-   cause: it skips a mounted panel shell, which no `showSession` would ever
-   restore.
+   cause, and needs both halves: it **skips a mounted** panel shell, which
+   nothing would ever remount and therefore nothing would restore; an
+   **unmounted** one is suspended like any other invisible terminal and gets its
+   context back in `mountPanelTerminal`, which is where `showSession`'s
+   `restoreTerminalWebgl` call has its equivalent for a panel shell.
 3. **Hidden-write exemption.** `isHiddenSingleViewSession()` returns true for
    any id that is not `activeSessionId` outside grid mode, and such a session
    gets zero `terminal.write()` calls (output accumulates for replay). A
@@ -106,11 +110,19 @@ stacking at the top.
 Height persists in `localStorage.panelTerminalHeight` (alongside
 `filePanelWidth`), floor 80 px, ceiling `#file-panel-content`'s height minus
 the 120 px the content above keeps and the handle's own 5 px (that height
-includes both, so neither can be left out of the subtraction). The ceiling is
-applied at every point the height is *used*, not just while dragging — a
-height stored by a maximised window would otherwise collapse the content above
-it on a short one. Those points are the drag, `showPanelTerminalRegion` (every
-mount) and a window `resize`, each followed by a refit when the height moved.
+includes both, so neither can be left out of the subtraction).
+
+The ceiling applies at every point the height is *used* — the drag,
+`showPanelTerminalRegion` (every mount) and a window `resize` — because a
+height chosen on a maximised window would otherwise collapse the content above
+it on a short one. It applies **to the display only**:
+`panelTerminalDesiredHeight` holds what the user asked for and no clamp ever
+writes to it, so a transient shrink (resize, a round trip while the panel
+happens to be short, devtools opening) gives the height back when the space
+returns. Clamping the value already on the element instead would ratchet the
+region down to its 80 px floor, one shrink at a time, with no way back but
+another drag. The only writer of the desired height is a finished drag, which
+records what the drag actually reached rather than where the pointer went.
 
 `refitOpenTerminals()` refits only the active session in single view, and the
 per-entry `ResizeObserver` covers geometry changes at an 80 ms debounce. The
@@ -145,19 +157,40 @@ the owner by scanning the (at most a handful of) states and clears it, so the
 map, the Shell button and the region can never be left pointing at a terminal
 that no longer exists.
 
-**Spawn races.** `openPanelTerminal` awaits `open-terminal`, and both things
-that can happen during that await are handled: a close is detected after the
-await (`panelTerminals.get(owner) !== state`) and stops the PTY the awaited
-call has by then created, rather than trusting the `stopSession` the close
-already fired against an id the main process did not know yet; and a re-open is
-refused while `panelSpawnsInFlight` holds the owner, because a second
-`open-terminal` for the same stable id lands on main's *reattach* branch and
-would resurrect the shell the close is killing.
+**Spawn races.** `openPanelTerminal` awaits `open-terminal`, and everything that
+can happen during that await is handled: a close is detected after the await
+(`panelTerminals.get(owner) !== state`) and stops the PTY the awaited call has
+by then created, rather than trusting the `stopSession` the close already fired
+against an id the main process did not know yet; a re-open is not started while
+`panelSpawnsInFlight` holds the owner, because a second `open-terminal` for the
+same stable id lands on main's *reattach* branch and would resurrect the shell
+the close is killing — it is remembered in `panelReopenAfterSpawn` and run once
+the close has settled, so a click inside that one-IPC window is honoured
+instead of vanishing.
 
-One ordering constraint falls out of that hook: `openPanelTerminal` clears a
-leftover terminal under the panel id **before** registering the new state.
-`destroySession` calls `destroyPanelTerminalFor`, which would otherwise read
-the state just registered and tear it straight back down.
+**The ordering rule: clear, then register.** `destroySession` calls
+`destroyPanelTerminalFor`, which resolves the shell's own id back to its owner
+and deletes that owner's state. So any code that tears a shell down and then
+wants a state to exist must register it *afterwards*. Both places obey it:
+`openPanelTerminal` clears a leftover terminal before `panelTerminals.set`, and
+`showPanelTerminalRefusal` destroys the terminal before registering the error
+state. Doing either the other way round deletes the state that was just
+written, and `resyncPanel` then closes the panel around it.
+
+## The refusal
+
+A refusal is a state in `panelTerminals` with `error` set and no terminal. It
+is what makes the panel open (`panelTerminalIsOpen` is what `hidePanel`
+consults), which is the only way the message is on screen at all: without it
+the panel is `width: 0`, `overflow: hidden`, and a message painted into the
+region is perfectly invisible. Tests for it assert the panel is `.open` with a
+non-zero width, not that a node inside it has `display: block`.
+
+It is deliberately **transient**: `unmountPanelTerminal` deletes an error state
+instead of unmounting it, so the refusal describes the click that produced it
+and not a standing condition. Leaving the session clears it; one click on Shell
+dismisses it; it never pins the panel open for a session the user has moved
+on from.
 
 **LRU.** `lruEvictOne()` skips ids in `activePtyIds` and any entry that is not
 `closed`, so a live panel shell is doubly protected: its PTY is listed by

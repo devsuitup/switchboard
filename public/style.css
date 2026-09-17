@@ -4367,8 +4367,6 @@ body { display: flex; flex-direction: column; }
   display: none;
   height: 4px;
   flex-shrink: 0;
-  /* With no tab open the flexible children above are display:none, so the
-     region would otherwise stack at the top of the panel. */
   margin-top: auto;
   cursor: row-resize;
   background: transparent;

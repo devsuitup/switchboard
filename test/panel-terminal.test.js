@@ -27,6 +27,11 @@ function setupPanel(extra = {}) {
   return ctx;
 }
 
+// Let an awaited continuation (and anything it chains) run.
+async function microtasks(n = 4) {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 function mouse(window, type, clientY) {
   return new window.MouseEvent(type, { clientY, bubbles: true, cancelable: true });
 }
@@ -227,17 +232,48 @@ test('destroying a session destroys its panel shell with it', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('a refused spawn shows the reason and mounts no terminal', async () => {
+// The refusal is the whole point of resolving the cwd in the main process, so
+// these assert what the user can see, not a style property on a node that may
+// be sitting inside a closed, zero-width panel.
+test('a refused spawn is visible: the panel opens on the reason, with no terminal', async () => {
   const ctx = setupPanel({ openTerminal: () => ({ ok: false, error: 'a remote session cannot host a panel shell' }) });
   try {
     const { window, document } = ctx;
     await window.togglePanelTerminal('owner');
 
-    assert.equal(window.openSessions.has('panel:owner'), false, 'no terminal is left behind');
-    assert.equal(document.querySelectorAll('#panel-terminal-region .terminal-container').length, 0);
+    const panel = document.getElementById('file-panel');
+    assert.ok(panel.classList.contains('open'), 'the panel must be open for the reason to be readable');
+    assert.notEqual(panel.style.width, '0px');
+    assert.ok(document.getElementById('panel-terminal-region').classList.contains('open'));
+
     const message = document.getElementById('panel-terminal-message');
     assert.equal(message.style.display, 'block');
     assert.match(message.textContent, /remote session cannot host a panel shell/);
+
+    assert.equal(window.openSessions.has('panel:owner'), false, 'no terminal is left behind');
+    assert.equal(document.querySelectorAll('#panel-terminal-region .terminal-container').length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a refusal is dismissed by the Shell button and does not outlive the session', async () => {
+  const ctx = setupPanel({ openTerminal: () => ({ ok: false, error: 'a remote session cannot host a panel shell' }) });
+  try {
+    const { window, document } = ctx;
+    const panel = document.getElementById('file-panel');
+
+    await window.togglePanelTerminal('owner');
+    window.togglePanelTerminal('owner'); // one click closes it again
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(ctx.inCtx("panelTerminals.has('owner')"), false);
+
+    // And a refusal left on screen does not pin the panel for ever after.
+    await window.togglePanelTerminal('owner');
+    window.switchPanel('other');
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(ctx.inCtx("panelTerminals.has('owner')"), false, 'the refusal describes one click, not a standing state');
+    window.switchPanel('owner');
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(document.getElementById('panel-terminal-region').classList.contains('open'), false);
   } finally { ctx.destroy(); }
 });
 
@@ -293,35 +329,60 @@ test('the region height never drops below the floor', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('the height is re-clamped when the window changes size, not only while dragging', async () => {
+// jsdom lays nothing out, so the panel's own height is declared by the test.
+function setPanelHeight(document, px) {
+  Object.defineProperty(document.getElementById('file-panel-content'), 'clientHeight', { value: px, configurable: true });
+}
+
+test('a shrinking window clamps the region for display and gives the height back', async () => {
   const ctx = setupPanel();
   try {
     const { window, document } = ctx;
     await window.togglePanelTerminal('owner');
     const region = document.getElementById('panel-terminal-region');
-    region.style.height = '900px'; // e.g. restored from a taller window
+    const handle = document.getElementById('panel-terminal-handle');
 
-    // jsdom lays nothing out, so the panel's own height is declared here.
-    Object.defineProperty(document.getElementById('file-panel-content'), 'clientHeight', { value: 300, configurable: true });
+    setPanelHeight(document, 800);
+    handle.dispatchEvent(mouse(window, 'mousedown', 400));
+    document.dispatchEvent(mouse(window, 'mousemove', 220)); // drag up to 400px
+    document.dispatchEvent(mouse(window, 'mouseup', 220));
+    assert.equal(region.style.height, '400px');
+    assert.equal(window.localStorage.getItem('panelTerminalHeight'), '400');
+
+    setPanelHeight(document, 300);
     window.dispatchEvent(new window.Event('resize'));
-
     assert.equal(region.style.height, '175px', 'the ceiling applies outside a drag too');
+
+    setPanelHeight(document, 800);
+    window.dispatchEvent(new window.Event('resize'));
+    assert.equal(region.style.height, '400px', 'a transient shrink must not discard the height the user chose');
   } finally { ctx.destroy(); }
 });
 
-test('showing the region re-clamps a height stored by a taller window', async () => {
+test('a session round trip on a short panel does not ratchet the region down', async () => {
   const ctx = setupPanel();
   try {
     const { window, document } = ctx;
     await window.togglePanelTerminal('owner');
     const region = document.getElementById('panel-terminal-region');
-    region.style.height = '900px';
-    Object.defineProperty(document.getElementById('file-panel-content'), 'clientHeight', { value: 400, configurable: true });
+    const handle = document.getElementById('panel-terminal-handle');
 
+    setPanelHeight(document, 800);
+    handle.dispatchEvent(mouse(window, 'mousedown', 400));
+    document.dispatchEvent(mouse(window, 'mousemove', 220));
+    document.dispatchEvent(mouse(window, 'mouseup', 220));
+    assert.equal(region.style.height, '400px');
+
+    // Leaving and returning while the panel happens to be short — no resize event.
+    setPanelHeight(document, 260);
     window.switchPanel('other');
     window.switchPanel('owner');
+    assert.equal(region.style.height, '135px');
 
-    assert.equal(region.style.height, '275px');
+    setPanelHeight(document, 800);
+    window.switchPanel('other');
+    window.switchPanel('owner');
+    assert.equal(region.style.height, '400px');
   } finally { ctx.destroy(); }
 });
 
@@ -354,6 +415,25 @@ test('a grid round trip leaves the panel shell visible, mounted and GPU-rendered
     window.handleTerminalData('panel:owner', 'after-grid');
     window.flushTerminalBuffer('panel:owner');
     assert.deepEqual(spies.writes, ['after-grid']);
+  } finally { ctx.destroy(); }
+});
+
+test('a shell suspended while unmounted gets its GPU renderer back when it returns', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window } = ctx;
+    await window.togglePanelTerminal('owner');
+    const panelEntry = window.openSessions.get('panel:owner');
+
+    // The ordinary "session switch: kept running" state — unmounted, so the
+    // grid suspends it like any other invisible terminal.
+    window.switchPanel('other');
+    window.showGridView();
+    window.toggleGridView();
+    assert.equal(panelEntry.webglAddon, null);
+
+    window.switchPanel('owner');
+    assert.ok(panelEntry.webglAddon, 'mounting restores the context, the way showSession does for a session');
   } finally { ctx.destroy(); }
 });
 
@@ -415,20 +495,26 @@ test('closing while the spawn is in flight stops the shell that spawn created', 
   } finally { ctx.destroy(); }
 });
 
-test('re-opening while a spawn is in flight does not spawn a second shell', async () => {
-  let settle;
-  const gate = new Promise((resolve) => { settle = resolve; });
-  const ctx = setupPanel({ openTerminal: () => gate });
+test('re-opening while a spawn is in flight waits for the close instead of racing it', async () => {
+  const gates = [];
+  const ctx = setupPanel({ openTerminal: () => new Promise((resolve) => { gates.push(resolve); }) });
   try {
-    const { window, spies } = ctx;
+    const { window, spies, document } = ctx;
     const opening = window.togglePanelTerminal('owner');
     window.togglePanelTerminal('owner'); // close
-    window.togglePanelTerminal('owner'); // and immediately re-open
-    settle({ ok: true });
-    await opening;
+    window.togglePanelTerminal('owner'); // and immediately click Shell again
 
     assert.equal(spies.openTerminal.length, 1,
-      'a second open-terminal would reattach to the PTY the close is killing');
+      'a second open-terminal now would reattach to the PTY the close is killing');
+
+    gates[0]({ ok: true });
+    await microtasks();
+    assert.equal(spies.openTerminal.length, 2, 'the swallowed click is honoured once the close has settled');
+    gates[1]({ ok: true });
+    await opening;
+
+    assert.ok(window.openSessions.has('panel:owner'), 'three clicks end with a shell, not with nothing');
+    assert.ok(document.getElementById('panel-terminal-toggle-btn').classList.contains('active'));
   } finally { ctx.destroy(); }
 });
 

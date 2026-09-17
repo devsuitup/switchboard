@@ -4,6 +4,7 @@
 
 const panelTerminals = new Map(); // ownerSessionId → { panelSessionId, error }
 const panelSpawnsInFlight = new Set(); // ownerSessionIds whose openTerminal has not resolved
+const panelReopenAfterSpawn = new Set(); // owners whose Shell was clicked again mid-close
 
 const PANEL_TERMINAL_ID_PREFIX = 'panel:';
 const PANEL_TERMINAL_HEIGHT_KEY = 'panelTerminalHeight';
@@ -18,6 +19,7 @@ let panelTerminalHandleEl = null;
 let panelTerminalMessageEl = null;
 let panelTerminalToggleBtn = null;
 let panelTerminalOwnerId = null; // the session the panel is currently showing
+let panelTerminalDesiredHeight = 0; // the height the user asked for, before any clamp
 
 function panelTerminalSessionId(ownerSessionId) {
   return PANEL_TERMINAL_ID_PREFIX + ownerSessionId;
@@ -76,7 +78,8 @@ function initPanelTerminal(contentEl) {
   panelTerminalRegionEl = document.createElement('div');
   panelTerminalRegionEl.id = 'panel-terminal-region';
   contentEl.appendChild(panelTerminalRegionEl);
-  setPanelTerminalHeight(storedPanelTerminalHeight());
+  panelTerminalDesiredHeight = storedPanelTerminalHeight();
+  applyPanelTerminalHeight();
 
   panelTerminalMessageEl = document.createElement('div');
   panelTerminalMessageEl.id = 'panel-terminal-message';
@@ -93,7 +96,7 @@ function initPanelTerminal(contentEl) {
 function reclampPanelTerminalHeight() {
   if (!panelTerminalRegionEl || !panelTerminalIsOpen(panelTerminalOwnerId)) return;
   const before = panelTerminalRegionEl.style.height;
-  setPanelTerminalHeight(currentPanelTerminalHeight());
+  applyPanelTerminalHeight();
   if (panelTerminalRegionEl.style.height !== before) refitPanelTerminal();
 }
 
@@ -127,21 +130,26 @@ function updatePanelTerminalToggle() {
 
 function currentPanelTerminalHeight() {
   const styled = parseInt(panelTerminalRegionEl.style.height, 10);
-  return Number.isFinite(styled) ? styled : storedPanelTerminalHeight();
+  return Number.isFinite(styled) ? styled : panelTerminalDesiredHeight;
 }
 
-function setPanelTerminalHeight(height) {
+// see .ai/contexts/panel-terminal.md ("Layout")
+function applyPanelTerminalHeight() {
   const contentHeight = panelTerminalContentEl ? panelTerminalContentEl.clientHeight : 0;
-  panelTerminalRegionEl.style.height = clampPanelTerminalHeight(height, contentHeight) + 'px';
+  panelTerminalRegionEl.style.height = clampPanelTerminalHeight(panelTerminalDesiredHeight, contentHeight) + 'px';
 }
 
 function setupPanelTerminalSplitter() {
   createSplitter(panelTerminalHandleEl, {
     axis: 'y',
     getSize: () => panelTerminalRegionEl.offsetHeight || currentPanelTerminalHeight(),
-    onDrag: (startSize, delta) => setPanelTerminalHeight(startSize - delta),
+    onDrag: (startSize, delta) => {
+      panelTerminalDesiredHeight = Math.max(MIN_PANEL_TERMINAL_HEIGHT, Math.round(startSize - delta));
+      applyPanelTerminalHeight();
+    },
     onCommit: () => {
-      localStorage.setItem(PANEL_TERMINAL_HEIGHT_KEY, String(currentPanelTerminalHeight()));
+      panelTerminalDesiredHeight = currentPanelTerminalHeight();
+      localStorage.setItem(PANEL_TERMINAL_HEIGHT_KEY, String(panelTerminalDesiredHeight));
       refitPanelTerminal();
     },
   });
@@ -159,7 +167,7 @@ function refitPanelTerminal() {
 function showPanelTerminalRegion() {
   panelTerminalRegionEl.classList.add('open');
   panelTerminalHandleEl.classList.add('open');
-  setPanelTerminalHeight(currentPanelTerminalHeight());
+  applyPanelTerminalHeight();
 }
 
 function hidePanelTerminalRegion() {
@@ -182,12 +190,18 @@ function mountPanelTerminal(ownerSessionId) {
   showPanelTerminalRegion();
   panelTerminalMessageEl.style.display = 'none';
   replayHiddenBuffer(state.panelSessionId);
+  restoreTerminalWebgl(state.panelSessionId);
   entry.element.classList.add('visible');
   entry.panelMounted = true;
   fitAndScroll(entry);
 }
 
-function unmountPanelTerminal(state) {
+// see .ai/contexts/panel-terminal.md ("The refusal")
+function unmountPanelTerminal(ownerSessionId, state) {
+  if (state.error) {
+    panelTerminals.delete(ownerSessionId);
+    return;
+  }
   const entry = openSessions.get(state.panelSessionId);
   if (!entry) return;
   entry.element.classList.remove('visible');
@@ -199,7 +213,7 @@ function syncPanelTerminal(sessionId) {
   panelTerminalOwnerId = sessionId || null;
   if (!panelTerminalRegionEl) return;
   for (const [ownerId, state] of panelTerminals) {
-    if (ownerId !== panelTerminalOwnerId) unmountPanelTerminal(state);
+    if (ownerId !== panelTerminalOwnerId) unmountPanelTerminal(ownerId, state);
   }
   updatePanelTerminalToggle();
   if (!panelTerminalIsOpen(panelTerminalOwnerId)) {
@@ -224,19 +238,22 @@ function togglePanelTerminal(ownerSessionId) {
 
 async function openPanelTerminal(ownerSessionId) {
   if (!panelTerminalRegionEl || panelTerminals.has(ownerSessionId)) return;
-  if (panelSpawnsInFlight.has(ownerSessionId)) return;
+  if (panelSpawnsInFlight.has(ownerSessionId)) {
+    panelReopenAfterSpawn.add(ownerSessionId);
+    return;
+  }
+  panelReopenAfterSpawn.delete(ownerSessionId);
   const panelSessionId = panelTerminalSessionId(ownerSessionId);
-  // Cleared before the state exists — see .ai/contexts/panel-terminal.md
+  // see .ai/contexts/panel-terminal.md ("clear, then register")
   if (openSessions.has(panelSessionId)) destroySession(panelSessionId);
 
   const state = { panelSessionId, error: null };
   panelTerminals.set(ownerSessionId, state);
-  if (typeof switchPanel === 'function') switchPanel(ownerSessionId);
+  resyncPanelFor(ownerSessionId);
 
   const owner = (typeof sessionMap !== 'undefined' && sessionMap.get(ownerSessionId)) || null;
   const projectPath = owner ? owner.projectPath : null;
   const session = { sessionId: panelSessionId, projectPath, summary: 'Shell', type: 'terminal' };
-  if (panelTerminalOwnerId === ownerSessionId) showPanelTerminalRegion();
   const entry = createTerminalEntry(session, { mount: panelTerminalRegionEl, panel: true });
   mountPanelTerminal(ownerSessionId);
 
@@ -253,17 +270,25 @@ async function openPanelTerminal(ownerSessionId) {
     // Closed while spawning: the PTY exists now, so stop it now.
     if (result && result.ok) stopPanelShell(panelSessionId);
     else if (openSessions.has(panelSessionId)) destroySession(panelSessionId);
+    if (panelReopenAfterSpawn.delete(ownerSessionId) && panelTerminalOwnerId === ownerSessionId) {
+      return openPanelTerminal(ownerSessionId);
+    }
     return;
   }
   if (!result || !result.ok) {
-    destroySession(panelSessionId);
-    state.error = (result && result.error) || 'could not start a shell for this session';
-    if (panelTerminalOwnerId === ownerSessionId) showPanelTerminalMessage(state.error);
+    showPanelTerminalRefusal(ownerSessionId, (result && result.error) || 'could not start a shell for this session');
     return;
   }
   syncPtySizeAfterOpen(entry);
   if (typeof pollActiveSessions === 'function') pollActiveSessions();
   if (panelTerminalOwnerId === ownerSessionId) mountPanelTerminal(ownerSessionId);
+}
+
+// see .ai/contexts/panel-terminal.md ("The refusal")
+function showPanelTerminalRefusal(ownerSessionId, message) {
+  destroySession(panelTerminalSessionId(ownerSessionId));
+  panelTerminals.set(ownerSessionId, { panelSessionId: panelTerminalSessionId(ownerSessionId), error: message });
+  resyncPanelFor(ownerSessionId);
 }
 
 function closePanelTerminal(ownerSessionId) {
@@ -292,8 +317,12 @@ function destroyPanelTerminalFor(sessionId) {
 
 // switchPanel re-decides whether the panel itself stays open.
 function resyncPanel() {
-  if (typeof switchPanel === 'function') switchPanel(panelTerminalOwnerId);
-  else syncPanelTerminal(panelTerminalOwnerId);
+  resyncPanelFor(panelTerminalOwnerId);
+}
+
+function resyncPanelFor(sessionId) {
+  if (typeof switchPanel === 'function') switchPanel(sessionId);
+  else syncPanelTerminal(sessionId);
 }
 
 // see .ai/contexts/panel-terminal.md ("Lifecycle")
