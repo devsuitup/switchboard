@@ -4362,6 +4362,55 @@ body { display: flex; flex-direction: column; }
   min-height: 0;
 }
 
+/* --- Panel shell region — see .ai/contexts/panel-terminal.md --- */
+#panel-terminal-handle {
+  display: none;
+  height: 4px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.15s;
+}
+
+#panel-terminal-handle.open {
+  display: block;
+}
+
+#panel-terminal-handle:hover,
+#panel-terminal-handle.dragging {
+  background: rgba(120,130,255,0.3);
+}
+
+/* Own positioning context: .terminal-container is absolute against #terminals. */
+#panel-terminal-region {
+  display: none;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+#panel-terminal-region.open {
+  display: block;
+}
+
+.terminal-container.panel-terminal {
+  inset: 0;
+  padding: 6px 0 6px 8px;
+}
+
+#panel-terminal-message {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #9090a8;
+}
+
+#panel-terminal-toggle-btn.active {
+  border-color: rgba(120,130,255,0.45);
+  color: #a0a8ff;
+  background: rgba(120,130,255,0.10);
+}
+
 #file-panel-body {
   flex: 1;
   min-height: 0;

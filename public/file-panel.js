@@ -196,6 +196,9 @@ function initFilePanel() {
   changesDiffEl.style.display = 'none';
   changesContainerEl.appendChild(changesDiffEl);
 
+  // Shell region below every tab type — see .ai/contexts/panel-terminal.md
+  if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
+
   terminalSplitEl.appendChild(filePanelEl);
   terminalArea.appendChild(terminalSplitEl);
 
@@ -431,6 +434,11 @@ function showPanel(state) {
 
 function hidePanel() {
   if (!filePanelEl) return;
+  // The shell region keeps the panel open with no tab — see .ai/contexts/panel-terminal.md
+  if (typeof panelTerminalIsOpen === 'function' && panelTerminalIsOpen(currentPanelSessionId)) {
+    showPanel(getSessionState(currentPanelSessionId));
+    return;
+  }
   filePanelEl.classList.remove('open');
   filePanelEl.style.width = '0';
   filePanelResizeHandle.style.display = 'none';
@@ -440,6 +448,7 @@ function hidePanel() {
 function switchPanel(sessionId) {
   currentPanelSessionId = sessionId;
   updateMcpIndicator();
+  if (typeof syncPanelTerminal === 'function') syncPanelTerminal(sessionId);
 
   if (!sessionId) {
     hidePanel();

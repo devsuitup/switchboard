@@ -393,8 +393,11 @@ const lastFlushAt = new Map(); // sessionId → performance.now() of last flush
 // (suspendTerminalWebgl/restoreTerminalWebgl + gridCardObserver in
 // grid-view.js) already caps the dominant render cost there, and every open
 // grid session keeps the fast cadence so thumbnails stay live.
+// Panel terminals are exempt — see .ai/contexts/panel-terminal.md.
 function isHiddenSingleViewSession(sessionId) {
-  return !gridViewActive && sessionId !== activeSessionId;
+  if (gridViewActive || sessionId === activeSessionId) return false;
+  const entry = openSessions.get(sessionId);
+  return !(entry && entry.panelMounted);
 }
 
 function flushTerminalBuffer(sessionId) {
@@ -828,7 +831,9 @@ function createTerminalEntry(session, opts = {}) {
   const { sessionId } = session;
   const container = document.createElement('div');
   container.className = 'terminal-container';
-  terminalsEl.appendChild(container);
+  // see .ai/contexts/panel-terminal.md ("Mount point")
+  if (opts.panel) container.classList.add('panel-terminal');
+  (opts.mount || terminalsEl).appendChild(container);
 
   // URI of the link currently under the cursor (set by the link hover/leave
   // callbacks below), so the right-click context menu can offer link actions.
@@ -955,7 +960,7 @@ function createTerminalEntry(session, opts = {}) {
   searchBar.querySelector('.terminal-search-prev').addEventListener('click', () => searchAddon.findPrevious(searchInput.value, searchOpts));
   searchBar.querySelector('.terminal-search-close').addEventListener('click', closeSearchBar);
 
-  const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false, webglAddon: null, lastPtySize: null, initialSize: null, stopObservingResize: null };
+  const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false, webglAddon: null, lastPtySize: null, initialSize: null, stopObservingResize: null, panel: !!opts.panel, panelMounted: false };
 
   // Measure NOW, before the caller spawns the PTY, so the shell is born with
   // the width it will actually be displayed at instead of 120x30. The caller
@@ -1054,6 +1059,8 @@ function restoreTerminalWebgl(sessionId) {
 function destroySession(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
+  // see .ai/contexts/panel-terminal.md
+  if (typeof destroyPanelTerminalFor === 'function') destroyPanelTerminalFor(sessionId);
   // Tear down any open right-click menu for this session before disposing the
   // terminal — its action closures hold the (about-to-be-disposed) xterm.
   if (typeof closeTerminalContextMenuForSession === 'function') closeTerminalContextMenuForSession(sessionId);
@@ -1125,7 +1132,8 @@ function showSession(sessionId) {
     }
   } else {
     // Single terminal view
-    document.querySelectorAll('.terminal-container').forEach(el => el.classList.remove('visible'));
+    // see .ai/contexts/panel-terminal.md
+    document.querySelectorAll('.terminal-container:not(.panel-terminal)').forEach(el => el.classList.remove('visible'));
     placeholder.style.display = 'none';
     hideAllViewers();
     if (session) showTerminalHeader(session);

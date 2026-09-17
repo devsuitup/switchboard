@@ -36,6 +36,14 @@ front would mean running one extra git command per untracked file on every
 refresh (and one ssh round-trip each, for a remote session), which a repo with a
 large untracked tree would feel. Refreshing resets them, since the files may
 have changed since.
+## A shell under the list
+
+**Shell** in the terminal header opens a shell in the same panel, below the
+Changes list, in the same directory the list is read from — so you can run a
+`git add`, a test, or anything else against exactly the tree you are looking
+at, then hit **Refresh**. Both stay visible; a horizontal handle between them
+sets how much room each gets. Local sessions only — see
+[Terminal](terminal.md) for the lifecycle and the remote limitation.
 
 ## What it doesn't do
 

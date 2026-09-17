@@ -7,6 +7,27 @@ Switchboard includes a full built-in terminal powered by xterm.js. You can launc
 - Click a session in the sidebar to open it in the terminal. If the session has an active process, you attach to its running PTY. If not, a new Claude CLI process is launched.
 - Click **New Session** (the `+` button next to a project) to start a fresh Claude Code session for that project.
 
+## Panel shell
+
+Click **Shell** in the terminal header to open a shell in the right-hand panel,
+under whatever the panel is showing — the [Changes](changes-view.md) list, a
+file, or a diff. Both stay visible; drag the horizontal handle between them to
+give one more room. The height is remembered.
+
+The shell starts in the session's own working directory, worktree included —
+the same directory the Changes panel reads and a `claude --resume` targets. You
+never pick the path, and it cannot drift from the one the session really runs
+in.
+
+One shell per session. Switching to another session leaves it running and puts
+it back, with whatever it printed meanwhile, when you come back. Click **Shell**
+again to close it, which stops it. It also stops when the session's terminal
+goes away (relaunching a session, stopping it, quitting the app).
+
+Remote sessions get no panel shell — Switchboard attaches to an existing remote
+tmux session but has no way to start a new remote one. The panel says so
+instead of showing a terminal.
+
 ## Right-click behavior
 
 Right-click behavior in the terminal is configurable. Open **Global Settings** and look for **Terminal Right-Click**:
