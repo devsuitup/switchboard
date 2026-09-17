@@ -1230,8 +1230,22 @@ ipcMain.handle('get-memories', () => {
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
+  // The known-project set is rebuilt from disk on every isAllowedMemoryPath
+  // call, so binding it once per handler call keeps this off a per-file path.
+  const knownRoots = [...getKnownProjectPaths()];
+  const isAllowed = (filePath) => _isAllowedMemoryPath(filePath, knownRoots);
+
+  // Bodies of the files accepted below, kept for the FTS index at the end of
+  // this handler. They travel here rather than on the entries themselves: the
+  // entries go to the renderer, the bodies have no business going with them.
+  const bodies = new Map();
+  const listed = ({ content, ...entry }) => {
+    bodies.set(entry.filePath, content);
+    return entry;
+  };
+
   // --- Global files ---
-  const globalFiles = scanMdFiles(CLAUDE_DIR, isAllowedMemoryPath).map(f => ({ ...f, displayPath: '~/.claude' }));
+  const globalFiles = scanMdFiles(CLAUDE_DIR, isAllowed).map(f => ({ ...listed(f), displayPath: '~/.claude' }));
 
   // --- Per-project files ---
   const projects = [];
@@ -1256,16 +1270,16 @@ ipcMain.handle('get-memories', () => {
         const seenPaths = new Set();
 
         // 1. ~/.claude/projects/{folder}/ — claude-home .md files
-        const claudeHomeFiles = scanMdFiles(folderPath, isAllowedMemoryPath);
+        const claudeHomeFiles = scanMdFiles(folderPath, isAllowed);
         for (const f of claudeHomeFiles) {
-          files.push({ ...f, displayPath: '~/.claude', source: 'claude-home' });
+          files.push({ ...listed(f), displayPath: '~/.claude', source: 'claude-home' });
           seenPaths.add(f.filePath);
         }
         // memory/MEMORY.md
         const memoryDir = path.join(folderPath, 'memory');
-        const memoryFiles = scanMdFiles(memoryDir, isAllowedMemoryPath);
+        const memoryFiles = scanMdFiles(memoryDir, isAllowed);
         for (const f of memoryFiles) {
-          files.push({ ...f, displayPath: '~/.claude', source: 'claude-home' });
+          files.push({ ...listed(f), displayPath: '~/.claude', source: 'claude-home' });
           seenPaths.add(f.filePath);
         }
 
@@ -1273,28 +1287,28 @@ ipcMain.handle('get-memories', () => {
         if (projectPath) {
           for (const name of ['CLAUDE.md', 'GEMINI.md', 'agents.md']) {
             const fp = path.join(projectPath, name);
-            const accepted = acceptMdFile(fp, isAllowedMemoryPath);
+            const accepted = acceptMdFile(fp, isAllowed);
             if (accepted && !seenPaths.has(fp)) {
-              files.push({ ...accepted, displayPath: shortName + '/', source: 'project' });
+              files.push({ ...listed(accepted), displayPath: shortName + '/', source: 'project' });
               seenPaths.add(fp);
             }
           }
 
           // 3. {projectPath}/.claude/ — commands/*.md and other .md files
           const dotClaudeDir = path.join(projectPath, '.claude');
-          const dotClaudeFiles = scanMdFiles(dotClaudeDir, isAllowedMemoryPath);
+          const dotClaudeFiles = scanMdFiles(dotClaudeDir, isAllowed);
           for (const f of dotClaudeFiles) {
             if (!seenPaths.has(f.filePath)) {
-              files.push({ ...f, displayPath: shortName + '/.claude/', source: 'project' });
+              files.push({ ...listed(f), displayPath: shortName + '/.claude/', source: 'project' });
               seenPaths.add(f.filePath);
             }
           }
           // commands/*.md
           const commandsDir = path.join(dotClaudeDir, 'commands');
-          const commandFiles = scanMdFiles(commandsDir, isAllowedMemoryPath);
+          const commandFiles = scanMdFiles(commandsDir, isAllowed);
           for (const f of commandFiles) {
             if (!seenPaths.has(f.filePath)) {
-              files.push({ ...f, displayPath: shortName + '/.claude/commands/', source: 'project' });
+              files.push({ ...listed(f), displayPath: shortName + '/.claude/commands/', source: 'project' });
               seenPaths.add(f.filePath);
             }
           }
@@ -1334,7 +1348,7 @@ ipcMain.handle('get-memories', () => {
       upsertSearchEntries(allFiles.map(f => ({
         id: f.filePath, type: 'memory', folder: null,
         title: f.label + ' ' + f.filename,
-        body: fs.readFileSync(f.filePath, 'utf8'),
+        body: bodies.get(f.filePath) ?? '',
       })));
     }
   } catch {}

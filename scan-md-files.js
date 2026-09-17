@@ -11,9 +11,14 @@ const { isSensitivePath } = require('./ipc-path-validator');
 /**
  * Accept `filePath` as a listable Markdown file, or return null.
  *
+ * The accepted content comes back with the entry. A caller that needs the body
+ * must use it rather than read the path again: a second read is a second
+ * resolution of the same string, free to land somewhere the checks above never
+ * saw. See resolve-path-on-disk.js.
+ *
  * @param {string} filePath
  * @param {(filePath: string) => boolean} [isAllowed] - caller's allowlist, given the literal path
- * @returns {{filename: string, filePath: string, modified: string}|null}
+ * @returns {{filename: string, filePath: string, modified: string, content: string}|null}
  */
 function acceptMdFile(filePath, isAllowed) {
   try {
@@ -21,8 +26,9 @@ function acceptMdFile(filePath, isAllowed) {
     if (!stat.isFile()) return null;
     if (isSensitivePath(filePath)) return null;
     if (isAllowed && !isAllowed(filePath)) return null;
-    if (!fs.readFileSync(filePath, 'utf8').trim()) return null;
-    return { filename: path.basename(filePath), filePath, modified: stat.mtime.toISOString() };
+    const content = fs.readFileSync(filePath, 'utf8');
+    if (!content.trim()) return null;
+    return { filename: path.basename(filePath), filePath, modified: stat.mtime.toISOString(), content };
   } catch {
     return null; // unreadable, dangling or absent
   }

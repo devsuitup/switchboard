@@ -181,15 +181,40 @@ test('scanMdFiles: a directory that does not exist scans to an empty list, not a
 // It is the single acceptance rule behind both paths — the memory listing had
 // two of them, and only one carried the guards.
 
-test('acceptMdFile: accepts an ordinary file and reports its own name and mtime', () => {
+test('acceptMdFile: accepts an ordinary file and reports its own name, mtime and content', () => {
   const r = rig();
   try {
     const fp = path.join(r.dir, 'CLAUDE.md');
-    fs.writeFileSync(fp, 'project instructions');
+    fs.writeFileSync(fp, 'project instructions\n');
     const out = acceptMdFile(fp);
     assert.equal(out.filename, 'CLAUDE.md');
     assert.equal(out.filePath, fp);
     assert.equal(out.modified, fs.statSync(fp).mtime.toISOString());
+    // The body comes back so the caller never has to read the path again.
+    assert.equal(out.content, 'project instructions\n');
+  } finally { r.cleanup(); }
+});
+
+test('acceptMdFile: the content returned is the one that passed the checks, not whatever the path holds later', (t) => {
+  const r = rig();
+  try {
+    // The checks run against a path, the read has to happen while that path
+    // still means what was checked. A caller that re-reads it afterwards gets
+    // whatever has been moved into place since — which is the whole point of
+    // handing the body back instead of the path alone.
+    const fp = path.join(r.dir, 'CLAUDE.md');
+    fs.writeFileSync(fp, 'the legitimate note');
+    const out = acceptMdFile(fp, () => true);
+
+    const swapped = path.join(r.elsewhere, 'swapped.md');
+    fs.writeFileSync(swapped, 'content moved in afterwards');
+    const tmp = path.join(r.dir, 'tmp-link');
+    try { fs.symlinkSync(swapped, tmp); }
+    catch { return t.skip('cannot create a symlink on this machine'); }
+    fs.renameSync(tmp, fp);
+
+    assert.equal(out.content, 'the legitimate note');
+    assert.notEqual(fs.readFileSync(out.filePath, 'utf8'), out.content);
   } finally { r.cleanup(); }
 });
 
