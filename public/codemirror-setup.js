@@ -488,7 +488,17 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
     },
     b: {
       doc: modifiedContent,
-      extensions: [...sharedExts],
+      extensions: [
+        ...sharedExts,
+        history(),
+        drawSelection(),
+        indentOnInput(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
+        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        cmGotoLineKeymap,
+        cmSaveKeymap,
+      ],
     },
     gutter: true,
     highlightChanges: true,
@@ -496,7 +506,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
   });
 }
 
-function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename) {
+function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: modifiedContent,
@@ -506,7 +516,10 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       foldGutter(),
       bracketMatching(),
       highlightSelectionMatches(),
-      keymap.of([...foldKeymap]),
+      history(),
+      drawSelection(),
+      indentOnInput(),
+      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...foldKeymap]),
       cmFindKeymap,
       cmFindDomHandler,
       cmGotoLineDomHandler,
@@ -521,6 +534,7 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
         gutter: true,
         highlightChanges: true,
         syntaxHighlightDeletions: true,
+        mergeControls,
         collapseUnchanged: { margin: 3, minSize: 4 },
       }),
     ],
