@@ -118,12 +118,13 @@ Measured: `git diff --no-index -- /dev/null /dev/zero` fails with
 device), while `/dev/null` on the same side succeeds; and `nul`, git's Windows
 spelling for the same thing, is refused on Linux. Both observations match git's
 own `diff-no-index.c`, where the `/dev/null` string is special-cased
-unconditionally and `nul` only under `GIT_WINDOWS_NATIVE`. **The Windows half of
-that reasoning has never been executed** — every measurement here is from Linux;
-the `windows-2022` CI leg running `test/git-changes-runner-real-git.test.js` is
-the evidence, and it is worth reading before merging anything that touches this
-operand. So `/dev/null` is the portable spelling, and the two alternatives are
-worse: creating an empty
+unconditionally and `nul` only under `GIT_WINDOWS_NATIVE`. **Git for Windows
+accepts it**: `test/git-changes-runner-real-git.test.js` drives real
+`git diff --no-index -- /dev/null <path>` invocations, it runs on the
+`windows-2022` CI leg alongside Linux and macOS, and its untracked cases pass
+there — so this is executed evidence on the platform in question, not an
+argument from git's source. So `/dev/null` is the portable spelling, and the two
+alternatives are worse: creating an empty
 temp file means writing into a repository under test (and cleaning it up on
 every error path, remote included), and `git add -N` mutates the index of a
 repository the user is actively working in, which a read-only viewer must never
@@ -206,7 +207,39 @@ does, in two layers:
     the far host had already read the file).
   - `fsOps` (`{realpath, lstat, stat}`) is dependency injection for tests only,
     the same seam `remote-attach.js` uses for `spawnFn`; production always takes
-    the real fs.
+    the real fs. `resolveLocalNoIndexOperand` takes a fourth `pathOps` argument
+    for the same reason — see "Path arithmetic across platforms" below.
+
+#### Path arithmetic across platforms
+
+The local containment check is `path` arithmetic, and `path` means win32 rules
+on the machine whose primary checkout is Windows. Three points decide whether
+it works there:
+
+- **The operand handed to git is git-spelled.** `path.relative` returns
+  `newdir\a.txt` on Windows; git writes `newdir/a.txt` in every diff header it
+  emits, and the header check compares against it. The guard converts on the way
+  out (`toGitPath`), so the operand, the requested path and the header all agree
+  on one spelling whatever the platform.
+- **An empty `path.relative` means "the same directory", not "outside".** Two
+  spellings of one directory — a drive-less root like `/repo` against the
+  `\repo` that `path.resolve` produces from it, a trailing separator, a
+  different case — compare unequal as strings while `path.relative` correctly
+  returns `''`. Reading that as an escape refuses every untracked diff whose
+  file sits directly in the repository root.
+- **A test fixture path is platform-specific.** `/repo` is drive-relative on
+  Windows, so a fake `realpath` returning it verbatim describes a directory the
+  operand never resolves into, and the guard refuses — the tests then pass or
+  fail for reasons that have nothing to do with what they assert. The fixtures
+  build their roots with `path.resolve('/repo')`, which is `/repo` on POSIX and
+  `<drive>:\repo` on Windows.
+
+`path.win32` and `path.posix` exist on every platform, so both flavours are
+injected through `pathOps` and asserted from whichever machine runs the suite
+(`test/git-changes-runner.test.js`, the `PATH_FLAVOURS` loop): a legitimate
+path resolves and comes back forward-slashed, traversal and an out-of-tree
+symlink (another drive, on Windows) are refused, a sibling sharing the root's
+string prefix is refused, and the leaf type rules hold under either separator.
 
 A symlink row is diffed, not rendered as a `symbolic link → target` widget of
 its own: `new file mode 120000` plus the target as the single added line is

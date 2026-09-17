@@ -56,10 +56,16 @@ const DEFAULT_FS_OPS = {
   stat: (p) => fs.statSync(p),
 };
 
-function isInsideRoot(root, candidate) {
+function isInsideRoot(root, candidate, pathOps) {
   if (candidate === root) return true;
-  const rel = path.relative(root, candidate);
-  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+  const rel = pathOps.relative(root, candidate);
+  if (rel === '') return true;
+  return rel !== '..' && !rel.startsWith('..' + pathOps.sep) && !pathOps.isAbsolute(rel);
+}
+
+// git spells every path with forward slashes — see .ai/contexts/changes-view.md ("Untracked files")
+function toGitPath(p, pathOps) {
+  return pathOps.sep === '/' ? p : p.split(pathOps.sep).join('/');
 }
 
 // git follows a symlink to a directory — see .ai/contexts/changes-view.md ("Untracked files")
@@ -74,21 +80,21 @@ function leafSymlinkIsDiffable(resolved, fsOps) {
 }
 
 // Containment for a --no-index operand — see .ai/contexts/changes-view.md ("Untracked files")
-function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS) {
+function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS, pathOps = path) {
   if (!isSafeNoIndexPath(filePath)) return null;
 
   try {
     const root = fsOps.realpath(cwd);
-    const absolute = path.resolve(root, filePath);
-    const parent = fsOps.realpath(path.dirname(absolute));
-    if (!root || !parent || !isInsideRoot(root, parent)) return null;
+    const absolute = pathOps.resolve(root, filePath);
+    const parent = fsOps.realpath(pathOps.dirname(absolute));
+    if (!root || !parent || !isInsideRoot(root, parent, pathOps)) return null;
 
-    const resolved = path.join(parent, path.basename(absolute));
+    const resolved = pathOps.join(parent, pathOps.basename(absolute));
     const stat = fsOps.lstat(resolved);
     if (!stat.isFile() && !stat.isSymbolicLink()) return null;
     if (stat.isSymbolicLink() && !leafSymlinkIsDiffable(resolved, fsOps)) return null;
 
-    const operand = path.relative(root, resolved);
+    const operand = toGitPath(pathOps.relative(root, resolved), pathOps);
     return isSafeNoIndexPath(operand) ? operand : null;
   } catch {
     return null;
