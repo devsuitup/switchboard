@@ -121,7 +121,7 @@ own `diff-no-index.c`, where the `/dev/null` string is special-cased
 unconditionally and `nul` only under `GIT_WINDOWS_NATIVE`. **Git for Windows
 accepts it**: `test/git-changes-runner-real-git.test.js` drives real
 `git diff --no-index -- /dev/null <path>` invocations, it runs on the
-`windows-2022` CI leg alongside Linux and macOS, and its untracked cases pass
+`windows-2022` CI leg alongside Linux, and its untracked cases pass
 there — so this is executed evidence on the platform in question, not an
 argument from git's source. So `/dev/null` is the portable spelling, and the two
 alternatives are worse: creating an empty
