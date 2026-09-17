@@ -85,6 +85,7 @@ const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
+const { resolvePanelTerminalCwd } = require('./panel-terminal-target');
 
 setPtyOpLogger(log);
 
@@ -1689,7 +1690,8 @@ ipcMain.handle('get-active-sessions', () => {
 ipcMain.handle('get-active-terminals', () => {
   const terminals = [];
   for (const [sessionId, session] of activeSessions) {
-    if (!session.exited && session.isPlainTerminal) {
+    // see .ai/contexts/panel-terminal.md
+    if (!session.exited && session.isPlainTerminal && !session.panelFor) {
       terminals.push({ sessionId, projectPath: session.projectPath });
     }
   }
@@ -2256,6 +2258,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (realCwd && fs.existsSync(realCwd)) spawnCwd = realCwd;
   }
 
+  // see .ai/contexts/panel-terminal.md ("Main process")
+  const panelOwnerId = sessionOptions?.type === 'terminal' && sessionOptions.panelFor
+    ? String(sessionOptions.panelFor)
+    : null;
+  if (panelOwnerId) {
+    const panelTarget = resolvePanelTerminalCwd(panelOwnerId, resolveGitChangesTarget);
+    if (!panelTarget.ok) return { ok: false, error: panelTarget.error };
+    spawnCwd = panelTarget.cwd;
+  }
+
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
     return { ok: false, error: `project directory no longer exists: ${spawnCwd}` };
@@ -2496,7 +2508,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // see .ai/contexts/trigger-watcher.md, "Target guard"
     cwd: spawnCwd,
     projectFolder, knownJsonlFiles,
-    isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
+    isPlainTerminal, panelFor: panelOwnerId, forkFrom: sessionOptions?.forkFrom || null,
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
     sandbox: !!sessionOptions?.sandbox,
