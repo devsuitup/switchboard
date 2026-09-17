@@ -4,7 +4,7 @@
 
 const { execFile } = require('child_process');
 const { defaultRunRemoteCommand } = require('./remote-attach');
-const { parseStatusPorcelainV2, parseNumstat, mergeChanges } = require('./git-changes');
+const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions } = require('./git-changes');
 
 const DEFAULT_LOCAL_TIMEOUT_MS = 10_000;
 const DEFAULT_REMOTE_TIMEOUT_MS = 20_000;
@@ -29,6 +29,17 @@ function isSafeGitPath(p) {
   if (!isSafeShellArg(p)) return false;
   if (p.includes('..')) return false;
   if (p[0] === ':') return false;
+  return true;
+}
+
+// `git diff --no-index` operands are filesystem paths, not pathspecs — see .ai/contexts/changes-view.md ("Untracked files")
+const NO_INDEX_EMPTY_SIDE = '/dev/null';
+
+function isSafeNoIndexPath(p) {
+  if (!isSafeGitPath(p)) return false;
+  if (p[0] === '-') return false;
+  if (p[0] === '/' || p[0] === '\\') return false;
+  if (/^[A-Za-z]:/.test(p)) return false;
   return true;
 }
 
@@ -119,7 +130,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
     let results;
     try {
       results = await Promise.all([
-        invoke(['status', '--porcelain=v2', '--branch', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+        invoke(['status', '--porcelain=v2', '--branch', '-uall', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
         invoke(['diff', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
         invoke(['diff', '--cached', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
       ]);
@@ -137,7 +148,27 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
     return { ok: true, ...mergeChanges(parsedStatus, numstatStaged, numstatUnstaged) };
   }
 
+  // `--no-index` exits 1 on a difference — see .ai/contexts/changes-view.md ("Untracked files")
+  async function untrackedDiff(path) {
+    if (!isSafeNoIndexPath(path)) return { ok: false, error: 'invalid path' };
+
+    let result;
+    try {
+      result = await invoke(['diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, path], { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    if (result.code !== 0 && result.code !== 1) return { ok: false, error: firstError(result) };
+    const stdout = result.stdout || '';
+    if (!stdout && (result.stderr || '').trim()) return { ok: false, error: firstError(result) };
+
+    const { content, truncated } = truncateDiffContent(stdout, MAX_DIFF_BYTES);
+    const added = truncated ? null : countNewFileDiffAdditions(content);
+    return { ok: true, content, truncated, added, deleted: added === null ? null : 0 };
+  }
+
   async function diff(path, opts = {}) {
+    if (opts.untracked) return untrackedDiff(path);
     if (!isSafeGitPath(path)) return { ok: false, error: 'invalid path' };
     const staged = !!opts.staged;
     const args = staged ? ['diff', '--cached', '--', path] : ['diff', '--', path];
@@ -165,6 +196,7 @@ module.exports = {
   shQuote,
   isSafeCwd,
   isSafeGitPath,
+  isSafeNoIndexPath,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,

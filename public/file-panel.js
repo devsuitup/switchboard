@@ -616,7 +616,6 @@ function openChangesTab(sessionId) {
     diffError: null,
     diffContent: null,
     diffTruncated: false,
-    diffUntracked: false,
   };
   state.panelVisible = true;
 
@@ -661,19 +660,11 @@ async function openChangesDiff(sessionId, file) {
   tab.diffError = null;
   tab.diffContent = null;
   tab.diffTruncated = false;
-  tab.diffUntracked = !!file.untracked;
-
-  if (file.untracked) {
-    // git diff never reports an untracked file — nothing to fetch.
-    tab.diffLoading = false;
-    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
-    return;
-  }
 
   tab.diffLoading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 
-  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged);
+  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged, file.untracked);
 
   const stillState = filePanelState.get(sessionId);
   if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
@@ -684,8 +675,28 @@ async function openChangesDiff(sessionId, file) {
   } else {
     tab.diffContent = result.content;
     tab.diffTruncated = !!result.truncated;
+    if (file.untracked) applyUntrackedCounts(tab, file.path, result.added, result.deleted);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+// Untracked counts arrive with the diff, not with status — see .ai/contexts/changes-view.md
+function applyUntrackedCounts(tab, filePath, added, deleted) {
+  if (typeof added !== 'number') return;
+  if (!tab.data || !Array.isArray(tab.data.files)) return;
+  const record = tab.data.files.find((f) => f.path === filePath);
+  if (!record) return;
+
+  record.added = added;
+  record.deleted = typeof deleted === 'number' ? deleted : 0;
+
+  let totalAdded = 0;
+  let totalDeleted = 0;
+  for (const f of tab.data.files) {
+    if (typeof f.added === 'number') totalAdded += f.added;
+    if (typeof f.deleted === 'number') totalDeleted += f.deleted;
+  }
+  tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted };
 }
 
 function closeChangesDiff(sessionId) {
@@ -820,8 +831,6 @@ function renderChangesDiff(sessionId, tab) {
   } else if (tab.diffError) {
     body.textContent = tab.diffError;
     body.classList.add('changes-error');
-  } else if (tab.diffUntracked) {
-    body.textContent = 'Untracked file — nothing to diff yet.';
   } else if (!tab.diffContent) {
     body.textContent = 'No differences.';
   } else {

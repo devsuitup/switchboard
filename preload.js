@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   stopSubagentWatch: (watchId) => ipcRenderer.invoke('stop-subagent-watch', watchId),
   // see .ai/contexts/changes-view.md
   gitChangesStatus: (sessionId) => ipcRenderer.invoke('git-changes-status', sessionId),
-  gitChangesDiff: (sessionId, filePath, staged) => ipcRenderer.invoke('git-changes-diff', sessionId, filePath, staged),
+  gitChangesDiff: (sessionId, filePath, staged, untracked) => ipcRenderer.invoke('git-changes-diff', sessionId, filePath, staged, untracked),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),

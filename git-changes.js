@@ -112,6 +112,22 @@ function parseNumstat(text) {
   return result;
 }
 
+// Count additions in a new-file unified diff — see .ai/contexts/changes-view.md ("Untracked files")
+function countNewFileDiffAdditions(text) {
+  const content = String(text || '');
+  if (/^Binary files /m.test(content)) return null;
+  let inHunk = false;
+  let added = 0;
+  for (const line of content.split('\n')) {
+    if (!inHunk) {
+      if (line.startsWith('@@')) inHunk = true;
+      continue;
+    }
+    if (line.startsWith('+')) added += 1;
+  }
+  return added;
+}
+
 function combineCounts(a, b) {
   if ((a && a.added === null) || (b && b.added === null)) return { added: null, deleted: null };
   const added = (a ? a.added || 0 : 0) + (b ? b.added || 0 : 0);
@@ -143,4 +159,4 @@ function mergeChanges(status, numstatStaged, numstatUnstaged) {
   };
 }
 
-module.exports = { parseStatusPorcelainV2, parseNumstat, mergeChanges };
+module.exports = { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions };

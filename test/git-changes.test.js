@@ -10,7 +10,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseStatusPorcelainV2, parseNumstat, mergeChanges } = require('../git-changes');
+const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions } = require('../git-changes');
 
 // --- parseStatusPorcelainV2 --------------------------------------------
 
@@ -204,7 +204,7 @@ test('mergeChanges: a file modified in both index and worktree sums both numstat
   assert.equal(merged.files[0].deleted, 5, 'staged (1) + unstaged (4) deleted lines');
 });
 
-test('mergeChanges: an untracked file carries null counts, not zero — git diff never reports it', () => {
+test('mergeChanges: an untracked file carries null counts, not zero — its counts only exist once its diff is fetched', () => {
   const status = { branch: { head: 'main', upstream: null, ahead: 0, behind: 0 }, files: [
     { path: 'new.js', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?' },
   ] };
@@ -230,6 +230,65 @@ test('mergeChanges: totals sum added/deleted across all files and count files', 
   ] };
   const merged = mergeChanges(status, { 'a.js': { added: 1, deleted: 1 } }, { 'b.js': { added: 4, deleted: 0 } });
   assert.deepEqual(merged.totals, { files: 2, added: 5, deleted: 1 });
+});
+
+// --- countNewFileDiffAdditions -----------------------------------------
+
+test('countNewFileDiffAdditions: counts only the lines inside the hunk, never the "+++ b/..." file header (mutation target: counting every line starting with "+")', () => {
+  const diff = [
+    'diff --git a/new.txt b/new.txt',
+    'new file mode 100644',
+    'index 0000000..2cdcdb0',
+    '--- /dev/null',
+    '+++ b/new.txt',
+    '@@ -0,0 +1,3 @@',
+    '+a1',
+    '+a2',
+    '+a3',
+    '',
+  ].join('\n');
+  assert.equal(countNewFileDiffAdditions(diff), 3);
+});
+
+test('countNewFileDiffAdditions: an added line that itself looks like a diff header or a hunk marker still counts exactly once (mutation target: a prefix test instead of hunk tracking)', () => {
+  const diff = [
+    'diff --git a/patch.txt b/patch.txt',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/patch.txt',
+    '@@ -0,0 +1,3 @@',
+    '++++ b/inner',      // the file's own content is "+++ b/inner"
+    '+@@ -1 +1 @@',      // ... and "@@ -1 +1 @@"
+    '+plain',
+    '',
+  ].join('\n');
+  assert.equal(countNewFileDiffAdditions(diff), 3);
+});
+
+test('countNewFileDiffAdditions: a binary diff reports null, not 0 — "unknown" is not "no lines"', () => {
+  const diff = [
+    'diff --git a/bin.dat b/bin.dat',
+    'new file mode 100644',
+    'index 0000000..c94be36',
+    'Binary files /dev/null and b/bin.dat differ',
+    '',
+  ].join('\n');
+  assert.equal(countNewFileDiffAdditions(diff), null);
+});
+
+test('countNewFileDiffAdditions: an empty new file has a header but no hunk — 0 additions, not null', () => {
+  const diff = 'diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n';
+  assert.equal(countNewFileDiffAdditions(diff), 0);
+});
+
+test('countNewFileDiffAdditions: a missing-final-newline marker is not an addition', () => {
+  const diff = '--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+only\n\\ No newline at end of file\n';
+  assert.equal(countNewFileDiffAdditions(diff), 1);
+});
+
+test('countNewFileDiffAdditions: empty/missing input is 0', () => {
+  assert.equal(countNewFileDiffAdditions(''), 0);
+  assert.equal(countNewFileDiffAdditions(null), 0);
 });
 
 test('mergeChanges: branch pass-through defaults when status is missing', () => {

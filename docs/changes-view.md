@@ -10,8 +10,20 @@ Click the **Changes** button in the terminal header, next to the stop button. Cl
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
 - One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts.
-- Clicking a row opens a read-only diff for that file. Untracked files show a note instead of a diff — `git diff` never reports them.
+- Clicking a row opens a read-only diff for that file, including an untracked one — a brand-new file shows up as an all-additions diff. A binary file shows a one-line note instead of its bytes.
+- A brand-new directory is listed file by file, not as a single folder row.
 - A **Refresh** button for a manual pull.
+
+### Counts for new files
+
+Git reports line counts for tracked files only, so an untracked file's row
+starts without any, and the header's `+A −B` does not include it yet. Click the
+row once: its diff is fetched, the row gets its `+added −0`, and the header
+total grows by the same amount. This is deliberate — counting every new file up
+front would mean running one extra git command per untracked file on every
+refresh (and one ssh round-trip each, for a remote session), which a repo with a
+large untracked tree would feel. Refreshing resets them, since the files may
+have changed since.
 
 ## What it doesn't do
 

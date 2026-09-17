@@ -88,8 +88,8 @@ refresh triggers): `.ai/contexts/changes-view.md`. User-facing: `docs/changes-vi
 
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
-| `git-changes-status` | `(sessionId)` | `{ok, branch, files, totals} \| {ok:false, error}` | `git status --porcelain=v2 --branch` + `git diff --numstat` + `git diff --cached --numstat`, merged by `git-changes.js`'s `mergeChanges()`. |
-| `git-changes-diff` | `(sessionId, filePath, staged)` | `{ok, content, truncated} \| {ok:false, error}` | `git diff [--cached] -- <filePath>`, capped at 512 KB. |
+| `git-changes-status` | `(sessionId)` | `{ok, branch, files, totals} \| {ok:false, error}` | `git status --porcelain=v2 --branch -uall` + `git diff --numstat` + `git diff --cached --numstat`, merged by `git-changes.js`'s `mergeChanges()`. |
+| `git-changes-diff` | `(sessionId, filePath, staged, untracked)` | `{ok, content, truncated, added, deleted} \| {ok:false, error}` | `git diff [--cached] -- <filePath>`, or `git diff --no-index -- /dev/null <filePath>` when `untracked`; capped at 512 KB. `added`/`deleted` are filled for an untracked file only — see `.ai/contexts/changes-view.md` ("Untracked files"). |
 
 ### Misc
 
@@ -157,7 +157,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
 | `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
-| `git-changes-diff` | `isSafeGitPath` (`git-changes-runner.js`) | not a filesystem path — a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist |
+| `git-changes-diff` | `isSafeGitPath`, or `isSafeNoIndexPath` when `untracked` (`git-changes-runner.js`) | not a filesystem path — a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist. The untracked variant is a real filesystem operand of `git diff --no-index`, which has no repository-boundary check of its own, so its guard additionally rejects absolute paths and a leading `-` — see "Untracked files" in the same doc |
 
 ### Non-obvious behaviors
 

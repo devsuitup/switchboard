@@ -65,9 +65,9 @@ function setupFilePanelDom({ statusImpl, diffImpl } = {}) {
       calls.status.push(sessionId);
       return Promise.resolve((statusImpl || (() => makeStatusResult()))(sessionId));
     },
-    gitChangesDiff: (sessionId, filePath, staged) => {
-      calls.diff.push({ sessionId, filePath, staged });
-      return Promise.resolve((diffImpl || (() => ({ ok: true, content: '@@ -1 +1 @@\n-old\n+new\n context\n', truncated: false })))(sessionId, filePath, staged));
+    gitChangesDiff: (sessionId, filePath, staged, untracked) => {
+      calls.diff.push({ sessionId, filePath, staged, untracked });
+      return Promise.resolve((diffImpl || (() => ({ ok: true, content: '@@ -1 +1 @@\n-old\n+new\n context\n', truncated: false })))(sessionId, filePath, staged, untracked));
     },
   };
 
@@ -153,7 +153,7 @@ test('clicking a file row opens a read-only diff colored by line prefix', async 
     await flush();
 
     assert.equal(ctx.calls.diff.length, 1);
-    assert.deepEqual(ctx.calls.diff[0], { sessionId: 's1', filePath: 'src/a.js', staged: true });
+    assert.deepEqual(ctx.calls.diff[0], { sessionId: 's1', filePath: 'src/a.js', staged: true, untracked: false });
 
     const addLine = ctx.document.querySelector('.changes-diff-add');
     const delLine = ctx.document.querySelector('.changes-diff-del');
@@ -170,8 +170,16 @@ test('clicking a file row opens a read-only diff colored by line prefix', async 
   } finally { ctx.destroy(); }
 });
 
-test('clicking an untracked file shows a note instead of calling gitChangesDiff', async () => {
-  const ctx = setupFilePanelDom();
+const UNTRACKED_DIFF_RESULT = {
+  ok: true,
+  content: 'diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+first\n+second\n',
+  truncated: false,
+  added: 2,
+  deleted: 0,
+};
+
+test('clicking an untracked file fetches its diff like any other row, flagged untracked (mutation target: the old short-circuit)', async () => {
+  const ctx = setupFilePanelDom({ diffImpl: () => UNTRACKED_DIFF_RESULT });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openChangesTab('s1');
@@ -181,9 +189,85 @@ test('clicking an untracked file shows a note instead of calling gitChangesDiff'
     row.dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
     await flush();
 
-    assert.equal(ctx.calls.diff.length, 0, 'an untracked file has no git diff to fetch');
+    assert.equal(ctx.calls.diff.length, 1, 'an untracked file is fetched, not short-circuited');
+    assert.deepEqual(ctx.calls.diff[0], { sessionId: 's1', filePath: 'new.txt', staged: false, untracked: true });
+
     const body = ctx.document.querySelector('.changes-diff-body');
-    assert.match(body.textContent, /Untracked file/);
+    assert.ok(!/nothing to diff/.test(body.textContent), 'the old placeholder note is gone');
+    const addLines = Array.from(ctx.document.querySelectorAll('.changes-diff-add')).map((el) => el.textContent);
+    assert.deepEqual(addLines, ['+first', '+second']);
+    const headerLines = Array.from(ctx.document.querySelectorAll('.changes-diff-file-header')).map((el) => el.textContent);
+    assert.deepEqual(headerLines, ['--- /dev/null', '+++ b/new.txt'], '--no-index header paths are classified as headers, not as a deletion and an addition');
+  } finally { ctx.destroy(); }
+});
+
+test('an untracked file\'s counts and the header totals pick up the additions its diff reported', async () => {
+  const ctx = setupFilePanelDom({ diffImpl: () => UNTRACKED_DIFF_RESULT });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const before = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(before, null, 'status alone cannot know an untracked file\'s line count');
+
+    ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
+      .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
+    backBtn.click();
+
+    const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.ok(counts, 'the row now renders counts like any other row');
+    assert.equal(counts.textContent, '+2−0');
+
+    const summary = ctx.document.getElementById('changes-summary');
+    assert.match(summary.textContent, /2 files changed \+5 −1/, 'the untracked additions (2) join the tracked ones (3) in the header total');
+    assert.equal(ctx.calls.status.length, 1, 'no extra status fetch — the counts came with the diff');
+  } finally { ctx.destroy(); }
+});
+
+test('an untracked binary file keeps null counts — the row stays countless and the totals do not move', async () => {
+  const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null };
+  const ctx = setupFilePanelDom({ diffImpl: () => binary });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
+      .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    const body = ctx.document.querySelector('.changes-diff-body');
+    assert.match(body.textContent, /Binary files .* differ/);
+
+    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
+    backBtn.click();
+
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1/, 'unknown counts must not be folded in as zero');
+  } finally { ctx.destroy(); }
+});
+
+test('a failed untracked diff surfaces the error and leaves the counts alone', async () => {
+  const ctx = setupFilePanelDom({ diffImpl: () => ({ ok: false, error: 'fatal: bad thing' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
+      .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    const body = ctx.document.querySelector('.changes-diff-body');
+    assert.match(body.textContent, /fatal: bad thing/);
+
+    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
+    backBtn.click();
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
   } finally { ctx.destroy(); }
 });
 
