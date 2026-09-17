@@ -4411,8 +4411,7 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.10);
 }
 
-/* Editor hosts: the MCP diff tab and the Changes panel's editable diff share
-   every rule below — a merge view looks the same wherever it is mounted. */
+/* Editor hosts — see .ai/contexts/viewer-panel.md */
 #file-panel-body,
 #changes-diff-host {
   flex: 1;

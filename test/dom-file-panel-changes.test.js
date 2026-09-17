@@ -51,7 +51,7 @@ function makeStatusResult(overrides = {}) {
   };
 }
 
-const DEFAULT_PAIR = { ok: true, original: 'old\n', current: 'new\n', binary: false, truncated: false };
+const DEFAULT_PAIR = { ok: true, original: 'old\n', current: 'new\n', version: 'v1', binary: false, truncated: false };
 
 // A stand-in for a CodeMirror view: it owns a DOM node, reports a document
 // the test can rewrite (typing), and records its own destruction — enough for
@@ -75,12 +75,13 @@ function makeEditorStub(window, mode, doc, created) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [], file: [], save: [] };
+  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [] };
   const editors = [];
+  const fileChangedListeners = [];
 
   window.api = {
     onMcpOpenDiff: () => {},
@@ -99,10 +100,26 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl } = {}) {
       calls.file.push({ sessionId, filePath, staged: !!(opts && opts.staged) });
       return Promise.resolve((fileImpl || (() => DEFAULT_PAIR))(sessionId, filePath, opts));
     },
-    gitChangesSave: (sessionId, filePath, content) => {
-      calls.save.push({ sessionId, filePath, content });
-      return Promise.resolve((saveImpl || (() => ({ ok: true })))(sessionId, filePath, content));
+    gitChangesSave: (sessionId, filePath, content, version) => {
+      calls.save.push({ sessionId, filePath, content, version });
+      return Promise.resolve((saveImpl || (() => ({ ok: true, version: 'v2' })))(sessionId, filePath, content, version));
     },
+    gitChangesWatch: (sessionId, filePath) => {
+      calls.watch.push({ sessionId, filePath });
+      return Promise.resolve({ ok: true });
+    },
+    gitChangesUnwatch: (sessionId, filePath) => {
+      calls.unwatch.push({ sessionId, filePath });
+      return Promise.resolve({ ok: true });
+    },
+    onGitChangesFileChanged: (cb) => { fileChangedListeners.push(cb); },
+  };
+
+  // jsdom's own window.confirm throws "not implemented"; the panel asks before
+  // discarding unsaved edits, so the suite answers for the user.
+  window.confirm = (message) => {
+    calls.confirm.push(message);
+    return confirmImpl ? confirmImpl(message) : true;
   };
 
   // file-panel.js defers every editor to the lazy bundle loader; the suite
@@ -114,9 +131,10 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl } = {}) {
     parent.appendChild(view.dom);
     return view;
   };
-  window.createUnifiedMergeViewer = (parent, original, modified, filename) => {
+  window.createUnifiedMergeViewer = (parent, original, modified, filename, opts) => {
     const view = makeEditorStub(window, 'inline', modified, editors);
     view.opened = { original, modified, filename };
+    view.opts = opts;
     parent.appendChild(view.dom);
     return view;
   };
@@ -149,15 +167,20 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl } = {}) {
     document: window.document,
     calls,
     editors,
+    fireFileChanged: (sessionId, filePath) => {
+      for (const cb of fileChangedListeners) cb(sessionId, filePath);
+    },
     setActivity: read('setActivity'),
     destroy: () => window.close(),
   };
 }
 
 function flush() {
-  // Four microtask turns: the status IPC, the content-pair IPC chained off it,
-  // the bundle loader, and whatever chains off that.
-  return Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve()).then(() => Promise.resolve());
+  // The chains run several IPC round trips deep (save -> status -> content pair
+  // -> bundle loader), so drain a generous number of microtask turns.
+  let p = Promise.resolve();
+  for (let i = 0; i < 12; i++) p = p.then(() => Promise.resolve());
+  return p;
 }
 
 function clickRow(ctx, filePath) {
@@ -688,25 +711,42 @@ test('an idle refresh does not detach the editor from the DOM either (mutation t
   } finally { ctx.destroy(); }
 });
 
-test('an idle refresh leaves a dirty buffer alone and says it may be out of date (mutation target: the dirty-buffer guard)', async () => {
+test('an idle refresh never replaces a dirty buffer, and says the file moved under it (mutation target: the dirty-buffer guard)', async () => {
   let current = 'new\n';
-  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current }) });
+  let version = 'v1';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current, version }) });
   try {
     await openFile(ctx, 's1', 'src/a.js');
     const editor = ctx.editors[0];
 
     editor.box.text = 'typed by the user\n';
     current = 'written by the session\n';
+    version = 'v2';
 
     ctx.setActivity('s1', true);
     ctx.setActivity('s1', false);
     await flush();
 
-    assert.equal(ctx.calls.file.length, 1, 'a dirty buffer is never re-read from disk');
-    assert.equal(ctx.editors.length, 1);
+    assert.equal(ctx.editors.length, 1, 'no second editor');
     assert.equal(editor.box.destroyed, false);
     assert.equal(editor.box.text, 'typed by the user\n', 'the unsaved edit survives');
-    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /out of date/);
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /changed on disk/);
+  } finally { ctx.destroy(); }
+});
+
+test('a dirty buffer over an unchanged file says nothing at all (mutation target: claiming staleness the code never checked)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'typed by the user\n';
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.editors[0].box.text, 'typed by the user\n');
+    assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none',
+      'nothing changed on disk, so there is nothing to warn about');
   } finally { ctx.destroy(); }
 });
 
@@ -738,7 +778,7 @@ test('Save writes the edited buffer through git-changes-save and refreshes the s
     ctx.document.getElementById('changes-diff-save-btn').click();
     await flush();
 
-    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited\n' }]);
+    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited\n', version: 'v1' }]);
     assert.equal(ctx.calls.status.length, 2, 'the row counts are re-read after a save');
     assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none');
   } finally { ctx.destroy(); }
@@ -753,7 +793,7 @@ test('Ctrl/Cmd+S from the editor saves the same way the button does', async () =
     ctx.editors[0].dom.dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
     await flush();
 
-    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited by keyboard\n' }]);
+    assert.deepEqual(ctx.calls.save, [{ sessionId: 's1', filePath: 'src/a.js', content: 'edited by keyboard\n', version: 'v1' }]);
   } finally { ctx.destroy(); }
 });
 
@@ -853,6 +893,252 @@ test('closing the panel and going back to the list both destroy the editor (muta
 
     ctx.document.getElementById('changes-toggle-btn').click();
     assert.equal(ctx.editors[1].box.destroyed, true, 'closing the tab destroys the editor');
+  } finally { ctx.destroy(); }
+});
+
+// --- Staleness: the file moving under the editor -------------------------
+
+test('a save carries the version token from the read, and a refused stale save keeps the buffer and says so (mutation target: the staleness refusal)', async () => {
+  const ctx = setupFilePanelDom({
+    saveImpl: () => ({ ok: false, error: 'this file changed on disk since it was opened', reason: 'stale' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.equal(ctx.calls.save[0].version, 'v1', 'the token the read handed out goes back with the write');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /changed on disk/);
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Save failed/);
+    assert.equal(ctx.editors[0].box.text, 'my edit\n', 'the refusal costs the user nothing');
+    assert.equal(ctx.calls.status.length, 1, 'a refused save must not claim the tree changed');
+  } finally { ctx.destroy(); }
+});
+
+test('the open file is watched while it is editable, and unwatched on the way out', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.deepEqual(ctx.calls.watch, [{ sessionId: 's1', filePath: 'src/a.js' }]);
+
+    backBtn(ctx).click();
+    await flush();
+    assert.deepEqual(ctx.calls.unwatch, [{ sessionId: 's1', filePath: 'src/a.js' }]);
+  } finally { ctx.destroy(); }
+});
+
+test('a watcher event reloads a clean buffer without waiting for the session to go idle', async () => {
+  let current = 'new\n';
+  let version = 'v1';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current, version }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.equal(ctx.editors.length, 1);
+
+    current = 'written by the session\n';
+    version = 'v2';
+    ctx.fireFileChanged('s1', 'src/a.js');
+    await flush();
+
+    assert.equal(ctx.editors.length, 2, 'the editor picked up the session\'s write');
+    assert.equal(ctx.editors[1].opened.modified, 'written by the session\n');
+  } finally { ctx.destroy(); }
+});
+
+test('a watcher event on a dirty buffer warns instead of reloading (mutation target: the watcher clobbering the buffer)', async () => {
+  let current = 'new\n';
+  let version = 'v1';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, original: 'old\n', current, version }) });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    current = 'written by the session\n';
+    version = 'v2';
+    ctx.fireFileChanged('s1', 'src/a.js');
+    await flush();
+
+    assert.equal(ctx.editors.length, 1);
+    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /changed on disk/);
+  } finally { ctx.destroy(); }
+});
+
+test('Reload asks before discarding unsaved edits and re-reads the file when allowed', async () => {
+  let current = 'new\n';
+  let allow = false;
+  const ctx = setupFilePanelDom({
+    fileImpl: () => ({ ok: true, original: 'old\n', current, version: 'v1' }),
+    confirmImpl: () => allow,
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+    current = 'session content\n';
+
+    ctx.document.getElementById('changes-diff-reload-btn').click();
+    await flush();
+    assert.equal(ctx.editors.length, 1, 'a declined confirm keeps the buffer');
+    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+
+    allow = true;
+    ctx.document.getElementById('changes-diff-reload-btn').click();
+    await flush();
+    assert.equal(ctx.editors.length, 2);
+    assert.equal(ctx.editors[1].opened.modified, 'session content\n');
+  } finally { ctx.destroy(); }
+});
+
+// --- Losing work by accident ---------------------------------------------
+
+test('Back asks before discarding unsaved edits, and a refusal keeps the editor (mutation target: the confirm)', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    backBtn(ctx).click();
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.editors[0].box.destroyed, false, 'the buffer is still there');
+    assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'flex');
+  } finally { ctx.destroy(); }
+});
+
+test('closing the tab and closing the panel both ask before discarding unsaved edits', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    ctx.document.getElementById('changes-toggle-btn').click();
+    assert.equal(ctx.editors[0].box.destroyed, false, 'the Changes button must not drop the buffer silently');
+
+    ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+    assert.equal(ctx.editors[0].box.destroyed, false, 'neither must the panel close button');
+    assert.equal(ctx.calls.confirm.length, 2);
+  } finally { ctx.destroy(); }
+});
+
+test('two saves in a row issue one write (mutation target: the in-flight guard)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    // Ctrl+S twice: the keyboard path does not consult the button's disabled
+    // state, so only the in-flight guard itself can stop the second write.
+    ctx.editors[0].dom.dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
+    ctx.editors[0].dom.dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
+    await flush();
+
+    assert.equal(ctx.calls.save.length, 1, 'the second save lands while the first write is in flight');
+
+    const saveBtn = ctx.document.getElementById('changes-diff-save-btn');
+    saveBtn.click();
+    saveBtn.click();
+    await flush();
+    assert.equal(ctx.calls.save.length, 2, 'and the button is disabled for the duration too');
+  } finally { ctx.destroy(); }
+});
+
+// --- One host, one editor -------------------------------------------------
+
+test('another session\'s editor never stacks in the shared host (mutation target: mounting without clearing)', async () => {
+  const ctx = setupFilePanelDom({
+    fileImpl: (sessionId) => ({ ok: true, original: 'old\n', current: 'content of ' + sessionId + '\n', version: 'v1' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    await openFile(ctx, 's2', 'src/a.js');
+
+    ctx.window.switchPanel('s1');
+    await flush();
+
+    const host = ctx.document.getElementById('changes-diff-host');
+    assert.equal(host.children.length, 1, 'exactly one editor on screen');
+    assert.equal(host.children[0], ctx.editors[0].dom, 's1\'s own editor, not s2\'s');
+
+    ctx.window.switchPanel('s2');
+    await flush();
+    assert.equal(host.children.length, 1);
+    assert.equal(host.children[0], ctx.editors[1].dom);
+  } finally { ctx.destroy(); }
+});
+
+// --- Things going wrong while a file is open ------------------------------
+
+test('a file that disappears under the editor says so instead of showing a phantom', async () => {
+  let gone = false;
+  const ctx = setupFilePanelDom({
+    fileImpl: () => (gone
+      ? { ok: false, error: 'file is not in the working tree', reason: 'missing' }
+      : { ok: true, original: 'old\n', current: 'new\n', version: 'v1' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    gone = true;
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /can no longer be read/);
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /not in the working tree/);
+  } finally { ctx.destroy(); }
+});
+
+test('a status refresh that fails while a file is open is visible in the diff view', async () => {
+  let broken = false;
+  const ctx = setupFilePanelDom({
+    statusImpl: () => (broken ? { ok: false, error: 'fatal: not a git repository' } : makeStatusResult()),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    broken = true;
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /not a git repository/);
+  } finally { ctx.destroy(); }
+});
+
+test('staging the open file mid-turn re-points the selection at its refreshed row', async () => {
+  let staged = false;
+  const statusImpl = () => makeStatusResult({
+    files: [{ path: 'src/a.js', origPath: null, staged, unstaged: !staged, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 }],
+    totals: { files: 1, added: 3, deleted: 1 },
+  });
+  const ctx = setupFilePanelDom({ statusImpl });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.equal(ctx.calls.file[0].staged, false);
+
+    staged = true;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.file[ctx.calls.file.length - 1].staged, true,
+      'the pair is re-read against HEAD once the file is staged');
+  } finally { ctx.destroy(); }
+});
+
+test('inline mode asks for a merge view with no accept/reject controls — this panel is not a git client', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.document.getElementById('changes-diff-mode-btn').click();
+    await flush();
+
+    const inline = ctx.editors[ctx.editors.length - 1];
+    assert.equal(inline.box.mode, 'inline');
+    assert.equal(inline.opts.mergeControls, false, 'accept/reject chunk controls would revert working-tree changes');
   } finally { ctx.destroy(); }
 });
 
