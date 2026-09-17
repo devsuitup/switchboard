@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('api', {
   // see .ai/contexts/changes-view.md
   gitChangesStatus: (sessionId) => ipcRenderer.invoke('git-changes-status', sessionId),
   gitChangesDiff: (sessionId, filePath, staged, untracked) => ipcRenderer.invoke('git-changes-diff', sessionId, filePath, staged, untracked),
+  gitChangesFile: (sessionId, filePath, opts) => ipcRenderer.invoke('git-changes-file', sessionId, filePath, opts),
+  gitChangesSave: (sessionId, filePath, content) => ipcRenderer.invoke('git-changes-save', sessionId, filePath, content),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),

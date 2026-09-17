@@ -294,6 +294,7 @@ module.exports = {
   createGitChangesRunner,
   buildRemoteGitCommand,
   buildGitArgs,
+  localGitEnv,
   truncateDiffContent,
   shQuote,
   isSafeCwd,

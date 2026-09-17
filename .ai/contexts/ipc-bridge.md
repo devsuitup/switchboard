@@ -82,14 +82,21 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 ### Changes panel (issue #251)
 
-Read-only git-status view in the same right-hand file panel, for local and
-remote sessions alike. Full design (parser, runner, quoting, cwd resolution,
-refresh triggers): `.ai/contexts/changes-view.md`. User-facing: `docs/changes-view.md`.
+A git-status view in the same right-hand file panel, for local and remote
+sessions alike; a local session's changed file is editable in place. Full
+design (parser, runner, quoting, cwd resolution, refresh triggers, editing):
+`.ai/contexts/changes-view.md`. User-facing: `docs/changes-view.md`.
 
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
-| `git-changes-status` | `(sessionId)` | `{ok, branch, files, totals, untrackedCollapsed} \| {ok:false, error}` | `git status --porcelain=v2 --branch -uall` + `git diff --numstat` + `git diff --cached --numstat`, merged by `git-changes.js`'s `mergeChanges()`. A `-uall` run too large for the transport falls back to git's default untracked mode and reports `untrackedCollapsed: true`. |
+| `git-changes-status` | `(sessionId)` | `{ok, kind, branch, files, totals, untrackedCollapsed} \| {ok:false, error}` | `git status --porcelain=v2 --branch -uall` + `git diff --numstat` + `git diff --cached --numstat`, merged by `git-changes.js`'s `mergeChanges()`. A `-uall` run too large for the transport falls back to git's default untracked mode and reports `untrackedCollapsed: true`. `kind` is `'local'` or `'remote'` — the renderer decides from it whether the panel is editable. |
 | `git-changes-diff` | `(sessionId, filePath, staged, untracked)` | `{ok, content, truncated, added, deleted} \| {ok:false, error}` | `git diff [--cached] -- <filePath>`, or `git diff --no-index -- /dev/null <filePath>` when `untracked`; capped at 512 KB. `added`/`deleted` are filled for an untracked file only — see `.ai/contexts/changes-view.md` ("Untracked files"). |
+| `git-changes-file` | `(sessionId, filePath, {staged})` | `{ok, original, current, binary, truncated} \| {ok:false, error, reason}` | The content pair behind the editable diff: `git cat-file blob :<path>` (or `HEAD:<path>` when `staged`) and the working-tree file. Local sessions only. `reason` is one of `invalid-path`, `repo`, `missing`, `outside`, `sensitive`, `not-a-file`, `binary`, `too-large`, `remote`. |
+| `git-changes-save` | `(sessionId, filePath, content)` | `{ok:true} \| {ok:false, error, reason}` | Writes the working-tree file the guard resolved. Local sessions only; never creates a file. |
+
+`filePath` is repo-relative in all four. No absolute path crosses this
+boundary in either direction: the session's cwd is re-resolved main-side on
+every call, and the absolute path built from it is used and discarded there.
 
 ### Misc
 
@@ -157,6 +164,8 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
 | `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
+| `git-changes-file` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root comes from `git rev-parse --show-toplevel`, both root and target are resolved on disk, the target must stay inside the root, and `isSensitivePath` applies on top | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
+| `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
 | `git-changes-diff` | `isSafeGitPath`, or `isSafeNoIndexPath` + containment when `untracked` (`git-changes-runner.js`) | a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist. The untracked variant is a real filesystem operand of `git diff --no-index`, which has no repository-boundary check of its own: on top of the syntactic guard it is resolved with `realpath`/`stat` against the resolved cwd (local) or checked against `git ls-files --others` (remote), git receives the guard's operand rather than the caller's, and the returned diff must name that same path in its `diff --git` line — see "Untracked files" in the same doc |
 
 ### Non-obvious behaviors

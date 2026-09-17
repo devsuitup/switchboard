@@ -86,6 +86,7 @@ const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
+const gitChangesFile = require('./git-changes-file');
 
 setPtyOpLogger(log);
 
@@ -1758,7 +1759,8 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   const target = resolveGitChangesTarget(sessionId);
   if (!target.ok) return target;
   try {
-    return await gitChangesRunnerFor(target).status();
+    const result = await gitChangesRunnerFor(target).status();
+    return result.ok === false ? result : { ...result, kind: target.kind };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1771,6 +1773,45 @@ ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, u
   if (!target.ok) return target;
   try {
     return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged, untracked: !!untracked });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// filePath is a repo-relative path, resolved and contained main-side — see .ai/contexts/changes-view.md ("Editing a changed file")
+ipcMain.handle('git-changes-file', async (_event, sessionId, filePath, opts) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = resolveGitChangesTarget(sessionId);
+  if (!target.ok) return target;
+  if (target.kind !== 'local') return { ok: false, error: 'editing is not available for a remote session', reason: 'remote' };
+  try {
+    return await gitChangesFile.readChangesFile({
+      cwd: target.cwd,
+      relPath: filePath,
+      staged: !!(opts && opts.staged),
+      maxBytes: PANEL_FILE_MAX_BYTES,
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = resolveGitChangesTarget(sessionId);
+  if (!target.ok) return target;
+  if (target.kind !== 'local') return { ok: false, error: 'editing is not available for a remote session', reason: 'remote' };
+  try {
+    const result = await gitChangesFile.writeChangesFile({
+      cwd: target.cwd,
+      relPath: filePath,
+      content,
+      maxBytes: PANEL_FILE_MAX_BYTES,
+    });
+    if (!result.ok) return result;
+    if (result.savedPath.includes('/.work-files/')) invalidateFtsSignature('work-file');
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }

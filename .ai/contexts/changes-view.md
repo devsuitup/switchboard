@@ -13,8 +13,9 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 |---|---|
 | `git-changes.js` | Pure parser — no electron, no DOM, no fs. `require()`-d from `main.js` and from tests, same pattern as `remote-hosts.js` / `derive-project-path.js`. |
 | `git-changes-runner.js` | Runs the git commands, local or remote, behind one interface. |
-| `git-changes-target.js` | cwd resolution for the two IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
-| `public/file-panel.js` | Renderer: the `'changes'` tab type, its rows, and the fallback diff-line renderer. |
+| `git-changes-target.js` | cwd resolution for the panel's IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
+| `git-changes-file.js` | The content pair and the write target behind the editable diff: the `<rev>:<path>` guard, the repository-containment check, the read and the write. |
+| `public/file-panel.js` | Renderer: the `'changes'` tab type, its rows, the editor, and the read-only diff-line renderer. |
 | `public/session-activity.js` | `onSessionIdle()` — the no-polling refresh hook. |
 
 ## Parser (`git-changes.js`)
@@ -313,6 +314,107 @@ counts.
 Extracted out of the two IPC handlers into its own module, fully dependency-injected, so this order is unit-tested without booting Electron (`test/git-changes-target.test.js`) — same rationale `delete-session-target.js` and `run-schedule-now-target.js` already document for their own handlers. Step 0's whole point is to be provably reachable *before* the disk-scanning fallback (step 3): `test/git-changes-target.test.js` asserts `resolveSessionRealCwd` is never called for `"../../x"`.
 
 `filePath` on `git-changes-diff` is a git pathspec relative to that cwd, not an absolute filesystem path, so `ipc-path-validator.js`'s allowlist/denylist helpers (which assume an absolute path under a known root) don't fit — it's validated by the runner's own `isSafeGitPath` instead (see "Quoting rule" above).
+
+## Editing a changed file (`git-changes-file.js`)
+
+A changed file of a **local** session is edited in place in the panel, with the
+diff recomputed as the user types. Two IPCs carry that — `git-changes-file`
+(the content pair) and `git-changes-save` (the write); both take the same
+repo-relative path the rows already carry, and neither returns an absolute
+path. The renderer never learns where the repository is: the session's cwd is
+re-resolved through `resolveGitChangesTarget` on **every** call, the absolute
+path is built from it, used, and discarded main-side.
+
+`git-changes-file` returns `{ok, original, current, binary, truncated}`.
+`original` is the side `git diff` itself compares against, so the diff the
+panel draws and the diff `git diff` would print cannot disagree: the index
+(`:<path>`) for the unstaged view, `HEAD:<path>` for the staged one. A path
+absent from that tree exits 128 — that is the untracked/new-file case, and it
+yields `original: ''` rather than an error. The repository's own validity is
+established before that call (`git rev-parse --show-toplevel` has already
+succeeded), which is what makes "non-zero means the path is not in this tree"
+safe to read that way.
+
+### `git cat-file blob`, not `git show`
+
+Both print the blob for a well-formed `<rev>:<path>`. They differ on
+everything else, and the difference is the whole guard:
+
+| Operand | `git show` | `git cat-file blob` |
+|---|---|---|
+| `:/<text>` | exit 0, prints a **commit** (`:/text` is commit-message search magic) | exit 128, `Not a valid object name` |
+| `HEAD:` or a directory path | exit 0, prints a **tree listing** | exit 128, `bad file` |
+| `HEAD` | exit 0, prints a commit with its diff | exit 128 |
+| a path not in that tree | exit 128 | exit 128 |
+
+Measured against git 2.53 and pinned in `test/git-changes-file-real-git.test.js`.
+`git show` is content-type-polymorphic: hand it something that is not a blob
+and it prints *something else* with exit 0, which would land in the editor as
+"the original side of this file". `cat-file blob` is type-constrained — a
+non-blob is an error, never output — so a guard bug downstream degrades into a
+refusal instead of into the wrong content.
+
+### `<rev>:<path>` is not a pathspec, and does not reuse the pathspec guard
+
+`--literal-pathspecs` does not apply to a revision operand, `--` cannot
+separate it from options, and `isSafeGitPath`'s leading-`:` rejection was
+written for pathspec magic (`:(exclude)`, `:/`, `:(top)`), which is a different
+syntax from revision magic. So the operand carries its own pair of guards
+(`git-changes-file.js`):
+
+- `isSafeRepoRelativePath` — non-empty, ≤ 4096 chars, no control characters
+  (NUL, newline, carriage return included), no `..`, not absolute (`/`, `\`,
+  `X:`), no leading `-`, no leading `:`. This is what `git-changes-save` uses,
+  because its operand is a filesystem path and nothing else.
+- `isSafeRevPathOperand` — the above **plus** no `^[0-9]+:` prefix, which would
+  turn `:<path>` into `:<n>:<path>`, git's conflict-stage syntax. A file
+  literally named `1:f.txt` is therefore not editable from the panel: an
+  accepted, narrow loss against a second layer of revision syntax hiding inside
+  what the renderer called a file path.
+
+Rejecting a leading `/` is what closes `:/<text>`, since the search magic is
+reachable only through an operand that starts with a slash after the colon.
+
+### Containment, and which path the write runs on
+
+The boundary is the repository root (`git rev-parse --show-toplevel`), not the
+session cwd: the paths in a row come from `git status`, which reports them
+relative to the root, and a session whose cwd is a subdirectory of the repo
+must still open its own repository's files. The root is computed by git from
+the already-resolved cwd — it is never a renderer-supplied string.
+
+`resolveTargetInsideRepo` resolves both the root and `path.join(root, relPath)`
+**on disk** (`resolveOnDisk`), requires the real target to be the real root or
+beneath it, applies `isSensitivePath`, and requires a regular file. It returns
+that single resolved path, and the read and the write run on **that** value —
+the TOCTOU rule `ipc-path-validator.js` documents for
+`resolveAllowedMemoryPath`: two independent resolutions of the same string are
+two chances for a symlink swap in between, one resolution reused cannot
+diverge from itself. A symlink inside the repository pointing outside it is
+refused by exactly that check (measured, both for the read and for the write).
+
+`save-file-for-panel`, the neighbouring write handler, has no containment check
+at all — it takes an absolute path from an OSC 8 terminal hyperlink and checks
+only `isSensitivePath`. A handler whose entire input is a *relative* path from
+the renderer has no such excuse, so it does not inherit that shape.
+
+### Caps, and why an oversized file is refused rather than truncated
+
+Same two limits the other panel reads use (`PANEL_FILE_MAX_BYTES`, 2 MB, and a
+NUL byte anywhere means binary), applied to both sides of the pair, and the
+refusal says **which** of the two it was (`reason: 'binary'` vs
+`'too-large'`) so the panel can explain itself and fall back to the read-only
+unified diff. Neither side is ever truncated: a truncated buffer in an editor
+that can save is a data-loss device, not a preview.
+
+### Remote sessions are refused
+
+Both IPCs refuse a session whose target is remote. There is no file-write path
+to a remote host anywhere in this app, and the working-tree side of the pair is
+read with `fs.readFileSync` from a path that only means anything on this
+machine. The renderer never calls them for a remote session either — it keeps
+the read-only unified-diff renderer — so the refusal is the second line, not
+the only one.
 
 ## Refresh triggers (no polling)
 
