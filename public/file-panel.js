@@ -40,6 +40,9 @@ let changesListEl = null;
 let changesDiffEl = null;
 let changesToggleBtn = null;
 
+// Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
+const MAX_CHANGES_ROWS = 500;
+
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
 const MIN_PANEL_WIDTH = 280;
@@ -660,6 +663,7 @@ async function openChangesDiff(sessionId, file) {
   tab.diffError = null;
   tab.diffContent = null;
   tab.diffTruncated = false;
+  const dataAtRequest = tab.data;
 
   tab.diffLoading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
@@ -675,15 +679,15 @@ async function openChangesDiff(sessionId, file) {
   } else {
     tab.diffContent = result.content;
     tab.diffTruncated = !!result.truncated;
-    if (file.untracked) applyUntrackedCounts(tab, file.path, result.added, result.deleted);
+    if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
 
 // Untracked counts arrive with the diff, not with status — see .ai/contexts/changes-view.md
-function applyUntrackedCounts(tab, filePath, added, deleted) {
+function applyUntrackedCounts(tab, expectedData, filePath, added, deleted) {
   if (typeof added !== 'number') return;
-  if (!tab.data || !Array.isArray(tab.data.files)) return;
+  if (!tab.data || tab.data !== expectedData || !Array.isArray(tab.data.files)) return;
   const record = tab.data.files.find((f) => f.path === filePath);
   if (!record) return;
 
@@ -755,9 +759,23 @@ function renderChangesContent(sessionId, tab) {
     branchInfoEl.textContent = parts.join(' ');
   }
 
+  if (data.untrackedCollapsed) {
+    const note = document.createElement('div');
+    note.className = 'changes-degraded-note';
+    note.textContent = 'Too many untracked files to list — untracked entries are collapsed into their directories.';
+    changesSummaryEl.appendChild(note);
+  }
+
   changesListEl.innerHTML = '';
-  for (const file of files) {
+  const shown = files.length > MAX_CHANGES_ROWS ? files.slice(0, MAX_CHANGES_ROWS) : files;
+  for (const file of shown) {
     changesListEl.appendChild(buildChangesFileRow(sessionId, file));
+  }
+  if (shown.length < files.length) {
+    const more = document.createElement('div');
+    more.className = 'changes-more-note';
+    more.textContent = `+${files.length - shown.length} more files not shown`;
+    changesListEl.appendChild(more);
   }
 }
 

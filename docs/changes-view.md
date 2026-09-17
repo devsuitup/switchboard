@@ -14,6 +14,18 @@ Click the **Changes** button in the terminal header, next to the stop button. Cl
 - A brand-new directory is listed file by file, not as a single folder row.
 - A **Refresh** button for a manual pull.
 
+### Very large working trees
+
+The list shows at most 500 rows, then a `+N more files not shown` line; the
+header keeps counting every changed file. Changed tracked files come first, so
+what the cap drops is untracked files.
+
+A working tree with tens of thousands of untracked files — an unignored
+`node_modules`, a vendored or build directory — can be more than the panel can
+fetch file by file, especially over ssh. Changes then falls back to listing
+untracked entries by directory, the way `git status` does by default, and says
+so under the header. Your tracked changes are unaffected.
+
 ### Counts for new files
 
 Git reports line counts for tracked files only, so an untracked file's row

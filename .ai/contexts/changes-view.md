@@ -30,7 +30,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 ## Runner interface (`git-changes-runner.js`)
 
-`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs})` → `{status(), diff(path, {staged, untracked})}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`) and merges them. `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
+`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked})}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
 - **Local** (`kind: 'local'`): `child_process.execFile('git', args, {cwd, timeout, maxBuffer})` — cwd is `execFile`'s own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s.
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
@@ -47,11 +47,12 @@ Four independent defenses, added after an adversarial review of the first cut of
 5. **`shQuote()`** (unchanged from the original design) — standard POSIX single-quote escaping (close the quote, insert a literal quote via `'\''`, reopen) around `cwd` and every arg before they're interpolated into the remote command string. This is what actually makes the remote command injection-safe: a correctly single-quoted string cannot be broken out of by any byte sequence except an embedded NUL, and NUL can't appear in a shell token or a JS string used as one to begin with.
 
 One operand does not get this treatment: the filesystem path handed to
-`git diff --no-index` for an untracked file, guarded by `isSafeNoIndexPath` —
-strictly narrower, because `--no-index` drops git's own repository-boundary
-check. See "Untracked files" below.
+`git diff --no-index` for an untracked file. `--no-index` drops git's own
+repository-boundary check, so that operand is guarded by `isSafeNoIndexPath`
+*and* resolved on disk (local) or checked against git's own untracked listing
+(remote) before it is used. See "Untracked files" below.
 
-Given (5), `isSafeShellArg`/`isSafeCwd`/`isSafeGitPath` stay a **denylist** (control characters, any `..` segment, and now a leading `:`) rather than a positive character allowlist. Git paths and cwds legitimately contain almost any byte — spaces, unicode, punctuation, even a literal backtick or `$` in a filename — and an allowlist narrow enough to catch every shell metacharacter would also reject a lot of real filenames for no safety gain, since the metacharacters are already neutralized by the quoting, not by the character check. This mirrors the `open-terminal` `preLaunchCmd` guard's own documented lesson (`.ai/contexts/ipc-bridge.md`, "IPC path-guard inventory"): a denylist proved incomplete there because that string is deliberately raw shell; here the string is never raw shell in the first place, so closing by quoting is available and preferred over closing by enumeration.
+Given (5), `isSafeShellArg`/`isSafeCwd`/`isSafeGitPath` stay a **denylist** (control characters, a `..` path segment, a leading `:`) rather than a positive character allowlist. The `..` test is on segments, split on both separators, not on the raw string: `..` is a traversal only as a whole segment, and a substring test refuses ordinary filenames — `has..dots.txt`, `v1..v2.diff`, `archive..2024.tar` — that git lists and the panel must therefore be able to open. Git paths and cwds legitimately contain almost any byte — spaces, unicode, punctuation, even a literal backtick or `$` in a filename — and an allowlist narrow enough to catch every shell metacharacter would also reject a lot of real filenames for no safety gain, since the metacharacters are already neutralized by the quoting, not by the character check. This mirrors the `open-terminal` `preLaunchCmd` guard's own documented lesson (`.ai/contexts/ipc-bridge.md`, "IPC path-guard inventory"): a denylist proved incomplete there because that string is deliberately raw shell; here the string is never raw shell in the first place, so closing by quoting is available and preferred over closing by enumeration.
 
 `buildRemoteGitCommand`/`shQuote` never emit a backtick for any input, proven in `test/git-changes-runner.test.js` including adversarial cwd/path values containing backtick, `$(...)`, and an embedded single quote.
 
@@ -63,16 +64,40 @@ An untracked file is a first-class row: one row per file, a real diff on click,
 and line counts that reach the header total. Four decisions hold that up, each
 measured against real git (git 2.53, `test/git-changes-runner-real-git.test.js`).
 
-**1. `status` runs with `-uall`.** Git's default `--untracked-files=normal`
-reports a wholly-untracked directory as a single entry (`? newdir/`) and never
-descends, so a brand-new directory collapsed to one row whose `path` was a
-directory — unopenable, uncountable. `-uall` lists every file individually
-(`? newdir/a.txt`, `? newdir/sub/b.txt`), which is what makes "no row's `path`
-is ever a directory" an invariant rather than a hope. The cost is a longer
-status output on a repo with a large unignored tree; it is bounded by the
-existing `STATUS_MAX_STDOUT_BYTES` (2 MB) cap on the remote transport, and by
-`execFile`'s `maxBuffer` locally — a repo that overruns it surfaces the cap
-message instead of a wrong answer.
+**1. `status` runs with `-uall`, with a floor under it.** Git's default
+`--untracked-files=normal` reports a wholly-untracked directory as a single
+entry (`? newdir/`) and never descends, so a brand-new directory is one row
+whose `path` is a directory — unopenable, uncountable. `-uall` lists every file
+individually (`? newdir/a.txt`, `? newdir/sub/b.txt`), which is what makes "no
+row's `path` is ever a directory" an invariant rather than a hope.
+
+The cost is volume, and it is bounded at both ends. Measured on a synthetic
+repo, 20 000 untracked files: ~570 KB of porcelain and ~70 ms (against ~8 ms
+and 81 bytes for the same repo without `-uall`) — time is a non-issue even on
+every busy→idle edge, volume is not. At ~28 bytes per row for short paths, and
+2–3× that for realistic ones, the remote transport's
+`STATUS_MAX_STDOUT_BYTES` (2 MiB) cap is reached somewhere around 25 000–35 000
+untracked files. That cap is a **hard error** (`stdout exceeded …`, empty
+stdout), so taking it at face value would blank the whole panel — including the
+tracked changes, which cost nothing and are usually the reason the panel is
+open. So a failing `-uall` status is retried once with git's default untracked
+mode; if that succeeds the result comes back `untrackedCollapsed: true` and the
+panel renders the tracked rows, the collapsed `? dir/` rows, and a note saying
+the untracked listing is coarse. If the retry fails too, the original error is
+returned unchanged — a broken repository is still an error, not a degraded
+listing.
+
+The renderer holds the other end: `MAX_CHANGES_ROWS` (500) in
+`public/file-panel.js` caps how many rows are built, with a `+N more files not
+shown` note for the remainder. Every row is a DOM node plus its own click
+listener, rebuilt from scratch on every refresh, and `refreshChanges` runs on
+every busy→idle edge — an unbounded list would put tens of thousands of node
+constructions on the Electron UI thread at exactly the moment a turn ends. 500
+is a reading limit, not a memory one: the panel is a viewer, and a list longer
+than that is not scanned, it is searched — which this panel does not offer.
+Porcelain v2 emits the ordinary/rename/unmerged records before the untracked
+ones (measured), so the rows dropped by the cap are untracked ones first; the
+header total keeps counting every file, capped or not.
 
 **2. The empty side of the diff is the literal string `/dev/null`.**
 `git diff --no-index -- /dev/null <path>` produces exactly the new-file diff
@@ -84,8 +109,12 @@ Measured: `git diff --no-index -- /dev/null /dev/zero` fails with
 device), while `/dev/null` on the same side succeeds; and `nul`, git's Windows
 spelling for the same thing, is refused on Linux. Both observations match git's
 own `diff-no-index.c`, where the `/dev/null` string is special-cased
-unconditionally and `nul` only under `GIT_WINDOWS_NATIVE`. So `/dev/null` is
-the portable spelling, and the two alternatives are worse: creating an empty
+unconditionally and `nul` only under `GIT_WINDOWS_NATIVE`. **The Windows half of
+that reasoning has never been executed** — every measurement here is from Linux;
+the `windows-2022` CI leg running `test/git-changes-runner-real-git.test.js` is
+the evidence, and it is worth reading before merging anything that touches this
+operand. So `/dev/null` is the portable spelling, and the two alternatives are
+worse: creating an empty
 temp file means writing into a repository under test (and cleaning it up on
 every error path, remote included), and `git add -N` mutates the index of a
 repository the user is actively working in, which a read-only viewer must never
@@ -102,27 +131,56 @@ stdout plus a message on stderr is an error. A successful `--no-index` against
 `/dev/null` always writes at least a `diff --git`/`new file mode` header, even
 for an empty file.
 
-**4. A `--no-index` operand is a filesystem path, and gets a stricter guard
-than a pathspec** (`isSafeNoIndexPath`, not `isSafeGitPath`). The pathspec guard
-can afford to be a denylist because git itself enforces the repository boundary:
-an absolute pathspec outside the repo is refused with `fatal: … is outside
-repository` (measured; see below). **`--no-index` has no such containment check
-at all** — measured: raw `git diff --no-index -- /dev/null /tmp/…/outside-secret.txt`
-from inside the repo prints the file. Nothing downstream would stop it, so the
-guard is what keeps an untracked diff inside the working directory:
-`isSafeNoIndexPath` = `isSafeGitPath` (control characters, any `..`, leading
-`:`) **plus** no absolute path (leading `/`, leading `\`, `X:` drive prefix) and
-no leading `-` (the operand sits where git parses options, and `--` separation
-is belt-and-braces, not the only defense). A repo-root-level file whose name
-starts with `-` is therefore not diffable from the panel — an accepted, narrow
-loss against an operand that could otherwise be read as a git option.
+**4. A `--no-index` operand is a filesystem path, so containment is resolved,
+never inferred from the string.** The pathspec guard (`isSafeGitPath`) can
+afford to be a denylist because git itself enforces the repository boundary: an
+absolute pathspec outside the repo is refused with `fatal: … is outside
+repository` (measured; see below). **`--no-index` has no containment check at
+all** — measured: raw `git diff --no-index -- /dev/null /tmp/…/outside-secret.txt`
+from inside the repo prints the file. Nothing downstream stops it, so the runner
+does, in two layers:
 
-Nothing changes for the remote transport: the untracked call goes through the
-same `invoke()` → `buildRemoteGitCommand`/`shQuote` path as every other command,
-so `/dev/null` and the path are each their own single-quoted token and the
-"never emits a backtick outside a quoted token" property is unchanged
-(asserted in `test/git-changes-runner.test.js` with a path containing a
-backtick and `$(…)`).
+- **Syntactic** (`isSafeNoIndexPath`): `isSafeGitPath` (control characters, a
+  `..` path segment, a leading `:`) **plus** no absolute path (leading `/`,
+  leading `\`, `X:` drive prefix) and no leading `-` (the operand sits where git
+  parses options; `--` separation is belt-and-braces, not the only defense). A
+  repo-root-level file whose name starts with `-` is therefore not diffable from
+  the panel — an accepted, narrow loss.
+- **Resolved** — the layer that actually enforces containment, because a
+  syntactic check cannot: a symlink *inside* the repo pointing at a directory
+  *outside* it yields an operand with no `..`, not absolute, that reads anything
+  under that directory (measured: raw git prints the out-of-repo file for
+  `link-to-dir/outside-secret.txt`). What each transport can do about it differs:
+  - **Local** (`resolveLocalNoIndexOperand`): `fs.realpathSync.native` on the
+    cwd and on the operand's **parent directory**, and the parent must be the
+    resolved root or below it (`path.relative`, not a string prefix — a sibling
+    named `/repo-evil` shares the prefix but is not inside `/repo`). The parent,
+    not the leaf: git `lstat`s the operand itself, so a leaf symlink diffs as
+    `new file mode 120000` plus the link target *string* and leaks no content —
+    resolving the leaf would instead refuse a row git legitimately lists. An
+    `lstat` on the leaf then requires a regular file or a symlink, which also
+    keeps a FIFO (where `git diff --no-index` blocks until the timeout) away
+    from git. This is the `resolveOnDisk` + realpath-containment shape
+    `ipc-path-validator.js` documents, including its TOCTOU rule: what git
+    receives is the **guard's** operand (relative to the resolved root), never
+    the caller's string.
+  - **Remote**: there is no local filesystem to resolve against, so git's own
+    view of the repository is the oracle —
+    `git ls-files --others --exclude-standard -z -- <path>` must return exactly
+    that path before any diff is sent. Measured: it lists a genuine untracked
+    file, and returns nothing for a path behind a symlinked directory (git's
+    traversal does not descend symlinks), for a tracked file, or for a FIFO.
+    Cost: one extra ssh round-trip per untracked row click, sequential (running
+    it alongside the diff would mean the far host had already read the file).
+  - `fsOps` (`{realpath, lstat}`) is dependency injection for tests only, the
+    same seam `remote-attach.js` uses for `spawnFn`; production always takes the
+    real fs.
+
+The untracked calls go through the same `invoke()` →
+`buildRemoteGitCommand`/`shQuote` path as every other command, so `/dev/null`
+and the path are each their own single-quoted token and the "never emits a
+backtick outside a quoted token" property holds for both of them (asserted in
+`test/git-changes-runner.test.js` with a path containing a backtick and `$(…)`).
 
 #### Why the counts arrive on click, not with status
 
@@ -152,10 +210,19 @@ session, and local and remote must not disagree about what the panel shows.
 A `--no-index` diff's file-header lines are `--- /dev/null` and `+++ b/<path>`
 (not the `a/<path> b/<path>` pair a tracked diff carries). `classifyDiffLine()`
 keys on the `---`/`+++`/`@@`/`+`/`-` prefixes only, so both land on
-`changes-diff-file-header` exactly as they do for a tracked diff — no renderer
-change was needed, and `test/dom-file-panel-changes.test.js` pins it so a future
-"classify by `a/`…`b/` pair" refactor cannot silently render `--- /dev/null` as
-a deleted line.
+`changes-diff-file-header` exactly as a tracked diff's do.
+`test/dom-file-panel-changes.test.js` pins that, so a "classify by the
+`a/`…`b/` pair" refactor cannot silently render `--- /dev/null` as a deleted
+line.
+
+A count is only ever written back onto the status result it was computed
+against: `applyUntrackedCounts` takes that result and returns early unless
+`tab.data` is still the same object. `refreshChanges` replaces `tab.data` but
+leaves `tab.selectedFile` alone, so the in-flight guard on the diff response
+(`currentTab`/`selectedFile` identity) does not catch a refresh that landed
+mid-flight — and the row a stale count would be stamped on is re-found by path,
+which may by then be a *tracked* file carrying git's own authoritative numstat
+counts.
 
 ### Remote transport stdout cap (`remote-attach.js` `defaultRunRemoteCommand`)
 

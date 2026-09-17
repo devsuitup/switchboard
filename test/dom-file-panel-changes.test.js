@@ -251,6 +251,102 @@ test('an untracked binary file keeps null counts — the row stays countless and
   } finally { ctx.destroy(); }
 });
 
+test('a count computed against one status result is never applied to a later one (mutation target: dropping the identity check)', async () => {
+  // v2 is what git says after the user staged and trimmed new.txt while the
+  // untracked diff of v1 was still in flight: the file is tracked now, with
+  // authoritative numstat counts that must not be overwritten.
+  const v2 = {
+    ok: true,
+    branch: { head: 'main', upstream: 'origin/main', ahead: 1, behind: 0 },
+    files: [
+      { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
+      { path: 'new.txt', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'A', added: 2, deleted: 7 },
+    ],
+    totals: { files: 2, added: 5, deleted: 8 },
+  };
+  let statusCall = 0;
+  let releaseDiff;
+  const ctx = setupFilePanelDom({
+    statusImpl: () => (statusCall++ === 0 ? makeStatusResult() : v2),
+    diffImpl: () => new Promise((resolve) => { releaseDiff = () => resolve(UNTRACKED_DIFF_RESULT); }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
+      .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    // A busy→idle edge lands while the diff is still in flight.
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    assert.equal(ctx.calls.status.length, 2, 'the refresh happened');
+
+    releaseDiff();
+    await flush();
+
+    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
+    backBtn.click();
+
+    const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(counts.textContent, '+2−7', 'git\'s own counts must survive the stale diff');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+5 −8/);
+  } finally { ctx.destroy(); }
+});
+
+test('an overrun -uall listing degrades instead of blanking the panel: tracked rows render, with a note', async () => {
+  const collapsed = {
+    ok: true,
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
+      { path: 'vendor/', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null },
+    ],
+    totals: { files: 2, added: 3, deleted: 1 },
+    untrackedCollapsed: true,
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => collapsed });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2, 'tracked changes still render');
+    const note = ctx.document.querySelector('.changes-degraded-note');
+    assert.ok(note, 'the panel says why the untracked listing is coarse');
+    assert.match(note.textContent, /collapsed/);
+    assert.equal(ctx.document.querySelector('.changes-error'), null, 'this is a degraded listing, not an error');
+  } finally { ctx.destroy(); }
+});
+
+test('the row list is capped, with a note for the remainder (mutation target: rendering one node per file unbounded)', async () => {
+  const many = {
+    ok: true,
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: Array.from({ length: 1200 }, (_, i) => ({
+      path: `f${i}.txt`, origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null,
+    })),
+    totals: { files: 1200, added: 0, deleted: 0 },
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => many });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const rows = ctx.document.querySelectorAll('.changes-file-row');
+    assert.ok(rows.length < 1200, 'the list must not build one node per file without a bound');
+    assert.equal(rows.length, 500);
+    const more = ctx.document.querySelector('.changes-more-note');
+    assert.ok(more, 'the user must be told rows are missing');
+    assert.equal(more.textContent, '+700 more files not shown');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /1200 files changed/, 'the header still counts every file');
+  } finally { ctx.destroy(); }
+});
+
 test('a failed untracked diff surfaces the error and leaves the counts alone', async () => {
   const ctx = setupFilePanelDom({ diffImpl: () => ({ ok: false, error: 'fatal: bad thing' }) });
   try {

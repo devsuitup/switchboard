@@ -3,6 +3,8 @@
 'use strict';
 
 const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { defaultRunRemoteCommand } = require('./remote-attach');
 const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions } = require('./git-changes');
 
@@ -24,10 +26,14 @@ function isSafeCwd(cwd) {
   return isSafeShellArg(cwd);
 }
 
+function hasDotDotSegment(p) {
+  return p.split(/[/\\]/).includes('..');
+}
+
 // Denylist plus a leading-':' shape check — see .ai/contexts/changes-view.md ("Quoting rule").
 function isSafeGitPath(p) {
   if (!isSafeShellArg(p)) return false;
-  if (p.includes('..')) return false;
+  if (hasDotDotSegment(p)) return false;
   if (p[0] === ':') return false;
   return true;
 }
@@ -41,6 +47,39 @@ function isSafeNoIndexPath(p) {
   if (p[0] === '/' || p[0] === '\\') return false;
   if (/^[A-Za-z]:/.test(p)) return false;
   return true;
+}
+
+// fs seam — injected in tests, real fs in production (same pattern as remote-attach.js's spawnFn)
+const DEFAULT_FS_OPS = {
+  realpath: (p) => fs.realpathSync.native(p),
+  lstat: (p) => fs.lstatSync(p),
+};
+
+function isInsideRoot(root, candidate) {
+  if (candidate === root) return true;
+  const rel = path.relative(root, candidate);
+  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+// Containment for a --no-index operand — see .ai/contexts/changes-view.md ("Untracked files")
+function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS) {
+  if (!isSafeNoIndexPath(filePath)) return null;
+
+  try {
+    const root = fsOps.realpath(cwd);
+    const absolute = path.resolve(root, filePath);
+    const parent = fsOps.realpath(path.dirname(absolute));
+    if (!root || !parent || !isInsideRoot(root, parent)) return null;
+
+    const resolved = path.join(parent, path.basename(absolute));
+    const stat = fsOps.lstat(resolved);
+    if (!stat.isFile() && !stat.isSymbolicLink()) return null;
+
+    const operand = path.relative(root, resolved);
+    return isSafeNoIndexPath(operand) ? operand : null;
+  } catch {
+    return null;
+  }
 }
 
 // --literal-pathspecs on every invocation — see .ai/contexts/changes-view.md ("Quoting rule").
@@ -99,8 +138,8 @@ function firstError(result) {
   return (result.stderr || '').trim() || `git exited with code ${result.code}`;
 }
 
-// {kind, cwd, alias, exec, timeoutMs} — see .ai/contexts/changes-view.md ("Runner interface")
-function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
+// {kind, cwd, alias, exec, timeoutMs, fsOps} — see .ai/contexts/changes-view.md ("Runner interface")
+function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {}) {
   if (kind !== 'local' && kind !== 'remote') {
     throw new Error('createGitChangesRunner requires kind "local" or "remote"');
   }
@@ -137,24 +176,59 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
     } catch (err) {
       return { ok: false, error: err.message };
     }
-    const [st, unstagedNum, stagedNum] = results;
-    if (st.code !== 0) return { ok: false, error: firstError(st) };
+    let [st] = results;
+    const [, unstagedNum, stagedNum] = results;
     if (unstagedNum.code !== 0) return { ok: false, error: firstError(unstagedNum) };
     if (stagedNum.code !== 0) return { ok: false, error: firstError(stagedNum) };
+
+    // A repo too large for -uall falls back to git's collapsed listing — see .ai/contexts/changes-view.md ("Untracked files")
+    let untrackedCollapsed = false;
+    if (st.code !== 0) {
+      let fallback;
+      try {
+        fallback = await invoke(['status', '--porcelain=v2', '--branch', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES });
+      } catch {
+        return { ok: false, error: firstError(st) };
+      }
+      if (fallback.code !== 0) return { ok: false, error: firstError(st) };
+      st = fallback;
+      untrackedCollapsed = true;
+    }
 
     const parsedStatus = parseStatusPorcelainV2(st.stdout);
     const numstatUnstaged = parseNumstat(unstagedNum.stdout);
     const numstatStaged = parseNumstat(stagedNum.stdout);
-    return { ok: true, ...mergeChanges(parsedStatus, numstatStaged, numstatUnstaged) };
+    return { ok: true, ...mergeChanges(parsedStatus, numstatStaged, numstatUnstaged), untrackedCollapsed };
+  }
+
+  // The operand git receives is the guard's own, never the caller's — see .ai/contexts/changes-view.md ("Untracked files")
+  async function resolveUntrackedOperand(filePath) {
+    if (!isSafeNoIndexPath(filePath)) return { ok: false, error: 'invalid path' };
+
+    if (kind === 'local') {
+      const operand = resolveLocalNoIndexOperand(cwd, filePath, fsOps || DEFAULT_FS_OPS);
+      return operand ? { ok: true, operand } : { ok: false, error: 'invalid path' };
+    }
+
+    let listed;
+    try {
+      listed = await invoke(['ls-files', '--others', '--exclude-standard', '-z', '--', filePath], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES });
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    if (listed.code !== 0) return { ok: false, error: firstError(listed) };
+    const operand = String(listed.stdout || '').split('\0')[0];
+    return operand === filePath ? { ok: true, operand } : { ok: false, error: 'invalid path' };
   }
 
   // `--no-index` exits 1 on a difference — see .ai/contexts/changes-view.md ("Untracked files")
-  async function untrackedDiff(path) {
-    if (!isSafeNoIndexPath(path)) return { ok: false, error: 'invalid path' };
+  async function untrackedDiff(filePath) {
+    const contained = await resolveUntrackedOperand(filePath);
+    if (!contained.ok) return { ok: false, error: contained.error };
 
     let result;
     try {
-      result = await invoke(['diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, path], { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
+      result = await invoke(['diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, contained.operand], { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -167,11 +241,11 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs } = {}) {
     return { ok: true, content, truncated, added, deleted: added === null ? null : 0 };
   }
 
-  async function diff(path, opts = {}) {
-    if (opts.untracked) return untrackedDiff(path);
-    if (!isSafeGitPath(path)) return { ok: false, error: 'invalid path' };
+  async function diff(filePath, opts = {}) {
+    if (opts.untracked) return untrackedDiff(filePath);
+    if (!isSafeGitPath(filePath)) return { ok: false, error: 'invalid path' };
     const staged = !!opts.staged;
-    const args = staged ? ['diff', '--cached', '--', path] : ['diff', '--', path];
+    const args = staged ? ['diff', '--cached', '--', filePath] : ['diff', '--', filePath];
 
     let result;
     try {
@@ -197,6 +271,7 @@ module.exports = {
   isSafeCwd,
   isSafeGitPath,
   isSafeNoIndexPath,
+  resolveLocalNoIndexOperand,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
