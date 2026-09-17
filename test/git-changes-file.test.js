@@ -53,6 +53,26 @@ test('isSafeRepoRelativePath accepts the ordinary paths git status reports', () 
   }
 });
 
+// `.git/config` carries core.pager and [alias]: writing it is command execution.
+test('both guards reject any .git segment, in any case and at any depth (mutation target: the .git check)', () => {
+  for (const p of ['.git', '.git/config', '.git/hooks/pre-commit', '.GIT/config', 'sub/.git/config', 'sub/.Git/x', '.git\\\\config']) {
+    assert.equal(isSafeRepoRelativePath(p), false, p);
+    assert.equal(isSafeRevPathOperand(p), false, p);
+  }
+});
+
+// `..` is a path segment, not a substring: a file may legitimately be named a..b.
+test('the traversal check is a segment check, so an ordinary file with two dots in its name is editable', () => {
+  for (const p of ['schema..v2.sql', 'a..b.txt', 'dir/x..y']) {
+    assert.equal(isSafeRepoRelativePath(p), true, p);
+    assert.equal(isSafeRevPathOperand(p), true, p);
+  }
+  for (const p of ['..', 'a/..', '../x', 'a/../../b', 'a\\\\..\\\\b']) {
+    assert.equal(isSafeRepoRelativePath(p), false, p);
+    assert.equal(isSafeRevPathOperand(p), false, p);
+  }
+});
+
 // `git show :1:f.txt` reads stage 1 of a conflicted path — a second layer of
 // revision syntax hiding inside what the renderer called a file path.
 test('isSafeRevPathOperand rejects the `:<n>:<path>` stage syntax that isSafeRepoRelativePath alone allows', () => {

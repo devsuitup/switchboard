@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { readChangesFile, writeChangesFile } = require('../git-changes-file');
+const { readChangesFile, writeChangesFile, versionOf } = require('../git-changes-file');
 
 // git translates its diagnostics; the assertions below match its English text.
 process.env.LC_ALL = 'C';
@@ -58,6 +58,25 @@ function initRepo(repoDir) {
 
 function read(repoDir, relPath, staged) {
   return readChangesFile({ cwd: repoDir, relPath, staged: !!staged, maxBytes: MAX_BYTES });
+}
+
+// The version token of what is on disk right now, i.e. a save that races nothing.
+function currentVersion(repoDir, relPath) {
+  try {
+    return versionOf(fs.readFileSync(path.join(repoDir, relPath)));
+  } catch {
+    return 'no-such-file';
+  }
+}
+
+function save(repoDir, relPath, content, version) {
+  return writeChangesFile({
+    cwd: repoDir,
+    relPath,
+    content,
+    version: version === undefined ? currentVersion(repoDir, relPath) : version,
+    maxBytes: MAX_BYTES,
+  });
 }
 
 // --- The content pair ---------------------------------------------------
@@ -226,12 +245,71 @@ test('real git: a symlink inside the repository pointing outside it is refused b
 
     const readResult = await read(repoDir, 'link.txt', false);
     assert.equal(readResult.ok, false, 'a symlinked escape must not read the file it points at');
+    assert.equal(readResult.reason, 'symlink');
+
+    const writeResult = await save(repoDir, 'link.txt', 'overwritten\n');
+    assert.equal(writeResult.ok, false);
+    assert.equal(writeResult.reason, 'symlink');
+    assert.equal(fs.readFileSync(secret, 'utf8'), OUTSIDE_SECRET, 'the file outside the repository is untouched');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a symlinked directory inside the repository is an escape the containment check catches (mutation target: the containment check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const outsideDir = path.join(tmp, 'outside');
+    fs.mkdirSync(outsideDir);
+    fs.writeFileSync(path.join(outsideDir, 'passwd'), OUTSIDE_SECRET);
+    fs.symlinkSync(outsideDir, path.join(repoDir, 'linkdir'));
+
+    const readResult = await read(repoDir, 'linkdir/passwd', false);
+    assert.equal(readResult.ok, false, 'the last component is a real file, so only containment can refuse this');
     assert.equal(readResult.reason, 'outside');
 
-    const writeResult = await writeChangesFile({ cwd: repoDir, relPath: 'link.txt', content: 'overwritten\n', maxBytes: MAX_BYTES });
+    const writeResult = await save(repoDir, 'linkdir/passwd', 'pwned\n');
     assert.equal(writeResult.ok, false);
     assert.equal(writeResult.reason, 'outside');
-    assert.equal(fs.readFileSync(secret, 'utf8'), OUTSIDE_SECRET, 'the file outside the repository is untouched');
+    assert.equal(fs.readFileSync(path.join(outsideDir, 'passwd'), 'utf8'), OUTSIDE_SECRET);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a symlink to another file inside the repository is refused, not silently followed (F5)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.symlinkSync(path.join(repoDir, 'f.txt'), path.join(repoDir, 'innerlink'));
+
+    const readResult = await read(repoDir, 'innerlink', false);
+    assert.equal(readResult.ok, false, 'the pair would be the link text against the target content');
+    assert.equal(readResult.reason, 'symlink');
+
+    const writeResult = await save(repoDir, 'innerlink', 'PWNED\n');
+    assert.equal(writeResult.ok, false, 'the row names one path; the write must not land on another');
+    assert.equal(writeResult.reason, 'symlink');
+    assert.equal(fs.readFileSync(path.join(repoDir, 'f.txt'), 'utf8'), 'worktree\n', 'the link target is untouched');
+    assert.equal(fs.lstatSync(path.join(repoDir, 'innerlink')).isSymbolicLink(), true);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: anything under .git is refused, on the read and on the write (mutation target: the .git segment check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const configPath = path.join(repoDir, '.git', 'config');
+    const configBefore = fs.readFileSync(configPath, 'utf8');
+
+    for (const relPath of ['.git/config', '.git/hooks/pre-commit.sample', '.GIT/config', 'sub/../.git/config', '.git']) {
+      const readResult = await read(repoDir, relPath, false);
+      assert.equal(readResult.ok, false, `read must refuse ${relPath}`);
+
+      const writeResult = await save(repoDir, relPath, '[core]\n\tpager = OWNED\n');
+      assert.equal(writeResult.ok, false, `write must refuse ${relPath}`);
+    }
+    assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore, 'git config is a command-execution primitive');
   } finally { cleanup(tmp); }
 });
 
@@ -282,7 +360,7 @@ test('real git: a save writes the working-tree file and the next read sees it', 
     const repoDir = path.join(tmp, 'repo');
     initRepo(repoDir);
 
-    const result = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'edited\n', maxBytes: MAX_BYTES });
+    const result = await save(repoDir, 'f.txt', 'edited\n');
     assert.equal(result.ok, true, result.error);
     assert.equal(fs.readFileSync(path.join(repoDir, 'f.txt'), 'utf8'), 'edited\n');
 
@@ -298,7 +376,7 @@ test('real git: a save never creates a file that does not exist', async () => {
     const repoDir = path.join(tmp, 'repo');
     initRepo(repoDir);
 
-    const result = await writeChangesFile({ cwd: repoDir, relPath: 'nope.txt', content: 'x\n', maxBytes: MAX_BYTES });
+    const result = await save(repoDir, 'nope.txt', 'x\n');
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'missing');
     assert.equal(fs.existsSync(path.join(repoDir, 'nope.txt')), false);
@@ -313,7 +391,7 @@ test('real git: a save refuses every adversarial path shape and writes nothing (
     const secret = withOutsideFile(tmp);
 
     for (const relPath of ['../outside-secret.txt', '../../etc/passwd', secret, 'f\n.txt', '', ':(exclude)f.txt', '-rf']) {
-      const result = await writeChangesFile({ cwd: repoDir, relPath, content: 'pwned\n', maxBytes: MAX_BYTES });
+      const result = await save(repoDir, relPath, 'pwned\n');
       assert.equal(result.ok, false, `must refuse ${JSON.stringify(relPath)}`);
     }
     assert.equal(fs.readFileSync(secret, 'utf8'), OUTSIDE_SECRET);
@@ -330,16 +408,20 @@ test('real git: the save writes the path the guard returned, not a re-derived jo
     initRepo(repoDir);
     fs.mkdirSync(path.join(repoDir, 'real'));
     fs.writeFileSync(path.join(repoDir, 'real', 'f.txt'), 'before\n');
+    // A symlinked directory inside the repo: the file itself is a real file, so
+    // it is editable, but the path the guard resolves is not the path it was given.
     fs.symlinkSync(path.join(repoDir, 'real'), path.join(repoDir, 'link'));
 
     const written = [];
     const fakeFs = {
       statSync: (p) => fs.statSync(p),
+      lstatSync: (p) => fs.lstatSync(p),
+      readFileSync: (p) => fs.readFileSync(p),
       writeFileSync: (p, content, enc) => { written.push(p); fs.writeFileSync(p, content, enc); },
     };
 
     const result = await writeChangesFile(
-      { cwd: repoDir, relPath: 'link/f.txt', content: 'after\n', maxBytes: MAX_BYTES },
+      { cwd: repoDir, relPath: 'link/f.txt', content: 'after\n', version: currentVersion(repoDir, 'link/f.txt'), maxBytes: MAX_BYTES },
       { fs: fakeFs },
     );
     assert.equal(result.ok, true, result.error);
@@ -354,14 +436,248 @@ test('real git: a save refuses content over the cap and non-string content', asy
     const repoDir = path.join(tmp, 'repo');
     initRepo(repoDir);
 
-    const tooBig = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'x'.repeat(2048), maxBytes: 1024 });
+    const tooBig = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'x'.repeat(2048), version: currentVersion(repoDir, 'f.txt'), maxBytes: 1024 });
     assert.equal(tooBig.ok, false);
     assert.equal(tooBig.reason, 'too-large');
 
-    const notAString = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: null, maxBytes: MAX_BYTES });
+    const notAString = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: null, version: currentVersion(repoDir, 'f.txt'), maxBytes: MAX_BYTES });
     assert.equal(notAString.ok, false);
     assert.equal(notAString.reason, 'invalid-content');
 
+    const noVersion = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'x\n', maxBytes: MAX_BYTES });
+    assert.equal(noVersion.ok, false);
+    assert.equal(noVersion.reason, 'invalid-version', 'a caller that carries no token cannot overwrite anything');
+
     assert.equal(fs.readFileSync(path.join(repoDir, 'f.txt'), 'utf8'), 'worktree\n');
+  } finally { cleanup(tmp); }
+});
+
+// --- Saving over a file that moved (F1) ----------------------------------
+
+test('real git: a save is refused when the file changed since it was read, and the other writer keeps its bytes (mutation target: the version token)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'f.txt');
+
+    const opened = await read(repoDir, 'f.txt', false);
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(typeof opened.version, 'string');
+
+    // The session writes the file while the panel holds it open.
+    fs.writeFileSync(target, 'IMPORTANT WORK BY THE SESSION\n');
+
+    const refused = await writeChangesFile({
+      cwd: repoDir, relPath: 'f.txt', content: opened.current + 'my edit\n', version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'stale');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'IMPORTANT WORK BY THE SESSION\n', 'the session\'s uncommitted work survives');
+
+    // Re-reading hands back a token that matches, and the save goes through.
+    const reread = await read(repoDir, 'f.txt', false);
+    const accepted = await writeChangesFile({
+      cwd: repoDir, relPath: 'f.txt', content: 'mine now\n', version: reread.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(accepted.ok, true, accepted.error);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'mine now\n');
+    assert.equal(accepted.version, reread.version === accepted.version ? accepted.version : accepted.version);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: the token a save returns is the one the next save must carry', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+
+    const opened = await read(repoDir, 'f.txt', false);
+    const first = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'one\n', version: opened.version, maxBytes: MAX_BYTES });
+    assert.equal(first.ok, true, first.error);
+
+    const stale = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'two\n', version: opened.version, maxBytes: MAX_BYTES });
+    assert.equal(stale.ok, false, 'the token from before the first save is spent');
+    assert.equal(stale.reason, 'stale');
+
+    const second = await writeChangesFile({ cwd: repoDir, relPath: 'f.txt', content: 'two\n', version: first.version, maxBytes: MAX_BYTES });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'f.txt'), 'utf8'), 'two\n');
+  } finally { cleanup(tmp); }
+});
+
+// --- Line endings (F2) ----------------------------------------------------
+
+test('real git: a CRLF file reads as LF and is written back as CRLF, so a no-op save is a no-op in git (mutation target: the line-ending round trip)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, 'crlf.txt'), 'one\r\ntwo\r\nthree\r\n');
+    git(repoDir, ['add', 'crlf.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'crlf']);
+
+    const opened = await read(repoDir, 'crlf.txt', true);
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(opened.current, 'one\ntwo\nthree\n', 'the editor never sees a CR it would strip on its own');
+    assert.equal(opened.original, 'one\ntwo\nthree\n');
+
+    // What CodeMirror hands back: the same document, LF-joined.
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'crlf.txt', content: opened.current, version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'crlf.txt'), 'utf8'), 'one\r\ntwo\r\nthree\r\n',
+      'the file keeps the line endings it had');
+    assert.equal(git(repoDir, ['status', '--porcelain', '--', 'crlf.txt']).trim(), '', 'a no-op save leaves git with nothing to report');
+
+    // A real edit keeps CRLF too.
+    const edited = await writeChangesFile({
+      cwd: repoDir, relPath: 'crlf.txt', content: 'one\ntwo\nthree\nfour\n', version: saved.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(edited.ok, true, edited.error);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'crlf.txt'), 'utf8'), 'one\r\ntwo\r\nthree\r\nfour\r\n');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: an LF file stays LF even when the buffer carries a stray CR', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+
+    const opened = await read(repoDir, 'f.txt', false);
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'f.txt', content: 'a\r\nb\n', version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'f.txt'), 'utf8'), 'a\nb\n');
+  } finally { cleanup(tmp); }
+});
+
+// --- Encoding (F3) --------------------------------------------------------
+
+test('real git: a file that is not valid UTF-8 is refused rather than round-tripped through U+FFFD (mutation target: the encoding gate)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const latin = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    const target = path.join(repoDir, 'latin.txt');
+    fs.writeFileSync(target, latin);
+
+    const result = await read(repoDir, 'latin.txt', false);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'encoding', 'the panel has to tell this apart from a binary file');
+    assert.deepEqual(fs.readFileSync(target), latin, 'and the bytes are untouched');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a blob that is not valid UTF-8 is refused too, even when the working tree side is clean', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, 'latin.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    git(repoDir, ['add', 'latin.txt']);
+    fs.writeFileSync(path.join(repoDir, 'latin.txt'), 'cafe\n');
+
+    const result = await read(repoDir, 'latin.txt', false);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'encoding');
+  } finally { cleanup(tmp); }
+});
+
+// --- A `cat-file` failure is not a new file (F10) -------------------------
+
+test('a cat-file failure that is not "absent from this tree" is an error, not an empty original', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+
+    const timedOut = await readChangesFile(
+      { cwd: repoDir, relPath: 'f.txt', staged: false, maxBytes: MAX_BYTES },
+      { runGit: fakeRunGit({ code: -1, stderr: 'killed' }) },
+    );
+    assert.equal(timedOut.ok, false, 'a timeout must not be rendered as "every line is new"');
+    assert.equal(timedOut.reason, 'git');
+
+    const absent = await readChangesFile(
+      { cwd: repoDir, relPath: 'f.txt', staged: false, maxBytes: MAX_BYTES },
+      { runGit: fakeRunGit({ code: 128, stderr: "fatal: path 'f.txt' exists on disk, but not in the index" }) },
+    );
+    assert.equal(absent.ok, true, 'exit 128 is the untracked/new-file case');
+    assert.equal(absent.original, '');
+  } finally { cleanup(tmp); }
+});
+
+// Passes rev-parse through to real git and fails only the blob read.
+function fakeRunGit(blobResult) {
+  const realModule = require('../git-changes-file');
+  void realModule;
+  return (args, opts) => {
+    if (args[0] === 'rev-parse') {
+      const out = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: opts.cwd, env: scratchGitEnv() });
+      return Promise.resolve({ code: 0, stdout: out, stderr: '', tooLarge: false });
+    }
+    return Promise.resolve({ code: blobResult.code, stdout: Buffer.alloc(0), stderr: blobResult.stderr, tooLarge: false });
+  };
+}
+
+// --- The module's own invocation (F19) ------------------------------------
+
+test('the blob is read with `cat-file blob`, pinned on the module\'s own argv (mutation target: going back to `git show`)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+
+    const seen = [];
+    const runGit = (args, opts) => {
+      seen.push(args);
+      if (args[0] === 'rev-parse') {
+        return Promise.resolve({
+          code: 0,
+          stdout: execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: opts.cwd, env: scratchGitEnv() }),
+          stderr: '',
+          tooLarge: false,
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: Buffer.from('indexed\n'), stderr: '', tooLarge: false });
+    };
+
+    const unstaged = await readChangesFile({ cwd: repoDir, relPath: 'f.txt', staged: false, maxBytes: MAX_BYTES }, { runGit });
+    assert.equal(unstaged.ok, true, unstaged.error);
+    assert.deepEqual(seen[seen.length - 1], ['cat-file', 'blob', ':f.txt']);
+
+    const staged = await readChangesFile({ cwd: repoDir, relPath: 'f.txt', staged: true, maxBytes: MAX_BYTES }, { runGit });
+    assert.equal(staged.ok, true, staged.error);
+    assert.deepEqual(seen[seen.length - 1], ['cat-file', 'blob', 'HEAD:f.txt']);
+  } finally { cleanup(tmp); }
+});
+
+// --- A legitimately odd filename (F17) ------------------------------------
+
+test('real git: a file whose name contains `..` is editable; a real traversal still is not', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    withOutsideFile(tmp);
+    fs.writeFileSync(path.join(repoDir, 'schema..v2.sql'), 'select 1;\n');
+
+    const opened = await read(repoDir, 'schema..v2.sql', false);
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(opened.current, 'select 1;\n');
+
+    const saved = await save(repoDir, 'schema..v2.sql', 'select 2;\n');
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'schema..v2.sql'), 'utf8'), 'select 2;\n');
+
+    for (const relPath of ['../outside-secret.txt', 'sub/../../outside-secret.txt', '..', 'a/..']) {
+      const refused = await read(repoDir, relPath, false);
+      assert.equal(refused.ok, false, `a real traversal must still be refused: ${relPath}`);
+    }
   } finally { cleanup(tmp); }
 });

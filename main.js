@@ -1795,7 +1795,7 @@ ipcMain.handle('git-changes-file', async (_event, sessionId, filePath, opts) => 
   }
 });
 
-ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content) => {
+ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content, version) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
   if (!target.ok) return target;
@@ -1804,15 +1804,68 @@ ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content) 
       cwd: target.cwd,
       relPath: filePath,
       content,
+      version,
       maxBytes: PANEL_FILE_MAX_BYTES,
     });
     if (!result.ok) return result;
-    if (result.savedPath.includes('/.work-files/')) invalidateFtsSignature('work-file');
+    if (result.savedPath.split(/[\\/]/).includes('.work-files')) invalidateFtsSignature('work-file');
     if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    return { ok: true, version: result.version };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// see .ai/contexts/changes-view.md ("Saving over a file that moved")
+const changesWatchers = new Map();
+
+function changesWatchKey(sessionId, relPath) {
+  return sessionId + '\u0000' + relPath;
+}
+
+function stopChangesWatch(key) {
+  const entry = changesWatchers.get(key);
+  if (!entry) return;
+  try { entry.watcher.close(); } catch {}
+  if (entry.debounce) clearTimeout(entry.debounce);
+  changesWatchers.delete(key);
+}
+
+ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+
+  const key = changesWatchKey(sessionId, filePath);
+  stopChangesWatch(key);
+
+  const repoRoot = await gitChangesFile.resolveRepoRoot(target.cwd, {});
+  if (!repoRoot) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  const resolved = gitChangesFile.resolveTargetInsideRepo(repoRoot, filePath, {});
+  if (!resolved.ok) return resolved;
+
+  try {
+    const entry = { watcher: null, debounce: null };
+    entry.watcher = fs.watch(resolved.path, (eventType) => {
+      if (eventType !== 'change') return;
+      if (entry.debounce) clearTimeout(entry.debounce);
+      entry.debounce = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('git-changes-file-changed', sessionId, filePath);
+        }
+      }, 300);
+    });
+    changesWatchers.set(key, entry);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: true };
+  stopChangesWatch(changesWatchKey(sessionId, filePath));
+  return { ok: true };
 });
 
 // --- IPC: toggle-star ---
