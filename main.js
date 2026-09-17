@@ -73,6 +73,7 @@ function spawnPty(file, args, opts) {
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const { scanMdFiles } = require('./scan-md-files');
 const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
@@ -1225,32 +1226,12 @@ function folderToShortPath(folder) {
   return meaningful.slice(-2).join('/');
 }
 
-/** Scan a directory for .md files (non-recursive). Returns array of { filename, filePath, modified }. */
-function scanMdFiles(dir) {
-  const results = [];
-  try {
-    if (!fs.existsSync(dir)) return results;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.isFile() && e.name.endsWith('.md')) {
-        const fp = path.join(dir, e.name);
-        const content = fs.readFileSync(fp, 'utf8').trim();
-        if (content) {
-          const stat = fs.statSync(fp);
-          results.push({ filename: e.name, filePath: fp, modified: stat.mtime.toISOString() });
-        }
-      }
-    }
-  } catch {}
-  return results;
-}
-
 ipcMain.handle('get-memories', () => {
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
   // --- Global files ---
-  const globalFiles = scanMdFiles(CLAUDE_DIR).map(f => ({ ...f, displayPath: '~/.claude' }));
+  const globalFiles = scanMdFiles(CLAUDE_DIR, isAllowedMemoryPath).map(f => ({ ...f, displayPath: '~/.claude' }));
 
   // --- Per-project files ---
   const projects = [];
@@ -1275,14 +1256,14 @@ ipcMain.handle('get-memories', () => {
         const seenPaths = new Set();
 
         // 1. ~/.claude/projects/{folder}/ — claude-home .md files
-        const claudeHomeFiles = scanMdFiles(folderPath);
+        const claudeHomeFiles = scanMdFiles(folderPath, isAllowedMemoryPath);
         for (const f of claudeHomeFiles) {
           files.push({ ...f, displayPath: '~/.claude', source: 'claude-home' });
           seenPaths.add(f.filePath);
         }
         // memory/MEMORY.md
         const memoryDir = path.join(folderPath, 'memory');
-        const memoryFiles = scanMdFiles(memoryDir);
+        const memoryFiles = scanMdFiles(memoryDir, isAllowedMemoryPath);
         for (const f of memoryFiles) {
           files.push({ ...f, displayPath: '~/.claude', source: 'claude-home' });
           seenPaths.add(f.filePath);
@@ -1306,7 +1287,7 @@ ipcMain.handle('get-memories', () => {
 
           // 3. {projectPath}/.claude/ — commands/*.md and other .md files
           const dotClaudeDir = path.join(projectPath, '.claude');
-          const dotClaudeFiles = scanMdFiles(dotClaudeDir);
+          const dotClaudeFiles = scanMdFiles(dotClaudeDir, isAllowedMemoryPath);
           for (const f of dotClaudeFiles) {
             if (!seenPaths.has(f.filePath)) {
               files.push({ ...f, displayPath: shortName + '/.claude/', source: 'project' });
@@ -1315,7 +1296,7 @@ ipcMain.handle('get-memories', () => {
           }
           // commands/*.md
           const commandsDir = path.join(dotClaudeDir, 'commands');
-          const commandFiles = scanMdFiles(commandsDir);
+          const commandFiles = scanMdFiles(commandsDir, isAllowedMemoryPath);
           for (const f of commandFiles) {
             if (!seenPaths.has(f.filePath)) {
               files.push({ ...f, displayPath: shortName + '/.claude/commands/', source: 'project' });

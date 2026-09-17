@@ -5,6 +5,7 @@
 
 const path = require('path');
 const { resolveOnDisk } = require('./resolve-path-on-disk');
+const { isSensitivePath } = require('./ipc-path-validator');
 
 const SCHEDULE_FILENAME_RE = /^schedule-.*\.md$/i;
 
@@ -20,7 +21,20 @@ function resolveRunNowTarget(filePath, isPathAllowed) {
     return { ok: false, error: 'invalid path' };
   }
 
-  const real = resolveOnDisk(filePath);
+  const requested = path.resolve(filePath);
+
+  if (!SCHEDULE_FILENAME_RE.test(path.basename(requested))) {
+    return { ok: false, error: 'not a schedule file' };
+  }
+
+  const commandsDir = path.dirname(requested);
+  const dotClaudeDir = path.dirname(commandsDir);
+
+  if (path.basename(commandsDir) !== 'commands' || path.basename(dotClaudeDir) !== '.claude') {
+    return { ok: false, error: 'not inside a project .claude/commands directory' };
+  }
+
+  const real = resolveOnDisk(requested);
   if (!real) {
     return { ok: false, error: 'file not found' };
   }
@@ -29,15 +43,16 @@ function resolveRunNowTarget(filePath, isPathAllowed) {
     return { ok: false, error: 'not a schedule file' };
   }
 
-  const commandsDir = path.dirname(real);
-  const dotClaudeDir = path.dirname(commandsDir);
-  const projectPath = path.dirname(dotClaudeDir);
-
-  if (path.basename(commandsDir) !== 'commands' || path.basename(dotClaudeDir) !== '.claude') {
-    return { ok: false, error: 'not inside a project .claude/commands directory' };
+  if (isSensitivePath(real)) {
+    return { ok: false, error: 'path not allowed' };
   }
 
-  if (typeof isPathAllowed !== 'function' || !isPathAllowed(real)) {
+  const projectPath = resolveOnDisk(path.dirname(dotClaudeDir));
+  if (!projectPath) {
+    return { ok: false, error: 'project root not found' };
+  }
+
+  if (typeof isPathAllowed !== 'function' || !isPathAllowed(real) || !isPathAllowed(projectPath)) {
     return { ok: false, error: 'path not allowed' };
   }
 
