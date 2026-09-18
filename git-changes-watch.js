@@ -41,8 +41,7 @@ function createChangesWatchRegistry(deps) {
     entry.armed = false;
   }
 
-  // A rename replaces the inode the watch is bound to, so the watch is re-armed
-  // on the same path once the replacement has settled.
+  // see .ai/contexts/changes-view.md ("Saving over a file that moved")
   function onEvent(entry, eventType) {
     if (eventType === 'rename') entry.needsRearm = true;
     if (entry.timer) unschedule(entry.timer);
