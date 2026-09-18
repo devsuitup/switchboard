@@ -1757,17 +1757,6 @@ function gitChangesRunnerFor(target) {
     : createGitChangesRunner({ kind: 'local', cwd: target.cwd });
 }
 
-// Decides whether the Changes affordance is offered at all — see .ai/contexts/changes-view.md ("Not a repository")
-ipcMain.handle('git-changes-available', async (_event, sessionId) => {
-  const target = resolveGitChangesTarget(sessionId);
-  if (!target.ok) return target;
-  try {
-    return await gitChangesRunnerFor(target).isWorkTree();
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
 ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   const target = resolveGitChangesTarget(sessionId);
   if (!target.ok) return target;

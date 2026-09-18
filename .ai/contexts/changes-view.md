@@ -306,20 +306,20 @@ counts.
 
 ## Not a repository
 
-A session's working directory need not be inside a git work tree, and when it
-is not, the Changes affordance is not offered: `#changes-toggle-btn` is
-`display: none` for that session. The panel never renders a refusal for this
-case, because there is nothing to refuse — the button that would produce it is
-not there.
+A session's working directory need not be inside a git work tree. The Changes
+control is offered for every session regardless, and the panel reports whichever
+of four answers is true: the file list when there is a work tree with changes,
+`No changes` when that tree is clean, `This directory is not a git repository.`
+when there is no work tree, and git's own bounded message when there **is** a
+repository and git refuses to open it.
 
-**Withdrawing a control is only correct on positive evidence.** A missing
-button says nothing and offers no way to ask why, so it is the wrong answer to
-every failure except the one it describes. `isWorkTree()` in
-`git-changes-runner.js` therefore reports `isRepo: false` only when something
-actually established that there is no work tree, and returns `{ok: false,
-error}` — *not an answer* — for everything else. The renderer's
-`typeof result.isRepo !== 'boolean'` guard leaves the button alone on a
-non-answer, and `status()` reports its bounded message into the tab.
+**A control that vanishes explains nothing.** Its absence is indistinguishable
+from a bug and offers no way to ask why, so the affordance is unconditional and
+every answer is text in the panel it opens. That puts the whole weight on
+telling the last two answers apart: "there is no repository here" and "git will
+not open this repository" are indistinguishable from git's exit status, and they
+must not read alike in the panel — the second is a repository the user has,
+usually with a one-line fix in git's own message.
 
 **No message is ever matched.** git translates every diagnostic (this project's
 own host runs it in French), so the detection reads only `git rev-parse
@@ -343,15 +343,15 @@ another user, on a mounted or NFS filesystem), a `.git` whose permissions it
 cannot read, an unsupported `core.repositoryformatversion`, a `.git` file whose
 gitdir is gone, and a worktree whose main repository was deleted. Every one of
 those is a repository the user has, usually with a one-line fix in git's own
-message — exactly the case where silently removing the panel is worse than
-printing the message. `test/git-changes-runner-real-git.test.js` builds those
+message — exactly the case the plain "this is not a repository" line must never
+be shown for. `test/git-changes-runner-real-git.test.js` builds those
 fixtures against real git, asserts each really does exit 128, and pins that none
 of them produces `reason: 'not-a-repo'`.
 
 **A cwd that is gone is ruled out before the corroboration is trusted.** The walk
 below answers "no `.git` anywhere" for a path that does not exist, so a deleted
-worktree outside a repository would otherwise withdraw the panel. `execFile`
-happens to fail to spawn for such a cwd — code `-1`, not 128 — but the local and
+worktree outside a repository would otherwise be reported as "not a git
+repository". `execFile` happens to fail to spawn for such a cwd — code `-1`, not 128 — but the local and
 remote transports differ here (`git -C <gone>` exits 128), so the check is an
 outcome of its own rather than something left to a code that happens not to
 match. It also decides the wording: `spawn git ENOENT` reads as "git is not
@@ -367,8 +367,8 @@ The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
 at the cwd and at each ancestor up to the filesystem root. It needs no process
 and no locale, and it answers the one question the exit code cannot — *is there
 a repository here at all*. It returns three ways, and only `false` (a walk that
-reached the root seeing nothing) withdraws the panel; an `EACCES` or any other
-unexpected `lstat` error is `null`, undecidable, and reports. A `.git` that
+reached the root seeing nothing) is "there is no repository here"; an `EACCES`
+or any other unexpected `lstat` error is `null`, undecidable, and reports. A `.git` that
 exists but is broken counts as `true`: the repository is there, it is just
 unreadable.
 
@@ -378,85 +378,32 @@ corroboration is a local filesystem walk and there is no remote equivalent that
 does not either re-read git's translated message or add ssh round-trips. So a
 remote session that exits 128 is never corroborated and always reports. The
 practical consequence: a remote working directory that is genuinely not a
-repository keeps its Changes button and shows git's own bounded message when
-clicked, instead of hiding the button. That is the pre-existing behaviour, and
-it is the safe side of the trade — it also means a remote cwd that is merely
-unmounted no longer loses the control.
+repository shows git's own bounded message rather than the plain-language line,
+which is the safe side of the trade — the reported message is always true, and
+only its wording is coarser than a local session's.
 
-**Who asks, and when.** Two paths reach the same conclusion, and `status()` is
-the cheaper of them:
+**Who asks.** `status()` is the only production caller: it returns
+`{ok: false, reason: 'not-a-repo'}` when a command failed **and**
+`isWorkTree()` then establishes there is no work tree, and every other failure
+carries its bounded message and no reason. The renderer turns that one reason
+into the plain-language line and everything else into git's own words, so the
+distinction the probe establishes is the distinction the user reads. `tab.notARepo`
+carries it to both surfaces that can show it: the list renders a neutral note
+rather than an error, and the notice line above an open editor states the same
+fact in the same neutral colour instead of reporting a refresh that failed —
+a directory with no repository did not fail at anything. `isWorkTree()` stays on the
+runner's interface for the tests that pin the table above.
 
-- `git-changes-available` runs the probe from `switchPanel()`. The answer is
-  cached on that session's `filePanelState` entry (`changesAvailable`) and
-  applied to the button before the round trip, so a known answer never flashes a
-  button that does not work.
-- `status()` returns `{ok: false, reason: 'not-a-repo'}` when a command failed
-  **and** the probe then establishes there is no work tree. The renderer treats
-  that exactly like an `isRepo: false` availability answer. That covers the
-  window between a switch and the repository disappearing under a running
-  session, and it means a click landing before the availability answer arrives
-  is handled too.
+**The probe is a diagnosis, not a precondition.** A session in a repository pays
+three commands per refresh, pinned by `calls.length === 3`; the fourth runs only on a status that already failed. A
+`-uall` run that overruns the stdout cap does not ask either — that is a volume
+problem with its own fallback, and the large repositories that hit it are the
+ones an extra spawn costs most.
 
-**The probe is bounded on both axes.** It is a *diagnosis, not a precondition*:
-a session in a repository pays three commands per refresh, the same three as
-before, pinned by `calls.length === 3`. A `-uall` run that overruns the stdout
-cap does not ask either — that is a volume problem with its own fallback, and
-the large repositories that hit it are the ones an extra spawn costs most. And
-on the switch path:
-
-- a session already answered `true` is **never probed again**;
-- a session git **could not answer for** is never probed again either. That
-  answer is memoised as its own state (`CHANGES_UNANSWERED`), because a
-  `{ok: false}` leaves the button visible and can never change it — asking again
-  buys nothing and costs an ssh with a 20 s kill timer. It is not a rare shape:
-  a remote cwd outside a repository, a local repository git refuses, and an
-  unreachable host all produce it, on every activation, forever;
-- **a non-answer never displaces an answer.** `CHANGES_UNANSWERED` is written
-  only for a session nothing has been established for yet, so the two memo
-  writes cannot collide. "No repository" is the one answer deliberately
-  re-asked, which makes it the one a transient failure — an ssh blip, a sleeping
-  host — can land on; overwriting it would un-hide a button for a directory that
-  is definitely not a repository, and then never ask again. A session that keeps
-  its `false` stays re-askable, so the blip costs nothing beyond that one probe;
-- a second probe for a session whose first is still in flight is **dropped**
-  (`changesAvailabilityInFlight`), so a burst of switches cannot put a burst of
-  ssh children on a remote host;
-- an answer is **recorded against the session it is about**, then applied to the
-  button only while that session is still the one on screen — on every branch,
-  because "a stale reply never touches the DOM" is an invariant, not a
-  per-branch outcome. Discarding a
-  correct answer because the panel had moved on would cost that session another
-  probe on its next activation; painting from it would paint the wrong
-  session's state.
-
-Only a session that answered "no repository" is re-asked on a later switch.
-That is the one answer worth re-checking — a `git init` turns it into a
-repository — and it is what makes the button come back without polling
-anything. The reverse transition is not tracked: a session that answered "in a
-repository" keeps its button even if the repository is deleted under it, and
-clicking Changes then closes the tab straight away through the `status()` path.
-Re-probing every activation to catch that is exactly the cost this memo exists
-to remove.
-
-**Withdrawal reuses the tab's own close control.** `noteChangesUnavailable`
-calls `toggleChangesTab(sessionId)` rather than tearing the tab down itself, so
-it takes the same path a user's click on the Changes toggle takes and inherits
-`confirmDiscardChangesEdits` along with it. A repository that stops being one
-under an open editor therefore asks before discarding the buffer, exactly as
-the toggle does.
-
-A Changes tab has a second way out: the panel's own X
-(`changesCloseBtn` → `handleClose`), which clears `currentTab` and hides the
-panel directly without passing through `toggleChangesTab`, and carries its own
-call to the same guard. What keeps a tab from being torn down without asking is
-that **each exit is guarded**, not that they funnel into one — a new exit has to
-be guarded on its own terms, and reusing an existing one is how the withdrawal
-avoids being such an exit.
-
-If the close does not happen — the user refused the discard, so the tab is still
-there afterwards — the button is left visible, because hiding the control while
-its tab is still open would strand the edit it is holding with no way back to
-it.
+A repository that disappears under an open tab is reported into that tab on the
+next refresh, and one that appears under a session that had none is listed on
+the next refresh too. Nothing polls and nothing is memoised, because the answer
+arrives with the status the tab was going to fetch anyway.
 
 ## Bounded error messages
 
@@ -472,7 +419,7 @@ A genuine failure — a permission error, a corrupt repository, a transport
 problem — is still reported, in git's own words and in whatever language git
 chose. Only the volume is capped. That is what "Not a repository" above leans
 on: every failure the probe cannot positively explain falls back to this
-message rather than to a missing button.
+message rather than to the "not a git repository" line.
 
 ## cwd resolution (`git-changes-target.js`)
 

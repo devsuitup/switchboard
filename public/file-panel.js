@@ -57,11 +57,9 @@ const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
 let changesListDesiredHeight = readStoredChangesListHeight();
 
-// No work tree, no Changes affordance — see .ai/contexts/changes-view.md ("Not a repository")
+// see .ai/contexts/changes-view.md ("Not a repository")
 const NOT_A_REPO_REASON = 'not-a-repo';
-// see .ai/contexts/changes-view.md ("Who asks, and when")
-const CHANGES_UNANSWERED = 'unanswered';
-const changesAvailabilityInFlight = new Set();
+const NOT_A_REPO_TEXT = 'This directory is not a git repository.';
 
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
@@ -356,7 +354,6 @@ function getSessionState(sessionId) {
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
       mcpActive: false,
-      changesAvailable: null,
     });
   }
   return filePanelState.get(sessionId);
@@ -557,7 +554,6 @@ function hidePanel() {
 function switchPanel(sessionId) {
   currentPanelSessionId = sessionId;
   updateMcpIndicator();
-  refreshChangesAvailability(sessionId);
   if (typeof syncPanelTerminal === 'function') syncPanelTerminal(sessionId);
 
   if (!sessionId) {
@@ -714,54 +710,6 @@ function handleDiffAction(sessionId, tab, action) {
 
 // ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────
 
-// see .ai/contexts/changes-view.md ("Not a repository")
-function updateChangesToggle() {
-  if (!changesToggleBtn) return;
-  const state = currentPanelSessionId ? filePanelState.get(currentPanelSessionId) : null;
-  changesToggleBtn.style.display = state && state.changesAvailable === false ? 'none' : '';
-}
-
-// see .ai/contexts/changes-view.md ("Who asks, and when")
-async function refreshChangesAvailability(sessionId) {
-  updateChangesToggle();
-  if (!sessionId || typeof window.api?.gitChangesAvailable !== 'function') return;
-  const memo = getSessionState(sessionId).changesAvailable;
-  if (memo === true || memo === CHANGES_UNANSWERED) return;
-  if (changesAvailabilityInFlight.has(sessionId)) return;
-
-  changesAvailabilityInFlight.add(sessionId);
-  let result;
-  try {
-    result = await window.api.gitChangesAvailable(sessionId);
-  } finally {
-    changesAvailabilityInFlight.delete(sessionId);
-  }
-
-  if (!result || typeof result.isRepo !== 'boolean') {
-    const state = getSessionState(sessionId);
-    if (state.changesAvailable === null) state.changesAvailable = CHANGES_UNANSWERED;
-    if (currentPanelSessionId === sessionId) updateChangesToggle();
-    return;
-  }
-  if (result.isRepo) {
-    getSessionState(sessionId).changesAvailable = true;
-    if (currentPanelSessionId === sessionId) updateChangesToggle();
-    return;
-  }
-  noteChangesUnavailable(sessionId);
-}
-
-// see .ai/contexts/changes-view.md ("Not a repository")
-function noteChangesUnavailable(sessionId) {
-  const state = getSessionState(sessionId);
-  if (state.currentTab && state.currentTab.type === 'changes') {
-    toggleChangesTab(sessionId);
-    if (state.currentTab) return;
-  }
-  state.changesAvailable = false;
-  if (currentPanelSessionId === sessionId) updateChangesToggle();
-}
-
 function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
   if (state.currentTab && state.currentTab.type === 'changes') {
@@ -806,6 +754,7 @@ function openChangesTab(sessionId) {
     saveError: null,
     saving: false,
     externalChange: false,
+    notARepo: false,
   };
   state.panelVisible = true;
   restoreChangesEdits(sessionId, state, state.currentTab);
@@ -833,14 +782,15 @@ async function refreshChanges(sessionId) {
 
   tab.loading = false;
   if (result && result.reason === NOT_A_REPO_REASON) {
-    noteChangesUnavailable(sessionId);
-    if (!stillState.currentTab) return;
-    tab.error = result.error || 'not a git repository';
+    tab.notARepo = true;
+    tab.error = NOT_A_REPO_TEXT;
     tab.data = null;
   } else if (!result || result.ok === false) {
+    tab.notARepo = false;
     tab.error = (result && result.error) || 'failed to load changes';
     tab.data = null;
   } else {
+    tab.notARepo = false;
     tab.error = null;
     tab.data = result;
     tab.remote = result.kind === 'remote';
@@ -1085,7 +1035,7 @@ function renderChangesList(sessionId, tab) {
     changesSummaryEl.textContent = '';
     changesListEl.innerHTML = '';
     const err = document.createElement('div');
-    err.className = 'changes-error';
+    err.className = tab.notARepo ? 'changes-note' : 'changes-error';
     err.textContent = tab.error;
     changesListEl.appendChild(err);
     if (branchInfoEl) branchInfoEl.textContent = '';
@@ -1313,14 +1263,16 @@ function updateChangesSaveButton(sessionId, tab) {
 
 function renderChangesNotice(tab) {
   const notes = [];
-  const alarming = !!(tab.saveError || tab.fileError || tab.error || tab.externalChange || tab.restoredEdits);
+  const listFailed = !!tab.error && !tab.notARepo;
+  const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
   if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');
   if (tab.fileError) notes.push(`This file can no longer be read: ${tab.fileError}`);
-  if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
+  if (tab.notARepo) notes.push(NOT_A_REPO_TEXT);
+  else if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
   if (tab.saveError) notes.push(`Save failed: ${tab.saveError}`);
 
   changesDiffNoticeEl.textContent = notes.join(' ');
