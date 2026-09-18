@@ -86,6 +86,8 @@ const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
+const gitChangesFile = require('./git-changes-file');
+const { createChangesWatchRegistry } = require('./git-changes-watch');
 
 setPtyOpLogger(log);
 
@@ -387,6 +389,7 @@ function createWindow() {
       if (!session.exited) killPty(session, id);
       activeSessions.delete(id);
     }
+    changesWatchers.closeAll();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {
@@ -1758,7 +1761,8 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   const target = resolveGitChangesTarget(sessionId);
   if (!target.ok) return target;
   try {
-    return await gitChangesRunnerFor(target).status();
+    const result = await gitChangesRunnerFor(target).status();
+    return result.ok === false ? result : { ...result, kind: target.kind };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1774,6 +1778,85 @@ ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, u
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+// filePath is a repo-relative path, resolved and contained main-side — see .ai/contexts/changes-view.md ("Editing a changed file")
+ipcMain.handle('git-changes-file', async (_event, sessionId, filePath, opts) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+  try {
+    return await gitChangesFile.readChangesFile({
+      cwd: target.cwd,
+      relPath: filePath,
+      staged: !!(opts && opts.staged),
+      maxBytes: PANEL_FILE_MAX_BYTES,
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content, version) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+  try {
+    const result = await gitChangesFile.writeChangesFile({
+      cwd: target.cwd,
+      relPath: filePath,
+      content,
+      version,
+      maxBytes: PANEL_FILE_MAX_BYTES,
+    });
+    if (!result.ok) return result;
+    if (result.savedPath.split(/[\\/]/).includes('.work-files')) invalidateFtsSignature('work-file');
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    return { ok: true, version: result.version };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// see .ai/contexts/changes-view.md ("Saving over a file that moved")
+const changesWatchers = createChangesWatchRegistry({
+  watchFn: (filePath, handler) => fs.watch(filePath, handler),
+  send: (sessionId, relPath) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('git-changes-file-changed', sessionId, relPath);
+    }
+  },
+});
+
+// filePath is absolute here — the only Changes IPC that takes one, and it
+// gives back a repo-relative row — see .ai/contexts/changes-view.md
+ipcMain.handle('git-changes-locate', async (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+  try {
+    return await gitChangesFile.locateChangesFile({ cwd: target.cwd, absolutePath: filePath });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+
+  const repo = await gitChangesFile.resolveRepoDirs(target.cwd, {});
+  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  const resolved = gitChangesFile.resolveTargetInsideRepo(repo, filePath, {});
+  if (!resolved.ok) return resolved;
+
+  return changesWatchers.watch(sessionId, filePath, resolved.path);
+});
+
+ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: true };
+  return changesWatchers.unwatch(sessionId, filePath);
 });
 
 // --- IPC: toggle-star ---

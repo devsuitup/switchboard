@@ -1,16 +1,19 @@
 # Changes View
 
-**Changes** is a read-only, git-status-sourced view of a session's working tree, shown in the same right-hand side panel as [IDE Emulation](ide-emulation.md)'s file/diff tabs. It exists because IDE-mode sessions never get the CLI's own `/diff` pane — Switchboard impersonates the IDE, and the IDE protocol never pushes "these files changed", only per-file diffs at permission time. A remote session shows `/diff` inside its terminal, but that view scrolls away with the session and isn't clickable from Switchboard. Changes gives both kinds the same panel.
+**Changes** is a git-status-sourced view of a session's working tree — and, for a local session, an editor for the files in it — shown in the same right-hand side panel as [IDE Emulation](ide-emulation.md)'s file/diff tabs. It exists because IDE-mode sessions never get the CLI's own `/diff` pane — Switchboard impersonates the IDE, and the IDE protocol never pushes "these files changed", only per-file diffs at permission time. A remote session shows `/diff` inside its terminal, but that view scrolls away with the session and isn't clickable from Switchboard. Changes gives both kinds the same panel.
 
 ## Opening it
 
 Click the **Changes** button in the terminal header, next to the stop button. Click it again to close.
 
+A file link in the terminal opens here too, when it points at one of this session's changed files: the panel opens on that row, ready to edit against its diff. A link to a file the session has not touched, or to one outside its repository, opens in the plain viewer as before.
+
 ## What it shows
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
 - One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts.
-- Clicking a row opens a read-only diff for that file, including an untracked one — a brand-new file shows up as an all-additions diff. A binary file shows a one-line note instead of its bytes.
+- Clicking a row opens that file below the list, which stays on screen — the current row is highlighted, and clicking another row swaps the file without going back anywhere. An untracked file opens too, as an all-additions diff. A binary file shows a one-line note instead of its bytes.
+- Drag the divider between the list and the file to give either one more room; the position is remembered.
 - A brand-new directory is listed file by file, not as a single folder row.
 - A **Refresh** button for a manual pull.
 
@@ -34,8 +37,30 @@ row once: its diff is fetched, the row gets its `+added −0`, and the header
 total grows by the same amount. This is deliberate — counting every new file up
 front would mean running one extra git command per untracked file on every
 refresh (and one ssh round-trip each, for a remote session), which a repo with a
-large untracked tree would feel. Refreshing resets them, since the files may
-have changed since.
+large untracked tree would feel. A refresh resets them, since the file may have
+changed since — with one exception: **saving the file you are editing keeps its
+counts**, because the save is itself the measurement. The Refresh button, and a
+refresh triggered by the session finishing a turn, reset them as before.
+
+## Editing a file
+
+On a local session, the open file is a live editor, not a picture of a diff. Type on the right-hand side and the diff recomputes as you go.
+
+- **Save** with the Save button or `Ctrl/Cmd+S`. The button is inactive until you change something. The file list refreshes on save, so the row's counts follow what you wrote.
+- The button next to **Close** cycles three views: **Inline** (one column, changes marked in place — the default, because the panel is a narrow column and side-by-side halves it), **Plain** (just the file, no diff decoration) and **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right). The choice is remembered.
+- The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
+- These stay read-only, and the panel says which case it is: a remote session, a binary file, a file that is not UTF-8 text, a file that mixes line endings (no editor can keep them line by line), a symbolic link, a hard link (two names for the same bytes, and only one of them is in this repository), and a file over 2 MB.
+
+### When the session writes the same file
+
+The session you are watching writes these files, so the panel assumes it is not the only writer.
+
+- While the file is open it is watched. If the session writes it and **your buffer has no unsaved edits**, the editor reloads to what is now on disk.
+- If you **do** have unsaved edits, your buffer is left exactly as it is and the panel says the file changed on disk. **Reload** replaces it with the version on disk — it asks first, because that discards what you typed.
+- A save of a file that changed since you opened it is **refused**, not merged and not forced: the panel tells you to reload first, and the session's work stays on disk. Saving again after a reload writes normally.
+- Switching to another row, **Close** (which closes the file and keeps the list), closing the tab and closing the panel all ask before discarding unsaved edits.
+- Whatever line ending the file uses is preserved — CRLF stays CRLF — so a save with no edits leaves git with nothing to report. A byte-order mark is kept too.
+- If the session opens a file or a diff of its own while you have unsaved edits, the panel switches away without asking, but your edits are kept: reopening **Changes** brings them back and says why. Answering yes to a discard prompt is the opposite instruction, and it is honoured — nothing comes back afterwards.
 
 ## A shell under the list
 
@@ -48,7 +73,9 @@ sets how much room each gets. Local sessions only — see
 
 ## What it doesn't do
 
-- No staging, committing, or reverting from the UI — this is a viewer, not a git client.
+- No staging, committing, or reverting from the UI — you can type in it, but it is not a git client. Inline mode deliberately has no per-change accept/reject buttons.
+- No creating, deleting or renaming files, and no editing on a remote session.
+- Nothing under `.git/`, and no symbolic links.
 - It doesn't replace the CLI's `/diff` pane in a non-IDE session; the two coexist.
 - IDE mode itself is not available for remote sessions (that's a separate, larger feature — an `ssh -R` tunnel plus a lock file on the host); Changes does not depend on it and works today for both local and remote sessions.
 

@@ -78,8 +78,62 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 `public/file-panel.js`'s side panel gained a third tab type, `'changes'`,
 alongside the pre-existing `'file'` and `'diff'` (MCP) types on the same
 per-session `filePanelState`. Full design (why it skips `ViewerPanel`, the
-entry point, the no-polling refresh trigger): `.ai/contexts/changes-view.md`.
+entry point, the no-polling refresh trigger, editing): `.ai/contexts/changes-view.md`.
 User-facing behavior: `docs/changes-view.md`.
+
+A local session's selected file is edited in one of the same CodeMirror views
+this component builds its own editors from — `createMergeViewer` (default),
+`createUnifiedMergeViewer` or `createEditableViewer`, picked by a three-way
+mode button and persisted under `localStorage.changesDiffMode` (the MCP diff
+tab's `filePanelDiffMode` is a separate key with a separate meaning). Three
+things about that editor are not `ViewerPanel`'s:
+
+- **The tab owns the instance, not the panel.** It lives on `tab.editorView`
+  the way the MCP `'diff'` tab's does, keyed by path + staged + mode, and a
+  re-render reuses it instead of rebuilding — the Changes tab re-renders on
+  every busy→idle edge, which would otherwise land on the user's cursor.
+  `destroyCurrentTab()` and `closeChangesDiff()` are what end its life.
+- **Reading the buffer back is asymmetric.** A side-by-side `MergeView` is read
+  from `view.b.state.doc`, the inline and plain views from `view.state.doc` —
+  the same asymmetry `handleDiffAction` already navigates for the MCP tab.
+- **The save is an IPC by session, not by path**: `gitChangesSave(sessionId,
+  repoRelativePath, content, version)`, not `saveFileForPanel`. The renderer
+  never holds an absolute path for a Changes row, and the version token is what
+  stops it overwriting a file the session has written in the meantime.
+
+`ViewerPanel`'s own protections have Changes-panel equivalents rather than
+reuses, for the same reason: watching goes through `git-changes-watch` instead
+of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
+lives on the tab instead of the component. One protection has no `ViewerPanel`
+counterpart at all: an MCP-driven open replaces whatever tab is showing, so a
+dirty Changes buffer is stashed on the session's panel state and restored when
+the tab is reopened.
+
+`Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
+the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts
+its own (on its container).
+
+The merge-view CSS in `public/style.css` is written for two hosts in one rule
+list — `#file-panel-body` (MCP tab) and `#changes-diff-host` (Changes tab).
+A new host means a new selector in those groups, not a copied block.
+
+`createMergeViewer`'s `b` side and `createUnifiedMergeViewer` carry the editing
+extensions a writing surface needs — `history()` (Ctrl/Cmd+Z), `defaultKeymap`,
+`indentWithTab`, `indentOnInput`, `drawSelection` — and `cmSaveKeymap`, which is
+what turns Ctrl/Cmd+S into the `cm-save` event the panels listen for. A
+read-only viewer gets `cmSaveDomHandler` instead; an editable one must not have
+both, or one keystroke raises two saves. `createUnifiedMergeViewer` takes
+`{mergeControls}`: the MCP diff tab keeps the per-chunk Accept/Reject buttons,
+the Changes panel turns them off. `test/codemirror-merge-editing.test.js`
+drives all of this against the real CodeMirror under jsdom — a stub that
+dispatches `cm-save` itself proves nothing about the keymap.
+
+All three factories take an `onChange` callback, and `docChangeListener` in
+`public/codemirror-setup.js` delivers it from a CodeMirror `updateListener` on
+`docChanged` rather than from a DOM `input` listener on the editor: it fires
+for typing, paste, undo/redo and programmatic dispatches alike, where a DOM
+`input` event reports only the first two. A Save button whose enabled state is
+computed from that callback is therefore still right after an undo.
 
 ## Gotchas
 

@@ -416,7 +416,14 @@ function createReadOnlyViewer(parent, content, filename) {
 
 // ── Editable File Viewer (for file panel) ───────────────────────────
 
-function createEditableViewer(parent, content, filename, { wrap = false } = {}) {
+// see .ai/contexts/viewer-panel.md ("Changes mode")
+function docChangeListener(onChange) {
+  return typeof onChange === 'function'
+    ? EditorView.updateListener.of((update) => { if (update.docChanged) onChange(); })
+    : [];
+}
+
+function createEditableViewer(parent, content, filename, { wrap = false, onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const wrapCompartment = new Compartment();
 
@@ -448,6 +455,7 @@ function createEditableViewer(parent, content, filename, { wrap = false } = {}) 
       syntaxHighlighting(markdownExtras),
       appThemePatch,
       wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
+      docChangeListener(onChange),
     ],
   });
 
@@ -458,7 +466,7 @@ function createEditableViewer(parent, content, filename, { wrap = false } = {}) 
 
 // ── Diff / Merge Viewer ─────────────────────────────────────────────
 
-function createMergeViewer(parent, originalContent, modifiedContent, filename) {
+function createMergeViewer(parent, originalContent, modifiedContent, filename, { onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const sharedExts = [
     lineNumbers(),
@@ -488,7 +496,18 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
     },
     b: {
       doc: modifiedContent,
-      extensions: [...sharedExts],
+      extensions: [
+        ...sharedExts,
+        history(),
+        drawSelection(),
+        indentOnInput(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
+        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        cmGotoLineKeymap,
+        cmSaveKeymap,
+        docChangeListener(onChange),
+      ],
     },
     gutter: true,
     highlightChanges: true,
@@ -496,7 +515,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
   });
 }
 
-function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename) {
+function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true, onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: modifiedContent,
@@ -506,7 +525,10 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       foldGutter(),
       bracketMatching(),
       highlightSelectionMatches(),
-      keymap.of([...foldKeymap]),
+      history(),
+      drawSelection(),
+      indentOnInput(),
+      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...foldKeymap]),
       cmFindKeymap,
       cmFindDomHandler,
       cmGotoLineDomHandler,
@@ -516,11 +538,13 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       dracula,
       syntaxHighlighting(markdownExtras),
       appThemePatch,
+      docChangeListener(onChange),
       unifiedMergeView({
         original: originalContent,
         gutter: true,
         highlightChanges: true,
         syntaxHighlightDeletions: true,
+        mergeControls,
         collapseUnchanged: { margin: 3, minSize: 4 },
       }),
     ],
