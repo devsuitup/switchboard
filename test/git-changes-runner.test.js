@@ -910,6 +910,13 @@ const FRENCH_FATAL = 'fatal: ni ceci ni aucun de ses répertoires parents (jusqu
 const FRENCH_DIFF_USAGE = ['warning: Pas un dépôt git. Utilisez --no-index pour comparer deux chemins hors d\'un arbre de travail', 'usage : git diff --no-index [<options>] <path> <path> [<pathspec>...]']
   .concat(Array.from({ length: 150 }, (_, i) => `    --some-option-${i}      une description de l'option ${i}`)).join('\n');
 
+// The fixture cwds are synthetic paths, so the fs seam describes them: a real
+// directory with no .git at or above it.
+const NO_REPO_FS = {
+  stat: () => ({ isDirectory: () => true }),
+  lstat: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+};
+
 // Every git command fails the way a non-repo cwd makes it fail, rev-parse included.
 function nonRepoExec(calls) {
   return (args) => {
@@ -922,7 +929,7 @@ function nonRepoExec(calls) {
 
 test('status(): a cwd outside any repository is its own machine-readable outcome, not a git message (mutation target: returning firstError)', async () => {
   const calls = [];
-  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec(calls) });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec(calls), fsOps: NO_REPO_FS });
   const result = await runner.status();
 
   assert.equal(result.ok, false);
@@ -932,7 +939,7 @@ test('status(): a cwd outside any repository is its own machine-readable outcome
 });
 
 test('status(): nothing git wrote reaches the caller when the cwd is outside a repository', async () => {
-  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]) });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]), fsOps: NO_REPO_FS });
   const result = await runner.status();
 
   assert.doesNotMatch(result.error, /dépôt|fatal|usage|GIT_DISCOVERY/,
@@ -946,8 +953,8 @@ test('status(): the detection is the exit code, so a translated git says the sam
     ? { code: 129, stdout: '', stderr: 'usage: git diff --no-index' }
     : { code: 128, stdout: '', stderr: ENGLISH_FATAL });
 
-  const fr = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]) }).status();
-  const en = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: english }).status();
+  const fr = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]), fsOps: NO_REPO_FS }).status();
+  const en = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: english, fsOps: NO_REPO_FS }).status();
   assert.deepEqual(en, fr);
 });
 
@@ -1007,7 +1014,7 @@ test('status(): a remote fatal is reported, bounded, because nothing can corrobo
 // --- isWorkTree() ----------------------------------------------------------
 
 test('isWorkTree(): the exit code and the printed answer, never the message', async () => {
-  const run = (response) => createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => Promise.resolve(response) }).isWorkTree();
+  const run = (response) => createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => Promise.resolve(response), fsOps: NO_REPO_FS }).isWorkTree();
 
   assert.deepEqual(await run({ code: 0, stdout: 'true\n', stderr: '' }), { ok: true, isRepo: true });
   assert.deepEqual(await run({ code: 128, stdout: '', stderr: FRENCH_FATAL }), { ok: true, isRepo: false });
@@ -1023,7 +1030,7 @@ test('isWorkTree(): the exit code and the printed answer, never the message', as
 });
 
 test('isWorkTree(): a thrown exec is reported, not treated as a missing repository', async () => {
-  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => { throw new Error('ENOENT'); } });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => { throw new Error('ENOENT'); }, fsOps: NO_REPO_FS });
   const result = await runner.isWorkTree();
   assert.equal(result.ok, false);
   assert.match(result.error, /ENOENT/);

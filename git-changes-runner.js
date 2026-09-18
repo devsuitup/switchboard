@@ -21,6 +21,8 @@ const MAX_ERROR_LINES = 5;
 const MAX_ERROR_CHARS = 500;
 // git's generic fatal exit code, not a "no repository" code — see .ai/contexts/changes-view.md ("Not a repository")
 const GIT_FATAL_EXIT_CODE = 128;
+// defaultLocalExec's code for a spawn that never ran — see .ai/contexts/changes-view.md ("Not a repository")
+const EXEC_FAILED_CODE = -1;
 const NOT_A_REPO_REASON = 'not-a-repo';
 
 // Denylist, not allowlist — see .ai/contexts/changes-view.md ("Quoting rule")
@@ -129,6 +131,17 @@ function gitEntryAtOrAbove(startDir, fsOps = DEFAULT_FS_OPS, pathOps = path) {
   }
 }
 
+// A local spawn fails on the cwd long before it fails on git — see .ai/contexts/changes-view.md ("Not a repository")
+function missingCwdError(cwd, fsOps = DEFAULT_FS_OPS) {
+  try {
+    return fsOps.stat(cwd).isDirectory() ? null : `working directory is not a directory: ${cwd}`;
+  } catch (err) {
+    const code = err && err.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return `working directory no longer exists: ${cwd}`;
+    return null;
+  }
+}
+
 // --literal-pathspecs on every invocation — see .ai/contexts/changes-view.md ("Quoting rule").
 function buildGitArgs(args) {
   return ['--literal-pathspecs', ...args];
@@ -232,20 +245,27 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     return kind === 'local' ? runExec(fullArgs) : runExec(buildRemoteGitCommand(cwd, fullArgs), remoteOpts);
   }
 
+  function cwdRefusal() {
+    return kind === 'local' ? missingCwdError(cwd, fsOps || DEFAULT_FS_OPS) : null;
+  }
+
   // Only positive evidence withdraws the panel — see .ai/contexts/changes-view.md ("Not a repository")
   async function isWorkTree() {
     let probe;
     try {
       probe = await invoke(['rev-parse', '--is-inside-work-tree']);
     } catch (err) {
-      return { ok: false, error: err.message };
+      return { ok: false, error: cwdRefusal() || err.message };
     }
     if (probe.code === 0) {
       const answer = String(probe.stdout || '').trim();
       if (answer === 'true' || answer === 'false') return { ok: true, isRepo: answer === 'true' };
       return { ok: false, error: 'git rev-parse gave no answer' };
     }
+    if (probe.code === EXEC_FAILED_CODE) return { ok: false, error: cwdRefusal() || firstError(probe) };
     if (probe.code !== GIT_FATAL_EXIT_CODE) return { ok: false, error: firstError(probe) };
+    const gone = cwdRefusal();
+    if (gone) return { ok: false, error: gone };
     const corroborated = kind === 'local'
       ? gitEntryAtOrAbove(cwd, fsOps || DEFAULT_FS_OPS)
       : null;
@@ -375,6 +395,7 @@ module.exports = {
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
   gitEntryAtOrAbove,
+  missingCwdError,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,

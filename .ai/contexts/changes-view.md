@@ -328,11 +328,13 @@ own host runs it in French), so the detection reads only `git rev-parse
 | probe result | meaning | outcome |
 |---|---|---|
 | exit 0, stdout `true` | inside a work tree | `{ok: true, isRepo: true}` |
-| exit 0, stdout `false` | a bare repository — no work tree, so no changes to show | `{ok: true, isRepo: false}` |
+| exit 0, stdout `false` | no work tree here: a bare repository, or a cwd inside an ordinary repository's `.git/` | `{ok: true, isRepo: false}` |
 | exit 0, anything else | git answered something this code does not understand | `{ok: false, error}` |
 | exit 128, corroborated | see below | `{ok: true, isRepo: false}` |
 | exit 128, not corroborated | a repository git refuses to open | `{ok: false, error}` |
-| any other non-zero, or a thrown exec | ssh's own `255`, `spawn git ENOENT`, a timeout | `{ok: false, error}` |
+| exit 128, cwd gone | the directory, not the repository, is what is missing | `{ok: false, error}` naming the directory |
+| a spawn that never ran (`-1`) or a thrown exec | a local cwd that was deleted, is a file, or is a dangling symlink | `{ok: false, error}` naming the directory |
+| any other non-zero | ssh's own `255`, a timeout | `{ok: false, error}` |
 
 **128 is git's generic fatal code, not a "no repository" code**, which is why it
 needs corroborating. Real git exits 128 for a plain directory *and* for a
@@ -345,6 +347,16 @@ message — exactly the case where silently removing the panel is worse than
 printing the message. `test/git-changes-runner-real-git.test.js` builds those
 fixtures against real git, asserts each really does exit 128, and pins that none
 of them produces `reason: 'not-a-repo'`.
+
+**A cwd that is gone is ruled out before the corroboration is trusted.** The walk
+below answers "no `.git` anywhere" for a path that does not exist, so a deleted
+worktree outside a repository would otherwise withdraw the panel. `execFile`
+happens to fail to spawn for such a cwd — code `-1`, not 128 — but the local and
+remote transports differ here (`git -C <gone>` exits 128), so the check is an
+outcome of its own rather than something left to a code that happens not to
+match. It also decides the wording: `spawn git ENOENT` reads as "git is not
+installed", where the truth is that the directory is gone, and the message names
+it.
 
 The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
 at the cwd and at each ancestor up to the filesystem root. It needs no process
