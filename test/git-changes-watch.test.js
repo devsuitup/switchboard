@@ -16,6 +16,18 @@ const { createChangesWatchRegistry } = require('../git-changes-watch');
 
 const ROOT = path.join(__dirname, '..');
 
+// main.js cannot be required from a test — it pulls in electron — so the wiring
+// between this registry and the IPC handlers is asserted against its source.
+// Commented-out lines are dropped first, so a call that has been commented out
+// cannot satisfy an assertion that it is made. This catches deletion, which is
+// the regression that happens; it cannot catch a call left in place but made
+// unreachable. Only whole-line comments are removed: `/*` also appears inside
+// string literals in main.js, and a block-comment stripper eats them.
+function sourceOf(file) {
+  return fs.readFileSync(path.join(ROOT, file), 'utf8')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
 // A stand-in for fs.watch plus the timer, so events and debounce are driven
 // by the test rather than by the clock.
 function harness({ failOn } = {}) {
@@ -185,8 +197,8 @@ test('closeAll drops every watch', () => {
 // --- The wiring in main.js, which no unit test can reach -----------------
 
 test('main.js arms the registry with fs.watch and answers both IPCs with it (mutation target: the wiring)', () => {
-  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
+  const main = sourceOf('main.js');
+  const preload = sourceOf('preload.js');
 
   const start = main.indexOf('const changesWatchers = createChangesWatchRegistry');
   assert.ok(start > 0, 'the registry is what main.js uses, not an inline Map of watchers');
