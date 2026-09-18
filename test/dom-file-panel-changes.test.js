@@ -81,11 +81,11 @@ function makeEditorStub(window, mode, doc, created, onChange) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl, availableImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [], available: [] };
+  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [] };
   const editors = [];
   const fileChangedListeners = [];
 
@@ -95,10 +95,6 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     onMcpCloseAllDiffs: () => {},
     onMcpCloseTab: () => {},
     mcpDiffResponse: () => {},
-    gitChangesAvailable: (sessionId) => {
-      calls.available.push(sessionId);
-      return Promise.resolve((availableImpl || (() => ({ ok: true, isRepo: true })))(sessionId));
-    },
     gitChangesStatus: (sessionId) => {
       calls.status.push(sessionId);
       return Promise.resolve((statusImpl || (() => makeStatusResult()))(sessionId));
@@ -1914,548 +1910,148 @@ test('Save follows the buffer in every mode, plain included (mutation target: th
   } finally { ctx.destroy(); }
 });
 
-// --- No git work tree — see .ai/contexts/changes-view.md ("Not a repository") ---
+// --- What the panel says, for each answer git can give ---------------------
+// The Changes control is unconditional; the panel reports. See
+// .ai/contexts/changes-view.md ("Not a repository").
 
-test('a cwd with no work tree withdraws the Changes button instead of offering a tab that cannot fill', async () => {
-  const ctx = setupFilePanelDom({ availableImpl: () => ({ ok: true, isRepo: false }) });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
+function noRepoStatus() {
+  return { ok: false, reason: 'not-a-repo', error: 'fatal: not a git repository (or any of the parent directories): .git' };
+}
 
-    const btn = ctx.document.getElementById('changes-toggle-btn');
-    assert.equal(btn.style.display, 'none', 'no work tree, no Changes affordance');
-    assert.equal(ctx.calls.status.length, 0, 'the availability answer costs no status call');
-  } finally { ctx.destroy(); }
-});
-
-test('the Changes button stays visible for a session that is in a work tree', async () => {
+test('a work tree with changes lists its files under a count', async () => {
   const ctx = setupFilePanelDom();
   try {
     ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
     await flush();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed/);
+  } finally { ctx.destroy(); }
+});
+
+test('a clean work tree keeps the Changes control and says there is nothing to show', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => makeStatusResult({ files: [], totals: { files: 0, added: 0, deleted: 0 } }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 0);
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /No changes/);
+  } finally { ctx.destroy(); }
+});
+
+test('a directory that is not a repository keeps the Changes control and says so in plain words', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: noRepoStatus });
+  try {
+    ctx.window.switchPanel('s1');
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'a control that vanishes explains nothing; the panel explains instead');
+
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    const note = ctx.document.querySelector('.changes-note');
+    assert.ok(note, 'the answer reaches the panel as a note, not as a git failure');
+    assert.match(note.textContent, /not a git repository/);
+    assert.equal(ctx.document.querySelectorAll('.changes-error').length, 0);
+    assert.doesNotMatch(note.textContent, /fatal:/, "git's own wording is not what this state says");
+  } finally { ctx.destroy(); }
+});
+
+test("a repository git refuses shows git's own message, not the no-repository text (mutation target: the reason check)", async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => ({ ok: false, error: 'fatal: detected dubious ownership in repository at /srv/repo' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    const err = ctx.document.querySelector('.changes-error');
+    assert.ok(err, 'a repository git will not open is a failure to report, with its own message');
+    assert.match(err.textContent, /dubious ownership/);
+    assert.equal(ctx.document.querySelectorAll('.changes-note').length, 0);
+    assert.doesNotMatch(ctx.document.body.textContent, /This directory is not a git repository/,
+      'telling the two apart is the whole point of the filesystem corroboration behind the reason');
     assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
   } finally { ctx.destroy(); }
 });
 
-test('the button follows the session the panel shows, not the last answer that arrived', async () => {
-  const ctx = setupFilePanelDom({ availableImpl: (id) => ({ ok: true, isRepo: id !== 'norepo' }) });
-  try {
-    ctx.window.switchPanel('norepo');
-    await flush();
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'a session in a repo must get its button back');
-
-    ctx.window.switchPanel('norepo');
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'a known answer applies before the round trip, with no flash of a button that does not work');
-  } finally { ctx.destroy(); }
-});
-
-test('a Changes tab already open when the cwd turns out to have no work tree is withdrawn, not left half-rendered', async () => {
-  let isRepo = true;
-  const ctx = setupFilePanelDom({
-    availableImpl: () => ({ ok: true, isRepo }),
-    statusImpl: () => (isRepo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
+test('a repository that disappears under an open tab reports into it instead of closing it', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({ statusImpl: () => (repo ? makeStatusResult() : noRepoStatus()) });
   try {
     ctx.window.switchPanel('s1');
     ctx.window.openChangesTab('s1');
     await flush();
     assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
 
-    isRepo = false;
-    ctx.setActivity('s1', true);
-    ctx.setActivity('s1', false);
-    await flush();
-
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false,
-      'the tab closes rather than reporting into itself');
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-
-    const statusCalls = ctx.calls.status.length;
-    ctx.setActivity('s1', true);
-    ctx.setActivity('s1', false);
-    await flush();
-    assert.equal(ctx.calls.status.length, statusCalls, 'the tab is gone, so nothing refreshes it any more');
-  } finally { ctx.destroy(); }
-});
-
-test('git stderr never reaches the panel as the message when the cwd has no work tree', async () => {
-  const ctx = setupFilePanelDom({
-    statusImpl: () => ({ ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openChangesTab('s1');
-    await flush();
-
-    assert.equal(ctx.document.querySelectorAll('.changes-error').length, 0,
-      'a missing work tree is not an error to report, it is an affordance to withdraw');
-    assert.doesNotMatch(ctx.document.body.textContent, /dépôt git|not a git repository/);
-  } finally { ctx.destroy(); }
-});
-
-test('a genuine git failure is still reported in the tab, and the button stays', async () => {
-  const ctx = setupFilePanelDom({
-    statusImpl: () => ({ ok: false, error: 'could not read directory: Permission denied' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openChangesTab('s1');
-    await flush();
-
-    const err = ctx.document.querySelector('.changes-error');
-    assert.ok(err, 'an unexpected failure must still be visible');
-    assert.match(err.textContent, /Permission denied/);
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'only a missing work tree withdraws the button — a transient failure must not');
-  } finally { ctx.destroy(); }
-});
-
-// --- The availability probe is memoised, deduped and ignored when stale ------
-// For a remote session each probe is an ssh with a 20 s kill timer, and
-// switchPanel is reached from every panel-shell open, close and exit as well as
-// from every sidebar click — see .ai/contexts/changes-view.md ("Not a repository").
-
-function deferredAvailable() {
-  const gates = [];
-  return {
-    gates,
-    impl: (sessionId) => new Promise((resolve) => gates.push({ sessionId, resolve })),
-    settle: (sessionId, value) => {
-      for (const g of gates.filter((x) => x.sessionId === sessionId)) g.resolve(value);
-    },
-    settleAll: (value) => { for (const g of gates.splice(0)) g.resolve(value); },
-  };
-}
-
-test('a session already known to be in a repository is never probed again', async () => {
-  const ctx = setupFilePanelDom();
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.calls.available.length, 1);
-
-    for (let i = 0; i < 5; i++) {
-      ctx.window.switchPanel('s1');
-      await flush();
-    }
-    assert.equal(ctx.calls.available.length, 1,
-      'five re-entries into the same session must cost one probe, not five');
-  } finally { ctx.destroy(); }
-});
-
-test('re-entering a session while its probe is still out does not start a second one', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    for (let i = 0; i < 10; i++) ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.calls.available.length, 1,
-      'ten rapid switches must not put ten concurrent ssh children on a remote host');
-
-    d.settleAll({ ok: true, isRepo: true });
-    await flush();
-  } finally { ctx.destroy(); }
-});
-
-test('a session with no repository is re-asked, so a git init is picked up', async () => {
-  let isRepo = false;
-  const ctx = setupFilePanelDom({ availableImpl: () => ({ ok: true, isRepo }) });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-
-    isRepo = true;
-    ctx.window.switchPanel('s2');
-    await flush();
-    ctx.window.switchPanel('s1');
-    await flush();
-
-    assert.equal(ctx.calls.available.filter((id) => id === 's1').length, 2,
-      'only the sessions that answered "no repository" pay a second probe');
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-  } finally { ctx.destroy(); }
-});
-
-test('a probe that answers after the panel has moved on changes nothing', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    ctx.window.switchPanel('s2');
-    await flush();
-
-    d.settle('s1', { ok: true, isRepo: false });
-    d.settle('s2', { ok: true, isRepo: true });
-    await flush();
-
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      's1’s answer must not withdraw s2’s button');
-  } finally { ctx.destroy(); }
-});
-
-// --- Withdrawal goes through the tab's own close control --------------------
-
-test('withdrawing the tab goes through toggleChangesTab, not a teardown of its own', async () => {
-  let isRepo = true;
-  const ctx = setupFilePanelDom({
-    availableImpl: () => ({ ok: true, isRepo }),
-    statusImpl: () => (isRepo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openChangesTab('s1');
-    await flush();
-
-    const toggles = [];
-    const realToggle = ctx.window.toggleChangesTab;
-    ctx.window.toggleChangesTab = (id) => { toggles.push(id); return realToggle(id); };
-
-    isRepo = false;
-    ctx.setActivity('s1', true);
-    ctx.setActivity('s1', false);
-    await flush();
-
-    assert.deepEqual(toggles, ['s1'],
-      'the one close path a future gate will guard must be the one the withdrawal uses');
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-  } finally { ctx.destroy(); }
-});
-
-test('a close the tab refuses leaves the button, so the tab can still be reopened', async () => {
-  const ctx = setupFilePanelDom({
-    statusImpl: () => ({ ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openChangesTab('s1');
-    // A gate that declines — what #302's confirmDiscardChangesEdits does on "cancel".
-    ctx.window.toggleChangesTab = () => {};
-    await flush();
-
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'hiding the control while its tab is still open strands whatever the tab is holding');
-  } finally { ctx.destroy(); }
-});
-
-// --- A non-answer is memoised too — see .ai/contexts/changes-view.md ("Who asks, and when") ---
-// A remote 128 is always {ok:false} by design, and a {ok:false} can never change
-// the button, so re-asking costs an ssh with a 20 s kill timer to learn nothing.
-
-function countRevisits(ctx, sessionId, times) {
-  const before = ctx.calls.available.filter((id) => id === sessionId).length;
-  const run = async () => {
-    for (let i = 0; i < times; i++) {
-      ctx.window.switchPanel('other');
-      await flush();
-      ctx.window.switchPanel(sessionId);
-      await flush();
-    }
-    return ctx.calls.available.filter((id) => id === sessionId).length - before;
-  };
-  return run();
-}
-
-test('a session git could not answer for is asked once, not on every activation', async () => {
-  const ctx = setupFilePanelDom({
-    availableImpl: (id) => (id === 'remote' ? { ok: false, error: 'fatal: …' } : { ok: true, isRepo: true }),
-  });
-  try {
-    ctx.window.switchPanel('remote');
-    await flush();
-    assert.equal(ctx.calls.available.filter((id) => id === 'remote').length, 1);
-
-    assert.equal(await countRevisits(ctx, 'remote', 6), 0,
-      'six revisits must add no probes — the answer cannot change the button, so asking again buys nothing');
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'and the button stays, because nothing established that there is no repository');
-  } finally { ctx.destroy(); }
-});
-
-test('a session in a repository is still asked once and never again', async () => {
-  const ctx = setupFilePanelDom();
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(await countRevisits(ctx, 's1', 6), 0);
-  } finally { ctx.destroy(); }
-});
-
-test('a session with no repository is still re-asked, so the two memos do not collapse into one', async () => {
-  const ctx = setupFilePanelDom({
-    availableImpl: (id) => (id === 'norepo' ? { ok: true, isRepo: false } : { ok: true, isRepo: true }),
-  });
-  try {
-    ctx.window.switchPanel('norepo');
-    await flush();
-    assert.equal(await countRevisits(ctx, 'norepo', 3), 3,
-      'only the answer that hides the button is worth re-checking');
-  } finally { ctx.destroy(); }
-});
-
-// --- The stale-reply guard covers the DOM, not the memo ---------------------
-
-test('an answer for a session the panel has left is still recorded against that session', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    ctx.window.switchPanel('s2');
-    await flush();
-
-    d.settle('s1', { ok: true, isRepo: true });
-    d.settle('s2', { ok: true, isRepo: true });
-    await flush();
-
-    const before = ctx.calls.available.filter((id) => id === 's1').length;
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.calls.available.filter((id) => id === 's1').length, before,
-      'a correct answer must not be thrown away just because the panel had moved on');
-  } finally { ctx.destroy(); }
-});
-
-test('an answer for a session the panel has left never touches the current button', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    ctx.window.switchPanel('s2');
-    await flush();
-
-    d.settle('s1', { ok: false, error: 'fatal: …' });
-    d.settle('s2', { ok: true, isRepo: true });
-    await flush();
-
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-
-    // ...and the memo it wrote is s1's, proven by s1 not being probed again.
-    const before = ctx.calls.available.filter((id) => id === 's1').length;
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.calls.available.filter((id) => id === 's1').length, before);
-  } finally { ctx.destroy(); }
-});
-
-// --- A refused withdrawal must not freeze the tab ---------------------------
-
-test('a close the tab refuses leaves a readable tab, not a permanent Loading', async () => {
-  const ctx = setupFilePanelDom({
-    statusImpl: () => ({ ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openChangesTab('s1');
-    ctx.window.toggleChangesTab = () => {}; // a gate that declines
-    await flush();
-
-    const summary = ctx.document.getElementById('changes-summary');
-    assert.doesNotMatch(summary.textContent, /Loading/,
-      'the tab is staying open, so it has to say something other than the render it was stuck on');
-    const err = ctx.document.querySelector('.changes-error');
-    assert.ok(err, 'a tab that could not be withdrawn must explain itself');
-  } finally { ctx.destroy(); }
-});
-
-// Counts writes to the button's display, which is the only trace a redundant
-// repaint leaves: the value written is always the current session's.
-function countDisplayWrites(ctx) {
-  const btn = ctx.document.getElementById('changes-toggle-btn');
-  const style = btn.style;
-  let writes = 0;
-  const proto = Object.getPrototypeOf(style);
-  const descriptor = Object.getOwnPropertyDescriptor(proto, 'display');
-  Object.defineProperty(style, 'display', {
-    configurable: true,
-    get() { return descriptor.get.call(style); },
-    set(v) { writes++; descriptor.set.call(style, v); },
-  });
-  return { count: () => writes, reset: () => { writes = 0; } };
-}
-
-test('a reply for a session the panel has left repaints nothing (mutation target: dropping the guard around updateChangesToggle)', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    ctx.window.switchPanel('s2');
-    await flush();
-
-    const writes = countDisplayWrites(ctx);
-    writes.reset();
-
-    d.settle('s1', { ok: true, isRepo: true });
-    await flush();
-    assert.equal(writes.count(), 0,
-      's1 is not the session on screen, so its answer has no button to paint');
-
-    d.settle('s2', { ok: true, isRepo: true });
-    await flush();
-    assert.equal(writes.count(), 1, 's2 is, so its answer does');
-  } finally { ctx.destroy(); }
-});
-
-// --- A non-answer never displaces an answer ---------------------------------
-// "no repository" is the one answer deliberately re-asked, so it is also the
-// one that a transient failure can land on — an ssh blip, a sleeping host. See
-// .ai/contexts/changes-view.md ("Who asks, and when").
-
-test('a transient failure on the re-ask does not un-hide a button that was correctly hidden', async () => {
-  let answer = { ok: true, isRepo: false };
-  const ctx = setupFilePanelDom({ availableImpl: (id) => (id === 'scratch' ? answer : { ok: true, isRepo: true }) });
-  try {
-    const btn = ctx.document.getElementById('changes-toggle-btn');
-    ctx.window.switchPanel('scratch');
-    await flush();
-    assert.equal(btn.style.display, 'none', 'a scratch directory is not a repository');
-
-    answer = { ok: false, error: 'ssh: connect to host h port 22: Connection refused' };
-    ctx.window.switchPanel('other');
-    await flush();
-    ctx.window.switchPanel('scratch');
-    await flush();
-
-    assert.equal(btn.style.display, 'none',
-      'a probe that could not answer must not overwrite the answer that was already established');
-    assert.equal(ctx.calls.available.filter((id) => id === 'scratch').length, 2);
-
-    // And the session is still re-askable, so the blip costs nothing permanent.
-    answer = { ok: true, isRepo: true };
-    ctx.window.switchPanel('other');
-    await flush();
-    ctx.window.switchPanel('scratch');
-    await flush();
-    assert.notEqual(btn.style.display, 'none', 'once git can answer again, the answer applies');
-  } finally { ctx.destroy(); }
-});
-
-test('a session that has only ever been unanswerable is still asked exactly once', async () => {
-  const ctx = setupFilePanelDom({
-    availableImpl: (id) => (id === 'remote' ? { ok: false, error: 'fatal: …' } : { ok: true, isRepo: true }),
-  });
-  try {
-    ctx.window.switchPanel('remote');
-    await flush();
-    assert.equal(await countRevisits(ctx, 'remote', 4), 0,
-      'the memo must still stop the forever-probe it was added for');
-  } finally { ctx.destroy(); }
-});
-
-test('a transient failure before any answer is memoised, and a later one after an answer is not', async () => {
-  let answer = { ok: false, error: 'fatal: …' };
-  const ctx = setupFilePanelDom({ availableImpl: (id) => (id === 't' ? answer : { ok: true, isRepo: true }) });
-  try {
-    ctx.window.switchPanel('t');
-    await flush();
-    assert.equal(ctx.calls.available.filter((id) => id === 't').length, 1);
-
-    // Nothing was established, so the non-answer sticks and stops the asking.
-    answer = { ok: true, isRepo: false };
-    assert.equal(await countRevisits(ctx, 't', 3), 0);
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-  } finally { ctx.destroy(); }
-});
-
-test('a reply for a departed session repaints nothing on the unanswerable branch either', async () => {
-  const d = deferredAvailable();
-  const ctx = setupFilePanelDom({ availableImpl: d.impl });
-  try {
-    ctx.window.switchPanel('s1');
-    await flush();
-    ctx.window.switchPanel('s2');
-    await flush();
-
-    const writes = countDisplayWrites(ctx);
-    writes.reset();
-
-    d.settle('s1', { ok: false, error: 'fatal: …' });
-    await flush();
-    assert.equal(writes.count(), 0,
-      'the twin of the isRepo branch: a stale reply never touches the DOM, whichever way it failed');
-
-    d.settle('s2', { ok: false, error: 'fatal: …' });
-    await flush();
-    assert.equal(writes.count(), 1, 'the current session’s reply does');
-  } finally { ctx.destroy(); }
-});
-
-// --- Withdrawal over a dirty editor buffer ----------------------------------
-// The one combination neither branch could have had a test for: the editor is
-// #302's, the withdrawal is this branch's, and they meet at toggleChangesTab.
-// See .ai/contexts/changes-view.md ("Withdrawal reuses the tab's own close
-// control").
-
-async function openDirtyFileThen(ctx, statusAfter) {
-  await openFile(ctx, 's1', 'src/a.js');
-  ctx.editors[0].box.text = 'my unsaved edit\n';
-  statusAfter();
-  ctx.setActivity('s1', true);
-  ctx.setActivity('s1', false);
-  await flush();
-}
-
-test('a withdrawal over unsaved edits asks first, and a refusal keeps both the editor and the button', async () => {
-  let repo = true;
-  const ctx = setupFilePanelDom({
-    confirmImpl: () => false,
-    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    await openDirtyFileThen(ctx, () => { repo = false; });
-
-    assert.equal(ctx.calls.confirm.length, 1, 'the withdrawal asks the same question every other exit asks');
-    assert.equal(ctx.editors[0].box.destroyed, false, 'a refused discard must not destroy the buffer');
-    assert.equal(ctx.editors[0].box.text, 'my unsaved edit\n');
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'hiding the control while its tab still holds the edit is what strands it');
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
-  } finally { ctx.destroy(); }
-});
-
-test('a withdrawal over unsaved edits proceeds once the user confirms, and then withdraws the button', async () => {
-  let repo = true;
-  const ctx = setupFilePanelDom({
-    confirmImpl: () => true,
-    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    await openDirtyFileThen(ctx, () => { repo = false; });
-
-    assert.equal(ctx.calls.confirm.length, 1);
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
-  } finally { ctx.destroy(); }
-});
-
-test('a withdrawal with nothing unsaved never asks, it just withdraws', async () => {
-  let repo = true;
-  const ctx = setupFilePanelDom({
-    confirmImpl: () => false,
-    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
-  });
-  try {
-    await openFile(ctx, 's1', 'src/a.js');
     repo = false;
     ctx.setActivity('s1', true);
     ctx.setActivity('s1', false);
     await flush();
 
-    assert.equal(ctx.calls.confirm.length, 0, 'a clean buffer has nothing to discard');
-    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'so the refusal path is never reached and the button goes');
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true,
+      'the tab stays open and says what happened');
+    assert.match(ctx.document.querySelector('.changes-note').textContent, /not a git repository/);
+
+    repo = true;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2,
+      'and a git init is picked up by the next refresh, with no probe to re-ask');
   } finally { ctx.destroy(); }
 });
+
+test('a git failure after a no-repository answer is shown as a failure (mutation target: the reset)', async () => {
+  let answer = noRepoStatus;
+  const ctx = setupFilePanelDom({ statusImpl: () => answer() });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+    assert.ok(ctx.document.querySelector('.changes-note'));
+
+    answer = () => ({ ok: false, error: 'fatal: detected dubious ownership in repository at /srv/repo' });
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-note').length, 0,
+      'the previous answer must not colour the next one');
+    assert.match(ctx.document.querySelector('.changes-error').textContent, /dubious ownership/);
+  } finally { ctx.destroy(); }
+});
+
+test('a repository that disappears under unsaved edits asks nothing and keeps the buffer', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({
+    confirmImpl: () => true,
+    statusImpl: () => (repo ? makeStatusResult() : noRepoStatus()),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my unsaved edit\n';
+
+    repo = false;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 0, 'nothing is being discarded, so nothing is asked');
+    assert.equal(ctx.editors[0].box.destroyed, false);
+    assert.equal(ctx.editors[0].box.text, 'my unsaved edit\n');
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+  } finally { ctx.destroy(); }
+});
+
 
 // --- The panel's own X is a second close path -------------------------------
 // `handleClose` clears currentTab and hides the panel directly, without passing
@@ -2491,7 +2087,7 @@ test('the panel X closes a Changes tab on its own path, not through toggleChange
   } finally { ctx.destroy(); }
 });
 
-test('the panel X leaves the Changes button, so the tab it closed can be reopened', async () => {
+test('the tab the panel X closed is reopened by the Changes button', async () => {
   const ctx = setupFilePanelDom();
   try {
     ctx.window.switchPanel('s1');
@@ -2499,8 +2095,6 @@ test('the panel X leaves the Changes button, so the tab it closed can be reopene
     await flush();
 
     ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
-    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
-      'closing the view is not the same as the session having no repository');
 
     ctx.document.getElementById('changes-toggle-btn').click();
     await flush();

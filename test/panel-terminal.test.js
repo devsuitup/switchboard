@@ -817,7 +817,6 @@ const STATUS_OK = {
 function setupPanelWithTab(extra = {}) {
   return setupPanel({
     api: {
-      gitChangesAvailable: () => Promise.resolve({ ok: true, isRepo: true }),
       gitChangesStatus: () => Promise.resolve(STATUS_OK),
     },
     ...extra,
