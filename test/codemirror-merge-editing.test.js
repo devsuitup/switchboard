@@ -185,3 +185,36 @@ test('real CodeMirror: the MCP diff tab keeps its per-chunk controls and still s
     host.remove();
   }
 });
+
+test('real CodeMirror: every editing mode reports a document change, including undo and a programmatic edit', async () => {
+  const window = await loadCodeMirror();
+  const { undo } = require('@codemirror/commands');
+
+  for (const build of [
+    (host, onChange) => window.createMergeViewer(host, 'old\n', 'new\n', 'a.js', { onChange }),
+    (host, onChange) => window.createUnifiedMergeViewer(host, 'old\n', 'new\n', 'a.js', { mergeControls: false, onChange }),
+    (host, onChange) => window.createEditableViewer(host, 'new\n', 'a.js', { onChange }),
+  ]) {
+    const host = window.document.createElement('div');
+    window.document.body.appendChild(host);
+    let changes = 0;
+    const view = build(host, () => { changes++; });
+    const editable = view.b || view;
+    try {
+      assert.equal(changes, 0, 'building the view is not an edit');
+
+      editable.dispatch({ changes: { from: 0, insert: 'typed ' } });
+      assert.equal(changes, 1, 'a document change is reported');
+
+      undo(editable);
+      assert.equal(changes, 2, 'and so is an undo, which no DOM input event would catch');
+
+      editable.dispatch({ selection: { anchor: 0 } });
+      assert.equal(changes, 2, 'moving the cursor is not a document change');
+    } finally {
+      view.destroy();
+      host.remove();
+    }
+  }
+  assertOnlyLayoutNoise();
+});

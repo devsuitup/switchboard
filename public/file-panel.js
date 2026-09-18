@@ -68,9 +68,11 @@ let diffMode = localStorage.getItem(DIFF_MODE_KEY) || 'side-by-side';
 const CHANGES_DIFF_MODE_KEY = 'changesDiffMode';
 const CHANGES_DIFF_MODES = ['side-by-side', 'inline', 'plain'];
 const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side', inline: 'Inline', plain: 'Plain' };
+// Inline by default: the panel is a column, and side-by-side halves it — see
+// .ai/contexts/changes-view.md ("The list and the editor")
 let changesDiffMode = CHANGES_DIFF_MODES.includes(localStorage.getItem(CHANGES_DIFF_MODE_KEY))
   ? localStorage.getItem(CHANGES_DIFF_MODE_KEY)
-  : 'side-by-side';
+  : 'inline';
 
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -188,8 +190,10 @@ function initFilePanel() {
   changesControls.className = 'viewer-toolbar-controls';
 
   const changesRefreshBtn = document.createElement('button');
-  changesRefreshBtn.className = 'fp-toolbar-btn';
-  changesRefreshBtn.textContent = 'Refresh';
+  changesRefreshBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  changesRefreshBtn.id = 'changes-refresh-btn';
+  changesRefreshBtn.title = 'Refresh the file list';
+  changesRefreshBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
   changesRefreshBtn.addEventListener('click', () => {
     if (currentPanelSessionId) refreshChanges(currentPanelSessionId);
   });
@@ -1212,7 +1216,7 @@ function renderChangesDiff(sessionId, tab) {
   changesDiffModeBtn.textContent = CHANGES_DIFF_MODE_LABELS[changesDiffMode];
   changesDiffModeBtn.title = 'Diff view mode — click to cycle';
   changesDiffSaveBtn.style.display = tab.editable ? '' : 'none';
-  changesDiffSaveBtn.disabled = !!tab.saving;
+  updateChangesSaveButton(sessionId, tab);
   changesDiffReloadBtn.style.display = tab.editable ? '' : 'none';
 
   renderChangesNotice(tab);
@@ -1239,6 +1243,14 @@ function renderChangesDiff(sessionId, tab) {
 
   changesDiffHostEl.innerHTML = '';
   changesDiffHostEl.appendChild(body);
+}
+
+// Nothing to save, nothing to press. The keyboard path does not consult the
+// attribute, so handleChangesSave keeps its own guard.
+function updateChangesSaveButton(sessionId, tab) {
+  const state = filePanelState.get(sessionId);
+  if (!state || state.currentTab !== tab) return;
+  changesDiffSaveBtn.disabled = !!tab.saving || !isChangesBufferDirty(tab);
 }
 
 function renderChangesNotice(tab) {
@@ -1282,13 +1294,14 @@ function ensureChangesEditor(sessionId, tab) {
     if (!tab.selectedFile || !tab.editable) return;
 
     const filename = tab.selectedFile.path;
+    const onChange = () => updateChangesSaveButton(sessionId, tab);
     if (mode === 'plain') {
-      tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename);
+      tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename, { onChange });
     } else if (mode === 'inline') {
       // mergeControls: false — this panel is not a git client, see .ai/contexts/changes-view.md
-      tab.editorView = window.createUnifiedMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { mergeControls: false });
+      tab.editorView = window.createUnifiedMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { mergeControls: false, onChange });
     } else {
-      tab.editorView = window.createMergeViewer(changesDiffHostEl, tab.original, tab.current, filename);
+      tab.editorView = window.createMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { onChange });
     }
     tab.editorKey = key;
     tab.editorMode = mode;
@@ -1364,6 +1377,7 @@ async function handleChangesSave(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
   if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile || tab.saving) return;
+  if (!isChangesBufferDirty(tab)) return;
 
   const content = readChangesEditorContent(tab);
   if (content == null) return;
@@ -1399,7 +1413,20 @@ async function handleChangesSave(sessionId) {
   tab.savedContent = content;
   if (result.version) tab.version = result.version;
   if (typeof window.flashButtonText === 'function') window.flashButtonText(changesDiffSaveBtn, 'Saved!');
-  return refreshChanges(sessionId);
+
+  await refreshChanges(sessionId);
+
+  // The refresh re-points selectedFile at its new row, so the file is the same
+  // file by path, not by identity.
+  const afterState = filePanelState.get(sessionId);
+  if (!afterState || afterState.currentTab !== tab) return;
+  if (!tab.selectedFile || tab.selectedFile.path !== file.path) return;
+  // An untracked row's counts are click-derived, and this save is the click:
+  // the bytes just written are exactly what the count is of.
+  if (file.untracked) {
+    applyUntrackedCounts(tab, tab.data, file.path, countAddedLines(content), 0);
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+  }
 }
 
 async function reloadChangesFile(sessionId) {

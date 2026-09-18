@@ -416,7 +416,16 @@ function createReadOnlyViewer(parent, content, filename) {
 
 // ── Editable File Viewer (for file panel) ───────────────────────────
 
-function createEditableViewer(parent, content, filename, { wrap = false } = {}) {
+// A caller that needs to know the document changed (an enabled/disabled Save,
+// say) gets it from CodeMirror rather than from DOM input events, which miss
+// undo, paste and programmatic edits.
+function docChangeListener(onChange) {
+  return typeof onChange === 'function'
+    ? EditorView.updateListener.of((update) => { if (update.docChanged) onChange(); })
+    : [];
+}
+
+function createEditableViewer(parent, content, filename, { wrap = false, onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const wrapCompartment = new Compartment();
 
@@ -448,6 +457,7 @@ function createEditableViewer(parent, content, filename, { wrap = false } = {}) 
       syntaxHighlighting(markdownExtras),
       appThemePatch,
       wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
+      docChangeListener(onChange),
     ],
   });
 
@@ -458,7 +468,7 @@ function createEditableViewer(parent, content, filename, { wrap = false } = {}) 
 
 // ── Diff / Merge Viewer ─────────────────────────────────────────────
 
-function createMergeViewer(parent, originalContent, modifiedContent, filename) {
+function createMergeViewer(parent, originalContent, modifiedContent, filename, { onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const sharedExts = [
     lineNumbers(),
@@ -498,6 +508,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         cmGotoLineKeymap,
         cmSaveKeymap,
+        docChangeListener(onChange),
       ],
     },
     gutter: true,
@@ -506,7 +517,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
   });
 }
 
-function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true } = {}) {
+function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true, onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: modifiedContent,
@@ -529,6 +540,7 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       dracula,
       syntaxHighlighting(markdownExtras),
       appThemePatch,
+      docChangeListener(onChange),
       unifiedMergeView({
         original: originalContent,
         gutter: true,

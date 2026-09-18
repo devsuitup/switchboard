@@ -56,10 +56,16 @@ const DEFAULT_PAIR = { ok: true, original: 'old\n', current: 'new\n', version: '
 // A stand-in for a CodeMirror view: it owns a DOM node, reports a document
 // the test can rewrite (typing), and records its own destruction — enough for
 // the reuse, dirty-buffer and save paths, none of the bundle.
-function makeEditorStub(window, mode, doc, created) {
+function makeEditorStub(window, mode, doc, created, onChange) {
   const dom = window.document.createElement('div');
   dom.className = 'fake-editor fake-editor-' + mode;
-  const box = { text: doc, destroyed: false, mode };
+  const box = {
+    destroyed: false,
+    mode,
+    _text: doc,
+    get text() { return this._text; },
+    set text(value) { this._text = value; if (typeof onChange === 'function') onChange(); },
+  };
   const docSide = { state: { doc: { toString: () => box.text } } };
   const view = {
     dom,
@@ -134,21 +140,23 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   // file-panel.js defers every editor to the lazy bundle loader; the suite
   // stands in for both the loader and the factories it would provide.
   window.loadCodeMirrorBundle = () => Promise.resolve();
-  window.createMergeViewer = (parent, original, modified, filename) => {
-    const view = makeEditorStub(window, 'side-by-side', modified, editors);
+  window.createMergeViewer = (parent, original, modified, filename, opts) => {
+    const view = makeEditorStub(window, 'side-by-side', modified, editors, opts && opts.onChange);
+    view.opts = opts;
     view.opened = { original, modified, filename };
     parent.appendChild(view.dom);
     return view;
   };
   window.createUnifiedMergeViewer = (parent, original, modified, filename, opts) => {
-    const view = makeEditorStub(window, 'inline', modified, editors);
+    const view = makeEditorStub(window, 'inline', modified, editors, opts && opts.onChange);
     view.opened = { original, modified, filename };
     view.opts = opts;
     parent.appendChild(view.dom);
     return view;
   };
-  window.createEditableViewer = (parent, content, filename) => {
-    const view = makeEditorStub(window, 'plain', content, editors);
+  window.createEditableViewer = (parent, content, filename, opts) => {
+    const view = makeEditorStub(window, 'plain', content, editors, opts && opts.onChange);
+    view.opts = opts;
     view.opened = { original: null, modified: content, filename };
     parent.appendChild(view.dom);
     return view;
@@ -492,8 +500,7 @@ test('the Refresh button re-invokes gitChangesStatus', async () => {
     await flush();
     assert.equal(ctx.calls.status.length, 1);
 
-    const refreshBtn = Array.from(ctx.document.querySelectorAll('#file-panel-changes button')).find(b => b.textContent === 'Refresh');
-    refreshBtn.click();
+    ctx.document.getElementById('changes-refresh-btn').click();
     await flush();
 
     assert.equal(ctx.calls.status.length, 2);
@@ -686,7 +693,7 @@ test('a local changed file opens in an editable diff over the content pair, with
 
     assert.equal(ctx.editors.length, 1);
     assert.deepEqual(ctx.editors[0].opened, { original: 'old\n', modified: 'new\n', filename: 'src/a.js' });
-    assert.equal(ctx.editors[0].box.mode, 'side-by-side', 'the default mode');
+    assert.equal(ctx.editors[0].box.mode, 'inline', 'the default at this panel width');
     assert.ok(ctx.document.querySelector('#changes-diff-host .fake-editor'), 'the editor is mounted in the diff host');
     assert.equal(ctx.document.querySelector('.changes-diff-body'), null, 'no inert diff text alongside the editor');
 
@@ -872,24 +879,23 @@ test('the mode toggle cycles side-by-side → inline → plain, persists under i
     ctx.editors[0].box.text = 'edited\n';
 
     const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
-    assert.equal(modeBtn.textContent, 'Side-by-side');
+    assert.equal(modeBtn.textContent, 'Inline');
 
     modeBtn.click();
     await flush();
-    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'inline');
+    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'plain');
     assert.equal(ctx.window.localStorage.getItem('filePanelDiffMode'), null, 'the MCP diff tab keeps its own key');
-    assert.equal(ctx.editors[1].box.mode, 'inline');
+    assert.equal(ctx.editors[1].box.mode, 'plain');
     assert.equal(ctx.editors[1].opened.modified, 'edited\n', 'an unsaved edit is carried into the new view');
 
     modeBtn.click();
     await flush();
-    assert.equal(ctx.editors[2].box.mode, 'plain');
-    assert.equal(ctx.editors[2].opened.original, null, 'plain mode is the file, with no diff decoration');
+    assert.equal(ctx.editors[2].box.mode, 'side-by-side');
 
     modeBtn.click();
     await flush();
-    assert.equal(ctx.editors[3].box.mode, 'side-by-side');
-    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'side-by-side');
+    assert.equal(ctx.editors[3].box.mode, 'inline');
+    assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'inline');
   } finally { ctx.destroy(); }
 });
 
@@ -898,14 +904,17 @@ test('an inline editor is read back from the view itself, a side-by-side one fro
   try {
     await openFile(ctx, 's1', 'src/a.js');
 
-    const sideBySide = ctx.editors[0];
+    ctx.document.getElementById('changes-diff-mode-btn').click();  // inline -> plain
+    ctx.document.getElementById('changes-diff-mode-btn').click();  // plain -> side-by-side
+    await flush();
+    const sideBySide = ctx.editors[ctx.editors.length - 1];
     assert.ok(sideBySide.b, 'the side-by-side view edits its b side');
     sideBySide.box.text = 'from the b side\n';
     ctx.document.getElementById('changes-diff-save-btn').click();
     await flush();
     assert.equal(ctx.calls.save[0].content, 'from the b side\n');
 
-    ctx.document.getElementById('changes-diff-mode-btn').click();
+    ctx.document.getElementById('changes-diff-mode-btn').click();  // side-by-side -> inline
     await flush();
     const inline = ctx.editors[ctx.editors.length - 1];
     assert.equal(inline.b, undefined, 'the inline view has no b side');
@@ -1488,11 +1497,17 @@ test('two saves in a row issue one write (mutation target: the in-flight guard)'
 
     assert.equal(ctx.calls.save.length, 1, 'the second save lands while the first write is in flight');
 
+    // Saved, so there is nothing to save: the button says so.
     const saveBtn = ctx.document.getElementById('changes-diff-save-btn');
+    assert.equal(saveBtn.disabled, true);
+
+    // The post-save re-read may have rebuilt the view; type into the live one.
+    ctx.editors[ctx.editors.length - 1].box.text = 'edited again\n';
+    assert.equal(saveBtn.disabled, false, 'typing brings it back without a re-render');
     saveBtn.click();
     saveBtn.click();
     await flush();
-    assert.equal(ctx.calls.save.length, 2, 'and the button is disabled for the duration too');
+    assert.equal(ctx.calls.save.length, 2, 'and the button is disabled for the duration of the write too');
   } finally { ctx.destroy(); }
 });
 
@@ -1584,11 +1599,9 @@ test('inline mode asks for a merge view with no accept/reject controls — this 
   const ctx = setupFilePanelDom();
   try {
     await openFile(ctx, 's1', 'src/a.js');
-    ctx.document.getElementById('changes-diff-mode-btn').click();
-    await flush();
 
     const inline = ctx.editors[ctx.editors.length - 1];
-    assert.equal(inline.box.mode, 'inline');
+    assert.equal(inline.box.mode, 'inline', 'the default at this panel width');
     assert.equal(inline.opts.mergeControls, false, 'accept/reject chunk controls would revert working-tree changes');
   } finally { ctx.destroy(); }
 });
@@ -1730,5 +1743,147 @@ test('the list height is clamped for display only, and never ratcheted down (mut
 
     // No layout to measure yet: keep what was asked for rather than guessing.
     assert.equal(clamp(250, 0), 250);
+  } finally { ctx.destroy(); }
+});
+
+// --- A save must not make the change it just wrote disappear --------------
+
+// The status a session reports after the file has been written: an untracked
+// file is still untracked and still has no numstat counts of its own.
+function statusAfterUntrackedSave() {
+  return makeStatusResult({
+    files: [
+      { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 1, deleted: 0 },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null },
+    ],
+    totals: { files: 2, added: 1, deleted: 0 },
+  });
+}
+
+test('saving an untracked file keeps its counts and the header total (mutation target: dropping the counts a save already has)', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => statusAfterUntrackedSave(),
+    fileImpl: (_s, _p) => ({ ok: true, original: '', current: 'one\ntwo\nthree\n', version: 'v1' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'new.txt');
+    // The click derived them from the pair: three lines, all additions.
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts').textContent, '+3−0');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+4 −0/);
+
+    ctx.editors[0].box.text = 'one\ntwo\nthree\nfour\n';
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.equal(ctx.calls.save.length, 1, 'the save happened');
+    const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.ok(counts, 'the row must not lose the counts because the user saved');
+    assert.equal(counts.textContent, '+4−0', 'and they follow the file as it now is');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+5 −0/,
+      'the header stays consistent with the rows');
+  } finally { ctx.destroy(); }
+});
+
+test('saving does not collapse the diff: the original side stays the side git compares against (mutation target: re-reading the original from the working tree)', async () => {
+  let current = 'one\ntwo\n';
+  const ctx = setupFilePanelDom({
+    statusImpl: () => statusAfterUntrackedSave(),
+    fileImpl: () => ({ ok: true, original: '', current, version: 'v' + current.length }),
+    saveImpl: (_s, _p, content) => { current = content; return { ok: true, version: 'v' + content.length }; },
+  });
+  try {
+    await openFile(ctx, 's1', 'new.txt');
+    assert.equal(ctx.editors[0].opened.original, '', 'an untracked file has no original side');
+
+    ctx.editors[0].box.text = 'one\ntwo\nthree\n';
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    const editor = ctx.editors[ctx.editors.length - 1];
+    assert.equal(editor.opened.original, '', 'still nothing on the left: the save wrote the working tree, not the index');
+    assert.notEqual(editor.box.text, editor.opened.original, 'so there is still a difference on screen');
+  } finally { ctx.destroy(); }
+});
+
+test('saving a tracked file keeps the diff against the index, with git\'s own counts', async () => {
+  let numstat = { added: 2, deleted: 1 };
+  const ctx = setupFilePanelDom({
+    statusImpl: () => makeStatusResult({
+      files: [{ path: 'src/a.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: numstat.added, deleted: numstat.deleted }],
+      totals: { files: 1, added: numstat.added, deleted: numstat.deleted },
+    }),
+    fileImpl: () => ({ ok: true, original: 'indexed\n', current: 'worktree\n', version: 'v1' }),
+    saveImpl: () => { numstat = { added: 3, deleted: 1 }; return { ok: true, version: 'v2' }; },
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'worktree edited\n';
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    const editor = ctx.editors[ctx.editors.length - 1];
+    assert.equal(editor.opened.original, 'indexed\n', 'the index is still what the diff is against');
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"] .changes-file-counts').textContent, '+3−1',
+      'and the counts are git\'s, recomputed after the write');
+  } finally { ctx.destroy(); }
+});
+
+// --- The panel and the sidebar draw from one set of values ----------------
+
+test('the panel styles itself from the shared tokens rather than its own literals (mutation target: re-divergence)', () => {
+  const css = fs.readFileSync(path.join(PUBLIC_DIR, 'style.css'), 'utf8');
+  const root = css.slice(0, css.indexOf('}'));
+  assert.match(root, /:root \{/, 'the shared set is defined in one place');
+  for (const token of ['--surface-chrome', '--hairline', '--control-border', '--accent', '--text-muted']) {
+    assert.match(root, new RegExp(token + ':'), `${token} is defined`);
+  }
+
+  // Every var() the stylesheet uses resolves against that set.
+  const defined = new Set([...root.matchAll(/(--[a-z-]+):/g)].map((m) => m[1]));
+  const used = new Set([...css.matchAll(/var\((--[a-z-]+)\)/g)].map((m) => m[1]));
+  assert.deepEqual([...used].filter((t) => !defined.has(t)), [], 'no token is used without being defined');
+
+  // The panel's own chrome, and the sidebar's, are the same value by reference.
+  const panelRule = css.slice(css.indexOf('#file-panel {'), css.indexOf('}', css.indexOf('#file-panel {')));
+  assert.match(panelRule, /background: var\(--surface-chrome\)/,
+    'the panel sits on the surface the sidebar sits on');
+  const sidebarRule = css.slice(css.indexOf('#sidebar {'), css.indexOf('}', css.indexOf('#sidebar {')));
+  assert.match(sidebarRule, /background: var\(--surface-chrome\)/);
+
+  // And the toolbar buttons are not a second treatment of their own.
+  const btnRule = css.slice(css.indexOf('.fp-toolbar-btn {'), css.indexOf('}', css.indexOf('.fp-toolbar-btn {')));
+  assert.match(btnRule, /border: 1px solid var\(--control-border\)/);
+  assert.match(btnRule, /color: var\(--text-muted\)/);
+});
+
+test('Ctrl/Cmd+S on a clean buffer saves nothing, since the keyboard path never sees the disabled button', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').disabled, true,
+      'nothing to save, nothing to press');
+
+    ctx.editors[0].dom.dispatchEvent(new ctx.window.CustomEvent('cm-save', { bubbles: true }));
+    await flush();
+
+    assert.deepEqual(ctx.calls.save, [], 'and the keyboard path declines for the same reason');
+  } finally { ctx.destroy(); }
+});
+
+test('the Refresh control is the icon this app already uses, not a word (mutation target: the icon)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const btn = ctx.document.getElementById('changes-refresh-btn');
+    assert.ok(btn.classList.contains('fp-icon-btn'), 'it uses the toolbar\'s icon-button treatment');
+    assert.equal(btn.textContent.trim(), '', 'no word');
+    const svg = btn.querySelector('svg');
+    assert.ok(svg, 'an icon');
+    assert.equal(svg.getAttribute('viewBox'), '0 0 24 24', 'the same one the search bar reindex button draws');
+    assert.match(btn.title, /refresh/i, 'and it says what it does on hover');
   } finally { ctx.destroy(); }
 });
