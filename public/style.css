@@ -222,7 +222,7 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-chrome);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   border-right: none;
   flex-shrink: 0;
 }
@@ -231,7 +231,7 @@ body { display: flex; flex-direction: column; }
   width: 4px;
   cursor: col-resize;
   background: transparent;
-  height: 100vh;
+  height: 100%;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
