@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment } = require('../git-changes-file');
+const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment, locateChangesFile } = require('../git-changes-file');
 
 // git translates its diagnostics; the assertions below match its English text.
 process.env.LC_ALL = 'C';
@@ -880,5 +880,156 @@ test('real git: a single line with no trailing newline round-trips byte-identica
     assert.equal(saved.ok, true, saved.error);
     assert.equal(fs.readFileSync(target, 'utf8'), 'no trailing newline');
     assert.equal(git(repoDir, ['status', '--porcelain', '--', 'oneline.txt']).trim(), '');
+  } finally { cleanup(tmp); }
+});
+
+// --- A file link's absolute path, mapped to a row -------------------------
+
+function locate(repoDir, absolutePath) {
+  return locateChangesFile({ cwd: repoDir, absolutePath });
+}
+
+test('real git: an absolute path inside the repo maps to its repo-relative row, with the row\'s own flags', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, 'src'));
+    fs.writeFileSync(path.join(repoDir, 'src', 'tracked.js'), 'one\n');
+    git(repoDir, ['add', 'src/tracked.js']);
+    git(repoDir, ['commit', '-q', '-m', 'add']);
+    fs.writeFileSync(path.join(repoDir, 'src', 'tracked.js'), 'two\n');
+
+    const modified = await locate(repoDir, path.join(repoDir, 'src', 'tracked.js'));
+    assert.equal(modified.ok, true, modified.error);
+    assert.equal(modified.relPath, 'src/tracked.js', 'the renderer is handed the pathspec, never the root');
+    assert.equal(modified.changed, true);
+    assert.equal(modified.staged, false, 'an unstaged edit opens against the index');
+    assert.equal(modified.untracked, false);
+
+    git(repoDir, ['add', 'src/tracked.js']);
+    const staged = await locate(repoDir, path.join(repoDir, 'src', 'tracked.js'));
+    assert.equal(staged.staged, true, 'a staged-only edit opens against HEAD');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: an untracked file is a row too, and an unmodified one is not (mutation target: the changed check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, 'brand-new.txt'), 'new\n');
+    git(repoDir, ['add', 'f.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'clean']);
+    fs.writeFileSync(path.join(repoDir, 'clean.txt'), 'x\n');
+    git(repoDir, ['add', 'clean.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'clean2']);
+
+    const untracked = await locate(repoDir, path.join(repoDir, 'brand-new.txt'));
+    assert.equal(untracked.changed, true, 'an untracked file is a legitimate row');
+    assert.equal(untracked.untracked, true);
+
+    const unmodified = await locate(repoDir, path.join(repoDir, 'clean.txt'));
+    assert.equal(unmodified.ok, true, 'an unmodified file is not an error');
+    assert.equal(unmodified.changed, false, 'it just has no diff to show');
+    assert.equal(unmodified.relPath, 'clean.txt');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a path outside the repository is refused, not mapped (mutation target: the containment check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const outside = path.join(tmp, 'outside.txt');
+    fs.writeFileSync(outside, 'secret\n');
+
+    const result = await locate(repoDir, outside);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'outside');
+    assert.ok(!('relPath' in result), 'nothing about the repository leaks back for a path outside it');
+
+    const missing = await locate(repoDir, path.join(repoDir, 'nope.txt'));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.reason, 'missing');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a link into the git directory or through a symlink is refused by the same guard as a row', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.symlinkSync(path.join(repoDir, '.git'), path.join(repoDir, 'gitlink'));
+    fs.symlinkSync(path.join(repoDir, 'f.txt'), path.join(repoDir, 'flink'));
+
+    // Both spellings resolve to the same place, and the relative path computed
+    // from the resolved one carries the .git segment either way.
+    for (const spelling of [path.join(repoDir, '.git', 'config'), path.join(repoDir, 'gitlink', 'config')]) {
+      const refused = await locate(repoDir, spelling);
+      assert.equal(refused.ok, false, `must refuse ${spelling}`);
+      assert.equal(refused.reason, 'invalid-path');
+      assert.ok(!('relPath' in refused), 'and hands back no pathspec to open');
+    }
+
+    // A symlink resolves to its target, which is an ordinary row: what is
+    // refused is editing the link itself, and that is what relPath names.
+    const link = await locate(repoDir, path.join(repoDir, 'flink'));
+    assert.equal(link.ok, true, link.error);
+    assert.equal(link.relPath, 'f.txt', 'the row is the file the link points at, inside the repo');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a path in a subdirectory keeps forward slashes, the spelling every other Changes IPC uses', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, 'a', 'b'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'a', 'b', 'c.txt'), 'deep\n');
+
+    const result = await locate(repoDir, path.join(repoDir, 'a', 'b', 'c.txt'));
+    assert.equal(result.relPath, 'a/b/c.txt');
+    assert.equal(result.changed, true);
+
+    const reread = await readChangesFile({ cwd: repoDir, relPath: result.relPath, staged: false, maxBytes: MAX_BYTES });
+    assert.equal(reread.ok, true, 'the pathspec it returns is one the read accepts: ' + reread.error);
+    assert.equal(reread.current, 'deep\n');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a link to a file no row could open is not offered as a row (mutation target: the shared guard in locate)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, '.env'), 'TOKEN=secret\n');
+    fs.mkdirSync(path.join(repoDir, 'adir'));
+
+    // Sensitive: the read refuses it, so the link must not route there either.
+    const sensitive = await locate(repoDir, path.join(repoDir, '.env'));
+    assert.equal(sensitive.ok, false);
+    assert.equal(sensitive.reason, 'sensitive');
+
+    // A directory link has no row to open.
+    const dir = await locate(repoDir, path.join(repoDir, 'adir'));
+    assert.equal(dir.ok, false);
+    assert.equal(dir.reason, 'not-a-file');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a git directory that is not called .git is not reachable through a link either', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    git(repoDir, ['init', '-q', '--separate-git-dir', path.join(repoDir, 'customgit')]);
+    git(repoDir, ['config', 'user.email', 'a@a.com']);
+    git(repoDir, ['config', 'user.name', 'a']);
+    fs.writeFileSync(path.join(repoDir, 'f.txt'), 'hello\n');
+
+    const result = await locate(repoDir, path.join(repoDir, 'customgit', 'config'));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'git-dir', 'no segment rule can see this one; containment can');
   } finally { cleanup(tmp); }
 });

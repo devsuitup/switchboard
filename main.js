@@ -1828,6 +1828,19 @@ const changesWatchers = createChangesWatchRegistry({
   },
 });
 
+// filePath is absolute here — the only Changes IPC that takes one, and it
+// gives back a repo-relative row — see .ai/contexts/changes-view.md
+ipcMain.handle('git-changes-locate', async (_event, sessionId, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
+  if (!target.ok) return target;
+  try {
+    return await gitChangesFile.locateChangesFile({ cwd: target.cwd, absolutePath: filePath });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));

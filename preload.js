@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   gitChangesDiff: (sessionId, filePath, staged, untracked) => ipcRenderer.invoke('git-changes-diff', sessionId, filePath, staged, untracked),
   gitChangesFile: (sessionId, filePath, opts) => ipcRenderer.invoke('git-changes-file', sessionId, filePath, opts),
   gitChangesSave: (sessionId, filePath, content, version) => ipcRenderer.invoke('git-changes-save', sessionId, filePath, content, version),
+  gitChangesLocate: (sessionId, filePath) => ipcRenderer.invoke('git-changes-locate', sessionId, filePath),
   gitChangesWatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-watch', sessionId, filePath),
   gitChangesUnwatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-unwatch', sessionId, filePath),
   onGitChangesFileChanged: (callback) => {

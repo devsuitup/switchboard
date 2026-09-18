@@ -7,12 +7,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { localGitEnv } = require('./git-changes-runner');
+const { parseStatusPorcelainV2 } = require('./git-changes');
 const { resolveOnDisk, isInsideDir } = require('./resolve-path-on-disk');
 const { isSensitivePath } = require('./ipc-path-validator');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_PATH_LENGTH = 4096;
 const TOPLEVEL_MAX_BUFFER = 64 * 1024;
+const STATUS_MAX_BUFFER = 1024 * 1024;
 const NOT_IN_TREE_EXIT_CODE = 128;
 
 // Guards for a repo-relative path from the renderer — see .ai/contexts/changes-view.md ("Editing a changed file")
@@ -238,6 +240,51 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   };
 }
 
+// A file link hands the renderer an absolute path; the repo-relative row it
+// belongs to is computed here, never there — see .ai/contexts/changes-view.md
+async function locateChangesFile({ cwd, absolutePath }, deps = {}) {
+  if (typeof absolutePath !== 'string' || !absolutePath) {
+    return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  }
+
+  const repo = await resolveRepoDirs(cwd, deps);
+  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
+
+  const realRoot = resolveOnDisk(repo.root);
+  const real = resolveOnDisk(absolutePath);
+  if (!realRoot || !real) return { ok: false, error: 'file is not in the working tree', reason: 'missing' };
+  if (!isInsideDir(real, realRoot)) return { ok: false, error: 'path is outside this session\'s repository', reason: 'outside' };
+
+  const relPath = path.relative(realRoot, real).split(path.sep).join('/');
+  if (!isSafeRevPathOperand(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+
+  // The same guard the read and the write go through, so a link cannot reach
+  // what a row cannot.
+  const target = resolveTargetInsideRepo(repo, relPath, deps);
+  if (!target.ok) return target;
+
+  const runGit = deps.runGit || defaultRunGit;
+  const status = await runGit(['status', '--porcelain=v2', '-uall', '-z', '--', relPath], {
+    cwd: realRoot,
+    timeoutMs: deps.timeoutMs || DEFAULT_TIMEOUT_MS,
+    maxBuffer: STATUS_MAX_BUFFER,
+  });
+  if (status.code !== 0) {
+    return { ok: false, error: (status.stderr || '').trim() || `git exited with code ${status.code}`, reason: 'git' };
+  }
+
+  const record = parseStatusPorcelainV2(String(status.stdout)).files.find((f) => f.path === relPath);
+  if (!record) return { ok: true, relPath, changed: false };
+
+  return {
+    ok: true,
+    relPath,
+    changed: true,
+    staged: !!record.staged && !record.unstaged,
+    untracked: !!record.untracked,
+  };
+}
+
 async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, deps = {}) {
   const fs = deps.fs || realFs;
   if (typeof content !== 'string') return { ok: false, error: 'invalid content', reason: 'invalid-content' };
@@ -271,6 +318,7 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
 module.exports = {
   readChangesFile,
   writeChangesFile,
+  locateChangesFile,
   requireLocalTarget,
   resolveTargetInsideRepo,
   isSafeRepoRelativePath,
