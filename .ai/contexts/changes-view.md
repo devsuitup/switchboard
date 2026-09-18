@@ -358,6 +358,11 @@ match. It also decides the wording: `spawn git ENOENT` reads as "git is not
 installed", where the truth is that the directory is gone, and the message names
 it.
 
+`fsOps` is dependency injection for tests only, and both functions that use it
+require a complete seam: `missingCwdError` throws a `TypeError` rather than
+treating a missing `stat` as "the cwd is fine", which would switch the check off
+with nothing to show for it.
+
 The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
 at the cwd and at each ancestor up to the filesystem root. It needs no process
 and no locale, and it answers the one question the exit code cannot — *is there
@@ -406,11 +411,20 @@ on the switch path:
   buys nothing and costs an ssh with a 20 s kill timer. It is not a rare shape:
   a remote cwd outside a repository, a local repository git refuses, and an
   unreachable host all produce it, on every activation, forever;
+- **a non-answer never displaces an answer.** `CHANGES_UNANSWERED` is written
+  only for a session nothing has been established for yet, so the two memo
+  writes cannot collide. "No repository" is the one answer deliberately
+  re-asked, which makes it the one a transient failure — an ssh blip, a sleeping
+  host — can land on; overwriting it would un-hide a button for a directory that
+  is definitely not a repository, and then never ask again. A session that keeps
+  its `false` stays re-askable, so the blip costs nothing beyond that one probe;
 - a second probe for a session whose first is still in flight is **dropped**
   (`changesAvailabilityInFlight`), so a burst of switches cannot put a burst of
   ssh children on a remote host;
 - an answer is **recorded against the session it is about**, then applied to the
-  button only while that session is still the one on screen. Discarding a
+  button only while that session is still the one on screen — on every branch,
+  because "a stale reply never touches the DOM" is an invariant, not a
+  per-branch outcome. Discarding a
   correct answer because the panel had moved on would cost that session another
   probe on its next activation; painting from it would paint the wrong
   session's state.

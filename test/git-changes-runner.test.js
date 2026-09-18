@@ -20,6 +20,7 @@ const {
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
   gitEntryAtOrAbove,
+  missingCwdError,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
@@ -1143,9 +1144,21 @@ test('status(): a cap overrun alongside a real failure still asks, so a non-repo
     if (args.includes('-uall')) return Promise.resolve({ code: -1, stdout: '', stderr: 'stdout maxBuffer length exceeded' });
     return Promise.resolve({ code: 128, stdout: '', stderr: FRENCH_FATAL });
   };
-  const fsOps = { lstat: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } };
-  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: NO_REPO_FS }).status();
 
   assert.equal(result.reason, NOT_A_REPO_REASON);
   assert.equal(calls.filter((a) => a[1] === 'rev-parse').length, 1);
+});
+
+test('missingCwdError refuses a partial fs seam instead of quietly switching the cwd check off', () => {
+  assert.throws(() => missingCwdError('/repo', { lstat: () => ({}) }), TypeError,
+    'a seam with no stat used to be swallowed as "the cwd is fine", disabling the guard with no sign');
+  assert.throws(() => missingCwdError('/repo', {}), TypeError);
+  assert.throws(() => missingCwdError('/repo', null), TypeError);
+});
+
+test('missingCwdError still treats an unexpected stat failure as "cannot tell", not as a missing directory', () => {
+  const fsOps = { stat: () => { const e = new Error('nope'); e.code = 'EACCES'; throw e; } };
+  assert.equal(missingCwdError('/repo', fsOps), null,
+    'only ENOENT/ENOTDIR name the directory; anything else leaves the 128 corroboration to decide');
 });

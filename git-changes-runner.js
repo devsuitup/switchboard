@@ -133,6 +133,9 @@ function gitEntryAtOrAbove(startDir, fsOps = DEFAULT_FS_OPS, pathOps = path) {
 
 // A local spawn fails on the cwd long before it fails on git — see .ai/contexts/changes-view.md ("Not a repository")
 function missingCwdError(cwd, fsOps = DEFAULT_FS_OPS) {
+  if (!fsOps || typeof fsOps.stat !== 'function') {
+    throw new TypeError('missingCwdError requires fsOps.stat');
+  }
   try {
     return fsOps.stat(cwd).isDirectory() ? null : `working directory is not a directory: ${cwd}`;
   } catch (err) {

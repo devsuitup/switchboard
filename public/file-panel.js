@@ -738,7 +738,8 @@ async function refreshChangesAvailability(sessionId) {
   }
 
   if (!result || typeof result.isRepo !== 'boolean') {
-    getSessionState(sessionId).changesAvailable = CHANGES_UNANSWERED;
+    const state = getSessionState(sessionId);
+    if (state.changesAvailable === null) state.changesAvailable = CHANGES_UNANSWERED;
     if (currentPanelSessionId === sessionId) updateChangesToggle();
     return;
   }

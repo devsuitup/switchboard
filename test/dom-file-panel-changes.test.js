@@ -2305,3 +2305,87 @@ test('a reply for a session the panel has left repaints nothing (mutation target
     assert.equal(writes.count(), 1, 's2 is, so its answer does');
   } finally { ctx.destroy(); }
 });
+
+// --- A non-answer never displaces an answer ---------------------------------
+// "no repository" is the one answer deliberately re-asked, so it is also the
+// one that a transient failure can land on — an ssh blip, a sleeping host. See
+// .ai/contexts/changes-view.md ("Who asks, and when").
+
+test('a transient failure on the re-ask does not un-hide a button that was correctly hidden', async () => {
+  let answer = { ok: true, isRepo: false };
+  const ctx = setupFilePanelDom({ availableImpl: (id) => (id === 'scratch' ? answer : { ok: true, isRepo: true }) });
+  try {
+    const btn = ctx.document.getElementById('changes-toggle-btn');
+    ctx.window.switchPanel('scratch');
+    await flush();
+    assert.equal(btn.style.display, 'none', 'a scratch directory is not a repository');
+
+    answer = { ok: false, error: 'ssh: connect to host h port 22: Connection refused' };
+    ctx.window.switchPanel('other');
+    await flush();
+    ctx.window.switchPanel('scratch');
+    await flush();
+
+    assert.equal(btn.style.display, 'none',
+      'a probe that could not answer must not overwrite the answer that was already established');
+    assert.equal(ctx.calls.available.filter((id) => id === 'scratch').length, 2);
+
+    // And the session is still re-askable, so the blip costs nothing permanent.
+    answer = { ok: true, isRepo: true };
+    ctx.window.switchPanel('other');
+    await flush();
+    ctx.window.switchPanel('scratch');
+    await flush();
+    assert.notEqual(btn.style.display, 'none', 'once git can answer again, the answer applies');
+  } finally { ctx.destroy(); }
+});
+
+test('a session that has only ever been unanswerable is still asked exactly once', async () => {
+  const ctx = setupFilePanelDom({
+    availableImpl: (id) => (id === 'remote' ? { ok: false, error: 'fatal: …' } : { ok: true, isRepo: true }),
+  });
+  try {
+    ctx.window.switchPanel('remote');
+    await flush();
+    assert.equal(await countRevisits(ctx, 'remote', 4), 0,
+      'the memo must still stop the forever-probe it was added for');
+  } finally { ctx.destroy(); }
+});
+
+test('a transient failure before any answer is memoised, and a later one after an answer is not', async () => {
+  let answer = { ok: false, error: 'fatal: …' };
+  const ctx = setupFilePanelDom({ availableImpl: (id) => (id === 't' ? answer : { ok: true, isRepo: true }) });
+  try {
+    ctx.window.switchPanel('t');
+    await flush();
+    assert.equal(ctx.calls.available.filter((id) => id === 't').length, 1);
+
+    // Nothing was established, so the non-answer sticks and stops the asking.
+    answer = { ok: true, isRepo: false };
+    assert.equal(await countRevisits(ctx, 't', 3), 0);
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('a reply for a departed session repaints nothing on the unanswerable branch either', async () => {
+  const d = deferredAvailable();
+  const ctx = setupFilePanelDom({ availableImpl: d.impl });
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    ctx.window.switchPanel('s2');
+    await flush();
+
+    const writes = countDisplayWrites(ctx);
+    writes.reset();
+
+    d.settle('s1', { ok: false, error: 'fatal: …' });
+    await flush();
+    assert.equal(writes.count(), 0,
+      'the twin of the isRepo branch: a stale reply never touches the DOM, whichever way it failed');
+
+    d.settle('s2', { ok: false, error: 'fatal: …' });
+    await flush();
+    assert.equal(writes.count(), 1, 'the current session’s reply does');
+  } finally { ctx.destroy(); }
+});
