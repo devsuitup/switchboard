@@ -400,9 +400,42 @@ function openFileTab(sessionId, data) {
   }
 }
 
+// A session opening a file or a diff replaces the tab without asking, so the
+// buffer is kept and restored the next time the Changes tab is opened.
+function stashChangesEdits(state, tab) {
+  if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
+  const content = readChangesEditorContent(tab);
+  if (content == null || content === tab.savedContent) return;
+  state.changesStash = {
+    file: tab.selectedFile,
+    content,
+    original: tab.original,
+    savedContent: tab.savedContent,
+    version: tab.version,
+  };
+}
+
+function restoreChangesEdits(sessionId, state, tab) {
+  const stash = state.changesStash;
+  if (!stash) return false;
+  state.changesStash = null;
+
+  tab.selectedFile = stash.file;
+  tab.editable = true;
+  tab.original = stash.original;
+  tab.current = stash.content;
+  tab.savedContent = stash.savedContent;
+  tab.version = stash.version;
+  tab.restoredEdits = true;
+  tab.diffLoading = false;
+  watchChangesFile(sessionId, tab, stash.file.path);
+  return true;
+}
+
 function destroyCurrentTab(state) {
   const tab = state.currentTab;
   if (!tab) return;
+  stashChangesEdits(state, tab);
   if (tab.type === 'diff' && tab.editorView) {
     tab.editorView.destroy();
     tab.editorView = null;
@@ -669,6 +702,7 @@ function openChangesTab(sessionId) {
     editorMode: null,
     editorPending: null,
     version: null,
+    restoredEdits: false,
     watchedPath: null,
     fallbackReason: null,
     fileError: null,
@@ -677,6 +711,7 @@ function openChangesTab(sessionId) {
     externalChange: false,
   };
   state.panelVisible = true;
+  restoreChangesEdits(sessionId, state, state.currentTab);
 
   if (currentPanelSessionId === sessionId) {
     showPanel(state);
@@ -824,7 +859,7 @@ async function openChangesDiff(sessionId, file) {
       tab.savedContent = pair.current;
       tab.version = pair.version;
       watchChangesFile(sessionId, tab, file.path);
-      if (file.untracked) applyUntrackedCounts(tab, file.path, countAddedLines(pair.current), 0);
+      if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, countAddedLines(pair.current), 0);
       if (currentPanelSessionId === sessionId) renderPanel(sessionId);
       return;
     }
@@ -851,6 +886,9 @@ function describeFallback(pair) {
   if (!pair) return 'this file could not be opened for editing';
   if (pair.reason === 'binary') return 'binary file';
   if (pair.reason === 'too-large') return 'file too large to edit';
+  if (pair.reason === 'encoding') return 'not UTF-8 text';
+  if (pair.reason === 'mixed-eol') return 'mixed line endings';
+  if (pair.reason === 'symlink') return 'symbolic link';
   return pair.error || 'this file could not be opened for editing';
 }
 
@@ -888,6 +926,7 @@ function closeChangesDiff(sessionId) {
   unwatchChangesFile(sessionId, tab);
   destroyChangesEditor(tab);
   tab.selectedFile = null;
+  tab.restoredEdits = false;
   tab.diffContent = null;
   tab.diffError = null;
   tab.editable = false;
@@ -1118,10 +1157,11 @@ function renderChangesDiff(sessionId, tab) {
 
 function renderChangesNotice(tab) {
   const notes = [];
-  const alarming = !!(tab.saveError || tab.fileError || tab.error || tab.externalChange);
+  const alarming = !!(tab.saveError || tab.fileError || tab.error || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
+  if (tab.restoredEdits) notes.push('Unsaved edits from before this panel was taken over have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');
   if (tab.fileError) notes.push(`This file can no longer be read: ${tab.fileError}`);
   if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
@@ -1244,12 +1284,16 @@ async function handleChangesSave(sessionId) {
   let result;
   try {
     result = await window.api.gitChangesSave(sessionId, file.path, content, tab.version);
+  } catch (err) {
+    result = { ok: false, error: (err && err.message) || 'the save could not be sent' };
   } finally {
     tab.saving = false;
   }
 
   const stillState = filePanelState.get(sessionId);
-  if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
+  if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) {
+    return;
+  }
 
   if (!result || result.ok === false) {
     tab.saveError = (result && result.error) || 'failed to save';
@@ -1292,6 +1336,9 @@ async function reloadChangesFile(sessionId) {
   tab.current = result.current;
   tab.savedContent = result.current;
   tab.version = result.version;
+  // The usual reason to reload is a file replaced on disk, which is also how a
+  // watch goes deaf, so the reload re-arms it.
+  watchChangesFile(sessionId, tab, file.path);
   destroyChangesEditor(tab);
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }

@@ -371,7 +371,7 @@ test('a count computed against one status result is never applied to a later one
   let statusCall = 0;
   let releaseDiff;
   const ctx = setupFilePanelDom({
-    statusImpl: () => (statusCall++ === 0 ? makeStatusResult() : v2),
+    statusImpl: () => (statusCall++ === 0 ? makeStatusResult({ kind: 'remote' }) : { ...v2, kind: 'remote' }),
     diffImpl: () => new Promise((resolve) => { releaseDiff = () => resolve(UNTRACKED_DIFF_RESULT); }),
   });
   try {
@@ -487,6 +487,48 @@ test('the Refresh button re-invokes gitChangesStatus', async () => {
     await flush();
 
     assert.equal(ctx.calls.status.length, 2);
+  } finally { ctx.destroy(); }
+});
+
+test('a count computed from the content pair is never applied to a later status either (mutation target: dropping the identity check on the editable path)', async () => {
+  const v2 = {
+    ok: true,
+    kind: 'local',
+    branch: { head: 'main', upstream: 'origin/main', ahead: 1, behind: 0 },
+    files: [
+      { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
+      { path: 'new.txt', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'A', added: 2, deleted: 7 },
+    ],
+    totals: { files: 2, added: 5, deleted: 8 },
+  };
+  let statusCall = 0;
+  let releasePair;
+  const ctx = setupFilePanelDom({
+    statusImpl: () => (statusCall++ === 0 ? makeStatusResult() : v2),
+    fileImpl: () => new Promise((resolve) => {
+      releasePair = () => resolve({ ok: true, original: '', current: 'first\nsecond\n', version: 'v1' });
+    }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    clickRow(ctx, 'new.txt');
+    await flush();
+
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    assert.equal(ctx.calls.status.length, 2, 'the refresh happened while the pair was in flight');
+
+    releasePair();
+    await flush();
+
+    backBtn(ctx).click();
+    const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(counts.textContent, '+2−7', 'git\'s own counts must survive the stale pair');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+5 −8/);
   } finally { ctx.destroy(); }
 });
 
@@ -991,7 +1033,100 @@ test('Reload asks before discarding unsaved edits and re-reads the file when all
   } finally { ctx.destroy(); }
 });
 
+test('Reload re-arms the watch, since a replaced file is exactly what makes a watch go deaf', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.equal(ctx.calls.watch.length, 1);
+
+    ctx.document.getElementById('changes-diff-reload-btn').click();
+    await flush();
+
+    assert.equal(ctx.calls.watch.length, 2, 'the reload arms a fresh watch');
+    assert.equal(ctx.calls.unwatch.length, 1, 'and drops the old one first');
+  } finally { ctx.destroy(); }
+});
+
+test('a save whose IPC rejects is reported and leaves the button usable (mutation target: the rejected-save path)', async () => {
+  const rejections = [];
+  const ctx = setupFilePanelDom({ saveImpl: () => { throw new Error('ipc blew up'); } });
+  const onRejection = (err) => rejections.push(err);
+  process.on('unhandledRejection', onRejection);
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /ipc blew up/);
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').disabled, false,
+      'the next click must do something');
+    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+    assert.deepEqual(rejections, [], 'and nothing escapes as an unhandled rejection');
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    ctx.destroy();
+  }
+});
+
 // --- Losing work by accident ---------------------------------------------
+
+test('a session opening its own file keeps the unsaved buffer and restores it (mutation target: the stash)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'work in progress\n';
+
+    // The session — not the user — takes the panel over.
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    assert.equal(ctx.calls.confirm.length, 0, 'an IPC-driven swap cannot stop to ask');
+
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const restored = ctx.editors[ctx.editors.length - 1];
+    assert.equal(restored.opened.modified, 'work in progress\n', 'the buffer comes back as it was');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /restored/i);
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('a clean buffer is not stashed, so reopening the tab shows the file list', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block');
+    assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('a restored buffer still refuses to save against a file that moved', async () => {
+  const ctx = setupFilePanelDom({
+    saveImpl: () => ({ ok: false, error: 'this file changed on disk since it was opened', reason: 'stale' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'work in progress\n';
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+
+    assert.equal(ctx.calls.save[0].version, 'v1', 'the token travelled with the stash');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /changed on disk/);
+  } finally { ctx.destroy(); }
+});
 
 test('Back asks before discarding unsaved edits, and a refusal keeps the editor (mutation target: the confirm)', async () => {
   const ctx = setupFilePanelDom({ confirmImpl: () => false });
