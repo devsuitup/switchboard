@@ -19,6 +19,7 @@ const {
   isSafeGitPath,
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
+  gitEntryAtOrAbove,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
@@ -987,7 +988,7 @@ test('status(): an ssh transport failure is never mistaken for "no repository"',
   assert.match(result.error, /Connection refused/);
 });
 
-test('status(): a remote cwd outside any repository reaches the same outcome as a local one', async () => {
+test('status(): a remote fatal is reported, bounded, because nothing can corroborate it', async () => {
   const calls = [];
   const exec = (command) => {
     calls.push(command);
@@ -995,8 +996,10 @@ test('status(): a remote cwd outside any repository reaches the same outcome as 
   };
   const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'build-01', exec }).status();
 
-  assert.equal(result.reason, NOT_A_REPO_REASON, 'local and remote must not disagree about what the panel shows');
-  assert.equal(result.error, 'not a git repository');
+  assert.equal(result.reason, undefined,
+    'exit 128 is git\'s generic fatal code; with no filesystem to check, "no repository" is a guess, not a finding');
+  assert.match(result.error, /dépôt git/, 'so the user gets git\'s own message instead of a silently missing control');
+  assert.ok(result.error.length <= MAX_ERROR_CHARS + 1, 'still bounded');
   assert.ok(calls.some((c) => c === "git -C '/srv/app' '--literal-pathspecs' 'rev-parse' '--is-inside-work-tree'"),
     'the probe goes through the same quoted transport as every other command');
 });
@@ -1057,4 +1060,85 @@ test('.diff(): an unexpected git failure reaches the caller bounded, never as th
   assert.equal(result.ok, false);
   assert.ok(result.error.split('\n').length <= MAX_ERROR_LINES);
   assert.ok(result.error.length <= MAX_ERROR_CHARS + 1);
+});
+
+// --- gitEntryAtOrAbove: the corroboration, on both path flavours -------------
+// It answers three ways on purpose: true (a repository is there), false (there
+// is definitively none), null (could not tell). Only `false` withdraws the
+// panel — see .ai/contexts/changes-view.md ("Not a repository").
+
+function fakeFs(entries, errorFor = {}) {
+  return {
+    lstat: (p) => {
+      if (errorFor[p]) { const e = new Error('nope'); e.code = errorFor[p]; throw e; }
+      if (entries.has(p)) return {};
+      const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
+    },
+  };
+}
+
+for (const flavour of ['posix', 'win32']) {
+  const p = path[flavour];
+  const root = flavour === 'posix' ? '/repo' : 'C:\\repo';
+  const deep = p.join(root, 'nested', 'deeper');
+
+  test(`gitEntryAtOrAbove (${flavour}): a .git at the root is found from a deep subdirectory`, () => {
+    const fsOps = fakeFs(new Set([p.join(root, '.git')]));
+    assert.equal(gitEntryAtOrAbove(deep, fsOps, p), true);
+  });
+
+  test(`gitEntryAtOrAbove (${flavour}): no .git anywhere up to the filesystem root is a definite no`, () => {
+    assert.equal(gitEntryAtOrAbove(deep, fakeFs(new Set()), p), false,
+      'the walk must terminate at the root instead of spinning on dirname');
+  });
+
+  test(`gitEntryAtOrAbove (${flavour}): a .git that exists as a FILE counts — a broken gitdir is still a repository`, () => {
+    const fsOps = fakeFs(new Set([p.join(deep, '.git')]));
+    assert.equal(gitEntryAtOrAbove(deep, fsOps, p), true);
+  });
+
+  test(`gitEntryAtOrAbove (${flavour}): an unreadable ancestor is undecidable, never a definite no`, () => {
+    const fsOps = fakeFs(new Set(), { [p.join(deep, '.git')]: 'EACCES' });
+    assert.equal(gitEntryAtOrAbove(deep, fsOps, p), null,
+      'EACCES means the walk cannot see — guessing "no repository" here is what withdraws the panel wrongly');
+  });
+}
+
+test('gitEntryAtOrAbove: a .git the walk cannot stat for an unexpected reason is undecidable', () => {
+  const fsOps = { lstat: () => { throw new Error('no code at all'); } };
+  assert.equal(gitEntryAtOrAbove('/repo/x', fsOps, path.posix), null);
+});
+
+// --- The probe is not paid on the stdout-cap path ---------------------------
+
+test('status(): a -uall overrun does not add a probe — it is a volume problem, not a repository question', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    if (args[1] !== 'status') return Promise.resolve({ code: 0, stdout: '1\t2\tfoo.js\0', stderr: '' });
+    if (args.includes('-uall')) return Promise.resolve({ code: -1, stdout: '', stderr: 'stdout exceeded 2097152 bytes' });
+    return Promise.resolve({ code: 0, stdout: '# branch.head main\x00', stderr: '' });
+  };
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec }).status();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.untrackedCollapsed, true);
+  assert.equal(calls.filter((a) => a[1] === 'rev-parse').length, 0,
+    'the large repositories that hit this cap are exactly the ones an extra spawn per refresh costs most');
+  assert.equal(calls.length, 4, 'three commands plus the one collapsed-listing retry');
+});
+
+test('status(): a cap overrun alongside a real failure still asks, so a non-repo is not missed', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    if (args[1] === 'rev-parse') return Promise.resolve({ code: 128, stdout: '', stderr: FRENCH_FATAL });
+    if (args.includes('-uall')) return Promise.resolve({ code: -1, stdout: '', stderr: 'stdout maxBuffer length exceeded' });
+    return Promise.resolve({ code: 128, stdout: '', stderr: FRENCH_FATAL });
+  };
+  const fsOps = { lstat: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } };
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+
+  assert.equal(result.reason, NOT_A_REPO_REASON);
+  assert.equal(calls.filter((a) => a[1] === 'rev-parse').length, 1);
 });

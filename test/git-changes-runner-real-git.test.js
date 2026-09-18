@@ -438,3 +438,96 @@ test('real git: a subdirectory of a repository is still inside the work tree', a
       'a session recorded in a subdirectory must keep its Changes panel');
   } finally { cleanup(tmp); }
 });
+
+// --- A repository git refuses is not a missing repository --------------------
+// Exit 128 is git's generic fatal code. Every fixture below is a REAL repository
+// that real git refuses to open, and each one exits 128 exactly like a plain
+// directory does — so the exit code alone cannot tell them apart, and the
+// corroborating filesystem check is what does. See .ai/contexts/changes-view.md
+// ("Not a repository").
+
+function initRefusedRepo(dir, wreck) {
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 'a@a.com']);
+  git(dir, ['config', 'user.name', 'a']);
+  wreck(dir);
+  return dir;
+}
+
+const REFUSED_FIXTURES = [
+  ['an unsupported core.repositoryformatversion', (d) => git(d, ['config', 'core.repositoryformatversion', '99'])],
+  ['a .git file pointing at a gitdir that is not there', (d) => {
+    fs.rmSync(path.join(d, '.git'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(d, '.git'), 'gitdir: /nonexistent/elsewhere\n');
+  }],
+  ['a .git file that is not a gitdir line at all', (d) => {
+    fs.rmSync(path.join(d, '.git'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(d, '.git'), 'not a gitdir line\n');
+  }],
+];
+
+for (const [label, wreck] of REFUSED_FIXTURES) {
+  test(`real git: ${label} is reported, not silently treated as "no repository"`, async () => {
+    const tmp = mkTmp();
+    try {
+      const repoDir = initRefusedRepo(path.join(tmp, 'repo'), wreck);
+
+      const raw = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoDir, encoding: 'utf8', env: scratchGitEnv() });
+      assert.equal(raw.status, 128, 'the fixture must actually make git exit 128, or it proves nothing');
+
+      const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+      const probe = await runner.isWorkTree();
+      assert.equal(probe.ok, false, 'a repository git will not open is not an answer of "no repository"');
+      assert.ok(probe.error, 'and the reason must survive to the caller');
+
+      const result = await runner.status();
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, undefined,
+        'reason: not-a-repo withdraws the Changes button — a refused repository must never trigger it');
+    } finally { cleanup(tmp); }
+  });
+}
+
+test('real git: a worktree whose main repository was deleted is reported, not withdrawn', async () => {
+  const tmp = mkTmp();
+  try {
+    const mainRepo = path.join(tmp, 'main');
+    initRepo(mainRepo);
+    git(mainRepo, ['add', '-A']);
+    git(mainRepo, ['commit', '-q', '-m', 'second']);
+    const wt = path.join(tmp, 'wt');
+    git(mainRepo, ['worktree', 'add', '-q', wt, '-b', 'wt']);
+    fs.rmSync(mainRepo, { recursive: true, force: true });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: wt }).status();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, undefined, 'the .git file is still there, so the repository is not missing — it is broken');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a plain directory is still the one case that withdraws the panel', async () => {
+  const tmp = mkTmp();
+  try {
+    const plain = path.join(tmp, 'notes');
+    fs.mkdirSync(plain, { recursive: true });
+
+    const probe = await createGitChangesRunner({ kind: 'local', cwd: plain }).isWorkTree();
+    assert.deepEqual(probe, { ok: true, isRepo: false });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: plain }).status();
+    assert.equal(result.reason, NOT_A_REPO_REASON);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a subdirectory of a refused repository is reported too, not withdrawn', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = initRefusedRepo(path.join(tmp, 'repo'), (d) => git(d, ['config', 'core.repositoryformatversion', '99']));
+    const sub = path.join(repoDir, 'nested');
+    fs.mkdirSync(sub, { recursive: true });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: sub }).status();
+    assert.equal(result.reason, undefined, 'the walk must climb to the repository root, not just look in the cwd');
+  } finally { cleanup(tmp); }
+});

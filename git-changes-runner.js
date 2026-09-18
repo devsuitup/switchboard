@@ -19,8 +19,8 @@ const DIFF_MAX_STDOUT_BYTES = MAX_DIFF_BYTES + DIFF_STDOUT_SLACK_BYTES;
 // An unexpected git failure is reported, bounded — see .ai/contexts/changes-view.md ("Bounded error messages")
 const MAX_ERROR_LINES = 5;
 const MAX_ERROR_CHARS = 500;
-// git's "not a git repository" exit code — see .ai/contexts/changes-view.md ("Not a repository")
-const NOT_A_REPO_EXIT_CODE = 128;
+// git's generic fatal exit code, not a "no repository" code — see .ai/contexts/changes-view.md ("Not a repository")
+const GIT_FATAL_EXIT_CODE = 128;
 const NOT_A_REPO_REASON = 'not-a-repo';
 
 // Denylist, not allowlist — see .ai/contexts/changes-view.md ("Quoting rule")
@@ -104,6 +104,28 @@ function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS, pathO
     return isSafeNoIndexPath(operand) ? operand : null;
   } catch {
     return null;
+  }
+}
+
+// true/false/null (undecidable) — see .ai/contexts/changes-view.md ("Not a repository")
+function gitEntryAtOrAbove(startDir, fsOps = DEFAULT_FS_OPS, pathOps = path) {
+  let dir;
+  try {
+    dir = pathOps.resolve(startDir);
+  } catch {
+    return null;
+  }
+  for (;;) {
+    try {
+      fsOps.lstat(pathOps.join(dir, '.git'));
+      return true;
+    } catch (err) {
+      const code = err && err.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
+    const parent = pathOps.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
   }
 }
 
@@ -210,7 +232,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     return kind === 'local' ? runExec(fullArgs) : runExec(buildRemoteGitCommand(cwd, fullArgs), remoteOpts);
   }
 
-  // The exit code answers, the message does not — see .ai/contexts/changes-view.md ("Not a repository")
+  // Only positive evidence withdraws the panel — see .ai/contexts/changes-view.md ("Not a repository")
   async function isWorkTree() {
     let probe;
     try {
@@ -218,11 +240,17 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     } catch (err) {
       return { ok: false, error: err.message };
     }
-    if (probe.code === NOT_A_REPO_EXIT_CODE) return { ok: true, isRepo: false };
-    if (probe.code !== 0) return { ok: false, error: firstError(probe) };
-    const answer = String(probe.stdout || '').trim();
-    if (answer === 'true' || answer === 'false') return { ok: true, isRepo: answer === 'true' };
-    return { ok: false, error: 'git rev-parse gave no answer' };
+    if (probe.code === 0) {
+      const answer = String(probe.stdout || '').trim();
+      if (answer === 'true' || answer === 'false') return { ok: true, isRepo: answer === 'true' };
+      return { ok: false, error: 'git rev-parse gave no answer' };
+    }
+    if (probe.code !== GIT_FATAL_EXIT_CODE) return { ok: false, error: firstError(probe) };
+    const corroborated = kind === 'local'
+      ? gitEntryAtOrAbove(cwd, fsOps || DEFAULT_FS_OPS)
+      : null;
+    if (corroborated === false) return { ok: true, isRepo: false };
+    return { ok: false, error: firstError(probe) };
   }
 
   async function cwdHasNoWorkTree() {
@@ -243,7 +271,8 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     }
     let [st] = results;
     const [, unstagedNum, stagedNum] = results;
-    if (results.some((r) => r.code !== 0) && await cwdHasNoWorkTree()) {
+    const failed = results.filter((r) => r.code !== 0);
+    if (failed.length > 0 && !failed.every(isStdoutCapFailure) && await cwdHasNoWorkTree()) {
       return { ok: false, reason: NOT_A_REPO_REASON, error: 'not a git repository' };
     }
     if (unstagedNum.code !== 0) return { ok: false, error: firstError(unstagedNum) };
@@ -345,6 +374,7 @@ module.exports = {
   isSafeGitPath,
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
+  gitEntryAtOrAbove,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,

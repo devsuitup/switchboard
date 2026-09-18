@@ -312,45 +312,82 @@ is not, the Changes affordance is not offered: `#changes-toggle-btn` is
 case, because there is nothing to refuse — the button that would produce it is
 not there.
 
-**The detection is an exit code, never a message.** `git rev-parse
---is-inside-work-tree` answers `128` outside any repository, `0` with `true`
-inside a work tree, and `0` with `false` in a bare one; git translates every
-one of its diagnostics (this project's own host runs it in French), so matching
-text is not an option. `isWorkTree()` in `git-changes-runner.js` is the single
-implementation, goes through the same `invoke()` as every other command, and
-therefore answers identically for a local and a remote session. It returns
-`{ok: true, isRepo}` only when git actually answered: a transport failure
-(ssh's own exit `255`), a thrown exec, and a `0` exit with neither `true` nor
-`false` printed all come back `{ok: false, error}`, which is *not* an answer and
-withdraws nothing. An ssh connection refused must never read as "you have no
-repository".
+**Withdrawing a control is only correct on positive evidence.** A missing
+button says nothing and offers no way to ask why, so it is the wrong answer to
+every failure except the one it describes. `isWorkTree()` in
+`git-changes-runner.js` therefore reports `isRepo: false` only when something
+actually established that there is no work tree, and returns `{ok: false,
+error}` — *not an answer* — for everything else. The renderer's
+`typeof result.isRepo !== 'boolean'` guard leaves the button alone on a
+non-answer, and `status()` reports its bounded message into the tab.
 
-`isRepo: false` covers a bare repository as well as a directory outside any
-repository: neither has a work tree, so neither has changes to show.
+**No message is ever matched.** git translates every diagnostic (this project's
+own host runs it in French), so the detection reads only `git rev-parse
+--is-inside-work-tree`'s exit code and the two literal tokens it prints:
+
+| probe result | meaning | outcome |
+|---|---|---|
+| exit 0, stdout `true` | inside a work tree | `{ok: true, isRepo: true}` |
+| exit 0, stdout `false` | a bare repository — no work tree, so no changes to show | `{ok: true, isRepo: false}` |
+| exit 0, anything else | git answered something this code does not understand | `{ok: false, error}` |
+| exit 128, corroborated | see below | `{ok: true, isRepo: false}` |
+| exit 128, not corroborated | a repository git refuses to open | `{ok: false, error}` |
+| any other non-zero, or a thrown exec | ssh's own `255`, `spawn git ENOENT`, a timeout | `{ok: false, error}` |
+
+**128 is git's generic fatal code, not a "no repository" code**, which is why it
+needs corroborating. Real git exits 128 for a plain directory *and* for a
+repository it will not open: dubious ownership (a repo owned by root, cloned by
+another user, on a mounted or NFS filesystem), a `.git` whose permissions it
+cannot read, an unsupported `core.repositoryformatversion`, a `.git` file whose
+gitdir is gone, and a worktree whose main repository was deleted. Every one of
+those is a repository the user has, usually with a one-line fix in git's own
+message — exactly the case where silently removing the panel is worse than
+printing the message. `test/git-changes-runner-real-git.test.js` builds those
+fixtures against real git, asserts each really does exit 128, and pins that none
+of them produces `reason: 'not-a-repo'`.
+
+The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
+at the cwd and at each ancestor up to the filesystem root. It needs no process
+and no locale, and it answers the one question the exit code cannot — *is there
+a repository here at all*. It returns three ways, and only `false` (a walk that
+reached the root seeing nothing) withdraws the panel; an `EACCES` or any other
+unexpected `lstat` error is `null`, undecidable, and reports. A `.git` that
+exists but is broken counts as `true`: the repository is there, it is just
+unreadable.
+
+**Local and remote diverge here, deliberately.** The probe itself goes through
+the same `invoke()` and the same quoting on both transports, but the
+corroboration is a local filesystem walk and there is no remote equivalent that
+does not either re-read git's translated message or add ssh round-trips. So a
+remote session that exits 128 is never corroborated and always reports. The
+practical consequence: a remote working directory that is genuinely not a
+repository keeps its Changes button and shows git's own bounded message when
+clicked, instead of hiding the button. That is the pre-existing behaviour, and
+it is the safe side of the trade — it also means a remote cwd that is merely
+unmounted no longer loses the control.
 
 **Who asks, and when.** Two paths reach the same conclusion, and `status()` is
 the cheaper of them:
 
-- `git-changes-available` runs the probe once per `switchPanel()` into a
-  session. The answer is cached on that session's `filePanelState` entry
-  (`changesAvailable`), applied to the button before the round trip so a known
-  answer never flashes a button that does not work, and re-asked on the next
-  switch — which is how a `git init` (or an `rm -rf .git`) mid-session is
-  picked up without polling anything.
+- `git-changes-available` runs the probe from `switchPanel()`. The answer is
+  cached on that session's `filePanelState` entry (`changesAvailable`) and
+  applied to the button before the round trip, so a known answer never flashes a
+  button that does not work, and re-asked on the next switch — which is how a
+  `git init` (or an `rm -rf .git`) mid-session is picked up without polling.
 - `status()` returns `{ok: false, reason: 'not-a-repo'}` when a command failed
-  **and** the probe then confirms there is no work tree. The renderer treats
-  that exactly like an `isRepo: false` availability answer: it withdraws the
-  button and closes the open tab rather than reporting into it. That covers the
+  **and** the probe then establishes there is no work tree. The renderer treats
+  that exactly like an `isRepo: false` availability answer. That covers the
   window between a switch and the repository disappearing under a running
   session, and it means a click landing before the availability answer arrives
   is handled too.
 
-The probe is a **diagnosis, not a precondition**: a session that is in a
-repository pays for three commands per refresh, the same three as before, and
-`test/git-changes-runner.test.js` pins that (`calls.length === 3`). Adding a
-fourth invocation to every refresh would cost a process spawn locally (measured
-~1.8 ms, git 2.53) and a whole ssh round-trip remotely, on every busy→idle edge
-of every session, to answer a question that is almost always the same.
+**The probe is a diagnosis, not a precondition.** A session in a repository pays
+three commands per refresh, the same three as before, pinned by
+`calls.length === 3`. A `-uall` run that overruns the stdout cap does not ask
+either — that is a volume problem with its own fallback, and the large
+repositories that hit it are the ones an extra spawn costs most. An answer that
+arrives after the panel has moved on is discarded
+(`currentPanelSessionId !== sessionId`).
 
 ## Bounded error messages
 
@@ -364,7 +401,9 @@ noise is below it.
 
 A genuine failure — a permission error, a corrupt repository, a transport
 problem — is still reported, in git's own words and in whatever language git
-chose. Only the volume is capped.
+chose. Only the volume is capped. That is what "Not a repository" above leans
+on: every failure the probe cannot positively explain falls back to this
+message rather than to a missing button.
 
 ## cwd resolution (`git-changes-target.js`)
 
