@@ -225,6 +225,9 @@ test('real git: a leaf symlink to a DIRECTORY leaks a file named "null" unless t
 
     const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
     const status = await runner.status();
+    // Shape first: a status() that came back as an error would otherwise fail
+    // here as a TypeError naming nothing.
+    assert.ok(Array.isArray(status.files), `status() must return a file list, got ${JSON.stringify(status)}`);
     assert.ok(status.files.some((f) => f.path === 'dirlink'), 'git lists the symlink as a row of its own — this needs no crafted path, just a click');
 
     // What raw git does with that row's own path, pinned.

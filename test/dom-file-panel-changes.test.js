@@ -2389,3 +2389,55 @@ test('a reply for a departed session repaints nothing on the unanswerable branch
     assert.equal(writes.count(), 1, 'the current session’s reply does');
   } finally { ctx.destroy(); }
 });
+
+// --- The panel's own X is a second close path -------------------------------
+// `handleClose` clears currentTab and hides the panel directly, without passing
+// through toggleChangesTab — see .ai/contexts/changes-view.md ("Withdrawal
+// reuses the tab's own close control").
+
+test('the panel X closes a Changes tab on its own path, not through toggleChangesTab', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
+
+    const toggles = [];
+    const realToggle = ctx.window.toggleChangesTab;
+    ctx.window.toggleChangesTab = (id) => { toggles.push(id); return realToggle(id); };
+
+    const closeBtn = ctx.document.querySelector('#file-panel-changes .fp-close-btn');
+    assert.ok(closeBtn, 'the Changes toolbar carries its own close button');
+    closeBtn.click();
+
+    assert.deepEqual(toggles, [],
+      'this exit does not funnel through the toggle — a guard on one is not a guard on the other');
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+
+    // The tab is gone, so nothing refreshes it any more.
+    const statusCalls = ctx.calls.status.length;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    assert.equal(ctx.calls.status.length, statusCalls);
+  } finally { ctx.destroy(); }
+});
+
+test('the panel X leaves the Changes button, so the tab it closed can be reopened', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'closing the view is not the same as the session having no repository');
+
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
+  } finally { ctx.destroy(); }
+});

@@ -438,12 +438,22 @@ clicking Changes then closes the tab straight away through the `status()` path.
 Re-probing every activation to catch that is exactly the cost this memo exists
 to remove.
 
-**Withdrawal goes through the tab's own close control.** `noteChangesUnavailable`
+**Withdrawal reuses the tab's own close control.** `noteChangesUnavailable`
 calls `toggleChangesTab(sessionId)` rather than tearing the tab down itself, so
-there is exactly one Changes close path and any guard placed on it applies here
-too. If that close does not happen — the tab is still there afterwards — the
-button is left visible, because hiding the control while its tab is still open
-would strand whatever the tab is holding with no way to reopen it.
+it takes the same path a user's click on the Changes toggle takes and inherits
+whatever that path is guarded by.
+
+A Changes tab has a second way out: the panel's own X
+(`changesCloseBtn` → `handleClose`), which clears `currentTab` and hides the
+panel directly without passing through `toggleChangesTab`, and carries its own
+guard. What keeps a tab from being torn down without asking is that **each exit
+is guarded**, not that they funnel into one — a new exit has to be guarded on
+its own terms, and reusing an existing one is how the withdrawal avoids being
+such an exit.
+
+If the close does not happen — the tab is still there afterwards — the button is
+left visible, because hiding the control while its tab is still open would
+strand whatever the tab is holding with no way to reopen it.
 
 ## Bounded error messages
 
