@@ -37,15 +37,17 @@ row once: its diff is fetched, the row gets its `+added −0`, and the header
 total grows by the same amount. This is deliberate — counting every new file up
 front would mean running one extra git command per untracked file on every
 refresh (and one ssh round-trip each, for a remote session), which a repo with a
-large untracked tree would feel. Refreshing resets them, since the files may
-have changed since.
+large untracked tree would feel. A refresh resets them, since the file may have
+changed since — with one exception: **saving the file you are editing keeps its
+counts**, because the save is itself the measurement. The Refresh button, and a
+refresh triggered by the session finishing a turn, reset them as before.
 
 ## Editing a file
 
 On a local session, the open file is a live editor, not a picture of a diff. Type on the right-hand side and the diff recomputes as you go.
 
-- **Save** with the Save button or `Ctrl/Cmd+S`. The file list refreshes on save, so the row's counts follow what you wrote.
-- The button next to **Close** cycles three views: **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right), **Inline** (one column, changes marked in place) and **Plain** (just the file, no diff decoration). The choice is remembered.
+- **Save** with the Save button or `Ctrl/Cmd+S`. The button is inactive until you change something. The file list refreshes on save, so the row's counts follow what you wrote.
+- The button next to **Close** cycles three views: **Inline** (one column, changes marked in place — the default, because the panel is a narrow column and side-by-side halves it), **Plain** (just the file, no diff decoration) and **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right). The choice is remembered.
 - The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
 - These stay read-only, and the panel says which case it is: a remote session, a binary file, a file that is not UTF-8 text, a file that mixes line endings (no editor can keep them line by line), a symbolic link, and a file over 2 MB.
 
