@@ -36,6 +36,7 @@ front would mean running one extra git command per untracked file on every
 refresh (and one ssh round-trip each, for a remote session), which a repo with a
 large untracked tree would feel. Refreshing resets them, since the files may
 have changed since.
+
 ## A shell under the list
 
 **Shell** in the terminal header opens a shell in the same panel, below the
