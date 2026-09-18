@@ -386,9 +386,12 @@ only its wording is coarser than a local session's.
 `{ok: false, reason: 'not-a-repo'}` when a command failed **and**
 `isWorkTree()` then establishes there is no work tree, and every other failure
 carries its bounded message and no reason. The renderer turns that one reason
-into the plain-language line (`tab.notARepo`, a note rather than an error
-colour) and everything else into git's own words, so the distinction the probe
-establishes is the distinction the user reads. `isWorkTree()` stays on the
+into the plain-language line and everything else into git's own words, so the
+distinction the probe establishes is the distinction the user reads. `tab.notARepo`
+carries it to both surfaces that can show it: the list renders a neutral note
+rather than an error, and the notice line above an open editor states the same
+fact in the same neutral colour instead of reporting a refresh that failed —
+a directory with no repository did not fail at anything. `isWorkTree()` stays on the
 runner's interface for the tests that pin the table above.
 
 **The probe is a diagnosis, not a precondition.** A session in a repository pays

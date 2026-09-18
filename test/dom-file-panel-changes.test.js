@@ -2030,25 +2030,75 @@ test('a git failure after a no-repository answer is shown as a failure (mutation
   } finally { ctx.destroy(); }
 });
 
-test('a repository that disappears under unsaved edits asks nothing and keeps the buffer', async () => {
-  let repo = true;
-  const ctx = setupFilePanelDom({
-    confirmImpl: () => true,
-    statusImpl: () => (repo ? makeStatusResult() : noRepoStatus()),
+// The three ways the tree under an open editor can stop answering: the
+// repository removed, the directory itself gone, and a repository git refuses.
+const TREE_LOST_PAYLOADS = [
+  ['the repository removed', noRepoStatus],
+  ['the working directory gone', () => ({ ok: false, error: 'the working directory no longer exists: /gone' })],
+  ['a repository git refuses', () => ({ ok: false, error: 'fatal: detected dubious ownership in repository at /srv/repo' })],
+];
+
+for (const [label, lostStatus] of TREE_LOST_PAYLOADS) {
+  test(`unsaved edits survive ${label}, and nothing is asked`, async () => {
+    let repo = true;
+    const ctx = setupFilePanelDom({
+      confirmImpl: () => true,
+      statusImpl: () => (repo ? makeStatusResult() : lostStatus()),
+    });
+    try {
+      await openFile(ctx, 's1', 'src/a.js');
+      ctx.editors[0].box.text = 'my unsaved edit\n';
+
+      repo = false;
+      ctx.setActivity('s1', true);
+      ctx.setActivity('s1', false);
+      await flush();
+
+      assert.equal(ctx.calls.confirm.length, 0, 'nothing is being discarded, so nothing is asked');
+      assert.equal(ctx.editors[0].box.destroyed, false);
+      assert.equal(ctx.editors[0].box.text, 'my unsaved edit\n');
+      assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+    } finally { ctx.destroy(); }
   });
+}
+
+test('the notice bar states the no-repository fact without borrowing the failure colour or its wording', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({ statusImpl: () => (repo ? makeStatusResult() : noRepoStatus()) });
   try {
     await openFile(ctx, 's1', 'src/a.js');
-    ctx.editors[0].box.text = 'my unsaved edit\n';
 
     repo = false;
     ctx.setActivity('s1', true);
     ctx.setActivity('s1', false);
     await flush();
 
-    assert.equal(ctx.calls.confirm.length, 0, 'nothing is being discarded, so nothing is asked');
-    assert.equal(ctx.editors[0].box.destroyed, false);
-    assert.equal(ctx.editors[0].box.text, 'my unsaved edit\n');
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+    const notice = ctx.document.getElementById('changes-diff-notice');
+    assert.match(notice.textContent, /This directory is not a git repository\./);
+    assert.doesNotMatch(notice.textContent, /could not be refreshed/,
+      'a directory that has no repository did not fail to refresh');
+    assert.equal(notice.classList.contains('changes-error'), false,
+      'the list below says this in a neutral note; the bar must not contradict it');
+    assert.equal(notice.classList.contains('changes-diff-truncated'), true);
+  } finally { ctx.destroy(); }
+});
+
+test('a genuine refresh failure still reaches the notice bar in the failure colour', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({
+    statusImpl: () => (repo ? makeStatusResult() : { ok: false, error: 'could not read directory: Permission denied' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    repo = false;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    const notice = ctx.document.getElementById('changes-diff-notice');
+    assert.match(notice.textContent, /The file list could not be refreshed: could not read directory/);
+    assert.equal(notice.classList.contains('changes-error'), true);
   } finally { ctx.destroy(); }
 });
 

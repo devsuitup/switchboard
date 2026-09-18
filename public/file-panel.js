@@ -1263,14 +1263,16 @@ function updateChangesSaveButton(sessionId, tab) {
 
 function renderChangesNotice(tab) {
   const notes = [];
-  const alarming = !!(tab.saveError || tab.fileError || tab.error || tab.externalChange || tab.restoredEdits);
+  const listFailed = !!tab.error && !tab.notARepo;
+  const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
   if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');
   if (tab.fileError) notes.push(`This file can no longer be read: ${tab.fileError}`);
-  if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
+  if (tab.notARepo) notes.push(NOT_A_REPO_TEXT);
+  else if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
   if (tab.saveError) notes.push(`Save failed: ${tab.saveError}`);
 
   changesDiffNoticeEl.textContent = notes.join(' ');
