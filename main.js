@@ -87,6 +87,7 @@ const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
+const { createChangesWatchRegistry } = require('./git-changes-watch');
 
 setPtyOpLogger(log);
 
@@ -1817,55 +1818,31 @@ ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content, 
 });
 
 // see .ai/contexts/changes-view.md ("Saving over a file that moved")
-const changesWatchers = new Map();
-
-function changesWatchKey(sessionId, relPath) {
-  return sessionId + '\u0000' + relPath;
-}
-
-function stopChangesWatch(key) {
-  const entry = changesWatchers.get(key);
-  if (!entry) return;
-  try { entry.watcher.close(); } catch {}
-  if (entry.debounce) clearTimeout(entry.debounce);
-  changesWatchers.delete(key);
-}
+const changesWatchers = createChangesWatchRegistry({
+  watchFn: (filePath, handler) => fs.watch(filePath, handler),
+  send: (sessionId, relPath) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('git-changes-file-changed', sessionId, relPath);
+    }
+  },
+});
 
 ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
   if (!target.ok) return target;
 
-  const key = changesWatchKey(sessionId, filePath);
-  stopChangesWatch(key);
-
-  const repoRoot = await gitChangesFile.resolveRepoRoot(target.cwd, {});
-  if (!repoRoot) return { ok: false, error: 'not a git repository', reason: 'repo' };
-  const resolved = gitChangesFile.resolveTargetInsideRepo(repoRoot, filePath, {});
+  const repo = await gitChangesFile.resolveRepoDirs(target.cwd, {});
+  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  const resolved = gitChangesFile.resolveTargetInsideRepo(repo, filePath, {});
   if (!resolved.ok) return resolved;
 
-  try {
-    const entry = { watcher: null, debounce: null };
-    entry.watcher = fs.watch(resolved.path, (eventType) => {
-      if (eventType !== 'change') return;
-      if (entry.debounce) clearTimeout(entry.debounce);
-      entry.debounce = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('git-changes-file-changed', sessionId, filePath);
-        }
-      }, 300);
-    });
-    changesWatchers.set(key, entry);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return changesWatchers.watch(sessionId, filePath, resolved.path);
 });
 
 ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: true };
-  stopChangesWatch(changesWatchKey(sessionId, filePath));
-  return { ok: true };
+  return changesWatchers.unwatch(sessionId, filePath);
 });
 
 // --- IPC: toggle-star ---

@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { readChangesFile, writeChangesFile, versionOf } = require('../git-changes-file');
+const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment } = require('../git-changes-file');
 
 // git translates its diagnostics; the assertions below match its English text.
 process.env.LC_ALL = 'C';
@@ -275,7 +275,7 @@ test('real git: a symlinked directory inside the repository is an escape the con
   } finally { cleanup(tmp); }
 });
 
-test('real git: a symlink to another file inside the repository is refused, not silently followed (F5)', async () => {
+test('real git: a symlink to another file inside the repository is refused, not silently followed', async () => {
   const tmp = mkTmp();
   try {
     const repoDir = path.join(tmp, 'repo');
@@ -408,8 +408,8 @@ test('real git: the save writes the path the guard returned, not a re-derived jo
     initRepo(repoDir);
     fs.mkdirSync(path.join(repoDir, 'real'));
     fs.writeFileSync(path.join(repoDir, 'real', 'f.txt'), 'before\n');
-    // A symlinked directory inside the repo: the file itself is a real file, so
-    // it is editable, but the path the guard resolves is not the path it was given.
+    // A symlinked directory inside the repo, pointing at an ordinary directory:
+    // editable, and the resolved path is not the path the guard was given.
     fs.symlinkSync(path.join(repoDir, 'real'), path.join(repoDir, 'link'));
 
     const written = [];
@@ -452,7 +452,7 @@ test('real git: a save refuses content over the cap and non-string content', asy
   } finally { cleanup(tmp); }
 });
 
-// --- Saving over a file that moved (F1) ----------------------------------
+// --- Saving over a file that moved ---------------------------------------
 
 test('real git: a save is refused when the file changed since it was read, and the other writer keeps its bytes (mutation target: the version token)', async () => {
   const tmp = mkTmp();
@@ -506,7 +506,7 @@ test('real git: the token a save returns is the one the next save must carry', a
   } finally { cleanup(tmp); }
 });
 
-// --- Line endings (F2) ----------------------------------------------------
+// --- Line endings ---------------------------------------------------------
 
 test('real git: a CRLF file reads as LF and is written back as CRLF, so a no-op save is a no-op in git (mutation target: the line-ending round trip)', async () => {
   const tmp = mkTmp();
@@ -555,7 +555,7 @@ test('real git: an LF file stays LF even when the buffer carries a stray CR', as
   } finally { cleanup(tmp); }
 });
 
-// --- Encoding (F3) --------------------------------------------------------
+// --- Encoding and the byte-order mark --------------------------------------
 
 test('real git: a file that is not valid UTF-8 is refused rather than round-tripped through U+FFFD (mutation target: the encoding gate)', async () => {
   const tmp = mkTmp();
@@ -588,7 +588,7 @@ test('real git: a blob that is not valid UTF-8 is refused too, even when the wor
   } finally { cleanup(tmp); }
 });
 
-// --- A `cat-file` failure is not a new file (F10) -------------------------
+// --- A `cat-file` failure is not a new file -------------------------------
 
 test('a cat-file failure that is not "absent from this tree" is an error, not an empty original', async () => {
   const tmp = mkTmp();
@@ -625,7 +625,7 @@ function fakeRunGit(blobResult) {
   };
 }
 
-// --- The module's own invocation (F19) ------------------------------------
+// --- The module's own invocation ------------------------------------------
 
 test('the blob is read with `cat-file blob`, pinned on the module\'s own argv (mutation target: going back to `git show`)', async () => {
   const tmp = mkTmp();
@@ -657,7 +657,7 @@ test('the blob is read with `cat-file blob`, pinned on the module\'s own argv (m
   } finally { cleanup(tmp); }
 });
 
-// --- A legitimately odd filename (F17) ------------------------------------
+// --- A legitimately odd filename ------------------------------------------
 
 test('real git: a file whose name contains `..` is editable; a real traversal still is not', async () => {
   const tmp = mkTmp();
@@ -679,5 +679,206 @@ test('real git: a file whose name contains `..` is editable; a real traversal st
       const refused = await read(repoDir, relPath, false);
       assert.equal(refused.ok, false, `a real traversal must still be refused: ${relPath}`);
     }
+  } finally { cleanup(tmp); }
+});
+
+// --- The git directory is not editable, however it is spelled ------------
+
+test('real git: .git reached through a symlinked directory is refused, on the read and on the write (mutation target: checking the resolved path)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const configPath = path.join(repoDir, '.git', 'config');
+    const configBefore = fs.readFileSync(configPath, 'utf8');
+    // The literal string carries no `.git` segment; only the resolved path does.
+    fs.symlinkSync(path.join(repoDir, '.git'), path.join(repoDir, 'gitlink'));
+
+    const readResult = await read(repoDir, 'gitlink/config', false);
+    assert.equal(readResult.ok, false, 'the git directory must not be readable through a link');
+    assert.equal(readResult.reason, 'git-dir');
+
+    const writeResult = await save(repoDir, 'gitlink/config', '[core]\n\tpager = OWNED\n');
+    assert.equal(writeResult.ok, false);
+    assert.equal(writeResult.reason, 'git-dir');
+    assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore,
+      'core.pager in .git/config runs on the next git command in this repo');
+  } finally { cleanup(tmp); }
+});
+
+// Two independent rules cover the git directory, and each is the only one that
+// can catch its own case: the segment rule when the git directory is named
+// `.git`, the containment rule when it is somewhere else entirely.
+test('real git: the resolved-path segment rule alone refuses .git reached through a link', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.symlinkSync(path.join(repoDir, '.git'), path.join(repoDir, 'gitlink'));
+
+    // A caller that knows only the root — no git-directory list to fall back on.
+    const target = resolveTargetInsideRepo(repoDir, 'gitlink/config', {});
+    assert.equal(target.ok, false);
+    assert.equal(target.reason, 'git-dir');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a git directory that is not called .git is refused by containment alone', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    // --separate-git-dir puts the real git directory under a name the segment
+    // rule cannot recognise, inside the working tree.
+    git(repoDir, ['init', '-q', '--separate-git-dir', path.join(repoDir, 'customgit')]);
+    git(repoDir, ['config', 'user.email', 'a@a.com']);
+    git(repoDir, ['config', 'user.name', 'a']);
+    fs.writeFileSync(path.join(repoDir, 'f.txt'), 'hello\n');
+    git(repoDir, ['add', 'f.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'init']);
+
+    const configBefore = fs.readFileSync(path.join(repoDir, 'customgit', 'config'), 'utf8');
+    assert.equal(hasGitSegment('customgit/config'), false, 'no segment rule can see this one');
+
+    const readResult = await read(repoDir, 'customgit/config', false);
+    assert.equal(readResult.ok, false);
+    assert.equal(readResult.reason, 'git-dir');
+
+    const writeResult = await save(repoDir, 'customgit/config', '[core]\n\tpager = OWNED\n');
+    assert.equal(writeResult.ok, false);
+    assert.equal(writeResult.reason, 'git-dir');
+    assert.equal(fs.readFileSync(path.join(repoDir, 'customgit', 'config'), 'utf8'), configBefore);
+
+    const ordinary = await read(repoDir, 'f.txt', false);
+    assert.equal(ordinary.ok, true, 'and the working tree is still editable: ' + ordinary.error);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: the git-directory check does not block ordinary files whose names merely contain "git"', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, '.github', 'workflows'), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, 'a.git'));
+    fs.writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules\n');
+    fs.writeFileSync(path.join(repoDir, '.github', 'workflows', 'ci.yml'), 'on: push\n');
+    fs.writeFileSync(path.join(repoDir, 'a.git', 'x.txt'), 'x\n');
+    fs.writeFileSync(path.join(repoDir, 'dotgit.md'), 'notes\n');
+
+    for (const relPath of ['.gitignore', '.github/workflows/ci.yml', 'a.git/x.txt', 'dotgit.md']) {
+      const result = await read(repoDir, relPath, false);
+      assert.equal(result.ok, true, `${relPath} must stay editable: ${result.error}`);
+    }
+  } finally { cleanup(tmp); }
+});
+
+// --- A byte-order mark survives the round trip ---------------------------
+
+test('real git: a BOM survives a no-op save, on a file that also uses CRLF (mutation target: the BOM round trip)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'win.txt');
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('hello\r\nworld\r\n', 'utf8')]);
+    fs.writeFileSync(target, bytes);
+    git(repoDir, ['add', 'win.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'win']);
+
+    const opened = await read(repoDir, 'win.txt', true);
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(opened.current, 'hello\nworld\n', 'the editor gets neither the BOM nor the CRs');
+    assert.equal(opened.original, 'hello\nworld\n');
+
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'win.txt', content: opened.current, version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.deepEqual(fs.readFileSync(target), bytes, 'byte-identical: the BOM and the CRLFs are both still there');
+    assert.equal(git(repoDir, ['status', '--porcelain', '--', 'win.txt']).trim(), '');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a file with no BOM does not acquire one', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+
+    const opened = await read(repoDir, 'f.txt', false);
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'f.txt', content: 'plain\n', version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.deepEqual(fs.readFileSync(path.join(repoDir, 'f.txt')), Buffer.from('plain\n', 'utf8'));
+  } finally { cleanup(tmp); }
+});
+
+// --- Every uniform line ending, including a lone CR ----------------------
+
+test('real git: a lone-CR file reads as LF and is written back as CR (mutation target: folding a lone CR)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'lonecr.txt');
+    fs.writeFileSync(target, 'a\rb\rc\r');
+    git(repoDir, ['add', 'lonecr.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'cr']);
+
+    const opened = await read(repoDir, 'lonecr.txt', true);
+    assert.equal(opened.ok, true, opened.error);
+    assert.equal(opened.current, 'a\nb\nc\n',
+      'CodeMirror folds a lone CR to LF, so the comparison side has to fold it too');
+
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'lonecr.txt', content: opened.current, version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'a\rb\rc\r', 'byte-identical after a no-op save');
+    assert.equal(git(repoDir, ['status', '--porcelain', '--', 'lonecr.txt']).trim(), '');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a file that mixes line endings is refused rather than silently normalised (mutation target: the uniformity check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'mixed.txt');
+    fs.writeFileSync(target, 'a\r\nb\nc\r\nd\n');
+    git(repoDir, ['add', 'mixed.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'mixed']);
+
+    const opened = await read(repoDir, 'mixed.txt', true);
+    assert.equal(opened.ok, false, 'no editor can preserve per-line endings a document type does not carry');
+    assert.equal(opened.reason, 'mixed-eol');
+
+    const refused = await save(repoDir, 'mixed.txt', 'a\nb\nc\nd\n');
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'mixed-eol');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'a\r\nb\nc\r\nd\n', 'and the file is untouched');
+    assert.equal(git(repoDir, ['status', '--porcelain', '--', 'mixed.txt']).trim(), '');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a single line with no trailing newline round-trips byte-identically', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'oneline.txt');
+    fs.writeFileSync(target, 'no trailing newline');
+    git(repoDir, ['add', 'oneline.txt']);
+    git(repoDir, ['commit', '-q', '-m', 'one']);
+
+    const opened = await read(repoDir, 'oneline.txt', true);
+    const saved = await writeChangesFile({
+      cwd: repoDir, relPath: 'oneline.txt', content: opened.current, version: opened.version, maxBytes: MAX_BYTES,
+    });
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'no trailing newline');
+    assert.equal(git(repoDir, ['status', '--porcelain', '--', 'oneline.txt']).trim(), '');
   } finally { cleanup(tmp); }
 });

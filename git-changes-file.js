@@ -68,21 +68,40 @@ function defaultRunGit(args, { cwd, timeoutMs, maxBuffer }) {
   });
 }
 
-async function resolveRepoRoot(cwd, deps) {
+// see .ai/contexts/changes-view.md ("Containment, and which path the write runs on")
+async function resolveRepoDirs(cwd, deps) {
   const runGit = deps.runGit || defaultRunGit;
-  const result = await runGit(['rev-parse', '--show-toplevel'], {
+  const result = await runGit(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], {
     cwd,
     timeoutMs: deps.timeoutMs || DEFAULT_TIMEOUT_MS,
     maxBuffer: TOPLEVEL_MAX_BUFFER,
   });
   if (result.code !== 0) return null;
-  const root = String(result.stdout).trim();
-  return root || null;
+  const lines = String(result.stdout).split('\n').map((l) => l.trim()).filter(Boolean);
+  const root = lines[0];
+  if (!root) return null;
+  const gitDirs = [];
+  for (const dir of lines.slice(1)) {
+    const resolved = resolveOnDisk(path.resolve(root, dir));
+    if (resolved && !gitDirs.includes(resolved)) gitDirs.push(resolved);
+  }
+  return { root, gitDirs };
+}
+
+async function resolveRepoRoot(cwd, deps) {
+  const dirs = await resolveRepoDirs(cwd, deps);
+  return dirs ? dirs.root : null;
+}
+
+function hasGitSegment(relativePath) {
+  return relativePath.split(/[/\\]/).some((segment) => segment.toLowerCase() === '.git');
 }
 
 // Returns the single resolved path every later read/write must use — see .ai/contexts/changes-view.md
-function resolveTargetInsideRepo(repoRoot, relPath, deps) {
+function resolveTargetInsideRepo(repo, relPath, deps) {
   const fs = deps.fs || realFs;
+  const repoRoot = typeof repo === 'string' ? repo : repo.root;
+  const gitDirs = (typeof repo === 'string' ? [] : repo.gitDirs) || [];
   const realRoot = resolveOnDisk(repoRoot);
   if (!realRoot) return { ok: false, error: 'the repository directory no longer exists', reason: 'repo' };
 
@@ -100,6 +119,16 @@ function resolveTargetInsideRepo(repoRoot, relPath, deps) {
   const real = resolveOnDisk(joined);
   if (!real) return { ok: false, error: 'file is not in the working tree', reason: 'missing' };
   if (!isInsideDir(real, realRoot)) return { ok: false, error: 'path resolves outside the repository', reason: 'outside' };
+  // Every check that matters runs on the resolved path: a symlinked directory
+  // component defeats one that reads the string the renderer sent.
+  if (hasGitSegment(path.relative(realRoot, real))) {
+    return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+  }
+  for (const gitDir of gitDirs) {
+    if (isInsideDir(real, gitDir)) {
+      return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+    }
+  }
   if (isSensitivePath(real)) return { ok: false, error: 'access to sensitive path denied', reason: 'sensitive' };
 
   let stat;
@@ -118,24 +147,46 @@ function versionOf(buf) {
   return crypto.createHash('sha1').update(buf).digest('hex') + '-' + buf.length;
 }
 
-function dominantEol(text) {
+const BOM = '\ufeff';
+
+// see .ai/contexts/changes-view.md ("Caps, line endings and encoding")
+function lineEndingsOf(text) {
   const crlf = (text.match(/\r\n/g) || []).length;
-  const lf = (text.match(/\n/g) || []).length - crlf;
-  return crlf > lf ? '\r\n' : '\n';
+  const cr = (text.match(/\r(?!\n)/g) || []).length;
+  const lf = (text.match(/(?<!\r)\n/g) || []).length;
+  const kinds = [];
+  if (crlf) kinds.push('\r\n');
+  if (cr) kinds.push('\r');
+  if (lf) kinds.push('\n');
+  return kinds;
 }
 
+function soleEol(text) {
+  const kinds = lineEndingsOf(text);
+  if (kinds.length === 0) return '\n';
+  return kinds.length === 1 ? kinds[0] : null;
+}
+
+// CodeMirror folds CRLF *and* a lone CR to LF, so both have to fold here too,
+// or the buffer never compares equal to what was read.
 function toLf(text) {
-  return text.replace(/\r\n/g, '\n');
+  return text.replace(/\r\n?/g, '\n');
 }
 
 function applyEol(text, eol) {
-  return eol === '\r\n' ? toLf(text).replace(/\n/g, '\r\n') : toLf(text);
+  const lf = toLf(text);
+  return eol === '\n' ? lf : lf.replace(/\n/g, eol);
 }
 
-// see .ai/contexts/changes-view.md ("Caps, line endings and encoding")
+function stripBom(text) {
+  return text.startsWith(BOM) ? text.slice(BOM.length) : text;
+}
+
+// ignoreBOM keeps a leading U+FEFF instead of consuming it, so a Windows-authored
+// file does not lose three bytes to a round trip.
 function decodeUtf8(buf) {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
   } catch {
     return null;
   }
@@ -145,18 +196,22 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   const fs = deps.fs || realFs;
   if (!isSafeRevPathOperand(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
 
-  const repoRoot = await resolveRepoRoot(cwd, deps);
-  if (!repoRoot) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  const repo = await resolveRepoDirs(cwd, deps);
+  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
 
-  const target = resolveTargetInsideRepo(repoRoot, relPath, deps);
+  const target = resolveTargetInsideRepo(repo, relPath, deps);
   if (!target.ok) return target;
 
   if (target.size > maxBytes) return { ok: false, error: 'file too large to edit', reason: 'too-large' };
   const buf = fs.readFileSync(target.path);
   if (buf.includes(0)) return { ok: false, error: 'binary file', reason: 'binary' };
   if (buf.length > maxBytes) return { ok: false, error: 'file too large to edit', reason: 'too-large' };
-  const currentText = decodeUtf8(buf);
-  if (currentText === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+  const decoded = decodeUtf8(buf);
+  if (decoded === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+  const currentText = stripBom(decoded);
+  if (soleEol(currentText) === null) {
+    return { ok: false, error: 'file mixes line endings', reason: 'mixed-eol' };
+  }
 
   const runGit = deps.runGit || defaultRunGit;
   const blob = await runGit(['cat-file', 'blob', buildBlobRev(relPath, staged)], {
@@ -173,7 +228,7 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
     if (blob.stdout.length > maxBytes) return { ok: false, error: 'file too large to edit', reason: 'too-large' };
     const originalText = decodeUtf8(blob.stdout);
     if (originalText === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
-    original = toLf(originalText);
+    original = toLf(stripBom(originalText));
   } else if (blob.code !== NOT_IN_TREE_EXIT_CODE) {
     return { ok: false, error: (blob.stderr || '').trim() || `git exited with code ${blob.code}`, reason: 'git' };
   }
@@ -195,10 +250,10 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
   if (!isSafeRepoRelativePath(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   if (Buffer.byteLength(content, 'utf8') > maxBytes) return { ok: false, error: 'content too large to save', reason: 'too-large' };
 
-  const repoRoot = await resolveRepoRoot(cwd, deps);
-  if (!repoRoot) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  const repo = await resolveRepoDirs(cwd, deps);
+  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
 
-  const target = resolveTargetInsideRepo(repoRoot, relPath, deps);
+  const target = resolveTargetInsideRepo(repo, relPath, deps);
   if (!target.ok) return target;
 
   const onDisk = fs.readFileSync(target.path);
@@ -206,8 +261,13 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
     return { ok: false, error: 'this file changed on disk since it was opened', reason: 'stale' };
   }
 
-  const eol = dominantEol(decodeUtf8(onDisk) || '');
-  const bytes = Buffer.from(applyEol(content, eol), 'utf8');
+  // The bytes the token was taken from decide how this file is written back.
+  const decoded = decodeUtf8(onDisk);
+  if (decoded === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+  const eol = soleEol(stripBom(decoded));
+  if (eol === null) return { ok: false, error: 'file mixes line endings', reason: 'mixed-eol' };
+  const prefix = decoded.startsWith(BOM) ? BOM : '';
+  const bytes = Buffer.from(prefix + applyEol(stripBom(content), eol), 'utf8');
   if (bytes.length > maxBytes) return { ok: false, error: 'content too large to save', reason: 'too-large' };
   fs.writeFileSync(target.path, bytes);
   return { ok: true, savedPath: target.path, version: versionOf(bytes) };
@@ -221,7 +281,11 @@ module.exports = {
   resolveRepoRoot,
   isSafeRepoRelativePath,
   isSafeRevPathOperand,
+  hasGitSegment,
   buildBlobRev,
   versionOf,
-  dominantEol,
+  resolveRepoDirs,
+  lineEndingsOf,
+  soleEol,
+  toLf,
 };
