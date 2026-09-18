@@ -518,6 +518,20 @@ A **local** session's selected file is a live editor over the content pair from 
 
 A **remote** session, and any file the main process refuses to open for editing (binary, over the cap, outside the repository), fall back to the unified-diff text from `git-changes-diff`: one `<div class="changes-diff-line">` per line, classed by its `+`/`-`/`@@` prefix (`classifyDiffLine()`), set via `textContent` (no HTML injection risk from diff content, which can contain arbitrary user code). The bundled CodeMirror has no diff/patch language mode to colour that blob with, which is why the fallback is deliberately plain. The panel says which of the two it is in, in its notice line, and the refusal's `reason` is what that line reports.
 
+### The list and the editor
+
+The list is never hidden. A selected file opens *below* it — summary, list, a drag handle, then the editor region — and the current row carries `.selected`. Reviewing a set of files is then click, read, click, which is the whole point of the layout; there is no navigation step to undo, so the editor's first button is **Close** (close the file, keep the list) rather than Back.
+
+The split uses `createSplitter` (`public/splitter.js`, shared with the panel's shell region) and the height model that region settled on: `changesListDesiredHeight` stores what the drag asked for, `clampChangesListHeight` narrows it only for display against the space actually available, and only the desired value is persisted (`localStorage.changesListHeight`). A transient shrink — a short panel, the shell open — therefore never ratchets the stored height down. The list has a floor of its own (`MIN_CHANGES_LIST_HEIGHT`, 96px, about four rows) so it cannot collapse to nothing, and the editor keeps `MIN_CHANGES_EDITOR_HEIGHT` (120px, the same floor the shell region uses for the content above it). Below that the list scrolls; nothing overlaps and nothing is clipped out of reach.
+
+Switching rows is an exit like Back, the tab toggle and the panel's close button: it asks `confirmDiscardChangesEdits` when the buffer is dirty and returns without touching anything if the answer is no. Clicking the row that is already open is not a switch and asks nothing. The row cap (`MAX_CHANGES_ROWS`) and the idle refresh are unchanged by the layout — a refresh rebuilds the list while the editor keeps its instance and its DOM node, which the editor-host MutationObserver test pins with the list now rebuilding alongside it.
+
+### File links
+
+`openFileInPanel` is the terminal's entry point (OSC 8 `file://` and the context menu) and it hands the renderer an **absolute** path. The renderer never turns that into a pathspec: `git-changes-locate` does, main-side, against the repo root `resolveRepoDirs` computes from the session's own cwd — the same root the read and the write use. It resolves the path on disk, requires containment, runs it through `resolveTargetInsideRepo` so a link cannot reach what a row cannot, and answers with `{relPath, changed, staged, untracked}`.
+
+"Changed" is one `git status --porcelain=v2 -uall -z -- <relPath>`, scoped to that one path: **measured on a 20 000-file repository, 14–17 ms against 117–126 ms for the unscoped status the panel runs on open** — cheap enough per click that the renderer does not need to cache or consult its last status, and correct even when no Changes tab is open. An untracked file counts as changed (it is a legitimate row, and the editor handles an empty original). An unmodified file, a path outside the repository and a remote session all answer "not a row" and the link falls back to the plain `ViewerPanel`, which is also what happens if the IPC is missing or throws.
+
 ### The render path is not a teardown
 
 The Changes tab re-renders on every busy→idle edge (see "Refresh triggers"), so a render that rebuilt its own DOM would destroy the editor under the user's cursor and discard unsaved edits once per turn the session finishes. Two rules prevent that:
