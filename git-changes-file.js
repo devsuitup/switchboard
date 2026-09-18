@@ -116,8 +116,7 @@ function resolveTargetInsideRepo(repo, relPath, deps) {
   const real = resolveOnDisk(joined);
   if (!real) return { ok: false, error: 'file is not in the working tree', reason: 'missing' };
   if (!isInsideDir(real, realRoot)) return { ok: false, error: 'path resolves outside the repository', reason: 'outside' };
-  // Every check that matters runs on the resolved path: a symlinked directory
-  // component defeats one that reads the string the renderer sent.
+  // see .ai/contexts/changes-view.md ("Containment, and which path the write runs on")
   if (hasGitSegment(path.relative(realRoot, real))) {
     return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
   }
@@ -135,6 +134,7 @@ function resolveTargetInsideRepo(repo, relPath, deps) {
     return { ok: false, error: 'file is not in the working tree', reason: 'missing' };
   }
   if (!stat.isFile()) return { ok: false, error: 'not a regular file', reason: 'not-a-file' };
+  if (stat.nlink !== 1) return { ok: false, error: 'this file is a hard link', reason: 'hardlink' };
 
   return { ok: true, path: real, size: stat.size, repoRoot: realRoot };
 }
@@ -164,8 +164,7 @@ function soleEol(text) {
   return kinds.length === 1 ? kinds[0] : null;
 }
 
-// CodeMirror folds CRLF *and* a lone CR to LF, so both have to fold here too,
-// or the buffer never compares equal to what was read.
+// see .ai/contexts/changes-view.md ("Caps, line endings and encoding")
 function toLf(text) {
   return text.replace(/\r\n?/g, '\n');
 }
@@ -175,12 +174,15 @@ function applyEol(text, eol) {
   return eol === '\n' ? lf : lf.replace(/\n/g, eol);
 }
 
+// see .ai/contexts/changes-view.md ("Caps, line endings and encoding")
+function hasLoneSurrogate(text) {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+}
+
 function stripBom(text) {
   return text.startsWith(BOM) ? text.slice(BOM.length) : text;
 }
 
-// ignoreBOM keeps a leading U+FEFF instead of consuming it, so a Windows-authored
-// file does not lose three bytes to a round trip.
 function decodeUtf8(buf) {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
@@ -240,8 +242,7 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   };
 }
 
-// A file link hands the renderer an absolute path; the repo-relative row it
-// belongs to is computed here, never there — see .ai/contexts/changes-view.md
+// see .ai/contexts/changes-view.md ("File links")
 async function locateChangesFile({ cwd, absolutePath }, deps = {}) {
   if (typeof absolutePath !== 'string' || !absolutePath) {
     return { ok: false, error: 'invalid path', reason: 'invalid-path' };
@@ -258,8 +259,6 @@ async function locateChangesFile({ cwd, absolutePath }, deps = {}) {
   const relPath = path.relative(realRoot, real).split(path.sep).join('/');
   if (!isSafeRevPathOperand(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
 
-  // The same guard the read and the write go through, so a link cannot reach
-  // what a row cannot.
   const target = resolveTargetInsideRepo(repo, relPath, deps);
   if (!target.ok) return target;
 
@@ -306,6 +305,7 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
   // The bytes the token was taken from decide how this file is written back.
   const decoded = decodeUtf8(onDisk);
   if (decoded === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+  if (hasLoneSurrogate(content)) return { ok: false, error: 'content is not valid UTF-8', reason: 'encoding' };
   const eol = soleEol(stripBom(decoded));
   if (eol === null) return { ok: false, error: 'file mixes line endings', reason: 'mixed-eol' };
   const prefix = decoded.startsWith(BOM) ? BOM : '';

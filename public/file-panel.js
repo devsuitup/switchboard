@@ -52,8 +52,7 @@ const MAX_CHANGES_ROWS = 500;
 
 const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
 const DEFAULT_CHANGES_LIST_HEIGHT = 200;
-// A floor of its own so the list never collapses to a row or two; the editor
-// keeps the rest — see .ai/contexts/changes-view.md ("The list and the editor")
+// see .ai/contexts/changes-view.md ("The list and the editor")
 const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
 let changesListDesiredHeight = readStoredChangesListHeight();
@@ -68,8 +67,7 @@ let diffMode = localStorage.getItem(DIFF_MODE_KEY) || 'side-by-side';
 const CHANGES_DIFF_MODE_KEY = 'changesDiffMode';
 const CHANGES_DIFF_MODES = ['side-by-side', 'inline', 'plain'];
 const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side', inline: 'Inline', plain: 'Plain' };
-// Inline by default: the panel is a column, and side-by-side halves it — see
-// .ai/contexts/changes-view.md ("The list and the editor")
+// see .ai/contexts/changes-view.md ("The list and the editor")
 let changesDiffMode = CHANGES_DIFF_MODES.includes(localStorage.getItem(CHANGES_DIFF_MODE_KEY))
   ? localStorage.getItem(CHANGES_DIFF_MODE_KEY)
   : 'inline';
@@ -419,8 +417,7 @@ function openFileTab(sessionId, data) {
   }
 }
 
-// A session opening a file or a diff replaces the tab without asking, so the
-// buffer is kept and restored the next time the Changes tab is opened.
+// see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
 function stashChangesEdits(state, tab) {
   if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
   const content = readChangesEditorContent(tab);
@@ -473,8 +470,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
   }
 }
 
-// A link to one of the session's own changed files opens where it can be
-// edited against its diff — see .ai/contexts/changes-view.md ("File links")
+// see .ai/contexts/changes-view.md ("File links")
 async function openFileInPanel(sessionId, filePath) {
   const row = await locateChangesRow(sessionId, filePath);
   if (row) return openChangesTabAt(sessionId, row);
@@ -934,6 +930,7 @@ function describeFallback(pair) {
   if (pair.reason === 'encoding') return 'not UTF-8 text';
   if (pair.reason === 'mixed-eol') return 'mixed line endings';
   if (pair.reason === 'symlink') return 'symbolic link';
+  if (pair.reason === 'hardlink') return 'hard link';
   return pair.error || 'this file could not be opened for editing';
 }
 
@@ -1112,8 +1109,7 @@ function readStoredChangesListHeight() {
   return Number.isFinite(stored) ? Math.max(MIN_CHANGES_LIST_HEIGHT, stored) : DEFAULT_CHANGES_LIST_HEIGHT;
 }
 
-// Store what the drag asked for, clamp only for display, so a transient shrink
-// never ratchets the list down — the height model panel-terminal.js settled on.
+// see .ai/contexts/changes-view.md ("The list and the editor")
 function clampChangesListHeight(height, available) {
   const wanted = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(height));
   if (!available) return wanted;
@@ -1245,8 +1241,7 @@ function renderChangesDiff(sessionId, tab) {
   changesDiffHostEl.appendChild(body);
 }
 
-// Nothing to save, nothing to press. The keyboard path does not consult the
-// attribute, so handleChangesSave keeps its own guard.
+// see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
 function updateChangesSaveButton(sessionId, tab) {
   const state = filePanelState.get(sessionId);
   if (!state || state.currentTab !== tab) return;
@@ -1416,13 +1411,10 @@ async function handleChangesSave(sessionId) {
 
   await refreshChanges(sessionId);
 
-  // The refresh re-points selectedFile at its new row, so the file is the same
-  // file by path, not by identity.
   const afterState = filePanelState.get(sessionId);
   if (!afterState || afterState.currentTab !== tab) return;
   if (!tab.selectedFile || tab.selectedFile.path !== file.path) return;
-  // An untracked row's counts are click-derived, and this save is the click:
-  // the bytes just written are exactly what the count is of.
+  // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
   if (file.untracked) {
     applyUntrackedCounts(tab, tab.data, file.path, countAddedLines(content), 0);
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
@@ -1454,8 +1446,6 @@ async function reloadChangesFile(sessionId) {
   tab.current = result.current;
   tab.savedContent = result.current;
   tab.version = result.version;
-  // The usual reason to reload is a file replaced on disk, which is also how a
-  // watch goes deaf, so the reload re-arms it.
   watchChangesFile(sessionId, tab, file.path);
   destroyChangesEditor(tab);
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);

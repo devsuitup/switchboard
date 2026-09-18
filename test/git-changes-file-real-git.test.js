@@ -24,8 +24,12 @@ function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-')));
 }
 
+// The maxBuffer cap SIGTERMs an overrunning `git cat-file`, and execFile's
+// callback runs before that child has been reaped (measured: exitCode null,
+// killed true). On Windows a live process holds a handle on its working
+// directory, so removing the scratch repo can race it — hence the retries.
 function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 // Scratch repo only: drop the caller's GIT_* env (set when this suite runs under a hook) and its hooks.
@@ -118,8 +122,8 @@ test('real git: a path absent from the tree is a new file — empty original, no
 
     // The exit code real git returns for a path that is not in the index, pinned.
     const raw = spawnSync('git', ['cat-file', 'blob', ':new.txt'], { cwd: repoDir, encoding: 'utf8', env: scratchGitEnv() });
-    assert.equal(raw.status, 128);
-    assert.match(raw.stderr, /not in the index/);
+    assert.equal(raw.status, 128, 'the exit code is what the module reads; the message varies by git version');
+    assert.equal(raw.stdout, '');
 
     const result = await read(repoDir, 'new.txt', false);
     assert.equal(result.ok, true, result.error);
@@ -1051,5 +1055,72 @@ test('real git: a file whose name is git\'s conflict-stage syntax is refused by 
     assert.equal(result.ok, false, 'only the operand guard can refuse this one');
     assert.equal(result.reason, 'invalid-path');
     assert.equal(fs.readFileSync(staged, 'utf8'), 'ordinary\n');
+  } finally { cleanup(tmp); }
+});
+
+// --- A hard link is a second name for the same bytes ----------------------
+
+test('real git: a hard link to a file outside the repository is refused, on the read and on the write (mutation target: the nlink check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const outside = path.join(tmp, 'outside-secret.txt');
+    fs.writeFileSync(outside, OUTSIDE_SECRET);
+    // Same inode, two names, one of them inside the repo: realpath cannot tell
+    // the difference, because the in-repo name IS the real path.
+    fs.linkSync(outside, path.join(repoDir, 'planted.txt'));
+    assert.equal(fs.statSync(path.join(repoDir, 'planted.txt')).nlink, 2, 'the link is what it looks like');
+
+    const readResult = await read(repoDir, 'planted.txt', false);
+    assert.equal(readResult.ok, false);
+    assert.equal(readResult.reason, 'hardlink');
+
+    const writeResult = await save(repoDir, 'planted.txt', 'pwned\n');
+    assert.equal(writeResult.ok, false);
+    assert.equal(writeResult.reason, 'hardlink');
+    assert.equal(fs.readFileSync(outside, 'utf8'), OUTSIDE_SECRET, 'the file outside the repository is untouched');
+
+    // A link to a file elsewhere in the same repo is refused by the same rule:
+    // the check is on the link, not on where the other name happens to be.
+    fs.linkSync(path.join(repoDir, 'f.txt'), path.join(repoDir, 'inner-link.txt'));
+    const inner = await read(repoDir, 'inner-link.txt', false);
+    assert.equal(inner.ok, false);
+    assert.equal(inner.reason, 'hardlink');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: an ordinary file is not mistaken for a hard link', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    assert.equal(fs.statSync(path.join(repoDir, 'f.txt')).nlink, 1);
+    const result = await read(repoDir, 'f.txt', false);
+    assert.equal(result.ok, true, result.error);
+  } finally { cleanup(tmp); }
+});
+
+// --- The write refuses what the read refuses ------------------------------
+
+test('real git: an unpaired surrogate in the content is refused rather than written as U+FFFD (mutation target: the write-side encoding check)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const target = path.join(repoDir, 'f.txt');
+    const before = fs.readFileSync(target);
+
+    for (const content of ['line1\n\uD800line2\n', 'lone low \uDC00\n', 'pair \uD83D\uDE00 then lone \uD83D\n']) {
+      const result = await save(repoDir, 'f.txt', content);
+      assert.equal(result.ok, false, `must refuse ${JSON.stringify(content)}`);
+      assert.equal(result.reason, 'encoding');
+    }
+    assert.deepEqual(fs.readFileSync(target), before, 'and nothing is written');
+
+    // A well-formed pair is ordinary text and still saves.
+    const ok = await save(repoDir, 'f.txt', 'emoji \uD83D\uDE00 fine\n');
+    assert.equal(ok.ok, true, ok.error);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'emoji \uD83D\uDE00 fine\n');
   } finally { cleanup(tmp); }
 });
