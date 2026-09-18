@@ -209,8 +209,10 @@ A refusal is a state in `panelTerminals` with `error` set and no terminal. It
 is what makes the panel open (`panelTerminalIsOpen` is what `hidePanel`
 consults), which is the only way the message is on screen at all: without it
 the panel is `width: 0`, `overflow: hidden`, and a message painted into the
-region is perfectly invisible. Tests for it assert the panel is `.open` with a
-non-zero width, not that a node inside it has `display: block`.
+region is perfectly invisible. Tests for it assert the panel is `.open` and the
+region too, and that the width is not `0px`, **before** they look at the
+message's own `display` — so an assertion on the message alone can no longer
+pass while the panel is shut.
 
 It is deliberately **transient**: `unmountPanelTerminal` deletes an error state
 instead of unmounting it, and a refusal that arrives once the panel has moved
