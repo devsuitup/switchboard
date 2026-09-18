@@ -2390,6 +2390,73 @@ test('a reply for a departed session repaints nothing on the unanswerable branch
   } finally { ctx.destroy(); }
 });
 
+// --- Withdrawal over a dirty editor buffer ----------------------------------
+// The one combination neither branch could have had a test for: the editor is
+// #302's, the withdrawal is this branch's, and they meet at toggleChangesTab.
+// See .ai/contexts/changes-view.md ("Withdrawal reuses the tab's own close
+// control").
+
+async function openDirtyFileThen(ctx, statusAfter) {
+  await openFile(ctx, 's1', 'src/a.js');
+  ctx.editors[0].box.text = 'my unsaved edit\n';
+  statusAfter();
+  ctx.setActivity('s1', true);
+  ctx.setActivity('s1', false);
+  await flush();
+}
+
+test('a withdrawal over unsaved edits asks first, and a refusal keeps both the editor and the button', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({
+    confirmImpl: () => false,
+    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    await openDirtyFileThen(ctx, () => { repo = false; });
+
+    assert.equal(ctx.calls.confirm.length, 1, 'the withdrawal asks the same question every other exit asks');
+    assert.equal(ctx.editors[0].box.destroyed, false, 'a refused discard must not destroy the buffer');
+    assert.equal(ctx.editors[0].box.text, 'my unsaved edit\n');
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'hiding the control while its tab still holds the edit is what strands it');
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+  } finally { ctx.destroy(); }
+});
+
+test('a withdrawal over unsaved edits proceeds once the user confirms, and then withdraws the button', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({
+    confirmImpl: () => true,
+    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    await openDirtyFileThen(ctx, () => { repo = false; });
+
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('a withdrawal with nothing unsaved never asks, it just withdraws', async () => {
+  let repo = true;
+  const ctx = setupFilePanelDom({
+    confirmImpl: () => false,
+    statusImpl: () => (repo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    repo = false;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 0, 'a clean buffer has nothing to discard');
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'so the refusal path is never reached and the button goes');
+  } finally { ctx.destroy(); }
+});
+
 // --- The panel's own X is a second close path -------------------------------
 // `handleClose` clears currentTab and hides the panel directly, without passing
 // through toggleChangesTab — see .ai/contexts/changes-view.md ("Withdrawal
