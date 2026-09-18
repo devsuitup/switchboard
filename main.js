@@ -390,6 +390,7 @@ function createWindow() {
       activeSessions.delete(id);
     }
     changesWatchers.closeAll();
+    closeAllFileWatchers();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {
@@ -993,6 +994,13 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
 
 // ── File Watching (for viewer panels) ────────────────────────────────
 const fileWatchers = new Map(); // filePath → FSWatcher
+
+function closeAllFileWatchers() {
+  for (const watcher of fileWatchers.values()) {
+    try { watcher.close(); } catch {}
+  }
+  fileWatchers.clear();
+}
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
