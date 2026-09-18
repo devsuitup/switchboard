@@ -2,8 +2,8 @@
 // Runs the node:test suite in two stages, cross-platform (no shell-specific
 // syntax, so this works the same under cmd.exe and under a POSIX shell).
 //
-// Stage 1: every test file except trigger-watcher.test.js, node's own default
-// concurrency.
+// Stage 1: every test file except trigger-watcher.test.js, at
+// DEFAULT_CONCURRENCY workers (override with SWITCHBOARD_TEST_CONCURRENCY).
 // Stage 2: trigger-watcher.test.js alone, serially, with a generous timeout.
 // It uses real timers + real fs.watch against wall-clock budgets (no fake-timer
 // injection yet -- see .ai/contexts/trigger-watcher.md, "timing tests and host
@@ -14,10 +14,27 @@
 
 const { spawnSync } = require('child_process');
 const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
 
 const TEST_DIR = path.join(__dirname, '..', 'test');
 const ISOLATED_FILE = 'trigger-watcher.test.js';
+
+// Node defaults stage 1 to os.availableParallelism() workers, which on a large
+// workstation is a dozen-plus test processes at once. See
+// .ai/agent-practices.md, "Test concurrency".
+const DEFAULT_CONCURRENCY = 4;
+
+function stageOneConcurrency() {
+  const raw = process.env.SWITCHBOARD_TEST_CONCURRENCY;
+  if (raw !== undefined && raw !== '') {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0) return n;
+    console.error(`run-tests: ignoring SWITCHBOARD_TEST_CONCURRENCY=${raw} (want a positive integer)`);
+  }
+  const available = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+  return Math.max(1, Math.min(DEFAULT_CONCURRENCY, available));
+}
 
 const mainFiles = fs.readdirSync(TEST_DIR)
   .filter((name) => name.endsWith('.js') && name !== ISOLATED_FILE)
@@ -29,14 +46,18 @@ function run(args) {
   return result.status === null ? 1 : result.status;
 }
 
-const mainStatus = run(['--test', ...mainFiles]);
+if (require.main === module) {
+  const mainStatus = run(['--test', `--test-concurrency=${stageOneConcurrency()}`, ...mainFiles]);
 
-// No --test-timeout: with an explicit file operand node applies it to the
-// file-level entry too, and this file legitimately runs for minutes on CI.
-const isolatedStatus = run([
-  '--test',
-  '--test-concurrency=1',
-  path.join('test', ISOLATED_FILE),
-]);
+  // No --test-timeout: with an explicit file operand node applies it to the
+  // file-level entry too, and this file legitimately runs for minutes on CI.
+  const isolatedStatus = run([
+    '--test',
+    '--test-concurrency=1',
+    path.join('test', ISOLATED_FILE),
+  ]);
 
-process.exit(mainStatus !== 0 ? mainStatus : isolatedStatus);
+  process.exit(mainStatus !== 0 ? mainStatus : isolatedStatus);
+}
+
+module.exports = { stageOneConcurrency, DEFAULT_CONCURRENCY };
