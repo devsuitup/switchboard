@@ -78,7 +78,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | IPC | Args |
 |---|---|
 | `read-file-for-panel` / `save-file-for-panel` | Arbitrary file IO inside the user's projects |
-| `watch-file` / `unwatch-file` | fs.watch wrapper, emits `file-changed` event |
+| `watch-file` / `unwatch-file` | fs.watch wrapper, emits `file-changed` event. The registry is keyed by resolved path and is released either one path at a time by `unwatch-file`, or wholesale by `closeAllFileWatchers()` in the window-`closed` handler, alongside `changesWatchers.closeAll()` and the subagent watches. A closing window sends no `unwatch-file`, so that teardown is what bounds these descriptors to the window's lifetime; it swallows a `close()` that throws, since a handle whose file is already gone must not strand the rest of the teardown. |
 
 ### Changes panel (issue #251)
 
