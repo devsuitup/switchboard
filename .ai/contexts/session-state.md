@@ -66,6 +66,46 @@ the terminal header's stop button, and the grid card's stop button all funnel
 through it) — it now asks `resolveSessionStop` which IPC to call instead of
 always calling `stopSession`.
 
+### Reopening a plain terminal
+
+A session's `type` is what tells `open-terminal` which of its two branches to
+take: `isPlainTerminal = sessionOptions?.type === 'terminal'` picks a login
+shell, anything else runs `claude --resume <sessionId>`. The type lives on the
+session object in the renderer, and every path that reopens one has to carry it
+across the IPC boundary — `resolveDefaultSessionOptions` (`public/dialogs.js`)
+resolves *Claude launch* options (permission mode, worktree, chrome, sandbox,
+preLaunchCmd, addDirs, MCP emulation) and deliberately says nothing about the
+session type, because it is also what a Claude resume uses.
+
+`openSession` therefore chooses the options in one chain, in this order:
+
+1. `customOptions`, when the caller supplied them. Only the
+   resume-with-config dialog does, and the sidebar never renders its button on
+   a terminal row (`session.type !== 'terminal'` gates the whole action group),
+   so an explicit choice always wins and never has to be reconciled with the
+   type.
+2. `{type: 'terminal'}` for a session whose own `type` is `'terminal'`. A shell
+   has no permission mode, worktree or MCP emulation to resolve, so the
+   defaults call is skipped entirely.
+3. `resolveDefaultSessionOptions()` otherwise.
+
+Without step 2, a terminal that is no longer in `openSessions` — its shell
+exited and the entry was destroyed, or the renderer reloaded — reopens as a
+Claude resume against an id minted by `launchTerminalSession` for a shell,
+which has no transcript. `activeSessions` hides it whenever the PTY is still
+live, because `open-terminal`'s reattach branch runs first; the failure needs
+the PTY to be gone as well.
+
+**An exited terminal reopens under its own id.** Both branches of the
+`openSessions` check now converge on the same reopen: a closed entry is
+destroyed and the function falls through, exactly as it already did for a
+Claude session. Minting a fresh id instead (`launchTerminalSession`) left the
+row the user clicked behind, pointing at an id nothing could open correctly,
+while the new shell arrived on a row they had not asked for. `main.js` needs
+nothing for this: its plain-terminal branch ignores `isNew` and spawns a shell
+either way, and the resume-cwd lookup is already guarded on
+`sessionOptions?.type !== 'terminal'`.
+
 ### Archive/delete are stop-then-archive/delete (issue #271)
 
 `public/sidebar.js`'s four archive/delete call sites (`.project-archive-btn`,

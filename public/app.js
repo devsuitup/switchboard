@@ -1095,10 +1095,6 @@ async function openSession(session, customOptions) {
     const entry = openSessions.get(sessionId);
     if (entry.closed) {
       destroySession(sessionId);
-      if (session.type === 'terminal') {
-        launchTerminalSession({ projectPath: session.projectPath });
-        return;
-      }
     } else {
       showSession(sessionId);
       return;
@@ -1108,8 +1104,9 @@ async function openSession(session, customOptions) {
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
 
-  // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
+  const resumeOptions = customOptions
+    || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);

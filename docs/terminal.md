@@ -6,6 +6,7 @@ Switchboard includes a full built-in terminal powered by xterm.js. You can launc
 
 - Click a session in the sidebar to open it in the terminal. If the session has an active process, you attach to its running PTY. If not, a new Claude CLI process is launched.
 - Click **New Session** (the `+` button next to a project) to start a fresh Claude Code session for that project.
+- A **Terminal** row (the `+` button's Terminal entry) is a plain shell, not a Claude session. Clicking it after its shell has exited gives that same row a new shell — one row, the one you clicked, not a second one beside it.
 
 ## Panel shell
 
