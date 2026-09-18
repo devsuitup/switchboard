@@ -44,7 +44,7 @@ On a local session, the open file is a live editor, not a picture of a diff. Typ
 - **Save** with the Save button or `Ctrl/Cmd+S`. The file list refreshes on save, so the row's counts follow what you wrote.
 - The button next to Back cycles three views: **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right), **Inline** (one column, changes marked in place) and **Plain** (just the file, no diff decoration). The choice is remembered.
 - The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
-- A remote session, a binary file, a file that is not UTF-8 text, and a file over 2 MB stay read-only, and the panel says which of those it is.
+- These stay read-only, and the panel says which case it is: a remote session, a binary file, a file that is not UTF-8 text, a file that mixes line endings (no editor can keep them line by line), a symbolic link, and a file over 2 MB.
 
 ### When the session writes the same file
 
@@ -54,7 +54,8 @@ The session you are watching writes these files, so the panel assumes it is not 
 - If you **do** have unsaved edits, your buffer is left exactly as it is and the panel says the file changed on disk. **Reload** replaces it with the version on disk — it asks first, because that discards what you typed.
 - A save of a file that changed since you opened it is **refused**, not merged and not forced: the panel tells you to reload first, and the session's work stays on disk. Saving again after a reload writes normally.
 - Back, closing the tab and closing the panel all ask before discarding unsaved edits.
-- Line endings are preserved: a CRLF file is still CRLF after you save it, so a save with no edits leaves git with nothing to report.
+- Whatever line ending the file uses is preserved — CRLF stays CRLF — so a save with no edits leaves git with nothing to report. A byte-order mark is kept too.
+- If the session opens a file or a diff of its own while you have unsaved edits, the panel switches away without asking, but your edits are kept: reopening **Changes** brings them back and says so.
 
 ## A shell under the list
 

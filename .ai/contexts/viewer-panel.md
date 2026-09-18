@@ -104,7 +104,10 @@ things about that editor are not `ViewerPanel`'s:
 `ViewerPanel`'s own protections have Changes-panel equivalents rather than
 reuses, for the same reason: watching goes through `git-changes-watch` instead
 of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
-lives on the tab instead of the component.
+lives on the tab instead of the component. One protection has no `ViewerPanel`
+counterpart at all: an MCP-driven open replaces whatever tab is showing, so a
+dirty Changes buffer is stashed on the session's panel state and restored when
+the tab is reopened.
 
 `Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
 the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts

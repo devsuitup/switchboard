@@ -16,6 +16,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 | `git-changes-runner.js` | Runs the git commands, local or remote, behind one interface. |
 | `git-changes-target.js` | cwd resolution for the panel's IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
 | `git-changes-file.js` | The content pair and the write target behind the editable diff: the `<rev>:<path>` guard, the repository-containment check, the read and the write. |
+| `git-changes-watch.js` | The registry behind `git-changes-watch`: arms `fs.watch`, debounces, re-arms after a rename, and reports the repo-relative path. |
 | `public/file-panel.js` | Renderer: the `'changes'` tab type, its rows, the editor, and the read-only diff-line renderer. |
 | `public/session-activity.js` | `onSessionIdle()` — the no-polling refresh hook. |
 
@@ -370,10 +371,18 @@ syntax from revision magic. So the operand carries its own pair of guards
   `git-changes-save` uses, because its operand is a filesystem path and nothing
   else. Both segment rules are split on `/` and `\` rather than matched as
   substrings: `a..b.txt` and `dotgit.md` are ordinary filenames, while `a/../b`
-  and `.git/config` are not paths this panel will touch. `.git` is inside the
-  repository root, so containment alone does not exclude it, and `.git/config`
-  carries `core.pager`, `core.fsmonitor` and `[alias]` — writing it is command
-  execution the next time any git command runs there.
+  and `.git/config` are not paths this panel will touch.
+
+  This check reads the string the renderer sent, so it is a cheap pre-filter and
+  **not** the guarantee: `gitlink/config`, where `gitlink` is a symlink to
+  `.git`, carries no `.git` segment at all. The guarantee is in
+  `resolveTargetInsideRepo`, which applies the same segment rule to the
+  **resolved** path and additionally refuses anything inside the directories
+  `git rev-parse --absolute-git-dir --git-common-dir` reports (`reason:
+  'git-dir'`). That covers a linked worktree, whose git directory is not under
+  the worktree root at all. `.git/config` carries `core.pager`,
+  `core.fsmonitor` and `[alias]`, so writing it is command execution the next
+  time any git command runs there.
 - `isSafeRevPathOperand` — the above **plus** no `^[0-9]+:` prefix, which would
   turn `:<path>` into `:<n>:<path>`, git's conflict-stage syntax. A file
   literally named `1:f.txt` is therefore not editable from the panel: an
@@ -396,10 +405,14 @@ a **symbolic link** outright (`reason: 'symlink'`): a symlink's content in a git
 working tree is its target string, so the pair would be the link text against
 the target's content, and a save would land on a file the row does not name.
 It then resolves both the root and the joined path **on disk**
-(`resolveOnDisk`), requires the real target to be the real root or beneath it —
-which is what catches an escape through a symlinked *directory*, whose last
-component is an ordinary file — applies `isSensitivePath`, and requires a
-regular file. It returns
+(`resolveOnDisk`) and runs **every remaining check against the resolved path**:
+containment in the repository root (which catches an escape through a symlinked
+*directory*, whose last component is an ordinary file), the `.git` segment rule
+and the git-directory containment above, `isSensitivePath`, and a regular-file
+check. The ordering is the rule this codebase keeps relearning: a guard that
+tests the literal string the renderer sent is defeated by a symlinked directory
+component; resolve first, check the resolved path, and use the value the guard
+returns. It returns
 that single resolved path, and the read and the write run on **that** value —
 the TOCTOU rule `ipc-path-validator.js` documents for
 `resolveAllowedMemoryPath`: two independent resolutions of the same string are
@@ -427,13 +440,24 @@ case. Two independent layers:
    bytes it just wrote, which is what the next save must carry. The hash, rather
    than an mtime, is what makes two writes inside the same clock tick
    distinguishable.
-2. **A watcher.** `git-changes-watch` resolves the same guard, `fs.watch`es the
-   resolved path, and sends `git-changes-file-changed(sessionId, relPath)` —
-   never an absolute path. The renderer re-reads on it, so the user is told (or
-   the clean buffer is refreshed) as it happens, rather than at the next
-   busy→idle edge. The watch is keyed by session + repo-relative path and is
-   dropped when the file is closed, the tab is closed, or another file is
-   opened.
+2. **A watcher.** `git-changes-watch` resolves the same guard and hands the
+   resolved path to `git-changes-watch.js`'s registry, which `fs.watch`es it and
+   sends `git-changes-file-changed(sessionId, relPath)` — never an absolute
+   path. The renderer re-reads on it, so the user is told (or the clean buffer
+   is refreshed) as it happens, rather than at the next busy→idle edge. The
+   watch is keyed by session + repo-relative path and is dropped when the file
+   is closed, the tab is closed, or another file is opened.
+
+   The registry is a module rather than a closure in `main.js` for the same
+   reason `git-changes-target.js` is: `main.js` cannot be required from a test,
+   and the half of the watcher that detects the change is the half worth
+   pinning. Its own rule: **a `rename` event re-arms the watch.** `fs.watch`
+   follows the inode, and an atomic replacement (`git checkout`, `git stash
+   pop`, `sed -i`, an editor saving via rename) delivers one event and then
+   silence, so the entry closes its watcher and re-arms on the same path before
+   reporting. The version token means the consequence of a missed event is a
+   missing warning, never a lost file, which is why this is a quality-of-signal
+   fix rather than a safety one.
 
 ### Caps, line endings and encoding
 
@@ -447,17 +471,27 @@ a data-loss device, not a preview.
 Two more properties of the round trip, both belonging main-side because the
 editor cannot preserve them:
 
-- **Line endings.** CodeMirror normalises `\r\n` to `\n` when it builds a
-  document and joins with `\n` on the way out, so a CRLF file edited in the
-  panel would come back LF and rewrite every line. The read returns LF-only text
-  (which also keeps the dirty comparison honest — otherwise a CRLF buffer is
-  "modified" the instant it opens), and the write re-applies the file's dominant
+- **Line endings.** CodeMirror normalises `\r\n` *and a lone `\r`* to `\n`
+  when it builds a document, and joins with `\n` on the way out, so any file not
+  already LF-only would come back rewritten. The read returns LF-only text —
+  `toLf` folds both forms, or the buffer never compares equal to what was read
+  and is treated as dirty forever — and the write re-applies the file's own
   ending, measured from the very bytes the version token was computed from.
+  A file that **mixes** endings is refused (`reason: 'mixed-eol'`) rather than
+  normalised to the majority: no editor whose document type carries one
+  separator can preserve per-line endings, and silently rewriting the minority
+  lines is the manufactured diff this rule exists to prevent. Uniform CRLF,
+  uniform LF, uniform lone-CR and a file with no line ending at all all
+  round-trip byte-identically.
 - **Encoding.** The binary gate is NUL bytes, which Latin-1 text does not
   contain: decoded as UTF-8 it becomes U+FFFD and would be written back as
   those replacement bytes, irreversibly. Both sides are therefore decoded
   strictly (`TextDecoder` with `fatal: true`) and a file that is not valid UTF-8
-  is refused with `reason: 'encoding'`, not repaired.
+  is refused with `reason: 'encoding'`, not repaired. The same decoder is given
+  `ignoreBOM: true`, because its default is to **consume** a leading U+FEFF: the
+  BOM is stripped from what the editor sees, so it cannot be typed over or
+  counted as a diff, and re-applied on write when the bytes on disk carried
+  one.
 
 ### Remote sessions are refused
 
@@ -506,7 +540,11 @@ Saving is `gitChangesSave(sessionId, path, content, version)` from the Save butt
 
 The buffer is read back from `view.b.state.doc` for side-by-side and from `view.state.doc` for inline and plain — the same asymmetry the MCP diff tab navigates.
 
-Back, closing the tab and closing the panel all ask before discarding unsaved edits (`window.confirm`, as `ViewerPanel` already does for its own destructive action). A tab replaced by an MCP-driven open (`openDiffTab` / `openFileTab`) does not prompt: nothing user-initiated is happening at that moment and an IPC event cannot wait on a dialog.
+Back, closing the tab and closing the panel all ask before discarding unsaved edits (`window.confirm`, as `ViewerPanel` already does for its own destructive action).
+
+A tab replaced by an MCP-driven open (`openDiffTab` / `openFileTab`) cannot ask — the session is acting, not the user, and the diff it is opening is waiting for an answer. It **stashes** the buffer instead (`stashChangesEdits` → `state.changesStash`: the selected file, the edited content, the pair it was based on and its version token), and reopening the Changes tab restores it with a notice saying so (`restoreChangesEdits`). The stash is per session, holds only a dirty buffer, and is consumed on restore. The version token travels with it, so a restored buffer that has gone stale meanwhile is still refused at save time rather than overwriting whatever arrived in between. This is the same failure the version token addresses, pointing the other way: the session's activity destroying the user's work instead of the user's save destroying the session's.
+
+**Reload** re-arms the watch as well as re-reading, because "this file was replaced on disk" is both the usual reason to press it and the way a watch goes deaf. A save whose IPC rejects outright (the channel is gone, the handler threw outside its own try/catch) is caught and reported in the notice line like any other failure, rather than escaping as an unhandled rejection and leaving the Save button disabled until the next render.
 
 One host element holds one editor: another session's tab keeps its instance, detached, and `mountChangesEditor` removes any foreign child before attaching. Without that, switching between two sessions with files open stacks both editors in the same column, and a user typing into the visible-but-not-current one has the keystrokes read from the other buffer on save.
 
