@@ -120,7 +120,7 @@ Grab the latest release for your platform:
 ```bash
 task install       # npm install
 task dev           # launch Electron (--no-sandbox, required on Linux)
-task test          # node --test
+task test          # node --test (4 workers; SWITCHBOARD_TEST_CONCURRENCY=N to change)
 task lint          # eslint .
 task check         # test + lint  — pre-commit / pre-push gate
 task ci            # same as check but sequential, verbose

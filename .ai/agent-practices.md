@@ -78,14 +78,37 @@ execution environment. Rules of thumb:
   `SWITCHBOARD_TEST_TIME_SCALE=<n> node --test test/trigger-watcher.test.js` (env, default 1)
   before assuming the code broke.
 
-## 5. Memory / notes hygiene
+## 5. Test concurrency
+
+`npm test` runs stage 1 at **4 parallel workers**, not at node's default of
+`os.availableParallelism()`. On a 14-core workstation that default means a
+dozen-plus test processes at once, which saturates the machine the developer is
+using and starves `test/trigger-watcher.test.js`, whose wall-clock budgets are
+the suite's most contention-sensitive assertions.
+
+Override it when you want the machine's full width:
+
+```bash
+SWITCHBOARD_TEST_CONCURRENCY=12 npm test
+```
+
+A value that is not a positive integer is ignored with a message on stderr, and
+the cap applies. The cap is also bounded by what the machine actually has, so a
+2-core CI runner still gets 2.
+
+When several agents run the suite at once, cap the whole process tree instead —
+`taskset -c 0-3 npm test` on Linux, which node's `availableParallelism()`
+honours, so it reduces the number of workers rather than crowding them onto
+fewer cores.
+
+## 6. Memory / notes hygiene
 
 Any saved note, memory, or prior observation is a **point-in-time snapshot**, not live state.
 Before citing something more than about a week old as a current fact — a file's line count, a
 commit range, a "this is safe" claim — re-verify it against the actual repo (read the file, run
 the check). If it's stale, correct or delete it in the same pass rather than repeating it.
 
-## 6. Scope discipline
+## 7. Scope discipline
 
 Fix exactly what was asked. When a task names N specific findings, apply N fixes — no
 unrelated cleanup, no rewriting adjacent prose "while you're in there". If you notice something
