@@ -327,7 +327,8 @@ function focusGridCard(sessionId) {
 // Wraps one card per open session in sidebar order, emitting a project heading
 // on each project change when grouping is on.
 function layoutGridCards(openSet) {
-  document.querySelectorAll('.terminal-container').forEach(el => el.classList.remove('visible'));
+  // see .ai/contexts/panel-terminal.md
+  document.querySelectorAll('.terminal-container:not(.panel-terminal)').forEach(el => el.classList.remove('visible'));
   const sessionIds = [];
   const sidebarItems = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   let currentProjectPath = null;
@@ -504,6 +505,8 @@ function hideGridView() {
   // DOM-rendered terminal, and never leaves more than one GL context alive.
   for (const [sid, entry] of openSessions) {
     if (!entry.closed) entry.terminal.options.scrollback = SCROLLBACK_SINGLE;
+    // see .ai/contexts/panel-terminal.md
+    if (entry.panelMounted) continue;
     suspendTerminalWebgl(sid);
   }
   unwrapGridCards();

@@ -17,6 +17,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | Claude CLI state files, early subagent rescan, canary tests | [cli-session-state](cli-session-state.md) |
 | Busy/attention/response-ready state, the session-state domain module, the icon-slot projection | [session-state](session-state.md) |
 | The Changes panel: git-status parser, local/remote runner, cwd resolution, no-polling refresh | [changes-view](changes-view.md) |
+| The shell inside the file panel: mount point, hidden-write exemption, shell lifecycle, the splitter | [panel-terminal](panel-terminal.md) |
 
 ## Reading order for a new contributor (~30 min)
 

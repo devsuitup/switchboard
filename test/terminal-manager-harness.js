@@ -73,9 +73,19 @@ function makeResizeObserverStub(spies) {
   };
 }
 
+// The header/terminal-area fixtures are inert for the terminal-manager suites
+// and are what public/file-panel.js builds its panel around (opts.filePanel).
+const HARNESS_HTML = `<!DOCTYPE html><html><body>
+  <div id="terminal-area"><div id="terminals"></div></div>
+  <div id="terminal-header"><div id="terminal-header-controls"><button id="terminal-stop-btn"></button></div></div>
+</body></html>`;
+
 // opts.proposeDimensions: (fitAddonInstance) => {cols, rows} | undefined
+// opts.filePanel: also load file-panel.js + splitter.js + panel-terminal.js and
+//   run initFilePanel() — the panel-shell region lives there.
+// opts.openTerminal: (sessionId, projectPath, isNew, sessionOptions) => result
 function setupTerminalDom(opts = {}) {
-  const dom = new JSDOM('<!DOCTYPE html><html><body><div id="terminals"></div></body></html>', {
+  const dom = new JSDOM(HARNESS_HTML, {
     url: 'http://localhost/',
     runScripts: 'outside-only',
     pretendToBeVisual: true,
@@ -92,13 +102,26 @@ function setupTerminalDom(opts = {}) {
     resizeObservers: [],
     resizeObserverDisconnects: 0,
     fitCalls: 0,
+    openTerminal: [],
+    stopSession: [],
   };
 
   window.api = new Proxy({ platform: 'linux' }, {
     get(target, prop) {
+      if (opts.api && Object.prototype.hasOwnProperty.call(opts.api, prop)) return opts.api[prop];
       if (prop in target) return target[prop];
       if (prop === 'closeTerminal') return () => { spies.closeTerminal++; };
       if (prop === 'resizeTerminal') return (id, cols, rows) => { spies.resizeTerminal.push({ id, cols, rows }); };
+      if (prop === 'openTerminal') {
+        return (id, projectPath, isNew, sessionOptions, initialSize) => {
+          spies.openTerminal.push({ id, projectPath, isNew, sessionOptions, initialSize });
+          const result = opts.openTerminal
+            ? opts.openTerminal(id, projectPath, isNew, sessionOptions)
+            : { ok: true };
+          return Promise.resolve(result);
+        };
+      }
+      if (prop === 'stopSession') return (id) => { spies.stopSession.push(id); return Promise.resolve({ ok: true }); };
       return () => Promise.resolve({ ok: true });
     },
   });
@@ -152,6 +175,13 @@ function setupTerminalDom(opts = {}) {
     terminalHeader: window.document.createElement('div'),
     gridViewer: window.document.createElement('div'),
     gridViewerCount: window.document.createElement('span'),
+    // Read by grid-view.js's showGridView/layoutGridCards.
+    terminalArea: window.document.getElementById('terminal-area'),
+    sidebarContent: window.document.createElement('div'),
+    statsViewer: window.document.createElement('div'),
+    memoryViewer: window.document.createElement('div'),
+    settingsViewer: window.document.createElement('div'),
+    jsonlViewer: window.document.createElement('div'),
   };
   for (const [k, v] of Object.entries(stubGlobals)) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
@@ -160,11 +190,25 @@ function setupTerminalDom(opts = {}) {
   // grid-view.js declares `let gridCards` (and other grid state) in the shared
   // lexical scope — it shadows the window stub, exactly as in production where
   // grid-view.js owns that global. Tests must read grid state via inCtx().
-  const ctx = dom.getInternalVMContext();
-  for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js']) {
-    const src = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
-    vm.runInContext(src, ctx, { filename: file });
+  if (opts.filePanel) {
+    Object.defineProperty(window, 'ViewerPanel', {
+      value: function ViewerPanelStub() { return { open() {}, destroy() {} }; },
+      writable: true,
+      configurable: true,
+    });
   }
+
+  const ctx = dom.getInternalVMContext();
+  const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
+  // Same order as index.html: file-panel.js first, the panel-shell pair last.
+  if (opts.filePanel) files.unshift('file-panel.js');
+  if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
+  for (const file of files) {
+    const fullPath = path.join(PUBLIC_DIR, file);
+    // Absolute filename: what c8/V8 attributes the coverage of these files to.
+    vm.runInContext(fs.readFileSync(fullPath, 'utf8'), ctx, { filename: fullPath });
+  }
+  if (opts.filePanel) window.initFilePanel();
 
   const inCtx = (code) => vm.runInContext(code, ctx);
   return { window, spies, inCtx, destroy: () => window.close() };

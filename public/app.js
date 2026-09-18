@@ -393,6 +393,12 @@ window.api.onProcessExited((sessionId, exitCode) => {
   if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode });
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId);
+  // see .ai/contexts/panel-terminal.md
+  if (typeof isPanelTerminalSession === 'function' && isPanelTerminalSession(sessionId)) {
+    notePanelTerminalExit(sessionId, exitCode);
+    pollActiveSessions();
+    return;
+  }
   if (entry) {
     entry.closed = true;
     // Write a visible exit banner so the user can see when the process ended
@@ -784,9 +790,16 @@ const POLL_FAST_MS = 3000;
 const POLL_IDLE_MS = 30000;
 let pollTimer = null;
 
+function runningSessionCount() {
+  return typeof countSessionsWithoutPanelShells === 'function'
+    ? countSessionsWithoutPanelShells(activePtyIds)
+    : activePtyIds.size;
+}
+
 function scheduleActiveSessionsPoll() {
   if (pollTimer) clearTimeout(pollTimer);
-  const delay = activePtyIds.size > 0 ? POLL_FAST_MS : POLL_IDLE_MS;
+  // see .ai/contexts/panel-terminal.md
+  const delay = runningSessionCount() > 0 ? POLL_FAST_MS : POLL_IDLE_MS;
   pollTimer = setTimeout(pollActiveSessions, delay);
 }
 
@@ -1380,7 +1393,7 @@ let activityTimer = null;
 function renderDefaultStatus() {
   const totalSessions = cachedAllProjects.reduce((n, p) => n + p.sessions.filter(s => !s.parentSessionId).length, 0);
   const totalProjects = cachedAllProjects.length;
-  const running = activePtyIds.size;
+  const running = runningSessionCount();
   const parts = [];
   if (running > 0) parts.push(`${running} running`);
   parts.push(`${totalSessions} sessions`);
