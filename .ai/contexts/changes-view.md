@@ -372,8 +372,7 @@ the cheaper of them:
 - `git-changes-available` runs the probe from `switchPanel()`. The answer is
   cached on that session's `filePanelState` entry (`changesAvailable`) and
   applied to the button before the round trip, so a known answer never flashes a
-  button that does not work, and re-asked on the next switch — which is how a
-  `git init` (or an `rm -rf .git`) mid-session is picked up without polling.
+  button that does not work.
 - `status()` returns `{ok: false, reason: 'not-a-repo'}` when a command failed
   **and** the probe then establishes there is no work tree. The renderer treats
   that exactly like an `isRepo: false` availability answer. That covers the
@@ -381,13 +380,30 @@ the cheaper of them:
   session, and it means a click landing before the availability answer arrives
   is handled too.
 
-**The probe is a diagnosis, not a precondition.** A session in a repository pays
-three commands per refresh, the same three as before, pinned by
-`calls.length === 3`. A `-uall` run that overruns the stdout cap does not ask
-either — that is a volume problem with its own fallback, and the large
-repositories that hit it are the ones an extra spawn costs most. An answer that
-arrives after the panel has moved on is discarded
-(`currentPanelSessionId !== sessionId`).
+**The probe is bounded on both axes.** It is a *diagnosis, not a precondition*:
+a session in a repository pays three commands per refresh, the same three as
+before, pinned by `calls.length === 3`. A `-uall` run that overruns the stdout
+cap does not ask either — that is a volume problem with its own fallback, and
+the large repositories that hit it are the ones an extra spawn costs most. And
+on the switch path:
+
+- a session already answered `true` is **never probed again**;
+- a second probe for a session whose first is still in flight is **dropped**
+  (`changesAvailabilityInFlight`), so a burst of switches cannot put a burst of
+  ssh children on a remote host;
+- an answer that arrives after the panel has moved on is **discarded**
+  (`currentPanelSessionId !== sessionId`).
+
+Only a session that answered "no repository" is re-asked on a later switch, and
+that is what picks up a `git init` without polling anything. It is the rare
+case, and it is the one where re-asking is the whole point.
+
+**Withdrawal goes through the tab's own close control.** `noteChangesUnavailable`
+calls `toggleChangesTab(sessionId)` rather than tearing the tab down itself, so
+there is exactly one Changes close path and any guard placed on it applies here
+too. If that close does not happen — the tab is still there afterwards — the
+button is left visible, because hiding the control while its tab is still open
+would strand whatever the tab is holding with no way to reopen it.
 
 ## Bounded error messages
 

@@ -59,6 +59,7 @@ let changesListDesiredHeight = readStoredChangesListHeight();
 
 // No work tree, no Changes affordance — see .ai/contexts/changes-view.md ("Not a repository")
 const NOT_A_REPO_REASON = 'not-a-repo';
+const changesAvailabilityInFlight = new Set();
 
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
@@ -722,8 +723,16 @@ function updateChangesToggle() {
 async function refreshChangesAvailability(sessionId) {
   updateChangesToggle();
   if (!sessionId || typeof window.api?.gitChangesAvailable !== 'function') return;
+  if (getSessionState(sessionId).changesAvailable === true) return;
+  if (changesAvailabilityInFlight.has(sessionId)) return;
 
-  const result = await window.api.gitChangesAvailable(sessionId);
+  changesAvailabilityInFlight.add(sessionId);
+  let result;
+  try {
+    result = await window.api.gitChangesAvailable(sessionId);
+  } finally {
+    changesAvailabilityInFlight.delete(sessionId);
+  }
   if (currentPanelSessionId !== sessionId) return;
   if (!result || typeof result.isRepo !== 'boolean') return;
 
@@ -738,13 +747,11 @@ async function refreshChangesAvailability(sessionId) {
 // see .ai/contexts/changes-view.md ("Not a repository")
 function noteChangesUnavailable(sessionId) {
   const state = getSessionState(sessionId);
-  state.changesAvailable = false;
   if (state.currentTab && state.currentTab.type === 'changes') {
-    destroyCurrentTab(state);
-    state.currentTab = null;
-    state.panelVisible = false;
-    if (currentPanelSessionId === sessionId) hidePanel();
+    toggleChangesTab(sessionId);
+    if (state.currentTab) return;
   }
+  state.changesAvailable = false;
   if (currentPanelSessionId === sessionId) updateChangesToggle();
 }
 
