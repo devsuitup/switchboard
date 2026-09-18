@@ -7,6 +7,24 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+
+// main.js cannot be required from a test, so the wiring that keeps a remote
+// session out of a local-only handler is asserted against its source, with
+// commented-out lines dropped first — the same instrument, and the same
+// limitation, as test/git-changes-watch.test.js.
+function mainSource() {
+  return fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
+function handlerBody(source, channel) {
+  const start = source.indexOf(`ipcMain.handle('${channel}'`);
+  assert.notEqual(start, -1, `${channel} must be handled`);
+  return source.slice(start, source.indexOf('\n});', start));
+}
 
 const {
   isSafeRepoRelativePath,
@@ -97,4 +115,27 @@ test('requireLocalTarget refuses a remote session and passes a local one through
 test('buildBlobRev names the index for the unstaged view and HEAD for the staged one', () => {
   assert.equal(buildBlobRev('src/a.js', false), ':src/a.js');
   assert.equal(buildBlobRev('src/a.js', true), 'HEAD:src/a.js');
+});
+
+// --- The local-only handlers, all four of them ---------------------------
+
+test('every Changes handler that touches the filesystem refuses a remote session (mutation target: the wiring)', () => {
+  const main = mainSource();
+  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch', 'git-changes-locate']) {
+    const body = handlerBody(main, channel);
+    assert.match(body, /requireLocalTarget\(resolveGitChangesTarget\(sessionId\)\)/,
+      `${channel} must resolve the session through the local-only guard`);
+    assert.match(body, /if \(!target\.ok\) return target;/,
+      `${channel} must hand back the guard's own refusal`);
+  }
+});
+
+test('git-changes-locate is the one handler that takes an absolute path, and it maps it main-side', () => {
+  const main = mainSource();
+  const body = handlerBody(main, 'git-changes-locate');
+  assert.match(body, /locateChangesFile\(\{ cwd: target\.cwd, absolutePath: filePath \}\)/,
+    'the mapping runs against the session\'s own resolved cwd');
+
+  const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
+  assert.match(preload, /gitChangesLocate: \(sessionId, filePath\) => ipcRenderer\.invoke\('git-changes-locate', sessionId, filePath\)/);
 });

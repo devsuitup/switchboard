@@ -1033,3 +1033,23 @@ test('real git: a git directory that is not called .git is not reachable through
     assert.equal(result.reason, 'git-dir', 'no segment rule can see this one; containment can');
   } finally { cleanup(tmp); }
 });
+
+test('real git: a file whose name is git\'s conflict-stage syntax is refused by the operand guard, not by containment', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    // A perfectly ordinary filename that `:<path>` would read as `:<n>:<path>`.
+    const staged = path.join(repoDir, '1:f.txt');
+    fs.writeFileSync(staged, 'ordinary\n');
+
+    // Containment has no objection: the file is inside the repository.
+    const contained = resolveTargetInsideRepo(repoDir, '1:f.txt', {});
+    assert.equal(contained.ok, true, 'nothing about its location is wrong');
+
+    const result = await read(repoDir, '1:f.txt', false);
+    assert.equal(result.ok, false, 'only the operand guard can refuse this one');
+    assert.equal(result.reason, 'invalid-path');
+    assert.equal(fs.readFileSync(staged, 'utf8'), 'ordinary\n');
+  } finally { cleanup(tmp); }
+});

@@ -1887,3 +1887,25 @@ test('the Refresh control is the icon this app already uses, not a word (mutatio
     assert.match(btn.title, /refresh/i, 'and it says what it does on hover');
   } finally { ctx.destroy(); }
 });
+
+test('Save follows the buffer in every mode, plain included (mutation target: the onChange wiring per mode)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const saveBtn = ctx.document.getElementById('changes-diff-save-btn');
+    const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
+
+    // inline (the default), then plain, then side-by-side.
+    for (const expected of ['inline', 'plain', 'side-by-side']) {
+      const editor = ctx.editors[ctx.editors.length - 1];
+      assert.equal(editor.box.mode, expected);
+      assert.equal(saveBtn.disabled, true, `${expected}: nothing typed yet`);
+
+      editor.box.text = 'typed in ' + expected + '\n';
+      assert.equal(saveBtn.disabled, false, `${expected}: typing must reach the button`);
+
+      modeBtn.click();
+      await flush();
+    }
+  } finally { ctx.destroy(); }
+});
