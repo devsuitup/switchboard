@@ -21,6 +21,8 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
+| Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
+| Cut a release | [README.md "Releasing"](../README.md) — and its fork gotchas, which are not optional |
 
 For a guided tour of the codebase architecture, start at [contexts/README.md](contexts/README.md).
 

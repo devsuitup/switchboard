@@ -203,11 +203,28 @@ changes. Uninstall later with `sudo pacman -R switchboard-doctly`.
 
 ## Releasing
 
-Releases are driven by git tags:
+Releases are driven by git tags. The version bump comes first and lands through
+a pull request, because `main` is protected:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git checkout -b release/v0.1.0 main
+npm version --no-git-tag-version 0.1.0   # package.json + package-lock.json
+git commit -am v0.1.0 && git push origin release/v0.1.0
+gh pr create --base main --title v0.1.0
+```
+
+**Run the app before tagging.** The tag is what publishes, so nothing between the
+merge and the tag looks at the whole again — and the test suite cannot see
+layout, raw tool output in a locale, or a control that renders in the wrong
+colour. Launch the assembled `main` in an isolated instance and use it; see
+[docs/testing-a-pr.md](docs/testing-a-pr.md), which also covers driving it over
+the DevTools protocol and testing the packaged artifact once it exists.
+
+Then tag the merged commit and push the tag:
+
+```bash
+git checkout main && git pull --ff-only
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The GitHub Actions workflow builds for all platforms and publishes to GitHub Releases. You can also release locally:
