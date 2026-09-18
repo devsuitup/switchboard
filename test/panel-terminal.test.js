@@ -947,3 +947,53 @@ test('style.css: with no tab, the handle is gone and the region takes the free s
     'a flex-basis of 0 is what lets the region fill the panel while style.height still records the drag');
   assert.match(regionRule, /min-height:\s*0/);
 });
+
+// --- 10. Grid mode's exclusion rides on the sidebar payload ------------------
+// layoutGridCards iterates SIDEBAR ROWS and wraps every id that is also in
+// openGridSessionIds(), which does contain `panel:<owner>`. Nothing in grid-view
+// knows about panel shells: the shell keeps its container only because
+// buildProjectsFromCache gives it no row. That coupling is load-bearing and
+// belongs in a test — see .ai/contexts/panel-terminal.md.
+
+function addSidebarRow(ctx, sessionId) {
+  const item = ctx.document.createElement('div');
+  item.className = 'session-item';
+  item.dataset.sessionId = sessionId;
+  ctx.window.sidebarContent.appendChild(item);
+  return item;
+}
+
+test('a panel shell gets no grid card, because the sidebar payload gives it no row', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window } = ctx;
+    window.createTerminalEntry({ sessionId: 'owner' });
+    await window.togglePanelTerminal('owner');
+    addSidebarRow(ctx, 'owner'); // the only row main sends for this project
+
+    // layoutGridCards builds its array inside the vm realm — copy before comparing.
+    const laid = Array.from(window.layoutGridCards(window.openGridSessionIds()));
+
+    assert.deepEqual(laid, ['owner'], 'the shell is in openGridSessionIds but has no row to be laid out from');
+    assert.equal(window.openSessions.get('panel:owner').element.parentElement.id, 'panel-terminal-region',
+      'a grid card would move the shell out of its region and cost it its WebGL context');
+  } finally { ctx.destroy(); }
+});
+
+test('the shell IS in the grid-eligible set — only the missing row keeps it out (mutation target: re-adding the row)', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window } = ctx;
+    window.createTerminalEntry({ sessionId: 'owner' });
+    await window.togglePanelTerminal('owner');
+
+    assert.ok(window.openGridSessionIds().has('panel:owner'),
+      'grid-view has no panel-shell predicate of its own, so this set includes it');
+
+    // What buildProjectsFromCache used to emit: a row for the shell.
+    addSidebarRow(ctx, 'owner');
+    addSidebarRow(ctx, 'panel:owner');
+    assert.deepEqual(Array.from(window.layoutGridCards(window.openGridSessionIds())), ['owner', 'panel:owner'],
+      'given a row, grid mode lays the shell out like any session — which is why the row must not exist');
+  } finally { ctx.destroy(); }
+});
