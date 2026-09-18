@@ -239,6 +239,7 @@ const rendererCrossFileGlobals = {
   initPanelTerminal: 'readonly',
   syncPanelTerminal: 'readonly',
   panelTerminalIsOpen: 'readonly',
+  setPanelTerminalShellOnly: 'readonly',
   destroyPanelTerminalFor: 'readonly',
   isPanelTerminalSession: 'readonly',
   notePanelTerminalExit: 'readonly',

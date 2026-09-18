@@ -803,3 +803,197 @@ test('panel shell ids are excluded from the running-session count', () => {
       'a lone panel shell must not pin the poll to its fast cadence');
   } finally { ctx.destroy(); }
 });
+
+// --- 8. No tab above the region — see .ai/contexts/panel-terminal.md ("Layout") ---
+
+const STATUS_OK = {
+  ok: true,
+  branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+  files: [],
+  totals: { files: 0, added: 0, deleted: 0 },
+};
+
+// A panel that can open a real Changes tab on top of the shell region.
+function setupPanelWithTab(extra = {}) {
+  return setupPanel({
+    api: {
+      gitChangesAvailable: () => Promise.resolve({ ok: true, isRepo: true }),
+      gitChangesStatus: () => Promise.resolve(STATUS_OK),
+    },
+    ...extra,
+  });
+}
+
+test('with no tab open the region is the panel, and there is nothing left to drag against', async () => {
+  const ctx = setupPanelWithTab();
+  try {
+    const { window, document } = ctx;
+    await window.togglePanelTerminal('owner');
+
+    const content = document.getElementById('file-panel-content');
+    assert.ok(content.classList.contains('shell-only'),
+      'a shell with nothing above it must fill the panel instead of leaving the tab area as an empty block');
+    assert.ok(document.getElementById('panel-terminal-region').classList.contains('open'));
+  } finally { ctx.destroy(); }
+});
+
+test('opening a tab gives the region its stored height back, and closing it fills the panel again', async () => {
+  const ctx = setupPanelWithTab();
+  try {
+    const { window, document } = ctx;
+    await window.togglePanelTerminal('owner');
+    const content = document.getElementById('file-panel-content');
+
+    await window.openChangesTab('owner');
+    await microtasks();
+    assert.equal(content.classList.contains('shell-only'), false,
+      'a tab is back above the region, so the region goes back to its own height');
+
+    window.toggleChangesTab('owner');
+    assert.ok(content.classList.contains('shell-only'));
+  } finally { ctx.destroy(); }
+});
+
+test('a height the user dragged to survives a full-height episode', async () => {
+  const ctx = setupPanelWithTab();
+  try {
+    const { window, document } = ctx;
+    await window.togglePanelTerminal('owner');
+    const region = document.getElementById('panel-terminal-region');
+    const handle = document.getElementById('panel-terminal-handle');
+
+    setPanelHeight(document, 800);
+    await window.openChangesTab('owner');
+    await microtasks();
+    handle.dispatchEvent(mouse(window, 'mousedown', 400));
+    document.dispatchEvent(mouse(window, 'mousemove', 220)); // drag up to 400px
+    document.dispatchEvent(mouse(window, 'mouseup', 220));
+    assert.equal(region.style.height, '400px');
+
+    window.toggleChangesTab('owner'); // no tab: the region fills the panel
+    assert.ok(document.getElementById('file-panel-content').classList.contains('shell-only'));
+
+    await window.openChangesTab('owner');
+    await microtasks();
+    assert.equal(region.style.height, '400px',
+      'the stored height is what the drag asked for, never a value read back out of the full-height state');
+    assert.equal(window.localStorage.getItem('panelTerminalHeight'), '400');
+  } finally { ctx.destroy(); }
+});
+
+test('the shell is refitted when the region stops or starts filling the panel', async () => {
+  const ctx = setupPanelWithTab();
+  try {
+    const { window, document, spies } = ctx;
+    await window.togglePanelTerminal('owner');
+    assert.ok(document.getElementById('file-panel-content').classList.contains('shell-only'));
+
+    const before = spies.resize.length;
+    await window.openChangesTab('owner');
+    await microtasks();
+    assert.ok(spies.resize.length > before,
+      'the region just changed size — an unfitted terminal renders at the wrong geometry');
+
+    const afterOpen = spies.resize.length;
+    window.toggleChangesTab('owner');
+    assert.ok(spies.resize.length > afterOpen, 'and again when it takes the whole panel back');
+  } finally { ctx.destroy(); }
+});
+
+test('a tab with no shell open leaves the panel untouched', async () => {
+  const ctx = setupPanelWithTab();
+  try {
+    const { window, document } = ctx;
+    window.switchPanel('owner');
+    await window.openChangesTab('owner');
+    await microtasks();
+
+    assert.equal(document.getElementById('file-panel-content').classList.contains('shell-only'), false);
+    assert.equal(document.getElementById('panel-terminal-region').classList.contains('open'), false);
+  } finally { ctx.destroy(); }
+});
+
+// --- 9. The layout rules those states depend on ----------------------
+// Same source-grep shape as test/session-meta-layout-css.test.js — no real CSS
+// parser, just enough to isolate a rule's declarations.
+
+const CSS = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'style.css'), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '');
+
+function cssRuleFor(selectorPattern) {
+  const blocks = CSS.match(/[^{}]+\{[^{}]*\}/g) || [];
+  return blocks.find((block) => {
+    const lines = block.split('{')[0].split('\n');
+    return selectorPattern.test(lines[lines.length - 1].trim());
+  });
+}
+
+test('style.css: the handle bottom-anchors the region while a tab is shown', () => {
+  const rule = cssRuleFor(/^#panel-terminal-handle$/);
+  assert.ok(rule, 'expected a #panel-terminal-handle rule');
+  assert.match(rule, /margin-top:\s*auto/,
+    'with flexible content above it, the handle is what pins the region to the bottom of the panel');
+});
+
+test('style.css: with no tab, the handle is gone and the region takes the free space', () => {
+  const handleRule = cssRuleFor(/^#file-panel-content\.shell-only #panel-terminal-handle\.open$/);
+  assert.ok(handleRule, 'expected the shell-only override for the handle');
+  assert.match(handleRule, /display:\s*none/,
+    'a drag handle with nothing above it to give space back to is a control that does nothing');
+
+  const regionRule = cssRuleFor(/^#file-panel-content\.shell-only #panel-terminal-region\.open$/);
+  assert.ok(regionRule, 'expected the shell-only override for the region');
+  assert.match(regionRule, /flex:\s*1/,
+    'a flex-basis of 0 is what lets the region fill the panel while style.height still records the drag');
+  assert.match(regionRule, /min-height:\s*0/);
+});
+
+// --- 10. Grid mode's exclusion rides on the sidebar payload ------------------
+// layoutGridCards iterates SIDEBAR ROWS and wraps every id that is also in
+// openGridSessionIds(), which does contain `panel:<owner>`. Nothing in grid-view
+// knows about panel shells: the shell keeps its container only because
+// buildProjectsFromCache gives it no row. That coupling is load-bearing and
+// belongs in a test — see .ai/contexts/panel-terminal.md.
+
+function addSidebarRow(ctx, sessionId) {
+  const item = ctx.document.createElement('div');
+  item.className = 'session-item';
+  item.dataset.sessionId = sessionId;
+  ctx.window.sidebarContent.appendChild(item);
+  return item;
+}
+
+test('a panel shell gets no grid card, because the sidebar payload gives it no row', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window } = ctx;
+    window.createTerminalEntry({ sessionId: 'owner' });
+    await window.togglePanelTerminal('owner');
+    addSidebarRow(ctx, 'owner'); // the only row main sends for this project
+
+    // layoutGridCards builds its array inside the vm realm — copy before comparing.
+    const laid = Array.from(window.layoutGridCards(window.openGridSessionIds()));
+
+    assert.deepEqual(laid, ['owner'], 'the shell is in openGridSessionIds but has no row to be laid out from');
+    assert.equal(window.openSessions.get('panel:owner').element.parentElement.id, 'panel-terminal-region',
+      'a grid card would move the shell out of its region and cost it its WebGL context');
+  } finally { ctx.destroy(); }
+});
+
+test('the shell IS in the grid-eligible set — only the missing row keeps it out (mutation target: re-adding the row)', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window } = ctx;
+    window.createTerminalEntry({ sessionId: 'owner' });
+    await window.togglePanelTerminal('owner');
+
+    assert.ok(window.openGridSessionIds().has('panel:owner'),
+      'grid-view has no panel-shell predicate of its own, so this set includes it');
+
+    // What buildProjectsFromCache used to emit: a row for the shell.
+    addSidebarRow(ctx, 'owner');
+    addSidebarRow(ctx, 'panel:owner');
+    assert.deepEqual(Array.from(window.layoutGridCards(window.openGridSessionIds())), ['owner', 'panel:owner'],
+      'given a row, grid mode lays the shell out like any session — which is why the row must not exist');
+  } finally { ctx.destroy(); }
+});

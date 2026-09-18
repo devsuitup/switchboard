@@ -6,6 +6,7 @@ const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
+const { isPanelShellSession } = require('./panel-terminal-target');
 
 /**
  * Session cache module.
@@ -539,6 +540,8 @@ function buildProjectsFromCache(showArchived) {
   // Inject active plain terminal sessions so they participate in sorting
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
+    // see .ai/contexts/panel-terminal.md ("A panel shell is not a session")
+    if (isPanelShellSession(session)) continue;
     if (!session.projectPath) continue;
     if (isProjectHidden(hiddenProjects, null, session.projectPath)) continue;
     const localKey = groupKey(null, session.projectPath);

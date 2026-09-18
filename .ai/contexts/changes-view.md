@@ -34,7 +34,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 ## Runner interface (`git-changes-runner.js`)
 
-`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked})}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
+`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
 - **Local** (`kind: 'local'`): `child_process.execFile('git', args, {cwd, timeout, maxBuffer})` — cwd is `execFile`'s own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s.
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
@@ -303,6 +303,176 @@ counts.
 `defaultRunRemoteCommand(alias, command, {timeoutMs, maxStdoutBytes, spawnFn})` counts accumulated stdout in UTF-8 bytes as each chunk arrives (`Buffer.byteLength`, works for both a real Buffer chunk and a test's plain-string chunk). Crossing `maxStdoutBytes` (default `DEFAULT_MAX_STDOUT_BYTES` = 8 MB when the caller doesn't pass one) SIGKILLs the child and resolves `{code: -1, stdout: '', stderr: 'stdout exceeded <n> bytes'}` — the same `{code, stdout, stderr}` shape every other path already returns, so `git-changes-runner.js`'s existing `firstError()`/`ok:false` handling surfaces it as `{ok: false, error: 'stdout exceeded <n> bytes'}` with no special-casing. `git-changes-runner.js` passes an explicit cap on every call — `STATUS_MAX_STDOUT_BYTES` (2 MB) for each of the three `status()` commands, `DIFF_MAX_STDOUT_BYTES` (`MAX_DIFF_BYTES` + 64 KB slack) for `diff()`, so a diff just over the panel's own display cap still arrives whole and gets truncated locally instead of being killed by the transport first. The tmux probe/restore calls in `remote-attach.js` and `remote-stop.js`'s kill command never pass `maxStdoutBytes` and fall back to the 8 MB default — their own output is a handful of bytes, nowhere near either cap (verified: `test/remote-attach.test.js` and `test/remote-stop.test.js` pass unmodified).
 
 `opts.spawnFn` is dependency injection for tests only (`test/remote-run-command-stdout-cap.test.js`, a fake `child_process`-shaped `EventEmitter` with `stdout`/`stderr`/`kill`) — production code never passes it, and the lazy `require('child_process')` stays the real default.
+
+## Not a repository
+
+A session's working directory need not be inside a git work tree, and when it
+is not, the Changes affordance is not offered: `#changes-toggle-btn` is
+`display: none` for that session. The panel never renders a refusal for this
+case, because there is nothing to refuse — the button that would produce it is
+not there.
+
+**Withdrawing a control is only correct on positive evidence.** A missing
+button says nothing and offers no way to ask why, so it is the wrong answer to
+every failure except the one it describes. `isWorkTree()` in
+`git-changes-runner.js` therefore reports `isRepo: false` only when something
+actually established that there is no work tree, and returns `{ok: false,
+error}` — *not an answer* — for everything else. The renderer's
+`typeof result.isRepo !== 'boolean'` guard leaves the button alone on a
+non-answer, and `status()` reports its bounded message into the tab.
+
+**No message is ever matched.** git translates every diagnostic (this project's
+own host runs it in French), so the detection reads only `git rev-parse
+--is-inside-work-tree`'s exit code and the two literal tokens it prints:
+
+| probe result | meaning | outcome |
+|---|---|---|
+| exit 0, stdout `true` | inside a work tree | `{ok: true, isRepo: true}` |
+| exit 0, stdout `false` | no work tree here: a bare repository, or a cwd inside an ordinary repository's `.git/` | `{ok: true, isRepo: false}` |
+| exit 0, anything else | git answered something this code does not understand | `{ok: false, error}` |
+| exit 128, corroborated | see below | `{ok: true, isRepo: false}` |
+| exit 128, not corroborated | a repository git refuses to open | `{ok: false, error}` |
+| exit 128, cwd gone | the directory, not the repository, is what is missing | `{ok: false, error}` naming the directory |
+| a spawn that never ran (`-1`) or a thrown exec | a local cwd that was deleted, is a file, or is a dangling symlink | `{ok: false, error}` naming the directory |
+| any other non-zero | ssh's own `255`, a timeout | `{ok: false, error}` |
+
+**128 is git's generic fatal code, not a "no repository" code**, which is why it
+needs corroborating. Real git exits 128 for a plain directory *and* for a
+repository it will not open: dubious ownership (a repo owned by root, cloned by
+another user, on a mounted or NFS filesystem), a `.git` whose permissions it
+cannot read, an unsupported `core.repositoryformatversion`, a `.git` file whose
+gitdir is gone, and a worktree whose main repository was deleted. Every one of
+those is a repository the user has, usually with a one-line fix in git's own
+message — exactly the case where silently removing the panel is worse than
+printing the message. `test/git-changes-runner-real-git.test.js` builds those
+fixtures against real git, asserts each really does exit 128, and pins that none
+of them produces `reason: 'not-a-repo'`.
+
+**A cwd that is gone is ruled out before the corroboration is trusted.** The walk
+below answers "no `.git` anywhere" for a path that does not exist, so a deleted
+worktree outside a repository would otherwise withdraw the panel. `execFile`
+happens to fail to spawn for such a cwd — code `-1`, not 128 — but the local and
+remote transports differ here (`git -C <gone>` exits 128), so the check is an
+outcome of its own rather than something left to a code that happens not to
+match. It also decides the wording: `spawn git ENOENT` reads as "git is not
+installed", where the truth is that the directory is gone, and the message names
+it.
+
+`fsOps` is dependency injection for tests only, and both functions that use it
+require a complete seam: `missingCwdError` throws a `TypeError` rather than
+treating a missing `stat` as "the cwd is fine", which would switch the check off
+with nothing to show for it.
+
+The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
+at the cwd and at each ancestor up to the filesystem root. It needs no process
+and no locale, and it answers the one question the exit code cannot — *is there
+a repository here at all*. It returns three ways, and only `false` (a walk that
+reached the root seeing nothing) withdraws the panel; an `EACCES` or any other
+unexpected `lstat` error is `null`, undecidable, and reports. A `.git` that
+exists but is broken counts as `true`: the repository is there, it is just
+unreadable.
+
+**Local and remote diverge here, deliberately.** The probe itself goes through
+the same `invoke()` and the same quoting on both transports, but the
+corroboration is a local filesystem walk and there is no remote equivalent that
+does not either re-read git's translated message or add ssh round-trips. So a
+remote session that exits 128 is never corroborated and always reports. The
+practical consequence: a remote working directory that is genuinely not a
+repository keeps its Changes button and shows git's own bounded message when
+clicked, instead of hiding the button. That is the pre-existing behaviour, and
+it is the safe side of the trade — it also means a remote cwd that is merely
+unmounted no longer loses the control.
+
+**Who asks, and when.** Two paths reach the same conclusion, and `status()` is
+the cheaper of them:
+
+- `git-changes-available` runs the probe from `switchPanel()`. The answer is
+  cached on that session's `filePanelState` entry (`changesAvailable`) and
+  applied to the button before the round trip, so a known answer never flashes a
+  button that does not work.
+- `status()` returns `{ok: false, reason: 'not-a-repo'}` when a command failed
+  **and** the probe then establishes there is no work tree. The renderer treats
+  that exactly like an `isRepo: false` availability answer. That covers the
+  window between a switch and the repository disappearing under a running
+  session, and it means a click landing before the availability answer arrives
+  is handled too.
+
+**The probe is bounded on both axes.** It is a *diagnosis, not a precondition*:
+a session in a repository pays three commands per refresh, the same three as
+before, pinned by `calls.length === 3`. A `-uall` run that overruns the stdout
+cap does not ask either — that is a volume problem with its own fallback, and
+the large repositories that hit it are the ones an extra spawn costs most. And
+on the switch path:
+
+- a session already answered `true` is **never probed again**;
+- a session git **could not answer for** is never probed again either. That
+  answer is memoised as its own state (`CHANGES_UNANSWERED`), because a
+  `{ok: false}` leaves the button visible and can never change it — asking again
+  buys nothing and costs an ssh with a 20 s kill timer. It is not a rare shape:
+  a remote cwd outside a repository, a local repository git refuses, and an
+  unreachable host all produce it, on every activation, forever;
+- **a non-answer never displaces an answer.** `CHANGES_UNANSWERED` is written
+  only for a session nothing has been established for yet, so the two memo
+  writes cannot collide. "No repository" is the one answer deliberately
+  re-asked, which makes it the one a transient failure — an ssh blip, a sleeping
+  host — can land on; overwriting it would un-hide a button for a directory that
+  is definitely not a repository, and then never ask again. A session that keeps
+  its `false` stays re-askable, so the blip costs nothing beyond that one probe;
+- a second probe for a session whose first is still in flight is **dropped**
+  (`changesAvailabilityInFlight`), so a burst of switches cannot put a burst of
+  ssh children on a remote host;
+- an answer is **recorded against the session it is about**, then applied to the
+  button only while that session is still the one on screen — on every branch,
+  because "a stale reply never touches the DOM" is an invariant, not a
+  per-branch outcome. Discarding a
+  correct answer because the panel had moved on would cost that session another
+  probe on its next activation; painting from it would paint the wrong
+  session's state.
+
+Only a session that answered "no repository" is re-asked on a later switch.
+That is the one answer worth re-checking — a `git init` turns it into a
+repository — and it is what makes the button come back without polling
+anything. The reverse transition is not tracked: a session that answered "in a
+repository" keeps its button even if the repository is deleted under it, and
+clicking Changes then closes the tab straight away through the `status()` path.
+Re-probing every activation to catch that is exactly the cost this memo exists
+to remove.
+
+**Withdrawal reuses the tab's own close control.** `noteChangesUnavailable`
+calls `toggleChangesTab(sessionId)` rather than tearing the tab down itself, so
+it takes the same path a user's click on the Changes toggle takes and inherits
+`confirmDiscardChangesEdits` along with it. A repository that stops being one
+under an open editor therefore asks before discarding the buffer, exactly as
+the toggle does.
+
+A Changes tab has a second way out: the panel's own X
+(`changesCloseBtn` → `handleClose`), which clears `currentTab` and hides the
+panel directly without passing through `toggleChangesTab`, and carries its own
+call to the same guard. What keeps a tab from being torn down without asking is
+that **each exit is guarded**, not that they funnel into one — a new exit has to
+be guarded on its own terms, and reusing an existing one is how the withdrawal
+avoids being such an exit.
+
+If the close does not happen — the user refused the discard, so the tab is still
+there afterwards — the button is left visible, because hiding the control while
+its tab is still open would strand the edit it is holding with no way back to
+it.
+
+## Bounded error messages
+
+`firstError()` puts every unexpected git failure through `boundErrorMessage()`:
+at most `MAX_ERROR_LINES` (5) lines and `MAX_ERROR_CHARS` (500) characters, with
+a trailing `…` when anything was dropped. Git's `diff --no-index` usage page is
+over 150 lines and git prints it on a plain exit-129 misuse; unbounded, that
+page is what the panel would display. The bound is the first lines rather than a
+flat character cut because git's own diagnosis is on the first line and the
+noise is below it.
+
+A genuine failure — a permission error, a corrupt repository, a transport
+problem — is still reported, in git's own words and in whatever language git
+chose. Only the volume is capped. That is what "Not a repository" above leans
+on: every failure the probe cannot positively explain falls back to this
+message rather than to a missing button.
 
 ## cwd resolution (`git-changes-target.js`)
 

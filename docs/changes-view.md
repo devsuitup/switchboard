@@ -6,6 +6,23 @@
 
 Click the **Changes** button in the terminal header, next to the stop button. Click it again to close.
 
+The button is only there for a session whose working directory is inside a git
+repository. A session started somewhere that is not one — a scratch directory, a
+notes folder — has no Changes button at all. Run `git init` there and the button
+appears the next time the panel follows that session.
+
+The reverse is looser: a session that was in a repository keeps its button for
+the rest of the run even if you delete the repository under it. Clicking Changes
+then closes the view again straight away. Checking for that on every click of
+every session would cost a git command each time, which is not worth it for a
+case that ends the moment you restart.
+
+A repository git *refuses to open* is a different case and keeps its button. If
+git will not read the repository — it is owned by another user, its permissions
+are wrong, or its format is one this git does not support — Changes shows you
+git's own message, which usually names the fix. The button disappears only when
+there is genuinely no repository there.
+
 A file link in the terminal opens here too, when it points at one of this session's changed files: the panel opens on that row, ready to edit against its diff. A link to a file the session has not touched, or to one outside its repository, opens in the plain viewer as before.
 
 ## What it shows
@@ -68,8 +85,10 @@ The session you are watching writes these files, so the panel assumes it is not 
 Changes list, in the same directory the list is read from — so you can run a
 `git add`, a test, or anything else against exactly the tree you are looking
 at, then hit **Refresh**. Both stay visible; a horizontal handle between them
-sets how much room each gets. Local sessions only — see
-[Terminal](terminal.md) for the lifecycle and the remote limitation.
+sets how much room each gets. With no list or file open above it, the shell
+takes the whole panel and the handle is gone; whatever height you dragged to
+comes back the moment you open something above it again. Local sessions only —
+see [Terminal](terminal.md) for the lifecycle and the remote limitation.
 
 ## What it doesn't do
 
@@ -93,5 +112,11 @@ The same parser and the same panel render both. Only the command runner differs:
 
 - **Local**: `git status`/`git diff` run directly against the session's real working directory (its worktree, if it has one — the same directory a `claude --resume` targets).
 - **Remote**: the same commands run over the existing ssh connection to the host, against the directory recorded in that session's descriptor. No attach, no tmux — this works even for a session you've never opened a terminal tab for.
+
+A remote working directory that is not a git repository keeps its button and
+shows git's message when you click, rather than hiding the button the way a
+local one does. Telling "there is no repository here" apart from "git will not
+open this repository" needs to look at the directory itself, which Switchboard
+can only do on this machine.
 
 Diffs are capped at 512 KB; a diff larger than that is truncated with a note at the bottom.

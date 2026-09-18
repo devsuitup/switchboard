@@ -24,7 +24,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { createGitChangesRunner, isSafeNoIndexPath } = require('../git-changes-runner');
+const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError } = require('../git-changes-runner');
 
 // git translates its diagnostics; the assertions below match its English text.
 // Set on this process so both the scratch-repo helper and the runner's own
@@ -225,6 +225,9 @@ test('real git: a leaf symlink to a DIRECTORY leaks a file named "null" unless t
 
     const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
     const status = await runner.status();
+    // Shape first: a status() that came back as an error would otherwise fail
+    // here as a TypeError naming nothing.
+    assert.ok(Array.isArray(status.files), `status() must return a file list, got ${JSON.stringify(status)}`);
     assert.ok(status.files.some((f) => f.path === 'dirlink'), 'git lists the symlink as a row of its own — this needs no crafted path, just a click');
 
     // What raw git does with that row's own path, pinned.
@@ -362,4 +365,243 @@ test('real git: a literal "~/..." pathspec is never shell-expanded (no shell is 
   } finally {
     cleanup(tmp);
   }
+});
+
+// --- Not a git work tree — see .ai/contexts/changes-view.md ("Not a repository") ---
+//
+// Real git, a real directory outside any repository. The suite pins LC_ALL=C
+// for its message assertions; these cases run under a second locale on purpose,
+// because the detection is an exit code and must not move when the message does.
+// A host without fr_FR.UTF-8 installed falls back to English — the assertions
+// hold either way, which is the point.
+
+const LOCALES = ['C', 'fr_FR.UTF-8'];
+const ALT_LOCALE = 'fr_FR.UTF-8';
+
+// Asserting that two locales agree proves nothing unless git actually speaks the
+// second one. GitHub's runners ship no fr_FR.UTF-8, so without this probe the
+// locale tests pass vacuously on every CI leg.
+function gitSpeaks(locale) {
+  const message = (env) => {
+    const r = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: os.tmpdir(), encoding: 'utf8', env: { ...scratchGitEnv(), ...env },
+    });
+    return String(r.stderr || '');
+  };
+  const english = message({ LC_ALL: 'C', LANGUAGE: 'C', LANG: 'C' });
+  const other = message({ LC_ALL: locale, LANGUAGE: locale, LANG: locale });
+  return !!english && !!other && english !== other;
+}
+
+const ALT_LOCALE_AVAILABLE = gitSpeaks(ALT_LOCALE);
+const SKIP_ALT_LOCALE = ALT_LOCALE_AVAILABLE ? false : `git does not translate its output under ${ALT_LOCALE} here`;
+
+// A temp directory with a repository somewhere above it would answer "true";
+// os.tmpdir() is not inside one on any supported platform, and the assertions
+// below would fail loudly rather than silently if it ever were.
+function withLocale(locale, fn) {
+  const saved = { LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE, LANG: process.env.LANG };
+  process.env.LC_ALL = locale;
+  process.env.LANGUAGE = locale;
+  process.env.LANG = locale;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
+
+test('real git: a directory outside any repository is reported as its own reason, in every locale', { skip: SKIP_ALT_LOCALE }, async () => {
+  const results = [];
+  for (const locale of LOCALES) {
+    const tmp = mkTmp();
+    try {
+      await withLocale(locale, async () => {
+        const result = await createGitChangesRunner({ kind: 'local', cwd: tmp }).status();
+        assert.equal(result.ok, false, `${locale}: no repository, no changes`);
+        assert.equal(result.reason, NOT_A_REPO_REASON, `${locale}: the outcome is machine-readable`);
+        assert.doesNotMatch(result.error, /fatal|dépôt|GIT_DISCOVERY|usage/,
+          `${locale}: git's own text must not become the panel's message`);
+        results.push(result);
+      });
+    } finally { cleanup(tmp); }
+  }
+  assert.deepEqual(results[1], results[0], 'the two locales must produce byte-identical outcomes');
+});
+
+test('real git: isWorkTree() answers by exit code, in every locale', { skip: SKIP_ALT_LOCALE }, async () => {
+  for (const locale of LOCALES) {
+    const tmp = mkTmp();
+    try {
+      const repoDir = path.join(tmp, 'repo');
+      initRepo(repoDir);
+      await withLocale(locale, async () => {
+        assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: repoDir }).isWorkTree(),
+          { ok: true, isRepo: true }, `${locale}: a real repository`);
+        assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: tmp }).isWorkTree(),
+          { ok: true, isRepo: false }, `${locale}: its parent, which is not one`);
+      });
+    } finally { cleanup(tmp); }
+  }
+});
+
+test('real git: a subdirectory of a repository is still inside the work tree', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const sub = path.join(repoDir, 'nested', 'deeper');
+    fs.mkdirSync(sub, { recursive: true });
+
+    assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: sub }).isWorkTree(), { ok: true, isRepo: true },
+      'a session recorded in a subdirectory must keep its Changes panel');
+  } finally { cleanup(tmp); }
+});
+
+// --- A repository git refuses is not a missing repository --------------------
+// Exit 128 is git's generic fatal code. Every fixture below is a REAL repository
+// that real git refuses to open, and each one exits 128 exactly like a plain
+// directory does — so the exit code alone cannot tell them apart, and the
+// corroborating filesystem check is what does. See .ai/contexts/changes-view.md
+// ("Not a repository").
+
+function initRefusedRepo(dir, wreck) {
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 'a@a.com']);
+  git(dir, ['config', 'user.name', 'a']);
+  wreck(dir);
+  return dir;
+}
+
+const REFUSED_FIXTURES = [
+  ['an unsupported core.repositoryformatversion', (d) => git(d, ['config', 'core.repositoryformatversion', '99'])],
+  ['a .git file pointing at a gitdir that is not there', (d) => {
+    fs.rmSync(path.join(d, '.git'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(d, '.git'), 'gitdir: /nonexistent/elsewhere\n');
+  }],
+  ['a .git file that is not a gitdir line at all', (d) => {
+    fs.rmSync(path.join(d, '.git'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(d, '.git'), 'not a gitdir line\n');
+  }],
+];
+
+for (const [label, wreck] of REFUSED_FIXTURES) {
+  test(`real git: ${label} is reported, not silently treated as "no repository"`, async () => {
+    const tmp = mkTmp();
+    try {
+      const repoDir = initRefusedRepo(path.join(tmp, 'repo'), wreck);
+
+      const raw = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoDir, encoding: 'utf8', env: scratchGitEnv() });
+      assert.equal(raw.status, 128, 'the fixture must actually make git exit 128, or it proves nothing');
+
+      const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+      const probe = await runner.isWorkTree();
+      assert.equal(probe.ok, false, 'a repository git will not open is not an answer of "no repository"');
+      assert.ok(probe.error, 'and the reason must survive to the caller');
+
+      const result = await runner.status();
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, undefined,
+        'reason: not-a-repo withdraws the Changes button — a refused repository must never trigger it');
+    } finally { cleanup(tmp); }
+  });
+}
+
+test('real git: a worktree whose main repository was deleted is reported, not withdrawn', async () => {
+  const tmp = mkTmp();
+  try {
+    const mainRepo = path.join(tmp, 'main');
+    initRepo(mainRepo);
+    git(mainRepo, ['add', '-A']);
+    git(mainRepo, ['commit', '-q', '-m', 'second']);
+    const wt = path.join(tmp, 'wt');
+    git(mainRepo, ['worktree', 'add', '-q', wt, '-b', 'wt']);
+    fs.rmSync(mainRepo, { recursive: true, force: true });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: wt }).status();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, undefined, 'the .git file is still there, so the repository is not missing — it is broken');
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a plain directory is still the one case that withdraws the panel', async () => {
+  const tmp = mkTmp();
+  try {
+    const plain = path.join(tmp, 'notes');
+    fs.mkdirSync(plain, { recursive: true });
+
+    const probe = await createGitChangesRunner({ kind: 'local', cwd: plain }).isWorkTree();
+    assert.deepEqual(probe, { ok: true, isRepo: false });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: plain }).status();
+    assert.equal(result.reason, NOT_A_REPO_REASON);
+  } finally { cleanup(tmp); }
+});
+
+test('real git: a subdirectory of a refused repository is reported too, not withdrawn', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = initRefusedRepo(path.join(tmp, 'repo'), (d) => git(d, ['config', 'core.repositoryformatversion', '99']));
+    const sub = path.join(repoDir, 'nested');
+    fs.mkdirSync(sub, { recursive: true });
+
+    const result = await createGitChangesRunner({ kind: 'local', cwd: sub }).status();
+    assert.equal(result.reason, undefined, 'the walk must climb to the repository root, not just look in the cwd');
+  } finally { cleanup(tmp); }
+});
+
+// --- A working directory that is gone ---------------------------------------
+// The walk answers "no .git anywhere" for a path that does not exist, so the
+// cwd has to be ruled out before the corroboration is trusted — otherwise a
+// deleted worktree outside a repository would withdraw the panel. See
+// .ai/contexts/changes-view.md ("Not a repository").
+
+const VANISHED_CWDS = [
+  ['a directory that was deleted', (tmp) => {
+    const gone = path.join(tmp, 'gone');
+    fs.mkdirSync(gone, { recursive: true });
+    fs.rmSync(gone, { recursive: true, force: true });
+    return gone;
+  }],
+  ['a path that is a file, not a directory', (tmp) => {
+    const file = path.join(tmp, 'notadir');
+    fs.writeFileSync(file, 'x');
+    return file;
+  }],
+  ['a symlink whose target is gone', (tmp) => {
+    const link = path.join(tmp, 'link');
+    fs.symlinkSync(path.join(tmp, 'never-existed'), link);
+    return link;
+  }],
+];
+
+for (const [label, make] of VANISHED_CWDS) {
+  test(`real git: ${label} is reported as a missing directory, never as a missing repository`, async () => {
+    const tmp = mkTmp();
+    try {
+      const cwd = make(tmp);
+      const runner = createGitChangesRunner({ kind: 'local', cwd });
+
+      const probe = await runner.isWorkTree();
+      assert.equal(probe.ok, false, 'a directory that is not there cannot answer whether it is a repository');
+      assert.doesNotMatch(probe.error, /spawn git/,
+        '"spawn git ENOENT" reads as "git is not installed"; the directory is what is missing');
+      assert.match(probe.error, /working directory/);
+      assert.ok(probe.error.includes(cwd), 'and it must name the directory');
+
+      const result = await runner.status();
+      assert.equal(result.reason, undefined, 'withdrawing the panel here would blame the repository for the cwd');
+    } finally { cleanup(tmp); }
+  });
+}
+
+test('real git: missingCwdError says nothing about a directory that is simply there', () => {
+  const tmp = mkTmp();
+  try {
+    assert.equal(missingCwdError(tmp), null);
+  } finally { cleanup(tmp); }
 });

@@ -50,13 +50,26 @@ everywhere a live PTY stands for a session the user can see or act on:
 | Place | Why it must skip a panel shell |
 |---|---|
 | `get-active-terminals` (main) | It restores plain-terminal *rows*; a panel shell has none. |
+| `buildProjectsFromCache` (main) | It injects every live plain-terminal PTY into the `get-projects` payload so a terminal sorts among the session rows. That payload *is* the sidebar, and the renderer's `dedup()` copies it into `sessionMap` — so an unfiltered shell becomes a session row of its own, labelled `Terminal` from the hard-coded `summary` here rather than the `Shell` the renderer sets on its own object. It also lands in `cachedAllProjects`, which is what `renderDefaultStatus` sums for "N sessions". |
+| `layoutGridCards` (renderer) | Only *implicitly*, and the row above is what does it. Grid mode has no panel-shell predicate: it walks the sidebar's DOM rows and wraps every id that is also in `openGridSessionIds()`, which **does** contain `panel:<owner>`. Given a row, it would move the shell's container out of `#panel-terminal-region` into a grid card and cost it the WebGL context the mount/unmount pair manages. The absent row is therefore load-bearing for a second subsystem, and `test/panel-terminal.test.js` pins both halves. |
 | the missing-project remap guard (main) | It refuses a remap while sessions append to the transcripts being rewritten, and tells the user to stop them first. A shell appends to nothing and offers nothing to stop. |
 | `scheduleActiveSessionsPoll` (renderer) | A non-empty `activePtyIds` pins the poll at 3 s. One open shell would cancel the 30 s idle back-off of the v0.0.33–41 perf campaign for the whole window. |
 | `renderDefaultStatus` (renderer) | "N running" would count a session with a shell twice. |
 
-The renderer side goes through `countSessionsWithoutPanelShells(ids)`, which
-keys on the `panel:` id prefix rather than on a lookup, because `activePtyIds`
-holds ids and nothing else.
+**The two sides of the exclusion use different keys, because they hold
+different things.** In the main process the value is the session object, so
+`isPanelShellSession(session)` (`panel-terminal-target.js`) reads `panelFor` —
+the field that actually defines a panel shell. `panel-terminal-target.js`
+requires nothing, so any main-process module can import it without a cycle. The
+renderer holds ids and nothing else (`activePtyIds`), so
+`countSessionsWithoutPanelShells(ids)` keys on the `panel:` id prefix instead.
+
+Every other `isPlainTerminal` reader either *skips* plain terminals already
+(`cli-session-state.js`, `session-transitions.js`, and the `!isPlainTerminal`
+branches in `main.js`) — which excludes a shell for free — or is per-PTY spawn
+and wiring behaviour in `open-terminal` that a panel shell should get exactly
+like any other shell. The readers that *select* plain terminals as user-facing
+sessions are the two named in the table, and only those two need the predicate.
 
 ## The three lifted assumptions in terminal-manager.js
 
@@ -107,10 +120,27 @@ height) and `.terminal-container.panel-terminal` overrides the inset to `0`.
 The region and its handle live at the end of `#file-panel-content`, after the
 viewer/diff/changes children, and are `display: none` until `.open`.
 
-The region and its handle carry `margin-top: auto` so that with no tab open —
-the state the `hidePanel` guard exists to support, where every flexible child
-above is `display: none` — they sit at the bottom of the panel instead of
-stacking at the top.
+`#panel-terminal-handle` carries `margin-top: auto`, which is what pins the
+handle and the region to the bottom of the panel while a tab is shown: the tab
+above is the flexible child and the region is a fixed pixel height below it.
+
+**With no tab open, the region is the panel.** That is the state the `hidePanel`
+guard exists to support — every flexible child above is `display: none` — and
+`margin-top: auto` alone leaves the tab area as an empty dark block with the
+shell squeezed into its stored height underneath. `renderTabContent()` therefore
+calls `setPanelTerminalShellOnly(!tab)`, which puts `.shell-only` on
+`#file-panel-content`, and two rules key off it: the handle is `display: none`,
+and the region becomes `flex: 1 1 0; min-height: 0`. The handle is hidden rather
+than left in place because with no tab above it there is nothing for a drag to
+give space back to — it would shrink the shell and re-create the empty block the
+class exists to remove.
+
+A `flex-basis` of `0` is what overrides the region's own `height` for layout, so
+nothing writes to that height to make this work: `panelTerminalDesiredHeight`,
+`localStorage.panelTerminalHeight` and the inline `style.height` all still hold
+what the last drag asked for, and opening a tab again restores exactly that. The
+class toggle refits the shell whenever it actually changes, since the region's
+geometry changes with it.
 
 Height persists in `localStorage.panelTerminalHeight` (alongside
 `filePanelWidth`), floor 80 px, ceiling `#file-panel-content`'s height minus
