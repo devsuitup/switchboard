@@ -171,6 +171,10 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
       for (const cb of fileChangedListeners) cb(sessionId, filePath);
     },
     setActivity: read('setActivity'),
+    stashOf: (sessionId) => {
+      const state = read('filePanelState').get(sessionId);
+      return state ? state.changesStash : undefined;
+    },
     destroy: () => window.close(),
   };
 }
@@ -1088,8 +1092,78 @@ test('a session opening its own file keeps the unsaved buffer and restores it (m
 
     const restored = ctx.editors[ctx.editors.length - 1];
     assert.equal(restored.opened.modified, 'work in progress\n', 'the buffer comes back as it was');
-    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /restored/i);
+    const notice = ctx.document.getElementById('changes-diff-notice').textContent;
+    assert.match(notice, /restored/i);
+    assert.match(notice, /the session opened something else/i, 'the notice must name the real reason');
     assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('every exit that asks about discarding honours the answer — no buffer comes back (mutation target: stashing after a confirmed discard)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    // 1. The Changes toggle.
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'I ASKED TO DISCARD THIS\n';
+    ctx.document.getElementById('changes-toggle-btn').click();
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.stashOf('s1'), null, 'a confirmed discard must leave nothing to resurrect');
+
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block',
+      'reopening shows the file list, not the buffer the user threw away');
+    assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none');
+
+    // 2. The panel close button.
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    ctx.editors[ctx.editors.length - 1].box.text = 'discard me too\n';
+    ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+    assert.equal(ctx.stashOf('s1'), null);
+
+    // 3. Back.
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    ctx.editors[ctx.editors.length - 1].box.text = 'and me\n';
+    backBtn(ctx).click();
+    await flush();
+    assert.equal(ctx.stashOf('s1'), null);
+  } finally { ctx.destroy(); }
+});
+
+test('a confirmed discard also drops a buffer stashed by an earlier takeover', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'stashed by the session\n';
+
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    assert.ok(ctx.stashOf('s1'), 'the takeover stashed it');
+
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    ctx.document.getElementById('changes-toggle-btn').click();
+    assert.equal(ctx.stashOf('s1'), null, 'the restored buffer was discarded on purpose');
+
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block');
+  } finally { ctx.destroy(); }
+});
+
+test('a declined discard keeps both the buffer and the tab', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'keep me\n';
+
+    ctx.document.getElementById('changes-toggle-btn').click();
+    assert.equal(ctx.editors[0].box.destroyed, false);
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
   } finally { ctx.destroy(); }
 });
 

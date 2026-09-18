@@ -55,7 +55,7 @@ The session you are watching writes these files, so the panel assumes it is not 
 - A save of a file that changed since you opened it is **refused**, not merged and not forced: the panel tells you to reload first, and the session's work stays on disk. Saving again after a reload writes normally.
 - Back, closing the tab and closing the panel all ask before discarding unsaved edits.
 - Whatever line ending the file uses is preserved — CRLF stays CRLF — so a save with no edits leaves git with nothing to report. A byte-order mark is kept too.
-- If the session opens a file or a diff of its own while you have unsaved edits, the panel switches away without asking, but your edits are kept: reopening **Changes** brings them back and says so.
+- If the session opens a file or a diff of its own while you have unsaved edits, the panel switches away without asking, but your edits are kept: reopening **Changes** brings them back and says why. Answering yes to a discard prompt is the opposite instruction, and it is honoured — nothing comes back afterwards.
 
 ## A shell under the list
 

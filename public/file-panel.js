@@ -240,7 +240,7 @@ function handleClose() {
   const tab = state.currentTab;
 
   if (tab) {
-    if (!confirmDiscardChangesEdits(tab)) return;
+    if (!confirmDiscardChangesEdits(state, tab)) return;
     if (tab.type === 'diff' && !tab.resolved) {
       window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
     }
@@ -432,10 +432,10 @@ function restoreChangesEdits(sessionId, state, tab) {
   return true;
 }
 
-function destroyCurrentTab(state) {
+function destroyCurrentTab(state, { stash = true } = {}) {
   const tab = state.currentTab;
   if (!tab) return;
-  stashChangesEdits(state, tab);
+  if (stash) stashChangesEdits(state, tab);
   if (tab.type === 'diff' && tab.editorView) {
     tab.editorView.destroy();
     tab.editorView = null;
@@ -668,8 +668,8 @@ function handleDiffAction(sessionId, tab, action) {
 function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
   if (state.currentTab && state.currentTab.type === 'changes') {
-    if (!confirmDiscardChangesEdits(state.currentTab)) return;
-    destroyCurrentTab(state);
+    if (!confirmDiscardChangesEdits(state, state.currentTab)) return;
+    destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
     state.panelVisible = false;
     if (currentPanelSessionId === sessionId) hidePanel();
@@ -922,7 +922,7 @@ function closeChangesDiff(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
-  if (!confirmDiscardChangesEdits(tab)) return;
+  if (!confirmDiscardChangesEdits(state, tab)) return;
   unwatchChangesFile(sessionId, tab);
   destroyChangesEditor(tab);
   tab.selectedFile = null;
@@ -942,10 +942,12 @@ function closeChangesDiff(sessionId) {
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
 
-function confirmDiscardChangesEdits(tab) {
-  if (!tab || tab.type !== 'changes' || !isChangesBufferDirty(tab)) return true;
-  if (typeof window.confirm !== 'function') return true;
-  return window.confirm('This file has unsaved edits. Discard them?');
+function confirmDiscardChangesEdits(state, tab) {
+  if (tab && tab.type === 'changes' && isChangesBufferDirty(tab) && typeof window.confirm === 'function') {
+    if (!window.confirm('This file has unsaved edits. Discard them?')) return false;
+  }
+  if (state) state.changesStash = null;
+  return true;
 }
 
 function renderChangesContent(sessionId, tab) {
@@ -1161,7 +1163,7 @@ function renderChangesNotice(tab) {
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
-  if (tab.restoredEdits) notes.push('Unsaved edits from before this panel was taken over have been restored.');
+  if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');
   if (tab.fileError) notes.push(`This file can no longer be read: ${tab.fileError}`);
   if (tab.error) notes.push(`The file list could not be refreshed: ${tab.error}`);
@@ -1315,7 +1317,7 @@ async function reloadChangesFile(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
   if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile) return;
-  if (!confirmDiscardChangesEdits(tab)) return;
+  if (!confirmDiscardChangesEdits(state, tab)) return;
 
   const file = tab.selectedFile;
   const result = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
