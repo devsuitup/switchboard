@@ -263,6 +263,63 @@ classes or inject `<style>` variants for A/B comparisons.
   a no-animation baseline first, or every comparison is against a moving
   floor.
 
+### Saving a file inside this repository reloads the renderer
+
+`main.js` loads `electron-reloader` with `watchRenderer: true` when it can be
+required, which is whenever the app runs from source. An instance launched from
+this checkout therefore reloads its renderer whenever a file in the checkout
+changes — including a file **the app itself just wrote** through the Changes
+panel's editor.
+
+That makes the app's own repository the one working tree you cannot use to test
+editing: the save succeeds, and the panel it should have left open is rebuilt
+from scratch a moment later. `performance.now()` in the renderer tells the two
+apart — a value far below the instance's real age means the page reloaded.
+
+Test editing against **another** repository, or against the packaged build
+below, which does not carry the reloader.
+
+### Marking a DOM node from one CDP call and clicking it in the next does not work
+
+The sidebar re-renders often enough that an `id` or `data-` attribute set in one
+`Runtime.evaluate` is usually gone by the next call. Read the element's
+bounding box and dispatch the click at those coordinates in the same session,
+or re-read the box immediately before clicking.
+
+Dispatch `mouseMoved` to the point before `mousePressed`. Controls that appear
+on hover do not react to a press that arrives without the pointer ever having
+been there.
+
+## Testing the packaged build
+
+Testing from source does not exercise what users install: the packaged build has
+no `electron-reloader`, logs at `info` rather than `debug`, runs from an asar
+archive, and carries its own rebuilt native modules. A release candidate is
+worth one pass through the real artifact.
+
+The artifacts are attached to the draft release the tag's build produces:
+
+```bash
+gh release download v<X.Y.Z> --pattern '*.AppImage' --dir /tmp/rc
+```
+
+**This machine has no FUSE**, so an AppImage cannot mount itself and exits with
+`AppImages require FUSE to run`. Extract it and run the binary inside:
+
+```bash
+cd /tmp/rc && ./Switchboard-<X.Y.Z>.AppImage --appimage-extract
+SWITCHBOARD_DATA_DIR=~/.switchboard-dev-rc \
+SWITCHBOARD_TRIGGERS_DIR=~/.switchboard-dev-rc/triggers \
+  ./squashfs-root/switchboard --no-sandbox --remote-debugging-port=9334
+```
+
+`squashfs-root/AppRun` does not work outside the mounted image — it resolves the
+executable against `APPDIR`. Run `squashfs-root/switchboard` directly.
+
+The same isolation rules apply as everywhere else on this page: a separate data
+directory, a separate triggers directory, and no session resumed that is live in
+another instance.
+
 ## Cleaning up
 
 ```bash
