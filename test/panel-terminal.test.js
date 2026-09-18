@@ -255,6 +255,35 @@ test('a refused spawn is visible: the panel opens on the reason, with no termina
   } finally { ctx.destroy(); }
 });
 
+test('a reply that lands after a session switch never drags the panel back', async () => {
+  const gates = [];
+  const ctx = setupPanel({ openTerminal: () => new Promise((resolve) => { gates.push(resolve); }) });
+  try {
+    const { window, document, spies } = ctx;
+    const panel = document.getElementById('file-panel');
+
+    // A refusal, answered after the user has moved on.
+    const refusing = window.togglePanelTerminal('owner');
+    window.switchPanel('other');
+    gates[0]({ ok: false, error: 'a remote session cannot host a panel shell' });
+    await refusing;
+
+    assert.equal(ctx.inCtx('currentPanelSessionId'), 'other', 'the panel follows the session, not the reply');
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(ctx.inCtx("panelTerminals.has('owner')"), false, 'nobody is there to read it, so nothing is registered');
+
+    // The same race on the success path, which must behave identically.
+    const opening = window.togglePanelTerminal('third');
+    window.switchPanel('other');
+    gates[1]({ ok: true });
+    await opening;
+
+    assert.equal(ctx.inCtx('currentPanelSessionId'), 'other');
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(spies.openTerminal.length, 2);
+  } finally { ctx.destroy(); }
+});
+
 test('a refusal is dismissed by the Shell button and does not outlive the session', async () => {
   const ctx = setupPanel({ openTerminal: () => ({ ok: false, error: 'a remote session cannot host a panel shell' }) });
   try {
@@ -359,6 +388,30 @@ test('a shrinking window clamps the region for display and gives the height back
   } finally { ctx.destroy(); }
 });
 
+test('a drag that hits the ceiling keeps what it asked for, not what it was shown', async () => {
+  const ctx = setupPanel();
+  try {
+    const { window, document } = ctx;
+    await window.togglePanelTerminal('owner');
+    const region = document.getElementById('panel-terminal-region');
+    const handle = document.getElementById('panel-terminal-handle');
+
+    setPanelHeight(document, 300); // ceiling: 300 − 120 − 5
+    window.dispatchEvent(new window.Event('resize'));
+    handle.dispatchEvent(mouse(window, 'mousedown', 400));
+    document.dispatchEvent(mouse(window, 'mousemove', 20)); // drag well past the ceiling
+    document.dispatchEvent(mouse(window, 'mouseup', 20));
+
+    assert.equal(region.style.height, '175px', 'the ceiling still bounds what is shown');
+    assert.equal(window.localStorage.getItem('panelTerminalHeight'), '555',
+      'a ceiling reached by dragging must not overwrite the request, the way a resize does not');
+
+    setPanelHeight(document, 1200);
+    window.dispatchEvent(new window.Event('resize'));
+    assert.equal(region.style.height, '555px');
+  } finally { ctx.destroy(); }
+});
+
 test('a session round trip on a short panel does not ratchet the region down', async () => {
   const ctx = setupPanel();
   try {
@@ -418,22 +471,25 @@ test('a grid round trip leaves the panel shell visible, mounted and GPU-rendered
   } finally { ctx.destroy(); }
 });
 
-test('a shell suspended while unmounted gets its GPU renderer back when it returns', async () => {
+test('an unmounted shell gives up its GPU context and gets it back when it returns', async () => {
   const ctx = setupPanel();
   try {
     const { window } = ctx;
     await window.togglePanelTerminal('owner');
     const panelEntry = window.openSessions.get('panel:owner');
+    assert.ok(panelEntry.webglAddon, 'a mounted shell renders through WebGL');
 
-    // The ordinary "session switch: kept running" state — unmounted, so the
-    // grid suspends it like any other invisible terminal.
+    // The ordinary "session switch: kept running" state. Chromium caps GL
+    // contexts per process, so an invisible shell must not hold one.
     window.switchPanel('other');
+    assert.equal(panelEntry.webglAddon, null);
+
     window.showGridView();
     window.toggleGridView();
     assert.equal(panelEntry.webglAddon, null);
 
     window.switchPanel('owner');
-    assert.ok(panelEntry.webglAddon, 'mounting restores the context, the way showSession does for a session');
+    assert.ok(panelEntry.webglAddon, 'mounting restores it, the way showSession does for a session');
   } finally { ctx.destroy(); }
 });
 
@@ -515,6 +571,31 @@ test('re-opening while a spawn is in flight waits for the close instead of racin
 
     assert.ok(window.openSessions.has('panel:owner'), 'three clicks end with a shell, not with nothing');
     assert.ok(document.getElementById('panel-terminal-toggle-btn').classList.contains('active'));
+  } finally { ctx.destroy(); }
+});
+
+test('clicks during an in-flight close keep toggling: four of them leave no shell', async () => {
+  // Only the first spawn is gated; a second one would answer at once, so a
+  // regression shows up as an extra shell rather than as a hang.
+  const gates = [];
+  const ctx = setupPanel({
+    openTerminal: () => (gates.length === 0 ? new Promise((resolve) => { gates.push(resolve); }) : { ok: true }),
+  });
+  try {
+    const { window, spies, document } = ctx;
+    const opening = window.togglePanelTerminal('owner'); // open
+    window.togglePanelTerminal('owner'); // close
+    window.togglePanelTerminal('owner'); // open again
+    window.togglePanelTerminal('owner'); // and close again — net intent: closed
+
+    gates[0]({ ok: true });
+    await opening;
+    await microtasks();
+
+    assert.equal(spies.openTerminal.length, 1, 'the queued open was cancelled by the click after it');
+    assert.equal(window.openSessions.has('panel:owner'), false, 'no shell the user asked to close is left running');
+    assert.equal(ctx.inCtx("panelReopenAfterSpawn.size"), 0);
+    assert.equal(document.getElementById('panel-terminal-toggle-btn').classList.contains('active'), false);
   } finally { ctx.destroy(); }
 });
 

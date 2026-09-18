@@ -148,7 +148,6 @@ function setupPanelTerminalSplitter() {
       applyPanelTerminalHeight();
     },
     onCommit: () => {
-      panelTerminalDesiredHeight = currentPanelTerminalHeight();
       localStorage.setItem(PANEL_TERMINAL_HEIGHT_KEY, String(panelTerminalDesiredHeight));
       refitPanelTerminal();
     },
@@ -206,6 +205,7 @@ function unmountPanelTerminal(ownerSessionId, state) {
   if (!entry) return;
   entry.element.classList.remove('visible');
   entry.panelMounted = false;
+  suspendTerminalWebgl(state.panelSessionId);
 }
 
 // Called by switchPanel: the panel now shows sessionId, or nothing.
@@ -233,18 +233,20 @@ function togglePanelTerminal(ownerSessionId) {
     closePanelTerminal(ownerSessionId);
     return;
   }
+  // see .ai/contexts/panel-terminal.md ("Spawn races")
+  if (panelSpawnsInFlight.has(ownerSessionId)) {
+    if (!panelReopenAfterSpawn.delete(ownerSessionId)) panelReopenAfterSpawn.add(ownerSessionId);
+    return;
+  }
   return openPanelTerminal(ownerSessionId);
 }
 
 async function openPanelTerminal(ownerSessionId) {
   if (!panelTerminalRegionEl || panelTerminals.has(ownerSessionId)) return;
-  if (panelSpawnsInFlight.has(ownerSessionId)) {
-    panelReopenAfterSpawn.add(ownerSessionId);
-    return;
-  }
+  if (panelSpawnsInFlight.has(ownerSessionId)) return;
   panelReopenAfterSpawn.delete(ownerSessionId);
   const panelSessionId = panelTerminalSessionId(ownerSessionId);
-  // see .ai/contexts/panel-terminal.md ("clear, then register")
+  // see .ai/contexts/panel-terminal.md ("The ordering rule")
   if (openSessions.has(panelSessionId)) destroySession(panelSessionId);
 
   const state = { panelSessionId, error: null };
@@ -287,6 +289,7 @@ async function openPanelTerminal(ownerSessionId) {
 // see .ai/contexts/panel-terminal.md ("The refusal")
 function showPanelTerminalRefusal(ownerSessionId, message) {
   destroySession(panelTerminalSessionId(ownerSessionId));
+  if (panelTerminalOwnerId !== ownerSessionId) return;
   panelTerminals.set(ownerSessionId, { panelSessionId: panelTerminalSessionId(ownerSessionId), error: message });
   resyncPanelFor(ownerSessionId);
 }

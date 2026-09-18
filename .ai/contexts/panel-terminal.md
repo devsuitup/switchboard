@@ -76,8 +76,13 @@ holds ids and nothing else.
    cause, and needs both halves: it **skips a mounted** panel shell, which
    nothing would ever remount and therefore nothing would restore; an
    **unmounted** one is suspended like any other invisible terminal and gets its
-   context back in `mountPanelTerminal`, which is where `showSession`'s
-   `restoreTerminalWebgl` call has its equivalent for a panel shell.
+   context back in `mountPanelTerminal`. The mount/unmount pair is where a panel
+   shell has its equivalent of `showSession`'s
+   `restoreTerminalWebgl`/`suspendTerminalWebgl`, and it needs both: Chromium
+   caps GL contexts at around 16 per process (`loadTerminalWebgl`), and a shell
+   is unmounted for as long as the panel follows another session, so an
+   unmounted one holding a context would halve the headroom for every session
+   the user has ever opened a shell on.
 3. **Hidden-write exemption.** `isHiddenSingleViewSession()` returns true for
    any id that is not `activeSessionId` outside grid mode, and such a session
    gets zero `terminal.write()` calls (output accumulates for replay). A
@@ -121,8 +126,14 @@ writes to it, so a transient shrink (resize, a round trip while the panel
 happens to be short, devtools opening) gives the height back when the space
 returns. Clamping the value already on the element instead would ratchet the
 region down to its 80 px floor, one shrink at a time, with no way back but
-another drag. The only writer of the desired height is a finished drag, which
-records what the drag actually reached rather than where the pointer went.
+another drag.
+
+The only writer of the desired height is a drag, and it records **what the drag
+asked for** — the pointer's target, floored — not the clamped height it was
+allowed to show. That is what makes the two ways of hitting the ceiling agree:
+a drag that runs into it on a laptop screen springs back on a large monitor,
+exactly as a height clamped by a window resize does. Recording the displayed
+value instead would re-open the ratchet through the drag.
 
 `refitOpenTerminals()` refits only the active session in single view, and the
 per-entry `ResizeObserver` covers geometry changes at an 80 ms debounce. The
@@ -161,21 +172,36 @@ that no longer exists.
 can happen during that await is handled: a close is detected after the await
 (`panelTerminals.get(owner) !== state`) and stops the PTY the awaited call has
 by then created, rather than trusting the `stopSession` the close already fired
-against an id the main process did not know yet; a re-open is not started while
-`panelSpawnsInFlight` holds the owner, because a second `open-terminal` for the
-same stable id lands on main's *reattach* branch and would resurrect the shell
-the close is killing — it is remembered in `panelReopenAfterSpawn` and run once
-the close has settled, so a click inside that one-IPC window is honoured
-instead of vanishing.
+against an id the main process did not know yet; and a re-open is not started
+while `panelSpawnsInFlight` holds the owner, because a second `open-terminal`
+for the same stable id lands on main's *reattach* branch and would resurrect
+the shell the close is killing.
 
-**The ordering rule: clear, then register.** `destroySession` calls
-`destroyPanelTerminalFor`, which resolves the shell's own id back to its owner
-and deletes that owner's state. So any code that tears a shell down and then
-wants a state to exist must register it *afterwards*. Both places obey it:
-`openPanelTerminal` clears a leftover terminal before `panelTerminals.set`, and
-`showPanelTerminalRefusal` destroys the terminal before registering the error
-state. Doing either the other way round deletes the state that was just
-written, and `resyncPanel` then closes the panel around it.
+A Shell click inside that window is not dropped either. `togglePanelTerminal`
+flips `panelReopenAfterSpawn` instead of calling `openPanelTerminal`, so the
+pending intent keeps toggling with the clicks: an odd number of them re-opens
+once the close has settled, an even number leaves it closed. Recording each
+click as "open" would hand the user a running shell they had just asked to
+close.
+
+Both branches that answer a settled spawn are guarded on
+`panelTerminalOwnerId === owner`. A reply — success *or* refusal — that lands
+after the user has switched session must not touch the panel: `switchPanel`
+sets `currentPanelSessionId`, so an unguarded resync pulls the panel back to a
+session the terminal area has left, and every panel-scoped call
+(`refreshChanges`, the MCP indicator, `openFileInPanel`, the Shell button)
+addresses the wrong one until the next switch.
+
+**The ordering rule: a shell's teardown always clears its state.**
+`destroySession` on a shell's id calls `destroyPanelTerminalFor`, which resolves
+that id back to its owner and deletes the owner's state — unconditionally.
+There is no way to destroy the terminal and keep the registration. Three sites
+depend on knowing it: `openPanelTerminal` clears a leftover terminal *before*
+`panelTerminals.set`, `showPanelTerminalRefusal` destroys the terminal *before*
+registering the error state, and `stopPanelShell` destroys without registering
+anything — safe only because both of its callers delete the state first, which
+a third caller would have to do too. Registering before tearing down deletes
+the state just written, and `resyncPanel` then closes the panel around it.
 
 ## The refusal
 
@@ -187,10 +213,11 @@ region is perfectly invisible. Tests for it assert the panel is `.open` with a
 non-zero width, not that a node inside it has `display: block`.
 
 It is deliberately **transient**: `unmountPanelTerminal` deletes an error state
-instead of unmounting it, so the refusal describes the click that produced it
-and not a standing condition. Leaving the session clears it; one click on Shell
-dismisses it; it never pins the panel open for a session the user has moved
-on from.
+instead of unmounting it, and a refusal that arrives once the panel has moved
+on is not registered at all — there is nobody to read it. So the refusal
+describes the click that produced it and not a standing condition. Leaving the
+session clears it; one click on Shell dismisses it; it never pins the panel
+open for a session the user has moved on from.
 
 **LRU.** `lruEvictOne()` skips ids in `activePtyIds` and any entry that is not
 `closed`, so a live panel shell is doubly protected: its PTY is listed by
