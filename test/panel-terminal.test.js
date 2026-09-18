@@ -32,6 +32,27 @@ async function microtasks(n = 4) {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
+// Stand-ins for the lazy CodeMirror bundle the Changes tab builds its editor
+// from: a DOM node, and a document the test can rewrite to dirty the buffer.
+function stubChangesEditors(window) {
+  const make = (parent, text) => {
+    const dom = window.document.createElement('div');
+    parent.appendChild(dom);
+    const view = {
+      dom,
+      text,
+      destroy() { if (dom.parentNode) dom.parentNode.removeChild(dom); },
+    };
+    view.state = { doc: { toString: () => view.text } };
+    view.b = { state: view.state };
+    return view;
+  };
+  window.loadCodeMirrorBundle = () => Promise.resolve();
+  window.createMergeViewer = (parent, original, modified) => make(parent, modified);
+  window.createUnifiedMergeViewer = (parent, original, modified) => make(parent, modified);
+  window.createEditableViewer = (parent, content) => make(parent, content);
+}
+
 function mouse(window, type, clientY) {
   return new window.MouseEvent(type, { clientY, bubbles: true, cancelable: true });
 }
@@ -660,6 +681,52 @@ test('closing the tab with the panel X leaves no stale tab content above the she
     assert.ok(document.getElementById('file-panel').classList.contains('open'),
       'the shell keeps the panel open');
     assert.equal(ctx.inCtx("filePanelState.get('owner').currentTab"), null);
+  } finally { ctx.destroy(); }
+});
+
+test('the panel X over a dirty buffer asks first, and a refusal keeps both the edits and the shell', async () => {
+  const status = {
+    ok: true,
+    kind: 'local',
+    branch: { head: 'main', ahead: 0, behind: 0 },
+    files: [{ path: 'src/a.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 1, deleted: 0 }],
+    totals: { files: 1, added: 1, deleted: 0 },
+  };
+  const ctx = setupPanel({
+    api: {
+      gitChangesStatus: () => Promise.resolve(status),
+      gitChangesFile: () => Promise.resolve({ ok: true, original: 'old\n', current: 'new\n', version: 'v1' }),
+    },
+  });
+  try {
+    const { window, document } = ctx;
+    const asked = [];
+    window.confirm = (message) => { asked.push(message); return asked.length > 1; };
+    stubChangesEditors(window);
+
+    window.switchPanel('owner');
+    await window.openChangesTab('owner');
+    await microtasks(12);
+    document.querySelector('.changes-file-row[data-path="src/a.js"]')
+      .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await microtasks(12);
+    await window.togglePanelTerminal('owner');
+    ctx.inCtx("filePanelState.get('owner').currentTab").editorView.text = 'edited\n';
+
+    window.handleClose(); // the X on the tab toolbar, first answer: keep the edits
+
+    assert.equal(asked.length, 1, 'unsaved edits are never dropped without asking');
+    assert.equal(document.getElementById('file-panel-changes').style.display, 'flex',
+      'a refused discard leaves the tab exactly where it was');
+    assert.ok(ctx.inCtx("filePanelState.get('owner').currentTab"), 'and the buffer is still there to save');
+    assert.ok(window.openSessions.has('panel:owner'), 'the shell below it is untouched');
+
+    window.handleClose(); // second answer: discard
+
+    assert.equal(asked.length, 2);
+    assert.equal(document.getElementById('file-panel-changes').style.display, 'none');
+    assert.equal(ctx.inCtx("filePanelState.get('owner').currentTab"), null);
+    assert.ok(window.openSessions.has('panel:owner'), 'closing the tab never closes the shell');
   } finally { ctx.destroy(); }
 });
 
