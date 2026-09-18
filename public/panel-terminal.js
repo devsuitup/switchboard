@@ -7,6 +7,7 @@ const panelSpawnsInFlight = new Set(); // ownerSessionIds whose openTerminal has
 const panelReopenAfterSpawn = new Set(); // owners whose Shell was clicked again mid-close
 
 const PANEL_TERMINAL_ID_PREFIX = 'panel:';
+const PANEL_SHELL_ONLY_CLASS = 'shell-only';
 const PANEL_TERMINAL_HEIGHT_KEY = 'panelTerminalHeight';
 const DEFAULT_PANEL_TERMINAL_HEIGHT = 220;
 const MIN_PANEL_TERMINAL_HEIGHT = 80;
@@ -152,6 +153,15 @@ function setupPanelTerminalSplitter() {
       refitPanelTerminal();
     },
   });
+}
+
+// see .ai/contexts/panel-terminal.md ("Layout")
+function setPanelTerminalShellOnly(shellOnly) {
+  if (!panelTerminalContentEl) return;
+  const want = !!shellOnly;
+  if (panelTerminalContentEl.classList.contains(PANEL_SHELL_ONLY_CLASS) === want) return;
+  panelTerminalContentEl.classList.toggle(PANEL_SHELL_ONLY_CLASS, want);
+  refitPanelTerminal();
 }
 
 function refitPanelTerminal() {

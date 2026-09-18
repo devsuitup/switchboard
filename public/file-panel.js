@@ -596,6 +596,8 @@ function renderPanel(sessionId) {
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
+  // see .ai/contexts/panel-terminal.md ("Layout")
+  if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
   if (!tab) {
     vpContainer.style.display = 'none';

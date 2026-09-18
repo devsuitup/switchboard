@@ -4411,6 +4411,16 @@ body { display: flex; flex-direction: column; }
   display: block;
 }
 
+/* No tab above it: the region is the panel — see .ai/contexts/panel-terminal.md ("Layout") */
+#file-panel-content.shell-only #panel-terminal-handle.open {
+  display: none;
+}
+
+#file-panel-content.shell-only #panel-terminal-region.open {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
 .terminal-container.panel-terminal {
   inset: 0;
   padding: 6px 0 6px 8px;

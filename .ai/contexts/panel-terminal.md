@@ -107,10 +107,27 @@ height) and `.terminal-container.panel-terminal` overrides the inset to `0`.
 The region and its handle live at the end of `#file-panel-content`, after the
 viewer/diff/changes children, and are `display: none` until `.open`.
 
-The region and its handle carry `margin-top: auto` so that with no tab open —
-the state the `hidePanel` guard exists to support, where every flexible child
-above is `display: none` — they sit at the bottom of the panel instead of
-stacking at the top.
+`#panel-terminal-handle` carries `margin-top: auto`, which is what pins the
+handle and the region to the bottom of the panel while a tab is shown: the tab
+above is the flexible child and the region is a fixed pixel height below it.
+
+**With no tab open, the region is the panel.** That is the state the `hidePanel`
+guard exists to support — every flexible child above is `display: none` — and
+`margin-top: auto` alone leaves the tab area as an empty dark block with the
+shell squeezed into its stored height underneath. `renderTabContent()` therefore
+calls `setPanelTerminalShellOnly(!tab)`, which puts `.shell-only` on
+`#file-panel-content`, and two rules key off it: the handle is `display: none`,
+and the region becomes `flex: 1 1 0; min-height: 0`. The handle is hidden rather
+than left in place because with no tab above it there is nothing for a drag to
+give space back to — it would shrink the shell and re-create the empty block the
+class exists to remove.
+
+A `flex-basis` of `0` is what overrides the region's own `height` for layout, so
+nothing writes to that height to make this work: `panelTerminalDesiredHeight`,
+`localStorage.panelTerminalHeight` and the inline `style.height` all still hold
+what the last drag asked for, and opening a tab again restores exactly that. The
+class toggle refits the shell whenever it actually changes, since the region's
+geometry changes with it.
 
 Height persists in `localStorage.panelTerminalHeight` (alongside
 `filePanelWidth`), floor 80 px, ceiling `#file-panel-content`'s height minus

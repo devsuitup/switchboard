@@ -14,6 +14,10 @@ under whatever the panel is showing — the [Changes](changes-view.md) list, a
 file, or a diff. Both stay visible; drag the horizontal handle between them to
 give one more room. The height is remembered.
 
+With nothing open above it, the shell takes the whole panel and there is no
+handle to drag. Open a list or a file again and the shell goes back to the
+height you last dragged it to.
+
 The shell starts in the session's own working directory, worktree included —
 the same directory the Changes panel reads and a `claude --resume` targets. You
 never pick the path, and it cannot drift from the one the session really runs
