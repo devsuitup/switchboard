@@ -1663,6 +1663,18 @@ test('a link to an unmodified file, or one outside the repo, keeps the plain vie
   }
 });
 
+test('a link falls back to the plain viewer when the main process cannot answer at all', async () => {
+  const ctx = setupFilePanelDom({ locateImpl: () => { throw new Error('channel closed'); } });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
+    await flush();
+
+    assert.deepEqual(ctx.calls.readFile, ['/repo/src/a.js'], 'a link still opens something');
+    assert.equal(ctx.calls.file.length, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('a link while another file is open with unsaved edits asks before switching', async () => {
   const ctx = setupFilePanelDom({
     confirmImpl: () => false,
