@@ -81,11 +81,11 @@ function makeEditorStub(window, mode, doc, created, onChange) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl, availableImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [] };
+  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [], available: [] };
   const editors = [];
   const fileChangedListeners = [];
 
@@ -95,6 +95,10 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     onMcpCloseAllDiffs: () => {},
     onMcpCloseTab: () => {},
     mcpDiffResponse: () => {},
+    gitChangesAvailable: (sessionId) => {
+      calls.available.push(sessionId);
+      return Promise.resolve((availableImpl || (() => ({ ok: true, isRepo: true })))(sessionId));
+    },
     gitChangesStatus: (sessionId) => {
       calls.status.push(sessionId);
       return Promise.resolve((statusImpl || (() => makeStatusResult()))(sessionId));
@@ -1907,5 +1911,107 @@ test('Save follows the buffer in every mode, plain included (mutation target: th
       modeBtn.click();
       await flush();
     }
+  } finally { ctx.destroy(); }
+});
+
+// --- No git work tree — see .ai/contexts/changes-view.md ("Not a repository") ---
+
+test('a cwd with no work tree withdraws the Changes button instead of offering a tab that cannot fill', async () => {
+  const ctx = setupFilePanelDom({ availableImpl: () => ({ ok: true, isRepo: false }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+
+    const btn = ctx.document.getElementById('changes-toggle-btn');
+    assert.equal(btn.style.display, 'none', 'no work tree, no Changes affordance');
+    assert.equal(ctx.calls.status.length, 0, 'the availability answer costs no status call');
+  } finally { ctx.destroy(); }
+});
+
+test('the Changes button stays visible for a session that is in a work tree', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('the button follows the session the panel shows, not the last answer that arrived', async () => {
+  const ctx = setupFilePanelDom({ availableImpl: (id) => ({ ok: true, isRepo: id !== 'norepo' }) });
+  try {
+    ctx.window.switchPanel('norepo');
+    await flush();
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'a session in a repo must get its button back');
+
+    ctx.window.switchPanel('norepo');
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'a known answer applies before the round trip, with no flash of a button that does not work');
+  } finally { ctx.destroy(); }
+});
+
+test('a Changes tab already open when the cwd turns out to have no work tree is withdrawn, not left half-rendered', async () => {
+  let isRepo = true;
+  const ctx = setupFilePanelDom({
+    availableImpl: () => ({ ok: true, isRepo }),
+    statusImpl: () => (isRepo ? makeStatusResult() : { ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
+
+    isRepo = false;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false,
+      'the tab closes rather than reporting into itself');
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+
+    const statusCalls = ctx.calls.status.length;
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    assert.equal(ctx.calls.status.length, statusCalls, 'the tab is gone, so nothing refreshes it any more');
+  } finally { ctx.destroy(); }
+});
+
+test('git stderr never reaches the panel as the message when the cwd has no work tree', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => ({ ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-error').length, 0,
+      'a missing work tree is not an error to report, it is an affordance to withdraw');
+    assert.doesNotMatch(ctx.document.body.textContent, /dépôt git|not a git repository/);
+  } finally { ctx.destroy(); }
+});
+
+test('a genuine git failure is still reported in the tab, and the button stays', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => ({ ok: false, error: 'could not read directory: Permission denied' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+
+    const err = ctx.document.querySelector('.changes-error');
+    assert.ok(err, 'an unexpected failure must still be visible');
+    assert.match(err.textContent, /Permission denied/);
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'only a missing work tree withdraws the button — a transient failure must not');
   } finally { ctx.destroy(); }
 });

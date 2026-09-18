@@ -24,7 +24,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { createGitChangesRunner, isSafeNoIndexPath } = require('../git-changes-runner');
+const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON } = require('../git-changes-runner');
 
 // git translates its diagnostics; the assertions below match its English text.
 // Set on this process so both the scratch-repo helper and the runner's own
@@ -362,4 +362,79 @@ test('real git: a literal "~/..." pathspec is never shell-expanded (no shell is 
   } finally {
     cleanup(tmp);
   }
+});
+
+// --- Not a git work tree — see .ai/contexts/changes-view.md ("Not a repository") ---
+//
+// Real git, a real directory outside any repository. The suite pins LC_ALL=C
+// for its message assertions; these cases run under a second locale on purpose,
+// because the detection is an exit code and must not move when the message does.
+// A host without fr_FR.UTF-8 installed falls back to English — the assertions
+// hold either way, which is the point.
+
+const LOCALES = ['C', 'fr_FR.UTF-8'];
+
+// A temp directory with a repository somewhere above it would answer "true";
+// os.tmpdir() is not inside one on any supported platform, and the assertions
+// below would fail loudly rather than silently if it ever were.
+function withLocale(locale, fn) {
+  const saved = { LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE, LANG: process.env.LANG };
+  process.env.LC_ALL = locale;
+  process.env.LANGUAGE = locale;
+  process.env.LANG = locale;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
+
+test('real git: a directory outside any repository is reported as its own reason, in every locale', async () => {
+  const results = [];
+  for (const locale of LOCALES) {
+    const tmp = mkTmp();
+    try {
+      await withLocale(locale, async () => {
+        const result = await createGitChangesRunner({ kind: 'local', cwd: tmp }).status();
+        assert.equal(result.ok, false, `${locale}: no repository, no changes`);
+        assert.equal(result.reason, NOT_A_REPO_REASON, `${locale}: the outcome is machine-readable`);
+        assert.doesNotMatch(result.error, /fatal|dépôt|GIT_DISCOVERY|usage/,
+          `${locale}: git's own text must not become the panel's message`);
+        results.push(result);
+      });
+    } finally { cleanup(tmp); }
+  }
+  assert.deepEqual(results[1], results[0], 'the two locales must produce byte-identical outcomes');
+});
+
+test('real git: isWorkTree() answers by exit code, in every locale', async () => {
+  for (const locale of LOCALES) {
+    const tmp = mkTmp();
+    try {
+      const repoDir = path.join(tmp, 'repo');
+      initRepo(repoDir);
+      await withLocale(locale, async () => {
+        assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: repoDir }).isWorkTree(),
+          { ok: true, isRepo: true }, `${locale}: a real repository`);
+        assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: tmp }).isWorkTree(),
+          { ok: true, isRepo: false }, `${locale}: its parent, which is not one`);
+      });
+    } finally { cleanup(tmp); }
+  }
+});
+
+test('real git: a subdirectory of a repository is still inside the work tree', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const sub = path.join(repoDir, 'nested', 'deeper');
+    fs.mkdirSync(sub, { recursive: true });
+
+    assert.deepEqual(await createGitChangesRunner({ kind: 'local', cwd: sub }).isWorkTree(), { ok: true, isRepo: true },
+      'a session recorded in a subdirectory must keep its Changes panel');
+  } finally { cleanup(tmp); }
 });

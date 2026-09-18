@@ -57,6 +57,9 @@ const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
 let changesListDesiredHeight = readStoredChangesListHeight();
 
+// No work tree, no Changes affordance — see .ai/contexts/changes-view.md ("Not a repository")
+const NOT_A_REPO_REASON = 'not-a-repo';
+
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
 const MIN_PANEL_WIDTH = 280;
@@ -350,6 +353,7 @@ function getSessionState(sessionId) {
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
       mcpActive: false,
+      changesAvailable: null,
     });
   }
   return filePanelState.get(sessionId);
@@ -550,6 +554,7 @@ function hidePanel() {
 function switchPanel(sessionId) {
   currentPanelSessionId = sessionId;
   updateMcpIndicator();
+  refreshChangesAvailability(sessionId);
   if (typeof syncPanelTerminal === 'function') syncPanelTerminal(sessionId);
 
   if (!sessionId) {
@@ -704,6 +709,43 @@ function handleDiffAction(sessionId, tab, action) {
 
 // ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────
 
+// see .ai/contexts/changes-view.md ("Not a repository")
+function updateChangesToggle() {
+  if (!changesToggleBtn) return;
+  const state = currentPanelSessionId ? filePanelState.get(currentPanelSessionId) : null;
+  changesToggleBtn.style.display = state && state.changesAvailable === false ? 'none' : '';
+}
+
+// see .ai/contexts/changes-view.md ("Not a repository")
+async function refreshChangesAvailability(sessionId) {
+  updateChangesToggle();
+  if (!sessionId || typeof window.api?.gitChangesAvailable !== 'function') return;
+
+  const result = await window.api.gitChangesAvailable(sessionId);
+  if (currentPanelSessionId !== sessionId) return;
+  if (!result || typeof result.isRepo !== 'boolean') return;
+
+  if (result.isRepo) {
+    getSessionState(sessionId).changesAvailable = true;
+    updateChangesToggle();
+    return;
+  }
+  noteChangesUnavailable(sessionId);
+}
+
+// see .ai/contexts/changes-view.md ("Not a repository")
+function noteChangesUnavailable(sessionId) {
+  const state = getSessionState(sessionId);
+  state.changesAvailable = false;
+  if (state.currentTab && state.currentTab.type === 'changes') {
+    destroyCurrentTab(state);
+    state.currentTab = null;
+    state.panelVisible = false;
+    if (currentPanelSessionId === sessionId) hidePanel();
+  }
+  if (currentPanelSessionId === sessionId) updateChangesToggle();
+}
+
 function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
   if (state.currentTab && state.currentTab.type === 'changes') {
@@ -774,6 +816,10 @@ async function refreshChanges(sessionId) {
   if (!stillState || stillState.currentTab !== tab) return;
 
   tab.loading = false;
+  if (result && result.reason === NOT_A_REPO_REASON) {
+    noteChangesUnavailable(sessionId);
+    return;
+  }
   if (!result || result.ok === false) {
     tab.error = (result && result.error) || 'failed to load changes';
     tab.data = null;

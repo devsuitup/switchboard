@@ -13,6 +13,7 @@ const {
   buildRemoteGitCommand,
   buildGitArgs,
   truncateDiffContent,
+  boundErrorMessage,
   shQuote,
   isSafeCwd,
   isSafeGitPath,
@@ -21,6 +22,9 @@ const {
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
+  MAX_ERROR_LINES,
+  MAX_ERROR_CHARS,
+  NOT_A_REPO_REASON,
 } = require('../git-changes-runner');
 
 // The guard resolves against the running platform's path rules, so a fixture
@@ -894,4 +898,163 @@ test('remote runner: uses the real defaultRunRemoteCommand transport when no exe
   const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps' });
   assert.equal(runner.kind, 'remote');
   assert.equal(runner.alias, 'vps');
+});
+
+// --- Not a git work tree — see .ai/contexts/changes-view.md ("Not a repository") ---
+
+// What git actually wrote on this host, in French, when the Changes panel was
+// pointed at a directory outside any repository. The detection must not depend
+// on a single byte of it.
+const FRENCH_FATAL = 'fatal: ni ceci ni aucun de ses répertoires parents (jusqu\'au point de montage /) n\'est un dépôt git\nArrêt à la limite du système de fichiers (GIT_DISCOVERY_ACROSS_FILESYSTEM n\'est pas défini).';
+const FRENCH_DIFF_USAGE = ['warning: Pas un dépôt git. Utilisez --no-index pour comparer deux chemins hors d\'un arbre de travail', 'usage : git diff --no-index [<options>] <path> <path> [<pathspec>...]']
+  .concat(Array.from({ length: 150 }, (_, i) => `    --some-option-${i}      une description de l'option ${i}`)).join('\n');
+
+// Every git command fails the way a non-repo cwd makes it fail, rev-parse included.
+function nonRepoExec(calls) {
+  return (args) => {
+    calls.push(args);
+    if (args[1] === 'rev-parse') return Promise.resolve({ code: 128, stdout: '', stderr: FRENCH_FATAL });
+    if (args[1] === 'status') return Promise.resolve({ code: 128, stdout: '', stderr: FRENCH_FATAL });
+    return Promise.resolve({ code: 129, stdout: '', stderr: FRENCH_DIFF_USAGE });
+  };
+}
+
+test('status(): a cwd outside any repository is its own machine-readable outcome, not a git message (mutation target: returning firstError)', async () => {
+  const calls = [];
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec(calls) });
+  const result = await runner.status();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, NOT_A_REPO_REASON, 'the renderer must key on a reason, not parse a string');
+  assert.equal(result.error, 'not a git repository');
+  assert.equal(calls.filter((a) => a[1] === 'rev-parse').length, 1, 'exactly one probe, after the failure');
+});
+
+test('status(): nothing git wrote reaches the caller when the cwd is outside a repository', async () => {
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]) });
+  const result = await runner.status();
+
+  assert.doesNotMatch(result.error, /dépôt|fatal|usage|GIT_DISCOVERY/,
+    'a localized fatal and a 150-line usage page are exactly what must not land in the panel');
+  assert.ok(result.error.length < 60);
+});
+
+test('status(): the detection is the exit code, so a translated git says the same thing as an English one', async () => {
+  const ENGLISH_FATAL = 'fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).';
+  const english = (args) => Promise.resolve(args[1] === 'diff'
+    ? { code: 129, stdout: '', stderr: 'usage: git diff --no-index' }
+    : { code: 128, stdout: '', stderr: ENGLISH_FATAL });
+
+  const fr = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: nonRepoExec([]) }).status();
+  const en = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec: english }).status();
+  assert.deepEqual(en, fr);
+});
+
+test('status(): a healthy repository never pays for the probe (mutation target: probing on every refresh)', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    return Promise.resolve({ code: 0, stdout: args[1] === 'status' ? '# branch.head main\x00' : '', stderr: '' });
+  };
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec }).status();
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3, 'three commands, not four — the probe is a diagnosis, not a precondition');
+  assert.equal(calls.filter((a) => a[1] === 'rev-parse').length, 0);
+});
+
+test('status(): a failure inside a real repository keeps its own message and carries no reason', async () => {
+  const exec = (args) => {
+    if (args[1] === 'rev-parse') return Promise.resolve({ code: 0, stdout: 'true\n', stderr: '' });
+    if (args[1] === 'status') return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: could not read directory: Permission denied' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec }).status();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, undefined, 'a broken repository is not the same condition as no repository');
+  assert.match(result.error, /Permission denied/);
+});
+
+test('status(): an ssh transport failure is never mistaken for "no repository"', async () => {
+  // ssh's own failure exit is 255, not git's 128; the probe cannot answer, so
+  // the original error stands.
+  const exec = () => Promise.resolve({ code: 255, stdout: '', stderr: 'ssh: connect to host build-01 port 22: Connection refused' });
+  const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'build-01', exec }).status();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, undefined);
+  assert.match(result.error, /Connection refused/);
+});
+
+test('status(): a remote cwd outside any repository reaches the same outcome as a local one', async () => {
+  const calls = [];
+  const exec = (command) => {
+    calls.push(command);
+    return Promise.resolve({ code: command.includes("'rev-parse'") || command.includes("'status'") ? 128 : 129, stdout: '', stderr: FRENCH_FATAL });
+  };
+  const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'build-01', exec }).status();
+
+  assert.equal(result.reason, NOT_A_REPO_REASON, 'local and remote must not disagree about what the panel shows');
+  assert.equal(result.error, 'not a git repository');
+  assert.ok(calls.some((c) => c === "git -C '/srv/app' '--literal-pathspecs' 'rev-parse' '--is-inside-work-tree'"),
+    'the probe goes through the same quoted transport as every other command');
+});
+
+// --- isWorkTree() ----------------------------------------------------------
+
+test('isWorkTree(): the exit code and the printed answer, never the message', async () => {
+  const run = (response) => createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => Promise.resolve(response) }).isWorkTree();
+
+  assert.deepEqual(await run({ code: 0, stdout: 'true\n', stderr: '' }), { ok: true, isRepo: true });
+  assert.deepEqual(await run({ code: 128, stdout: '', stderr: FRENCH_FATAL }), { ok: true, isRepo: false });
+  assert.deepEqual(await run({ code: 0, stdout: 'false\n', stderr: '' }), { ok: true, isRepo: false },
+    'a bare repository has no work tree, so it has no changes to show either');
+
+  const broken = await run({ code: 255, stdout: '', stderr: 'ssh: Connection refused' });
+  assert.equal(broken.ok, false, 'a transport failure is not an answer');
+  assert.match(broken.error, /Connection refused/);
+
+  const mute = await run({ code: 0, stdout: '', stderr: '' });
+  assert.equal(mute.ok, false, 'no answer is not the same as "no"');
+});
+
+test('isWorkTree(): a thrown exec is reported, not treated as a missing repository', async () => {
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => { throw new Error('ENOENT'); } });
+  const result = await runner.isWorkTree();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /ENOENT/);
+});
+
+// --- Bounded error messages — see .ai/contexts/changes-view.md --------------
+
+test('boundErrorMessage: git\'s 150-line usage page is cut to the stated bound (mutation target: dropping the cap)', () => {
+  const bounded = boundErrorMessage(FRENCH_DIFF_USAGE);
+
+  assert.ok(bounded.split('\n').length <= MAX_ERROR_LINES, `at most ${MAX_ERROR_LINES} lines`);
+  assert.ok(bounded.length <= MAX_ERROR_CHARS + 1, `at most ${MAX_ERROR_CHARS} characters plus the ellipsis`);
+  assert.ok(bounded.endsWith('…'), 'the cut is signalled, not silent');
+  assert.match(bounded, /Pas un dépôt git/, 'the first, informative line survives');
+  assert.ok(FRENCH_DIFF_USAGE.length > 4000, 'the fixture has to be big enough for the bound to bite');
+});
+
+test('boundErrorMessage: a short message passes through whole, with no ellipsis', () => {
+  assert.equal(boundErrorMessage('fatal: could not read directory: Permission denied'),
+    'fatal: could not read directory: Permission denied');
+  assert.equal(boundErrorMessage('  \n  '), '');
+});
+
+test('boundErrorMessage: one enormous line is cut by characters, not only by lines', () => {
+  const bounded = boundErrorMessage('x'.repeat(10_000));
+  assert.ok(bounded.length <= MAX_ERROR_CHARS + 1);
+  assert.ok(bounded.endsWith('…'));
+});
+
+test('.diff(): an unexpected git failure reaches the caller bounded, never as the whole usage page', async () => {
+  const exec = () => Promise.resolve({ code: 129, stdout: '', stderr: FRENCH_DIFF_USAGE });
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec }).diff('foo.js');
+
+  assert.equal(result.ok, false);
+  assert.ok(result.error.split('\n').length <= MAX_ERROR_LINES);
+  assert.ok(result.error.length <= MAX_ERROR_CHARS + 1);
 });

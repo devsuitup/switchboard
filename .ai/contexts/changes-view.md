@@ -34,7 +34,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 ## Runner interface (`git-changes-runner.js`)
 
-`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked})}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
+`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
 - **Local** (`kind: 'local'`): `child_process.execFile('git', args, {cwd, timeout, maxBuffer})` — cwd is `execFile`'s own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s.
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
@@ -303,6 +303,68 @@ counts.
 `defaultRunRemoteCommand(alias, command, {timeoutMs, maxStdoutBytes, spawnFn})` counts accumulated stdout in UTF-8 bytes as each chunk arrives (`Buffer.byteLength`, works for both a real Buffer chunk and a test's plain-string chunk). Crossing `maxStdoutBytes` (default `DEFAULT_MAX_STDOUT_BYTES` = 8 MB when the caller doesn't pass one) SIGKILLs the child and resolves `{code: -1, stdout: '', stderr: 'stdout exceeded <n> bytes'}` — the same `{code, stdout, stderr}` shape every other path already returns, so `git-changes-runner.js`'s existing `firstError()`/`ok:false` handling surfaces it as `{ok: false, error: 'stdout exceeded <n> bytes'}` with no special-casing. `git-changes-runner.js` passes an explicit cap on every call — `STATUS_MAX_STDOUT_BYTES` (2 MB) for each of the three `status()` commands, `DIFF_MAX_STDOUT_BYTES` (`MAX_DIFF_BYTES` + 64 KB slack) for `diff()`, so a diff just over the panel's own display cap still arrives whole and gets truncated locally instead of being killed by the transport first. The tmux probe/restore calls in `remote-attach.js` and `remote-stop.js`'s kill command never pass `maxStdoutBytes` and fall back to the 8 MB default — their own output is a handful of bytes, nowhere near either cap (verified: `test/remote-attach.test.js` and `test/remote-stop.test.js` pass unmodified).
 
 `opts.spawnFn` is dependency injection for tests only (`test/remote-run-command-stdout-cap.test.js`, a fake `child_process`-shaped `EventEmitter` with `stdout`/`stderr`/`kill`) — production code never passes it, and the lazy `require('child_process')` stays the real default.
+
+## Not a repository
+
+A session's working directory need not be inside a git work tree, and when it
+is not, the Changes affordance is not offered: `#changes-toggle-btn` is
+`display: none` for that session. The panel never renders a refusal for this
+case, because there is nothing to refuse — the button that would produce it is
+not there.
+
+**The detection is an exit code, never a message.** `git rev-parse
+--is-inside-work-tree` answers `128` outside any repository, `0` with `true`
+inside a work tree, and `0` with `false` in a bare one; git translates every
+one of its diagnostics (this project's own host runs it in French), so matching
+text is not an option. `isWorkTree()` in `git-changes-runner.js` is the single
+implementation, goes through the same `invoke()` as every other command, and
+therefore answers identically for a local and a remote session. It returns
+`{ok: true, isRepo}` only when git actually answered: a transport failure
+(ssh's own exit `255`), a thrown exec, and a `0` exit with neither `true` nor
+`false` printed all come back `{ok: false, error}`, which is *not* an answer and
+withdraws nothing. An ssh connection refused must never read as "you have no
+repository".
+
+`isRepo: false` covers a bare repository as well as a directory outside any
+repository: neither has a work tree, so neither has changes to show.
+
+**Who asks, and when.** Two paths reach the same conclusion, and `status()` is
+the cheaper of them:
+
+- `git-changes-available` runs the probe once per `switchPanel()` into a
+  session. The answer is cached on that session's `filePanelState` entry
+  (`changesAvailable`), applied to the button before the round trip so a known
+  answer never flashes a button that does not work, and re-asked on the next
+  switch — which is how a `git init` (or an `rm -rf .git`) mid-session is
+  picked up without polling anything.
+- `status()` returns `{ok: false, reason: 'not-a-repo'}` when a command failed
+  **and** the probe then confirms there is no work tree. The renderer treats
+  that exactly like an `isRepo: false` availability answer: it withdraws the
+  button and closes the open tab rather than reporting into it. That covers the
+  window between a switch and the repository disappearing under a running
+  session, and it means a click landing before the availability answer arrives
+  is handled too.
+
+The probe is a **diagnosis, not a precondition**: a session that is in a
+repository pays for three commands per refresh, the same three as before, and
+`test/git-changes-runner.test.js` pins that (`calls.length === 3`). Adding a
+fourth invocation to every refresh would cost a process spawn locally (measured
+~1.8 ms, git 2.53) and a whole ssh round-trip remotely, on every busy→idle edge
+of every session, to answer a question that is almost always the same.
+
+## Bounded error messages
+
+`firstError()` puts every unexpected git failure through `boundErrorMessage()`:
+at most `MAX_ERROR_LINES` (5) lines and `MAX_ERROR_CHARS` (500) characters, with
+a trailing `…` when anything was dropped. Git's `diff --no-index` usage page is
+over 150 lines and git prints it on a plain exit-129 misuse; unbounded, that
+page is what the panel would display. The bound is the first lines rather than a
+flat character cut because git's own diagnosis is on the first line and the
+noise is below it.
+
+A genuine failure — a permission error, a corrupt repository, a transport
+problem — is still reported, in git's own words and in whatever language git
+chose. Only the volume is capped.
 
 ## cwd resolution (`git-changes-target.js`)
 

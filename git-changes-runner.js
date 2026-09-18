@@ -16,6 +16,12 @@ const LOCAL_MAX_BUFFER = 20 * 1024 * 1024;
 const STATUS_MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const DIFF_STDOUT_SLACK_BYTES = 64 * 1024;
 const DIFF_MAX_STDOUT_BYTES = MAX_DIFF_BYTES + DIFF_STDOUT_SLACK_BYTES;
+// An unexpected git failure is reported, bounded — see .ai/contexts/changes-view.md ("Bounded error messages")
+const MAX_ERROR_LINES = 5;
+const MAX_ERROR_CHARS = 500;
+// git's "not a git repository" exit code — see .ai/contexts/changes-view.md ("Not a repository")
+const NOT_A_REPO_EXIT_CODE = 128;
+const NOT_A_REPO_REASON = 'not-a-repo';
 
 // Denylist, not allowlist — see .ai/contexts/changes-view.md ("Quoting rule")
 function isSafeShellArg(s) {
@@ -153,8 +159,22 @@ function defaultLocalExec(args, { cwd, timeoutMs }) {
   });
 }
 
+// Bounds what git wrote — see .ai/contexts/changes-view.md ("Bounded error messages")
+function boundErrorMessage(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  const lines = trimmed.split('\n');
+  let out = lines.slice(0, MAX_ERROR_LINES).join('\n');
+  let dropped = lines.length > MAX_ERROR_LINES;
+  if (out.length > MAX_ERROR_CHARS) {
+    out = out.slice(0, MAX_ERROR_CHARS).trimEnd();
+    dropped = true;
+  }
+  return dropped ? out + '…' : out;
+}
+
 function firstError(result) {
-  return (result.stderr || '').trim() || `git exited with code ${result.code}`;
+  return boundErrorMessage(result.stderr) || `git exited with code ${result.code}`;
 }
 
 // The two stdout-cap overruns: the remote transport's own, and execFile's maxBuffer — see .ai/contexts/changes-view.md ("Untracked files")
@@ -190,6 +210,26 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     return kind === 'local' ? runExec(fullArgs) : runExec(buildRemoteGitCommand(cwd, fullArgs), remoteOpts);
   }
 
+  // The exit code answers, the message does not — see .ai/contexts/changes-view.md ("Not a repository")
+  async function isWorkTree() {
+    let probe;
+    try {
+      probe = await invoke(['rev-parse', '--is-inside-work-tree']);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    if (probe.code === NOT_A_REPO_EXIT_CODE) return { ok: true, isRepo: false };
+    if (probe.code !== 0) return { ok: false, error: firstError(probe) };
+    const answer = String(probe.stdout || '').trim();
+    if (answer === 'true' || answer === 'false') return { ok: true, isRepo: answer === 'true' };
+    return { ok: false, error: 'git rev-parse gave no answer' };
+  }
+
+  async function cwdHasNoWorkTree() {
+    const probe = await isWorkTree();
+    return probe.ok === true && probe.isRepo === false;
+  }
+
   async function status() {
     let results;
     try {
@@ -203,6 +243,9 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     }
     let [st] = results;
     const [, unstagedNum, stagedNum] = results;
+    if (results.some((r) => r.code !== 0) && await cwdHasNoWorkTree()) {
+      return { ok: false, reason: NOT_A_REPO_REASON, error: 'not a git repository' };
+    }
     if (unstagedNum.code !== 0) return { ok: false, error: firstError(unstagedNum) };
     if (stagedNum.code !== 0) return { ok: false, error: firstError(stagedNum) };
 
@@ -287,7 +330,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
     return { ok: true, content, truncated };
   }
 
-  return { status, diff, kind, cwd, alias: alias || null };
+  return { status, diff, isWorkTree, kind, cwd, alias: alias || null };
 }
 
 module.exports = {
@@ -296,6 +339,7 @@ module.exports = {
   buildGitArgs,
   localGitEnv,
   truncateDiffContent,
+  boundErrorMessage,
   shQuote,
   isSafeCwd,
   isSafeGitPath,
@@ -304,4 +348,7 @@ module.exports = {
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
+  MAX_ERROR_LINES,
+  MAX_ERROR_CHARS,
+  NOT_A_REPO_REASON,
 };
