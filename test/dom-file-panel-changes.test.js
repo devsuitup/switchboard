@@ -88,6 +88,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     onMcpOpenFile: () => {},
     onMcpCloseAllDiffs: () => {},
     onMcpCloseTab: () => {},
+    mcpDiffResponse: () => {},
     gitChangesStatus: (sessionId) => {
       calls.status.push(sessionId);
       return Promise.resolve((statusImpl || (() => makeStatusResult()))(sessionId));
@@ -1099,40 +1100,42 @@ test('a session opening its own file keeps the unsaved buffer and restores it (m
   } finally { ctx.destroy(); }
 });
 
-test('every exit that asks about discarding honours the answer — no buffer comes back (mutation target: stashing after a confirmed discard)', async () => {
-  const ctx = setupFilePanelDom();
-  try {
-    // 1. The Changes toggle.
-    await openFile(ctx, 's1', 'src/a.js');
-    ctx.editors[0].box.text = 'I ASKED TO DISCARD THIS\n';
-    ctx.document.getElementById('changes-toggle-btn').click();
-    assert.equal(ctx.calls.confirm.length, 1);
-    assert.equal(ctx.stashOf('s1'), null, 'a confirmed discard must leave nothing to resurrect');
+// Each exit is given its own live stash, so none of them can pass on the back
+// of another having already cleared it.
+for (const exit of ['toggle', 'panel-close', 'back']) {
+  test(`the ${exit} exit clears the stash once the user confirms the discard (mutation target: the discard call on that path)`, async () => {
+    const ctx = setupFilePanelDom();
+    try {
+      await openFile(ctx, 's1', 'src/a.js');
+      ctx.editors[0].box.text = 'I ASKED TO DISCARD THIS\n';
 
-    await ctx.window.openChangesTab('s1');
-    await flush();
-    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block',
-      'reopening shows the file list, not the buffer the user threw away');
-    assert.equal(ctx.document.getElementById('changes-diff-notice').style.display, 'none');
+      // A takeover puts the buffer in the stash; reopening restores it, so the
+      // tab is dirty again and this exit is the one that must drop it.
+      ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      await flush();
+      assert.ok(ctx.stashOf('s1'), 'the stash is live before the exit');
+      await ctx.window.openChangesTab('s1');
+      await flush();
 
-    // 2. The panel close button.
-    clickRow(ctx, 'src/a.js');
-    await flush();
-    ctx.editors[ctx.editors.length - 1].box.text = 'discard me too\n';
-    ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
-    assert.equal(ctx.stashOf('s1'), null);
+      if (exit === 'toggle') ctx.document.getElementById('changes-toggle-btn').click();
+      else if (exit === 'panel-close') ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+      else backBtn(ctx).click();
+      await flush();
 
-    // 3. Back.
-    await ctx.window.openChangesTab('s1');
-    await flush();
-    clickRow(ctx, 'src/a.js');
-    await flush();
-    ctx.editors[ctx.editors.length - 1].box.text = 'and me\n';
-    backBtn(ctx).click();
-    await flush();
-    assert.equal(ctx.stashOf('s1'), null);
-  } finally { ctx.destroy(); }
-});
+      assert.equal(ctx.calls.confirm.length, 1, 'the user was asked');
+      assert.equal(ctx.stashOf('s1'), null, 'a confirmed discard must leave nothing to resurrect');
+
+      await ctx.window.openChangesTab('s1');
+      await flush();
+      assert.equal(ctx.document.getElementById('changes-list').style.display, 'block',
+        'reopening shows the file list, not the buffer the user threw away');
+      assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'none',
+        'and the diff view, where the restore notice lives, is off screen');
+      assert.equal(ctx.editors[ctx.editors.length - 1].box.destroyed, true,
+        'the discarded editor is gone, not merely hidden');
+    } finally { ctx.destroy(); }
+  });
+}
 
 test('a confirmed discard also drops a buffer stashed by an earlier takeover', async () => {
   const ctx = setupFilePanelDom();
@@ -1164,6 +1167,60 @@ test('a declined discard keeps both the buffer and the tab', async () => {
     ctx.document.getElementById('changes-toggle-btn').click();
     assert.equal(ctx.editors[0].box.destroyed, false);
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+  } finally { ctx.destroy(); }
+});
+
+// The pair of questions this feature turns on: a buffer may only be dropped
+// when the user was asked about it, and must be dropped when they said yes.
+test('closing the panel over the session\'s own tab keeps the stash, because nothing was asked (mutation target: clearing without asking)', async () => {
+  for (const takeover of ['file', 'diff']) {
+    const ctx = setupFilePanelDom();
+    try {
+      await openFile(ctx, 's1', 'src/a.js');
+      ctx.editors[0].box.text = 'work the user never abandoned\n';
+
+      if (takeover === 'file') {
+        ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      } else {
+        ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
+      }
+      await flush();
+      assert.ok(ctx.stashOf('s1'), `the ${takeover} takeover stashed the buffer`);
+
+      // The panel now shows the session's tab. Closing it asks nothing about
+      // edits that are not in front of the user.
+      ctx.window.handleClose();
+      assert.equal(ctx.calls.confirm.length, 0, 'no question was put');
+      assert.ok(ctx.stashOf('s1'), 'so the answer cannot be "discard"');
+
+      await ctx.window.openChangesTab('s1');
+      await flush();
+      const restored = ctx.editors[ctx.editors.length - 1];
+      assert.equal(restored.opened.modified, 'work the user never abandoned\n');
+    } finally { ctx.destroy(); }
+  }
+});
+
+test('an exit that asks nothing never drops a stash, even from the Changes tab itself', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'stashed\n';
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+
+    // Back in Changes, the restored buffer is saved, so the tab is clean: an
+    // exit from here asks nothing, and a clean tab is not an instruction.
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    ctx.document.getElementById('changes-diff-save-btn').click();
+    await flush();
+    assert.equal(ctx.calls.confirm.length, 0);
+
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    backBtn(ctx).click();
+    assert.equal(ctx.calls.confirm.length, 0, 'a clean buffer is never asked about');
   } finally { ctx.destroy(); }
 });
 
