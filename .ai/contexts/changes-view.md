@@ -400,15 +400,29 @@ the large repositories that hit it are the ones an extra spawn costs most. And
 on the switch path:
 
 - a session already answered `true` is **never probed again**;
+- a session git **could not answer for** is never probed again either. That
+  answer is memoised as its own state (`CHANGES_UNANSWERED`), because a
+  `{ok: false}` leaves the button visible and can never change it — asking again
+  buys nothing and costs an ssh with a 20 s kill timer. It is not a rare shape:
+  a remote cwd outside a repository, a local repository git refuses, and an
+  unreachable host all produce it, on every activation, forever;
 - a second probe for a session whose first is still in flight is **dropped**
   (`changesAvailabilityInFlight`), so a burst of switches cannot put a burst of
   ssh children on a remote host;
-- an answer that arrives after the panel has moved on is **discarded**
-  (`currentPanelSessionId !== sessionId`).
+- an answer is **recorded against the session it is about**, then applied to the
+  button only while that session is still the one on screen. Discarding a
+  correct answer because the panel had moved on would cost that session another
+  probe on its next activation; painting from it would paint the wrong
+  session's state.
 
-Only a session that answered "no repository" is re-asked on a later switch, and
-that is what picks up a `git init` without polling anything. It is the rare
-case, and it is the one where re-asking is the whole point.
+Only a session that answered "no repository" is re-asked on a later switch.
+That is the one answer worth re-checking — a `git init` turns it into a
+repository — and it is what makes the button come back without polling
+anything. The reverse transition is not tracked: a session that answered "in a
+repository" keeps its button even if the repository is deleted under it, and
+clicking Changes then closes the tab straight away through the `status()` path.
+Re-probing every activation to catch that is exactly the cost this memo exists
+to remove.
 
 **Withdrawal goes through the tab's own close control.** `noteChangesUnavailable`
 calls `toggleChangesTab(sessionId)` rather than tearing the tab down itself, so

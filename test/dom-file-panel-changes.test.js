@@ -2145,3 +2145,163 @@ test('a close the tab refuses leaves the button, so the tab can still be reopene
       'hiding the control while its tab is still open strands whatever the tab is holding');
   } finally { ctx.destroy(); }
 });
+
+// --- A non-answer is memoised too — see .ai/contexts/changes-view.md ("Who asks, and when") ---
+// A remote 128 is always {ok:false} by design, and a {ok:false} can never change
+// the button, so re-asking costs an ssh with a 20 s kill timer to learn nothing.
+
+function countRevisits(ctx, sessionId, times) {
+  const before = ctx.calls.available.filter((id) => id === sessionId).length;
+  const run = async () => {
+    for (let i = 0; i < times; i++) {
+      ctx.window.switchPanel('other');
+      await flush();
+      ctx.window.switchPanel(sessionId);
+      await flush();
+    }
+    return ctx.calls.available.filter((id) => id === sessionId).length - before;
+  };
+  return run();
+}
+
+test('a session git could not answer for is asked once, not on every activation', async () => {
+  const ctx = setupFilePanelDom({
+    availableImpl: (id) => (id === 'remote' ? { ok: false, error: 'fatal: …' } : { ok: true, isRepo: true }),
+  });
+  try {
+    ctx.window.switchPanel('remote');
+    await flush();
+    assert.equal(ctx.calls.available.filter((id) => id === 'remote').length, 1);
+
+    assert.equal(await countRevisits(ctx, 'remote', 6), 0,
+      'six revisits must add no probes — the answer cannot change the button, so asking again buys nothing');
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none',
+      'and the button stays, because nothing established that there is no repository');
+  } finally { ctx.destroy(); }
+});
+
+test('a session in a repository is still asked once and never again', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(await countRevisits(ctx, 's1', 6), 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a session with no repository is still re-asked, so the two memos do not collapse into one', async () => {
+  const ctx = setupFilePanelDom({
+    availableImpl: (id) => (id === 'norepo' ? { ok: true, isRepo: false } : { ok: true, isRepo: true }),
+  });
+  try {
+    ctx.window.switchPanel('norepo');
+    await flush();
+    assert.equal(await countRevisits(ctx, 'norepo', 3), 3,
+      'only the answer that hides the button is worth re-checking');
+  } finally { ctx.destroy(); }
+});
+
+// --- The stale-reply guard covers the DOM, not the memo ---------------------
+
+test('an answer for a session the panel has left is still recorded against that session', async () => {
+  const d = deferredAvailable();
+  const ctx = setupFilePanelDom({ availableImpl: d.impl });
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    ctx.window.switchPanel('s2');
+    await flush();
+
+    d.settle('s1', { ok: true, isRepo: true });
+    d.settle('s2', { ok: true, isRepo: true });
+    await flush();
+
+    const before = ctx.calls.available.filter((id) => id === 's1').length;
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(ctx.calls.available.filter((id) => id === 's1').length, before,
+      'a correct answer must not be thrown away just because the panel had moved on');
+  } finally { ctx.destroy(); }
+});
+
+test('an answer for a session the panel has left never touches the current button', async () => {
+  const d = deferredAvailable();
+  const ctx = setupFilePanelDom({ availableImpl: d.impl });
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    ctx.window.switchPanel('s2');
+    await flush();
+
+    d.settle('s1', { ok: false, error: 'fatal: …' });
+    d.settle('s2', { ok: true, isRepo: true });
+    await flush();
+
+    assert.notEqual(ctx.document.getElementById('changes-toggle-btn').style.display, 'none');
+
+    // ...and the memo it wrote is s1's, proven by s1 not being probed again.
+    const before = ctx.calls.available.filter((id) => id === 's1').length;
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(ctx.calls.available.filter((id) => id === 's1').length, before);
+  } finally { ctx.destroy(); }
+});
+
+// --- A refused withdrawal must not freeze the tab ---------------------------
+
+test('a close the tab refuses leaves a readable tab, not a permanent Loading', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => ({ ok: false, reason: 'not-a-repo', error: 'not a git repository' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    ctx.window.toggleChangesTab = () => {}; // a gate that declines
+    await flush();
+
+    const summary = ctx.document.getElementById('changes-summary');
+    assert.doesNotMatch(summary.textContent, /Loading/,
+      'the tab is staying open, so it has to say something other than the render it was stuck on');
+    const err = ctx.document.querySelector('.changes-error');
+    assert.ok(err, 'a tab that could not be withdrawn must explain itself');
+  } finally { ctx.destroy(); }
+});
+
+// Counts writes to the button's display, which is the only trace a redundant
+// repaint leaves: the value written is always the current session's.
+function countDisplayWrites(ctx) {
+  const btn = ctx.document.getElementById('changes-toggle-btn');
+  const style = btn.style;
+  let writes = 0;
+  const proto = Object.getPrototypeOf(style);
+  const descriptor = Object.getOwnPropertyDescriptor(proto, 'display');
+  Object.defineProperty(style, 'display', {
+    configurable: true,
+    get() { return descriptor.get.call(style); },
+    set(v) { writes++; descriptor.set.call(style, v); },
+  });
+  return { count: () => writes, reset: () => { writes = 0; } };
+}
+
+test('a reply for a session the panel has left repaints nothing (mutation target: dropping the guard around updateChangesToggle)', async () => {
+  const d = deferredAvailable();
+  const ctx = setupFilePanelDom({ availableImpl: d.impl });
+  try {
+    ctx.window.switchPanel('s1');
+    await flush();
+    ctx.window.switchPanel('s2');
+    await flush();
+
+    const writes = countDisplayWrites(ctx);
+    writes.reset();
+
+    d.settle('s1', { ok: true, isRepo: true });
+    await flush();
+    assert.equal(writes.count(), 0,
+      's1 is not the session on screen, so its answer has no button to paint');
+
+    d.settle('s2', { ok: true, isRepo: true });
+    await flush();
+    assert.equal(writes.count(), 1, 's2 is, so its answer does');
+  } finally { ctx.destroy(); }
+});

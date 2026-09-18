@@ -59,6 +59,8 @@ let changesListDesiredHeight = readStoredChangesListHeight();
 
 // No work tree, no Changes affordance — see .ai/contexts/changes-view.md ("Not a repository")
 const NOT_A_REPO_REASON = 'not-a-repo';
+// see .ai/contexts/changes-view.md ("Who asks, and when")
+const CHANGES_UNANSWERED = 'unanswered';
 const changesAvailabilityInFlight = new Set();
 
 const PANEL_WIDTH_KEY = 'filePanelWidth';
@@ -719,11 +721,12 @@ function updateChangesToggle() {
   changesToggleBtn.style.display = state && state.changesAvailable === false ? 'none' : '';
 }
 
-// see .ai/contexts/changes-view.md ("Not a repository")
+// see .ai/contexts/changes-view.md ("Who asks, and when")
 async function refreshChangesAvailability(sessionId) {
   updateChangesToggle();
   if (!sessionId || typeof window.api?.gitChangesAvailable !== 'function') return;
-  if (getSessionState(sessionId).changesAvailable === true) return;
+  const memo = getSessionState(sessionId).changesAvailable;
+  if (memo === true || memo === CHANGES_UNANSWERED) return;
   if (changesAvailabilityInFlight.has(sessionId)) return;
 
   changesAvailabilityInFlight.add(sessionId);
@@ -733,12 +736,15 @@ async function refreshChangesAvailability(sessionId) {
   } finally {
     changesAvailabilityInFlight.delete(sessionId);
   }
-  if (currentPanelSessionId !== sessionId) return;
-  if (!result || typeof result.isRepo !== 'boolean') return;
 
+  if (!result || typeof result.isRepo !== 'boolean') {
+    getSessionState(sessionId).changesAvailable = CHANGES_UNANSWERED;
+    if (currentPanelSessionId === sessionId) updateChangesToggle();
+    return;
+  }
   if (result.isRepo) {
     getSessionState(sessionId).changesAvailable = true;
-    updateChangesToggle();
+    if (currentPanelSessionId === sessionId) updateChangesToggle();
     return;
   }
   noteChangesUnavailable(sessionId);
@@ -827,9 +833,10 @@ async function refreshChanges(sessionId) {
   tab.loading = false;
   if (result && result.reason === NOT_A_REPO_REASON) {
     noteChangesUnavailable(sessionId);
-    return;
-  }
-  if (!result || result.ok === false) {
+    if (!stillState.currentTab) return;
+    tab.error = result.error || 'not a git repository';
+    tab.data = null;
+  } else if (!result || result.ok === false) {
     tab.error = (result && result.error) || 'failed to load changes';
     tab.data = null;
   } else {

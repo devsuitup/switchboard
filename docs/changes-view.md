@@ -9,8 +9,13 @@ Click the **Changes** button in the terminal header, next to the stop button. Cl
 The button is only there for a session whose working directory is inside a git
 repository. A session started somewhere that is not one — a scratch directory, a
 notes folder — has no Changes button at all. Run `git init` there and the button
-appears the next time the panel follows that session; delete the repository and
-it goes away again, closing the view if it was open.
+appears the next time the panel follows that session.
+
+The reverse is looser: a session that was in a repository keeps its button for
+the rest of the run even if you delete the repository under it. Clicking Changes
+then closes the view again straight away. Checking for that on every click of
+every session would cost a git command each time, which is not worth it for a
+case that ends the moment you restart.
 
 A repository git *refuses to open* is a different case and keeps its button. If
 git will not read the repository — it is owned by another user, its permissions
