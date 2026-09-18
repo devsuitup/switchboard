@@ -128,6 +128,13 @@ the Changes panel turns them off. `test/codemirror-merge-editing.test.js`
 drives all of this against the real CodeMirror under jsdom — a stub that
 dispatches `cm-save` itself proves nothing about the keymap.
 
+All three factories take an `onChange` callback, and `docChangeListener` in
+`public/codemirror-setup.js` delivers it from a CodeMirror `updateListener` on
+`docChanged` rather than from a DOM `input` listener on the editor: it fires
+for typing, paste, undo/redo and programmatic dispatches alike, where a DOM
+`input` event reports only the first two. A Save button whose enabled state is
+computed from that callback is therefore still right after an undo.
+
 ## Gotchas
 
 - **CodeMirror state holds DOM references** — calling `destroy()` then immediately `open()` on the SAME container works because `_createEditor` rebuilds it, but if you reorder this, the editor can dangle.

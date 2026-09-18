@@ -416,9 +416,7 @@ function createReadOnlyViewer(parent, content, filename) {
 
 // ── Editable File Viewer (for file panel) ───────────────────────────
 
-// A caller that needs to know the document changed (an enabled/disabled Save,
-// say) gets it from CodeMirror rather than from DOM input events, which miss
-// undo, paste and programmatic edits.
+// see .ai/contexts/viewer-panel.md ("Changes mode")
 function docChangeListener(onChange) {
   return typeof onChange === 'function'
     ? EditorView.updateListener.of((update) => { if (update.docChanged) onChange(); })
