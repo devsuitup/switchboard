@@ -10,7 +10,9 @@ const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
 
 const BLUE = '#4fc3f7';
-const VIOLET = '#8088ff';
+// The violet is the shared accent token; either spelling is the same colour,
+// and what these rules must not do is pick a different one.
+const VIOLET = '(?:#8088ff|var\\(--accent\\))';
 
 function projectWithLiveSubagent() {
   return makeSampleProject({
