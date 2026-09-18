@@ -307,10 +307,13 @@ checks are scans: every call to `trace`, `codePoints`, `controlOffset`,
 and the probe categories are named so a probe deleted in a refactor fails the
 suite instead of quietly reducing a count.
 
-One call is exempt and pinned by its exact text: the OSC 0 `log.debug` line
-renders a code point into a template literal on every title, whatever the trace
-is doing. It predates this feature (c07ab13, 2026-03) and is on `main`; the
-exemption exists so that it stays the only one.
+One call is exempt from that guard and pinned by its exact text: the OSC 0
+`log.debug` line renders a code point into a template literal, and it carries
+the debug-log guard `if (LOG_DEBUG_ON)` rather than `if (TRACE.on)` — a
+packaged build logs at `info`, so the line and its code point are inert there.
+`test/osc-debug-log-guards.test.js` pins that guard, and every other debug line
+on the PTY data path with it. The exemption above exists so that this stays the
+only one.
 
 This matters because of
 [ADR 0002](decisions/0002-discrete-steps-sidebar-animations.md) — the

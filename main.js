@@ -30,6 +30,7 @@ if (process.env.SWITCHBOARD_DATA_DIR) {
 
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
+const LOG_DEBUG_ON = log.transports.file.level === 'debug' || log.transports.console.level === 'debug';
 
 // Opt-in activity trace — see docs/activity-trace.md.
 const activityTrace = require('./activity-trace');
@@ -2170,12 +2171,12 @@ function wireSessionPty(session, sessionId, ptyProcess) {
         // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
         if (code === '0') {
           const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
-          log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
+          if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
           if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
           if (isBusy && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 0] session=${currentId} → BUSY`);
+            if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} → BUSY`);
             if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);
@@ -2183,7 +2184,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
           } else if (isIdle && session._cliBusy) {
             session._cliBusy = false;
             session._oscIdle = true;
-            log.debug(`[OSC 0] session=${currentId} → IDLE`);
+            if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} → IDLE`);
             if (TRACE.on) trace('busy.emit', currentId, { busy: false, via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, false);
@@ -2199,12 +2200,12 @@ function wireSessionPty(session, sessionId, ptyProcess) {
         if (payload.startsWith('4;')) {
           const level = payload.split(';')[1];
           if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
-          log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
+          if (LOG_DEBUG_ON) log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
           if (TRACE.on) trace('osc.progress', currentId, { level, payload: payload.slice(0, 60), was: !!session._cliBusy, decision: progressDecision(level, !!session._cliBusy) });
           if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
+            if (LOG_DEBUG_ON) log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
             if (TRACE.on) trace('busy.emit', currentId, { busy: true, via: 'osc9.4', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);

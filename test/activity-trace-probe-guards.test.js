@@ -132,13 +132,12 @@ test('every trace() call in main.js is guarded, except the IPC forwarder', () =>
   assert.equal(looseTrace.length, 1, 'the renderer forwarder is the only unguarded call');
 });
 
-// One call predates the trace: the OSC 0 debug log renders a code point into a
-// template literal on every title, whatever the trace is doing. It is a real
-// cost on a hot path and it is not this feature's to remove — it came in with
-// c07ab13 (2026-03) and is on main. Pinned by its exact text so that it stays
-// the *only* exception: anything new fails the assertion below.
+// One call renders a code point outside the trace's guard: the OSC 0 debug log
+// sits under `if (LOG_DEBUG_ON)` instead, the debug-log guard, which
+// test/osc-debug-log-guards.test.js pins. Its exact text is pinned here so
+// that it stays the *only* exception: anything new fails the assertion below.
 const KNOWN_UNGUARDED_HELPERS = [
-  'log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);',
+  'if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);',
 ];
 
 test('no trace payload helper is called outside a guard', () => {
