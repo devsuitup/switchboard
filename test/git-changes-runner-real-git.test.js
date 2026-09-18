@@ -42,8 +42,11 @@ function mkTmp() {
   return fs.realpathSync.native(dir);
 }
 
+// Same race as test/git-changes-file-real-git.test.js: a git child killed by a
+// cap is still terminating when the assertion returns, and on Windows it holds
+// its working directory until it dies.
 function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 // Scratch repo only: drop the caller's GIT_* env (set when this suite runs under a hook) and its hooks.
