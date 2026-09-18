@@ -6,9 +6,10 @@
 // does to it — not about a stub that always answers correctly.
 //
 // jsdom has no layout, so CodeMirror's measuring phase throws inside its own
-// requestAnimationFrame callbacks; the stubs below give it enough of a Range to
-// stay quiet, and the jsdom virtual console swallows the rest. None of that
-// touches the keymap, the history or the document, which is what is asserted.
+// requestAnimationFrame callbacks. The stubs below give it enough of a Range to
+// stay quiet; anything else that reaches the virtual console is recorded and
+// asserted on, so an error that means "the view never constructed" cannot pass
+// as layout noise.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,12 +20,23 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 const SETUP = path.join(__dirname, '..', 'public', 'codemirror-setup.js');
 
 let cmWindow = null;
+const jsdomErrors = [];
+
+// Measuring against a layout engine that does not exist. Anything else is a
+// real failure and is asserted on at the end of each test.
+const LAYOUT_NOISE = /getClientRects|getBoundingClientRect|coordsAt|textRange|scrollIntoView/;
+
+function assertOnlyLayoutNoise() {
+  const real = jsdomErrors.filter((e) => !LAYOUT_NOISE.test(e));
+  assert.deepEqual(real, [], 'jsdom reported an error that is not a missing-layout measurement');
+  jsdomErrors.length = 0;
+}
 
 async function loadCodeMirror() {
   if (cmWindow) return cmWindow;
 
   const virtualConsole = new VirtualConsole();
-  virtualConsole.on('jsdomError', () => {});
+  virtualConsole.on('jsdomError', (err) => jsdomErrors.push(String((err && err.message) || err)));
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { pretendToBeVisual: true, virtualConsole });
   const { window } = dom;
 
@@ -71,6 +83,7 @@ test('real CodeMirror: Ctrl/Cmd+S in the side-by-side editing pane raises exactl
 
     pressCtrlS(window, view.b.contentDOM);
     assert.equal(saves, 2);
+    assertOnlyLayoutNoise();
   } finally {
     view.destroy();
     container.remove();
@@ -93,6 +106,7 @@ test('real CodeMirror: the side-by-side editing pane is editable and has undo', 
     const { undo } = require('@codemirror/commands');
     assert.equal(undo(view.b), true, 'undo needs the history extension to be installed');
     assert.equal(view.b.state.doc.toString(), 'new\n');
+    assertOnlyLayoutNoise();
   } finally {
     view.destroy();
     host.remove();
@@ -115,13 +129,16 @@ test('real CodeMirror: the inline merge view drops the accept/reject chunk contr
       'the default carries the chunk controls, which is what the Changes panel opts out of');
     assert.doesNotMatch(host.innerHTML, /cm-chunkButtons/);
     assert.doesNotMatch(host.innerHTML, /Reject/);
+    assertOnlyLayoutNoise();
   } finally {
     without.destroy();
     host.remove();
   }
 });
 
-test('real CodeMirror: Ctrl/Cmd+S also raises cm-save in the inline and plain editing modes', async () => {
+// Exactly one: a keymap and a DOM handler on the same editable view raise two
+// saves per keystroke, which is why the merge pane carries only the keymap.
+test('real CodeMirror: Ctrl/Cmd+S raises exactly one cm-save in the inline and plain editing modes too', async () => {
   const window = await loadCodeMirror();
   const host = window.document.createElement('div');
   window.document.body.appendChild(host);
@@ -129,9 +146,11 @@ test('real CodeMirror: Ctrl/Cmd+S also raises cm-save in the inline and plain ed
   const inline = window.createUnifiedMergeViewer(host, 'old\n', 'new\n', 'a.js', { mergeControls: false });
   try {
     let saves = 0;
-    host.addEventListener('cm-save', () => { saves++; });
+    const count = () => { saves++; };
+    host.addEventListener('cm-save', count);
     pressCtrlS(window, inline.contentDOM);
-    assert.ok(saves >= 1, 'inline mode saves too');
+    assert.equal(saves, 1, 'inline mode saves exactly once per keystroke');
+    host.removeEventListener('cm-save', count);
   } finally {
     inline.destroy();
   }
@@ -141,9 +160,28 @@ test('real CodeMirror: Ctrl/Cmd+S also raises cm-save in the inline and plain ed
     let saves = 0;
     host.addEventListener('cm-save', () => { saves++; });
     pressCtrlS(window, plain.contentDOM);
-    assert.ok(saves >= 1, 'plain mode saves too');
+    assert.equal(saves, 1, 'plain mode saves exactly once per keystroke');
+    assertOnlyLayoutNoise();
   } finally {
     plain.destroy();
+    host.remove();
+  }
+});
+
+test('real CodeMirror: the MCP diff tab keeps its per-chunk controls and still saves exactly once', async () => {
+  const window = await loadCodeMirror();
+  const host = window.document.createElement('div');
+  window.document.body.appendChild(host);
+
+  const view = window.createUnifiedMergeViewer(host, 'old\n', 'new\n', 'a.js');
+  try {
+    let saves = 0;
+    host.addEventListener('cm-save', () => { saves++; });
+    pressCtrlS(window, view.contentDOM);
+    assert.equal(saves, 1);
+    assertOnlyLayoutNoise();
+  } finally {
+    view.destroy();
     host.remove();
   }
 });
