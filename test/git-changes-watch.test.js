@@ -88,7 +88,6 @@ test('a rename-based replacement re-arms the watch, so the write after it is sti
   assert.equal(h.watches.length, 2, 'and a new one is armed on the same path');
   assert.equal(h.watches[1].filePath, '/repo/src/a.js');
 
-  // Everything after the replacement used to be silent.
   h.fire('change');
   h.settle();
   assert.equal(h.sent.length, 2, 'a write after the replacement is still reported');
@@ -136,6 +135,36 @@ test('two sessions watching the same relative path are independent', () => {
   assert.deepEqual(h.sent[1], { sessionId: 's2', relPath: 'src/a.js' });
 });
 
+test('a notification whose entry is gone is dropped, even if its timer still fires', () => {
+  const captured = [];
+  const watches = [];
+  const sent = [];
+  const registry = createChangesWatchRegistry({
+    watchFn: (filePath, handler) => {
+      const entry = { filePath, handler, closed: false };
+      watches.push(entry);
+      return { close() { entry.closed = true; } };
+    },
+    send: (sessionId, relPath) => sent.push({ sessionId, relPath }),
+    // A scheduler that hands the callback out and ignores clearTimeout, which
+    // is the race a real timer can lose.
+    scheduler: { setTimeout: (fn) => { captured.push(fn); return captured.length; }, clearTimeout: () => {} },
+  });
+
+  registry.watch('s1', 'src/a.js', '/repo/src/a.js');
+  watches[0].handler('change');
+  registry.unwatch('s1', 'src/a.js');
+  captured[captured.length - 1]();
+  assert.deepEqual(sent, [], 'the file is not open any more; nothing may be reported for it');
+
+  registry.watch('s1', 'src/a.js', '/repo/src/a.js');
+  watches[1].handler('change');
+  const stale = captured[captured.length - 1];
+  registry.watch('s1', 'src/a.js', '/repo/src/a.js');
+  stale();
+  assert.deepEqual(sent, [], 'and neither may a timer belonging to a replaced entry');
+});
+
 test('a file that cannot be watched is reported, not thrown', () => {
   const h = harness({ failOn: () => true });
   const result = h.registry.watch('s1', 'gone.js', '/repo/gone.js');
@@ -171,6 +200,8 @@ test('main.js arms the registry with fs.watch and answers both IPCs with it (mut
   const watchBody = watchHandler.slice(0, watchHandler.indexOf('\n});'));
   assert.match(watchBody, /requireLocalTarget/, 'a remote session has no file to watch here');
   assert.match(watchBody, /resolveTargetInsideRepo/, 'the watch goes through the same guard as the read');
+  assert.match(watchBody, /if \(!resolved\.ok\) return resolved;/,
+    'a refused path must come back with the guard\'s own reason, not as a failed fs.watch');
   assert.match(watchBody, /changesWatchers\.watch\(sessionId, filePath, resolved\.path\)/);
 
   const unwatchHandler = main.slice(main.indexOf("ipcMain.handle('git-changes-unwatch'"));
@@ -178,4 +209,8 @@ test('main.js arms the registry with fs.watch and answers both IPCs with it (mut
 
   assert.match(preload, /gitChangesWatch: \(sessionId, filePath\) => ipcRenderer\.invoke\('git-changes-watch', sessionId, filePath\)/);
   assert.match(preload, /onGitChangesFileChanged/);
+
+  const closedHandler = main.slice(main.indexOf("mainWindow.on('closed'"));
+  assert.match(closedHandler.slice(0, closedHandler.indexOf('\n  });')), /changesWatchers\.closeAll\(\)/,
+    'the watches must not outlive the window that asked for them');
 });

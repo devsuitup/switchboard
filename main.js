@@ -389,6 +389,7 @@ function createWindow() {
       if (!session.exited) killPty(session, id);
       activeSessions.delete(id);
     }
+    changesWatchers.closeAll();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {

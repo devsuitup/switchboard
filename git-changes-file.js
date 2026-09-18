@@ -88,11 +88,6 @@ async function resolveRepoDirs(cwd, deps) {
   return { root, gitDirs };
 }
 
-async function resolveRepoRoot(cwd, deps) {
-  const dirs = await resolveRepoDirs(cwd, deps);
-  return dirs ? dirs.root : null;
-}
-
 function hasGitSegment(relativePath) {
   return relativePath.split(/[/\\]/).some((segment) => segment.toLowerCase() === '.git');
 }
@@ -278,7 +273,6 @@ module.exports = {
   writeChangesFile,
   requireLocalTarget,
   resolveTargetInsideRepo,
-  resolveRepoRoot,
   isSafeRepoRelativePath,
   isSafeRevPathOperand,
   hasGitSegment,
