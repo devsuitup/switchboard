@@ -75,11 +75,11 @@ function makeEditorStub(window, mode, doc, created) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [] };
+  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [] };
   const editors = [];
   const fileChangedListeners = [];
 
@@ -114,6 +114,14 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
       return Promise.resolve({ ok: true });
     },
     onGitChangesFileChanged: (cb) => { fileChangedListeners.push(cb); },
+    gitChangesLocate: (sessionId, filePath) => {
+      calls.locate.push({ sessionId, filePath });
+      return Promise.resolve((locateImpl || (() => ({ ok: false, reason: 'outside' })))(sessionId, filePath));
+    },
+    readFileForPanel: (filePath) => {
+      calls.readFile.push(filePath);
+      return Promise.resolve({ ok: true, content: 'plain content' });
+    },
   };
 
   // jsdom's own window.confirm throws "not implemented"; the panel asks before
@@ -153,6 +161,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'splitter.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
@@ -172,6 +181,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
       for (const cb of fileChangedListeners) cb(sessionId, filePath);
     },
     setActivity: read('setActivity'),
+    clampListHeight: read('clampChangesListHeight'),
     stashOf: (sessionId) => {
       const state = read('filePanelState').get(sessionId);
       return state ? state.changesStash : undefined;
@@ -193,8 +203,8 @@ function clickRow(ctx, filePath) {
     .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
 }
 
-function backBtn(ctx) {
-  return Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find((b) => b.textContent === 'Back');
+function closeEditorBtn(ctx) {
+  return ctx.document.getElementById('changes-diff-close-btn');
 }
 
 async function openFile(ctx, sessionId, filePath) {
@@ -269,8 +279,7 @@ test('clicking a file row on a remote session opens a read-only diff colored by 
     assert.ok(hunkLine && hunkLine.textContent.startsWith('@@'));
 
     // Back returns to the file list without another status call.
-    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
-    backBtn.click();
+    closeEditorBtn(ctx).click();
     assert.equal(ctx.document.getElementById('changes-list').style.display, 'block');
     assert.equal(ctx.calls.status.length, 1, 'returning to the list must not re-fetch status');
   } finally { ctx.destroy(); }
@@ -321,8 +330,7 @@ test('an untracked file\'s counts and the header totals pick up the additions it
       .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
     await flush();
 
-    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
-    backBtn.click();
+    closeEditorBtn(ctx).click();
 
     const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
     assert.ok(counts, 'the row now renders counts like any other row');
@@ -352,8 +360,7 @@ test('an untracked binary file keeps null counts — the row stays countless and
     const body = ctx.document.querySelector('.changes-diff-body');
     assert.match(body.textContent, /Binary files .* differ/);
 
-    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
-    backBtn.click();
+    closeEditorBtn(ctx).click();
 
     assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
     assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1/, 'unknown counts must not be folded in as zero');
@@ -397,8 +404,7 @@ test('a count computed against one status result is never applied to a later one
     releaseDiff();
     await flush();
 
-    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
-    backBtn.click();
+    closeEditorBtn(ctx).click();
 
     const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
     assert.equal(counts.textContent, '+2−7', 'git\'s own counts must survive the stale diff');
@@ -473,8 +479,7 @@ test('a failed untracked diff surfaces the error and leaves the counts alone', a
     const body = ctx.document.querySelector('.changes-diff-body');
     assert.match(body.textContent, /fatal: bad thing/);
 
-    const backBtn = Array.from(ctx.document.querySelectorAll('#changes-diff-view button')).find(b => b.textContent === 'Back');
-    backBtn.click();
+    closeEditorBtn(ctx).click();
     assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
   } finally { ctx.destroy(); }
 });
@@ -530,7 +535,7 @@ test('a count computed from the content pair is never applied to a later status 
     releasePair();
     await flush();
 
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
     assert.equal(counts.textContent, '+2−7', 'git\'s own counts must survive the stale pair');
     assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+5 −8/);
@@ -919,7 +924,7 @@ test('an untracked local file opens with an empty original and its own lines as 
     assert.deepEqual(ctx.calls.file, [{ sessionId: 's1', filePath: 'new.txt', staged: false }]);
     assert.equal(ctx.editors[0].opened.original, '');
 
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     const counts = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
     assert.equal(counts.textContent, '+2−0');
     assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+5 −1/);
@@ -930,7 +935,7 @@ test('closing the panel and going back to the list both destroy the editor (muta
   const ctx = setupFilePanelDom();
   try {
     await openFile(ctx, 's1', 'src/a.js');
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     assert.equal(ctx.editors[0].box.destroyed, true, 'Back destroys the editor');
     assert.equal(ctx.document.querySelector('#changes-diff-host .fake-editor'), null);
 
@@ -940,6 +945,186 @@ test('closing the panel and going back to the list both destroy the editor (muta
 
     ctx.document.getElementById('changes-toggle-btn').click();
     assert.equal(ctx.editors[1].box.destroyed, true, 'closing the tab destroys the editor');
+  } finally { ctx.destroy(); }
+});
+
+// --- The list and the editor together ------------------------------------
+
+test('opening a file leaves the list on screen, with its row marked (mutation target: hiding the list)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+
+    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block',
+      'the list is the point: reviewing a set of files must not be a round trip');
+    assert.equal(ctx.document.getElementById('changes-summary').style.display, 'block');
+    assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'flex');
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2, 'every row is still there');
+
+    const selected = ctx.document.querySelectorAll('.changes-file-row.selected');
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].dataset.path, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('clicking another row swaps the editor\'s file without leaving the list', async () => {
+  const ctx = setupFilePanelDom({
+    fileImpl: (_s, filePath) => ({ ok: true, original: '', current: 'content of ' + filePath + '\n', version: 'v1' }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    assert.equal(ctx.editors[0].opened.modified, 'content of src/a.js\n');
+
+    clickRow(ctx, 'new.txt');
+    await flush();
+
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'new.txt');
+    assert.equal(ctx.editors[ctx.editors.length - 1].opened.modified, 'content of new.txt\n');
+    assert.equal(ctx.document.getElementById('changes-list').style.display, 'block');
+    const selected = ctx.document.querySelectorAll('.changes-file-row.selected');
+    assert.equal(selected.length, 1, 'exactly one row is current');
+    assert.equal(selected[0].dataset.path, 'new.txt');
+  } finally { ctx.destroy(); }
+});
+
+test('switching rows with unsaved edits asks first, and a refusal stays on the file (mutation target: the row-switch guard)', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    clickRow(ctx, 'new.txt');
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 1, 'the same question the other exits ask');
+    assert.equal(ctx.calls.file.length, 1, 'the refused switch fetched nothing');
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+    assert.equal(ctx.editors[0].box.destroyed, false);
+    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+    assert.equal(ctx.document.querySelector('.changes-file-row.selected').dataset.path, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('switching rows with unsaved edits proceeds once the user confirms', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    clickRow(ctx, 'new.txt');
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'new.txt');
+    assert.equal(ctx.editors[0].box.destroyed, true, 'the discarded buffer is gone');
+  } finally { ctx.destroy(); }
+});
+
+test('clicking the row that is already open re-reads it without asking anything', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    clickRow(ctx, 'src/a.js');
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 0, 'the current file is not another file');
+  } finally { ctx.destroy(); }
+});
+
+test('a row switch confirmed by the user leaves no stash to resurrect (mutation target: the row-switch exit)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'I ASKED TO DISCARD THIS\n';
+
+    // A live stash, the way the other exits are pinned.
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    assert.ok(ctx.stashOf('s1'), 'the stash is live before the switch');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    clickRow(ctx, 'new.txt');
+    await flush();
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.stashOf('s1'), null, 'switching away from a discarded buffer must not stash it');
+
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.stashOf('s1'), null);
+    assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'none',
+      'and nothing from before the switch comes back — the editor region is closed');
+  } finally { ctx.destroy(); }
+});
+
+test('an idle refresh rebuilds the list without disturbing the open editor', async () => {
+  let files = null;
+  const ctx = setupFilePanelDom({
+    statusImpl: () => (files ? makeStatusResult({ files, totals: { files: files.length, added: 9, deleted: 0 } }) : makeStatusResult()),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const editor = ctx.editors[0];
+    const host = ctx.document.getElementById('changes-diff-host');
+
+    const records = [];
+    const observer = new ctx.window.MutationObserver((list) => records.push(...list));
+    observer.observe(host, { childList: true });
+
+    files = [
+      { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 9, deleted: 0 },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null },
+      { path: 'third.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 1, deleted: 1 },
+    ];
+    ctx.setActivity('s1', true);
+    ctx.setActivity('s1', false);
+    await flush();
+    await flush();
+    observer.disconnect();
+
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 3, 'the list followed the session');
+    assert.deepEqual(records, [], 'and the editor was not touched');
+    assert.equal(editor.box.destroyed, false);
+    assert.equal(ctx.document.querySelector('.changes-file-row.selected').dataset.path, 'src/a.js',
+      'the open file is still marked after the rebuild');
+  } finally { ctx.destroy(); }
+});
+
+test('the list keeps an explicit height only while the editor is open, and the drag persists it', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const list = ctx.document.getElementById('changes-list');
+    const splitter = ctx.document.getElementById('changes-list-splitter');
+    assert.equal(list.style.height, '', 'with no editor the list takes the panel');
+    assert.equal(splitter.style.display, 'none');
+
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    assert.equal(splitter.style.display, 'block');
+    assert.notEqual(list.style.height, '', 'the split gives the list a bounded height');
+
+    // Drag the handle down: the list grows by the delta.
+    const before = parseInt(list.style.height, 10);
+    splitter.dispatchEvent(new ctx.window.MouseEvent('mousedown', { clientY: 100, bubbles: true }));
+    ctx.document.dispatchEvent(new ctx.window.MouseEvent('mousemove', { clientY: 160, bubbles: true }));
+    ctx.document.dispatchEvent(new ctx.window.MouseEvent('mouseup', { bubbles: true }));
+
+    const after = parseInt(list.style.height, 10);
+    assert.ok(after > before, `the drag grew the list: ${before} -> ${after}`);
+    assert.equal(ctx.window.localStorage.getItem('changesListHeight'), String(after),
+      'and what the drag asked for is what is stored');
+
+    closeEditorBtn(ctx).click();
+    await flush();
+    assert.equal(list.style.height, '', 'closing the editor gives the list the panel back');
   } finally { ctx.destroy(); }
 });
 
@@ -970,7 +1155,7 @@ test('the open file is watched while it is editable, and unwatched on the way ou
     await openFile(ctx, 's1', 'src/a.js');
     assert.deepEqual(ctx.calls.watch, [{ sessionId: 's1', filePath: 'src/a.js' }]);
 
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     await flush();
     assert.deepEqual(ctx.calls.unwatch, [{ sessionId: 's1', filePath: 'src/a.js' }]);
   } finally { ctx.destroy(); }
@@ -1119,7 +1304,7 @@ for (const exit of ['toggle', 'panel-close', 'back']) {
 
       if (exit === 'toggle') ctx.document.getElementById('changes-toggle-btn').click();
       else if (exit === 'panel-close') ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
-      else backBtn(ctx).click();
+      else closeEditorBtn(ctx).click();
       await flush();
 
       assert.equal(ctx.calls.confirm.length, 1, 'the user was asked');
@@ -1219,7 +1404,7 @@ test('an exit that asks nothing never drops a stash, even from the Changes tab i
 
     ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
     await flush();
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     assert.equal(ctx.calls.confirm.length, 0, 'a clean buffer is never asked about');
   } finally { ctx.destroy(); }
 });
@@ -1265,7 +1450,7 @@ test('Back asks before discarding unsaved edits, and a refusal keeps the editor 
     await openFile(ctx, 's1', 'src/a.js');
     ctx.editors[0].box.text = 'my edit\n';
 
-    backBtn(ctx).click();
+    closeEditorBtn(ctx).click();
     await flush();
 
     assert.equal(ctx.calls.confirm.length, 1);
@@ -1416,5 +1601,122 @@ test('the panel close button destroys the editor too', async () => {
     ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
     assert.equal(ctx.editors[0].box.destroyed, true);
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+  } finally { ctx.destroy(); }
+});
+
+// --- A file link from the terminal ----------------------------------------
+
+test('a link to a changed file opens the Changes editor on its row (mutation target: the link routing)', async () => {
+  const ctx = setupFilePanelDom({
+    locateImpl: () => ({ ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false }),
+    fileImpl: () => ({ ok: true, original: 'old\n', current: 'new\n', version: 'v1' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
+    await flush();
+
+    assert.deepEqual(ctx.calls.locate, [{ sessionId: 's1', filePath: '/repo/src/a.js' }],
+      'the absolute path goes to main, which answers with a row');
+    assert.deepEqual(ctx.calls.readFile, [], 'the plain viewer is not involved');
+    assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'flex');
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+    assert.deepEqual(ctx.calls.file[0], { sessionId: 's1', filePath: 'src/a.js', staged: true },
+      'and the row it names is opened against the side the row says');
+    assert.equal(ctx.document.querySelector('.changes-file-row.selected').dataset.path, 'src/a.js');
+  } finally { ctx.destroy(); }
+});
+
+test('a link to an untracked file opens there too', async () => {
+  const ctx = setupFilePanelDom({
+    locateImpl: () => ({ ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true }),
+    fileImpl: () => ({ ok: true, original: '', current: 'brand new\n', version: 'v1' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openFileInPanel('s1', '/repo/new.txt');
+    await flush();
+
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'new.txt');
+    assert.equal(ctx.calls.file[0].staged, false);
+    assert.deepEqual(ctx.calls.readFile, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a link to an unmodified file, or one outside the repo, keeps the plain viewer (mutation target: the changed check)', async () => {
+  for (const answer of [
+    { ok: true, relPath: 'clean.txt', changed: false },
+    { ok: false, reason: 'outside', error: 'path is outside this session\'s repository' },
+    { ok: false, reason: 'remote', error: 'editing is not available for a remote session' },
+  ]) {
+    const ctx = setupFilePanelDom({ locateImpl: () => answer });
+    try {
+      ctx.window.switchPanel('s1');
+      await ctx.window.openFileInPanel('s1', '/somewhere/clean.txt');
+      await flush();
+
+      assert.deepEqual(ctx.calls.readFile, ['/somewhere/clean.txt'],
+        `${answer.reason || 'unmodified'} must fall back to the plain editor`);
+      assert.equal(ctx.calls.file.length, 0, 'and must not open a Changes editor');
+      assert.equal(ctx.document.getElementById('file-panel-viewer').style.display, 'flex');
+    } finally { ctx.destroy(); }
+  }
+});
+
+test('a link while another file is open with unsaved edits asks before switching', async () => {
+  const ctx = setupFilePanelDom({
+    confirmImpl: () => false,
+    locateImpl: () => ({ ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true }),
+  });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'my edit\n';
+
+    await ctx.window.openFileInPanel('s1', '/repo/new.txt');
+    await flush();
+
+    assert.equal(ctx.calls.confirm.length, 1);
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js',
+      'a refused switch stays where it was, link or row click alike');
+    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+  } finally { ctx.destroy(); }
+});
+
+test('a link is still honoured when the panel is closed or showing something else', async () => {
+  const ctx = setupFilePanelDom({
+    locateImpl: () => ({ ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    await flush();
+
+    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
+    await flush();
+
+    assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'flex');
+    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
+    assert.equal(ctx.calls.status.length, 1, 'the tab it opened loaded its list');
+  } finally { ctx.destroy(); }
+});
+
+test('the list height is clamped for display only, and never ratcheted down (mutation target: the clamp)', () => {
+  const ctx = setupFilePanelDom();
+  try {
+    const clamp = ctx.clampListHeight;
+
+    // Room for both: the drag gets what it asked for.
+    assert.equal(clamp(200, 600), 200);
+
+    // A short panel: the editor keeps its floor, the list gives way.
+    assert.equal(clamp(500, 300), 180, 'available minus the editor floor');
+
+    // Shorter than both floors: the list keeps its own and the region scrolls
+    // rather than the list vanishing.
+    assert.equal(clamp(500, 150), 96);
+    assert.equal(clamp(10, 600), 96, 'a drag cannot take the list below its floor');
+
+    // No layout to measure yet: keep what was asked for rather than guessing.
+    assert.equal(clamp(250, 0), 250);
   } finally { ctx.destroy(); }
 });

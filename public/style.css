@@ -4549,6 +4549,7 @@ body { display: flex; flex-direction: column; }
 #changes-list {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .changes-file-row {
@@ -4619,11 +4620,40 @@ body { display: flex; flex-direction: column; }
   color: #9090a8;
 }
 
+/* The list keeps its explicit height while the editor is open; it is the
+   editor that takes the remaining space. */
+#changes-list.changes-list-split {
+  flex: 0 0 auto;
+}
+
+#changes-list-splitter {
+  display: none;
+  height: 4px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+#changes-list-splitter:hover,
+#changes-list-splitter.dragging {
+  background: rgba(120,130,255,0.3);
+}
+
+.changes-file-row.selected {
+  background: rgba(120,130,255,0.16);
+}
+
+.changes-file-row.selected .changes-file-path {
+  color: #fff;
+}
+
 #changes-diff-view {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .changes-diff-body {

@@ -45,9 +45,18 @@ let changesDiffSaveBtn = null;
 let changesDiffReloadBtn = null;
 let changesDiffNoticeEl = null;
 let changesDiffHostEl = null;
+let changesListSplitterEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
 const MAX_CHANGES_ROWS = 500;
+
+const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
+const DEFAULT_CHANGES_LIST_HEIGHT = 200;
+// A floor of its own so the list never collapses to a row or two; the editor
+// keeps the rest — see .ai/contexts/changes-view.md ("The list and the editor")
+const MIN_CHANGES_LIST_HEIGHT = 96;
+const MIN_CHANGES_EDITOR_HEIGHT = 120;
+let changesListDesiredHeight = readStoredChangesListHeight();
 
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
@@ -204,12 +213,18 @@ function initFilePanel() {
   changesListEl.id = 'changes-list';
   changesContainerEl.appendChild(changesListEl);
 
+  changesListSplitterEl = document.createElement('div');
+  changesListSplitterEl.id = 'changes-list-splitter';
+  changesListSplitterEl.style.display = 'none';
+  changesContainerEl.appendChild(changesListSplitterEl);
+
   changesDiffEl = document.createElement('div');
   changesDiffEl.id = 'changes-diff-view';
   changesDiffEl.style.display = 'none';
   changesContainerEl.appendChild(changesDiffEl);
 
   buildChangesDiffChrome();
+  setupChangesListSplitter();
   // Shell region below every tab type — see .ai/contexts/panel-terminal.md
   if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
 
@@ -454,10 +469,34 @@ function destroyCurrentTab(state, { stash = true } = {}) {
   }
 }
 
+// A link to one of the session's own changed files opens where it can be
+// edited against its diff — see .ai/contexts/changes-view.md ("File links")
 async function openFileInPanel(sessionId, filePath) {
+  const row = await locateChangesRow(sessionId, filePath);
+  if (row) return openChangesTabAt(sessionId, row);
+
   const result = await window.api.readFileForPanel(filePath);
   if (!result.ok) return;
   openFileTab(sessionId, { filePath, content: result.content });
+}
+
+async function locateChangesRow(sessionId, filePath) {
+  if (!window.api.gitChangesLocate) return null;
+  let located;
+  try {
+    located = await window.api.gitChangesLocate(sessionId, filePath);
+  } catch {
+    return null;
+  }
+  if (!located || !located.ok || !located.changed) return null;
+  return { path: located.relPath, staged: !!located.staged, untracked: !!located.untracked };
+}
+
+async function openChangesTabAt(sessionId, file) {
+  const tab = getSessionState(sessionId).currentTab;
+  if (!tab || tab.type !== 'changes') await openChangesTab(sessionId);
+  // openChangesDiff owns the discard question for every route into it.
+  return openChangesDiff(sessionId, file);
 }
 
 function closeAllDiffs(sessionId) {
@@ -824,6 +863,8 @@ async function openChangesDiff(sessionId, file) {
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
 
+  if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
+
   tab.selectedFile = file;
   tab.diffError = null;
   tab.diffContent = null;
@@ -954,17 +995,20 @@ function confirmDiscardChangesEdits(tab) {
 }
 
 function renderChangesContent(sessionId, tab) {
-  if (tab.selectedFile) {
-    changesSummaryEl.style.display = 'none';
-    changesListEl.style.display = 'none';
-    changesDiffEl.style.display = 'flex';
-    renderChangesDiff(sessionId, tab);
-    return;
-  }
-  changesDiffEl.style.display = 'none';
+  const editorOpen = !!tab.selectedFile;
   changesSummaryEl.style.display = 'block';
   changesListEl.style.display = 'block';
+  changesListSplitterEl.style.display = editorOpen ? 'block' : 'none';
+  changesDiffEl.style.display = editorOpen ? 'flex' : 'none';
+  changesListEl.classList.toggle('changes-list-split', editorOpen);
+  if (editorOpen) applyChangesListHeight();
+  else changesListEl.style.height = '';
 
+  renderChangesList(sessionId, tab);
+  if (editorOpen) renderChangesDiff(sessionId, tab);
+}
+
+function renderChangesList(sessionId, tab) {
   const branchInfoEl = document.getElementById('changes-branch-info');
 
   if (tab.loading && !tab.data) {
@@ -1010,7 +1054,7 @@ function renderChangesContent(sessionId, tab) {
   changesListEl.innerHTML = '';
   const shown = files.length > MAX_CHANGES_ROWS ? files.slice(0, MAX_CHANGES_ROWS) : files;
   for (const file of shown) {
-    changesListEl.appendChild(buildChangesFileRow(sessionId, file));
+    changesListEl.appendChild(buildChangesFileRow(sessionId, tab, file));
   }
   if (shown.length < files.length) {
     const more = document.createElement('div');
@@ -1020,7 +1064,7 @@ function renderChangesContent(sessionId, tab) {
   }
 }
 
-function buildChangesFileRow(sessionId, file) {
+function buildChangesFileRow(sessionId, tab, file) {
   const row = document.createElement('div');
   row.className = 'changes-file-row';
   row.dataset.path = file.path;
@@ -1049,12 +1093,47 @@ function buildChangesFileRow(sessionId, file) {
     row.appendChild(counts);
   }
 
+  if (isSelectedChangesRow(tab, file)) row.classList.add('selected');
+
   row.addEventListener('click', () => {
     // prefer the unstaged (worktree) diff when a file has both
     const staged = !!file.staged && !file.unstaged;
     openChangesDiff(sessionId, { path: file.path, staged, untracked: !!file.untracked });
   });
   return row;
+}
+
+function readStoredChangesListHeight() {
+  const stored = parseInt(localStorage.getItem(CHANGES_LIST_HEIGHT_KEY), 10);
+  return Number.isFinite(stored) ? Math.max(MIN_CHANGES_LIST_HEIGHT, stored) : DEFAULT_CHANGES_LIST_HEIGHT;
+}
+
+// Store what the drag asked for, clamp only for display, so a transient shrink
+// never ratchets the list down — the height model panel-terminal.js settled on.
+function clampChangesListHeight(height, available) {
+  const wanted = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(height));
+  if (!available) return wanted;
+  const ceiling = available - MIN_CHANGES_EDITOR_HEIGHT;
+  return Math.min(wanted, Math.max(MIN_CHANGES_LIST_HEIGHT, ceiling));
+}
+
+function applyChangesListHeight() {
+  if (!changesListEl || !changesContainerEl) return;
+  const available = changesContainerEl.clientHeight - changesSummaryEl.offsetHeight;
+  changesListEl.style.height = clampChangesListHeight(changesListDesiredHeight, available) + 'px';
+}
+
+function setupChangesListSplitter() {
+  if (typeof createSplitter !== 'function') return;
+  createSplitter(changesListSplitterEl, {
+    axis: 'y',
+    getSize: () => changesListEl.offsetHeight || changesListDesiredHeight,
+    onDrag: (startSize, delta) => {
+      changesListDesiredHeight = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(startSize + delta));
+      applyChangesListHeight();
+    },
+    onCommit: () => localStorage.setItem(CHANGES_LIST_HEIGHT_KEY, String(changesListDesiredHeight)),
+  });
 }
 
 // Built once: a render must never tear the open editor down — see .ai/contexts/changes-view.md
@@ -1073,13 +1152,15 @@ function buildChangesDiffChrome() {
   const controls = document.createElement('div');
   controls.className = 'viewer-toolbar-controls';
 
-  const backBtn = document.createElement('button');
-  backBtn.className = 'fp-toolbar-btn';
-  backBtn.textContent = 'Back';
-  backBtn.addEventListener('click', () => {
+  const closeEditorBtn = document.createElement('button');
+  closeEditorBtn.className = 'fp-toolbar-btn';
+  closeEditorBtn.id = 'changes-diff-close-btn';
+  closeEditorBtn.textContent = 'Close';
+  closeEditorBtn.title = 'Close the editor and keep the file list';
+  closeEditorBtn.addEventListener('click', () => {
     if (currentPanelSessionId) closeChangesDiff(currentPanelSessionId);
   });
-  controls.appendChild(backBtn);
+  controls.appendChild(closeEditorBtn);
 
   changesDiffModeBtn = document.createElement('button');
   changesDiffModeBtn.className = 'fp-toolbar-btn';
@@ -1223,6 +1304,11 @@ function mountChangesEditor(dom) {
     if (child !== dom) changesDiffHostEl.removeChild(child);
   }
   if (dom.parentNode !== changesDiffHostEl) changesDiffHostEl.appendChild(dom);
+}
+
+function isSelectedChangesRow(tab, file) {
+  const selected = tab && tab.selectedFile;
+  return !!selected && selected.path === file.path;
 }
 
 function changesEditorKey(tab) {
