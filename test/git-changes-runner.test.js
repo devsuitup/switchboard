@@ -6,6 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 const {
   createGitChangesRunner,
@@ -15,10 +16,22 @@ const {
   shQuote,
   isSafeCwd,
   isSafeGitPath,
+  isSafeNoIndexPath,
+  resolveLocalNoIndexOperand,
   MAX_DIFF_BYTES,
   STATUS_MAX_STDOUT_BYTES,
   DIFF_MAX_STDOUT_BYTES,
 } = require('../git-changes-runner');
+
+// The guard resolves against the running platform's path rules, so a fixture
+// cwd must be absolute FOR THAT PLATFORM: "/repo" is a drive-relative path on
+// Windows, which the guard rightly refuses. REPO is "/repo" on POSIX and
+// "<drive>:\repo" on Windows.
+const REPO = path.resolve('/repo');
+const REAL_REPO = path.resolve('/real/repo');
+const OUTSIDE = path.resolve('/elsewhere');
+const SIBLING = path.resolve('/repository-evil');
+const inRepo = (...segments) => path.join(REPO, ...segments);
 
 // --- shQuote / buildRemoteGitCommand ---------------------------------------
 
@@ -83,6 +96,25 @@ test('isSafeGitPath rejects path traversal (mutation target: dropping the ".." c
   assert.equal(isSafeGitPath('src/file.js'), true);
 });
 
+test('isSafeGitPath rejects ".." as a whole path segment, in either separator (mutation target: only checking the first segment)', () => {
+  assert.equal(isSafeGitPath('..'), false);
+  assert.equal(isSafeGitPath('../x'), false);
+  assert.equal(isSafeGitPath('a/..'), false);
+  assert.equal(isSafeGitPath('a/../../b'), false);
+  assert.equal(isSafeGitPath('a/../b'), false);
+  assert.equal(isSafeGitPath('..\\windows\\x'), false);
+  assert.equal(isSafeGitPath('a\\..\\b'), false);
+});
+
+test('isSafeGitPath accepts ".." inside a filename — it is a name, not a traversal (mutation target: a substring test)', () => {
+  assert.equal(isSafeGitPath('has..dots.txt'), true);
+  assert.equal(isSafeGitPath('v1..v2.diff'), true);
+  assert.equal(isSafeGitPath('..leading.txt'), true);
+  assert.equal(isSafeGitPath('trailing..'), true);
+  assert.equal(isSafeGitPath('src/archive..2024.tar'), true);
+  assert.equal(isSafeNoIndexPath('has..dots.txt'), true, 'the untracked operand guard inherits the same rule');
+});
+
 test('isSafeGitPath rejects NUL/newline, accepts spaces and unicode', () => {
   assert.equal(isSafeGitPath('a\0b'), false);
   assert.equal(isSafeGitPath('a\nb'), false);
@@ -95,6 +127,30 @@ test('isSafeGitPath rejects a leading ":" — git pathspec magic interpreted eve
   assert.equal(isSafeGitPath(':/'), false);
   assert.equal(isSafeGitPath(':(top)src/x.js'), false);
   assert.equal(isSafeGitPath('src/:weird.js'), true, 'a colon not in the first position is not pathspec magic');
+});
+
+// --- isSafeNoIndexPath: the guard for a --no-index filesystem operand -------
+
+test('isSafeNoIndexPath rejects an absolute path — --no-index has no repository-containment check of its own (mutation target: reusing isSafeGitPath here)', () => {
+  assert.equal(isSafeNoIndexPath('/etc/passwd'), false);
+  assert.equal(isSafeNoIndexPath('\\\\host\\share\\secret'), false);
+  assert.equal(isSafeNoIndexPath('C:/Users/dev/.ssh/id_rsa'), false);
+  assert.equal(isSafeNoIndexPath('c:\\Users\\dev\\.ssh\\id_rsa'), false);
+  assert.equal(isSafeGitPath('/etc/passwd'), true, 'the pathspec guard accepts it — git itself refuses it there, but --no-index would not');
+});
+
+test('isSafeNoIndexPath rejects a leading "-" — a --no-index operand sits where git parses options', () => {
+  assert.equal(isSafeNoIndexPath('-R'), false);
+  assert.equal(isSafeNoIndexPath('--output=/tmp/x'), false);
+  assert.equal(isSafeNoIndexPath('src/-dash.txt'), true, 'a dash that is not in the first position is an ordinary filename');
+});
+
+test('isSafeNoIndexPath keeps the pathspec guard\'s rejections and accepts an ordinary relative path', () => {
+  assert.equal(isSafeNoIndexPath('../escape.txt'), false);
+  assert.equal(isSafeNoIndexPath('a\0b'), false);
+  assert.equal(isSafeNoIndexPath(':(exclude)x'), false);
+  assert.equal(isSafeNoIndexPath('newdir/sub/b.txt'), true);
+  assert.equal(isSafeNoIndexPath('café/déjà vu.txt'), true);
 });
 
 // --- truncateDiffContent: byte cap, cut on a line boundary -----------------
@@ -156,7 +212,7 @@ test('local runner .status(): three commands, no -C flag (cwd passed via execFil
     diff: { code: 0, stdout: '1\t2\tfoo.js\x00', stderr: '' },
     'diff:cached': { code: 0, stdout: '', stderr: '' },
   });
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   const result = await runner.status();
 
   assert.equal(result.ok, true);
@@ -170,18 +226,30 @@ test('local runner .status(): three commands, no -C flag (cwd passed via execFil
   }
 });
 
+test('local runner .status(): status runs with -uall so a wholly-untracked directory is listed file by file, never as one directory row (mutation target: dropping -uall)', async () => {
+  const { exec, calls } = localFakeExec({});
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  await runner.status();
+
+  const statusArgs = calls.find((args) => args[1] === 'status');
+  assert.deepEqual(statusArgs, ['--literal-pathspecs', 'status', '--porcelain=v2', '--branch', '-uall', '-z']);
+  for (const args of calls) {
+    if (args[1] === 'diff') assert.ok(!args.includes('-uall'), '-uall belongs to status only, it is not a diff option');
+  }
+});
+
 test('local runner .status(): a failing git call surfaces stderr as the error, not a throw', async () => {
   const exec = (args) => Promise.resolve(
     args[1] === 'status' ? { code: 128, stdout: '', stderr: 'fatal: not a git repository' } : { code: 0, stdout: '', stderr: '' }
   );
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   const result = await runner.status();
   assert.equal(result.ok, false);
   assert.match(result.error, /not a git repository/);
 });
 
 test('local runner .status(): a thrown exec rejects gracefully', async () => {
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec: () => { throw new Error('ENOENT'); } });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => { throw new Error('ENOENT'); } });
   const result = await runner.status();
   assert.equal(result.ok, false);
   assert.match(result.error, /ENOENT/);
@@ -192,7 +260,7 @@ test('local runner .status(): a thrown exec rejects gracefully', async () => {
 test('local runner .diff(): unstaged diff args carry --literal-pathspecs, refuses an unsafe path before calling exec', async () => {
   const calls = [];
   const exec = (args) => { calls.push(args); return Promise.resolve({ code: 0, stdout: 'diff --git a/x b/x\n+line\n', stderr: '' }); };
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
 
   const bad = await runner.diff('../escape.js');
   assert.equal(bad.ok, false);
@@ -206,7 +274,7 @@ test('local runner .diff(): unstaged diff args carry --literal-pathspecs, refuse
 test('local runner .diff({staged:true}): includes --cached', async () => {
   const calls = [];
   const exec = (args) => { calls.push(args); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   await runner.diff('src/x.js', { staged: true });
   assert.deepEqual(calls[0], ['--literal-pathspecs', 'diff', '--cached', '--', 'src/x.js']);
 });
@@ -215,7 +283,7 @@ test('local runner .diff(): truncates content past 512 KB, on a line boundary, m
   const line = 'a'.repeat(100) + '\n'; // 101 bytes/line, ASCII
   const big = line.repeat(6000); // ~600 KB, well past the 512 KB cap
   const exec = () => Promise.resolve({ code: 0, stdout: big, stderr: '' });
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   const result = await runner.diff('x.js');
   assert.equal(result.ok, true);
   assert.equal(result.truncated, true);
@@ -230,7 +298,7 @@ test('local runner .diff(): the byte cap is measured in UTF-8 bytes, not JS stri
   const line = 'é'.repeat(100) + '\n'; // 100 chars => 201 bytes/line
   const big = line.repeat(4000); // ~400,000 chars / ~804,000 bytes
   const exec = () => Promise.resolve({ code: 0, stdout: big, stderr: '' });
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   const result = await runner.diff('x.js');
   assert.equal(result.truncated, true);
   assert.ok(Buffer.byteLength(result.content, 'utf8') <= MAX_DIFF_BYTES, 'a char-length cap would overshoot the byte cap here');
@@ -238,10 +306,355 @@ test('local runner .diff(): the byte cap is measured in UTF-8 bytes, not JS stri
 
 test('local runner .diff(): a diff under the cap is not marked truncated', async () => {
   const exec = () => Promise.resolve({ code: 0, stdout: 'small diff\n', stderr: '' });
-  const runner = createGitChangesRunner({ kind: 'local', cwd: '/repo', exec });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   const result = await runner.diff('x.js');
   assert.equal(result.truncated, false);
   assert.equal(result.content, 'small diff\n');
+});
+
+// --- local runner: .diff({untracked:true}) ----------------------------------
+
+// The fs seam the local containment check goes through. By default every path
+// is its own real path and every leaf is a regular file; `links` redirects a
+// single path the way a symlink would.
+// `type` is what lstat() sees; `target` is what stat() sees through a symlink
+// ('missing' throws, the way a dangling link does).
+function fakeFsOps({ links = {}, type = 'file', target = 'file' } = {}) {
+  return {
+    realpath: (p) => {
+      if (Object.prototype.hasOwnProperty.call(links, p)) return links[p];
+      return p;
+    },
+    lstat: () => ({ isFile: () => type === 'file', isSymbolicLink: () => type === 'symlink' }),
+    stat: () => {
+      if (target === 'missing') throw new Error('ENOENT: no such file or directory');
+      return { isFile: () => target === 'file', isDirectory: () => target === 'dir' };
+    },
+  };
+}
+
+// A --no-index diff whose header names `p`, the way real git spells it.
+function untrackedDiffFor(p) {
+  return `diff --git a/${p} b/${p}\nnew file mode 100644\nindex 0000000..2cdcdb0\n--- /dev/null\n+++ b/${p}\n@@ -0,0 +1,2 @@\n+a1\n+a2\n`;
+}
+
+const UNTRACKED_DIFF = [
+  'diff --git a/new.txt b/new.txt',
+  'new file mode 100644',
+  'index 0000000..2cdcdb0',
+  '--- /dev/null',
+  '+++ b/new.txt',
+  '@@ -0,0 +1,2 @@',
+  '+a1',
+  '+a2',
+  '',
+].join('\n');
+
+test('local runner .diff({untracked:true}): exit code 1 with a diff on stdout is SUCCESS — git diff --no-index exits 1 whenever the two inputs differ (mutation target: the usual code !== 0 check)', async () => {
+  const exec = () => Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('new.txt', { untracked: true });
+
+  assert.equal(result.ok, true, 'exit 1 from --no-index means "they differ", not "it failed"');
+  assert.equal(result.content, UNTRACKED_DIFF);
+  assert.equal(result.truncated, false);
+});
+
+test('local runner .diff({untracked:true}): builds a --no-index invocation against /dev/null, with -- before the two operands', async () => {
+  const calls = [];
+  const exec = (args) => { calls.push(args); return Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' }); };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  await runner.diff('new.txt', { untracked: true });
+
+  assert.deepEqual(calls[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'new.txt']);
+  assert.ok(!calls[0].includes('--cached'), 'an untracked file has nothing in the index');
+});
+
+test('local runner .diff({untracked:true}): returns the added-line count the status pass could not know, with deleted 0', async () => {
+  const exec = () => Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('new.txt', { untracked: true });
+
+  assert.equal(result.added, 2);
+  assert.equal(result.deleted, 0);
+});
+
+test('local runner .diff({untracked:true}): a binary file reports null counts and git\'s own note, not garbage', async () => {
+  const binary = 'diff --git a/bin.dat b/bin.dat\nnew file mode 100644\nBinary files /dev/null and b/bin.dat differ\n';
+  const exec = () => Promise.resolve({ code: 1, stdout: binary, stderr: '' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('bin.dat', { untracked: true });
+
+  assert.equal(result.ok, true);
+  assert.match(result.content, /Binary files .* differ/);
+  assert.equal(result.added, null, 'a binary file has no line count — null, not 0');
+  assert.equal(result.deleted, null);
+});
+
+test('local runner .diff({untracked:true}): a truncated diff reports null counts — a partial diff cannot be counted', async () => {
+  const head = 'diff --git a/big.txt b/big.txt\n--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,6000 @@\n';
+  const exec = () => Promise.resolve({ code: 1, stdout: head + ('+' + 'a'.repeat(100) + '\n').repeat(6000), stderr: '' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('big.txt', { untracked: true });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.added, null);
+  assert.equal(result.deleted, null);
+});
+
+test('local runner .diff({untracked:true}): any exit code other than 0 or 1 is still an error', async () => {
+  const exec = () => Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('new.txt', { untracked: true });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not a git repository/);
+});
+
+test('local runner .diff({untracked:true}): exit 1 with NO stdout and a message on stderr is an error — that is how --no-index reports an inaccessible operand', async () => {
+  const exec = () => Promise.resolve({ code: 1, stdout: '', stderr: "error: Could not access 'gone.txt'" });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+  const result = await runner.diff('gone.txt', { untracked: true });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Could not access/);
+});
+
+test('local runner .diff({untracked:true}): an operand outside the working directory never reaches exec — --no-index would happily read it', async () => {
+  let calls = 0;
+  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: 'SECRET', stderr: '' }); };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
+
+  for (const bad of ['/etc/passwd', '../../etc/passwd', 'C:/Users/dev/.ssh/id_rsa', '--output=/tmp/pwn']) {
+    const result = await runner.diff(bad, { untracked: true });
+    assert.equal(result.ok, false, `${bad} must be refused`);
+    assert.equal(result.error, 'invalid path');
+  }
+  assert.equal(calls, 0, 'no unsafe operand may ever reach exec');
+});
+
+test('local runner .diff({untracked:true}): a symlinked directory inside the repo cannot be used to read outside it (mutation target: a syntax-only guard)', async () => {
+  let calls = 0;
+  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: 'SUPER_SECRET_OUTSIDE_THE_REPO', stderr: '' }); };
+  // repo/link-to-dir is a symlink to /elsewhere: the operand has no "..", is not
+  // absolute, and every syntactic check passes.
+  const fsOps = fakeFsOps({ links: { [inRepo('link-to-dir')]: OUTSIDE } });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('link-to-dir/outside-secret.txt', { untracked: true });
+  assert.equal(isSafeNoIndexPath('link-to-dir/outside-secret.txt'), true, 'the syntactic guard alone accepts this operand');
+  assert.equal(result.ok, false, 'containment must be resolved on disk, not inferred from the string');
+  assert.equal(result.error, 'invalid path');
+  assert.equal(calls, 0, 'git must never be handed an operand that resolves outside the working directory');
+});
+
+test('local runner .diff({untracked:true}): git receives the guard\'s resolved operand, not the caller\'s string', async () => {
+  const calls = [];
+  const exec = (args) => { calls.push(args); return Promise.resolve({ code: 1, stdout: untrackedDiffFor('sub/new.txt'), stderr: '' }); };
+  // The repo is reached through a symlinked ancestor: cwd and the operand's real
+  // parent are spelled differently, and the operand must come out relative to the
+  // resolved root.
+  const fsOps = fakeFsOps({ links: { [REPO]: REAL_REPO } });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('sub/new.txt', { untracked: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'sub/new.txt']);
+});
+
+test('local runner .diff({untracked:true}): a leaf symlink to a FILE is still diffable (git lstats that one — the link target string, never the target\'s content)', async () => {
+  const exec = () => Promise.resolve({ code: 1, stdout: 'diff --git a/link-to-file b/link-to-file\nnew file mode 120000\n--- /dev/null\n+++ b/link-to-file\n@@ -0,0 +1 @@\n+/etc/passwd\n', stderr: '' });
+  const fsOps = fakeFsOps({ type: 'symlink', target: 'file' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('link-to-file', { untracked: true });
+  assert.equal(result.ok, true, 'a symlink row that git lists must stay openable');
+  assert.match(result.content, /new file mode 120000/);
+});
+
+test('local runner .diff({untracked:true}): a leaf symlink to a DIRECTORY never reaches git — it follows that one and pairs the operands by basename (mutation target: lstat alone)', async () => {
+  let calls = 0;
+  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: untrackedDiffFor('dirlink/null'), stderr: '' }); };
+  const fsOps = fakeFsOps({ type: 'symlink', target: 'dir' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('dirlink', { untracked: true });
+  assert.equal(result.ok, false, 'git would diff <dirlink>/null, a file outside the repository');
+  assert.equal(result.error, 'invalid path');
+  assert.equal(calls, 0);
+});
+
+test('local runner .diff({untracked:true}): a dangling leaf symlink stays diffable — there is nothing for git to follow', async () => {
+  const exec = () => Promise.resolve({ code: 1, stdout: 'diff --git a/dangling b/dangling\nnew file mode 120000\n--- /dev/null\n+++ b/dangling\n@@ -0,0 +1 @@\n+/gone\n', stderr: '' });
+  const fsOps = fakeFsOps({ type: 'symlink', target: 'missing' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('dangling', { untracked: true });
+  assert.equal(result.ok, true);
+});
+
+// --- the diff header must name the file that was asked for ------------------
+
+test('.diff({untracked:true}): a diff naming a path other than the one requested is refused, on either transport (mutation target: dropping the header check)', async () => {
+  const leak = untrackedDiffFor('dirlink/null');
+
+  // Local: the fs seam is made to lie about the leaf, so only the header check
+  // can catch the basename pairing.
+  const local = createGitChangesRunner({
+    kind: 'local',
+    cwd: REPO,
+    exec: () => Promise.resolve({ code: 1, stdout: leak, stderr: '' }),
+    fsOps: fakeFsOps({ type: 'file' }),
+  });
+  const localResult = await local.diff('dirlink', { untracked: true });
+  assert.equal(localResult.ok, false);
+  assert.equal(localResult.error, 'invalid path');
+
+  // Remote: git's own listing returns the symlink itself, so the oracle passes
+  // and the header check is the only thing left.
+  const remote = createGitChangesRunner({
+    kind: 'remote',
+    cwd: '/srv/app',
+    alias: 'vps',
+    exec: (command) => (command.includes("'ls-files'")
+      ? Promise.resolve({ code: 0, stdout: 'dirlink\0', stderr: '' })
+      : Promise.resolve({ code: 1, stdout: leak, stderr: '' })),
+  });
+  const remoteResult = await remote.diff('dirlink', { untracked: true });
+  assert.equal(remoteResult.ok, false, 'the remote transport has no filesystem to resolve against — the header is the check');
+  assert.equal(remoteResult.error, 'invalid path');
+  assert.ok(!String(remoteResult.content || '').includes('a1'), 'no content from the wrong file is returned');
+});
+
+test('.diff({untracked:true}): a quoted header (a name git cannot print verbatim) still matches its own path', async () => {
+  const quoted = 'diff --git "a/quote\\".txt" "b/quote\\".txt"\nnew file mode 100644\n--- /dev/null\n+++ "b/quote\\".txt"\n@@ -0,0 +1 @@\n+x\n';
+  const runner = createGitChangesRunner({
+    kind: 'local',
+    cwd: REPO,
+    exec: () => Promise.resolve({ code: 1, stdout: quoted, stderr: '' }),
+    fsOps: fakeFsOps(),
+  });
+  const result = await runner.diff('quote".txt', { untracked: true });
+  assert.equal(result.ok, true, 'a legitimately named file must not be refused by the header check');
+  assert.equal(result.added, 1);
+});
+
+test('.diff({untracked:true}): a binary diff has no "+++" line at all and is still matched, by its "diff --git" line', async () => {
+  const binary = 'diff --git a/bin.dat b/bin.dat\nnew file mode 100644\nindex 0000000..c94be36\nBinary files /dev/null and b/bin.dat differ\n';
+  const runner = createGitChangesRunner({
+    kind: 'local',
+    cwd: REPO,
+    exec: () => Promise.resolve({ code: 1, stdout: binary, stderr: '' }),
+    fsOps: fakeFsOps(),
+  });
+  const result = await runner.diff('bin.dat', { untracked: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.added, null);
+});
+
+test('local runner .diff({untracked:true}): an operand that is neither a file nor a symlink (fifo, device, directory) never reaches git', async () => {
+  let calls = 0;
+  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
+  const fsOps = fakeFsOps({ type: 'fifo' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('afifo', { untracked: true });
+  assert.equal(result.ok, false);
+  assert.equal(calls, 0, 'git would block on a fifo until the timeout');
+});
+
+test('local runner .diff({untracked:true}): a vanished operand is refused before git runs', async () => {
+  let calls = 0;
+  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
+  const fsOps = {
+    realpath: (p) => p,
+    lstat: () => { throw new Error('ENOENT: no such file or directory'); },
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+
+  const result = await runner.diff('gone.txt', { untracked: true });
+  assert.equal(result.ok, false);
+  assert.equal(calls, 0);
+});
+
+// --- resolveLocalNoIndexOperand: the containment helper on its own -----------
+
+// Both path flavours run on both platforms: `path.win32` and `path.posix` are
+// available everywhere, so the Windows drive/separator arithmetic is exercised
+// from a POSIX machine and vice versa — the failure that shipped was visible
+// only on Windows CI.
+const PATH_FLAVOURS = [
+  { name: 'win32', pathOps: path.win32, root: 'C:\\Serveur\\repo', sep: '\\', outside: 'D:\\secrets', sibling: 'C:\\Serveur\\repo-evil' },
+  { name: 'posix', pathOps: path.posix, root: '/srv/repo', sep: '/', outside: '/secrets', sibling: '/srv/repo-evil' },
+];
+
+for (const flavour of PATH_FLAVOURS) {
+  const { name, pathOps, root, sep, outside, sibling } = flavour;
+
+  test(`resolveLocalNoIndexOperand [${name}]: a legitimate path resolves to a git-spelled operand, always forward-slashed (mutation target: returning the native separator)`, () => {
+    assert.equal(resolveLocalNoIndexOperand(root, 'a.txt', fakeFsOps(), pathOps), 'a.txt');
+    assert.equal(resolveLocalNoIndexOperand(root, 'newdir/a.txt', fakeFsOps(), pathOps), 'newdir/a.txt');
+    assert.equal(resolveLocalNoIndexOperand(root, 'deep/sub/dir/a.txt', fakeFsOps(), pathOps), 'deep/sub/dir/a.txt');
+    assert.equal(resolveLocalNoIndexOperand(root, 'has..dots.txt', fakeFsOps(), pathOps), 'has..dots.txt');
+  });
+
+  test(`resolveLocalNoIndexOperand [${name}]: traversal and escapes are refused`, () => {
+    assert.equal(resolveLocalNoIndexOperand(root, '../x.txt', fakeFsOps(), pathOps), null);
+    assert.equal(resolveLocalNoIndexOperand(root, 'sub/../../x.txt', fakeFsOps(), pathOps), null);
+    assert.equal(resolveLocalNoIndexOperand(root, '/etc/passwd', fakeFsOps(), pathOps), null);
+
+    const escaping = fakeFsOps({ links: { [root + sep + 'link']: outside } });
+    assert.equal(resolveLocalNoIndexOperand(root, 'link/secret.txt', escaping, pathOps), null,
+      'a symlinked directory pointing out of the tree (another drive, on Windows) must not resolve inside it');
+
+    const nextDoor = fakeFsOps({ links: { [root + sep + 'link']: sibling } });
+    assert.equal(resolveLocalNoIndexOperand(root, 'link/x.txt', nextDoor, pathOps), null,
+      'a sibling sharing the root as a string prefix is not inside it');
+  });
+
+  test(`resolveLocalNoIndexOperand [${name}]: a root that realpath spells differently from the cwd still resolves`, () => {
+    // The leaf's parent IS the root, reached by another spelling — path.relative
+    // returns '' for that, which is "the same directory", not "outside".
+    const spelled = fakeFsOps({ links: { [root]: root + sep + '.' } });
+    assert.equal(resolveLocalNoIndexOperand(root, 'a.txt', spelled, pathOps), 'a.txt');
+  });
+
+  test(`resolveLocalNoIndexOperand [${name}]: the leaf type rules hold whatever the separator`, () => {
+    assert.equal(resolveLocalNoIndexOperand(root, 'link', fakeFsOps({ type: 'symlink', target: 'file' }), pathOps), 'link');
+    assert.equal(resolveLocalNoIndexOperand(root, 'dirlink', fakeFsOps({ type: 'symlink', target: 'dir' }), pathOps), null);
+    assert.equal(resolveLocalNoIndexOperand(root, 'afifo', fakeFsOps({ type: 'fifo' }), pathOps), null);
+  });
+}
+
+test('resolveLocalNoIndexOperand [win32]: the same directory spelled two ways is inside itself, not outside (mutation target: treating an empty path.relative as "not inside")', () => {
+  // The Windows CI failure in one line: "/repo" and the parent of its own
+  // resolved child are the same directory under two spellings, and
+  // path.relative says so by returning the empty string.
+  const parentOfChild = path.win32.dirname(path.win32.resolve('/repo', 'new.txt'));
+  assert.notEqual(parentOfChild, '/repo', 'win32 resolves a drive-less root to a different spelling');
+  assert.equal(path.win32.relative('/repo', parentOfChild), '');
+  assert.equal(resolveLocalNoIndexOperand('/repo', 'new.txt', fakeFsOps(), path.win32), 'new.txt');
+});
+
+test('resolveLocalNoIndexOperand: returns the operand relative to the resolved root, or null when it escapes', () => {
+  const plain = fakeFsOps();
+  assert.equal(resolveLocalNoIndexOperand(REPO, 'newdir/a.txt', plain), 'newdir/a.txt');
+  assert.equal(resolveLocalNoIndexOperand(REPO, 'a.txt', plain), 'a.txt');
+  assert.equal(resolveLocalNoIndexOperand(REPO, '../a.txt', plain), null);
+  assert.equal(resolveLocalNoIndexOperand(REPO, '/etc/passwd', plain), null);
+
+  const escaping = fakeFsOps({ links: { [inRepo('link')]: OUTSIDE } });
+  assert.equal(resolveLocalNoIndexOperand(REPO, 'link/secret.txt', escaping), null);
+
+  const sibling = fakeFsOps({ links: { [inRepo('link')]: SIBLING } });
+  assert.equal(resolveLocalNoIndexOperand(REPO, 'link/x.txt', sibling), null, 'a sibling sharing the root as a string prefix is not inside it');
+});
+
+test('local runner .diff({untracked:true}): a thrown exec rejects gracefully', async () => {
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec: () => { throw new Error('ENOENT'); }, fsOps: fakeFsOps() });
+  const result = await runner.diff('new.txt', { untracked: true });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /ENOENT/);
 });
 
 // --- remote runner: command shape -------------------------------------------
@@ -258,6 +671,10 @@ test('remote runner .status(): three ssh calls, each a full "git -C <cwd> --lite
 
   assert.equal(result.ok, true);
   assert.equal(commands.length, 3);
+  assert.equal(
+    commands.find((c) => c.includes("'status'")),
+    "git -C '/srv/app' '--literal-pathspecs' 'status' '--porcelain=v2' '--branch' '-uall' '-z'"
+  );
   for (const cmd of commands) {
     assert.match(cmd, /^git -C '\/srv\/app' '--literal-pathspecs' /);
     assert.match(cmd, /'-z'$/, 'must end in a quoted -z token');
@@ -273,6 +690,156 @@ test('remote runner .diff(): the built command carries --literal-pathspecs, quot
 
   assert.equal(commands.length, 1);
   assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--cached' '--' 'src/weird file.js'");
+});
+
+test('remote runner .diff({untracked:true}): every token of the --no-index command is individually quoted, and no backtick is ever emitted', async () => {
+  const commands = [];
+  const seenOpts = [];
+  const hostilePath = "weird `name`$(x).txt";
+  const exec = (command, opts) => {
+    commands.push(command);
+    seenOpts.push(opts);
+    if (command.includes("'ls-files'")) return Promise.resolve({ code: 0, stdout: hostilePath + '\0', stderr: '' });
+    return Promise.resolve({ code: 1, stdout: untrackedDiffFor(hostilePath), stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.diff(hostilePath, { untracked: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'weird `name`$(x).txt'");
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' '-c' 'core.quotepath=false' 'diff' '--no-index' '--' '/dev/null' 'weird `name`$(x).txt'");
+  for (const cmd of commands) {
+    assert.match(cmd, /^git -C '[^']*' ('[^']*' )*'[^']*'$/s, 'the backtick never sits outside a quoted token');
+  }
+  assert.equal(seenOpts[1].maxStdoutBytes, DIFF_MAX_STDOUT_BYTES);
+});
+
+test('remote runner .diff({untracked:true}): git itself must list the path as untracked before any diff runs — no local filesystem to resolve against', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'ls-files'")) return Promise.resolve({ code: 0, stdout: 'new.txt\0', stderr: '' });
+    return Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.diff('new.txt', { untracked: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(commands.length, 2, 'the listing check runs before the diff, not alongside it');
+  assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'new.txt'");
+  assert.ok(commands[1].includes("'--no-index'"));
+});
+
+test('remote runner .diff({untracked:true}): a path git does not list as untracked never reaches the diff (mutation target: skipping the listing check)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    // A path reached through a symlinked directory: git's own traversal never
+    // lists it, so the listing comes back empty.
+    if (command.includes("'ls-files'")) return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+    return Promise.resolve({ code: 1, stdout: 'SUPER_SECRET_OUTSIDE_THE_REPO', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.diff('link-to-dir/outside-secret.txt', { untracked: true });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid path');
+  assert.equal(commands.length, 1, 'no diff command may be sent for an unlisted path');
+});
+
+test('remote runner .diff({untracked:true}): a prefix match is not a match — the listed path must be the requested one', async () => {
+  const exec = (command) => (command.includes("'ls-files'")
+    ? Promise.resolve({ code: 0, stdout: 'new.txt.bak\0', stderr: '' })
+    : Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' }));
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.diff('new.txt', { untracked: true });
+  assert.equal(result.ok, false);
+});
+
+test('remote runner .diff({untracked:true}): a failing listing surfaces git\'s error instead of running the diff', async () => {
+  const exec = (command) => (command.includes("'ls-files'")
+    ? Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: not a git repository' })
+    : Promise.resolve({ code: 1, stdout: UNTRACKED_DIFF, stderr: '' }));
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.diff('new.txt', { untracked: true });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not a git repository/);
+});
+
+// --- status(): the -uall fallback ------------------------------------------
+
+test('status(): when -uall overruns the transport cap, tracked changes still render, flagged as a collapsed untracked listing (mutation target: returning ok:false)', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    if (args[1] !== 'status') return Promise.resolve({ code: 0, stdout: '1\t2\tfoo.js\0', stderr: '' });
+    if (args.includes('-uall')) return Promise.resolve({ code: -1, stdout: '', stderr: 'stdout exceeded 2097152 bytes' });
+    return Promise.resolve({ code: 0, stdout: '# branch.head main\x001 .M N... 100644 100644 100644 abc123 def456 foo.js\x00? vendor/\x00', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+
+  assert.equal(result.ok, true, 'the panel must not go dark because there are too many untracked files');
+  assert.equal(result.untrackedCollapsed, true);
+  assert.equal(result.files.length, 2);
+  assert.equal(result.files[0].path, 'foo.js', 'the tracked change is still there');
+  assert.equal(calls.filter((a) => a[1] === 'status').length, 2, 'exactly one retry, with git\'s default untracked mode');
+});
+
+test('status(): a healthy -uall run reports untrackedCollapsed false and never retries', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    return Promise.resolve({ code: 0, stdout: args[1] === 'status' ? '# branch.head main\x00' : '', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.untrackedCollapsed, false);
+  assert.equal(calls.filter((a) => a[1] === 'status').length, 1);
+});
+
+test('status(): a -uall failure that is not a stdout-cap overrun is reported, never relabelled as "too many untracked files" (mutation target: retrying on any non-zero exit)', async () => {
+  const calls = [];
+  const exec = (args) => {
+    calls.push(args);
+    if (args[1] !== 'status') return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+    if (args.includes('-uall')) return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: could not read directory: Permission denied' });
+    return Promise.resolve({ code: 0, stdout: '# branch.head main\x00', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+
+  assert.equal(result.ok, false, 'a permission error is not a volume problem');
+  assert.match(result.error, /Permission denied/, 'the real error must not be discarded');
+  assert.notEqual(result.untrackedCollapsed, true);
+  assert.equal(calls.filter((a) => a[1] === 'status').length, 1, 'no retry for a failure the fallback cannot help with');
+});
+
+test('status(): the local maxBuffer overrun is recognised as a stdout-cap failure too, not only the remote transport\'s own message', async () => {
+  const exec = (args) => {
+    if (args[1] !== 'status') return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+    if (args.includes('-uall')) return Promise.resolve({ code: -1, stdout: '', stderr: 'stdout maxBuffer length exceeded' });
+    return Promise.resolve({ code: 0, stdout: '# branch.head main\x00', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.untrackedCollapsed, true);
+});
+
+test('status(): a genuine status failure is still an error — the fallback must not swallow it', async () => {
+  const exec = (args) => Promise.resolve(args[1] === 'status'
+    ? { code: 128, stdout: '', stderr: 'fatal: not a git repository' }
+    : { code: 0, stdout: '', stderr: '' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not a git repository/);
 });
 
 // --- remote runner: stdout cap wiring (adversarial review, CRITICAL finding 1) ---

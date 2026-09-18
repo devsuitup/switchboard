@@ -40,6 +40,9 @@ let changesListEl = null;
 let changesDiffEl = null;
 let changesToggleBtn = null;
 
+// Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
+const MAX_CHANGES_ROWS = 500;
+
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
 const MIN_PANEL_WIDTH = 280;
@@ -616,7 +619,6 @@ function openChangesTab(sessionId) {
     diffError: null,
     diffContent: null,
     diffTruncated: false,
-    diffUntracked: false,
   };
   state.panelVisible = true;
 
@@ -661,19 +663,12 @@ async function openChangesDiff(sessionId, file) {
   tab.diffError = null;
   tab.diffContent = null;
   tab.diffTruncated = false;
-  tab.diffUntracked = !!file.untracked;
-
-  if (file.untracked) {
-    // git diff never reports an untracked file — nothing to fetch.
-    tab.diffLoading = false;
-    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
-    return;
-  }
+  const dataAtRequest = tab.data;
 
   tab.diffLoading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 
-  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged);
+  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged, file.untracked);
 
   const stillState = filePanelState.get(sessionId);
   if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
@@ -684,8 +679,28 @@ async function openChangesDiff(sessionId, file) {
   } else {
     tab.diffContent = result.content;
     tab.diffTruncated = !!result.truncated;
+    if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+}
+
+// Untracked counts arrive with the diff, not with status — see .ai/contexts/changes-view.md
+function applyUntrackedCounts(tab, expectedData, filePath, added, deleted) {
+  if (typeof added !== 'number') return;
+  if (!tab.data || tab.data !== expectedData || !Array.isArray(tab.data.files)) return;
+  const record = tab.data.files.find((f) => f.path === filePath);
+  if (!record) return;
+
+  record.added = added;
+  record.deleted = typeof deleted === 'number' ? deleted : 0;
+
+  let totalAdded = 0;
+  let totalDeleted = 0;
+  for (const f of tab.data.files) {
+    if (typeof f.added === 'number') totalAdded += f.added;
+    if (typeof f.deleted === 'number') totalDeleted += f.deleted;
+  }
+  tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted };
 }
 
 function closeChangesDiff(sessionId) {
@@ -744,9 +759,23 @@ function renderChangesContent(sessionId, tab) {
     branchInfoEl.textContent = parts.join(' ');
   }
 
+  if (data.untrackedCollapsed) {
+    const note = document.createElement('div');
+    note.className = 'changes-degraded-note';
+    note.textContent = 'Too many untracked files to list — untracked entries are collapsed into their directories.';
+    changesSummaryEl.appendChild(note);
+  }
+
   changesListEl.innerHTML = '';
-  for (const file of files) {
+  const shown = files.length > MAX_CHANGES_ROWS ? files.slice(0, MAX_CHANGES_ROWS) : files;
+  for (const file of shown) {
     changesListEl.appendChild(buildChangesFileRow(sessionId, file));
+  }
+  if (shown.length < files.length) {
+    const more = document.createElement('div');
+    more.className = 'changes-more-note';
+    more.textContent = `+${files.length - shown.length} more files not shown`;
+    changesListEl.appendChild(more);
   }
 }
 
@@ -820,8 +849,6 @@ function renderChangesDiff(sessionId, tab) {
   } else if (tab.diffError) {
     body.textContent = tab.diffError;
     body.classList.add('changes-error');
-  } else if (tab.diffUntracked) {
-    body.textContent = 'Untracked file — nothing to diff yet.';
   } else if (!tab.diffContent) {
     body.textContent = 'No differences.';
   } else {

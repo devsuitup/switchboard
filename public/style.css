@@ -4548,6 +4548,18 @@ body { display: flex; flex-direction: column; }
   font-size: 12px;
 }
 
+.changes-degraded-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #c8a24a;
+}
+
+.changes-more-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #9090a8;
+}
+
 #changes-diff-view {
   flex: 1;
   display: flex;

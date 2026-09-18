@@ -1759,13 +1759,13 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   }
 });
 
-// filePath is a git pathspec, not a filesystem path — see .ai/contexts/changes-view.md
-ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged) => {
+// filePath is a git pathspec, or an untracked file's --no-index operand — see .ai/contexts/changes-view.md
+ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, untracked) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path' };
   const target = resolveGitChangesTarget(sessionId);
   if (!target.ok) return target;
   try {
-    return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged });
+    return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged, untracked: !!untracked });
   } catch (err) {
     return { ok: false, error: err.message };
   }
