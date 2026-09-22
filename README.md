@@ -203,11 +203,28 @@ changes. Uninstall later with `sudo pacman -R switchboard-doctly`.
 
 ## Releasing
 
-Releases are driven by git tags:
+Releases are driven by git tags. The version bump comes first and lands through
+a pull request, because `main` is protected:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git checkout -b release/v0.1.0 main
+npm version --no-git-tag-version 0.1.0   # package.json + package-lock.json
+git commit -am v0.1.0 && git push origin release/v0.1.0
+gh pr create --base main --title v0.1.0 --fill
+```
+
+**Run the app before tagging.** The tag is what publishes, so nothing between the
+merge and the tag looks at the whole again — and the test suite cannot see
+layout, raw tool output in a locale, or a control that renders in the wrong
+colour. Launch the assembled `main` in an isolated instance and use it; see
+[docs/testing-a-pr.md](docs/testing-a-pr.md), which also covers driving it over
+the DevTools protocol and testing the packaged artifact once it exists.
+
+Then tag the merged commit and push the tag:
+
+```bash
+git checkout main && git pull --ff-only
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The GitHub Actions workflow builds for all platforms and publishes to GitHub Releases. You can also release locally:
@@ -223,7 +240,7 @@ Set `GH_TOKEN` in your environment (a GitHub personal access token with `repo` s
 This fork's `main` is branch-protected and its `main` branch tracks `upstream/main`, both of which trip up the generic release flow above:
 
 - **A bare `git push` (no remote) targets `upstream` (`doctly/switchboard`), not `origin`** — it will fail with a permissions error. Always `git push origin ...` explicitly.
-- **Direct pushes to `main` are rejected** ("repository rule violations"). The version-bump commit must land via a PR. The ruleset requires 1 approving review from a different account plus green `test (20)` / `test (22)` checks; arm `gh pr merge --auto` and approve from the other account.
+- **Direct pushes to `main` are rejected** ("repository rule violations"). The version-bump commit must land via a PR. The `main-protection` ruleset requires green `test (20)` / `test (22)` checks; it sets `required_approving_review_count` to 0, so no second account is needed to merge, and `gh pr merge --auto` can be armed as soon as the checks are running.
 - **The release workflow leaves the release as a draft on purpose** — after all assets are uploaded (19 expected), publish manually: `gh release edit v<X.Y.Z> --draft=false --latest --notes "..."`.
 - **Tag the merged commit on `main`, after the PR merges — never the local pre-merge bump commit.** Tagging first and then squash-merging creates a tag that isn't an ancestor of `main`; `git describe --tags` and release-notes generation then skip it. Correct order: PR-merge the bump → `git reset --hard origin/main` locally → tag → `git push origin <tag>`. If a build already started from a bad tag, cancel the run (`gh run cancel`) and delete + recreate the tag.
 - **Unsigned macOS builds need both `"mac": {"identity": null}` in `package.json` and `notarize: false`.** A `CSC_LINK` env that's set-but-empty (e.g. `${{ secrets.CSC_LINK || '' }}`) is read by electron-builder as a certificate *file path* — `stat('')` resolves to the CI working directory, and the mac job fails with `... not a file` only on tag-triggered (release) runs, never on PR builds. Gating `CSC_IDENTITY_AUTO_DISCOVERY` on whether the secret is set does **not** fix this; `identity: null` does.
