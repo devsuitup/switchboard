@@ -1,8 +1,9 @@
 # Context: terminal-path-links
 
-**Purpose**: a filesystem path printed in the terminal — by an agent's prose,
-`git status`, a stack trace, `grep -n`, anything — is a link that opens the
-side panel. Only paths the panel may actually open become links.
+**Purpose**: a filesystem path or bare filename printed in the terminal — by an
+agent's prose, `git status`, a stack trace, `grep -n`, anything — is a link that
+opens the side panel. Only what the panel has established it can open becomes a
+link.
 
 ## Key files
 
@@ -20,6 +21,11 @@ side panel. Only paths the panel may actually open become links.
 
 ### A candidate is checked, and the check is "may the panel open this"
 
+**Only a path the panel has established it can open becomes a link.** The
+underline is not a claim about what the text looks like; it is the result of
+the open having already been decided, which is why the matcher may be widened
+and the check may not be moved to the click.
+
 xterm asks a link provider for the links on **one hovered line**, not on every
 render, so the cost is bounded by what the pointer touches rather than by
 output volume. That budget is spent on one question per candidate, asked of
@@ -30,8 +36,11 @@ enforce — `isSensitivePath`, on the disk-resolved path — plus regular-file-n
 the panel's own size bound, and a NUL-byte sniff of the first 4 KB. A path that
 fails any of those gets no link at all.
 
-Underlining `.env` and then denying the click would teach the reader to
-distrust the underline. A link that does nothing is worse than no link.
+Nothing else filters. Shape decides only what is worth asking about: a bare
+word is a candidate, so the check is the whole of what stands between arbitrary
+scrollback text and an opened file. Linking on shape and refusing on click
+reads as a simplification and is the defect this is built against — it teaches
+the reader that an underline means nothing.
 
 The existence check runs **first**, because on a line of prose most candidates
 are not files and a path that is not there is refused whatever the denylist
