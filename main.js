@@ -74,6 +74,7 @@ function spawnPty(file, args, opts) {
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
@@ -1629,32 +1630,6 @@ ipcMain.handle('delete-setting', (_event, key) => {
 
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
-
-const SETTING_DEFAULTS = {
-  // 'auto' is Claude Code's own default permission mode (it classifies each
-  // action, allows routine work, and stops for risky ones). It applies only
-  // when NEITHER global nor project settings have ever saved this key — see
-  // get-effective-settings below. A user who explicitly picked "Default"
-  // (prompt for all actions, --permission-mode omitted) has that stored as an
-  // explicit `null`, which is honored as-is and never promoted to 'auto'.
-  permissionMode: 'auto',
-  dangerouslySkipPermissions: false,
-  worktree: false,
-  worktreeName: '',
-  chrome: false,
-  sandbox: false,
-  preLaunchCmd: '',
-  addDirs: '',
-  visibleSessionCount: 5,
-  sidebarWidth: 340,
-  terminalTheme: 'switchboard',
-  mcpEmulation: false,
-  // Automatic update download + install-on-quit. On by default so behaviour is
-  // unchanged; off means the app never fetches or swaps its own binary without
-  // being asked. The manual "Check for Updates" button still works either way.
-  autoUpdate: true,
-  shellProfile: 'auto',
-};
 
 ipcMain.handle('get-shell-profiles', () => {
   // TODO(lint): `_shellProfiles` is scoped inside shell-profiles.js and not

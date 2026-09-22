@@ -73,6 +73,18 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
 
+**One table of defaults.** `SETTING_DEFAULTS` lives in `public/setting-defaults.js`,
+a dual-mode file: `main.js` requires it, `index.html` loads it as a classic
+script, so both processes resolve a missing key to the same value.
+`get-effective-settings` returns project value → global value → that table, and
+`settings-panel.js`'s `fieldValue()` resolves in the same order — the panel
+therefore displays what a session will get. No renderer file carries a default
+of its own; `test/setting-defaults.test.js` fails if one appears.
+
+An explicitly saved `null` (permission mode "Default", which omits
+`--permission-mode`) is a value, not an absence: the merge overrides on
+`!== undefined` only, so it is never promoted to the table's `'auto'`.
+
 ### File panel (IDE mode)
 
 | IPC | Args |

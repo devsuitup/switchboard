@@ -122,6 +122,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 | Walk all JSONLs (parents + subagents + legacy layouts) | `enumerateSessionFiles(folderPath)` in `read-session-file.js` |
 | Encode `/path/to/project` → `-path-to-project` folder | `encodeProjectPath()` in `encode-project-path.js` |
 | Resolve worktree path back to repo root | `resolveWorktreePath()` in `derive-project-path.js` |
+| Default value for a setting | `SETTING_DEFAULTS` in `setting-defaults.js` — never a literal at the call site |
 | Escape HTML in renderer | `escapeHtml()` (cross-file global) |
 | Open a file in a CodeMirror panel | `new ViewerPanel(container, opts)` |
 | Optional toolbar button | `opts.format`, `opts.onDelete`, `opts.onSave`, `opts.onClose` on ViewerPanel |

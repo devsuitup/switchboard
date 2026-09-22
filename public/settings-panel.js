@@ -50,11 +50,12 @@
       return `<label class="settings-use-global"><input type="checkbox" data-field="${fieldName}" class="use-global-cb" ${useGlobal ? 'checked' : ''}> Use global default</label>`;
     }
 
-    function fieldValue(fieldName, fallback) {
+    // Same resolution order as get-effective-settings — see .ai/contexts/ipc-bridge.md
+    function fieldValue(fieldName) {
       if (isProject && (current[fieldName] === undefined || current[fieldName] === null)) {
-        return globalSettings[fieldName] !== undefined ? globalSettings[fieldName] : fallback;
+        return globalSettings[fieldName] !== undefined ? globalSettings[fieldName] : SETTING_DEFAULTS[fieldName];
       }
-      return current[fieldName] !== undefined ? current[fieldName] : fallback;
+      return current[fieldName] !== undefined ? current[fieldName] : SETTING_DEFAULTS[fieldName];
     }
 
     function fieldDisabled(fieldName) {
@@ -62,22 +63,22 @@
       return (current[fieldName] === undefined || current[fieldName] === null) ? 'disabled' : '';
     }
 
-    const permModeValue = fieldValue('permissionMode', '');
-    const worktreeValue = fieldValue('worktree', false);
-    const worktreeNameValue = fieldValue('worktreeName', '');
-    const chromeValue = fieldValue('chrome', false);
-    const sandboxValue = fieldValue('sandbox', false);
+    const permModeValue = fieldValue('permissionMode');
+    const worktreeValue = fieldValue('worktree');
+    const worktreeNameValue = fieldValue('worktreeName');
+    const chromeValue = fieldValue('chrome');
+    const sandboxValue = fieldValue('sandbox');
     const isLinux = window.api.platform === 'linux';
-    const preLaunchValue = fieldValue('preLaunchCmd', '');
-    const addDirsValue = fieldValue('addDirs', '');
-    const visCountValue = fieldValue('visibleSessionCount', 10);
-    const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
-    const themeValue = fieldValue('terminalTheme', 'switchboard');
-    const rightClickValue = fieldValue('terminalRightClick', 'menu');
-    const restoreStartupValue = fieldValue('restoreOnStartup', 'ask');
-    const mcpEmulationValue = fieldValue('mcpEmulation', true);
-    const autoUpdateValue = fieldValue('autoUpdate', true);
-    const shellProfileValue = fieldValue('shellProfile', 'auto');
+    const preLaunchValue = fieldValue('preLaunchCmd');
+    const addDirsValue = fieldValue('addDirs');
+    const visCountValue = fieldValue('visibleSessionCount');
+    const maxAgeValue = fieldValue('sessionMaxAgeDays');
+    const themeValue = fieldValue('terminalTheme');
+    const rightClickValue = fieldValue('terminalRightClick');
+    const restoreStartupValue = fieldValue('restoreOnStartup');
+    const mcpEmulationValue = fieldValue('mcpEmulation');
+    const autoUpdateValue = fieldValue('autoUpdate');
+    const shellProfileValue = fieldValue('shellProfile');
 
     // Working copy of the global-only host list, written back on Save.
     const remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : [])
@@ -531,14 +532,14 @@
         if (sandboxToggle) settings.sandbox = sandboxToggle.checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
-        settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
-        settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
-        settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
-        settings.terminalRightClick = settingsViewerBody.querySelector('#sv-right-click').value || 'menu';
-        settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || 'ask';
+        settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || SETTING_DEFAULTS.visibleSessionCount;
+        settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || SETTING_DEFAULTS.sessionMaxAgeDays;
+        settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || SETTING_DEFAULTS.terminalTheme;
+        settings.terminalRightClick = settingsViewerBody.querySelector('#sv-right-click').value || SETTING_DEFAULTS.terminalRightClick;
+        settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
-        settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
+        settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
         settings.shortcuts = scShortcuts;
         // Same alias rule as remote-hosts.js; a failing row is reported.
         const aliasRe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;

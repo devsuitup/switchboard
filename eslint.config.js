@@ -283,6 +283,9 @@ const rendererCrossFileGlobals = {
   updatePtyTitle: 'readonly',
   _shellProfiles: 'writable',
 
+  // The one table of setting defaults (public/setting-defaults.js)
+  SETTING_DEFAULTS: 'readonly',
+
   // Terminal right-click context menu (public/terminal-context-menu.js)
   terminalRightClickMode: 'writable',
   setupTerminalContextMenu: 'readonly',
@@ -351,6 +354,26 @@ module.exports = [
         ...globals.browser,
         ...rendererCrossFileGlobals,
         module: 'writable',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Producer of a cross-file renderer global: classic <script> in the renderer,
+  // require()-d by the main process and tests. It declares SETTING_DEFAULTS
+  // rather than consuming it, so the global is switched off here.
+  {
+    files: ['public/setting-defaults.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        module: 'writable',
+        SETTING_DEFAULTS: 'off',
       },
     },
     rules: {

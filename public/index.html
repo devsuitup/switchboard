@@ -116,6 +116,8 @@
   <!-- activity-trace.js defines window.ATRACE / window.atrace, read by probe
        sites in session-activity, sidebar and app — must load before them. -->
   <script src="activity-trace.js"></script>
+  <!-- setting-defaults.js defines SETTING_DEFAULTS — must load before its readers. -->
+  <script src="setting-defaults.js"></script>
   <script src="icons.js"></script>
   <script src="viewer-toolbar.js"></script>
   <script src="viewer-panel.js"></script>
