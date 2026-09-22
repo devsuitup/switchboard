@@ -50,3 +50,16 @@ test('the sensitive-path check still runs before anything is read', () => {
     'the path must be refused before its size is even asked for',
   );
 });
+
+// A terminal path is checked for regular-file-ness before it is offered as a
+// link, but that check and this read are two separate resolutions of the same
+// string: between them the name can become a FIFO, and readFileSync on a FIFO
+// never returns. The handler that does the reading makes the check itself.
+test('read-file-for-panel refuses anything that is not a regular file', () => {
+  const body = handlerBody('read-file-for-panel');
+  assert.match(body, /isFile\(\)/, 'the read must be refused on a FIFO, device or directory');
+  assert.ok(
+    body.indexOf('isFile()') < body.indexOf('readFileSync'),
+    'the check must come before the read it protects',
+  );
+});

@@ -8,6 +8,7 @@
 // wrapInGridCard, showGridView (grid-view.js)
 // Depends on: shellEscape (utils.js)
 // Depends on: fileUriToPath (terminal-context-menu.js)
+// Depends on: createTerminalPathResolver, registerTerminalPathLinks (terminal-path-links.js)
 
 // --- Terminal key bindings ---
 // Shift+Enter → kitty protocol (CSI 13;2u) so Claude Code treats it as newline, not submit.
@@ -15,6 +16,17 @@
 //   1. attachCustomKeyEventHandler returning false — blocks xterm's key pipeline (onKey/onData)
 //   2. preventDefault on capture-phase keydown — prevents browser inserting \n into textarea
 const isMac = typeof window !== 'undefined' && window.api && window.api.platform === 'darwin';
+
+// Lazy: this file is also require()-d bare — see .ai/contexts/terminal-path-links.md
+let terminalPathResolver = null;
+function getTerminalPathResolver() {
+  if (!terminalPathResolver) {
+    terminalPathResolver = createTerminalPathResolver(
+      (sessionId, texts) => window.api.resolveTerminalPaths(sessionId, texts),
+    );
+  }
+  return terminalPathResolver;
+}
 
 // True when a keydown is being consumed by an IME (e.g. Korean/Japanese/Chinese)
 // to compose a character. Chromium reports keyCode 229 for such keydowns, and
@@ -902,6 +914,15 @@ function createTerminalEntry(session, opts = {}) {
       window.api.openExternal(url);
     }
   }, { hover: (_event, url) => { hoveredLinkUri = url; }, leave: () => { hoveredLinkUri = null; } }));
+  registerTerminalPathLinks(terminal, sessionId, {
+    resolver: getTerminalPathResolver(),
+    activate: (target, event) => {
+      if (event && typeof event.button === 'number' && event.button !== 0) return;
+      if (typeof openFileInPanel === 'function') openFileInPanel(sessionId, target.path, { line: target.line });
+    },
+    hover: (uri) => { hoveredLinkUri = uri; },
+    leave: () => { hoveredLinkUri = null; },
+  });
   const searchAddon = new SearchAddon.SearchAddon();
   terminal.loadAddon(searchAddon);
   terminal.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
@@ -1087,6 +1108,7 @@ function destroySession(sessionId) {
   // entry.element, which is removed below and garbage-collected once the
   // entry leaves openSessions/gridCards.
   entry.terminal.dispose();
+  getTerminalPathResolver().forget(sessionId);
   entry.element.remove();
   openSessions.delete(sessionId);
   const li = lruOrder.indexOf(sessionId);

@@ -562,6 +562,16 @@ window.createUnifiedMergeViewer = createUnifiedMergeViewer;
 window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
 window.CMMergeView = MergeView;
+// A merge view exposes its editable side as `.b` — see .ai/contexts/terminal-path-links.md
+function revealLine(view, lineNumber) {
+  const target = view && view.state ? view : view && view.b;
+  if (!target || !Number.isInteger(lineNumber) || lineNumber < 1) return;
+  const doc = target.state.doc;
+  const line = doc.line(Math.min(lineNumber, doc.lines));
+  target.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+}
+
+window.cmRevealLine = revealLine;
 window.cmOpenGotoLine = openGotoLine;
 
 marked.setOptions({ breaks: true, gfm: true });

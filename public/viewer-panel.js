@@ -288,6 +288,20 @@ class ViewerPanel {
     });
   }
 
+  /**
+   * Scroll the open file to `lineNumber` — see .ai/contexts/terminal-path-links.md
+   *
+   * @param {number} lineNumber - 1-based.
+   */
+  revealLine(lineNumber) {
+    if (!Number.isInteger(lineNumber) || lineNumber < 1) return;
+    const myGen = this._openGen;
+    loadCodeMirrorBundle().then(() => {
+      if (this._openGen !== myGen || !this.editorView || !window.cmRevealLine) return;
+      window.cmRevealLine(this.editorView, lineNumber);
+    }).catch(() => {});
+  }
+
   _createEditor(content, filePath) {
     if (this.opts.language === 'auto') {
       this.editorView = window.createEditableViewer(

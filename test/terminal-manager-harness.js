@@ -17,11 +17,33 @@ const { JSDOM } = require('jsdom');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
+// Buffer cell/line stubs: the surface public/terminal-path-links.js reads.
+function makeCellStub() {
+  let chars = '';
+  let width = 1;
+  return {
+    getChars: () => chars,
+    getWidth: () => width,
+    _set(c, w) { chars = c; width = w; },
+  };
+}
+
+function makeBufferLineStub(row) {
+  const text = typeof row === 'string' ? row : row.text;
+  return {
+    isWrapped: typeof row === 'string' ? false : !!row.isWrapped,
+    length: text.length,
+    getCell(x, cell) { cell._set(text[x] === undefined ? '' : text[x], 1); },
+  };
+}
+
 function makeTerminalStub(spies) {
   return class TerminalStub {
     constructor(opts) {
       this.options = { ...opts };
-      this.buffer = { active: { viewportY: 0, baseY: 0 } };
+      this.buffer = { active: { viewportY: 0, baseY: 0, getLine: (y) => this._lines[y], getNullCell: () => makeCellStub() } };
+      this._lines = [];
+      this.linkProviders = [];
       this.parser = { registerOscHandler: () => {} };
       this.unicode = { activeVersion: '' };
       this.cols = 80;
@@ -29,6 +51,9 @@ function makeTerminalStub(spies) {
       this._onResize = null;
     }
     loadAddon() {}
+    registerLinkProvider(provider) { this.linkProviders.push(provider); return { dispose: () => {} }; }
+    // Test-only: fill the buffer with rows the link provider can read.
+    setBufferRows(rows) { this._lines = rows.map(makeBufferLineStub); }
     open() {}
     dispose() { spies.dispose++; }
     write(d, cb) { spies.write++; spies.writes.push(d); if (cb) cb(); }
@@ -199,7 +224,7 @@ function setupTerminalDom(opts = {}) {
   }
 
   const ctx = dom.getInternalVMContext();
-  const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
+  const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
   // Same order as index.html: file-panel.js first, the panel-shell pair last.
   if (opts.filePanel) files.unshift('file-panel.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');

@@ -87,6 +87,7 @@ const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
+const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
@@ -199,6 +200,7 @@ const searchViaWorker = searchClient.searchViaWorker;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Ceiling for a file opened in the viewer panel, mirroring read-work-file.
 const PANEL_FILE_MAX_BYTES = 2 * 1024 * 1024;
+const TERMINAL_PATH_BATCH_MAX = 64;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 // MAX_BUFFER_SIZE imported from output-buffer.js (single source of truth)
@@ -965,6 +967,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     // A file link in terminal output decides this path, so the size is not
     // ours -- see .ai/contexts/viewer-panel.md, "Bounds".
     const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return { ok: false, error: 'not a regular file' };
     if (stat.size > PANEL_FILE_MAX_BYTES) {
       return { ok: false, error: 'file too large to display' };
     }
@@ -1810,6 +1813,26 @@ const changesWatchers = createChangesWatchRegistry({
       mainWindow.webContents.send('git-changes-file-changed', sessionId, relPath);
     }
   },
+});
+
+// A path from terminal output is untrusted input — see .ai/contexts/terminal-path-links.md
+ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
+  if (!Array.isArray(texts)) return [];
+  const wanted = texts.slice(0, TERMINAL_PATH_BATCH_MAX);
+  const where = terminalPathTarget.resolveTerminalPathsCwd(sessionId, {
+    getSession: (id) => activeSessions.get(id),
+    resolveTarget: resolveGitChangesTarget,
+    resolvePanelCwd: resolvePanelTerminalCwd,
+  });
+  if (!where.ok) return wanted.map(() => ({ ok: false, reason: where.reason }));
+  const deps = {
+    isSensitivePath,
+    statSync: (p) => fs.statSync(p),
+    hasNullByte: terminalPathTarget.fileHasNullByte,
+    homedir: () => os.homedir(),
+    maxBytes: PANEL_FILE_MAX_BYTES,
+  };
+  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, where.cwd, deps));
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it
