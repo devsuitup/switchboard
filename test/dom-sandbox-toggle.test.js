@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ROOT = path.join(__dirname, '..');
@@ -55,6 +56,7 @@ function setupDialogsDom(platform) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'dialogs.js'));
 
@@ -192,6 +194,7 @@ function setupSettingsPanelDom(platform) {
     },
   });
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   // Global scope renders the Application section, which reads TERMINAL_THEMES.
@@ -267,10 +270,7 @@ test('Settings panel (darwin): sandbox toggle is not rendered and save does not 
 test('main.js: sandbox defaults to off and wraps the claude command with the asar-unpacked bwrap script, linux-gated', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 
-  const defaultsStart = src.indexOf('const SETTING_DEFAULTS = {');
-  assert.ok(defaultsStart !== -1);
-  const defaultsBody = src.slice(defaultsStart, src.indexOf('};', defaultsStart));
-  assert.match(defaultsBody, /sandbox:\s*false/, 'sandbox must be off by default');
+  assert.equal(SETTING_DEFAULTS.sandbox, false, 'sandbox must be off by default');
 
   assert.match(src, /sessionOptions\?\.sandbox/, 'open-terminal must honor the sandbox session option');
   assert.match(src, /process\.platform !== 'linux'/, 'sandbox launches must be rejected off-linux');

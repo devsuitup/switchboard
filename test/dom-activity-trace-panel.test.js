@@ -82,6 +82,7 @@ function setup({ traceState, files = [], readResult, deleteResult = { ok: true }
   window.confirm = (msg) => { confirms.push(msg); return window.__confirmAnswer !== false; };
   window.alert = (msg) => { alerts.push(String(msg)); };
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'terminal-themes.js'));

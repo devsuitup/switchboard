@@ -7,15 +7,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const ROOT = path.join(__dirname, '..');
 const main = () => fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 
 test('autoUpdate defaults to on, so behaviour is unchanged for existing users', () => {
-  const src = main();
-  const start = src.indexOf('const SETTING_DEFAULTS = {');
-  const body = src.slice(start, src.indexOf('};', start));
-  assert.match(body, /autoUpdate: true/, 'the default must preserve current behaviour');
+  assert.equal(SETTING_DEFAULTS.autoUpdate, true, 'the default must preserve current behaviour');
 });
 
 test('the setting gates download, install-on-quit, and both scheduled checks', () => {
@@ -72,7 +70,7 @@ test('a manual check can still complete while automation is off', () => {
 
 test('the toggle is rendered in Global settings only and is persisted', () => {
   const panel = fs.readFileSync(path.join(ROOT, 'public', 'settings-panel.js'), 'utf8');
-  assert.match(panel, /const autoUpdateValue = fieldValue\('autoUpdate', true\)/);
+  assert.match(panel, /const autoUpdateValue = fieldValue\('autoUpdate'\)/, 'the toggle reads the shared defaults table');
   assert.match(panel, /id="sv-auto-update"/, 'the toggle must exist');
   assert.match(panel, /settings\.autoUpdate = settingsViewerBody\.querySelector\('#sv-auto-update'\)\.checked/, 'it must be saved');
 

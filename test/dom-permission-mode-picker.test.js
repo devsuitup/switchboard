@@ -22,6 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ROOT = path.join(__dirname, '..');
@@ -63,6 +64,7 @@ function setupDialogsDom() {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'dialogs.js'));
   // utils.js declares PERMISSION_MODES as a top-level `const`, which — like
@@ -179,6 +181,7 @@ function setupSettingsPanelDom() {
     },
   });
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'settings-panel.js'));
@@ -217,11 +220,7 @@ test('Settings panel: select is built from the shared PERMISSION_MODES list, not
 test('main.js: permissionMode SETTING_DEFAULTS is auto, and an explicit null override is never conflated with "unset"', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 
-  const defaultsStart = src.indexOf('const SETTING_DEFAULTS = {');
-  assert.ok(defaultsStart !== -1, 'main.js must define SETTING_DEFAULTS');
-  const defaultsEnd = src.indexOf('};', defaultsStart);
-  const defaultsBody = src.slice(defaultsStart, defaultsEnd);
-  assert.match(defaultsBody, /permissionMode:\s*'auto'/, 'permissionMode default must be auto — the whole point of this change');
+  assert.equal(SETTING_DEFAULTS.permissionMode, 'auto', 'permissionMode default must be auto — the whole point of this change');
 
   const handlerStart = src.indexOf("ipcMain.handle('get-effective-settings'");
   assert.ok(handlerStart !== -1, 'main.js must define the get-effective-settings IPC handler');

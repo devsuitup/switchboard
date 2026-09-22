@@ -183,7 +183,7 @@ async function showNewSessionDialog(project) {
   dialog.className = 'new-session-dialog';
 
   let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let dangerousSkip = !!effective.dangerouslySkipPermissions;
 
   const modes = PERMISSION_MODES;
 
@@ -207,7 +207,7 @@ async function showNewSessionDialog(project) {
         <div class="settings-description">Run session in an isolated git worktree</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || '')}" style="width:140px">
+        <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || SETTING_DEFAULTS.worktreeName)}" style="width:140px">
         <label class="settings-toggle"><input type="checkbox" id="nsd-worktree" ${effective.worktree ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
       </div>
     </div>
@@ -235,7 +235,7 @@ async function showNewSessionDialog(project) {
         <div class="settings-description">Prepended to the claude command</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || '')}">
+        <input type="text" class="settings-input" id="nsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || SETTING_DEFAULTS.preLaunchCmd)}">
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -244,7 +244,7 @@ async function showNewSessionDialog(project) {
         <div class="settings-description">Extra directories to include (comma-separated)</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || '')}">
+        <input type="text" class="settings-input" id="nsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
       </div>
     </div>
     <div class="new-session-actions">
@@ -325,7 +325,7 @@ async function showResumeSessionDialog(session) {
   dialog.className = 'new-session-dialog';
 
   let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let dangerousSkip = !!effective.dangerouslySkipPermissions;
 
   const modes = PERMISSION_MODES;
 
@@ -369,7 +369,7 @@ async function showResumeSessionDialog(session) {
         <div class="settings-description">Prepended to the claude command</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || '')}">
+        <input type="text" class="settings-input" id="rsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || SETTING_DEFAULTS.preLaunchCmd)}">
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -378,7 +378,7 @@ async function showResumeSessionDialog(session) {
         <div class="settings-description">Extra directories to include (comma-separated)</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || '')}">
+        <input type="text" class="settings-input" id="rsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
       </div>
     </div>
     <div class="new-session-actions">

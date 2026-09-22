@@ -96,8 +96,8 @@ let cachedAllProjects = [];
 let activePtyIds = new Set();
 let sortedOrder = []; // [{ projectPath, itemIds: [itemId, ...] }, ...] — single source of truth for sidebar order
 let activeTab = 'sessions';
-let visibleSessionCount = 10;
-let sessionMaxAgeDays = 3;
+let visibleSessionCount = SETTING_DEFAULTS.visibleSessionCount;
+let sessionMaxAgeDays = SETTING_DEFAULTS.sessionMaxAgeDays;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
 
 // Bridge functions for settings-panel.js
@@ -113,7 +113,7 @@ window._applyTerminalTheme = (themeName) => {
 };
 // Live-apply the terminal right-click behavior (terminalRightClickMode lives in
 // terminal-context-menu.js); takes effect on the next right-click, no relaunch.
-window._applyTerminalRightClick = (mode) => { terminalRightClickMode = mode || 'menu'; };
+window._applyTerminalRightClick = (mode) => { terminalRightClickMode = mode || SETTING_DEFAULTS.terminalRightClick; };
 
 // --- Working-set persistence (open sessions → global.openWorkingSet) ---
 // Guard: while restoring, suppress incremental persist calls.
@@ -180,7 +180,7 @@ async function runRestore(list) {
 
 async function restoreWorkingSet() {
   const g = await window.api.getSetting('global');
-  restoreMode = (g && g.restoreOnStartup) || 'ask';
+  restoreMode = (g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup;
   const savedSet = (g && g.openWorkingSet) || [];
 
   document.getElementById('restore-cold-toast')?.remove();
@@ -1070,7 +1070,7 @@ async function showTerminalHeader(session) {
   // Show active shell profile
   try {
     const effective = await window.api.getEffectiveSettings(session.projectPath);
-    const profileId = effective.shellProfile || 'auto';
+    const profileId = effective.shellProfile || SETTING_DEFAULTS.shellProfile;
     if (profileId === 'auto') {
       terminalHeaderShell.style.display = 'none';
     } else {
@@ -1340,7 +1340,7 @@ setTimeout(() => {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
     }
-    if (global.terminalRightClick) terminalRightClickMode = global.terminalRightClick;
+    terminalRightClickMode = global.terminalRightClick || SETTING_DEFAULTS.terminalRightClick;
     if (global.shortcuts) setAppShortcuts(global.shortcuts);
   }
 })();
