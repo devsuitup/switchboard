@@ -966,6 +966,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     // A file link in terminal output decides this path, so the size is not
     // ours -- see .ai/contexts/viewer-panel.md, "Bounds".
     const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return { ok: false, error: 'not a regular file' };
     if (stat.size > PANEL_FILE_MAX_BYTES) {
       return { ok: false, error: 'file too large to display' };
     }
@@ -1843,8 +1844,12 @@ const changesWatchers = createChangesWatchRegistry({
 ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
   if (!Array.isArray(texts)) return [];
   const wanted = texts.slice(0, TERMINAL_PATH_BATCH_MAX);
-  const target = resolveGitChangesTarget(sessionId);
-  if (target.ok && target.kind !== 'local') return wanted.map(() => ({ ok: false, reason: 'remote' }));
+  const where = terminalPathTarget.resolveTerminalPathsCwd(sessionId, {
+    getSession: (id) => activeSessions.get(id),
+    resolveTarget: resolveGitChangesTarget,
+    resolvePanelCwd: resolvePanelTerminalCwd,
+  });
+  if (!where.ok) return wanted.map(() => ({ ok: false, reason: where.reason }));
   const deps = {
     isSensitivePath,
     statSync: (p) => fs.statSync(p),
@@ -1852,8 +1857,7 @@ ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
     homedir: () => os.homedir(),
     maxBytes: PANEL_FILE_MAX_BYTES,
   };
-  const cwd = target.ok ? target.cwd : null;
-  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, cwd, deps));
+  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, where.cwd, deps));
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it

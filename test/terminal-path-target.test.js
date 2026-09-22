@@ -115,3 +115,71 @@ test('the resolved path is the one the panel is handed, not the text that was ma
 test('fileHasNullByte reports true for an unreadable path rather than letting it through', () => {
   assert.strictEqual(fileHasNullByte(path.join(fixture.cwd, 'does-not-exist')), true);
 });
+
+// --- Which cwd a session's candidates resolve against ---
+
+const { resolveTerminalPathsCwd } = require('../terminal-path-target');
+const { resolvePanelTerminalCwd } = require('../panel-terminal-target');
+
+function cwdDeps(sessions, targets) {
+  return {
+    getSession: (id) => sessions[id],
+    resolveTarget: (id) => targets[id] || { ok: false, error: 'could not resolve a working directory' },
+    resolvePanelCwd: resolvePanelTerminalCwd,
+  };
+}
+
+test('a local session resolves against its own working directory', () => {
+  const deps = cwdDeps({}, { s1: { ok: true, kind: 'local', cwd: '/repo' } });
+  assert.deepStrictEqual(resolveTerminalPathsCwd('s1', deps), { ok: true, cwd: '/repo' });
+});
+
+test('a remote session is refused', () => {
+  const deps = cwdDeps({}, { s1: { ok: true, kind: 'remote', cwd: '/repo' } });
+  assert.deepStrictEqual(resolveTerminalPathsCwd('s1', deps), { ok: false, reason: 'remote' });
+});
+
+// The refusal that matters: a remote host whose descriptor has not been indexed
+// yet resolves to an error, and an error must not read as "no cwd, keep going"
+// — absolute paths and ~/… would then be stat-ed on the local disk and opened
+// while the user believes they are reading the remote file.
+test('a session whose working directory cannot be resolved is refused, not resolved locally', () => {
+  const deps = cwdDeps({}, {});
+  assert.deepStrictEqual(resolveTerminalPathsCwd('unknown', deps), { ok: false, reason: 'no-cwd' });
+});
+
+test('an ok target with no usable cwd is refused', () => {
+  const deps = cwdDeps({}, { s1: { ok: true, kind: 'local', cwd: '' } });
+  assert.deepStrictEqual(resolveTerminalPathsCwd('s1', deps), { ok: false, reason: 'no-cwd' });
+});
+
+test('a panel shell resolves through the session that owns it', () => {
+  const deps = cwdDeps(
+    { 'panel:s1': { panelFor: 's1' } },
+    { s1: { ok: true, kind: 'local', cwd: '/repo' } },
+  );
+  assert.deepStrictEqual(resolveTerminalPathsCwd('panel:s1', deps), { ok: true, cwd: '/repo' });
+});
+
+test('a panel shell over a remote session is refused', () => {
+  const deps = cwdDeps(
+    { 'panel:s1': { panelFor: 's1' } },
+    { s1: { ok: true, kind: 'remote', cwd: '/repo' } },
+  );
+  assert.deepStrictEqual(resolveTerminalPathsCwd('panel:s1', deps), { ok: false, reason: 'no-cwd' });
+});
+
+// --- Non-regular files ---
+
+// Stubbed rather than run against a real FIFO on purpose: the check this pins
+// is what stops the NUL sniff below it from calling openSync on one, and an
+// openSync on a FIFO with no writer never returns. A real FIFO here would turn
+// a broken guard into a CI that hangs instead of a CI that fails.
+test('a path that exists but is not a regular file is refused', () => {
+  const notAFile = { isDirectory: () => false, isFile: () => false, size: 0 };
+  const result = resolveTerminalPathTarget('public/app.js', fixture.cwd, {
+    ...deps(fixture.home),
+    statSync: () => notAFile,
+  });
+  assert.deepStrictEqual(result, { ok: false, reason: 'not-a-regular-file' });
+});

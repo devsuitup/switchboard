@@ -36,6 +36,15 @@ enforce — `isSensitivePath`, on the disk-resolved path — plus regular-file-n
 the panel's own size bound, and a NUL-byte sniff of the first 4 KB. A path that
 fails any of those gets no link at all.
 
+Regular-file-ness is load-bearing rather than tidy: a FIFO answers `statSync`
+and then blocks `openSync` and `readFileSync` until a writer appears, which on
+the main process means no IPC served, no PTY pumped and no window response
+until the app is killed. `read-file-for-panel` therefore makes the same check
+on the other side of the click. The two are separate resolutions of the same
+string — the openability answer is cached for 30 s and the user still has to
+click — so the name can become a FIFO in between, and only the check the reader
+makes itself protects the read it is about to do.
+
 Nothing else filters. Shape decides only what is worth asking about: a bare
 word is a candidate, so the check is the whole of what stands between arbitrary
 scrollback text and an opened file. Linking on shape and refusing on click
@@ -60,7 +69,10 @@ for a file that has already been accepted, which is what `readFileForPanel`
 needs to open it.
 
 A remote session is refused: its paths name files on the far host, and this
-check stats the local disk.
+check stats the local disk. So is a session whose working directory cannot be
+resolved at all — an unresolved cwd is not "no cwd", which would still admit
+absolute paths and `~/…` against the local disk and the local home. A panel
+shell resolves through the session that owns it, the same way its spawn does.
 
 ### `path:line` and `path:line:col` carry the line into the panel
 
@@ -122,8 +134,18 @@ At most 64 candidates per line.
 A line's unknown candidates go out in **one** call, and `createTerminalPathResolver`
 memoises the answers per `sessionId` + text, refusals included. The in-flight
 promise is what is stored, so a second hover of the same line while the first is
-still out adds nothing. Entries live 30 s and the map is capped at 4096, oldest
-shed first; `forget(sessionId)` runs when a terminal is destroyed.
+still out adds nothing. Entries live 30 s and the map is capped at 4096;
+`forget(sessionId)` runs when a terminal is destroyed.
+
+### The memo evicts least-recently-used
+
+A `Map` sheds its oldest insertion, so a hit re-inserts its entry before
+returning it. Without that, eviction is insertion order: the moment a sweep's
+distinct-candidate count passes 4096 the reuse rate falls to zero in one step
+rather than degrading, and a log with near-unique tokens per row pays the full
+price on every pass. The prose sweep below carries 3225 distinct candidates —
+79 % of the cap — so the cliff is within reach of ordinary input, and re-insertion
+is what keeps the cap from being load-bearing.
 
 Measured, against real prose (this repository's own context docs, 200 columns
 wide):
@@ -147,9 +169,8 @@ on.
 ## Bounds
 
 - **The link provider must not touch the write path.** It runs on a pointer
-  event, never on a write. Terminal throughput is unchanged, measured through
-  `handleTerminalData` in the jsdom harness: 615.8 / 602.3 / 581.4 MB/s before,
-  621.0 / 618.6 / 636.3 MB/s after.
+  event, never on a write: `handleTerminalData` and the flush path have no call
+  into it, which is what makes terminal throughput unchanged by construction.
 - The reachable line of a hovered row walks at most 24 wrapped buffer rows.
 - `resolve-terminal-paths` reads bytes but returns none: its answer is a
   yes/no plus the resolved path, and it accepts at most 64 paths per call.
@@ -157,6 +178,9 @@ on.
   as its paths take: 14 µs each, and at most 64 of them — under a millisecond in
   the worst case, and 50 µs for the 3.65-path average measured over the prose
   sweep. It stops entirely once a region of the scrollback has been hovered.
+  Those figures are CPU against a local disk; the cost is one `stat` of latency
+  per path, so a session whose cwd is on a network filesystem blocks the main
+  process for the batch's whole round-trip rather than for its CPU.
 
 ## What this does not change
 

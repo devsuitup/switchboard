@@ -273,21 +273,6 @@ test('provideLinks asked about the wrapped continuation row walks back to the st
   assert.strictEqual(links[0].text, ABS);
 });
 
-test('a right-click does not activate the link', async () => {
-  const activated = [];
-  const terminal = makeTerminal([`see ${ABS}`]);
-  registerTerminalPathLinks(terminal, 'sess-1', {
-    resolver: createTerminalPathResolver(makeLookup({ calls: 0 })),
-    activate: (target, event) => {
-      if (event && typeof event.button === 'number' && event.button !== 0) return;
-      activated.push(target);
-    },
-  });
-  const links = await provideLinks(terminal, 1);
-  links[0].activate({ button: 2 });
-  assert.deepStrictEqual(activated, []);
-});
-
 test('hover reports a file:// URI so the existing context menu classifies it', async () => {
   const hovered = [];
   const terminal = makeTerminal([`see ${ABS}`]);
@@ -419,4 +404,39 @@ test('a URL scheme is not a candidate, and neither is anything inside the URL', 
     findTerminalPathCandidates('see https://example.com/a/b and http://x.y/z').map((c) => c.text),
     ['see', 'and'],
   );
+});
+
+// The bare pass drops a URL by looking for '://' just past the match. A quoted
+// string is taken whole, so that lookahead never applies and the shape check is
+// the only thing left to refuse it.
+test('a quoted URL is not a candidate either', () => {
+  assert.deepStrictEqual(
+    findTerminalPathCandidates('fetched "http://example.com/a b/c" twice').map((c) => c.text),
+    // 'b/c' comes from the bare pass, which reads inside the quotes; what must
+    // not appear is the quoted string itself, URL scheme and all.
+    ['fetched', 'b/c', 'twice'],
+  );
+});
+
+// The memo sheds its oldest *insertion*, so without re-inserting on a hit the
+// hot region is what gets evicted: a sweep wider than the cap would drop to a
+// zero hit rate in one step instead of degrading.
+test('the memo keeps what is being used and sheds what is not', async () => {
+  const asked = [];
+  const resolver = createTerminalPathResolver(
+    (_sessionId, texts) => { asked.push(...texts); return Promise.resolve(texts.map(() => ({ ok: false, reason: 'missing' }))); },
+    { max: 2 },
+  );
+
+  await resolver.resolveAll('s', ['a']);
+  await resolver.resolveAll('s', ['b']);
+  await resolver.resolveAll('s', ['a']);   // a is now the most recently used
+  await resolver.resolveAll('s', ['c']);   // evicts the least recently used
+  assert.deepStrictEqual(asked, ['a', 'b', 'c'], 'the third hover of a was free');
+
+  await resolver.resolveAll('s', ['a']);
+  assert.deepStrictEqual(asked, ['a', 'b', 'c'], 'a survived the eviction');
+
+  await resolver.resolveAll('s', ['b']);
+  assert.deepStrictEqual(asked, ['a', 'b', 'c', 'b'], 'b was the one shed');
 });

@@ -44,8 +44,7 @@ function resolveTerminalPathTarget(text, cwd, deps) {
   }
   const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
 
-  // Existence first, denylist second, and every check still runs on anything
-  // that exists — see .ai/contexts/terminal-path-links.md ("A candidate is checked")
+  // see .ai/contexts/terminal-path-links.md ("A candidate is checked")
   let stat;
   try {
     stat = deps.statSync(resolved);
@@ -61,4 +60,29 @@ function resolveTerminalPathTarget(text, cwd, deps) {
   return { ok: true, path: resolved };
 }
 
-module.exports = { resolveTerminalPathTarget, fileHasNullByte };
+/**
+ * The working directory a session's terminal paths resolve against, or the
+ * reason there is none — see .ai/contexts/terminal-path-links.md
+ *
+ * @param {string} sessionId
+ * @param {object} deps
+ * @param {(id: string) => object|undefined} deps.getSession   the live session record, for `panelFor`
+ * @param {(id: string) => object} deps.resolveTarget          resolveGitChangesTarget
+ * @param {(ownerId: string, resolveTarget: Function) => object} deps.resolvePanelCwd
+ * @returns {{ok: true, cwd: string} | {ok: false, reason: 'remote'|'no-cwd'}}
+ */
+function resolveTerminalPathsCwd(sessionId, deps) {
+  const panelOwnerId = deps.getSession(sessionId)?.panelFor || null;
+  const target = panelOwnerId
+    ? deps.resolvePanelCwd(panelOwnerId, deps.resolveTarget)
+    : deps.resolveTarget(sessionId);
+  if (target && target.ok && target.kind && target.kind !== 'local') {
+    return { ok: false, reason: 'remote' };
+  }
+  if (!target || !target.ok || typeof target.cwd !== 'string' || target.cwd === '') {
+    return { ok: false, reason: 'no-cwd' };
+  }
+  return { ok: true, cwd: target.cwd };
+}
+
+module.exports = { resolveTerminalPathTarget, resolveTerminalPathsCwd, fileHasNullByte };

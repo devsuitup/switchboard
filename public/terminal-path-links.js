@@ -4,8 +4,7 @@
 'use strict';
 
 const TPL_SEGMENT = '[A-Za-z0-9._\\-+@%~$#=]+';
-// A separator is not required: a bare filename is a candidate too, and
-// openability is the filter — see .ai/contexts/terminal-path-links.md
+// see .ai/contexts/terminal-path-links.md ("What becomes a candidate")
 const TPL_BARE_SOURCE =
   `(?<![A-Za-z0-9._\\-+@%~$#=:/\\\\])(?:[A-Za-z]:)?(?:${TPL_SEGMENT}(?:[/\\\\]${TPL_SEGMENT})*|(?:[/\\\\]${TPL_SEGMENT})+)(?::\\d+(?::\\d+)?)?`;
 const TPL_QUOTED_RE = /`([^`\n]{1,1024})`|"([^"\n]{1,1024})"|'([^'\n]{1,1024})'/g;
@@ -123,7 +122,8 @@ function createTerminalPathResolver(lookupMany, opts = {}) {
     const settled = texts.map((text) => {
       const key = `${sessionId}\u0000${text}`;
       const hit = cache.get(key);
-      if (hit && now() - hit.at < ttlMs) return hit.promise;
+      // see .ai/contexts/terminal-path-links.md ("The memo evicts least-recently-used")
+      if (hit && now() - hit.at < ttlMs) { cache.delete(key); cache.set(key, hit); return hit.promise; }
       if (hit) cache.delete(key);
       if (!pending.has(text)) pending.set(text, null);
       return null;
