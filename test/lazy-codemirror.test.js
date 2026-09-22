@@ -335,3 +335,62 @@ test('lazy-codemirror: rejected bundle load resets cached promise so next open()
     ctx.destroy();
   }
 });
+
+// ── revealLine: the jump a path:line link asks for ─────────────────────────
+
+function openPanelWithEditor(ctx) {
+  const view = { dispatched: [], state: { doc: { length: 0 } }, dispatch(tr) { view.dispatched.push(tr); } };
+  ctx.window.createPlanEditor = () => view;
+  ctx.window.createEditableViewer = ctx.window.createPlanEditor;
+  ctx.window.CMEditorView = { lineWrapping: [] };
+  const revealed = [];
+  ctx.window.cmRevealLine = (v, line) => revealed.push({ v, line });
+  const panel = new ctx.window.ViewerPanel(ctx.container, {});
+  return { panel, view, revealed };
+}
+
+test('revealLine: the jump waits for the bundle, then targets the open editor', async () => {
+  const ctx = setupViewerPanelDom();
+  try {
+    const { panel, view, revealed } = openPanelWithEditor(ctx);
+    panel.open('Test', '/tmp/test.js', 'a\nb\nc\n');
+    panel.revealLine(3);
+    assert.deepEqual(revealed, [], 'nothing may be dispatched before the bundle resolves');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(revealed.length, 1);
+    assert.equal(revealed[0].line, 3);
+    assert.equal(revealed[0].v, view);
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('revealLine: a jump queued for a file the panel has since left is dropped', async () => {
+  const ctx = setupViewerPanelDom();
+  try {
+    const { panel, revealed } = openPanelWithEditor(ctx);
+    panel.open('Test', '/tmp/test.js', 'a\nb\nc\n');
+    panel.revealLine(3);
+    panel.open('Other', '/tmp/other.js', 'x\n');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(revealed, []);
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('revealLine: a line that is not a positive integer is ignored', async () => {
+  const ctx = setupViewerPanelDom();
+  try {
+    const { panel, revealed } = openPanelWithEditor(ctx);
+    panel.open('Test', '/tmp/test.js', 'a\n');
+    panel.revealLine(0);
+    panel.revealLine(-1);
+    panel.revealLine(null);
+    panel.revealLine(1.5);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(revealed, []);
+  } finally {
+    ctx.destroy();
+  }
+});

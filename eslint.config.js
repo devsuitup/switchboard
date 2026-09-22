@@ -245,6 +245,10 @@ const rendererCrossFileGlobals = {
   notePanelTerminalExit: 'readonly',
   countSessionsWithoutPanelShells: 'readonly',
   fileUriToPath: 'readonly',
+  createTerminalPathResolver: 'readonly',
+  registerTerminalPathLinks: 'readonly',
+  findTerminalPathCandidates: 'readonly',
+  readTerminalLogicalLine: 'readonly',
   rekeyFilePanelState: 'readonly',
   loadStats: 'readonly',
   loadMemories: 'readonly',
@@ -351,6 +355,31 @@ module.exports = [
         ...globals.browser,
         ...rendererCrossFileGlobals,
         module: 'writable',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Dual-mode matcher (public/terminal-path-links.js — see
+  // .ai/contexts/terminal-path-links.md): classic <script> in the renderer,
+  // require()-d in node:test. It declares the four link-provider globals
+  // rather than consuming them, so they are switched off here.
+  {
+    files: ['public/terminal-path-links.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        module: 'writable',
+        createTerminalPathResolver: 'off',
+        registerTerminalPathLinks: 'off',
+        findTerminalPathCandidates: 'off',
+        readTerminalLogicalLine: 'off',
       },
     },
     rules: {

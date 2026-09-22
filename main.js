@@ -86,6 +86,7 @@ const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
+const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
@@ -1835,6 +1836,19 @@ const changesWatchers = createChangesWatchRegistry({
       mainWindow.webContents.send('git-changes-file-changed', sessionId, relPath);
     }
   },
+});
+
+// A path from terminal output is untrusted input — see .ai/contexts/terminal-path-links.md
+ipcMain.handle('resolve-terminal-path', (_event, sessionId, text) => {
+  const target = resolveGitChangesTarget(sessionId);
+  if (target.ok && target.kind !== 'local') return { ok: false, reason: 'remote' };
+  return terminalPathTarget.resolveTerminalPathTarget(text, target.ok ? target.cwd : null, {
+    isSensitivePath,
+    statSync: (p) => fs.statSync(p),
+    hasNullByte: terminalPathTarget.fileHasNullByte,
+    homedir: () => os.homedir(),
+    maxBytes: PANEL_FILE_MAX_BYTES,
+  });
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it

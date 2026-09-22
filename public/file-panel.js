@@ -411,6 +411,7 @@ function openFileTab(sessionId, data) {
     label: basename(data.filePath),
     filePath: data.filePath,
     content: data.content,
+    pendingLine: Number.isInteger(data.line) && data.line > 0 ? data.line : null,
   };
 
   state.panelVisible = true;
@@ -474,14 +475,15 @@ function destroyCurrentTab(state, { stash = true } = {}) {
   }
 }
 
-// see .ai/contexts/changes-view.md ("File links")
-async function openFileInPanel(sessionId, filePath) {
+// see .ai/contexts/changes-view.md ("File links") and .ai/contexts/terminal-path-links.md
+async function openFileInPanel(sessionId, filePath, opts = {}) {
+  const line = Number.isInteger(opts.line) && opts.line > 0 ? opts.line : null;
   const row = await locateChangesRow(sessionId, filePath);
-  if (row) return openChangesTabAt(sessionId, row);
+  if (row) return openChangesTabAt(sessionId, row, line);
 
   const result = await window.api.readFileForPanel(filePath);
   if (!result.ok) return;
-  openFileTab(sessionId, { filePath, content: result.content });
+  openFileTab(sessionId, { filePath, content: result.content, line });
 }
 
 async function locateChangesRow(sessionId, filePath) {
@@ -496,11 +498,11 @@ async function locateChangesRow(sessionId, filePath) {
   return { path: located.relPath, staged: !!located.staged, untracked: !!located.untracked };
 }
 
-async function openChangesTabAt(sessionId, file) {
+async function openChangesTabAt(sessionId, file, line = null) {
   const tab = getSessionState(sessionId).currentTab;
   if (!tab || tab.type !== 'changes') await openChangesTab(sessionId);
   // openChangesDiff owns the discard question for every route into it.
-  return openChangesDiff(sessionId, file);
+  return openChangesDiff(sessionId, file, line);
 }
 
 function closeAllDiffs(sessionId) {
@@ -611,6 +613,10 @@ function renderTabContent(sessionId, tab) {
     changesContainerEl.style.display = 'none';
     vpContainer.style.display = 'flex';
     fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+    if (tab.pendingLine) {
+      fpViewerPanel.revealLine(tab.pendingLine);
+      tab.pendingLine = null;
+    }
   } else if (tab.type === 'changes') {
     vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
@@ -871,13 +877,14 @@ function unwatchChangesFile(sessionId, tab) {
   tab.watchedPath = null;
 }
 
-async function openChangesDiff(sessionId, file) {
+async function openChangesDiff(sessionId, file, line = null) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
 
   if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
 
+  tab.pendingLine = Number.isInteger(line) && line > 0 ? line : null;
   tab.selectedFile = file;
   tab.diffError = null;
   tab.diffContent = null;
@@ -1267,6 +1274,7 @@ function renderChangesNotice(tab) {
   const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
+  if (tab.pendingLine && !tab.editable && !tab.diffLoading) notes.push(`Line ${tab.pendingLine} was not reached — a read-only diff has no line to jump to.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
   if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');
@@ -1286,6 +1294,7 @@ function ensureChangesEditor(sessionId, tab) {
   const key = changesEditorKey(tab);
   if (tab.editorView && tab.editorKey === key && tab.editorMode === changesDiffMode) {
     mountChangesEditor(tab.editorView.dom);
+    consumeChangesPendingLine(tab);
     return;
   }
   const token = JSON.stringify([key, changesDiffMode]);
@@ -1315,10 +1324,19 @@ function ensureChangesEditor(sessionId, tab) {
     }
     tab.editorKey = key;
     tab.editorMode = mode;
+    consumeChangesPendingLine(tab);
   }).catch((err) => {
     tab.editorPending = null;
     console.error('[file-panel] Failed to load codemirror-bundle:', err);
   });
+}
+
+// see .ai/contexts/terminal-path-links.md ("`path:line` and `path:line:col`")
+function consumeChangesPendingLine(tab) {
+  if (!tab.pendingLine || !tab.editorView || !window.cmRevealLine) return;
+  const line = tab.pendingLine;
+  tab.pendingLine = null;
+  window.cmRevealLine(tab.editorView, line);
 }
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")

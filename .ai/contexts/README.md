@@ -1,6 +1,6 @@
 # Context engineering — Switchboard
 
-Eight sub-system docs (76 to 526 lines as of 2026-09, most have grown well past
+Eleven sub-system docs (76 to 526 lines as of 2026-09, most have grown well past
 their original size), written for AI agents who need to make a focused change
 without re-reading `main.js`, now ~2600 LOC.
 
@@ -18,6 +18,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | Busy/attention/response-ready state, the session-state domain module, the icon-slot projection | [session-state](session-state.md) |
 | The Changes panel: git-status parser, local/remote runner, cwd resolution, no-polling refresh | [changes-view](changes-view.md) |
 | The shell inside the file panel: mount point, hidden-write exemption, shell lifecycle, the splitter | [panel-terminal](panel-terminal.md) |
+| Paths in terminal output becoming links: the matcher, the openability check, `path:line` | [terminal-path-links](terminal-path-links.md) |
 
 ## Reading order for a new contributor (~30 min)
 
