@@ -22,7 +22,7 @@ let terminalPathResolver = null;
 function getTerminalPathResolver() {
   if (!terminalPathResolver) {
     terminalPathResolver = createTerminalPathResolver(
-      (sessionId, text) => window.api.resolveTerminalPath(sessionId, text),
+      (sessionId, texts) => window.api.resolveTerminalPaths(sessionId, texts),
     );
   }
   return terminalPathResolver;

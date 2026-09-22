@@ -34,9 +34,11 @@ function makeFixture() {
   fs.mkdirSync(path.join(cwd, 'emptydir'));
   fs.mkdirSync(path.join(cwd, 'docs'));
   fs.writeFileSync(path.join(cwd, 'public', 'app.js'), 'one\ntwo\nthree\n');
-  fs.writeFileSync(path.join(cwd, 'docs', 'my file.txt'), 'spaced\n');
+  fs.writeFileSync(path.join(cwd, 'my file.txt'), 'spaced\n');
   fs.writeFileSync(path.join(cwd, '.env'), 'SECRET=1\n');
   fs.writeFileSync(path.join(cwd, 'README.md'), '# readme\n');
+  fs.writeFileSync(path.join(cwd, 'Makefile'), 'all:\n');
+  fs.writeFileSync(path.join(cwd, 'plan'), 'the plan\n');
   return { root, home, cwd };
 }
 
@@ -44,17 +46,19 @@ const fixture = makeFixture();
 const ABS = path.join(fixture.cwd, 'public/app.js');
 test.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
 
-// The real openability check, wearing an IPC's clothes.
+// The real openability check, wearing an IPC's clothes. `counter.calls` is the
+// IPC round trips; `counter.lookups` is the paths those calls carried.
 function makeLookup(counter) {
-  return (_sessionId, text) => {
+  return (_sessionId, texts) => {
     counter.calls++;
-    return Promise.resolve(resolveTerminalPathTarget(text, fixture.cwd, {
+    counter.lookups = (counter.lookups || 0) + texts.length;
+    return Promise.resolve(texts.map((text) => resolveTerminalPathTarget(text, fixture.cwd, {
       isSensitivePath,
       statSync: (p) => fs.statSync(p),
       hasNullByte: fileHasNullByte,
       homedir: () => fixture.home,
       maxBytes: MAX_BYTES,
-    }));
+    })));
   };
 }
 
@@ -153,23 +157,18 @@ const MATRIX = [
     expect: [],
   },
   {
-    name: 'a relative path the guards refuse gets no link',
-    line: () => 'open .env now',
-    expect: [],
-  },
-  {
     name: 'a directory gets no link',
     line: () => 'cd emptydir/ first',
     expect: [],
   },
   {
-    name: 'a path with spaces links when quoted',
-    line: () => 'open "docs/my file.txt" please',
-    expect: [{ text: path.join(fixture.cwd, 'docs/my file.txt'), line: null, column: null }],
+    name: 'a name with spaces links when quoted',
+    line: () => 'open "my file.txt" please',
+    expect: [{ text: path.join(fixture.cwd, 'my file.txt'), line: null, column: null }],
   },
   {
-    name: 'a path with spaces, unquoted, links nothing rather than half of it',
-    line: () => 'open docs/my file.txt please',
+    name: 'a name with spaces, unquoted, links nothing rather than half of it',
+    line: () => 'open my file.txt please',
     expect: [],
   },
   {
@@ -178,22 +177,45 @@ const MATRIX = [
     expect: [{ text: path.join(fixture.cwd, 'public/app.js'), line: null, column: null }],
   },
   {
-    name: 'a bare word is never a path',
-    line: () => 'app.js was updated and README too',
+    name: 'a bare filename that exists and is openable links',
+    line: () => 'README.md was updated',
+    expect: [{ text: path.join(fixture.cwd, 'README.md'), line: null, column: null }],
+  },
+  {
+    name: 'an extensionless bare filename links',
+    line: () => 'run Makefile first',
+    expect: [{ text: path.join(fixture.cwd, 'Makefile'), line: null, column: null }],
+  },
+  {
+    name: 'a bare filename that collides with an ordinary English word links anyway',
+    line: () => 'we should plan the work',
+    expect: [{ text: path.join(fixture.cwd, 'plan'), line: null, column: null }],
+  },
+  {
+    name: 'a bare filename that does not exist gets no link',
+    line: () => 'ghost.js was updated and README too',
     expect: [],
   },
   {
-    // Prose names files constantly. Without a separator the candidate is not a
-    // path, even when a file of that name does sit in the session's cwd.
-    name: 'a bare filename that does exist is still not a path',
-    line: () => 'README.md was updated',
+    name: 'a bare name that is a directory gets no link',
+    line: () => 'look in emptydir for it',
     expect: [],
+  },
+  {
+    name: 'a bare filename the guards refuse gets no link',
+    line: () => 'open .env now',
+    expect: [],
+  },
+  {
+    name: 'a bare filename with :line carries the line',
+    line: () => 'README.md:2 is the heading',
+    expect: [{ text: path.join(fixture.cwd, 'README.md'), line: 2, column: null }],
   },
   {
     name: 'two paths on one line get two links',
-    line: () => 'public/app.js and "docs/my file.txt"',
+    line: () => 'public/app.js and "my file.txt"',
     expect: [
-      { text: path.join(fixture.cwd, 'docs/my file.txt'), line: null, column: null },
+      { text: path.join(fixture.cwd, 'my file.txt'), line: null, column: null },
       { text: path.join(fixture.cwd, 'public/app.js'), line: null, column: null },
     ],
   },
@@ -285,11 +307,10 @@ test('hover reports a file:// URI so the existing context menu classifies it', a
 
 // --- The cache ---
 
-test('a sweep across the scrollback costs one lookup per distinct candidate, not one per line', async () => {
+test('a sweep across repeated lines costs one call, not one per line', async () => {
   const counter = { calls: 0 };
-  const rows = [];
   const LINES = 200;
-  for (let i = 0; i < LINES; i++) rows.push(`${i}: public/app.js and public/ghost.js`);
+  const rows = Array.from({ length: LINES }, () => 'public/app.js and public/ghost.js');
   const terminal = makeTerminal(rows);
   registerTerminalPathLinks(terminal, 'sess-1', {
     resolver: createTerminalPathResolver(makeLookup(counter)),
@@ -299,17 +320,34 @@ test('a sweep across the scrollback costs one lookup per distinct candidate, not
     const links = await provideLinks(terminal, i);
     assert.strictEqual(links.length, 1);
   }
-  // Two distinct candidates on every line: the openable one and the missing one.
-  assert.strictEqual(counter.calls, 2);
+  assert.strictEqual(counter.calls, 1);
+  // Three distinct candidates: the openable path, the missing one, and "and".
+  assert.strictEqual(counter.lookups, 3);
+});
+
+test('an ordinary sentence of prose costs one call on the first pass and none on the second', async () => {
+  const counter = { calls: 0 };
+  const prose = 'the watcher now reports every change it sees without waiting for a poll';
+  const terminal = makeTerminal([prose]);
+  registerTerminalPathLinks(terminal, 'sess-1', {
+    resolver: createTerminalPathResolver(makeLookup(counter)),
+    activate: () => {},
+  });
+  assert.deepStrictEqual(await provideLinks(terminal, 1), []);
+  assert.strictEqual(counter.calls, 1);
+  assert.strictEqual(counter.lookups, new Set(prose.split(' ')).size);
+
+  assert.deepStrictEqual(await provideLinks(terminal, 1), []);
+  assert.strictEqual(counter.calls, 1);
 });
 
 test('simultaneous lookups of the same path share one call', async () => {
   const counter = { calls: 0 };
   const resolver = createTerminalPathResolver(makeLookup(counter));
   await Promise.all([
-    resolver.resolve('s', 'public/app.js'),
-    resolver.resolve('s', 'public/app.js'),
-    resolver.resolve('s', 'public/app.js'),
+    resolver.resolveAll('s', ['public/app.js']),
+    resolver.resolveAll('s', ['public/app.js']),
+    resolver.resolveAll('s', ['public/app.js']),
   ]);
   assert.strictEqual(counter.calls, 1);
 });
@@ -317,8 +355,8 @@ test('simultaneous lookups of the same path share one call', async () => {
 test('a refusal is cached too, so a missing path is not asked about twice', async () => {
   const counter = { calls: 0 };
   const resolver = createTerminalPathResolver(makeLookup(counter));
-  assert.deepStrictEqual(await resolver.resolve('s', 'public/ghost.js'), { ok: false, reason: 'missing' });
-  assert.deepStrictEqual(await resolver.resolve('s', 'public/ghost.js'), { ok: false, reason: 'missing' });
+  assert.deepStrictEqual((await resolver.resolveAll('s', ['public/ghost.js']))[0], { ok: false, reason: 'missing' });
+  assert.deepStrictEqual((await resolver.resolveAll('s', ['public/ghost.js']))[0], { ok: false, reason: 'missing' });
   assert.strictEqual(counter.calls, 1);
 });
 
@@ -326,45 +364,59 @@ test('an entry is asked again once its time-to-live has passed', async () => {
   const counter = { calls: 0 };
   let clock = 0;
   const resolver = createTerminalPathResolver(makeLookup(counter), { ttlMs: 1000, now: () => clock });
-  await resolver.resolve('s', 'public/app.js');
+  await resolver.resolveAll('s', ['public/app.js']);
   clock = 999;
-  await resolver.resolve('s', 'public/app.js');
+  await resolver.resolveAll('s', ['public/app.js']);
   assert.strictEqual(counter.calls, 1);
   clock = 1001;
-  await resolver.resolve('s', 'public/app.js');
+  await resolver.resolveAll('s', ['public/app.js']);
   assert.strictEqual(counter.calls, 2);
 });
 
 test('the cache is bounded and sheds its oldest entries', async () => {
   const resolver = createTerminalPathResolver(makeLookup({ calls: 0 }), { max: 10 });
-  for (let i = 0; i < 50; i++) await resolver.resolve('s', `public/missing-${i}.js`);
+  for (let i = 0; i < 50; i++) await resolver.resolveAll('s', [`public/missing-${i}.js`]);
   assert.strictEqual(resolver.size, 10);
 });
 
 test('closing a session drops that session s entries and no other s', async () => {
   const resolver = createTerminalPathResolver(makeLookup({ calls: 0 }));
-  await resolver.resolve('a', 'public/app.js');
-  await resolver.resolve('b', 'public/app.js');
+  await resolver.resolveAll('a', ['public/app.js']);
+  await resolver.resolveAll('b', ['public/app.js']);
   resolver.forget('a');
   assert.strictEqual(resolver.size, 1);
 });
 
 test('a lookup that throws is a refusal, not an unhandled rejection', async () => {
   const resolver = createTerminalPathResolver(() => Promise.reject(new Error('ipc down')));
-  assert.deepStrictEqual(await resolver.resolve('s', 'public/app.js'), { ok: false, reason: 'error' });
+  assert.deepStrictEqual(await resolver.resolveAll('s', ['a', 'b']), [
+    { ok: false, reason: 'unresolved' },
+    { ok: false, reason: 'unresolved' },
+  ]);
 });
 
 // --- The matcher on its own ---
 
 test('the matcher caps how many candidates one line can produce', () => {
-  const line = Array.from({ length: 40 }, (_, i) => `a/b${i}`).join(' ');
-  assert.ok(findTerminalPathCandidates(line).length <= 16);
+  const line = Array.from({ length: 200 }, (_, i) => `a/b${i}`).join(' ');
+  assert.strictEqual(findTerminalPathCandidates(line).length, 64);
 });
 
-test('the matcher needs a separator: a word is not a candidate', () => {
-  assert.deepStrictEqual(findTerminalPathCandidates('README app.js Makefile'), []);
+test('a bare word is a candidate; whether it links is the openability question', () => {
+  assert.deepStrictEqual(
+    findTerminalPathCandidates('README app.js Makefile').map((c) => c.text),
+    ['README', 'app.js', 'Makefile'],
+  );
 });
 
-test('a quoted span needs a separator too, so prose in quotes is not a candidate', () => {
-  assert.deepStrictEqual(findTerminalPathCandidates('he said "that was the plan" today'), []);
+test('a component longer than a filename may be is not a candidate', () => {
+  assert.deepStrictEqual(findTerminalPathCandidates('x'.repeat(256)), []);
+  assert.strictEqual(findTerminalPathCandidates('x'.repeat(255)).length, 1);
+});
+
+test('a URL scheme is not a candidate, and neither is anything inside the URL', () => {
+  assert.deepStrictEqual(
+    findTerminalPathCandidates('see https://example.com/a/b and http://x.y/z').map((c) => c.text),
+    ['see', 'and'],
+  );
 });

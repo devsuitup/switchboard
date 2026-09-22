@@ -164,7 +164,7 @@ contextBridge.exposeInMainWorld('api', {
   mcpDiffResponse: (sessionId, diffId, action, editedContent) => {
     ipcRenderer.send('mcp-diff-response', sessionId, diffId, action, editedContent);
   },
-  resolveTerminalPath: (sessionId, text) => ipcRenderer.invoke('resolve-terminal-path', sessionId, text),
+  resolveTerminalPaths: (sessionId, texts) => ipcRenderer.invoke('resolve-terminal-paths', sessionId, texts),
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
   saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),

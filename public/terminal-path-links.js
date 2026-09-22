@@ -4,15 +4,17 @@
 'use strict';
 
 const TPL_SEGMENT = '[A-Za-z0-9._\\-+@%~$#=]+';
-// A candidate needs at least one separator: a bare word is never a path here.
+// A separator is not required: a bare filename is a candidate too, and
+// openability is the filter — see .ai/contexts/terminal-path-links.md
 const TPL_BARE_SOURCE =
-  `(?<![A-Za-z0-9._\\-+@%~$#=:/\\\\])(?:[A-Za-z]:)?(?:${TPL_SEGMENT})?(?:[/\\\\]${TPL_SEGMENT})+(?::\\d+(?::\\d+)?)?`;
+  `(?<![A-Za-z0-9._\\-+@%~$#=:/\\\\])(?:[A-Za-z]:)?(?:${TPL_SEGMENT}(?:[/\\\\]${TPL_SEGMENT})*|(?:[/\\\\]${TPL_SEGMENT})+)(?::\\d+(?::\\d+)?)?`;
 const TPL_QUOTED_RE = /`([^`\n]{1,1024})`|"([^"\n]{1,1024})"|'([^'\n]{1,1024})'/g;
 const TPL_URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 const TPL_TRAILING_RE = /[.,;:!?)\]}>'"`]+$/;
 const TPL_LINE_COL_RE = /^(.*?):(\d+)(?::(\d+))?$/;
-const TPL_MAX_CANDIDATES = 16;
+const TPL_MAX_CANDIDATES = 64;
 const TPL_MAX_WRAPPED_ROWS = 24;
+const TPL_MAX_NAME_LENGTH = 255;
 
 function tplStripSuffixes(raw) {
   let text = raw.replace(TPL_TRAILING_RE, '');
@@ -29,7 +31,7 @@ function tplStripSuffixes(raw) {
 
 function tplIsPathShaped(text) {
   if (!text || TPL_URL_RE.test(text)) return false;
-  return /[/\\]/.test(text);
+  return text.split(/[/\\]/).every((segment) => segment.length <= TPL_MAX_NAME_LENGTH);
 }
 
 // see .ai/contexts/terminal-path-links.md ("What becomes a candidate")
@@ -60,6 +62,7 @@ function tplBareCandidates(lineText) {
   while ((match = re.exec(lineText)) !== null) {
     if (match[0] === '') { re.lastIndex++; continue; }
     const kept = match[0].replace(TPL_TRAILING_RE, '');
+    if (lineText.startsWith('://', match.index + kept.length)) continue;
     const parsed = tplStripSuffixes(match[0]);
     if (!tplIsPathShaped(parsed.text)) continue;
     out.push({
@@ -98,30 +101,48 @@ function tplDropOverlaps(links) {
 }
 
 /**
- * Per-path memo in front of the openability IPC, negatives included.
+ * Per-path memo in front of the openability IPC, refusals included. A line's
+ * unknown candidates go out in one call — see .ai/contexts/terminal-path-links.md
  *
- * @param {(sessionId: string, text: string) => Promise} lookup
+ * @param {(sessionId: string, texts: string[]) => Promise} lookupMany
  * @param {{max?: number, ttlMs?: number, now?: () => number}} [opts]
  */
-function createTerminalPathResolver(lookup, opts = {}) {
-  const max = opts.max || 1000;
+function createTerminalPathResolver(lookupMany, opts = {}) {
+  const max = opts.max || 4096;
   const ttlMs = opts.ttlMs || 30000;
   const now = opts.now || (() => Date.now());
   const cache = new Map();
 
-  function resolve(sessionId, text) {
-    const key = `${sessionId}\u0000${text}`;
-    const hit = cache.get(key);
-    if (hit && now() - hit.at < ttlMs) return hit.promise;
-    if (hit) cache.delete(key);
+  function normalise(result) {
+    if (result && result.ok) return { ok: true, path: result.path };
+    return { ok: false, reason: (result && result.reason) || 'unresolved' };
+  }
 
-    const promise = Promise.resolve()
-      .then(() => lookup(sessionId, text))
-      .then((r) => (r && r.ok ? { ok: true, path: r.path } : { ok: false, reason: (r && r.reason) || 'unresolved' }))
-      .catch(() => ({ ok: false, reason: 'error' }));
-    cache.set(key, { at: now(), promise });
-    while (cache.size > max) cache.delete(cache.keys().next().value);
-    return promise;
+  function resolveAll(sessionId, texts) {
+    const pending = new Map();
+    const settled = texts.map((text) => {
+      const key = `${sessionId}\u0000${text}`;
+      const hit = cache.get(key);
+      if (hit && now() - hit.at < ttlMs) return hit.promise;
+      if (hit) cache.delete(key);
+      if (!pending.has(text)) pending.set(text, null);
+      return null;
+    });
+
+    if (pending.size) {
+      const wanted = Array.from(pending.keys());
+      const batch = Promise.resolve()
+        .then(() => lookupMany(sessionId, wanted))
+        .catch(() => null);
+      wanted.forEach((text, i) => {
+        const promise = batch.then((results) => normalise(Array.isArray(results) ? results[i] : null));
+        pending.set(text, promise);
+        cache.set(`${sessionId}\u0000${text}`, { at: now(), promise });
+      });
+      while (cache.size > max) cache.delete(cache.keys().next().value);
+    }
+
+    return Promise.all(texts.map((text, i) => settled[i] || pending.get(text)));
   }
 
   function forget(sessionId) {
@@ -131,7 +152,7 @@ function createTerminalPathResolver(lookup, opts = {}) {
     }
   }
 
-  return { resolve, forget, get size() { return cache.size; } };
+  return { resolveAll, forget, get size() { return cache.size; } };
 }
 
 // The logical (unwrapped) line under `row`, with the buffer cell behind every string index.
@@ -185,7 +206,7 @@ function registerTerminalPathLinks(terminal, sessionId, deps) {
       const candidates = findTerminalPathCandidates(text);
       if (candidates.length === 0) { callback(undefined); return; }
 
-      Promise.all(candidates.map((c) => deps.resolver.resolve(sessionId, c.text)))
+      deps.resolver.resolveAll(sessionId, candidates.map((c) => c.text))
         .then((results) => {
           const openable = [];
           for (let i = 0; i < candidates.length; i++) {

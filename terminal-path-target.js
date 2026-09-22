@@ -44,14 +44,15 @@ function resolveTerminalPathTarget(text, cwd, deps) {
   }
   const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
 
-  if (deps.isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
-
+  // Existence first, denylist second, and every check still runs on anything
+  // that exists — see .ai/contexts/terminal-path-links.md ("A candidate is checked")
   let stat;
   try {
     stat = deps.statSync(resolved);
   } catch {
     return { ok: false, reason: 'missing' };
   }
+  if (deps.isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
   if (stat.isDirectory()) return { ok: false, reason: 'directory' };
   if (!stat.isFile()) return { ok: false, reason: 'not-a-regular-file' };
   if (stat.size > deps.maxBytes) return { ok: false, reason: 'too-large' };

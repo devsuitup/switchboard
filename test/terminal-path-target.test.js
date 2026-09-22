@@ -84,6 +84,18 @@ test('an absolute path still resolves when the session cwd is unknown', () => {
   assert.deepStrictEqual(resolveTerminalPathTarget(abs, null, deps(fixture.home)), { ok: true, path: abs });
 });
 
+test('an existing file in a credential location is refused as sensitive, a missing one as missing', () => {
+  const ssh = path.join(fixture.cwd, '.ssh');
+  fs.mkdirSync(ssh);
+  fs.writeFileSync(path.join(ssh, 'id_rsa'), 'key\n');
+  try {
+    assert.deepStrictEqual(resolveTerminalPathTarget('.ssh/id_rsa', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'sensitive' });
+    assert.deepStrictEqual(resolveTerminalPathTarget('.ssh/absent', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'missing' });
+  } finally {
+    fs.rmSync(ssh, { recursive: true, force: true });
+  }
+});
+
 test('a symlink into a sensitive location is refused on its resolved target', () => {
   const link = path.join(fixture.cwd, 'innocent.txt');
   fs.symlinkSync(path.join(fixture.cwd, '.env'), link);

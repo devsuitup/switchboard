@@ -199,6 +199,7 @@ const searchViaWorker = searchClient.searchViaWorker;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Ceiling for a file opened in the viewer panel, mirroring read-work-file.
 const PANEL_FILE_MAX_BYTES = 2 * 1024 * 1024;
+const TERMINAL_PATH_BATCH_MAX = 64;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 // MAX_BUFFER_SIZE imported from output-buffer.js (single source of truth)
@@ -1839,16 +1840,20 @@ const changesWatchers = createChangesWatchRegistry({
 });
 
 // A path from terminal output is untrusted input — see .ai/contexts/terminal-path-links.md
-ipcMain.handle('resolve-terminal-path', (_event, sessionId, text) => {
+ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
+  if (!Array.isArray(texts)) return [];
+  const wanted = texts.slice(0, TERMINAL_PATH_BATCH_MAX);
   const target = resolveGitChangesTarget(sessionId);
-  if (target.ok && target.kind !== 'local') return { ok: false, reason: 'remote' };
-  return terminalPathTarget.resolveTerminalPathTarget(text, target.ok ? target.cwd : null, {
+  if (target.ok && target.kind !== 'local') return wanted.map(() => ({ ok: false, reason: 'remote' }));
+  const deps = {
     isSensitivePath,
     statSync: (p) => fs.statSync(p),
     hasNullByte: terminalPathTarget.fileHasNullByte,
     homedir: () => os.homedir(),
     maxBytes: PANEL_FILE_MAX_BYTES,
-  });
+  };
+  const cwd = target.ok ? target.cwd : null;
+  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, cwd, deps));
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it

@@ -112,7 +112,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Search off the main thread + bounded FTS query** — worker relay + 48-char cap (fork PR #97, v0.0.44)
 - **Debug mode** — Settings → Diagnostics arms the activity trace at runtime, without a restart, and lists/opens/deletes its files; see [docs/activity-trace.md](../docs/activity-trace.md)
 - **Resume/fork in real recorded cwd** for worktree sessions (fork PR #96, v0.0.44)
-- **Clickable paths in the terminal** — a link provider over filesystem paths, checked main-side against the panel's own guards; see [contexts/terminal-path-links.md](contexts/terminal-path-links.md)
+- **Clickable paths in the terminal** — a link provider over filesystem paths and bare filenames, checked main-side against the panel's own guards; see [contexts/terminal-path-links.md](contexts/terminal-path-links.md)
 - **Grid "Group by project" toggle** — the grid header switches between the project-grouped layout (default) and a flat card grid; the choice persists in `localStorage.gridGroupByProject`
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)

@@ -10,7 +10,7 @@ side panel. Only paths the panel may actually open become links.
 |---|---|
 | `public/terminal-path-links.js` | The matcher, the per-path cache, and the xterm link provider. Dual-mode: a classic `<script>` in the renderer, `require()`-d by `test/terminal-path-links.test.js`. |
 | `terminal-path-target.js` | Main-side openability: the one question the provider asks per candidate. |
-| `main.js` | `resolve-terminal-path` handler. |
+| `main.js` | `resolve-terminal-paths` handler. |
 | `public/terminal-manager.js` | Registers the provider per terminal; routes a click to `openFileInPanel`. |
 | `public/file-panel.js` | `openFileInPanel(sessionId, path, { line })` — both routes into the panel carry the line. |
 | `public/viewer-panel.js` | `revealLine(n)`. |
@@ -25,7 +25,7 @@ render, so the cost is bounded by what the pointer touches rather than by
 output volume. That budget is spent on one question per candidate, asked of
 the main process: may the panel open this path?
 
-`resolve-terminal-path` answers it with the guard the file-panel IPCs already
+`resolve-terminal-paths` answers it with the guard the file-panel IPCs already
 enforce — `isSensitivePath`, on the disk-resolved path — plus regular-file-ness,
 the panel's own size bound, and a NUL-byte sniff of the first 4 KB. A path that
 fails any of those gets no link at all.
@@ -33,9 +33,17 @@ fails any of those gets no link at all.
 Underlining `.env` and then denying the click would teach the reader to
 distrust the underline. A link that does nothing is worse than no link.
 
+The existence check runs **first**, because on a line of prose most candidates
+are not files and a path that is not there is refused whatever the denylist
+says. Everything that does exist still passes `isSensitivePath` before anything
+else is decided, so the set of checks a linked path has survived is unchanged;
+only the refusal reason differs for a path that is both missing and
+credential-shaped. Measured: 45 µs per candidate with the denylist first, 14 µs
+with the stat first.
+
 ### Relative paths resolve main-side, against the session's own cwd
 
-The renderer sends the session id and the matched text. `resolve-terminal-path`
+The renderer sends the session id and the matched texts. `resolve-terminal-paths`
 derives the session's real working directory through `resolveGitChangesTarget`
 — the same resolution the Changes panel uses — and resolves against it. The
 renderer never learns where a session lives; it receives an absolute path only
@@ -61,24 +69,36 @@ takes `{ line }` and both routes honour it:
 
 ## What becomes a candidate
 
-A candidate always contains a path separator. A bare word never becomes a
-link, even when a file of that name sits in the session's cwd: prose names
-files constantly, and linking every one of them is noise plus an IPC per word.
+**Existence and openability are the filter, not a guess about what the writer
+meant.** A token with no separator is a candidate too: if a file of that exact
+name is really in the session's working directory and the panel would open it,
+it becomes a link. `README.md` in prose is clickable when that file is there.
+
+Extensionless names are included — `Makefile`, `Dockerfile`, `LICENSE` are real
+files people name in prose, and a list of "filename-shaped" extensions would be
+exactly the guess about intent this rule refuses. The cost is main-side only and
+is stated under "The cache".
+
+The consequence is accepted rather than worked around: a sentence using an
+ordinary word that happens to name a file in the cwd — "we should **plan** the
+work", with a file called `plan` next to it — links that word.
 
 Two passes over the hovered logical line:
 
-1. **Bare** — `(?:[A-Za-z]:)?(?:SEG)?(?:[/\\]SEG)+(?::\d+(?::\d+)?)?`, with a
-   lookbehind that refuses a start inside a longer token. A `scheme://` prefix
-   makes every interior position follow a path character or a `:` or `/`, so
-   URLs never match and `http`/`https` stays with `WebLinksAddon` and `file://`
-   with the existing `linkHandler`.
+1. **Bare** — `(?:[A-Za-z]:)?(?:SEG(?:[/\]SEG)*|(?:[/\]SEG)+)(?::\d+(?::\d+)?)?`,
+   with a lookbehind that refuses a start inside a longer token. A candidate
+   followed by `://` is dropped, and every interior position of a URL follows a
+   path character, a `:` or a `/`, so `http`/`https` stays with `WebLinksAddon`
+   and `file://` with the existing `linkHandler`.
 2. **Quoted** — the inner text of a `` ` ``, `"` or `'` span, only when it
    contains a space. A quote is the only delimiter that makes a space inside a
-   path unambiguous. Unquoted, `docs/my file.txt` matches `docs/my`, which then
-   fails openability and produces no link — half a path is not linked.
+   name unambiguous. Unquoted, `my file.txt` matches `my`, which then fails
+   openability and produces no link — half a name is not linked.
 
-Trailing prose punctuation (`.,;:!?)]}>'"` `` ` ``) is stripped before the
-`:line:col` suffix is parsed, so `see /etc/hosts.` links `/etc/hosts`.
+No component may exceed 255 characters, which is what a filename component can
+be, not a judgement about shape. Trailing prose punctuation
+(`.,;:!?)]}>'"` `` ` ``) is stripped before the `:line:col` suffix is parsed, so
+`see /etc/hosts.` links `/etc/hosts`.
 
 The two passes can produce overlapping candidates (a quoted span and the bare
 match inside it). Openability decides between them: overlaps are resolved
@@ -86,28 +106,48 @@ match inside it). Openability decides between them: overlaps are resolved
 accepted. A quoted span that is really prose — the text between two
 apostrophes — is refused and leaves the bare link inside it standing.
 
-At most 16 candidates per line.
+At most 64 candidates per line.
 
 ## The cache
 
-`createTerminalPathResolver` memoises per `sessionId` + matched text, negatives
-included, because a pointer swept across the scrollback would otherwise fire one
-IPC per line per pass. The in-flight promise is what is stored, so simultaneous
-lookups of the same path share one call. Entries live 30 s and the map is capped
-at 1000, oldest shed first; `forget(sessionId)` runs when a terminal is
-destroyed.
+A line's unknown candidates go out in **one** call, and `createTerminalPathResolver`
+memoises the answers per `sessionId` + text, refusals included. The in-flight
+promise is what is stored, so a second hover of the same line while the first is
+still out adds nothing. Entries live 30 s and the map is capped at 4096, oldest
+shed first; `forget(sessionId)` runs when a terminal is destroyed.
 
-Measured: a 1000-line sweep over a line carrying four distinct candidates costs
-**4 IPC calls**, and 0.018 ms per hovered line.
+Measured, against real prose (this repository's own context docs, 200 columns
+wide):
+
+| | calls | paths carried | wall |
+|---|---|---|---|
+| one 13-word sentence, first hover | 1 | 13 | — |
+| the same sentence, hovered again | 0 | 0 | — |
+| 1000-line sweep, first pass | 883 | 3225 | 135 ms (0.135 ms/line) |
+| 1000-line sweep, second pass | 0 | 0 | 32 ms (0.032 ms/line) |
+
+Without the batch those 3225 paths would be 3225 calls. The batch is what keeps
+the call count at one per line no matter how many words the line has, and the
+memo is what takes the second pass to zero.
+
+Of those 3225 distinct candidates, 211 contain a dot and 3014 do not. Admitting
+the extensionless ones therefore costs 40 µs per hovered line of dense prose,
+once, and nothing thereafter — which is what the decision to include them rests
+on.
 
 ## Bounds
 
 - **The link provider must not touch the write path.** It runs on a pointer
-  event, never on a write. Terminal throughput is unchanged: 694.8 MB/s before,
-  692.7 MB/s after, through `handleTerminalData` in the jsdom harness.
+  event, never on a write. Terminal throughput is unchanged, measured through
+  `handleTerminalData` in the jsdom harness: 615.8 / 602.3 / 581.4 MB/s before,
+  621.0 / 618.6 / 636.3 MB/s after.
 - The reachable line of a hovered row walks at most 24 wrapped buffer rows.
-- `resolve-terminal-path` reads bytes but returns none: its answer is a
-  yes/no plus the resolved path.
+- `resolve-terminal-paths` reads bytes but returns none: its answer is a
+  yes/no plus the resolved path, and it accepts at most 64 paths per call.
+- The handler is synchronous, so one call occupies the main process for as long
+  as its paths take: 14 µs each, and at most 64 of them — under a millisecond in
+  the worst case, and 50 µs for the 3.65-path average measured over the prose
+  sweep. It stops entirely once a region of the scrollback has been hovered.
 
 ## What this does not change
 
