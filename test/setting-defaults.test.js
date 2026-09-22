@@ -139,7 +139,11 @@ test('no renderer file carries a second default for a setting key', () => {
   const offences = [];
 
   for (const file of fs.readdirSync(PUBLIC_DIR)) {
+    // codemirror-bundle.js is generated and gitignored, so it is absent on CI
+    // and present after a local build: minified vendor code matches a key name
+    // beside a `||` often enough to make this guard fire only on a workstation.
     if (!file.endsWith('.js') || file === 'setting-defaults.js') continue;
+    if (file === 'codemirror-bundle.js') continue;
     const lines = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8').split('\n');
     lines.forEach((line, i) => {
       if (line.includes('SETTING_DEFAULTS')) return;
