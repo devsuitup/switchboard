@@ -55,10 +55,20 @@ The trigger watcher lets any external script type into an open session's termina
 - `sessionId` — the target session (must be open in Switchboard).
 - `command` — written to the PTY, followed by a discrete Enter keypress.
 - `wait` — `"none"` (default) does not wait for the session to stop being busy; `"idle"` does. Neither sends into a composer with unsubmitted input: see "Politeness" — `"none"` can still wait, up to `timeout_ms`. Use `"idle"` for anything that must not interrupt a mid-response stream.
-- `timeout_ms` — optional cap on the waiting, idle **and politeness** (≤ 600 000 ms; default 300 000). See "Politeness" below: with `wait: "none"` this is the only bound on how long a trigger sits waiting for a free composer.
+- `timeout_ms` — optional cap on the waiting, idle **and politeness** (≤ 600 000 ms; default 300 000). See "Politeness" below: with `wait: "none"` this is the only bound on how long a trigger sits waiting for a free composer. On a `chain` it is the deadline for the **whole chain**, not for each step — see "A chain's deadline is one budget for every step".
 - `expectedCwd` — optional. See "Target guard" below.
 
-Environment overrides: `SWITCHBOARD_TRIGGERS_DIR` (watched directory), `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` (default idle wait), `SWITCHBOARD_TRIGGER_QUIET_MS` (the politeness quiet window, default 3000 ms).
+Environment overrides: `SWITCHBOARD_TRIGGERS_DIR` (watched directory), `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` (default idle wait), `SWITCHBOARD_TRIGGER_QUIET_MS` (the politeness quiet window, default 3000 ms), `SWITCHBOARD_TRIGGER_MAX_AGE_MS` (the staleness limit, default 300 000 ms).
+
+**A trigger file older than the staleness limit is refused unread.** Age is the
+file's own `mtime` against the moment the watcher inspects it, so a trigger that
+ages out while queued is refused exactly like one that was already stale when the
+watcher found it: a `/compact` written six hours ago no longer targets the same
+session state. The refusal is an ordinary result — `{"ok": false, "submitted":
+"no", "error": "not sent"}` with the age in `reason`. A trigger written while
+Switchboard was closed is not lost: a startup scan picks it up at the next
+launch, and the limit is what decides — it runs if it is still inside the
+window, and is refused if it has aged past it.
 
 Instead of a single `command`, you can send a `chain` — a sequence of up to 20 steps injected one after another, each submitted and verified before the next:
 
@@ -71,6 +81,29 @@ Instead of a single `command`, you can send a `chain` — a sequence of up to 20
 ```
 
 `command` and `chain` are mutually exclusive.
+
+**A chain's deadline is one budget for every step.** `timeout_ms` — or its
+300 000 ms default — is a single deadline taken at the start and shared by the
+initial wait, every step's politeness wait, every submit verification, and the
+busy-fall wait that separates one step from the next. It is not restarted per
+step. A step may narrow its own share with its own `timeout_ms`; it can never
+extend it past the chain's deadline — and a per-step value above the 600 000 cap
+is refused outright, not clamped, taking the whole trigger with it.
+
+The cap is enforced on the `timeout_ms` field only. When the field is absent the
+budget comes from `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS`, which is not capped: an
+env var set above 600 000 gives every chain on that machine a larger budget than
+any trigger may ask for.
+
+Size it against what the steps actually do, not against how many there are. A
+chain that compacts and then resumes spends most of its budget waiting for the
+session to go idle after `/compact`, and the default leaves little room for the
+resume step: `{"chain": [{"command": "/compact"}, {"command": "…"}],
+"timeout_ms": 600000}` is the shape that fits, 600 000 being the cap.
+
+A session that is busy for another reason spends the budget just as fast —
+anything typed into it while a chain is in flight competes with the chain's own
+steps for the same deadline.
 
 **`waited_ms` / `total_waited_ms`.** Both fields mean the same thing — every
 wait this trigger spent — scoped differently: a single `command` result
@@ -256,8 +289,14 @@ than that.
 Every path that decides a trigger's fate — success, validation refusal, timeout,
 missing session, refused `wait` — writes the result to
 `~/.switchboard/triggers/processed/<name>.result.json` and then deletes the
-trigger file. The directory therefore holds exactly the triggers still waiting
-to be processed:
+trigger file. For a chain that happens once the whole chain has ended, not step
+by step — so a trigger file still sitting in `~/.switchboard/triggers/` with no
+result yet is normally **in flight, not failed**. Normally, and not always: a
+watcher whose `fs.watch` or directory setup failed at startup leaves the same
+picture, and so does a name the watcher could not read — both are logged and
+neither produces a result. A caller that polls for one needs a bound of its own.
+The triggers directory therefore holds the triggers still waiting to be
+processed, or being processed right now:
 
 ```json
 { "ok": true,  "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320 }
@@ -364,6 +403,35 @@ The two reserved values are easy to confuse and mean opposite things, so:
 - The same holds when the session exits during that initial wait: the `error`
   stays the free-text `session exited during wait`, but `submitted` is `no`,
   `partial` is `false`, and `reason` says nothing was written.
+
+**A truncated chain: reading which steps went out.** `steps_completed` counts
+steps whose wait *completed*. A step that was written and whose wait then hit
+the deadline gets an entry in `steps[]` and is **not** counted — so a chain that
+sent `/compact` and timed out waiting for the session to come back reports
+`steps_completed: 0` with one entry in `steps[]`. Read as "nothing went out",
+that sends `/compact` a second time.
+
+Read the array, not the count. `steps[]` holds the steps the chain **reached**,
+which is not the same as the steps it wrote: a step whose politeness wait never
+found a free composer is recorded too, and nothing was written for it. That
+entry is recognisable — **`submitted: "no"` on a step means it was never
+written**, and it is the only way a step entry carries that value.
+
+So, with `steps_total` the chain's length, carried on every chain result:
+
+- the last entry, when its `submitted` is `"no"`, was **not** sent: the unsent
+  tail starts at that entry's own `idx`;
+- otherwise the last entry was sent, and the tail starts at `max(steps[].idx) + 1`;
+- either way the tail runs to `steps_total - 1`;
+- with no entry at all, the whole chain is the tail.
+
+Taking `max(steps[].idx) + 1` unconditionally is the mistake that loses a resume
+prompt held back by politeness — the case `steps_total` exists to make visible.
+
+An empty `steps: []` and a missing `steps` key both mean nothing went out; they
+distinguish a refusal inside the chain loop from one that never reached it, and
+the same `error` value can appear in either. Read it as
+`(result.steps || []).length === 0`, not as `result.steps.length === 0`.
 
 **An exception anywhere while deciding a trigger's fate** — not just the
 anticipated validation refusals above — still ends in a result file and a
