@@ -1060,8 +1060,19 @@ the step that *was* written but whose wait never completed is pushed into
 
 - `steps_completed` counts steps whose wait completed — it is **not** the
   index the tail resumes from;
-- `max(steps[].idx)` is the last step actually sent;
-- **the unsent tail is `max(steps[].idx) + 1 .. steps_total - 1`.**
+- an entry is a step the loop **reached**, not necessarily one it wrote: the
+  politeness refusal at the top of the loop body pushes an entry with
+  `submitted: "no"` and nothing written. That value is set nowhere else on a
+  step — every other push takes it from `classifySubmitted()`, which returns
+  `assumed` at weakest — so **`submitted: "no"` on a step entry is exactly "not
+  written"**;
+- `max(steps[].idx)` is the last step the loop reached, and is the last step
+  *sent* only when that entry's `submitted` is not `"no"`;
+- **the unsent tail is `max(steps[].idx) + 1 .. steps_total - 1`, or
+  `max(steps[].idx) .. steps_total - 1` when the last entry reads
+  `submitted: "no"`.** Reading it the first way in every case drops a step that
+  was never written — a resume prompt held back by politeness is precisely the
+  loss this field exists to prevent.
 
 In the measured case above, `steps_completed: 0` with one entry in `steps[]`:
 step 0 had gone out. Deriving the tail from `steps_completed` would have
