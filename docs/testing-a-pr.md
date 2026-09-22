@@ -276,6 +276,10 @@ editing: the save succeeds, and the panel it should have left open is rebuilt
 from scratch a moment later. `performance.now()` in the renderer tells the two
 apart — a value far below the instance's real age means the page reloaded.
 
+The watcher ignores dotfiles, `node_modules` and source maps, so a write under
+`.work-files/` — the scratch space the guidelines point agents at — does not
+trigger it.
+
 Test editing against **another** repository, or against the packaged build
 below, which does not carry the reloader.
 
@@ -313,8 +317,16 @@ SWITCHBOARD_TRIGGERS_DIR=~/.switchboard-dev-rc/triggers \
   ./squashfs-root/switchboard --no-sandbox --remote-debugging-port=9334
 ```
 
-`squashfs-root/AppRun` does not work outside the mounted image — it resolves the
-executable against `APPDIR`. Run `squashfs-root/switchboard` directly.
+`squashfs-root/AppRun` works only when invoked with **no arguments**. Its search
+for the application directory walks up from the script testing `-e "$path/$1"`
+— the script's own first argument, not a fixed marker — so an argument that is
+not the name of a file in the tree makes the walk run to the root, leaving
+`APPDIR` empty and the executable resolved as `/switchboard`. Run
+`squashfs-root/switchboard` directly and the question does not arise.
+
+`AppRun` also honours an `APPDIR` it inherits, so a shell opened inside a
+running AppImage would launch that image's binary rather than the extracted
+one. `env -u APPDIR` clears it.
 
 The same isolation rules apply as everywhere else on this page: a separate data
 directory, a separate triggers directory, and no session resumed that is live in
