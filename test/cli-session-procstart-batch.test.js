@@ -112,12 +112,12 @@ test('no probe is spawned when no candidate needs one', () => withDir(async (dir
   assert.equal(calls, 0);
 }));
 
-test('candidates past the probe cap are not asked about and stay live', () => withDir(async (dir) => {
+test('on Windows, candidates past the probe cap are not asked about and stay live', () => withDir(async (dir) => {
   const cap = cliSessionState.MAX_PROBE_PIDS;
   const ids = [];
   for (let i = 0; i < cap + 3; i++) { writeState(dir, 1000 + i); ids.push(`sess-${1000 + i}`); }
   let asked = 0;
-  boot(dir, async (pids) => { asked = pids.length; return new Map([...pids].map((p) => [p, FT_B])); });
+  boot(dir, async (pids) => { asked = pids.length; return new Map([...pids].map((p) => [p, FT_B])); }, 'win32');
   const found = await cliSessionState.liveElsewhereMany(ids, noPty);
   assert.equal(asked, cap);
   assert.equal(Object.keys(found).length, 3, 'only the probed (mismatching) candidates are dropped');
@@ -164,3 +164,38 @@ test('a probe that timed out or could not spawn rejects', async () => {
   const spawnError = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
   await assert.rejects(cliSessionState.probeProcStartWindows([4242], 2000, fakeExec(spawnError, '')));
 });
+
+test('on Linux there is no probe cap: a mismatch past the 64th candidate is still dropped', () => withDir(async (dir) => {
+  const cap = cliSessionState.MAX_PROBE_PIDS;
+  const ids = [];
+  for (let i = 0; i < cap + 3; i++) { writeState(dir, 1000 + i, { procStart: '111', pidDomain: undefined }); ids.push('sess-' + (1000 + i)); }
+  let asked = 0;
+  boot(dir, async (pids) => { asked = pids.length; return new Map([...pids].map((p) => [p, '222'])); }, 'linux');
+  assert.deepEqual(await cliSessionState.liveElsewhereMany(ids, noPty), {});
+  assert.equal(asked, cap + 3);
+}));
+
+test('the Windows probe never puts a non-integer, non-positive or string pid in the script', async () => {
+  let script = null;
+  const exec = (_exe, args, _opts, cb) => { script = args[args.length - 1]; cb(null, '', ''); };
+  await cliSessionState.probeProcStartWindows([4242, 0, -5, 1.5, '77; calc', NaN, null, 4242, 9], 2000, exec);
+  assert.match(script, /-Id 4242,9 /);
+  assert.equal(script.includes('calc'), false);
+  let spawned = false;
+  await cliSessionState.probeProcStartWindows([0, 'x'], 2000, () => { spawned = true; });
+  assert.equal(spawned, false, 'nothing valid left: no process is spawned');
+});
+
+test('two descriptors for one session: the first in name order decides, whatever readdir returns', () => withDir(async (dir) => {
+  writeState(dir, 4242, { sessionId: 'dup', cwd: 'C:\first' });
+  writeState(dir, 4343, { sessionId: 'dup', cwd: 'C:\second' });
+  boot(dir, async () => new Map([[4242, FT_A], [4343, FT_A]]));
+  const realReaddir = fs.readdirSync;
+  fs.readdirSync = (...args) => realReaddir(...args).reverse();
+  try {
+    const live = await cliSessionState.liveElsewhere('dup', noPty);
+    assert.equal(live.pid, 4242);
+  } finally {
+    fs.readdirSync = realReaddir;
+  }
+}));

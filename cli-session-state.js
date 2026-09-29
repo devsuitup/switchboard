@@ -16,7 +16,7 @@ const MAX_SEEDED_FILES = 200;
 const MAX_LIVE_QUERY_IDS = 200;
 const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 const MAX_PROBE_PIDS = 64;
-const PROBE_TIMEOUT_MS = 2000;
+const PROBE_TIMEOUT_MS = 5000;
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 
 let dir = DEFAULT_DIR;
@@ -311,7 +311,7 @@ async function scanLiveProcesses(sessionIds, exclude) {
   const found = new Map();
   if (sessionIds.size === 0) return found;
   let names;
-  try { names = fs.readdirSync(dir); } catch { return found; }
+  try { names = fs.readdirSync(dir).sort(); } catch { return found; }
   const candidates = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
@@ -324,7 +324,8 @@ async function scanLiveProcesses(sessionIds, exclude) {
     candidates.push(raw);
   }
 
-  const toProbe = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))].slice(0, MAX_PROBE_PIDS);
+  const comparable = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))];
+  const toProbe = platform === 'win32' ? comparable.slice(0, MAX_PROBE_PIDS) : comparable;
   let actualByPid = new Map();
   if (toProbe.length > 0) {
     try {

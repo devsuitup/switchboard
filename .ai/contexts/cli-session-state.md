@@ -229,9 +229,16 @@ ids past the cap are not looked up and resume as before the guard.
   pid alive, not this instance's own), then asks `readProcStartMany(pids)`
   once for all of them. The default probe on Windows is one
   `powershell.exe -NoProfile` running `Get-Process -Id <pids>`, bounded by
-  `PROBE_TIMEOUT_MS` (2 s) and `MAX_PROBE_PIDS` (64 pids per batch; candidates
-  beyond that are not probed). About 0.7 s measured on a cold call, paid only
-  when at least one candidate carries a comparable `procStart`. The IPC
+  `PROBE_TIMEOUT_MS` (5 s) and, on Windows only, `MAX_PROBE_PIDS` (64 pids per
+  batch; candidates beyond that are not probed and stay live). Linux reads
+  `/proc` per candidate, spawns nothing, and compares every candidate. About
+  0.7 s measured on a cold call, paid only when at least one candidate carries
+  a comparable `procStart`. The timeout is 5 s because the case that matters is
+  the post-login restore, where a cold PowerShell runs under login load; a
+  timeout fails closed (the sessions stay live, not resumed), so a longer bound
+  costs only a later answer in that rare case. Descriptors are read in name
+  order, so when two files name one session the first wins, the same on every
+  platform. The IPC
   handlers are `ipcMain.handle`, so they simply return the promise.
 - **Undecidable stays live.** A probe that fails, times out, does not report a
   pid (process gone, access denied), a missing `procStart`, an unrecognised
