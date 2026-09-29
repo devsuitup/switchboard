@@ -345,6 +345,25 @@ for (const mode of ['menu', 'paste', 'none']) {
   });
 }
 
+// The find bar sits in the same container, outside xterm's element.
+for (const mode of ['menu', 'paste', 'none']) {
+  test(`${mode} mode: a right press in an input beside the terminal leaves that input focused`, async () => {
+    const h = setupMenuDom();
+    const t = await openTrackingTerminal(h);
+    try {
+      menu._setTerminalRightClickMode(mode);
+      const input = h.window.document.createElement('input');
+      t.terminal.element.parentElement.appendChild(input);
+      input.focus();
+      const notPrevented = input.dispatchEvent(
+        new h.window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }),
+      );
+      assert.equal(notPrevented, true);
+      assert.equal(h.window.document.activeElement, input);
+    } finally { t.terminal.dispose(); await h.destroy(); }
+  });
+}
+
 test('menu mode: the release of a swallowed right press is not reported either', async () => {
   const h = setupMenuDom();
   const t = await openTrackingTerminal(h);

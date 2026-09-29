@@ -58,6 +58,8 @@ never `click`.
   textarea, and the keys typed after a right-click go nowhere. The guard
   therefore calls both itself; `preventDefault` on a `mousedown` does not
   suppress the `contextmenu` that follows.
+- The guard acts only on a press inside xterm's own element. The container
+  also holds the find bar, whose input keeps its focus on a right press.
 - A right-button `mousedown` inside a terminal does not bubble to `document`,
   so a document-level bubble listener (for example the new-session popover's
   click-outside close in `public/dialogs.js`) does not see it. Capture-phase

@@ -178,6 +178,7 @@ function setupTerminalContextMenu(container, terminal, getSessionId, getHoveredL
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 2 || terminalRightClickMode === 'default') return;
     // see .ai/contexts/terminal-right-click.md
+    if (!terminal.element || !terminal.element.contains(e.target)) return;
     e.stopPropagation();
     e.preventDefault();
     terminal.focus();
