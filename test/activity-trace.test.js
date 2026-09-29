@@ -404,6 +404,9 @@ test('a segment that cannot be unlinked stays queued and is retried, not forgott
   });
   t.init(dir);
   for (let i = 0; i < 60; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
+  // see docs/activity-trace.md "A segment is pruned only once its stream has closed"
+  await waitUntil(() => attempts.length >= 1);
+  for (let i = 0; i < 10; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
   await waitUntil(() => attempts.length > 1);
 
   const stale = t.files[0];

@@ -398,6 +398,11 @@ seen on the Linux runners. The test "a retired segment
 whose open lands late is not recreated behind the prune" holds one stream's
 open back to reproduce the order deterministically on any platform.
 
+The first unlink attempt on a segment therefore waits for that segment's own
+`close`, which can be the last of a burst to land. A test that counts retries
+of a locked segment rotates again after the first attempt, since before it
+there may be none left to count.
+
 A stream whose `close` never fires (the fallback in "Testing the async prune
 path" below) keeps its segment, and every segment queued after it, on disk
 until the process exits.
