@@ -12,8 +12,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-const TRANSITIONS = fs.readFileSync(path.join(__dirname, '..', 'session-transitions.js'), 'utf8');
+// Line endings normalised: a Windows checkout has CRLF, and the markers below are LF.
+const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8').replace(/\r\n/g, '\n');
+const MAIN = read('main.js');
+const TRANSITIONS = read('session-transitions.js');
 
 function block(src, marker, endMarker = '\n});') {
   const start = src.indexOf(marker);

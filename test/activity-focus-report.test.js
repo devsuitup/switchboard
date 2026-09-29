@@ -12,8 +12,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-const UTILS_SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'utils.js'), 'utf8');
+// Line endings normalised: a Windows checkout has CRLF.
+const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8').replace(/\r\n/g, '\n');
+const APP_SRC = read('app.js');
+const UTILS_SRC = read('utils.js');
 
 function functionSource(src, name) {
   const start = src.indexOf(`function ${name}(`);
