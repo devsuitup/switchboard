@@ -1,0 +1,33 @@
+name: Flake loop (temporary)
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  loop:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Run the blob-over-the-cap subtest repeatedly
+        shell: bash
+        run: |
+          runs=200; fail=0; ebusy=0
+          for i in $(seq 1 $runs); do
+            if ! node --test --test-name-pattern="blob over the cap" test/git-changes-file-real-git.test.js > out.txt 2>&1; then
+              fail=$((fail+1))
+              if grep -q EBUSY out.txt; then ebusy=$((ebusy+1)); fi
+              grep -E "not ok|EBUSY" out.txt | head -5
+            fi
+          done
+          echo "RESULT node=${{ matrix.node-version }} shard=${{ matrix.shard }} runs=$runs failed=$fail ebusy=$ebusy"
