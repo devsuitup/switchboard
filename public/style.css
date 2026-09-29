@@ -1517,9 +1517,9 @@ body { display: flex; flex-direction: column; }
 
 .terminal-container {
   position: absolute;
-  inset: -5px 20px 0 0;
+  inset: 0 20px 0 0;
   display: none;
-  padding: 8px 0 8px 8px;
+  padding: 3px 0 8px 8px;
   overflow: hidden;
 }
 
@@ -1808,6 +1808,8 @@ body { display: flex; flex-direction: column; }
 .terminal-container.grid-mode {
   display: block !important;
   position: relative !important;
+  top: -5px;
+  padding-top: 8px;
   flex: 1;
   min-height: 0;
 }

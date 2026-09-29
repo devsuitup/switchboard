@@ -61,6 +61,8 @@ the sidebar is collapsed to its 42px column, the main headers take the
 remainder and the expand button moves below the strip. `window-full-screen`
 resets both insets, because the traffic lights leave with the title bar.
 
+A `.terminal-container` starts at the top of `#terminals`, never above it (its top padding is 3px, the gap the old `-5px` inset left): a negative top inset would put the container under the controls below 100 % zoom, where the header is only as tall as the overlay. The grid card keeps its own `top: -5px`, which sits under no window control.
+
 ## Drag regions
 
 `-webkit-app-region: drag` is on `#sidebar-tabs`, on the collapsed sidebar

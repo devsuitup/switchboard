@@ -297,3 +297,16 @@ test('main applies the zoom keys and stops them there', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(src, /const zoom = zoomKey\(input, process\.platform\);\n\s*if \(zoom\) \{\n\s*event\.preventDefault\(\);\n\s*mainWindow\.webContents\.setZoomLevel\(nextZoomLevel\(mainWindow\.webContents\.getZoomLevel\(\), zoom\)\);/);
 });
+
+test('a terminal container never starts above the bottom of its header', () => {
+  const offenders = [];
+  for (const m of CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = m[1].trim();
+    if (!/\.terminal-container(?![\w-])/.test(selector)) continue;
+    if (/\.grid-mode/.test(selector)) continue;
+    const top = /(?:^|[;\s])(?:inset|top)\s*:\s*(-[^;\s]+)/.exec(m[2]);
+    if (top) offenders.push(`${selector} { ${top[0].trim()} }`);
+  }
+  assert.deepEqual(offenders, []);
+  assert.match(CSS, /\.terminal-container\s*\{[^}]*inset:\s*0 20px 0 0/);
+});
