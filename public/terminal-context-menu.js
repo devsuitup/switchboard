@@ -176,7 +176,11 @@ function showTerminalContextMenu(event, ctx) {
 // null.
 function setupTerminalContextMenu(container, terminal, getSessionId, getHoveredLinkUri) {
   container.addEventListener('mousedown', (e) => {
-    if (e.button === 2 && terminalRightClickMode !== 'default') e.stopPropagation();
+    if (e.button !== 2 || terminalRightClickMode === 'default') return;
+    // see .ai/contexts/terminal-right-click.md
+    e.stopPropagation();
+    e.preventDefault();
+    terminal.focus();
   }, { capture: true });
   container.addEventListener('contextmenu', (e) => {
     if (terminalRightClickMode === 'default') return; // let xterm handle it natively

@@ -329,6 +329,35 @@ for (const mode of ['menu', 'paste', 'none']) {
   });
 }
 
+// xterm's own mousedown listener, which the guard stops, is also what keeps the
+// press from blurring the terminal: the guard has to do that part itself.
+for (const mode of ['menu', 'paste', 'none']) {
+  test(`${mode} mode: a swallowed right press leaves the terminal focused`, async () => {
+    const h = setupMenuDom();
+    const t = await openTrackingTerminal(h);
+    try {
+      menu._setTerminalRightClickMode(mode);
+      t.terminal.textarea.blur();
+      const notPrevented = t.press(2);
+      assert.equal(notPrevented, false, 'the browser default (blur) is suppressed');
+      assert.equal(h.window.document.activeElement, t.terminal.textarea);
+    } finally { t.terminal.dispose(); await h.destroy(); }
+  });
+}
+
+test('menu mode: the release of a swallowed right press is not reported either', async () => {
+  const h = setupMenuDom();
+  const t = await openTrackingTerminal(h);
+  try {
+    menu._setTerminalRightClickMode('menu');
+    t.press(2);
+    h.window.document.dispatchEvent(
+      new h.window.MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 50 }),
+    );
+    assert.deepStrictEqual(t.sent.filter((d) => d.startsWith('\x1b[<')), []);
+  } finally { t.terminal.dispose(); await h.destroy(); }
+});
+
 test('default mode: a right-button press is reported to the application', async () => {
   const h = setupMenuDom();
   const t = await openTrackingTerminal(h);

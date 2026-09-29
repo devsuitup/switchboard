@@ -52,6 +52,12 @@ never `click`.
 
 ## Consequences of stopping the press
 
+- xterm's `mousedown` listener is also what calls `preventDefault()` and
+  `focus()` on every press, before any mouse-tracking branch. Without it, the
+  browser's default for a press on non-focusable content blurs xterm's
+  textarea, and the keys typed after a right-click go nowhere. The guard
+  therefore calls both itself; `preventDefault` on a `mousedown` does not
+  suppress the `contextmenu` that follows.
 - A right-button `mousedown` inside a terminal does not bubble to `document`,
   so a document-level bubble listener (for example the new-session popover's
   click-outside close in `public/dialogs.js`) does not see it. Capture-phase
