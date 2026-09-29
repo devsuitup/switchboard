@@ -86,6 +86,8 @@ test('a failed update install gives the next quit its flush back', () => {
 
 test('titles from the renderer are bounded before they are forwarded', () => {
   const titles = block(MAIN, "ipcMain.on('activity-titles'");
+  assert.match(titles, /if \(!Array\.isArray\(list\)\) return;/);
+  assert.match(titles, /typeof t\.name === 'string'/);
   assert.match(titles, /list\.slice\(0, 500\)/);
   assert.match(titles, /t\.sessionId\.length <= 200/);
   assert.match(titles, /t\.name\.slice\(0, 200\)/);

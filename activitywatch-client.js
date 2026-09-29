@@ -29,6 +29,7 @@ function createActivityWatchClient(deps) {
   let cooldownMs = 0;
   let nextAttemptAt = 0;
   let reachable = null; // null until the first call resolves it either way
+  let active = true;
 
   function sleeping() {
     return nextAttemptAt > now();
@@ -50,7 +51,9 @@ function createActivityWatchClient(deps) {
   }
 
   // The response, or null when none came — see .ai/contexts/activitywatch.md ("Failure")
-  async function send(path, init) {
+  async function send(path, init, { probing = false, serverMustAnswer = false } = {}) {
+    // see .ai/contexts/activitywatch.md ("Failure")
+    if (!active && !probing) return null;
     let response;
     try {
       response = await fetchFn(`${DEFAULT_BASE_URL}${path}`, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -58,7 +61,7 @@ function createActivityWatchClient(deps) {
       noteFailure();
       return null;
     }
-    if (!response || response.status >= 500) {
+    if (!response || (serverMustAnswer && response.status >= 500)) {
       noteFailure();
       return null;
     }
@@ -66,8 +69,8 @@ function createActivityWatchClient(deps) {
     return response;
   }
 
-  function post(path, body) {
-    return send(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  function post(path, body, opts) {
+    return send(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, opts);
   }
 
   const is2xx = (r) => !!r && r.status >= 200 && r.status < 300;
@@ -78,7 +81,7 @@ function createActivityWatchClient(deps) {
     if (creating.has(bucketId)) return creating.get(bucketId);
     const pending = post(`/api/0/buckets/${encodeURIComponent(bucketId)}`, {
       client, type, hostname: deps.hostname || 'unknown',
-    }).then((r) => {
+    }, { serverMustAnswer: true }).then((r) => {
       const ok = is2xx(r) || (!!r && r.status === 304);
       if (ok) readyBuckets.add(bucketId);
       if (is2xx(r)) fresh.add(bucketId);
@@ -153,10 +156,11 @@ function createActivityWatchClient(deps) {
    * @returns {Promise<boolean>}
    */
   async function probe() {
-    return is2xx(await send('/api/0/info', {}));
+    return is2xx(await send('/api/0/info', {}, { probing: true, serverMustAnswer: true }));
   }
 
   return {
+    setActive: (on) => { active = !!on; },
     heartbeat,
     upsertSpan,
     probe,

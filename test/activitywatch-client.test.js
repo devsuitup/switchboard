@@ -444,3 +444,40 @@ test('a span write the server refuses reports failure', async () => {
   });
   assert.equal(await client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] }), false);
 });
+
+test('a 500 on the bucket create is a server that cannot take writes, and backs off', async () => {
+  const h = harness({ server: 500 });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.client.sleeping, true);
+});
+
+// A beat can meet a 500 while aw-server's cached last event is out of step
+// with a re-created bucket; the other bucket must keep being written.
+test('a 500 on one bucket\'s beat does not stop writes to the other', async () => {
+  const h = harness({ server: (url) => (url.includes('/buckets/a/heartbeat') ? 500 : /\/api\/0\/buckets\/[^/]+$/.test(url) ? 304 : 200) });
+  assert.equal(await h.client.heartbeat('a', BUCKET, { project: 'x' }, 60), false);
+  assert.equal(h.client.sleeping, false);
+  assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), true);
+});
+
+test('once made inactive, a write already past its lookup sends nothing more', async () => {
+  let release;
+  const held = new Promise(r => { release = r; });
+  const sent = [];
+  const client = createActivityWatchClient({
+    hostname: 'h', now: () => 0,
+    fetchFn: async (url, opts) => {
+      sent.push(`${(opts && opts.method) || 'GET'} ${url}`);
+      if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return { status: 304 };
+      if (!opts.method) { await held; return { status: 200, json: async () => [] }; }
+      return { status: 200 };
+    },
+  });
+  const write = client.upsertSpan('b', BUCKET, { session: 's' }, 1000, 5, { key: 'session', values: ['s'] });
+  await new Promise(r => setImmediate(r));
+  client.setActive(false);
+  release();
+  assert.equal(await write, false);
+  assert.equal(sent.filter(l => l.startsWith('POST') && l.endsWith('/events')).length, 0);
+  assert.equal(await client.probe(), true, 'a probe still answers, for the Settings panel');
+});

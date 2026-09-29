@@ -774,6 +774,7 @@ test('the project is sent by its directory name, and a title on one line, in bot
   await h.settle();
   assert.equal(h.beats[0].data.project, 'switchboard');
   assert.equal(h.beats[0].data.title, 'fix the build');
+  assert.equal(h.beats[0].data.file, 'fix the build');
   assert.equal(h.events[0].data.project, 'switchboard');
   assert.equal(h.events[0].data.title, 'fix the build');
 });
@@ -798,4 +799,16 @@ test('a title cleared in the sidebar is cleared from the next write', async () =
   h.reporter.titles([{ sessionId: 'bg', name: '' }]);
   await h.reporter.sessionEnded('bg');
   assert.equal(h.events.at(-1).data.title, undefined);
+});
+
+test('turning reporting on and off switches the client with it', () => {
+  const states = [];
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    client: { heartbeat: async () => true, upsertSpan: async () => true, setActive: (on) => states.push(on) },
+    setIntervalFn: () => ({}), clearIntervalFn: () => {},
+  });
+  reporter.setEnabled(true);
+  reporter.setEnabled(false);
+  assert.deepEqual(states, [true, false]);
 });

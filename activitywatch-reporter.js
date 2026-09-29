@@ -201,6 +201,7 @@ function createActivityWatchReporter(deps) {
 
   function setEnabled(on) {
     enabled = !!on;
+    if (typeof client.setActive === 'function') client.setActive(enabled);
     if (!enabled) { stopKeepalive(); stopCheckpoints(); return; }
     if (focused) { beat(focused); startKeepalive(); }
     checkpointAll(); // see .ai/contexts/activitywatch.md ("Running")

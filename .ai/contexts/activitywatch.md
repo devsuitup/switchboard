@@ -153,8 +153,14 @@ client call resolves to a boolean and never rejects.
   which calls return `false` without touching the network. A success resets it.
 - The transitions are logged once each (unreachable, reachable again), never per
   call.
-- A 5xx is treated as an absent server: whatever answers on the port cannot
-  take the write, and retrying it every beat helps nobody.
+- A 5xx on the bucket create or the probe is treated as an absent server:
+  whatever answers on the port cannot take writes. A 5xx on a beat or a span
+  write is not: it concerns that bucket's event (aw-server answers one while its
+  cached last event is out of step with a re-created bucket), and a cooldown
+  would stop the other bucket too.
+- Turning reporting off makes the client inactive: a write already past its
+  lookup or its bucket create sends nothing more. Only the probe, which the
+  Settings panel calls, still reaches the server.
 - A 4xx does **not** start a cooldown: it is the server answering, and treating
   a malformed payload as an absent server would hide the bug behind a retry.
 - Losing the server forgets which buckets exist: it may come back as a fresh
