@@ -404,8 +404,10 @@ test('a first beat that fails leaves the bucket marked, so the retry has no merg
 
 test('a first beat that never arrives leaves the bucket marked too', async () => {
   let down = true;
+  // The re-create after the outage answers 304, as a server that kept the
+  // bucket does — a 200 would re-mark it and hide a lost mark.
   const h = harness({ server: (url) => {
-    if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return 200;
+    if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return down ? 200 : 304;
     return down ? 'down' : 200;
   } });
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
