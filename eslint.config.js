@@ -312,6 +312,8 @@ const rendererCrossFileGlobals = {
 
   // Working-set restore decision (public/restore-plan.js)
   createRestorePlanner: 'readonly',
+  // Resume guard for sessions live in another process (public/resume-guard.js)
+  guardResume: 'readonly',
 };
 
 module.exports = [
@@ -352,7 +354,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/stop-session-ui.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',

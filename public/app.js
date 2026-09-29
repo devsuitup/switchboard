@@ -199,7 +199,8 @@ async function runRestore(list) {
     if (openSessions.has(item.sessionId)) continue;
     // Resume with the project's current "new session" defaults, exactly like a
     // manual session relaunch — not options frozen from a previous launch.
-    await openSession(s);
+    const opened = await openSession(s, undefined, { automatic: true });
+    if (opened === false) continue;
     await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
   }
   // Activate the entry marked active (or the last one)
@@ -1119,7 +1120,7 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
-async function openSession(session, customOptions) {
+async function openSession(session, customOptions, { automatic = false } = {}) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   const { sessionId, projectPath } = session;
 
@@ -1133,6 +1134,9 @@ async function openSession(session, customOptions) {
       return;
     }
   }
+
+  // see .ai/contexts/cli-session-state.md ("Live elsewhere")
+  if (!(await guardResume(session, { automatic, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
@@ -1392,7 +1396,7 @@ loadProjects().then(async () => {
   // be opened a second time (duplicate PTY / duplicate claude --resume).
   if (activeSessionId && !openSessions.has(activeSessionId)) {
     const session = sessionMap.get(activeSessionId);
-    if (session) await openSession(session);
+    if (session) await openSession(session, undefined, { automatic: true });
   }
   // Restore working set (persisted across full restarts via global settings)
   await restoreWorkingSet();

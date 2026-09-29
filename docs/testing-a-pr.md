@@ -74,16 +74,37 @@ grep -l 'enabled: true' */.claude/commands/schedule-*.md 2>/dev/null
 If anything is enabled and due to fire during your test window, either disable it
 first (`enabled: false`) or accept the duplicate run.
 
-### 4. Sessions — never resume a session that's live elsewhere
+### 4. Sessions — the transcripts are shared
 
 **Both instances read the same `~/.claude/projects/*.jsonl` transcripts from
-disk** — `SWITCHBOARD_DATA_DIR` isolates the SQLite index, not the session files
-themselves. Clicking a session in the test instance that is **currently open and
-live in the AppImage spawns a second `claude --resume` of that same session
-id, duplicating it** (witnessed: a live orchestrator session was duplicated this
-way, then killed, when someone clicked into it from the test instance). **Only
-interact with terminal sessions you started fresh in the test instance, or with
-sessions that are dead/closed everywhere else.**
+disk.** `SWITCHBOARD_DATA_DIR` and `SWITCHBOARD_TRIGGERS_DIR` isolate the SQLite
+index and the triggers, not the session files: the test instance's sidebar
+lists every session the AppImage is running, and nothing stops it from
+resuming one of them. Two resumes can happen without a click:
+
+- **A renderer reload** (`location.reload()`, `Ctrl+R`, a DevTools reload)
+  re-opens the session remembered in `sessionStorage.activeSessionId`.
+  `restoreOnStartup` does not gate this path.
+- **The working-set restore** at startup, when `restoreOnStartup` is on and
+  `openWorkingSet` lists sessions.
+
+A resume of a session another process is running starts a second
+`claude --resume` of that session id: two CLIs write one transcript, and input
+sent to the test instance lands in the live session's prompt.
+
+Switchboard refuses the two automatic resumes above for a session that is live
+elsewhere, and asks for confirmation before a resume you click. It knows a
+session is live from the CLI's own `~/.claude/sessions/<pid>.json` (see
+[`.ai/contexts/cli-session-state.md`](../.ai/contexts/cli-session-state.md),
+"Live elsewhere"), which is an undocumented file: a PR under test may predate
+the guard, or break it. So the rules still hold:
+
+- **Only interact with sessions you started fresh in the test instance**, or
+  with sessions that are dead everywhere else.
+- Seed the test DB with `restoreOnStartup` off and `openWorkingSet` removed
+  (see "Cold start" below).
+- Before reloading the test instance, make sure the session it remembers is one
+  you created in it.
 
 ## Running it
 
@@ -183,11 +204,12 @@ transcript of the test session itself.
 
 ### Never resume a session that's live in the other instance
 
-Covered above under [isolation concern 4](#4-sessions--never-resume-a-session-thats-live-elsewhere)
-— repeating here because it's the highest-impact pitfall of the four: **clicking
-a session in the test instance that's currently open in the AppImage (or vice
-versa) spawns a duplicate `claude --resume` of it**, and the duplicate then
-competes with the real one for the same session id.
+Covered above under [isolation concern 4](#4-sessions--the-transcripts-are-shared)
+— repeating here because it's the highest-impact pitfall of the four: **a resume
+in the test instance of a session that's currently open in the AppImage (or
+vice versa) spawns a duplicate `claude --resume` of it**, and the duplicate then
+competes with the real one for the same session id. A click asks first; answer
+Cancel.
 
 ## Comparing the two instances
 

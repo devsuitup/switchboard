@@ -150,7 +150,7 @@ test('a live entry is only shown — no second PTY for a terminal that is alread
 // ---------------------------------------------------------------------------
 
 function openSessionBody() {
-  const start = APP_SRC.indexOf('async function openSession(session, customOptions)');
+  const start = APP_SRC.indexOf('async function openSession(session, customOptions');
   assert.notEqual(start, -1, 'openSession must still exist with the (session, customOptions) signature');
   const end = APP_SRC.indexOf('\n}', APP_SRC.indexOf('pollActiveSessions();', start));
   assert.ok(end > start);

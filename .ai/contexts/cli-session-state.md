@@ -5,8 +5,13 @@ immediate subagent rescan, so a subagent that finished right before its parent's
 turn ended is marked complete in seconds instead of waiting for the next
 stabilisation tick.
 
-**Files**: `cli-session-state.js`, wired in `main.js` (three call sites),
-`test/cli-session-state.test.js`, `test/canary-cli-session-state.test.js`.
+**Files**: `cli-session-state.js`, wired in `main.js` (three call sites, plus
+the `session-live-elsewhere` IPC), `public/resume-guard.js`,
+`test/cli-session-state.test.js`, `test/canary-cli-session-state.test.js`,
+`test/cli-session-live-elsewhere.test.js`, `test/resume-guard.test.js`.
+
+The module has a second, unrelated consumer: the resume guard described under
+"Live elsewhere" below.
 
 ## Why it exists
 
@@ -169,6 +174,50 @@ tests use a fake clock instead of real delays) — a dead pid deletes the entry
 and the call returns `undefined`, same as a file event would have done. This
 still never touches disk and never arms `onIdle` — "the one invariant" above
 is unchanged, it is a read-path liveness check, not a new trigger.
+
+## Live elsewhere (issue #331)
+
+A resume spawns `claude --resume <id>`. When another process is already running
+that session — a second Switchboard instance reading the same
+`~/.claude/projects`, or a CLI in a terminal — that makes two CLIs on one
+session, both writing its transcript, and input meant for this instance lands
+in a session the user is driving elsewhere.
+
+**The check** is main-side, on demand, over IPC `session-live-elsewhere`:
+`liveElsewhere(sessionId, sessionHasPty)` returns `{pid, cwd, startedAt}` or
+`null`.
+
+- A session this instance holds a PTY for (`sessionHasPty`, which matches
+  `realSessionId` too) is never live elsewhere: opening it is a re-attach, the
+  case a renderer reload relies on.
+- Otherwise `findLiveProcess(sessionId)` reads `~/.claude/sessions/*.json`
+  afresh — it does not use the watcher's maps, so it answers before the watcher
+  attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file
+  whose `sessionId` matches, whose `pid` is alive (`process.kill(pid, 0)`), and
+  whose `procStart` matches the process that owns that pid now.
+- **`procStart` on Linux is field 22 of `/proc/<pid>/stat`** (start time in
+  clock ticks since boot; checked against CLI 2.1.284). A mismatch means the pid
+  was reused and the file is stale. On other platforms the value is not decoded
+  (on Windows it is a FILETIME-sized number whose origin is unverified), so
+  `readProcStart` returns `null` and liveness alone decides: a reused pid there
+  reads as live, and costs a spurious skip or confirm, never a duplicate.
+- `status` is not required: any live process holding the session counts.
+
+**The decision** is in `public/resume-guard.js` (`guardResume`), called by
+`openSession` before `open-terminal`:
+
+| Resume | Live elsewhere | Result |
+|---|---|---|
+| automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt |
+| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes | `confirm()`; cancel aborts, OK spawns the second CLI |
+| any | no | spawns as before |
+
+Plain terminals are never checked. A failed IPC call is treated as "not live"
+(the behaviour before the guard), in line with "Failure is silence" above.
+
+The sidebar has no dedicated marker for such a session. Once the watcher has
+seen its state file, `getStatus()` gives it the same state+age line as any live
+session (see the section above).
 
 ## Canary tests
 
