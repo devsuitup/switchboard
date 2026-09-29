@@ -131,11 +131,12 @@ function createActivityWatchReporter(deps) {
     return write;
   }
 
-  // The titles the renderer shows, for sessions that run unseen — see
-  // .ai/contexts/activitywatch.md ("Running")
+  // see .ai/contexts/activitywatch.md ("Running")
   function titles(list) {
     for (const { sessionId, name } of list) {
-      if (name && live.has(sessionId)) names.set(sessionId, name);
+      if (!live.has(sessionId)) continue;
+      if (name) names.set(sessionId, name);
+      else names.delete(sessionId);
     }
   }
 

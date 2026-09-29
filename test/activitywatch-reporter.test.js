@@ -789,3 +789,13 @@ test('a running session never shown gets the title the sidebar gives it, and a s
   await h.reporter.sessionEnded('gone');
   assert.equal(h.events.at(-1).data.title, undefined, 'a title sent before the session ran was not kept');
 });
+
+test('a title cleared in the sidebar is cleared from the next write', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'bg', project: '/w/p' });
+  h.reporter.titles([{ sessionId: 'bg', name: 'old title' }]);
+  h.reporter.titles([{ sessionId: 'bg', name: '' }]);
+  await h.reporter.sessionEnded('bg');
+  assert.equal(h.events.at(-1).data.title, undefined);
+});

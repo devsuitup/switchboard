@@ -114,6 +114,6 @@ test('a project reload sends the titles of the open sessions', () => {
   vm.createContext(ctx);
   vm.runInContext(functionSource(UTILS_SRC, 'cleanDisplayName'), ctx);
   vm.runInContext(fn + '\nreportActivityTitles()', ctx);
-  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), [{ sessionId: 'a', name: 'mine' }, { sessionId: 'b', name: 'generated' }],
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), [{ sessionId: 'a', name: 'mine' }, { sessionId: 'b', name: 'generated' }, { sessionId: 'c', name: '' }],
     'never the summary');
 });

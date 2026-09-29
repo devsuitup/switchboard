@@ -90,11 +90,12 @@ fragment every event it sits in.
   than at the next checkpoint.
 - `title` is the one given at start (a scheduled run's), or else the last name
   the renderer reported for that session — by focus, or through
-  `activity-titles`, which the renderer sends after every project reload with
-  the title of each open session, so a session that runs unseen is titled too.
-  A session the sidebar shows no title for has none, and it is omitted, not
-  guessed. Titles for sessions that are not running are ignored. A name is dropped at each checkpoint once its
-  session is neither running nor on screen, so the map holds live entries only.
+  `activity-titles`, which the renderer sends after every project reload for
+  each open session, so a session that runs unseen is titled too. An entry with
+  an empty name clears the title: a session the sidebar shows no title for has
+  none, and it is omitted, not guessed. Entries for sessions that are not
+  running are ignored. A name is dropped at each checkpoint once its session is
+  neither running nor on screen, so the map holds live entries only.
 - A re-key moves the span, its name and its pending writes to the real id. The
   event already on the server still carries the old id, so each span records
   the id it was last written under (`writtenAs`), and a write after a re-key
@@ -238,7 +239,7 @@ Two orderings follow from that, and both are handled:
 | `get-activity-reporting-state` | invoke | `{enabled, destination, url, reachable, buckets}`. `reachable` is probed at the call while reporting is on, and `null` while it is off — nothing is contacted then, so there is no answer to give. |
 | `set-activity-reporting-enabled` | invoke | a boolean; persists `global.activityReporting`, returns the state. |
 | `activity-focus` | send | `{sessionId, name, project}` or `null`. Main takes a missing, empty or non-string id, or one over 200 characters, as no focus, and bounds `name` to 200 and `project` to 1024 characters before anything is forwarded. |
-| `activity-titles` | send | `[{sessionId, name}]` — the open sessions' titles. Main keeps at most 500 entries, drops any whose id is missing, non-string or over 200 characters or whose name is not a string, and bounds `name` to 200 characters. |
+| `activity-titles` | send | `[{sessionId, name}]` — every open session's title, `''` for none. Main keeps at most 500 entries, drops any whose id is missing, non-string or over 200 characters or whose name is not a string, and bounds `name` to 200 characters. |
 
 ## What reaches the server
 

@@ -99,8 +99,7 @@ function reportActivityTitles() {
   const list = [];
   for (const id of openSessions.keys()) {
     const s = sessionMap.get(id) || {};
-    const name = cleanDisplayName(s.name || s.aiTitle);
-    if (name) list.push({ sessionId: id, name });
+    list.push({ sessionId: id, name: cleanDisplayName(s.name || s.aiTitle) || '' });
   }
   window.api.reportActivityTitles(list);
 }
