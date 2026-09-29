@@ -21,6 +21,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change what a path in terminal output links to (matcher, openability check, `path:line`) | [contexts/terminal-path-links.md](contexts/terminal-path-links.md) |
 | Change what is reported to ActivityWatch (the two buckets, focus, the Settings section) | [contexts/activitywatch.md](contexts/activitywatch.md) |
 | Change what a right-click does in the terminal (context menu, paste, mouse reports to the application) | [contexts/terminal-right-click.md](contexts/terminal-right-click.md) |
+| Change the window frame, the strip that replaces the title bar, its drag regions or the menu's accelerators | [contexts/window-frame.md](contexts/window-frame.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |

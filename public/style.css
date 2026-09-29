@@ -13,6 +13,10 @@
   --accent-wash: rgba(120,130,255,0.06);
   --accent-wash-strong: rgba(120,130,255,0.12);
   --text-muted: #9090a8;
+  /* The window strip: see .ai/contexts/window-frame.md */
+  --strip-height: 32px;
+  --strip-inset-left: 0px;
+  --strip-inset-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -4812,4 +4816,91 @@ body { display: flex; flex-direction: column; }
 .activity-trace-delete-btn:hover {
   color: #ff7a7a;
   border-color: #6a3a3a;
+}
+
+/* ========== WINDOW STRIP ==========
+   see .ai/contexts/window-frame.md */
+body.platform-darwin {
+  --strip-inset-left: 72px;
+  --strip-inset-right: 0px;
+}
+body.window-full-screen {
+  --strip-inset-left: 0px;
+  --strip-inset-right: 0px;
+}
+
+body.window-frameless #sidebar-header {
+  padding-top: 0;
+}
+body.window-frameless #sidebar-tabs {
+  height: var(--strip-height);
+  margin: 0 -20px;
+  padding: 0 20px 0 max(20px, calc(var(--strip-inset-left) + 8px));
+  -webkit-app-region: drag;
+  user-select: none;
+}
+body.window-frameless #sidebar-tabs .sidebar-tab {
+  align-self: stretch;
+  padding: 0 12px;
+}
+
+#app-menu-btn {
+  display: none;
+}
+body.window-frameless:not(.platform-darwin) #app-menu-btn {
+  background: none;
+  border: none;
+  color: #7a7a90;
+  cursor: pointer;
+  padding: 4px;
+  margin: 0 6px 0 -6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+#app-menu-btn:hover {
+  color: #b0b0c4;
+  background: var(--control-surface);
+}
+
+body.window-frameless #sidebar.collapsed {
+  -webkit-app-region: drag;
+}
+body.window-frameless.platform-darwin:not(.window-full-screen) #sidebar.collapsed #sidebar-expand-btn {
+  margin-top: calc(var(--strip-height) + 8px);
+}
+
+body.window-frameless :is(
+  #terminal-header,
+  #grid-viewer-header,
+  #stats-viewer-header,
+  #settings-viewer-header,
+  #jsonl-viewer-header,
+  #memory-viewer .viewer-toolbar,
+  #work-files-viewer .viewer-toolbar,
+  #activity-trace-viewer .viewer-toolbar
+) {
+  min-height: var(--strip-height);
+  padding-right: calc(16px + var(--strip-inset-right));
+  -webkit-app-region: drag;
+}
+body.window-frameless #sidebar.collapsed ~ #main :is(
+  #terminal-header,
+  #grid-viewer-header,
+  #stats-viewer-header,
+  #settings-viewer-header,
+  #jsonl-viewer-header,
+  #memory-viewer .viewer-toolbar,
+  #work-files-viewer .viewer-toolbar,
+  #activity-trace-viewer .viewer-toolbar
+) {
+  padding-left: max(16px, calc(var(--strip-inset-left) - 42px + 8px));
+}
+
+body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
+body.window-frameless :is(#terminal-header-id, #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
+  -webkit-app-region: no-drag;
 }

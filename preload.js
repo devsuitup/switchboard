@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   toggleFullScreen: () => ipcRenderer.invoke('toggle-full-screen'),
+  popupAppMenu: (x, y) => ipcRenderer.invoke('popup-app-menu', { x, y }),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard-write-text', text),
   readClipboard: () => ipcRenderer.invoke('read-clipboard'),
   clipboardHasImage: () => ipcRenderer.invoke('clipboard-has-image'),

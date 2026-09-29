@@ -37,6 +37,7 @@ const activityTrace = require('./activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
+const { windowFrameOptions, applicationMenuTemplate } = require('./window-frame');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -299,6 +300,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 500,
     title: appTitle,
+    ...windowFrameOptions(process.platform),
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -421,45 +423,7 @@ function createWindow() {
 }
 
 function buildMenu() {
-  const template = [
-    {
-      label: app.name,
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'quit' },
-      ],
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name)));
 }
 
 // --- Session cache helpers ---
@@ -954,6 +918,16 @@ ipcMain.handle('read-clipboard', () => clipboard.readText());
 // strings attached, so all terminal copies go through here.
 ipcMain.handle('clipboard-write-text', (_event, text) => {
   if (typeof text === 'string') clipboard.writeText(text);
+});
+
+ipcMain.handle('popup-app-menu', (_event, position) => {
+  const menu = Menu.getApplicationMenu();
+  if (!menu || !mainWindow || mainWindow.isDestroyed()) return false;
+  const zoom = mainWindow.webContents.getZoomFactor();
+  const x = Math.round((Number(position && position.x) || 0) * zoom);
+  const y = Math.round((Number(position && position.y) || 0) * zoom);
+  menu.popup({ window: mainWindow, x, y });
+  return true;
 });
 
 ipcMain.handle('toggle-full-screen', () => {
