@@ -72,8 +72,27 @@ function applicationMenuTemplate(appName) {
   ];
 }
 
+// see .ai/contexts/window-frame.md ("Zoom keys")
+const ZOOM_STEP = 0.5;
+
+function zoomKey(input, platform) {
+  if (!input || input.type !== 'keyDown' || input.alt) return null;
+  if (!(platform === 'darwin' ? input.meta : input.control)) return null;
+  if (input.key === '+' || input.key === '=' || input.code === 'NumpadAdd') return 'in';
+  if (input.key === '-' || input.code === 'NumpadSubtract') return 'out';
+  if (input.key === '0' || input.code === 'Digit0' || input.code === 'Numpad0') return 'reset';
+  return null;
+}
+
+function nextZoomLevel(level, direction) {
+  if (direction === 'reset') return 0;
+  return level + (direction === 'in' ? ZOOM_STEP : -ZOOM_STEP);
+}
+
 module.exports = {
   STRIP_HEIGHT,
+  zoomKey,
+  nextZoomLevel,
   KEYBOARD_ROLES,
   windowFrameOptions,
   applicationMenuTemplate,

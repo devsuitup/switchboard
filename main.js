@@ -37,7 +37,7 @@ const activityTrace = require('./activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
-const { windowFrameOptions, applicationMenuTemplate } = require('./window-frame');
+const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel } = require('./window-frame');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -362,6 +362,11 @@ function createWindow() {
     const key = input.key.toLowerCase();
     if (key === 'r' && input.meta) event.preventDefault();
     if (key === 'r' && input.control && input.shift) event.preventDefault();
+    const zoom = zoomKey(input, process.platform);
+    if (zoom) {
+      event.preventDefault();
+      mainWindow.webContents.setZoomLevel(nextZoomLevel(mainWindow.webContents.getZoomLevel(), zoom));
+    }
   });
 
   // Renderer-driven fullscreen toggle (F11 lands in xterm, which consumes the

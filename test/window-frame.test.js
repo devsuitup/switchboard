@@ -159,3 +159,46 @@ test('the menu button opens the application menu under itself', () => {
   btn.dispatchEvent(new doc.defaultView.MouseEvent('click', { bubbles: true }));
   assert.deepEqual(calls, [[8, 30]]);
 });
+
+// --- Zoom keys, whatever the layout ---
+
+const { zoomKey, nextZoomLevel } = require('../window-frame');
+const key = (k, code, mods = {}) => ({ type: 'keyDown', key: k, code, control: false, meta: false, alt: false, shift: false, ...mods });
+
+test('zoom keys are read by the character produced, on US and AZERTY alike', () => {
+  const ctrl = { control: true };
+  assert.equal(zoomKey(key('+', 'Equal', { ...ctrl, shift: true }), 'linux'), 'in');     // AZERTY / US Shift+=
+  assert.equal(zoomKey(key('=', 'Equal', ctrl), 'linux'), 'in');                          // US without Shift
+  assert.equal(zoomKey(key('-', 'Digit6', ctrl), 'linux'), 'out');                        // AZERTY
+  assert.equal(zoomKey(key('-', 'Minus', ctrl), 'linux'), 'out');                         // US
+  assert.equal(zoomKey(key('à', 'Digit0', ctrl), 'linux'), 'reset');                      // AZERTY, unshifted
+  assert.equal(zoomKey(key('0', 'Digit0', ctrl), 'linux'), 'reset');
+});
+
+test('the numeric keypad zooms too', () => {
+  const ctrl = { control: true };
+  assert.equal(zoomKey(key('+', 'NumpadAdd', ctrl), 'linux'), 'in');
+  assert.equal(zoomKey(key('-', 'NumpadSubtract', ctrl), 'linux'), 'out');
+  assert.equal(zoomKey(key('Insert', 'Numpad0', ctrl), 'linux'), 'reset');                 // NumLock off
+});
+
+test('only Ctrl (Cmd on macOS) without Alt, on a key down, is a zoom key', () => {
+  assert.equal(zoomKey(key('-', 'Minus'), 'linux'), null, 'a bare minus is typing');
+  assert.equal(zoomKey(key('-', 'Minus', { control: true, alt: true }), 'linux'), null);
+  assert.equal(zoomKey(key('-', 'Minus', { meta: true }), 'linux'), null);
+  assert.equal(zoomKey(key('-', 'Minus', { meta: true }), 'darwin'), 'out');
+  assert.equal(zoomKey(key('-', 'Minus', { control: true }), 'darwin'), null);
+  assert.equal(zoomKey({ ...key('-', 'Minus', { control: true }), type: 'keyUp' }, 'linux'), null);
+  assert.equal(zoomKey(key('c', 'KeyC', { control: true }), 'linux'), null);
+});
+
+test('zoom steps by half a level, and reset returns to 0', () => {
+  assert.equal(nextZoomLevel(0, 'in'), 0.5);
+  assert.equal(nextZoomLevel(0.5, 'out'), 0);
+  assert.equal(nextZoomLevel(2, 'reset'), 0);
+});
+
+test('main applies the zoom keys and stops them there', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(src, /const zoom = zoomKey\(input, process\.platform\);\n\s*if \(zoom\) \{\n\s*event\.preventDefault\(\);\n\s*mainWindow\.webContents\.setZoomLevel\(nextZoomLevel\(mainWindow\.webContents\.getZoomLevel\(\), zoom\)\);/);
+});

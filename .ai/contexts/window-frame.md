@@ -109,6 +109,19 @@ A synthetic key from `webContents.sendInputEvent` or CDP does not reach the
 focus manager, so a menu accelerator cannot be exercised that way; the test
 pins the menu instead.
 
+## Zoom keys
+
+The zoom roles' accelerators (`CommandOrControl+Plus`, `CommandOrControl+-`,
+`CommandOrControl+0`) are bound to the US key positions: on an AZERTY layout
+`-` and `0` are on other keys (`0` needs Shift), and the numeric keypad is never
+bound. So main also reads the zoom keys itself, in the `before-input-event`
+handler, through `zoomKey()` in `window-frame.js`: the character the key
+produced (`+`, `=`, `-`, `0`), the physical `Digit0` key, or the keypad's
+`NumpadAdd`, `NumpadSubtract` and `Numpad0`, with Ctrl (Cmd on macOS) held and
+Alt not. A match is applied in steps of 0.5, as the roles do, and the event is
+prevented, so neither the menu accelerator nor the terminal also receives it.
+The roles stay in the menu for the menu button.
+
 ## States the window can be in
 
 `isMovable()`, `isResizable()`, `isMaximizable()`, `isMinimizable()` and
