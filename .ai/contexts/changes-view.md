@@ -734,23 +734,20 @@ stdout cap. Past the cap it keeps reading and drops the bytes, so git runs to
 its own end; the result carries `overflow: true` and the same
 `stdout maxBuffer length exceeded` message `execFile` would give.
 
-The reason is Windows. The `git.exe` on `PATH` there (`C:\Program Files\Git\bin`
-or `\cmd`) is a launcher that starts `mingw64\bin\git.exe` as its own child.
-`execFile` kills an overrunning child, which on Windows terminates the launcher
-only: the real git is left running, with the repository as its working
-directory, after the call has returned. A process holding a directory as its
-cwd makes that directory impossible to remove (`EBUSY`), which is how the
-over-the-cap test in `test/git-changes-file-real-git.test.js` failed its cleanup
-on `windows-2022`. Letting git finish means the launcher exits only after the
-real git has, and `close` is the moment both are gone.
+The reason is Windows. There, a git that was killed leaves its working
+directory busy for a moment after `execFile` has reported its exit: the
+repository cannot be removed (`EBUSY` on `rmdir`) although neither the `git.exe`
+on `PATH` nor the `mingw64\bin\git.exe` it starts as its own child is still
+reported alive. A git that runs to its own end does not. On `windows-2022` the
+over-the-cap subtest of `test/git-changes-file-real-git.test.js` hit `EBUSY` in
+its cleanup in 24 of 8400 runs while the cap killed git, and in none of 8400
+once git was drained instead.
 
 A timeout still kills: a git that hangs cannot be waited for. The pipes are
-closed on this side first, as `execFile` does, so a surviving grandchild that
-still holds them cannot delay `close`. On Windows that kill has the same
-launcher-only reach, so a timed-out git can outlive the call.
+closed on this side first, as `execFile` does, so a grandchild that still holds
+them cannot delay `close`. On Windows a timed-out git therefore leaves its
+working directory busy for a moment after the call has returned, as above.
 
 `fs.rmSync`'s `maxRetries` does not cover this failure on Node 20 and 22: their
 recursive removal retries only after emptying a directory (`ENOTEMPTY`,
-`EPERM`); an `EBUSY` on the first `rmdir` is thrown at once. The retries the
-real-git tests pass cover Windows' delayed deletion of the files inside, not a
-live process.
+`EPERM`); an `EBUSY` on the first `rmdir` of a directory is thrown at once.

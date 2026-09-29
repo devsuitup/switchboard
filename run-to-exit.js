@@ -2,7 +2,7 @@
 
 const { spawn } = require('child_process');
 
-// Settles on 'close' and never kills over a stdout cap — see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
+// see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
 function runToExit(file, args, { cwd, env, timeoutMs, maxBuffer }, spawnFn = spawn) {
   return new Promise((resolve) => {
     const command = [file, ...args].join(' ');
