@@ -29,6 +29,7 @@ const SETTING_DEFAULTS = {
   // being asked. The manual "Check for Updates" button still works either way.
   autoUpdate: true,
   shellProfile: 'auto',
+  activityReporting: false, // see .ai/contexts/activitywatch.md
 };
 
 if (typeof module !== 'undefined' && module.exports) {

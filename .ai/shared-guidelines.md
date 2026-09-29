@@ -19,6 +19,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
 | Change the shell inside the file panel (mount point, hidden-write exemption, splitter) | [contexts/panel-terminal.md](contexts/panel-terminal.md) |
 | Change what a path in terminal output links to (matcher, openability check, `path:line`) | [contexts/terminal-path-links.md](contexts/terminal-path-links.md) |
+| Change what is reported to ActivityWatch (the two buckets, focus, the Settings section) | [contexts/activitywatch.md](contexts/activitywatch.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
@@ -115,6 +116,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Debug mode** — Settings → Diagnostics arms the activity trace at runtime, without a restart, and lists/opens/deletes its files; see [docs/activity-trace.md](../docs/activity-trace.md)
 - **Resume/fork in real recorded cwd** for worktree sessions (fork PR #96, v0.0.44)
 - **Clickable paths in the terminal** — a link provider over filesystem paths and bare filenames, checked main-side against the panel's own guards; see [contexts/terminal-path-links.md](contexts/terminal-path-links.md)
+- **Activity reporting to ActivityWatch** — opt-in; the focused session and every running session as two separate buckets; see [contexts/activitywatch.md](contexts/activitywatch.md)
 - **Grid "Group by project" toggle** — the grid header switches between the project-grouped layout (default) and a flat card grid; the choice persists in `localStorage.gridGroupByProject`
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)

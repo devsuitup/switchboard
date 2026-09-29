@@ -8,7 +8,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -16,6 +16,7 @@ function init(ctx) {
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   rekeyMcpServer = ctx.rekeyMcpServer;
+  rekeyActivity = ctx.rekeyActivity || (() => {});
 }
 
 // --- Subagent spawn / completion detection ---
@@ -421,6 +422,7 @@ function detectSessionTransitions(folder) {
         activeSessions.set(newId, session);
         // Re-key MCP server to match new session ID
         rekeyMcpServer(sessionId, newId);
+        rekeyActivity(sessionId, newId);
         const mainWindow = getMainWindow();
         if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         if (mainWindow && !mainWindow.isDestroyed()) {

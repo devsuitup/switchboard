@@ -116,6 +116,8 @@ const rendererCrossFileGlobals = {
   showNewSessionPopover: 'readonly',
   openSettingsViewer: 'readonly',
   wireActivityTraceToggle: 'readonly',
+  wireActivityReportingToggle: 'readonly',
+  renderActivityReportingStatus: 'readonly',
   renderActivityTraceFiles: 'readonly',
   openActivityTraceFile: 'readonly',
   showResumeSessionDialog: 'readonly',
@@ -383,6 +385,29 @@ module.exports = [
         registerTerminalPathLinks: 'off',
         findTerminalPathCandidates: 'off',
         readTerminalLogicalLine: 'off',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Dual-mode Settings section (public/activity-reporting-panel.js — see
+  // .ai/contexts/activitywatch.md): classic <script> in the renderer, and
+  // require()-d in node:test for its status text. It declares the two globals
+  // settings-panel.js consumes, so they are switched off here.
+  {
+    files: ['public/activity-reporting-panel.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        module: 'writable',
+        wireActivityReportingToggle: 'off',
+        renderActivityReportingStatus: 'off',
       },
     },
     rules: {

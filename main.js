@@ -91,6 +91,8 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
+const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
+const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
 setPtyOpLogger(log);
 
@@ -158,6 +160,13 @@ activityTrace.setEnabled(
 if (TRACE.on) {
   log.info(`[activity-trace] enabled → ${activityTrace.currentFile() || '(failed to open)'}`);
 }
+
+// see .ai/contexts/activitywatch.md
+const activityWatchClient = createActivityWatchClient({ fetchFn: fetch, hostname: os.hostname(), log });
+const activityReporter = createActivityWatchReporter({ client: activityWatchClient, hostname: os.hostname() });
+activityReporter.setEnabled(
+  (getSetting('global') || {}).activityReporting ?? SETTING_DEFAULTS.activityReporting
+);
 
 // One-shot cleanup: the Plans tab was removed, so nothing indexes or clears
 // FTS rows of type 'plan' anymore. Purge any left behind by earlier versions.
@@ -2265,6 +2274,8 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     activeSessions.delete(realId);
     // Clean up the original key too in case transition detection hasn't run yet
     activeSessions.delete(sessionId);
+    activityReporter.sessionEnded(realId);
+    activityReporter.sessionEnded(sessionId);
   });
 }
 
@@ -2612,6 +2623,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     host: null, kind: 'local-pty',
   };
   activeSessions.set(sessionId, session);
+  if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
   // see .ai/contexts/cli-session-state.md
   if (!isPlainTerminal && !cliSessionState.ensureWatching()) {
@@ -2671,6 +2683,40 @@ function activityTraceState() {
 }
 
 ipcMain.handle('get-activity-trace-state', () => activityTraceState());
+
+// see .ai/contexts/activitywatch.md ("The IPC surface")
+async function activityReportingState() {
+  const reachable = activityReporter.enabled ? await activityWatchClient.probe() : null;
+  return {
+    enabled: activityReporter.enabled,
+    destination: 'ActivityWatch',
+    url: ACTIVITYWATCH_URL,
+    reachable,
+    buckets: activityReporter.buckets,
+  };
+}
+
+ipcMain.handle('get-activity-reporting-state', () => activityReportingState());
+
+ipcMain.handle('set-activity-reporting-enabled', (_event, enabled) => {
+  const on = !!enabled;
+  activityReporter.setEnabled(on);
+  const global = getSetting('global') || {};
+  global.activityReporting = on;
+  setSetting('global', global);
+  log.info(`[activitywatch] reporting ${on ? 'enabled' : 'disabled'} from the UI`);
+  return activityReportingState();
+});
+
+// The renderer owns focus: which session is shown, and whether the window has it.
+ipcMain.on('activity-focus', (_event, focus) => {
+  if (!focus || typeof focus.sessionId !== 'string') { activityReporter.focus(null); return; }
+  activityReporter.focus({
+    sessionId: focus.sessionId,
+    name: typeof focus.name === 'string' ? focus.name.slice(0, 200) : '',
+    project: typeof focus.project === 'string' ? focus.project.slice(0, 1024) : '',
+  });
+});
 
 ipcMain.handle('set-activity-trace-enabled', async (_event, enabled) => {
   const on = !!enabled;
@@ -2774,7 +2820,10 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
-sessionTransitions.init({ PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
+sessionTransitions.init({
+  PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
+  rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
+});
 const { detectSessionTransitions } = sessionTransitions;
 
 // see .ai/contexts/cli-session-state.md
@@ -3082,7 +3131,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+// see .ai/contexts/activitywatch.md ("Quitting")
+let activityFlushedForQuit = false;
+app.on('before-quit', (event) => {
+  if (!activityFlushedForQuit && activityReporter.enabled && activityReporter.liveCount > 0) {
+    event.preventDefault();
+    activityFlushedForQuit = true;
+    const bound = new Promise((resolve) => setTimeout(resolve, 1500));
+    Promise.race([activityReporter.flush().catch(() => {}), bound]).finally(() => app.quit());
+    return;
+  }
+  activityReporter.stop();
   if (TRACE.on) trace('app.quit', null, {});
   activityTrace.close();
 

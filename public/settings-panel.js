@@ -91,6 +91,11 @@
     if (!isProject) {
       try { traceState = (await window.api.getActivityTraceState()) || traceState; } catch {};
     }
+    // Same kind of live switch — see .ai/contexts/activitywatch.md
+    let reportingState = { enabled: false, reachable: null, destination: 'ActivityWatch', url: '', buckets: {} };
+    if (!isProject && typeof window.api.getActivityReportingState === 'function') {
+      try { reportingState = (await window.api.getActivityReportingState()) || reportingState; } catch {};
+    }
 
     // Working copy of the (global-only) re-bindable keyboard shortcuts.
     let scShortcuts = normalizeShortcuts(isProject ? null : current.shortcuts);
@@ -359,6 +364,31 @@
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
+        <div class="settings-section-title">Activity Reporting</div>
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Send session activity to ActivityWatch</span>
+            <div class="settings-description">Destination: <strong>${escapeHtml(reportingState.destination || 'ActivityWatch')}</strong>, the local time tracker, at <code>${escapeHtml(reportingState.url || '')}</code>. Nothing leaves this machine. Takes effect immediately and is remembered across launches.</div>
+            <div class="settings-description" id="sv-activity-reporting-status"></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-activity-reporting" ${reportingState.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <span class="settings-label">What is sent</span>
+            <div class="settings-description">
+              Two separate buckets, so that the time you spent on a session is never added to the time it ran on its own.<br>
+              <strong>Your attention</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.attention) || '')}</code>: the session on screen while the window has focus, with its project and its name as the sidebar shows it. It appears in ActivityWatch's Editor view.<br>
+              <strong>What ran</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.running) || '')}</code>: every Claude session from start to exit, whether or not you were looking at it, with its project and — if you ever opened it — its name. Sessions overlap there, as they did. Shells are not counted: a shell sitting open is not work running.<br>
+              No transcript content, prompt or command is ever sent.
+            </div>
+          </div>
+        </div>
+      </div>` : ''}
+
+      ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Diagnostics</div>
         <div class="settings-field">
           <div class="settings-field-info">
@@ -430,6 +460,11 @@
     }
 
     // Debug mode is a live switch: it does not go through Save.
+    if (!isProject && typeof wireActivityReportingToggle === 'function') {
+      const reportingStatus = settingsViewerBody.querySelector('#sv-activity-reporting-status');
+      renderActivityReportingStatus(reportingStatus, reportingState);
+      wireActivityReportingToggle(settingsViewerBody.querySelector('#sv-activity-reporting'), reportingStatus);
+    }
     if (!isProject && typeof wireActivityTraceToggle === 'function') {
       const traceList = settingsViewerBody.querySelector('#sv-activity-trace-list');
       wireActivityTraceToggle(settingsViewerBody.querySelector('#sv-activity-trace'), traceList);

@@ -77,7 +77,22 @@ function setActiveSession(id) {
   else sessionStorage.removeItem('activeSessionId');
   // Update file panel to show this session's open files/diffs
   if (typeof switchPanel === 'function') switchPanel(id);
+  reportActivityFocus();
 }
+
+// see .ai/contexts/activitywatch.md ("Attention")
+function reportActivityFocus() {
+  if (!window.api || typeof window.api.reportActivityFocus !== 'function') return;
+  if (!activeSessionId || !document.hasFocus()) { window.api.reportActivityFocus(null); return; }
+  const s = sessionMap.get(activeSessionId) || {};
+  window.api.reportActivityFocus({
+    sessionId: activeSessionId,
+    name: cleanDisplayName(s.name || s.aiTitle || s.summary) || '',
+    project: s.projectPath || '',
+  });
+}
+window.addEventListener('focus', reportActivityFocus);
+window.addEventListener('blur', reportActivityFocus);
 // Persist slug group expand state across reloads
 function getExpandedSlugs() {
   try { return new Set(JSON.parse(sessionStorage.getItem('expandedSlugs') || '[]')); } catch { return new Set(); }
@@ -952,6 +967,7 @@ async function loadProjects({ resort = false } = {}) {
   loadingStatus.className = '';
   dedup(cachedProjects);
   dedup(cachedAllProjects);
+  reportActivityFocus(); // see .ai/contexts/activitywatch.md ("Attention")
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;

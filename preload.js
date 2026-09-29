@@ -81,6 +81,10 @@ contextBridge.exposeInMainWorld('api', {
   listActivityTraceFiles: () => ipcRenderer.invoke('list-activity-trace-files'),
   readActivityTraceFile: (filePath) => ipcRenderer.invoke('read-activity-trace-file', filePath),
   deleteActivityTraceFile: (filePath) => ipcRenderer.invoke('delete-activity-trace-file', filePath),
+  // see .ai/contexts/activitywatch.md
+  getActivityReportingState: () => ipcRenderer.invoke('get-activity-reporting-state'),
+  setActivityReportingEnabled: (enabled) => ipcRenderer.invoke('set-activity-reporting-enabled', enabled),
+  reportActivityFocus: (focus) => ipcRenderer.send('activity-focus', focus),
   onActivityTraceState: (cb) => ipcRenderer.on('activity-trace-state', (_e, enabled) => cb(enabled)),
 
   // Send (fire-and-forget)
