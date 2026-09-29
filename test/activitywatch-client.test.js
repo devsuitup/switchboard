@@ -46,18 +46,21 @@ test('a heartbeat creates the bucket once, then only beats', async () => {
   const h = harness();
   assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), true);
   assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), true);
+  assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), true);
 
   assert.deepEqual(h.paths(), [
     '/api/0/buckets/b',
+    '/api/0/buckets/b/events',
     '/api/0/buckets/b/heartbeat?pulsetime=60',
     '/api/0/buckets/b/heartbeat?pulsetime=60',
   ], 'the bucket is created once and reused');
 });
 
 test('the heartbeat carries an ISO timestamp, a zero duration and the data as given', async () => {
-  const h = harness();
+  const h = harness({ server: (url) => (/\/api\/0\/buckets\/[^/]+$/.test(url) ? 304 : 200) });
   await h.client.heartbeat('b', BUCKET, { project: 'switchboard', session: 's1' }, 60);
   const beat = h.calls[1].body;
+  assert.match(h.calls[1].url, /\/heartbeat\?pulsetime=60$/);
   assert.equal(beat.duration, 0);
   assert.deepEqual(beat.data, { project: 'switchboard', session: 's1' });
   assert.equal(new Date(beat.timestamp).toISOString(), beat.timestamp, 'ISO 8601, round-trips');
@@ -228,7 +231,7 @@ test('writes racing on a fresh bucket share one create request', async () => {
     h.client.heartbeat('r', BUCKET, { project: 'x' }, 60),
   ]);
   assert.equal(h.posts.filter(p => p.url.endsWith('/api/0/buckets/r')).length, 1);
-  assert.equal(h.eventPosts().length, 2, 'and both writes still went out');
+  assert.equal(h.eventPosts().length, 3, 'and all three writes still went out');
 });
 
 test('another session starting in the same millisecond is not mistaken for this one', async () => {
@@ -345,4 +348,59 @@ test('a span is found under any of the ids it may carry', async () => {
   const h = spanHarness({ stored: [{ id: 8, data: { session: 'real' } }] });
   await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', values: ['tmp', 'real'] });
   assert.equal(h.eventPosts()[0].body[0].id, 8, 'the write that renamed it may have been stored unacknowledged');
+});
+
+// --- Convergence review ---
+
+// aw-server keeps, per bucket id, the last event a heartbeat can merge into,
+// and does not clear it when the bucket is deleted. A same-data heartbeat to a
+// re-created bucket then merges into that ghost and fails with 500 — for as
+// long as the focus does not change. One POST /events resets it.
+test('the first write to a bucket this client created goes through /events, not /heartbeat', async () => {
+  const h = harness();
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.deepEqual(h.paths(), [
+    '/api/0/buckets/b',
+    '/api/0/buckets/b/events',
+    '/api/0/buckets/b/heartbeat?pulsetime=60',
+  ]);
+  assert.ok(Array.isArray(h.calls[1].body), 'the events endpoint takes a list');
+});
+
+test('a bucket that already existed is beaten straight away', async () => {
+  const h = harness({ server: (url) => (/\/api\/0\/buckets\/[^/]+$/.test(url) ? 304 : 200) });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.deepEqual(h.paths(), ['/api/0/buckets/b', '/api/0/buckets/b/heartbeat?pulsetime=60']);
+});
+
+test('a bucket re-created after a 404 gets its first write through /events again', async () => {
+  let deleted = false;
+  const h = harness({ server: (url) => (deleted && url.includes('/heartbeat') ? 404 : 200) });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  deleted = true;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  deleted = false;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.deepEqual(h.paths().slice(-2), ['/api/0/buckets/b', '/api/0/buckets/b/events']);
+});
+
+test('a span still under its old id is found when the old id comes first', async () => {
+  const h = spanHarness({ stored: [{ id: 8, data: { session: 'tmp' } }] });
+  await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', values: ['tmp', 'real'] });
+  assert.equal(h.eventPosts()[0].body[0].id, 8);
+});
+
+test('a span write the server refuses reports failure', async () => {
+  const posts = [];
+  const client = createActivityWatchClient({
+    hostname: 'h',
+    fetchFn: async (url, opts) => {
+      if (!opts || !opts.method) return { ok: true, status: 200, json: async () => [] };
+      posts.push(url);
+      return url.endsWith('/events') ? { ok: false, status: 500 } : { ok: true, status: 200 };
+    },
+  });
+  assert.equal(await client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] }), false);
 });

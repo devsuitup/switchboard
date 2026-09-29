@@ -75,3 +75,10 @@ test('idle time comes from the system, and cannot throw into the keepalive', () 
 test('reporting starts from the stored setting, falling back to the one table of defaults', () => {
   assert.match(MAIN, /activityReporter\.setEnabled\(\s*\(getSetting\('global'\) \|\| \{\}\)\.activityReporting \?\? SETTING_DEFAULTS\.activityReporting\s*\)/);
 });
+
+// An install that fails does not quit. Left set, the flag would skip the flush
+// on every later, ordinary quit.
+test('a failed update install gives the next quit its flush back', () => {
+  const onError = block(MAIN, "autoUpdater.on('error'", '\n  });');
+  assert.match(onError, /activityFlushedForQuit = false;/);
+});

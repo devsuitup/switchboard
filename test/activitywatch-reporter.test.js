@@ -685,3 +685,59 @@ test('stop leaves no timer running', async () => {
   h.reporter.stop();
   assert.equal(h.liveTimers().length, 0);
 });
+
+// --- Convergence review ---
+
+// writtenAs names the id the event carries on the server. A write that stored
+// nothing must not advance it, or the next lookup searches under an id the
+// server has never seen and inserts a second event.
+test('a write that stored nothing after a re-key leaves the event findable under its old id', async () => {
+  const events = [];
+  let refuse = false;
+  let checkpoint = null;
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    setIntervalFn: (fn, ms) => { if (ms === CHECKPOINT_MS) checkpoint = fn; return {}; },
+    clearIntervalFn: () => {},
+    client: {
+      heartbeat: async () => true,
+      upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
+        if (refuse) return false;                 // the server was gone: nothing stored
+        const existing = events.find(e => e.startedAt === startedAt && match.values.includes(e.data[match.key]));
+        if (existing) { existing.data = data; existing.duration = duration; } else events.push({ data, startedAt, duration });
+        return true;
+      },
+    },
+  });
+  const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(r => setImmediate(r)); };
+  reporter.setEnabled(true);
+  reporter.sessionStarted({ sessionId: 'A', project: '/p' });
+  await settle();
+  reporter.rekey('A', 'B');
+  refuse = true;  checkpoint(); await settle();
+  refuse = false; checkpoint(); await settle();
+  assert.deepEqual(events.map(e => e.data.session), ['B'], JSON.stringify(events));
+});
+
+test('the flush does not settle before the closing beat has been answered', async () => {
+  let releaseBeat = null;
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    setIntervalFn: () => ({}), clearIntervalFn: () => {},
+    client: {
+      heartbeat: () => new Promise((r) => { releaseBeat = () => r(true); }),
+      upsertSpan: async () => true,
+    },
+  });
+  reporter.setEnabled(true);
+  const focused = reporter.focus(A);
+  releaseBeat(); await focused;
+
+  let settled = false;
+  const flushed = reporter.flush().then(() => { settled = true; });
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.equal(settled, false, 'still waiting on the closing beat');
+  releaseBeat();
+  await flushed;
+  assert.equal(settled, true);
+});

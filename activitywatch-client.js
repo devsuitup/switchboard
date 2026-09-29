@@ -25,6 +25,7 @@ function createActivityWatchClient(deps) {
 
   const readyBuckets = new Set();
   const creating = new Map(); // bucketId -> the create request in flight
+  const fresh = new Set();    // buckets this client created and has not yet written to
   let cooldownMs = 0;
   let nextAttemptAt = 0;
   let reachable = null; // null until the first call resolves it either way
@@ -76,6 +77,7 @@ function createActivityWatchClient(deps) {
     }).then((r) => {
       const ok = is2xx(r) || (!!r && r.status === 304);
       if (ok) readyBuckets.add(bucketId);
+      if (is2xx(r)) fresh.add(bucketId);
       return ok;
     }).finally(() => creating.delete(bucketId));
     creating.set(bucketId, pending);
@@ -92,11 +94,12 @@ function createActivityWatchClient(deps) {
   async function heartbeat(bucketId, bucket, data, pulsetimeSeconds) {
     if (sleeping()) return false;
     if (!(await ensureBucket(bucketId, bucket))) return false;
-    const r = await post(`${bucketPath(bucketId)}/heartbeat?pulsetime=${encodeURIComponent(pulsetimeSeconds)}`, {
-      timestamp: new Date(now()).toISOString(),
-      duration: 0,
-      data,
-    });
+    const event = { timestamp: new Date(now()).toISOString(), duration: 0, data };
+    // see .ai/contexts/activitywatch.md ("Creating a bucket is idempotent")
+    const r = fresh.has(bucketId)
+      ? await post(`${bucketPath(bucketId)}/events`, [event])
+      : await post(`${bucketPath(bucketId)}/heartbeat?pulsetime=${encodeURIComponent(pulsetimeSeconds)}`, event);
+    if (is2xx(r)) fresh.delete(bucketId);
     // see .ai/contexts/activitywatch.md ("Failure")
     if (r && r.status === 404) readyBuckets.delete(bucketId);
     return is2xx(r);
@@ -135,7 +138,9 @@ function createActivityWatchClient(deps) {
       : null;
     const event = { timestamp: start, duration: Math.max(0, durationSeconds), data };
     if (existing && existing.id !== undefined) event.id = existing.id;
-    return is2xx(await post(eventsPath, [event]));
+    const ok = is2xx(await post(eventsPath, [event]));
+    if (ok) fresh.delete(bucketId);
+    return ok;
   }
 
   /**

@@ -175,6 +175,16 @@ Two sessions starting at once, or a beat and a session write, are enough to
 send them together. The client therefore keeps one create in flight per bucket
 and every caller awaits that one.
 
+**A re-created bucket remembers its predecessor.** aw-server keeps, per bucket
+id, the last event a heartbeat may merge into, and deleting the bucket does not
+clear it. A heartbeat to the re-created bucket carrying the same `data` inside
+`pulsetime` merges into that ghost and gets `500` — and since the keepalive
+beats an unchanged focus every 30 s under a 60 s `pulsetime`, it gets `500`
+indefinitely, until the focus changes. One `POST /events` to the bucket resets
+it. So the first write to a bucket the client itself created — a `200`, not a
+`304` — goes through `/events` instead of `/heartbeat`; later beats heartbeat
+as usual.
+
 ## Quitting
 
 `before-quit` holds the quit, bounded at 1.5 s, while the reporter has pending
@@ -183,7 +193,9 @@ With reporting off, or nothing pending, the quit is not delayed at all. An app
 that is killed rather than quit writes nothing after its last checkpoint.
 
 **An update install is never held.** `updater-install` sets the flag the hold
-checks before calling `quitAndInstall`. On Linux, the AppImage updater starts
+checks before calling `quitAndInstall`, and the updater's `error` handler clears
+it: an install that fails does not quit, and a flag left set would skip the
+flush on every later quit. On Linux, the AppImage updater starts
 the new binary before the old process quits; the new one loses the
 single-instance lock to the old and exits, so any extra time the old one spends
 quitting is time the user can be left with no app at all.

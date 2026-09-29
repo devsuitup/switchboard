@@ -131,6 +131,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater.on('update-downloaded', (info) => sendUpdaterEvent('update-downloaded', info));
   autoUpdater.on('error', (err) => {
     log.error('[updater] Error:', err?.message || String(err));
+    activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-event', 'error', { message: err?.message || String(err) });
     }
