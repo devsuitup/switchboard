@@ -31,3 +31,21 @@ jobs:
             fi
           done
           echo "RESULT node=${{ matrix.node-version }} shard=${{ matrix.shard }} runs=$runs failed=$fail ebusy=$ebusy"
+
+  diag:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22]
+        blob: [4096, 8388608]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Observe git processes after a capped read
+        shell: bash
+        run: node scripts/diag-capped-read.js 100 ${{ matrix.blob }}
