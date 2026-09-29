@@ -5,7 +5,7 @@
 const realFs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { runToExit } = require('./run-to-exit');
 const { localGitEnv } = require('./git-changes-runner');
 const { parseStatusPorcelainV2 } = require('./git-changes');
 const { resolveOnDisk, isInsideDir } = require('./resolve-path-on-disk');
@@ -51,23 +51,10 @@ function requireLocalTarget(target) {
   return target;
 }
 
-function defaultRunGit(args, { cwd, timeoutMs, maxBuffer }) {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd, env: localGitEnv(), timeout: timeoutMs, maxBuffer, encoding: 'buffer', windowsHide: true },
-      (err, stdout, stderr) => {
-        const out = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || '');
-        if (err) {
-          resolve({
-            code: typeof err.code === 'number' ? err.code : -1,
-            stdout: out,
-            stderr: String(stderr || err.message || ''),
-            tooLarge: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-          });
-          return;
-        }
-        resolve({ code: 0, stdout: out, stderr: '', tooLarge: false });
-      });
-  });
+async function defaultRunGit(args, { cwd, timeoutMs, maxBuffer }) {
+  const result = await runToExit('git', args, { cwd, env: localGitEnv(), timeoutMs, maxBuffer });
+  if (result.code === 0) return { code: 0, stdout: result.stdout, stderr: '', tooLarge: false };
+  return { code: result.code, stdout: result.stdout, stderr: result.stderr || result.message, tooLarge: result.overflow };
 }
 
 // see .ai/contexts/changes-view.md ("Containment, and which path the write runs on")
