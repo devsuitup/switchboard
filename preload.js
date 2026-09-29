@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('api', {
   getActivityReportingState: () => ipcRenderer.invoke('get-activity-reporting-state'),
   setActivityReportingEnabled: (enabled) => ipcRenderer.invoke('set-activity-reporting-enabled', enabled),
   reportActivityFocus: (focus) => ipcRenderer.send('activity-focus', focus),
+  reportActivityTitles: (list) => ipcRenderer.send('activity-titles', list),
   onActivityTraceState: (cb) => ipcRenderer.on('activity-trace-state', (_e, enabled) => cb(enabled)),
 
   // Send (fire-and-forget)

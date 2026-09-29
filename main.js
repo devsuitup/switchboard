@@ -2727,6 +2727,13 @@ ipcMain.on('activity-focus', (_event, focus) => {
   });
 });
 
+ipcMain.on('activity-titles', (_event, list) => {
+  if (!Array.isArray(list)) return;
+  activityReporter.titles(list.slice(0, 500)
+    .filter(t => t && typeof t.sessionId === 'string' && t.sessionId && t.sessionId.length <= 200 && typeof t.name === 'string')
+    .map(t => ({ sessionId: t.sessionId, name: t.name.slice(0, 200) })));
+});
+
 ipcMain.handle('set-activity-trace-enabled', async (_event, enabled) => {
   const on = !!enabled;
   // activityTrace.setEnabled has its own bounded fallback (see

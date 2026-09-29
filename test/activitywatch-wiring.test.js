@@ -84,3 +84,10 @@ test('a failed update install gives the next quit its flush back', () => {
   const onError = block(MAIN, "autoUpdater.on('error'", '\n  });');
   assert.match(onError, /activityFlushedForQuit = false;/);
 });
+
+test('titles from the renderer are bounded before they are forwarded', () => {
+  const titles = block(MAIN, "ipcMain.on('activity-titles'");
+  assert.match(titles, /list\.slice\(0, 500\)/);
+  assert.match(titles, /t\.sessionId\.length <= 200/);
+  assert.match(titles, /t\.name\.slice\(0, 200\)/);
+});

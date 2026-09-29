@@ -26,7 +26,7 @@ by type:
 | id | `aw-watcher-switchboard_<hostname>` | `aw-watcher-switchboard-running_<hostname>` |
 | type | `app.editor.activity` | `app.session.running` |
 | holds | the one session on screen while the window has focus | every Claude session, start to exit |
-| data | `{project, file}` — `file` is the name the sidebar shows | `{session, project, name?}` |
+| data | `{project, path, session, title?, file}` — `file` is the title, or the id when there is none | `{project, path, session, title?}` |
 | written by | heartbeat | one event per session, updated every minute |
 
 **The types differ on purpose.** ActivityWatch's web UI selects editor buckets
@@ -88,9 +88,12 @@ fragment every event it sits in.
 - A session is timed from its spawn even if reporting was turned on later.
   Turning reporting on writes every session already running at once, rather
   than at the next checkpoint.
-- `name` is the one given at start (a scheduled run's), or else the last name
-  the renderer reported for that session; a session never focused has none, and
-  it is omitted, not guessed. A name is dropped at each checkpoint once its
+- `title` is the one given at start (a scheduled run's), or else the last name
+  the renderer reported for that session — by focus, or through
+  `activity-titles`, which the renderer sends after every project reload with
+  the title of each open session, so a session that runs unseen is titled too.
+  A session the sidebar shows no title for has none, and it is omitted, not
+  guessed. Titles for sessions that are not running are ignored. A name is dropped at each checkpoint once its
   session is neither running nor on screen, so the map holds live entries only.
 - A re-key moves the span, its name and its pending writes to the real id. The
   event already on the server still carries the old id, so each span records
@@ -235,8 +238,23 @@ Two orderings follow from that, and both are handled:
 | `get-activity-reporting-state` | invoke | `{enabled, destination, url, reachable, buckets}`. `reachable` is probed at the call while reporting is on, and `null` while it is off — nothing is contacted then, so there is no answer to give. |
 | `set-activity-reporting-enabled` | invoke | a boolean; persists `global.activityReporting`, returns the state. |
 | `activity-focus` | send | `{sessionId, name, project}` or `null`. Main takes a missing, empty or non-string id, or one over 200 characters, as no focus, and bounds `name` to 200 and `project` to 1024 characters before anything is forwarded. |
+| `activity-titles` | send | `[{sessionId, name}]` — the open sessions' titles. Main keeps at most 500 entries, drops any whose id is missing, non-string or over 200 characters or whose name is not a string, and bounds `name` to 200 characters. |
 
 ## What reaches the server
+
+Every event, in both buckets, carries the session's identity under the same
+keys, which consumers of the buckets read by name:
+
+| key | value |
+|---|---|
+| `project` | the project directory's name (`switchboard`, `platform`), split on `/` and `\` alike |
+| `path` | the project's absolute path |
+| `session` | the session id — the Claude session UUID, Switchboard's session key |
+| `title` | the name the sidebar shows, on one line (runs of whitespace, newlines included, become one space); absent when there is none |
+
+A title changes during a session when the user renames it or a title is
+generated late; the next write carries the new one, so a consumer groups by
+`session` and keeps the latest `title`.
 
 Session ids, project paths, and session names. A name is the one the user gave
 the session (`name`) or the title generated for it (`aiTitle`) — never

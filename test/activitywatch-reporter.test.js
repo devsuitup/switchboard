@@ -87,7 +87,7 @@ test('focusing a session beats it with project and name, at a pulsetime above th
   const h = harness();
   h.reporter.setEnabled(true);
   await h.reporter.focus(A);
-  assert.deepEqual(h.beats.map(b => b.data), [{ project: '/w/switchboard', file: 'dev-panel' }]);
+  assert.deepEqual(h.beats.map(b => b.data), [{ project: 'switchboard', path: '/w/switchboard', session: 'sA', title: 'dev-panel', file: 'dev-panel' }]);
   assert.ok(PULSETIME_SECONDS * 1000 > KEEPALIVE_MS, 'a pulsetime under the keepalive would fragment every event');
 });
 
@@ -190,7 +190,7 @@ test('a running session carries the name the user last saw for it', async () => 
   h.reporter.sessionStarted(A);
   await h.reporter.focus(A);
   await h.reporter.sessionEnded(A.sessionId);
-  assert.equal(h.events[0].data.name, 'dev-panel');
+  assert.equal(h.events[0].data.title, 'dev-panel');
 });
 
 test('a session never focused is written without a name rather than a guessed one', async () => {
@@ -198,7 +198,7 @@ test('a session never focused is written without a name rather than a guessed on
   h.reporter.setEnabled(true);
   h.reporter.sessionStarted({ sessionId: B.sessionId, project: B.project });   // as main starts a PTY session
   await h.reporter.sessionEnded(B.sessionId);
-  assert.deepEqual(h.events[0].data, { session: 'sB', project: '/w/platform' });
+  assert.deepEqual(h.events[0].data, { project: 'platform', path: '/w/platform', session: 'sB' });
 });
 
 test('a session started with a name carries it without ever being focused', async () => {
@@ -206,7 +206,7 @@ test('a session started with a name carries it without ever being focused', asyn
   h.reporter.setEnabled(true);
   h.reporter.sessionStarted({ sessionId: 'schedule:nightly', project: '/w/p', name: 'Scheduled: nightly' });
   await h.reporter.sessionEnded('schedule:nightly');
-  assert.equal(h.events[0].data.name, 'Scheduled: nightly');
+  assert.equal(h.events[0].data.title, 'Scheduled: nightly');
 });
 
 test('flush writes every live session as a span ending now', async () => {
@@ -269,7 +269,7 @@ test('a re-keyed session is written under its new id, keeping its start and name
   await h.reporter.sessionEnded('real');
 
   assert.equal(h.events.length, 1);
-  assert.deepEqual(h.events[0].data, { session: 'real', project: '/w/p', name: 'forked' });
+  assert.deepEqual(h.events[0].data, { session: 'real', project: 'p', path: '/w/p', title: 'forked' });
   assert.equal(h.events[0].startedAt, started);
   assert.equal(await h.reporter.sessionEnded('tmp'), false, 'the old id is gone');
 });
@@ -635,7 +635,7 @@ test('a name kept for a session no longer on screen and never started is let go'
   await h.tick(CHECKPOINT_MS);
   h.reporter.sessionStarted({ sessionId: 'X', project: '/p' });
   await h.reporter.sessionEnded('X');
-  assert.equal(h.events[0].data.name, undefined, 'the stale name did not survive the checkpoint');
+  assert.equal(h.events[0].data.title, undefined, 'the stale name did not survive the checkpoint');
 });
 
 test('starting a session that is already live keeps its original start', async () => {
@@ -674,7 +674,7 @@ test('a re-key to the same id changes nothing', async () => {
   await h.reporter.focus({ sessionId: 'A', name: 'kept', project: '/p' });
   h.reporter.rekey('A', 'A');
   await h.reporter.sessionEnded('A');
-  assert.equal(h.events[0].data.name, 'kept');
+  assert.equal(h.events[0].data.title, 'kept');
 });
 
 test('stop leaves no timer running', async () => {
@@ -764,4 +764,28 @@ test('a write still queued when reporting is turned off is never sent', async ()
   release();
   assert.equal(await ended, false);
   assert.equal(sent.length, 1, 'only the write already on the wire went out');
+});
+
+test('the project is sent by its directory name, and a title on one line, in both buckets', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  await h.reporter.focus({ sessionId: 'sW', name: 'fix\n  the\tbuild', project: 'C:\\Serveur\\switchboard\\' });
+  h.reporter.sessionStarted({ sessionId: 'sW', project: 'C:\\Serveur\\switchboard\\' });
+  await h.settle();
+  assert.equal(h.beats[0].data.project, 'switchboard');
+  assert.equal(h.beats[0].data.title, 'fix the build');
+  assert.equal(h.events[0].data.project, 'switchboard');
+  assert.equal(h.events[0].data.title, 'fix the build');
+});
+
+test('a running session never shown gets the title the sidebar gives it, and a session not running gets none', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'bg', project: '/w/p' });
+  h.reporter.titles([{ sessionId: 'bg', name: 'nightly refactor' }, { sessionId: 'gone', name: 'x' }]);
+  await h.reporter.sessionEnded('bg');
+  assert.equal(h.events.at(-1).data.title, 'nightly refactor');
+  h.reporter.sessionStarted({ sessionId: 'gone', project: '/w/p' });
+  await h.reporter.sessionEnded('gone');
+  assert.equal(h.events.at(-1).data.title, undefined, 'a title sent before the session ran was not kept');
 });

@@ -93,6 +93,17 @@ function reportActivityFocus() {
     project: s.projectPath || '',
   });
 }
+// see .ai/contexts/activitywatch.md ("Running")
+function reportActivityTitles() {
+  if (!window.api || typeof window.api.reportActivityTitles !== 'function') return;
+  const list = [];
+  for (const id of openSessions.keys()) {
+    const s = sessionMap.get(id) || {};
+    const name = cleanDisplayName(s.name || s.aiTitle);
+    if (name) list.push({ sessionId: id, name });
+  }
+  window.api.reportActivityTitles(list);
+}
 window.addEventListener('focus', reportActivityFocus);
 window.addEventListener('blur', reportActivityFocus);
 // see .ai/contexts/activitywatch.md ("Attention")
@@ -974,6 +985,7 @@ async function loadProjects({ resort = false } = {}) {
   dedup(cachedProjects);
   dedup(cachedAllProjects);
   reportActivityFocus(); // see .ai/contexts/activitywatch.md ("Attention")
+  reportActivityTitles();
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;

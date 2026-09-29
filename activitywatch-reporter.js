@@ -43,8 +43,21 @@ function createActivityWatchReporter(deps) {
   const inflight = new Set();  // running-event writes not yet settled
   const chains = new Map();    // sessionId -> the tail of that session's writes
 
+  // see .ai/contexts/activitywatch.md ("What reaches the server")
+  const projectName = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  const oneLine = (s) => (s ? String(s).replace(/\s+/g, ' ').trim() : '');
+
+  function identity(sessionId, projectPath, name) {
+    const data = { project: projectName(projectPath), path: projectPath || '', session: sessionId };
+    const title = oneLine(name);
+    if (title) data.title = title;
+    return data;
+  }
+
   function attentionData(f) {
-    return { project: f.project || '', file: f.name || f.sessionId };
+    const data = identity(f.sessionId, f.project, f.name);
+    data.file = data.title || f.sessionId;
+    return data;
   }
 
   function beat(f) {
@@ -98,9 +111,7 @@ function createActivityWatchReporter(deps) {
 
   // see .ai/contexts/activitywatch.md ("Checkpoints")
   function writeSpan(sessionId, span, endedAt) {
-    const data = { session: sessionId, project: span.project };
-    const name = names.get(sessionId);
-    if (name) data.name = name;
+    const data = identity(sessionId, span.project, names.get(sessionId));
     const duration = (endedAt - span.startedAt) / 1000;
 
     const write = (chains.get(sessionId) || Promise.resolve())
@@ -118,6 +129,14 @@ function createActivityWatchReporter(deps) {
       for (const [id, tail] of chains) if (tail === write) chains.delete(id);
     });
     return write;
+  }
+
+  // The titles the renderer shows, for sessions that run unseen — see
+  // .ai/contexts/activitywatch.md ("Running")
+  function titles(list) {
+    for (const { sessionId, name } of list) {
+      if (name && live.has(sessionId)) names.set(sessionId, name);
+    }
   }
 
   function pruneNames() {
@@ -190,7 +209,7 @@ function createActivityWatchReporter(deps) {
   function stop() { stopKeepalive(); stopCheckpoints(); }
 
   return {
-    focus, sessionStarted, sessionEnded, rekey, flush, setEnabled, stop,
+    focus, titles, sessionStarted, sessionEnded, rekey, flush, setEnabled, stop,
     get enabled() { return enabled; },
     get hasPendingWork() { return enabled && (live.size > 0 || inflight.size > 0); },
     buckets: { attention: attention.id, running: running.id },

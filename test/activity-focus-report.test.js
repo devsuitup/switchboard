@@ -100,3 +100,20 @@ test('a project reload reports focus, so a title generated late reaches the buck
   assert.ok(load.indexOf('dedup(cachedAllProjects)') < load.indexOf('reportActivityFocus()'),
     'reported after the fresh data is applied');
 });
+
+test('a project reload sends the titles of the open sessions', () => {
+  const load = functionSource(APP_SRC, 'loadProjects');
+  assert.ok(load.indexOf('dedup(cachedAllProjects)') < load.indexOf('reportActivityTitles()'));
+  const fn = functionSource(APP_SRC, 'reportActivityTitles');
+  const sent = [];
+  const ctx = {
+    window: { api: { reportActivityTitles: (l) => sent.push(l) } },
+    openSessions: new Map([['a', {}], ['b', {}], ['c', {}]]),
+    sessionMap: new Map([['a', { name: 'mine' }], ['b', { aiTitle: 'generated', summary: 'p' }], ['c', { summary: 'first prompt' }]]),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(functionSource(UTILS_SRC, 'cleanDisplayName'), ctx);
+  vm.runInContext(fn + '\nreportActivityTitles()', ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), [{ sessionId: 'a', name: 'mine' }, { sessionId: 'b', name: 'generated' }],
+    'never the summary');
+});
