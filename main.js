@@ -2874,6 +2874,7 @@ const localTranscriptTracker = createLocalTranscriptTracker({ hasPty: sessionHas
 
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 ipcMain.handle('session-live-elsewhere', (_event, sessionId) => cliSessionState.liveElsewhere(sessionId, sessionHasPty, ptyPids));
+ipcMain.handle('sessions-live-elsewhere', (_event, sessionIds) => cliSessionState.liveElsewhereMany(sessionIds, sessionHasPty, ptyPids));
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;

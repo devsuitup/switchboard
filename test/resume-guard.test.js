@@ -133,7 +133,7 @@ test('the reload path resumes the remembered session as an automatic resume', ()
 
 test('the working-set restore resumes each session as an automatic resume', () => {
   const body = functionBody(APP_SRC, 'async function runRestore(');
-  assert.match(body, /openSession\(s, undefined, \{ automatic: true \}\)/);
+  assert.match(body, /openSession\(s, undefined, \{ automatic: true, live \}\)/);
   assert.doesNotMatch(body, /openSession\(s\)/);
 });
 
@@ -147,4 +147,8 @@ test('index.html loads the guard before app.js, preload exposes the check, main 
     /getSessionLiveElsewhere: \(id\) => ipcRenderer\.invoke\('session-live-elsewhere', id\)/);
   assert.match(read('main.js'),
     /ipcMain\.handle\('session-live-elsewhere', \(_event, sessionId\) => cliSessionState\.liveElsewhere\(sessionId, sessionHasPty, ptyPids\)\)/);
+  assert.match(read('preload.js'),
+    /getSessionsLiveElsewhere: \(ids\) => ipcRenderer\.invoke\('sessions-live-elsewhere', ids\)/);
+  assert.match(read('main.js'),
+    /ipcMain\.handle\('sessions-live-elsewhere', \(_event, sessionIds\) => cliSessionState\.liveElsewhereMany\(sessionIds, sessionHasPty, ptyPids\)\)/);
 });

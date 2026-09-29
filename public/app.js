@@ -151,12 +151,17 @@ window._applyTerminalRightClick = (mode) => { terminalRightClickMode = mode || S
 let restoringWorkingSet = false;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
+const LIVE_ELSEWHERE_NOTICE_MS = 15000;
 
 // Cold-cache retry-until-indexed: see .ai/contexts/session-cache.md.
 let restorePlanner = null;
 let restoreMode = 'off';
 let restoreIndexingDone = false;
 let sessionOpenedOutsideRestore = false;
+
+// see .ai/contexts/cli-session-state.md ("Live elsewhere")
+const skippedWorkingSetEntries = new Map();
+let restoreSavedIndex = new Map();
 
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
@@ -177,6 +182,12 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
+    const skipped = [...skippedWorkingSetEntries.values()]
+      .filter(({ item }) => !openSessions.has(item.sessionId))
+      .sort((a, b) => a.index - b.index);
+    for (const { item, index } of skipped) {
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
+    }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
   }).catch((e) => { console.warn('[switchboard] failed to persist working set', e); });
@@ -193,16 +204,26 @@ function schedulePersistWorkingSet() {
 }
 
 async function runRestore(list) {
-  for (const item of list) {
+  const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
+  const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
+  const skippedNow = [];
+  for (const [position, item] of list.entries()) {
     const s = sessionMap.get(item.sessionId);
     if (!s) continue;
     if (openSessions.has(item.sessionId)) continue;
     // Resume with the project's current "new session" defaults, exactly like a
     // manual session relaunch — not options frozen from a previous launch.
-    const opened = await openSession(s, undefined, { automatic: true });
-    if (opened === false) continue;
+    const live = liveById[item.sessionId] || null;
+    const opened = await openSession(s, undefined, { automatic: true, live });
+    if (opened === false) {
+      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+      skippedWorkingSetEntries.set(item.sessionId, { item, index });
+      skippedNow.push({ session: s, live });
+      continue;
+    }
     await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
   }
+  if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
   const activeItem = list.find(i => i.active) || list[list.length - 1];
   if (activeItem && openSessions.has(activeItem.sessionId)) {
@@ -214,6 +235,7 @@ async function restoreWorkingSet() {
   const g = await window.api.getSetting('global');
   restoreMode = (g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup;
   const savedSet = (g && g.openWorkingSet) || [];
+  restoreSavedIndex = new Map(savedSet.map((item, index) => [item.sessionId, index]));
 
   document.getElementById('restore-cold-toast')?.remove();
 
@@ -298,6 +320,27 @@ function showColdCacheNotice(count) {
     toast.remove();
     restorePlanner?.dismiss();
   });
+}
+
+function showLiveElsewhereNotice(skipped) {
+  document.getElementById('restore-live-elsewhere-toast')?.remove();
+  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
+  const text = skipped.length === 1
+    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
+    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
+  const toast = document.createElement('div');
+  toast.id = 'restore-live-elsewhere-toast';
+  toast.className = 'restore-toast';
+  const msg = document.createElement('span');
+  msg.className = 'restore-toast-msg';
+  msg.textContent = text;
+  const dismiss = document.createElement('button');
+  dismiss.className = 'restore-toast-btn restore-toast-dismiss';
+  dismiss.textContent = 'Dismiss';
+  dismiss.addEventListener('click', () => toast.remove());
+  toast.append(msg, dismiss);
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), LIVE_ELSEWHERE_NOTICE_MS);
 }
 
 async function maybeRetryRestoreWorkingSet() {
@@ -1120,7 +1163,7 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
-async function openSession(session, customOptions, { automatic = false } = {}) {
+async function openSession(session, customOptions, { automatic = false, live } = {}) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   const { sessionId, projectPath } = session;
 
@@ -1136,7 +1179,7 @@ async function openSession(session, customOptions, { automatic = false } = {}) {
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere")
-  if (!(await guardResume(session, { automatic, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
+  if (!(await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
@@ -1151,6 +1194,7 @@ async function openSession(session, customOptions, { automatic = false } = {}) {
     showSession(sessionId);
     return;
   }
+  skippedWorkingSetEntries.delete(sessionId);
   syncPtySizeAfterOpen(entry);
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
   setSessionSandboxed(sessionId, result.sandbox);

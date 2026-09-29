@@ -185,3 +185,42 @@ test('on Linux, a real child of this process is recognised as its own through /p
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- liveElsewhereMany: one scan for a restore batch ------------------------
+
+test('liveElsewhereMany answers every asked id from one directory read', () => withDir((dir) => {
+  writeState(dir, 4242, { sessionId: 'sess-1' });
+  writeState(dir, 4343, { sessionId: 'sess-2' });
+  writeState(dir, 4444, { sessionId: 'sess-other' });
+  boot(dir);
+  const realReaddir = fs.readdirSync;
+  let reads = 0;
+  fs.readdirSync = (...args) => { reads++; return realReaddir(...args); };
+  try {
+    const found = cliSessionState.liveElsewhereMany(['sess-1', 'sess-2', 'sess-3'], noPty);
+    assert.deepEqual(Object.keys(found).sort(), ['sess-1', 'sess-2']);
+    assert.equal(found['sess-1'].pid, 4242);
+    assert.equal(found['sess-2'].pid, 4343);
+  } finally {
+    fs.readdirSync = realReaddir;
+  }
+  assert.equal(reads, 1);
+}));
+
+test('liveElsewhereMany skips ids this instance holds a PTY for, and its own PTY pids', () => withDir((dir) => {
+  writeState(dir, 4242, { sessionId: 'sess-1' });
+  writeState(dir, 5001, { sessionId: 'sess-2' });
+  boot(dir);
+  const hasPty = (id) => id === 'sess-1';
+  assert.deepEqual(cliSessionState.liveElsewhereMany(['sess-1', 'sess-2'], hasPty, () => [5001]), {});
+}));
+
+test('liveElsewhereMany rejects a non-array, ignores non-string ids, and is capped', () => withDir((dir) => {
+  writeState(dir, 4242, { sessionId: 'sess-1' });
+  boot(dir);
+  assert.deepEqual(cliSessionState.liveElsewhereMany('sess-1', noPty), {});
+  assert.deepEqual(Object.keys(cliSessionState.liveElsewhereMany([42, null, {}, 'sess-1'], noPty)), ['sess-1']);
+  const many = Array.from({ length: cliSessionState.MAX_LIVE_QUERY_IDS }, (_, i) => `filler-${i}`);
+  assert.deepEqual(cliSessionState.liveElsewhereMany([...many, 'sess-1'], noPty), {},
+    'ids past the cap are not looked up');
+}));

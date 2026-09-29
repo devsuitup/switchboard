@@ -74,7 +74,7 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktree
 
 - **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. See `test/session-restore-cold-cache.test.js`.
 
-- **Neither the working-set restore nor the reload path resumes a session that is live in another process.** `runRestore` and the post-`loadProjects` re-open of `sessionStorage.activeSessionId` call `openSession(..., { automatic: true })`, which skips the session without a prompt when `guardResume` reports it live elsewhere; the skipped entry is not activated. See `.ai/contexts/cli-session-state.md` ("Live elsewhere").
+- **Neither the working-set restore nor the reload path resumes a session that is live in another process.** `runRestore` and the post-`loadProjects` re-open of `sessionStorage.activeSessionId` call `openSession(..., { automatic: true })`, which skips the session without a prompt when `guardResume` reports it live elsewhere; the skipped entry is not activated, stays in the persisted working set at its saved position, and is reported by a one-line notice. See `.ai/contexts/cli-session-state.md` ("Live elsewhere").
 
 ## Remote SSH hosts (issue #201)
 

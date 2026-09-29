@@ -314,6 +314,7 @@ const rendererCrossFileGlobals = {
   createRestorePlanner: 'readonly',
   // Resume guard for sessions live in another process (public/resume-guard.js)
   guardResume: 'readonly',
+  liveElsewhereMany: 'readonly',
 };
 
 module.exports = [

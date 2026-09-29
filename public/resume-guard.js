@@ -7,13 +7,24 @@ function liveElsewhereMessage(live) {
     + 'Resume it anyway?';
 }
 
-async function guardResume(session, { automatic = false, api, confirm } = {}) {
-  if (!session || session.type === 'terminal') return true;
-  let live = null;
+async function liveElsewhereMany(sessionIds, { api } = {}) {
+  if (!sessionIds.length) return {};
   try {
-    live = await api.getSessionLiveElsewhere(session.sessionId);
+    const found = await api.getSessionsLiveElsewhere(sessionIds);
+    return found && typeof found === 'object' ? found : {};
   } catch {
-    live = null;
+    return {};
+  }
+}
+
+async function guardResume(session, { automatic = false, api, confirm, live } = {}) {
+  if (!session || session.type === 'terminal') return true;
+  if (live === undefined) {
+    try {
+      live = await api.getSessionLiveElsewhere(session.sessionId);
+    } catch {
+      live = null;
+    }
   }
   if (!live) return true;
   if (automatic) return false;
@@ -21,5 +32,5 @@ async function guardResume(session, { automatic = false, api, confirm } = {}) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { guardResume, liveElsewhereMessage };
+  module.exports = { guardResume, liveElsewhereMany, liveElsewhereMessage };
 }
