@@ -284,3 +284,116 @@ test('setupTerminalContextMenu: menu mode shows the context menu with the hovere
     assert.ok(labels.includes('Copy path'));
   } finally { await h.destroy(); }
 });
+
+// ── Right button vs. application mouse tracking (real xterm) ─────────
+// see .ai/contexts/terminal-right-click.md
+
+// A real xterm opened in the container setupTerminalContextMenu guards, with
+// mouse tracking on as a TUI turns it on. jsdom has no layout, so every element
+// reports one fixed box — enough for xterm to measure a cell and report a press.
+async function openTrackingTerminal(h) {
+  const { Terminal } = require('@xterm/xterm');
+  const box = { left: 0, top: 0, right: 720, bottom: 408, width: 720, height: 408, x: 0, y: 0 };
+  h.window.HTMLElement.prototype.getBoundingClientRect = () => box;
+  Object.defineProperty(h.window.HTMLElement.prototype, 'offsetWidth', { get: () => box.width });
+  Object.defineProperty(h.window.HTMLElement.prototype, 'offsetHeight', { get: () => box.height });
+  h.window.HTMLCanvasElement.prototype.getContext = () => null;
+  h.window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
+
+  const container = h.window.document.createElement('div');
+  h.window.document.body.appendChild(container);
+  const terminal = new Terminal({ cols: 80, rows: 24 });
+  terminal.open(container);
+  menu.setupTerminalContextMenu(container, terminal, () => 's1', () => null);
+  const sent = [];
+  terminal.onData((d) => sent.push(d));
+  await new Promise((r) => terminal.write('\x1b[?1000h\x1b[?1006h', r));
+  const press = (button) => container.querySelector('.xterm-screen').dispatchEvent(
+    new h.window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button, clientX: 50, clientY: 50 }),
+  );
+  return { terminal, sent, press };
+}
+
+// The button of each SGR mouse report (ESC [ < button ; col ; row M) xterm sent.
+const reportedButtons = (sent) => sent.map((d) => /^\x1b\[<(\d+);\d+;\d+M$/.exec(d)).filter(Boolean).map((m) => Number(m[1]));
+
+for (const mode of ['menu', 'paste', 'none']) {
+  test(`${mode} mode: a right-button press is not reported to the application`, async () => {
+    const h = setupMenuDom();
+    const t = await openTrackingTerminal(h);
+    try {
+      menu._setTerminalRightClickMode(mode);
+      t.press(2);
+      assert.deepStrictEqual(reportedButtons(t.sent), []);
+    } finally { t.terminal.dispose(); await h.destroy(); }
+  });
+}
+
+// xterm's own mousedown listener, which the guard stops, is also what keeps the
+// press from blurring the terminal: the guard has to do that part itself.
+for (const mode of ['menu', 'paste', 'none']) {
+  test(`${mode} mode: a swallowed right press leaves the terminal focused`, async () => {
+    const h = setupMenuDom();
+    const t = await openTrackingTerminal(h);
+    try {
+      menu._setTerminalRightClickMode(mode);
+      t.terminal.textarea.blur();
+      const notPrevented = t.press(2);
+      assert.equal(notPrevented, false, 'the browser default (blur) is suppressed');
+      assert.equal(h.window.document.activeElement, t.terminal.textarea);
+    } finally { t.terminal.dispose(); await h.destroy(); }
+  });
+}
+
+// The find bar sits in the same container, outside xterm's element.
+for (const mode of ['menu', 'paste', 'none']) {
+  test(`${mode} mode: a right press in an input beside the terminal leaves that input focused`, async () => {
+    const h = setupMenuDom();
+    const t = await openTrackingTerminal(h);
+    try {
+      menu._setTerminalRightClickMode(mode);
+      const input = h.window.document.createElement('input');
+      t.terminal.element.parentElement.appendChild(input);
+      input.focus();
+      const notPrevented = input.dispatchEvent(
+        new h.window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }),
+      );
+      assert.equal(notPrevented, true);
+      assert.equal(h.window.document.activeElement, input);
+    } finally { t.terminal.dispose(); await h.destroy(); }
+  });
+}
+
+test('menu mode: the release of a swallowed right press is not reported either', async () => {
+  const h = setupMenuDom();
+  const t = await openTrackingTerminal(h);
+  try {
+    menu._setTerminalRightClickMode('menu');
+    t.press(2);
+    h.window.document.dispatchEvent(
+      new h.window.MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 50 }),
+    );
+    assert.deepStrictEqual(t.sent.filter((d) => d.startsWith('\x1b[<')), []);
+  } finally { t.terminal.dispose(); await h.destroy(); }
+});
+
+test('default mode: a right-button press is reported to the application', async () => {
+  const h = setupMenuDom();
+  const t = await openTrackingTerminal(h);
+  try {
+    menu._setTerminalRightClickMode('default');
+    t.press(2);
+    assert.deepStrictEqual(reportedButtons(t.sent), [2]);
+  } finally { t.terminal.dispose(); await h.destroy(); }
+});
+
+test('menu mode: left and middle presses are still reported to the application', async () => {
+  const h = setupMenuDom();
+  const t = await openTrackingTerminal(h);
+  try {
+    menu._setTerminalRightClickMode('menu');
+    t.press(0);
+    t.press(1);
+    assert.deepStrictEqual(reportedButtons(t.sent), [0, 1]);
+  } finally { t.terminal.dispose(); await h.destroy(); }
+});

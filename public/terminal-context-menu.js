@@ -1,13 +1,5 @@
 // --- Terminal right-click context menu ---
-//
-// xterm's built-in `contextmenu` handler (rightClickHandler in @xterm/xterm)
-// moves the hidden helper textarea under the cursor and fills it with the
-// current selection — on Linux this surfaces as a stray "paste" into the
-// prompt. xterm's link service also fires link `activate` on ANY mouseup
-// (no button guard), so a right-click over a file link re-opens it. We
-// intercept `contextmenu` in capture phase (see setupTerminalContextMenu in
-// terminal-manager.js) so neither default runs, then apply the user's chosen
-// behavior.
+// see .ai/contexts/terminal-right-click.md
 //
 // Behavior is gated by the global `terminalRightClickMode`, persisted as the
 // `terminalRightClick` global setting and pushed live via
@@ -183,6 +175,14 @@ function showTerminalContextMenu(event, ctx) {
 // cursor is currently over (tracked via the link hover/leave callbacks), or
 // null.
 function setupTerminalContextMenu(container, terminal, getSessionId, getHoveredLinkUri) {
+  container.addEventListener('mousedown', (e) => {
+    if (e.button !== 2 || terminalRightClickMode === 'default') return;
+    // see .ai/contexts/terminal-right-click.md
+    if (!terminal.element || !terminal.element.contains(e.target)) return;
+    e.stopPropagation();
+    e.preventDefault();
+    terminal.focus();
+  }, { capture: true });
   container.addEventListener('contextmenu', (e) => {
     if (terminalRightClickMode === 'default') return; // let xterm handle it natively
     // Capture-phase preventDefault + stopPropagation: xterm's contextmenu

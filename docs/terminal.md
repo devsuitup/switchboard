@@ -50,6 +50,8 @@ Right-click behavior in the terminal is configurable. Open **Global Settings** a
 | **Native (xterm)** | Passes the click through to xterm's built-in handler |
 | **Do nothing** | Right-click has no effect |
 
+Only **Native (xterm)** lets a program that tracks the mouse — Claude Code's fullscreen view, for one — see the right button. In the other three modes the right button does what the setting says and nothing else; left and middle clicks still reach the program.
+
 The setting takes effect immediately on the next right-click — no restart required.
 
 ### Context menu actions
