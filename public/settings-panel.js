@@ -381,7 +381,7 @@
             <div class="settings-description">
               Two separate buckets, so that the time you spent on a session is never added to the time it ran on its own.<br>
               <strong>Your attention</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.attention) || '')}</code>: the session on screen while the window has focus, with its project and its name as the sidebar shows it. It appears in ActivityWatch's Editor view.<br>
-              <strong>What ran</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.running) || '')}</code>: every Claude session from start to exit, whether or not you were looking at it, with its project and — if you ever opened it — its name. Sessions overlap there, as they did. Shells are not counted: a shell sitting open is not work running.<br>
+              <strong>What ran</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.running) || '')}</code>: every Claude session from start to exit, whether or not you were looking at it, with its project and — if you ever opened it — its name. Sessions overlap there, as they did. Each one is updated every minute while it runs, so a crash loses at most the last minute of it. Shells are not counted: a shell sitting open is not work running.<br>
               No transcript content, prompt or command is ever sent.
             </div>
           </div>

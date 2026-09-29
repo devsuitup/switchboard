@@ -5,6 +5,7 @@
 
 const KEEPALIVE_MS = 30000;
 const PULSETIME_SECONDS = 60;
+const CHECKPOINT_MS = 60000;
 
 /**
  * @param {object} deps
@@ -32,8 +33,11 @@ function createActivityWatchReporter(deps) {
   let enabled = false;
   let focused = null;          // { sessionId, name, project } or null
   let keepalive = null;
+  let checkpointTimer = null;
   const live = new Map();      // sessionId -> { project, startedAt }
   const names = new Map();     // sessionId -> the last name the renderer showed
+  const inflight = new Set();  // running-event writes not yet settled
+  const chains = new Map();    // sessionId -> the tail of that session's writes
 
   function attentionData(f) {
     return { project: f.project || '', file: f.name || f.sessionId };
@@ -76,14 +80,50 @@ function createActivityWatchReporter(deps) {
 
   function sessionStarted({ sessionId, project }, startedAt) {
     if (!sessionId || live.has(sessionId)) return;
-    live.set(sessionId, { project: project || '', startedAt: startedAt || now() });
+    // writtenAs: the session id the span's event carries on the server, which
+    // a re-key makes differ from the current one until the next write.
+    const span = { project: project || '', startedAt: startedAt || now(), writtenAs: sessionId };
+    live.set(sessionId, span);
+    if (enabled) writeSpan(sessionId, span, span.startedAt);
   }
 
-  function runningEvent(sessionId, span, endedAt) {
+  // One session's writes are chained, so a checkpoint still in flight and the
+  // final write can never both insert — see .ai/contexts/activitywatch.md
+  // ("Checkpoints").
+  function writeSpan(sessionId, span, endedAt) {
     const data = { session: sessionId, project: span.project };
     const name = names.get(sessionId);
     if (name) data.name = name;
-    return client.insertEvent(running.id, running.bucket, data, span.startedAt, (endedAt - span.startedAt) / 1000);
+    const match = { key: 'session', value: span.writtenAs };
+    const duration = (endedAt - span.startedAt) / 1000;
+
+    const write = (chains.get(sessionId) || Promise.resolve())
+      .then(() => client.upsertSpan(running.id, running.bucket, data, span.startedAt, duration, match))
+      .then((ok) => { if (ok) span.writtenAs = sessionId; return ok; })
+      .catch(() => false);
+    chains.set(sessionId, write);
+    inflight.add(write);
+    write.finally(() => {
+      inflight.delete(write);
+      if (chains.get(sessionId) === write) chains.delete(sessionId);
+    });
+    return write;
+  }
+
+  function checkpointAll() {
+    if (!enabled) return;
+    const at = now();
+    for (const [id, span] of live) writeSpan(id, span, at);
+  }
+
+  function startCheckpoints() {
+    if (checkpointTimer || !enabled) return;
+    checkpointTimer = setIntervalFn(checkpointAll, CHECKPOINT_MS);
+  }
+
+  function stopCheckpoints() {
+    if (checkpointTimer) clearIntervalFn(checkpointTimer);
+    checkpointTimer = null;
   }
 
   // see .ai/contexts/activitywatch.md ("Two buckets, two mechanisms")
@@ -91,7 +131,7 @@ function createActivityWatchReporter(deps) {
     const span = live.get(sessionId);
     if (!span) return false;
     live.delete(sessionId);
-    const written = enabled ? runningEvent(sessionId, span, now()) : Promise.resolve(false);
+    const written = enabled ? writeSpan(sessionId, span, now()) : Promise.resolve(false);
     names.delete(sessionId);
     return written;
   }
@@ -100,8 +140,15 @@ function createActivityWatchReporter(deps) {
   async function flush() {
     const at = now();
     if (focused) await beat(focused);
-    if (!enabled) return;
-    await Promise.all(Array.from(live, ([id, span]) => runningEvent(id, span, at)));
+    if (enabled) {
+      // see .ai/contexts/activitywatch.md ("Quitting")
+      for (const [id, span] of Array.from(live)) {
+        live.delete(id);
+        writeSpan(id, span, at);
+        names.delete(id);
+      }
+    }
+    await Promise.all(Array.from(inflight));
   }
 
   // see .ai/contexts/activitywatch.md ("Running")
@@ -109,6 +156,8 @@ function createActivityWatchReporter(deps) {
     if (!fromId || !toId || fromId === toId) return;
     const span = live.get(fromId);
     if (span && !live.has(toId)) { live.set(toId, span); live.delete(fromId); }
+    const chain = chains.get(fromId);
+    if (chain && !chains.has(toId)) { chains.set(toId, chain); chains.delete(fromId); }
     const name = names.get(fromId);
     if (name !== undefined) { if (!names.has(toId)) names.set(toId, name); names.delete(fromId); }
     if (focused && focused.sessionId === fromId) focused = { ...focused, sessionId: toId };
@@ -116,18 +165,22 @@ function createActivityWatchReporter(deps) {
 
   function setEnabled(on) {
     enabled = !!on;
-    if (!enabled) { stopKeepalive(); return; }
+    if (!enabled) { stopKeepalive(); stopCheckpoints(); return; }
     if (focused) { beat(focused); startKeepalive(); }
+    // Sessions already running are written now rather than a minute from now.
+    checkpointAll();
+    startCheckpoints();
   }
 
-  function stop() { stopKeepalive(); }
+  function stop() { stopKeepalive(); stopCheckpoints(); }
 
   return {
     focus, sessionStarted, sessionEnded, rekey, flush, setEnabled, stop,
     get enabled() { return enabled; },
     get liveCount() { return live.size; },
+    get hasPendingWork() { return enabled && (live.size > 0 || inflight.size > 0); },
     buckets: { attention: attention.id, running: running.id },
   };
 }
 
-module.exports = { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS };
+module.exports = { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS };

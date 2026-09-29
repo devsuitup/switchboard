@@ -147,35 +147,6 @@ test('a bucket id with a slash cannot escape its own endpoint', async () => {
   assert.ok(h.calls.every(c => !c.url.includes('/../')), h.calls.map(c => c.url).join('\n'));
 });
 
-// --- Explicit events, for the concurrent bucket ---
-
-test('an event carries the span the caller measured, as a one-element array', async () => {
-  const h = harness();
-  const started = Date.UTC(2026, 0, 1, 6, 0, 0);
-  assert.equal(await h.client.insertEvent('run', BUCKET, { session: 's1' }, started, 90), true);
-
-  const [, post] = h.calls;
-  assert.match(post.url, /\/api\/0\/buckets\/run\/events$/);
-  assert.ok(Array.isArray(post.body), 'the events endpoint takes a list');
-  assert.equal(post.body.length, 1);
-  assert.equal(post.body[0].timestamp, '2026-01-01T06:00:00.000Z');
-  assert.equal(post.body[0].duration, 90);
-  assert.deepEqual(post.body[0].data, { session: 's1' });
-});
-
-test('a negative duration is floored rather than sent', async () => {
-  const h = harness();
-  await h.client.insertEvent('run', BUCKET, { session: 's1' }, Date.now(), -5);
-  assert.equal(h.calls[1].body[0].duration, 0);
-});
-
-test('an event is not attempted while the client is backed off', async () => {
-  const h = harness({ server: 'down' });
-  await h.client.insertEvent('run', BUCKET, { session: 's1' }, Date.now(), 10);
-  const after = h.calls.length;
-  await h.client.insertEvent('run', BUCKET, { session: 's2' }, Date.now(), 10);
-  assert.equal(h.calls.length, after, 'the second event costs no socket');
-});
 
 // --- Probe ---
 
@@ -195,4 +166,90 @@ test('a failed probe reports false and does not throw', async () => {
   const h = harness({ server: 'down' });
   assert.equal(await h.client.probe(), false);
   assert.equal(h.client.reachable, false);
+});
+
+// --- upsertSpan: find by start time and match value, update or insert ---
+
+// A fetch that answers GETs from `stored` and records POSTs.
+function spanHarness({ stored = [], getStatus = 200 } = {}) {
+  const posts = [];
+  const gets = [];
+  const client = createActivityWatchClient({
+    hostname: 'h',
+    fetchFn: async (url, opts) => {
+      if (!opts || !opts.method) {
+        gets.push(url);
+        return { ok: getStatus === 200, status: getStatus, json: async () => stored };
+      }
+      posts.push({ url, body: JSON.parse(opts.body) });
+      return { ok: true, status: 200 };
+    },
+  });
+  return { client, posts, gets, eventPosts: () => posts.filter(p => p.url.endsWith('/events')) };
+}
+
+const START = Date.UTC(2026, 0, 1, 6, 0, 0, 123);
+
+test('a span not yet on the server is inserted without an id', async () => {
+  const h = spanHarness({ stored: [] });
+  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' }), true);
+  const [post] = h.eventPosts();
+  assert.equal('id' in post.body[0], false);
+  assert.equal(post.body[0].duration, 60);
+});
+
+test('a span already on the server is updated under its own id', async () => {
+  const h = spanHarness({ stored: [{ id: 8, timestamp: '2026-01-01T06:00:00.123000+00:00', data: { session: 'A' } }] });
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 120, { key: 'session', value: 'A' });
+  assert.equal(h.eventPosts()[0].body[0].id, 8);
+  assert.equal(h.eventPosts()[0].body[0].duration, 120);
+});
+
+// aw-server's range query does not return a zero-duration event whose
+// timestamp equals `start`, and the write at a session's start is exactly
+// that. A window opening at the span start found nothing, so every
+// checkpoint inserted a duplicate.
+test('the lookup window opens before the span start, so a zero-duration event is found', async () => {
+  const h = spanHarness();
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 1, { key: 'session', value: 'A' });
+  const url = new URL(h.gets[0]);
+  assert.equal(url.searchParams.get('start'), '2026-01-01T06:00:00.122Z');
+  assert.equal(url.searchParams.get('end'), '2026-01-01T06:00:00.124Z');
+});
+
+// Two concurrent creates of one bucket can get a 500 from aw-server for the
+// second, which dropped that write. One create is ever in flight per bucket.
+test('writes racing on a fresh bucket share one create request', async () => {
+  const h = spanHarness();
+  await Promise.all([
+    h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 0, { key: 'session', value: 'A' }),
+    h.client.upsertSpan('r', BUCKET, { session: 'B' }, START, 0, { key: 'session', value: 'B' }),
+    h.client.heartbeat('r', BUCKET, { project: 'x' }, 60),
+  ]);
+  assert.equal(h.posts.filter(p => p.url.endsWith('/api/0/buckets/r')).length, 1);
+  assert.equal(h.eventPosts().length, 2, 'and both writes still went out');
+});
+
+test('another session starting in the same millisecond is not mistaken for this one', async () => {
+  const h = spanHarness({ stored: [{ id: 9, data: { session: 'B' } }] });
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' });
+  assert.equal('id' in h.eventPosts()[0].body[0], false, 'B was not overwritten with A');
+});
+
+test('the match value, not the new data, finds the event — so a renamed span keeps its event', async () => {
+  const h = spanHarness({ stored: [{ id: 8, data: { session: 'tmp' } }] });
+  await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', value: 'tmp' });
+  const body = h.eventPosts()[0].body[0];
+  assert.equal(body.id, 8);
+  assert.equal(body.data.session, 'real', 'the update rewrites the id the event carries');
+});
+
+// aw-server answers 200 to an update whose id does not exist and stores
+// nothing, so an id is never cached: every write looks the event up.
+test('a bucket deleted under the client is re-created on the next write', async () => {
+  const h = spanHarness({ getStatus: 404 });
+  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' }), false);
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' });
+  const creates = h.posts.filter(p => p.url.endsWith('/api/0/buckets/r'));
+  assert.equal(creates.length, 2, 'the bucket is asserted again after the 404');
 });

@@ -25,6 +25,7 @@ function createActivityWatchClient(deps) {
   const log = deps.log || null;
 
   const readyBuckets = new Set();
+  const creating = new Map(); // bucketId -> the create request in flight
   let cooldownMs = 0;
   let nextAttemptAt = 0;
   let reachable = null; // null until the first call resolves it either way
@@ -69,13 +70,36 @@ function createActivityWatchClient(deps) {
     return response.ok || response.status === 304;
   }
 
-  async function ensureBucket(bucketId, { client, type }) {
-    if (readyBuckets.has(bucketId)) return true;
-    const ok = await request(`/api/0/buckets/${encodeURIComponent(bucketId)}`, {
+  // Resolves to {status, body} for any answer, or null when the server is absent.
+  async function getJson(path) {
+    let response;
+    try {
+      response = await fetchFn(`${baseUrl}${path}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    } catch {
+      noteFailure();
+      return null;
+    }
+    noteSuccess();
+    if (!response) return null;
+    let body = null;
+    if (response.ok && typeof response.json === 'function') {
+      try { body = await response.json(); } catch { body = null; }
+    }
+    return { status: response.status, body };
+  }
+
+  // see .ai/contexts/activitywatch.md ("Creating a bucket is idempotent")
+  function ensureBucket(bucketId, { client, type }) {
+    if (readyBuckets.has(bucketId)) return Promise.resolve(true);
+    if (creating.has(bucketId)) return creating.get(bucketId);
+    const pending = request(`/api/0/buckets/${encodeURIComponent(bucketId)}`, {
       client, type, hostname: deps.hostname || 'unknown',
-    });
-    if (ok) readyBuckets.add(bucketId);
-    return ok;
+    }).then((ok) => {
+      if (ok) readyBuckets.add(bucketId);
+      return ok;
+    }).finally(() => creating.delete(bucketId));
+    creating.set(bucketId, pending);
+    return pending;
   }
 
   /**
@@ -96,24 +120,6 @@ function createActivityWatchClient(deps) {
   }
 
   /**
-   * One event with a span the caller measured — see
-   * .ai/contexts/activitywatch.md ("Two buckets, two mechanisms").
-   *
-   * @param {number} startedAtMs
-   * @param {number} durationSeconds
-   * @returns {Promise<boolean>}
-   */
-  async function insertEvent(bucketId, bucket, data, startedAtMs, durationSeconds) {
-    if (sleeping()) return false;
-    if (!(await ensureBucket(bucketId, bucket))) return false;
-    return request(`/api/0/buckets/${encodeURIComponent(bucketId)}/events`, [{
-      timestamp: new Date(startedAtMs).toISOString(),
-      duration: Math.max(0, durationSeconds),
-      data,
-    }]);
-  }
-
-  /**
    * Whether the server answers now, cooldown or not — for the Settings panel.
    *
    * @returns {Promise<boolean>}
@@ -129,9 +135,43 @@ function createActivityWatchClient(deps) {
     }
   }
 
+  /**
+   * Write a span that is still growing, as one event — see
+   * .ai/contexts/activitywatch.md ("Checkpoints").
+   *
+   * @param {{key: string, value: string}} match  the `data` field, and the value
+   *   it was last written with, that identifies the span among events sharing
+   *   its start time
+   * @returns {Promise<boolean>}
+   */
+  async function upsertSpan(bucketId, bucket, data, startedAtMs, durationSeconds, match) {
+    if (sleeping()) return false;
+    if (!(await ensureBucket(bucketId, bucket))) return false;
+
+    const start = new Date(startedAtMs).toISOString();
+    // see .ai/contexts/activitywatch.md ("Checkpoints")
+    const from = new Date(startedAtMs - 1).toISOString();
+    const end = new Date(startedAtMs + 1).toISOString();
+    const eventsPath = `/api/0/buckets/${encodeURIComponent(bucketId)}/events`;
+    const found = await getJson(`${eventsPath}?start=${encodeURIComponent(from)}&end=${encodeURIComponent(end)}&limit=50`);
+    if (!found) return false;
+    if (found.status === 404) {
+      // The bucket went away under us; the next call asserts it again.
+      readyBuckets.delete(bucketId);
+      return false;
+    }
+    const existing = Array.isArray(found.body)
+      ? found.body.find(e => e && e.data && e.data[match.key] === match.value)
+      : null;
+
+    const event = { timestamp: start, duration: Math.max(0, durationSeconds), data };
+    if (existing && existing.id !== undefined) event.id = existing.id;
+    return request(eventsPath, [event]);
+  }
+
   return {
     heartbeat,
-    insertEvent,
+    upsertSpan,
     probe,
     get reachable() { return reachable; },
     get sleeping() { return sleeping(); },

@@ -8,17 +8,27 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS } = require('../activitywatch-reporter');
+const { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS } = require('../activitywatch-reporter');
 
+// `events` is what the server holds, not what was sent: upsertSpan is modelled
+// the way aw-server behaves — an event found by start time and match value is
+// replaced, otherwise one is added.
 function harness() {
   const beats = [];
   const events = [];
+  const writes = [];
   const timers = [];
   let clock = Date.UTC(2026, 0, 1, 6, 0, 0);
 
   const client = {
     heartbeat: async (id, bucket, data, pulsetime) => { beats.push({ id, bucket, data, pulsetime, at: clock }); return true; },
-    insertEvent: async (id, bucket, data, startedAt, duration) => { events.push({ id, bucket, data, startedAt, duration }); return true; },
+    upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
+      writes.push({ id, data, startedAt, duration, match });
+      const existing = events.find(e => e.id === id && e.startedAt === startedAt && e.data[match.key] === match.value);
+      if (existing) { existing.data = data; existing.duration = duration; existing.bucket = bucket; }
+      else events.push({ id, bucket, data, startedAt, duration });
+      return true;
+    },
   };
   const reporter = createActivityWatchReporter({
     client,
@@ -29,11 +39,12 @@ function harness() {
   });
 
   return {
-    reporter, beats, events,
+    reporter, beats, events, writes,
     advance: (ms) => { clock += ms; },
     at: () => clock,
-    liveTimers: () => timers.filter(t => !t.cleared),
-    tick: async () => { for (const t of timers.filter(x => !x.cleared)) await t.fn(); },
+    liveTimers: (ms) => timers.filter(t => !t.cleared && (ms === undefined || t.ms === ms)),
+    tick: async (ms) => { for (const t of timers.filter(x => !x.cleared && (ms === undefined || x.ms === ms))) await t.fn(); },
+    settle: () => new Promise(r => setImmediate(r)),
   };
 }
 
@@ -107,11 +118,10 @@ test('the keepalive re-beats the focused session, and only that one', async () =
   h.reporter.setEnabled(true);
   await h.reporter.focus(A);
   await h.reporter.focus(B);
-  assert.equal(h.liveTimers().length, 1, 'one timer, however many switches');
-  assert.equal(h.liveTimers()[0].ms, KEEPALIVE_MS);
+  assert.equal(h.liveTimers(KEEPALIVE_MS).length, 1, 'one keepalive, however many switches');
 
   const before = h.beats.length;
-  await h.tick();
+  await h.tick(KEEPALIVE_MS);
   assert.equal(h.beats.length, before + 1);
   assert.equal(h.beats.at(-1).data.file, 'builder');
 });
@@ -125,7 +135,7 @@ test('losing focus closes the session and stops the keepalive', async () => {
 
   assert.equal(h.beats.length, 2, 'the open and the close');
   assert.equal(h.beats[1].at - h.beats[0].at, 5000);
-  assert.equal(h.liveTimers().length, 0);
+  assert.equal(h.liveTimers(KEEPALIVE_MS).length, 0);
 });
 
 test('a session with no name is still reported, under its id', async () => {
@@ -145,7 +155,7 @@ test('a session that ran is written once, as its whole span', async () => {
   h.advance(90000);
   await h.reporter.sessionEnded(A.sessionId);
 
-  assert.equal(h.events.length, 1);
+  assert.equal(h.events.length, 1, 'one event on the server, however many writes');
   assert.equal(h.events[0].startedAt, started);
   assert.equal(h.events[0].duration, 90);
   assert.equal(h.beats.length, 0, 'running sessions never go through the heartbeat path');
@@ -230,12 +240,12 @@ test('disabling stops the keepalive, and re-enabling resumes on the current focu
   h.reporter.setEnabled(true);
   await h.reporter.focus(A);
   h.reporter.setEnabled(false);
-  assert.equal(h.liveTimers().length, 0);
+  assert.equal(h.liveTimers().length, 0, 'off leaves no timer of any kind');
 
   const before = h.beats.length;
   h.reporter.setEnabled(true);
   assert.equal(h.beats.length, before + 1);
-  assert.equal(h.liveTimers().length, 1);
+  assert.equal(h.liveTimers(KEEPALIVE_MS).length, 1);
 });
 
 // --- Re-keying ---
@@ -265,4 +275,227 @@ test('re-keying the focused session does not break the next switch', async () =>
   const before = h.beats.length;
   await h.reporter.focus({ sessionId: 'real', name: 'forked', project: '/w/p' });
   assert.equal(h.beats.length, before, 'no spurious close-and-reopen');
+});
+
+// --- Quitting: closing the window kills the PTYs before before-quit, and
+// each exit reaches the reporter asynchronously ---
+
+// A client whose writes stay pending until the gate opens, to stage the
+// orderings. Once open, it stays open: a session's writes are chained, so the
+// later ones are only issued after the earlier ones resolve.
+function slowHarness() {
+  const events = [];
+  const pending = [];
+  let open = false;
+  let clock = Date.UTC(2026, 0, 1, 6, 0, 0);
+  const client = {
+    heartbeat: async () => true,
+    upsertSpan: (id, bucket, data, startedAt, duration, match) => new Promise((resolve) => {
+      const apply = () => {
+        const existing = events.find(e => e.startedAt === startedAt && e.data[match.key] === match.value);
+        if (existing) { existing.data = data; existing.duration = duration; }
+        else events.push({ data, startedAt, duration });
+        resolve(true);
+      };
+      if (open) apply(); else pending.push(apply);
+    }),
+  };
+  const reporter = createActivityWatchReporter({
+    client, hostname: 'host', now: () => clock,
+    setIntervalFn: () => ({}), clearIntervalFn: () => {},
+  });
+  return {
+    reporter,
+    events,
+    // The first write is issued on a microtask, so the gate opens a turn later.
+    releaseAll: async () => {
+      await new Promise(r => setImmediate(r));
+      open = true;
+      while (pending.length) pending.shift()();
+    },
+    advance: (ms) => { clock += ms; },
+  };
+}
+
+test('an exit that landed before the quit still holds it until its write is acknowledged', { timeout: 5000 }, async () => {
+  const h = slowHarness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  h.advance(10000);
+  h.reporter.sessionEnded(A.sessionId);   // not awaited, as the PTY exit handler does not
+
+  assert.equal(h.reporter.liveCount, 0, 'the span has left the live set');
+  assert.equal(h.reporter.hasPendingWork, true, 'but the quit must still wait for its write');
+
+  const flushed = h.reporter.flush();
+  await h.releaseAll();
+  await flushed;
+  assert.equal(h.events.length, 1);
+  assert.equal(h.reporter.hasPendingWork, false);
+});
+
+test('an exit that lands during the flush does not write the session a second time', { timeout: 5000 }, async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  h.reporter.sessionStarted(B);
+  h.advance(10000);
+
+  const flushed = h.reporter.flush();
+  await h.reporter.sessionEnded(A.sessionId);   // the late PTY exit
+  await h.reporter.sessionEnded(B.sessionId);
+  await flushed;
+
+  assert.deepEqual(h.events.map(e => e.data.session).sort(), ['sA', 'sB'], 'each session once');
+});
+
+test('with reporting off there is never pending work, so the quit is never held', () => {
+  const h = harness();
+  h.reporter.sessionStarted(A);
+  assert.equal(h.reporter.hasPendingWork, false);
+});
+
+test('a write that fails still settles, so it cannot hold the quit forever', { timeout: 5000 }, async () => {
+  const reporter = createActivityWatchReporter({
+    client: { heartbeat: async () => true, upsertSpan: async () => { throw new Error('boom'); } },
+    hostname: 'host', setIntervalFn: () => ({}), clearIntervalFn: () => {},
+  });
+  reporter.setEnabled(true);
+  reporter.sessionStarted(A);
+  await reporter.sessionEnded(A.sessionId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(reporter.hasPendingWork, false);
+});
+
+// --- Checkpoints: a running session is on the server while it runs, so a
+// crash loses at most the last minute rather than the whole session ---
+
+test('a session is on the server from the moment it starts', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  await h.settle();
+  assert.equal(h.events.length, 1);
+  assert.equal(h.events[0].duration, 0);
+});
+
+test('each checkpoint extends the same event rather than adding one', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  for (let i = 1; i <= 3; i++) {
+    h.advance(CHECKPOINT_MS);
+    await h.tick(CHECKPOINT_MS);
+    await h.settle();
+    assert.equal(h.events.length, 1, `still one event after ${i} checkpoint(s)`);
+    assert.equal(h.events[0].duration, i * CHECKPOINT_MS / 1000);
+  }
+});
+
+test('a crash leaves the span as of the last checkpoint', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  h.advance(5 * CHECKPOINT_MS);
+  await h.tick(CHECKPOINT_MS);
+  await h.settle();
+  h.advance(40000);
+  // The process dies here: no sessionEnded, no flush.
+  assert.equal(h.events[0].duration, 300, 'five minutes are on the server; only the last 40 s are lost');
+});
+
+test('concurrent sessions each grow their own event', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  h.advance(30000);
+  h.reporter.sessionStarted(B);
+  h.advance(30000);
+  await h.tick(CHECKPOINT_MS);
+  await h.settle();
+  const byId = Object.fromEntries(h.events.map(e => [e.data.session, e.duration]));
+  assert.deepEqual(byId, { sA: 60, sB: 30 });
+});
+
+test('the checkpoint timer exists only while reporting is on', () => {
+  const h = harness();
+  h.reporter.sessionStarted(A);
+  assert.equal(h.liveTimers(CHECKPOINT_MS).length, 0);
+  h.reporter.setEnabled(true);
+  assert.equal(h.liveTimers(CHECKPOINT_MS).length, 1);
+  h.reporter.setEnabled(false);
+  assert.equal(h.liveTimers(CHECKPOINT_MS).length, 0);
+});
+
+test('turning reporting on writes the sessions already running at once', async () => {
+  const h = harness();
+  h.reporter.sessionStarted(A);
+  h.advance(45000);
+  h.reporter.setEnabled(true);
+  await h.settle();
+  assert.equal(h.events.length, 1);
+  assert.equal(h.events[0].duration, 45, 'not a minute later, and timed from its real start');
+});
+
+// Written under its temporary id, then re-keyed: the next write must find the
+// event by the id it carries on the server, or it inserts a second one.
+test('a re-key after a checkpoint updates the same event, which then carries the real id', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'tmp', project: '/w/p' });
+  h.advance(CHECKPOINT_MS);
+  await h.tick(CHECKPOINT_MS);
+  await h.settle();
+  h.reporter.rekey('tmp', 'real');
+  h.advance(CHECKPOINT_MS);
+  await h.tick(CHECKPOINT_MS);
+  await h.settle();
+
+  assert.equal(h.events.length, 1, 'no second event for the same span');
+  assert.equal(h.events[0].data.session, 'real');
+  assert.equal(h.events[0].duration, 120);
+
+  h.advance(CHECKPOINT_MS);
+  await h.tick(CHECKPOINT_MS);
+  await h.settle();
+  assert.equal(h.events.length, 1, 'and later writes find it under the new id');
+});
+
+test('ending a session writes its final span onto the same event', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted(A);
+  h.advance(CHECKPOINT_MS);
+  await h.tick(CHECKPOINT_MS);
+  h.advance(25000);
+  await h.reporter.sessionEnded(A.sessionId);
+  assert.equal(h.events.length, 1);
+  assert.equal(h.events[0].duration, 85);
+});
+
+// On the wire an upsert is a lookup, then a write. Two upserts for the same
+// session left to overlap would both see "not found" and both insert.
+test('two writes for one session never overlap, so they cannot both insert', async () => {
+  const events = [];
+  const turn = () => new Promise(r => setImmediate(r));
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    setIntervalFn: () => ({}), clearIntervalFn: () => {},
+    client: {
+      heartbeat: async () => true,
+      upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
+        await turn();
+        const existing = events.find(e => e.startedAt === startedAt && e.data[match.key] === match.value);
+        await turn();
+        if (existing) { existing.data = data; existing.duration = duration; } else events.push({ data, startedAt, duration });
+        return true;
+      },
+    },
+  });
+  reporter.setEnabled(true);
+  reporter.sessionStarted(A);          // the write at start
+  reporter.setEnabled(true);           // an immediate checkpoint, while that write is still out
+  await reporter.sessionEnded(A.sessionId);
+  await reporter.flush();
+  assert.equal(events.length, 1, `one event for one session, got ${events.length}`);
 });

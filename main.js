@@ -3134,7 +3134,7 @@ app.on('window-all-closed', () => {
 // see .ai/contexts/activitywatch.md ("Quitting")
 let activityFlushedForQuit = false;
 app.on('before-quit', (event) => {
-  if (!activityFlushedForQuit && activityReporter.enabled && activityReporter.liveCount > 0) {
+  if (!activityFlushedForQuit && activityReporter.hasPendingWork) {
     event.preventDefault();
     activityFlushedForQuit = true;
     const bound = new Promise((resolve) => setTimeout(resolve, 1500));
