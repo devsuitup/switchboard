@@ -50,7 +50,7 @@ test('a heartbeat creates the bucket once, then only beats', async () => {
 
   assert.deepEqual(h.paths(), [
     '/api/0/buckets/b',
-    '/api/0/buckets/b/events',
+    '/api/0/buckets/b/heartbeat?pulsetime=0',
     '/api/0/buckets/b/heartbeat?pulsetime=60',
     '/api/0/buckets/b/heartbeat?pulsetime=60',
   ], 'the bucket is created once and reused');
@@ -231,7 +231,8 @@ test('writes racing on a fresh bucket share one create request', async () => {
     h.client.heartbeat('r', BUCKET, { project: 'x' }, 60),
   ]);
   assert.equal(h.posts.filter(p => p.url.endsWith('/api/0/buckets/r')).length, 1);
-  assert.equal(h.eventPosts().length, 3, 'and all three writes still went out');
+  assert.equal(h.eventPosts().length, 2, 'both span writes went out');
+  assert.equal(h.posts.filter(p => p.url.includes('/heartbeat')).length, 1, 'and so did the beat');
 });
 
 test('another session starting in the same millisecond is not mistaken for this one', async () => {
@@ -353,19 +354,21 @@ test('a span is found under any of the ids it may carry', async () => {
 // --- Convergence review ---
 
 // aw-server keeps, per bucket id, the last event a heartbeat can merge into,
-// and does not clear it when the bucket is deleted. A same-data heartbeat to a
-// re-created bucket then merges into that ghost and fails with 500 — for as
-// long as the focus does not change. One POST /events resets it.
-test('the first write to a bucket this client created goes through /events, not /heartbeat', async () => {
+// and does not clear it when the bucket is deleted. A heartbeat to the
+// re-created bucket then merges into that ghost: it fails with 500, or — after
+// a POST /events — rewrites the new event with the deleted span's start. A
+// zero pulsetime cannot reach a ghost in the past.
+test('the first beat to a bucket this client created has no merge window', async () => {
   const h = harness();
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
   assert.deepEqual(h.paths(), [
     '/api/0/buckets/b',
-    '/api/0/buckets/b/events',
+    '/api/0/buckets/b/heartbeat?pulsetime=0',
     '/api/0/buckets/b/heartbeat?pulsetime=60',
   ]);
-  assert.ok(Array.isArray(h.calls[1].body), 'the events endpoint takes a list');
+  assert.equal(h.paths().filter(p => p.endsWith('/events')).length, 0,
+    'POST /events leaves the ghost in place, so it is never the reset');
 });
 
 test('a bucket that already existed is beaten straight away', async () => {
@@ -374,7 +377,7 @@ test('a bucket that already existed is beaten straight away', async () => {
   assert.deepEqual(h.paths(), ['/api/0/buckets/b', '/api/0/buckets/b/heartbeat?pulsetime=60']);
 });
 
-test('a bucket re-created after a 404 gets its first write through /events again', async () => {
+test('a bucket re-created after a 404 gets its first beat with no merge window again', async () => {
   let deleted = false;
   const h = harness({ server: (url) => (deleted && url.includes('/heartbeat') ? 404 : 200) });
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
@@ -383,7 +386,33 @@ test('a bucket re-created after a 404 gets its first write through /events again
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
   deleted = false;
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
-  assert.deepEqual(h.paths().slice(-2), ['/api/0/buckets/b', '/api/0/buckets/b/events']);
+  assert.deepEqual(h.paths().slice(-2), ['/api/0/buckets/b', '/api/0/buckets/b/heartbeat?pulsetime=0']);
+});
+
+test('a first beat that fails leaves the bucket marked, so the retry has no merge window either', async () => {
+  let failBeats = true;
+  const h = harness({ server: (url) => {
+    if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return failBeats ? 200 : 304;   // created, then already there
+    return failBeats ? 500 : 200;
+  } });
+  assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), false);
+  failBeats = false;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  const beats = h.paths().filter(p => p.includes('/heartbeat'));
+  assert.deepEqual(beats, ['/api/0/buckets/b/heartbeat?pulsetime=0', '/api/0/buckets/b/heartbeat?pulsetime=0']);
+});
+
+test('a first beat that never arrives leaves the bucket marked too', async () => {
+  let down = true;
+  const h = harness({ server: (url) => {
+    if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return 200;
+    return down ? 'down' : 200;
+  } });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  h.advance(MAX_COOLDOWN_MS);
+  down = false;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.paths().filter(p => p.endsWith('pulsetime=0')).length, 2);
 });
 
 test('a span still under its old id is found when the old id comes first', async () => {

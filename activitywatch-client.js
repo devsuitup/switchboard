@@ -25,7 +25,7 @@ function createActivityWatchClient(deps) {
 
   const readyBuckets = new Set();
   const creating = new Map(); // bucketId -> the create request in flight
-  const fresh = new Set();    // buckets this client created and has not yet written to
+  const fresh = new Set();    // buckets this client created and has not yet beaten
   let cooldownMs = 0;
   let nextAttemptAt = 0;
   let reachable = null; // null until the first call resolves it either way
@@ -94,11 +94,13 @@ function createActivityWatchClient(deps) {
   async function heartbeat(bucketId, bucket, data, pulsetimeSeconds) {
     if (sleeping()) return false;
     if (!(await ensureBucket(bucketId, bucket))) return false;
-    const event = { timestamp: new Date(now()).toISOString(), duration: 0, data };
     // see .ai/contexts/activitywatch.md ("Creating a bucket is idempotent")
-    const r = fresh.has(bucketId)
-      ? await post(`${bucketPath(bucketId)}/events`, [event])
-      : await post(`${bucketPath(bucketId)}/heartbeat?pulsetime=${encodeURIComponent(pulsetimeSeconds)}`, event);
+    const pulse = fresh.has(bucketId) ? 0 : pulsetimeSeconds;
+    const r = await post(`${bucketPath(bucketId)}/heartbeat?pulsetime=${encodeURIComponent(pulse)}`, {
+      timestamp: new Date(now()).toISOString(),
+      duration: 0,
+      data,
+    });
     if (is2xx(r)) fresh.delete(bucketId);
     // see .ai/contexts/activitywatch.md ("Failure")
     if (r && r.status === 404) readyBuckets.delete(bucketId);
@@ -138,9 +140,7 @@ function createActivityWatchClient(deps) {
       : null;
     const event = { timestamp: start, duration: Math.max(0, durationSeconds), data };
     if (existing && existing.id !== undefined) event.id = existing.id;
-    const ok = is2xx(await post(eventsPath, [event]));
-    if (ok) fresh.delete(bucketId);
-    return ok;
+    return is2xx(await post(eventsPath, [event]));
   }
 
   /**

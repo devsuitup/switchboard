@@ -180,10 +180,20 @@ id, the last event a heartbeat may merge into, and deleting the bucket does not
 clear it. A heartbeat to the re-created bucket carrying the same `data` inside
 `pulsetime` merges into that ghost and gets `500` — and since the keepalive
 beats an unchanged focus every 30 s under a 60 s `pulsetime`, it gets `500`
-indefinitely, until the focus changes. One `POST /events` to the bucket resets
-it. So the first write to a bucket the client itself created — a `200`, not a
-`304` — goes through `/events` instead of `/heartbeat`; later beats heartbeat
-as usual.
+indefinitely, until the focus changes.
+
+`POST /events` does not clear it. The next same-data heartbeat still merges
+into the ghost, and the server then rewrites the event just inserted with the
+ghost's start: a span the user deleted comes back, and the gap since is counted
+as focus. What does work is a heartbeat whose `pulsetime` is `0` — with no
+window it cannot merge into a ghost that ended in the past, so it is inserted,
+and it replaces the ghost as the event later heartbeats merge into. The first
+beat to a bucket the client itself created (a `200`, not a `304`) is therefore
+sent with `pulsetime=0`; later beats use the normal 60 s. The bucket stays
+marked until that first beat succeeds, so a failed one is retried the same way.
+Measured with a ghost 40 s old: through `/events` the bucket ended up holding
+one event starting 40 s before the re-create; with `pulsetime=0`, one starting
+at it.
 
 ## Quitting
 
