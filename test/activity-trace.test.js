@@ -296,22 +296,97 @@ function readEntries(files) {
 
 // --- bounding: rotation with a fixed number of retained segments -----------
 
-test('the trace rotates segments and retains a bounded number of them', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-trace-rot-'));
-  const t = createActivityTrace({ enabled: true, maxSegmentBytes: 200, maxSegments: 2 });
-  t.init(dir);
-  for (let i = 0; i < 60; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
-  assert.ok(t.files.length > 2, 'the run produced more segments than it retains');
-  await new Promise(r => t.close(r));
+// TEMPORARY DIAGNOSTICS (issue #323) — do not merge.
+function diagInstrument(tag) {
+  const t0 = process.hrtime.bigint();
+  const ms = () => (Number(process.hrtime.bigint() - t0) / 1e6).toFixed(1);
+  const events = [];
+  const log = (msg) => events.push(ms() + 'ms ' + msg);
+  const realCreate = fs.createWriteStream;
+  fs.createWriteStream = (...args) => {
+    const s = realCreate.apply(fs, args);
+    const name = path.basename(String(args[0]));
+    log('create ' + name);
+    s.on('open', (fd) => log('open ' + name + ' fd=' + fd));
+    s.on('finish', () => log('finish ' + name));
+    s.on('close', () => log('close ' + name));
+    s.on('error', (e) => log('stream-error ' + name + ' ' + (e && e.code)));
+    return s;
+  };
+  const unlink = (f) => {
+    const name = path.basename(f);
+    try {
+      fs.unlinkSync(f);
+      log('unlink-ok ' + name + ' existsAfter=' + fs.existsSync(f));
+    } catch (e) {
+      log('unlink-FAIL ' + name + ' code=' + (e && e.code) + ' errno=' + (e && e.errno));
+      throw e;
+    }
+  };
+  return {
+    unlink, log,
+    restore() { fs.createWriteStream = realCreate; },
+    async dump(dir, trace, iteration) {
+      const lines = [];
+      const out = (m) => lines.push('[DIAG ' + tag + ' #' + iteration + '] ' + m);
+      out('node=' + process.version + ' platform=' + process.platform);
+      const listing = fs.readdirSync(dir).sort();
+      out('readdir (' + listing.length + '): ' + listing.join(', '));
+      out('t.files (' + trace.files.length + '): ' + trace.files.map(f => path.basename(f)).join(', '));
+      out('t.currentFile: ' + (trace.currentFile && path.basename(trace.currentFile)));
+      const warnings = readEntries(listing.map(f => path.join(dir, f))).filter(e => e.cat === 'trace.prune-failed');
+      out('prune-failed entries on disk (' + warnings.length + '): ' + JSON.stringify(warnings.map(w => ({ file: w.file, error: w.error, retained: w.retained }))));
+      for (const e of events) out('event ' + e);
+      const queued = new Set(trace.files.map(f => path.basename(f)));
+      for (const f of listing) {
+        const full = path.join(dir, f);
+        let r;
+        try { fs.unlinkSync(full); r = 'ok existsAfter=' + fs.existsSync(full); } catch (e) { r = 'FAIL ' + (e && e.code); }
+        out('post-mortem unlink ' + f + ' queued=' + queued.has(f) + ' -> ' + r);
+      }
+      console.log(lines.join('\n'));
+    },
+  };
+}
 
+async function diagRotationRun(tag, iteration, armAtRuntime) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-trace-' + tag + '-'));
+  const d = diagInstrument(tag);
+  let t;
   let files = [];
-  await waitUntil(() => {
-    files = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl'));
-    return files.length <= 2;
-  });
-  assert.equal(files.length, 2, 'older segments are unlinked, disk use stays bounded');
-  assert.ok(files.every(f => f.startsWith('activity-trace-')));
-  fs.rmSync(dir, { recursive: true, force: true });
+  try {
+    t = createActivityTrace({ enabled: !armAtRuntime, maxSegmentBytes: 200, maxSegments: 2, unlink: d.unlink });
+    t.init(dir);
+    if (armAtRuntime) t.setEnabled(true);
+    for (let i = 0; i < 60; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
+    assert.ok(t.files.length > 2, 'the run produced more segments than it retains');
+    d.log('close() called');
+    await new Promise(r => t.close(r));
+    d.log('close() done');
+    await waitUntil(() => {
+      files = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl'));
+      return files.length <= 2;
+    });
+    d.log('waitUntil ended with ' + files.length);
+  } finally {
+    d.restore();
+  }
+  const ok = files.length === 2;
+  if (!ok || process.env.DIAG_ALWAYS) await d.dump(dir, t, iteration);
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  return { ok, count: files.length };
+}
+
+async function diagRotationTest(tag, armAtRuntime) {
+  const results = [];
+  for (let i = 0; i < 15; i++) results.push(await diagRotationRun(tag, i, armAtRuntime));
+  const failed = results.filter(r => !r.ok);
+  console.log('[DIAG ' + tag + '] summary: ' + failed.length + '/' + results.length + ' failed; counts=' + results.map(r => r.count).join(','));
+  assert.equal(failed.length, 0, 'older segments are unlinked, disk use stays bounded (' + failed.length + '/' + results.length + ' iterations exceeded)');
+}
+
+test('the trace rotates segments and retains a bounded number of them', { timeout: 300000 }, async () => {
+  await diagRotationTest('rot', false);
 });
 
 test('a segment that cannot be unlinked stays queued and is retried, not forgotten', async () => {
@@ -489,20 +564,8 @@ test('re-enabling opens a fresh segment instead of appending to the closed one',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('rotation still bounds the disk when the trace was armed at runtime', async () => {
-  const dir = tmpTraceDir('armrot');
-  const t = createActivityTrace({ enabled: false, maxSegmentBytes: 200, maxSegments: 2 });
-  t.init(dir);
-  t.setEnabled(true);
-
-  for (let i = 0; i < 60; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
-  assert.ok(t.files.length > 2, 'the run produced more segments than it retains');
-  await new Promise(r => t.close(r));
-
-  let files = [];
-  await waitUntil(() => { files = jsonlIn(dir); return files.length <= 2; });
-  assert.equal(files.length, 2, 'older segments are unlinked, disk use stays bounded');
-  fs.rmSync(dir, { recursive: true, force: true });
+test('rotation still bounds the disk when the trace was armed at runtime', { timeout: 300000 }, async () => {
+  await diagRotationTest('armrot', true);
 });
 
 // see docs/activity-trace.md "A segment is pruned only once its stream has closed"
