@@ -43,6 +43,7 @@ function boot(dir, opts = {}) {
     readProcStart: opts.readProcStart || (() => '9373049'),
     readParentPid: opts.readParentPid || (() => null),
     ownPid: opts.ownPid,
+    platform: 'linux',
   });
 }
 
