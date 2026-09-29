@@ -24,7 +24,7 @@ function harness() {
     heartbeat: async (id, bucket, data, pulsetime) => { beats.push({ id, bucket, data, pulsetime, at: clock }); return true; },
     upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
       writes.push({ id, data, startedAt, duration, match });
-      const existing = events.find(e => e.id === id && e.startedAt === startedAt && e.data[match.key] === match.value);
+      const existing = events.find(e => e.id === id && e.startedAt === startedAt && match.values.includes(e.data[match.key]));
       if (existing) { existing.data = data; existing.duration = duration; existing.bucket = bucket; }
       else events.push({ id, bucket, data, startedAt, duration });
       return true;
@@ -196,9 +196,17 @@ test('a running session carries the name the user last saw for it', async () => 
 test('a session never focused is written without a name rather than a guessed one', async () => {
   const h = harness();
   h.reporter.setEnabled(true);
-  h.reporter.sessionStarted(B);
+  h.reporter.sessionStarted({ sessionId: B.sessionId, project: B.project });   // as main starts a PTY session
   await h.reporter.sessionEnded(B.sessionId);
   assert.deepEqual(h.events[0].data, { session: 'sB', project: '/w/platform' });
+});
+
+test('a session started with a name carries it without ever being focused', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'schedule:nightly', project: '/w/p', name: 'Scheduled: nightly' });
+  await h.reporter.sessionEnded('schedule:nightly');
+  assert.equal(h.events[0].data.name, 'Scheduled: nightly');
 });
 
 test('flush writes every live session as a span ending now', async () => {
@@ -292,7 +300,7 @@ function slowHarness() {
     heartbeat: async () => true,
     upsertSpan: (id, bucket, data, startedAt, duration, match) => new Promise((resolve) => {
       const apply = () => {
-        const existing = events.find(e => e.startedAt === startedAt && e.data[match.key] === match.value);
+        const existing = events.find(e => e.startedAt === startedAt && match.values.includes(e.data[match.key]));
         if (existing) { existing.data = data; existing.duration = duration; }
         else events.push({ data, startedAt, duration });
         resolve(true);
@@ -324,7 +332,6 @@ test('an exit that landed before the quit still holds it until its write is ackn
   h.advance(10000);
   h.reporter.sessionEnded(A.sessionId);   // not awaited, as the PTY exit handler does not
 
-  assert.equal(h.reporter.liveCount, 0, 'the span has left the live set');
   assert.equal(h.reporter.hasPendingWork, true, 'but the quit must still wait for its write');
 
   const flushed = h.reporter.flush();
@@ -485,7 +492,7 @@ test('two writes for one session never overlap, so they cannot both insert', asy
       heartbeat: async () => true,
       upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
         await turn();
-        const existing = events.find(e => e.startedAt === startedAt && e.data[match.key] === match.value);
+        const existing = events.find(e => e.startedAt === startedAt && match.values.includes(e.data[match.key]));
         await turn();
         if (existing) { existing.data = data; existing.duration = duration; } else events.push({ data, startedAt, duration });
         return true;
@@ -498,4 +505,183 @@ test('two writes for one session never overlap, so they cannot both insert', asy
   await reporter.sessionEnded(A.sessionId);
   await reporter.flush();
   assert.equal(events.length, 1, `one event for one session, got ${events.length}`);
+});
+
+// --- Findings from review ---
+
+// On the wire an upsert is a lookup and then a write, with the network between.
+function wireHarness({ loseAnswerOf } = {}) {
+  const events = [];
+  const turn = () => new Promise(r => setImmediate(r));
+  let nextId = 1;
+  let checkpoint = null;
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    setIntervalFn: (fn, ms) => { if (ms === CHECKPOINT_MS) checkpoint = fn; return {}; },
+    clearIntervalFn: () => {},
+    client: {
+      heartbeat: async () => true,
+      upsertSpan: async (id, bucket, data, startedAt, duration, match) => {
+        await turn();
+        const existing = events.find(e => e.startedAt === startedAt && match.values.includes(e.data[match.key]));
+        await turn();
+        if (existing) { existing.data = data; existing.duration = duration; } else events.push({ id: nextId++, data, startedAt, duration });
+        // The server stored it; the answer never arrived (the 2 s timeout).
+        if (loseAnswerOf && loseAnswerOf(data)) { loseAnswerOf = null; return false; }
+        return true;
+      },
+    },
+  });
+  return { reporter, events, checkpoint: () => checkpoint(), settle: async () => { for (let i = 0; i < 20; i++) await turn(); } };
+}
+
+test('a write queued behind the one that renames a span still finds it', async () => {
+  const h = wireHarness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'A', project: '/p' });
+  await h.settle();
+  h.reporter.rekey('A', 'B');
+  h.checkpoint();                         // renames the event to B — still in flight
+  await h.reporter.sessionEnded('B');     // queued behind it
+  await h.settle();
+  assert.deepEqual(h.events.map(e => e.data.session), ['B'], JSON.stringify(h.events));
+});
+
+test('a rename stored but never acknowledged does not lead to a second event', async () => {
+  const h = wireHarness({ loseAnswerOf: (data) => data.session === 'B' });
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'A', project: '/p' });
+  await h.settle();
+  h.reporter.rekey('A', 'B');
+  h.checkpoint();                         // stored as B, reported failed
+  await h.settle();
+  h.checkpoint();                         // must find it under B
+  await h.settle();
+  assert.equal(h.events.length, 1, JSON.stringify(h.events));
+});
+
+test('a re-key while a write is in flight keeps the next write behind it', async () => {
+  const h = wireHarness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'A', project: '/p' });   // start write in flight
+  h.reporter.rekey('A', 'B');
+  h.checkpoint();                                                  // must wait for it
+  await h.settle();
+  assert.equal(h.events.length, 1, JSON.stringify(h.events));
+});
+
+test('the keepalive stops crediting a session once nobody has touched the keyboard for 3 minutes', async () => {
+  let idle = 0;
+  const beats = [];
+  let tick = null;
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    idleSeconds: () => idle,
+    setIntervalFn: (fn, ms) => { if (ms === KEEPALIVE_MS) tick = fn; return {}; },
+    clearIntervalFn: () => {},
+    client: { heartbeat: async (id, b, data) => { beats.push(data); return true; }, upsertSpan: async () => true },
+  });
+  reporter.setEnabled(true);
+  await reporter.focus(A);
+  const opened = beats.length;
+  idle = 179; tick();
+  assert.equal(beats.length, opened + 1, 'still at the keyboard');
+  idle = 180; tick(); tick();
+  assert.equal(beats.length, opened + 1, 'away: no beat, so the event ends at the last one');
+  idle = 2; tick();
+  assert.equal(beats.length, opened + 2, 'back: beating again');
+});
+
+test('the flush starts every span write without waiting for the attention beat', async () => {
+  let releaseBeat;
+  const upserts = [];
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    setIntervalFn: () => ({}), clearIntervalFn: () => {},
+    client: {
+      heartbeat: () => new Promise((r) => { releaseBeat = () => r(true); }),
+      upsertSpan: async (id, b, data) => { upserts.push(data.session); return true; },
+    },
+  });
+  reporter.setEnabled(true);
+  reporter.sessionStarted(B);
+  await new Promise(r => setImmediate(r));
+  const beforeFocus = upserts.length;
+  reporter.focus(A);                  // its beat hangs
+  await new Promise(r => setImmediate(r));
+  releaseBeat();                      // let focus() settle
+  await new Promise(r => setImmediate(r));
+  const flushed = reporter.flush();   // the closing beat hangs too
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.ok(upserts.length > beforeFocus, 'the span write went out while the beat was still pending');
+  releaseBeat();
+  await flushed;
+});
+
+test('the flush sends a closing beat for the session on screen', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  await h.reporter.focus(A);
+  const before = h.beats.length;
+  await h.reporter.flush();
+  assert.equal(h.beats.length, before + 1);
+});
+
+test('a name kept for a session no longer on screen and never started is let go', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  await h.reporter.focus({ sessionId: 'X', name: 'looked at once', project: '/p' });
+  await h.reporter.focus(null);
+  await h.tick(CHECKPOINT_MS);
+  h.reporter.sessionStarted({ sessionId: 'X', project: '/p' });
+  await h.reporter.sessionEnded('X');
+  assert.equal(h.events[0].data.name, undefined, 'the stale name did not survive the checkpoint');
+});
+
+test('starting a session that is already live keeps its original start', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  const t0 = h.at();
+  h.reporter.sessionStarted(A);
+  h.advance(30000);
+  h.reporter.sessionStarted(A);
+  h.advance(30000);
+  await h.reporter.sessionEnded(A.sessionId);
+  assert.equal(h.events[0].startedAt, t0);
+  assert.equal(h.events[0].duration, 60);
+});
+
+test('a re-key onto an id already live leaves both spans where they were', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  const tA = h.at();
+  h.reporter.sessionStarted({ sessionId: 'A', project: '/p' });
+  h.advance(10000);
+  const tB = h.at();
+  h.reporter.sessionStarted({ sessionId: 'B', project: '/p' });
+  h.reporter.rekey('A', 'B');
+  h.advance(10000);
+  await h.reporter.sessionEnded('B');
+  await h.reporter.sessionEnded('A');
+  const start = Object.fromEntries(h.events.map(e => [e.data.session, e.startedAt]));
+  assert.deepEqual(start, { A: tA, B: tB });
+});
+
+test('a re-key to the same id changes nothing', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  h.reporter.sessionStarted({ sessionId: 'A', project: '/p' });
+  await h.reporter.focus({ sessionId: 'A', name: 'kept', project: '/p' });
+  h.reporter.rekey('A', 'A');
+  await h.reporter.sessionEnded('A');
+  assert.equal(h.events[0].data.name, 'kept');
+});
+
+test('stop leaves no timer running', async () => {
+  const h = harness();
+  h.reporter.setEnabled(true);
+  await h.reporter.focus(A);
+  assert.ok(h.liveTimers().length > 0);
+  h.reporter.stop();
+  assert.equal(h.liveTimers().length, 0);
 });

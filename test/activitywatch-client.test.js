@@ -26,8 +26,9 @@ function harness({ server = 'up', startAt = 1_000_000 } = {}) {
     log: { info: (m) => logged.push(m), warn: (m) => logged.push(m) },
     fetchFn: async (url, opts) => {
       calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
-      if (state.server === 'down') throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
-      if (typeof state.server === 'number') return { ok: false, status: state.server };
+      const answer = typeof state.server === 'function' ? state.server(url, opts) : state.server;
+      if (answer === 'down') throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      if (typeof answer === 'number') return { ok: answer >= 200 && answer < 300, status: answer };
       return { ok: true, status: 200 };
     },
   });
@@ -134,7 +135,7 @@ test('a 4xx is the server answering, so it does not trigger a backoff', async ()
 // only for 2xx, so a client that reads `ok` alone re-creates the bucket before
 // every single beat.
 test('a bucket that already exists is not re-created before every beat', async () => {
-  const h = harness({ server: 304 });
+  const h = harness({ server: (url) => (/\/api\/0\/buckets\/[^/]+$/.test(url) ? 304 : 200) });
   assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), true,
     '304 on create is success, and the beat that follows is taken');
   await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
@@ -192,7 +193,7 @@ const START = Date.UTC(2026, 0, 1, 6, 0, 0, 123);
 
 test('a span not yet on the server is inserted without an id', async () => {
   const h = spanHarness({ stored: [] });
-  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' }), true);
+  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] }), true);
   const [post] = h.eventPosts();
   assert.equal('id' in post.body[0], false);
   assert.equal(post.body[0].duration, 60);
@@ -200,7 +201,7 @@ test('a span not yet on the server is inserted without an id', async () => {
 
 test('a span already on the server is updated under its own id', async () => {
   const h = spanHarness({ stored: [{ id: 8, timestamp: '2026-01-01T06:00:00.123000+00:00', data: { session: 'A' } }] });
-  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 120, { key: 'session', value: 'A' });
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 120, { key: 'session', values: ['A'] });
   assert.equal(h.eventPosts()[0].body[0].id, 8);
   assert.equal(h.eventPosts()[0].body[0].duration, 120);
 });
@@ -211,7 +212,7 @@ test('a span already on the server is updated under its own id', async () => {
 // checkpoint inserted a duplicate.
 test('the lookup window opens before the span start, so a zero-duration event is found', async () => {
   const h = spanHarness();
-  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 1, { key: 'session', value: 'A' });
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 1, { key: 'session', values: ['A'] });
   const url = new URL(h.gets[0]);
   assert.equal(url.searchParams.get('start'), '2026-01-01T06:00:00.122Z');
   assert.equal(url.searchParams.get('end'), '2026-01-01T06:00:00.124Z');
@@ -222,8 +223,8 @@ test('the lookup window opens before the span start, so a zero-duration event is
 test('writes racing on a fresh bucket share one create request', async () => {
   const h = spanHarness();
   await Promise.all([
-    h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 0, { key: 'session', value: 'A' }),
-    h.client.upsertSpan('r', BUCKET, { session: 'B' }, START, 0, { key: 'session', value: 'B' }),
+    h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 0, { key: 'session', values: ['A'] }),
+    h.client.upsertSpan('r', BUCKET, { session: 'B' }, START, 0, { key: 'session', values: ['B'] }),
     h.client.heartbeat('r', BUCKET, { project: 'x' }, 60),
   ]);
   assert.equal(h.posts.filter(p => p.url.endsWith('/api/0/buckets/r')).length, 1);
@@ -232,13 +233,13 @@ test('writes racing on a fresh bucket share one create request', async () => {
 
 test('another session starting in the same millisecond is not mistaken for this one', async () => {
   const h = spanHarness({ stored: [{ id: 9, data: { session: 'B' } }] });
-  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' });
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] });
   assert.equal('id' in h.eventPosts()[0].body[0], false, 'B was not overwritten with A');
 });
 
 test('the match value, not the new data, finds the event — so a renamed span keeps its event', async () => {
   const h = spanHarness({ stored: [{ id: 8, data: { session: 'tmp' } }] });
-  await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', value: 'tmp' });
+  await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', values: ['tmp'] });
   const body = h.eventPosts()[0].body[0];
   assert.equal(body.id, 8);
   assert.equal(body.data.session, 'real', 'the update rewrites the id the event carries');
@@ -248,8 +249,100 @@ test('the match value, not the new data, finds the event — so a renamed span k
 // nothing, so an id is never cached: every write looks the event up.
 test('a bucket deleted under the client is re-created on the next write', async () => {
   const h = spanHarness({ getStatus: 404 });
-  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' }), false);
-  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', value: 'A' });
+  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] }), false);
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] });
   const creates = h.posts.filter(p => p.url.endsWith('/api/0/buckets/r'));
   assert.equal(creates.length, 2, 'the bucket is asserted again after the 404');
+});
+
+// --- Findings from review, each a defect that shipped green ---
+
+test('a lookup that fails with a server error writes nothing, rather than a duplicate', async () => {
+  const h = spanHarness({ stored: [{ id: 8, data: { session: 'A' } }], getStatus: 500 });
+  assert.equal(await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, 60, { key: 'session', values: ['A'] }), false);
+  assert.equal(h.eventPosts().length, 0, 'a 500 is not "not found"');
+});
+
+test('a heartbeat to a bucket deleted under the client re-creates it on the next beat', async () => {
+  let deleted = false;
+  const h = harness({ server: (url) => (deleted && url.includes('/heartbeat') ? 404 : 200) });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  deleted = true;
+  assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), false);
+  deleted = false;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.paths().filter(p => p === '/api/0/buckets/b').length, 2, 'the 404 forgot the bucket');
+});
+
+test('a bucket known before the server went away is created again when it returns', async () => {
+  const h = harness();
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);   // bucket now known
+  h.set('down');
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  h.advance(MAX_COOLDOWN_MS);
+  h.set('up');
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.paths().filter(p => p === '/api/0/buckets/b').length, 2);
+});
+
+test('a span write makes no call while the client is backed off', async () => {
+  const h = harness({ server: 'down' });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  const before = h.calls.length;
+  assert.equal(await h.client.upsertSpan('b', BUCKET, { session: 'A' }, START, 1, { key: 'session', values: ['A'] }), false);
+  assert.equal(h.calls.length, before);
+});
+
+test('the cooldown starts over after a success, instead of resuming where it was', async () => {
+  const h = harness({ server: 'down' });
+  const attemptAt = [];
+  const beatAndRecord = async () => {
+    const before = h.calls.length;
+    await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+    if (h.calls.length > before) attemptAt.push(h.at());
+  };
+  for (let i = 0; i < 200; i++) { await beatAndRecord(); h.advance(1000); }   // cooldown grows to its cap
+  h.set('up');
+  h.advance(MAX_COOLDOWN_MS);
+  await beatAndRecord();                                                       // recovers
+  h.set('down');
+  await beatAndRecord();                                                       // fails once more
+  const failedAt = h.at();
+  for (let i = 0; i < 20; i++) { h.advance(1000); await beatAndRecord(); }
+  const nextTry = attemptAt.find(t => t > failedAt);
+  assert.ok(nextTry - failedAt <= 6000, `retried after ${nextTry - failedAt} ms, not the capped cooldown`);
+});
+
+test('two failures in a row are logged once', async () => {
+  const h = harness({ server: 'down' });
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  h.advance(MAX_COOLDOWN_MS);
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.calls.length, 2, 'both attempts reached the socket');
+  assert.equal(h.logged.length, 1);
+});
+
+test('every request carries a timeout, so a hung server cannot hold a write forever', async () => {
+  const signals = [];
+  const client = createActivityWatchClient({
+    hostname: 'h',
+    fetchFn: async (url, opts) => { signals.push(opts && opts.signal); return { ok: true, status: 200, json: async () => [] }; },
+  });
+  await client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  await client.upsertSpan('b', BUCKET, { session: 'A' }, START, 1, { key: 'session', values: ['A'] });
+  await client.probe();
+  assert.ok(signals.length >= 5);
+  assert.ok(signals.every(s => s instanceof AbortSignal), 'no request goes out without a signal');
+});
+
+test('a negative span is floored at zero', async () => {
+  const h = spanHarness();
+  await h.client.upsertSpan('r', BUCKET, { session: 'A' }, START, -3, { key: 'session', values: ['A'] });
+  assert.equal(h.eventPosts()[0].body[0].duration, 0);
+});
+
+test('a span is found under any of the ids it may carry', async () => {
+  const h = spanHarness({ stored: [{ id: 8, data: { session: 'real' } }] });
+  await h.client.upsertSpan('r', BUCKET, { session: 'real' }, START, 60, { key: 'session', values: ['tmp', 'real'] });
+  assert.equal(h.eventPosts()[0].body[0].id, 8, 'the write that renamed it may have been stored unacknowledged');
 });

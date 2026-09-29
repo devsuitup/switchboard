@@ -59,7 +59,18 @@ fragment every event it sits in.
 - On a switch the **outgoing** session is beaten once more before the incoming
   one. A heartbeat ends its event at its own timestamp, so without that final
   beat the outgoing span would end at its last keepalive, up to 30 s early.
-- Window blur is a focus change to nothing: the event ends at the blur.
+- Attention is a session's **terminal** on screen, in a focused window, with
+  someone at the keyboard. Each condition ends the event when it stops holding:
+  - Window blur is a focus change to nothing: the event ends at the blur.
+  - Settings, Memory, Work Files, Stats, the transcript viewer and the trace
+    viewer replace the terminals by hiding `#terminal-area`. The renderer
+    observes that element's `style`, so every such viewer — including one added
+    later — reports no focus while it is shown, without a call at each opener.
+  - The keepalive is skipped once the system has seen no input for 180 s, the
+    threshold ActivityWatch's own AFK watcher uses. The event then ends at the
+    last beat, and the next input's beat starts a new one: the Editor view's
+    query does not subtract AFK time, so a timer that beat regardless would
+    credit the whole absence.
 - The renderer re-reports focus after every project reload, so a name generated
   after the session was focused (a late AI title) reaches the bucket. The
   reporter drops a report identical to the current focus, so this costs nothing
@@ -68,17 +79,28 @@ fragment every event it sits in.
 ### Running
 
 - Counted: sessions spawned locally that are not plain terminals and not panel
-  shells. A shell sitting open is not work running. Remote sessions are not
-  counted: their lifecycle belongs to another host.
+  shells, and scheduled headless runs (`runScheduleCommand`). A shell sitting
+  open is not work running. Remote sessions are not counted: their lifecycle
+  belongs to another host.
+- A scheduled run has no transcript id when it is spawned, so it is reported
+  under `schedule:<name>:<spawn time>` with the name `Scheduled: <name>` — the
+  schedule's own name, not its prompt.
 - A session is timed from its spawn even if reporting was turned on later.
   Turning reporting on writes every session already running at once, rather
   than at the next checkpoint.
-- `name` is the last name the renderer showed for that session, so a session
-  never focused has none. It is omitted, not guessed.
+- `name` is the one given at start (a scheduled run's), or else the last name
+  the renderer reported for that session; a session never focused has none, and
+  it is omitted, not guessed. A name is dropped at each checkpoint once its
+  session is neither running nor on screen, so the map holds live entries only.
 - A re-key moves the span, its name and its pending writes to the real id. The
   event already on the server still carries the old id, so each span records
-  the id it was last written under (`writtenAs`) and the next write finds the
-  event by that and rewrites it to the real id.
+  the id it was last written under (`writtenAs`), and a write after a re-key
+  looks the event up under **both** ids and rewrites it to the real one.
+  Both, because either may be on the server: `writtenAs` is only advanced by a
+  write that reported success, and a write can be stored and still report
+  failure — its answer lost to the 2 s timeout. The ids to match are read when
+  the write runs, not when it is queued, so a write queued behind the one that
+  performs the rename sees the rename.
 
 ## Checkpoints
 
@@ -108,7 +130,12 @@ nothing, so every checkpoint inserted a duplicate.
 two left to overlap — the write at start and a checkpoint issued before it
 returns — would both find nothing and both insert, leaving two events for one
 session. Each session's writes are chained, each starting when the previous one
-has settled.
+has settled. A re-key moves the chain with the span, so a write under the new
+id cannot overlap one still in flight under the old.
+
+Only a lookup that answered `200` can say the event is not there. Any other
+status — a `500`, a `400` — writes nothing; treating it as "not found" would
+insert a second event for the span. The next checkpoint tries again.
 
 Two sessions starting in the same millisecond share a lookup window and are
 told apart by their `session` field.
@@ -126,6 +153,9 @@ client call resolves to a boolean and never rejects.
   a malformed payload as an absent server would hide the bug behind a retry.
 - Losing the server forgets which buckets exist: it may come back as a fresh
   database, so each bucket is asserted again.
+- A bucket can also go away while the server stays up — deleted from the
+  ActivityWatch UI. A `404` on a heartbeat or on a span lookup forgets that
+  bucket, and the next write re-creates it.
 - **Nothing is queued.** A beat or a write produced while the server is down is
   dropped. The attention bucket loses the time it was down. The running bucket
   does not: every checkpoint writes the whole span from the session's start, so
@@ -150,7 +180,17 @@ and every caller awaits that one.
 `before-quit` holds the quit, bounded at 1.5 s, while the reporter has pending
 work: a span still open, or a running event written and not yet acknowledged.
 With reporting off, or nothing pending, the quit is not delayed at all. An app
-that is killed rather than quit writes nothing for its live sessions.
+that is killed rather than quit writes nothing after its last checkpoint.
+
+**An update install is never held.** `updater-install` sets the flag the hold
+checks before calling `quitAndInstall`. On Linux, the AppImage updater starts
+the new binary before the old process quits; the new one loses the
+single-instance lock to the old and exits, so any extra time the old one spends
+quitting is time the user can be left with no app at all.
+
+The flush starts the attention beat and every span write together rather than
+in turn: awaiting the beat first left the spans unstarted when the 1.5 s bound
+ran out on a slow server.
 
 Closing the window kills the PTYs (`mainWindow.on('closed')`) before
 `before-quit` fires, and each PTY's exit reaches the reporter asynchronously.
@@ -162,7 +202,7 @@ Two orderings follow from that, and both are handled:
   them, not only live spans.
 - **An exit lands during the flush.** `flush` removes each span from the live
   set as it writes it, so the late `sessionEnded` finds nothing and writes
-  nothing. Without that, the session would be written twice.
+  nothing more.
 
 ## The IPC surface
 
@@ -170,7 +210,14 @@ Two orderings follow from that, and both are handled:
 |---|---|---|
 | `get-activity-reporting-state` | invoke | `{enabled, destination, url, reachable, buckets}`. `reachable` is probed at the call while reporting is on, and `null` while it is off — nothing is contacted then, so there is no answer to give. |
 | `set-activity-reporting-enabled` | invoke | a boolean; persists `global.activityReporting`, returns the state. |
-| `activity-focus` | send | `{sessionId, name, project}` or `null`. Main checks the id is a string and bounds `name` to 200 and `project` to 1024 characters before anything is forwarded. |
+| `activity-focus` | send | `{sessionId, name, project}` or `null`. Main takes a missing, empty or non-string id, or one over 200 characters, as no focus, and bounds `name` to 200 and `project` to 1024 characters before anything is forwarded. |
 
-What reaches the server is limited to session ids, project paths and session
-names. No transcript content, prompt or command is sent.
+## What reaches the server
+
+Session ids, project paths, and session names. A name is the one the user gave
+the session (`name`) or the title generated for it (`aiTitle`) — never
+`summary`. `summary` is the first 120 characters of the session's first prompt,
+and it is what the sidebar shows for a session with neither of the other two;
+such a session is sent under its id instead. The generated title is derived
+from the conversation, but it is a title the sidebar already displays, not a
+prompt. No prompt, command or other transcript content is sent.

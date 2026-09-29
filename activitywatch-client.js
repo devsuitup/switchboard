@@ -1,5 +1,5 @@
-// activitywatch-client.js — heartbeats to a local ActivityWatch server
-// — see .ai/contexts/activitywatch.md
+// activitywatch-client.js — heartbeats and spans to a local ActivityWatch
+// server — see .ai/contexts/activitywatch.md
 
 'use strict';
 
@@ -13,15 +13,14 @@ const REQUEST_TIMEOUT_MS = 2000;
  * .ai/contexts/activitywatch.md ("Failure").
  *
  * @param {object} deps
- * @param {Function} deps.fetchFn            fetch-compatible
+ * @param {Function} deps.fetchFn     fetch-compatible
+ * @param {string} deps.hostname      sent when a bucket is created
  * @param {() => number} [deps.now]
- * @param {string} [deps.baseUrl]
- * @param {{info: Function, warn: Function}} [deps.log]
+ * @param {{info: Function}} [deps.log]
  */
 function createActivityWatchClient(deps) {
   const fetchFn = deps.fetchFn;
   const now = deps.now || (() => Date.now());
-  const baseUrl = (deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const log = deps.log || null;
 
   const readyBuckets = new Set();
@@ -49,58 +48,41 @@ function createActivityWatchClient(deps) {
     reachable = true;
   }
 
-  async function request(path, body) {
+  // The response, or null when none came — see .ai/contexts/activitywatch.md ("Failure")
+  async function send(path, init) {
     let response;
     try {
-      response = await fetchFn(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      noteFailure();
-      return false;
-    }
-    // see .ai/contexts/activitywatch.md ("Failure")
-    noteSuccess();
-    if (!response) return false;
-    // 304 is how bucket creation reports "already there" — see
-    // .ai/contexts/activitywatch.md ("Creating a bucket is idempotent")
-    return response.ok || response.status === 304;
-  }
-
-  // Resolves to {status, body} for any answer, or null when the server is absent.
-  async function getJson(path) {
-    let response;
-    try {
-      response = await fetchFn(`${baseUrl}${path}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      response = await fetchFn(`${DEFAULT_BASE_URL}${path}`, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     } catch {
       noteFailure();
       return null;
     }
     noteSuccess();
-    if (!response) return null;
-    let body = null;
-    if (response.ok && typeof response.json === 'function') {
-      try { body = await response.json(); } catch { body = null; }
-    }
-    return { status: response.status, body };
+    return response || null;
   }
+
+  function post(path, body) {
+    return send(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  const is2xx = (r) => !!r && r.status >= 200 && r.status < 300;
 
   // see .ai/contexts/activitywatch.md ("Creating a bucket is idempotent")
   function ensureBucket(bucketId, { client, type }) {
     if (readyBuckets.has(bucketId)) return Promise.resolve(true);
     if (creating.has(bucketId)) return creating.get(bucketId);
-    const pending = request(`/api/0/buckets/${encodeURIComponent(bucketId)}`, {
+    const pending = post(`/api/0/buckets/${encodeURIComponent(bucketId)}`, {
       client, type, hostname: deps.hostname || 'unknown',
-    }).then((ok) => {
+    }).then((r) => {
+      const ok = is2xx(r) || (!!r && r.status === 304);
       if (ok) readyBuckets.add(bucketId);
       return ok;
     }).finally(() => creating.delete(bucketId));
     creating.set(bucketId, pending);
     return pending;
   }
+
+  const bucketPath = (bucketId) => `/api/0/buckets/${encodeURIComponent(bucketId)}`;
 
   /**
    * One heartbeat — see .ai/contexts/activitywatch.md ("Attention").
@@ -110,38 +92,23 @@ function createActivityWatchClient(deps) {
   async function heartbeat(bucketId, bucket, data, pulsetimeSeconds) {
     if (sleeping()) return false;
     if (!(await ensureBucket(bucketId, bucket))) return false;
-    const path = `/api/0/buckets/${encodeURIComponent(bucketId)}/heartbeat`
-      + `?pulsetime=${encodeURIComponent(pulsetimeSeconds)}`;
-    return request(path, {
+    const r = await post(`${bucketPath(bucketId)}/heartbeat?pulsetime=${encodeURIComponent(pulsetimeSeconds)}`, {
       timestamp: new Date(now()).toISOString(),
       duration: 0,
       data,
     });
-  }
-
-  /**
-   * Whether the server answers now, cooldown or not — for the Settings panel.
-   *
-   * @returns {Promise<boolean>}
-   */
-  async function probe() {
-    try {
-      const response = await fetchFn(`${baseUrl}/api/0/info`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-      noteSuccess();
-      return !!(response && response.ok);
-    } catch {
-      noteFailure();
-      return false;
-    }
+    // see .ai/contexts/activitywatch.md ("Failure")
+    if (r && r.status === 404) readyBuckets.delete(bucketId);
+    return is2xx(r);
   }
 
   /**
    * Write a span that is still growing, as one event — see
    * .ai/contexts/activitywatch.md ("Checkpoints").
    *
-   * @param {{key: string, value: string}} match  the `data` field, and the value
-   *   it was last written with, that identifies the span among events sharing
-   *   its start time
+   * @param {{key: string, values: string[]}} match  the `data` field, and every
+   *   value it may carry on the server, that identify the span among events
+   *   sharing its start time
    * @returns {Promise<boolean>}
    */
   async function upsertSpan(bucketId, bucket, data, startedAtMs, durationSeconds, match) {
@@ -152,21 +119,32 @@ function createActivityWatchClient(deps) {
     // see .ai/contexts/activitywatch.md ("Checkpoints")
     const from = new Date(startedAtMs - 1).toISOString();
     const end = new Date(startedAtMs + 1).toISOString();
-    const eventsPath = `/api/0/buckets/${encodeURIComponent(bucketId)}/events`;
-    const found = await getJson(`${eventsPath}?start=${encodeURIComponent(from)}&end=${encodeURIComponent(end)}&limit=50`);
+    const eventsPath = `${bucketPath(bucketId)}/events`;
+    const found = await send(`${eventsPath}?start=${encodeURIComponent(from)}&end=${encodeURIComponent(end)}&limit=50`, {});
     if (!found) return false;
     if (found.status === 404) {
-      // The bucket went away under us; the next call asserts it again.
       readyBuckets.delete(bucketId);
       return false;
     }
-    const existing = Array.isArray(found.body)
-      ? found.body.find(e => e && e.data && e.data[match.key] === match.value)
-      : null;
+    if (found.status !== 200) return false;
+    let stored = null;
+    try { stored = await found.json(); } catch { return false; }
 
+    const existing = Array.isArray(stored)
+      ? stored.find(e => e && e.data && match.values.includes(e.data[match.key]))
+      : null;
     const event = { timestamp: start, duration: Math.max(0, durationSeconds), data };
     if (existing && existing.id !== undefined) event.id = existing.id;
-    return request(eventsPath, [event]);
+    return is2xx(await post(eventsPath, [event]));
+  }
+
+  /**
+   * Whether the server answers now, cooldown or not — for the Settings panel.
+   *
+   * @returns {Promise<boolean>}
+   */
+  async function probe() {
+    return is2xx(await send('/api/0/info', {}));
   }
 
   return {

@@ -6,18 +6,22 @@
 const KEEPALIVE_MS = 30000;
 const PULSETIME_SECONDS = 60;
 const CHECKPOINT_MS = 60000;
+// ActivityWatch's own AFK watcher calls a user away after this long.
+const IDLE_SECONDS = 180;
 
 /**
  * @param {object} deps
  * @param {object} deps.client            createActivityWatchClient() result
  * @param {string} deps.hostname
  * @param {() => number} [deps.now]
+ * @param {() => number} [deps.idleSeconds]   seconds since the last input
  * @param {Function} [deps.setIntervalFn]
  * @param {Function} [deps.clearIntervalFn]
  */
 function createActivityWatchReporter(deps) {
   const { client } = deps;
   const now = deps.now || (() => Date.now());
+  const idleSeconds = deps.idleSeconds || (() => 0);
   const setIntervalFn = deps.setIntervalFn || setInterval;
   const clearIntervalFn = deps.clearIntervalFn || clearInterval;
 
@@ -34,7 +38,7 @@ function createActivityWatchReporter(deps) {
   let focused = null;          // { sessionId, name, project } or null
   let keepalive = null;
   let checkpointTimer = null;
-  const live = new Map();      // sessionId -> { project, startedAt }
+  const live = new Map();      // sessionId -> { project, startedAt, writtenAs }
   const names = new Map();     // sessionId -> the last name the renderer showed
   const inflight = new Set();  // running-event writes not yet settled
   const chains = new Map();    // sessionId -> the tail of that session's writes
@@ -48,9 +52,15 @@ function createActivityWatchReporter(deps) {
     return client.heartbeat(attention.id, attention.bucket, attentionData(f), PULSETIME_SECONDS);
   }
 
+  // see .ai/contexts/activitywatch.md ("Attention")
+  function keepaliveTick() {
+    if (idleSeconds() >= IDLE_SECONDS) return;
+    beat(focused);
+  }
+
   function startKeepalive() {
     if (keepalive || !enabled || !focused) return;
-    keepalive = setIntervalFn(() => { beat(focused); }, KEEPALIVE_MS);
+    keepalive = setIntervalFn(keepaliveTick, KEEPALIVE_MS);
   }
 
   function stopKeepalive() {
@@ -67,7 +77,6 @@ function createActivityWatchReporter(deps) {
       && focused.name === f.name && focused.project === f.project;
     if (same) return;
 
-    // see .ai/contexts/activitywatch.md ("Attention")
     const outgoing = focused;
     focused = f;
     stopKeepalive();
@@ -78,39 +87,46 @@ function createActivityWatchReporter(deps) {
     }
   }
 
-  function sessionStarted({ sessionId, project }, startedAt) {
+  function sessionStarted({ sessionId, project, name }, startedAt) {
     if (!sessionId || live.has(sessionId)) return;
-    // writtenAs: the session id the span's event carries on the server, which
-    // a re-key makes differ from the current one until the next write.
+    if (name) names.set(sessionId, name);
+    // see .ai/contexts/activitywatch.md ("Running")
     const span = { project: project || '', startedAt: startedAt || now(), writtenAs: sessionId };
     live.set(sessionId, span);
     if (enabled) writeSpan(sessionId, span, span.startedAt);
   }
 
-  // One session's writes are chained, so a checkpoint still in flight and the
-  // final write can never both insert — see .ai/contexts/activitywatch.md
-  // ("Checkpoints").
+  // see .ai/contexts/activitywatch.md ("Checkpoints")
   function writeSpan(sessionId, span, endedAt) {
     const data = { session: sessionId, project: span.project };
     const name = names.get(sessionId);
     if (name) data.name = name;
-    const match = { key: 'session', value: span.writtenAs };
     const duration = (endedAt - span.startedAt) / 1000;
 
     const write = (chains.get(sessionId) || Promise.resolve())
-      .then(() => client.upsertSpan(running.id, running.bucket, data, span.startedAt, duration, match))
+      .then(() => {
+        const values = span.writtenAs === sessionId ? [sessionId] : [span.writtenAs, sessionId];
+        return client.upsertSpan(running.id, running.bucket, data, span.startedAt, duration, { key: 'session', values });
+      })
       .then((ok) => { if (ok) span.writtenAs = sessionId; return ok; })
       .catch(() => false);
     chains.set(sessionId, write);
     inflight.add(write);
     write.finally(() => {
       inflight.delete(write);
-      if (chains.get(sessionId) === write) chains.delete(sessionId);
+      for (const [id, tail] of chains) if (tail === write) chains.delete(id);
     });
     return write;
   }
 
+  function pruneNames() {
+    for (const id of Array.from(names.keys())) {
+      if (!live.has(id) && !(focused && focused.sessionId === id)) names.delete(id);
+    }
+  }
+
   function checkpointAll() {
+    pruneNames();
     if (!enabled) return;
     const at = now();
     for (const [id, span] of live) writeSpan(id, span, at);
@@ -139,16 +155,15 @@ function createActivityWatchReporter(deps) {
   // see .ai/contexts/activitywatch.md ("Quitting")
   async function flush() {
     const at = now();
-    if (focused) await beat(focused);
+    const closing = focused ? beat(focused) : Promise.resolve(false);
     if (enabled) {
-      // see .ai/contexts/activitywatch.md ("Quitting")
       for (const [id, span] of Array.from(live)) {
         live.delete(id);
         writeSpan(id, span, at);
         names.delete(id);
       }
     }
-    await Promise.all(Array.from(inflight));
+    await Promise.all([closing, ...Array.from(inflight)]);
   }
 
   // see .ai/contexts/activitywatch.md ("Running")
@@ -167,8 +182,7 @@ function createActivityWatchReporter(deps) {
     enabled = !!on;
     if (!enabled) { stopKeepalive(); stopCheckpoints(); return; }
     if (focused) { beat(focused); startKeepalive(); }
-    // Sessions already running are written now rather than a minute from now.
-    checkpointAll();
+    checkpointAll(); // see .ai/contexts/activitywatch.md ("Running")
     startCheckpoints();
   }
 
@@ -177,10 +191,9 @@ function createActivityWatchReporter(deps) {
   return {
     focus, sessionStarted, sessionEnded, rekey, flush, setEnabled, stop,
     get enabled() { return enabled; },
-    get liveCount() { return live.size; },
     get hasPendingWork() { return enabled && (live.size > 0 || inflight.size > 0); },
     buckets: { attention: attention.id, running: running.id },
   };
 }
 
-module.exports = { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS };
+module.exports = { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS, IDLE_SECONDS };

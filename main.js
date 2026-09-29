@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const path = require('path');
@@ -163,7 +163,12 @@ if (TRACE.on) {
 
 // see .ai/contexts/activitywatch.md
 const activityWatchClient = createActivityWatchClient({ fetchFn: fetch, hostname: os.hostname(), log });
-const activityReporter = createActivityWatchReporter({ client: activityWatchClient, hostname: os.hostname() });
+const activityReporter = createActivityWatchReporter({
+  client: activityWatchClient,
+  hostname: os.hostname(),
+  idleSeconds: () => { try { return powerMonitor.getSystemIdleTime(); } catch { return 0; } },
+});
+let activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
 activityReporter.setEnabled(
   (getSetting('global') || {}).activityReporting ?? SETTING_DEFAULTS.activityReporting
 );
@@ -2708,9 +2713,12 @@ ipcMain.handle('set-activity-reporting-enabled', (_event, enabled) => {
   return activityReportingState();
 });
 
-// The renderer owns focus: which session is shown, and whether the window has it.
+// see .ai/contexts/activitywatch.md ("The IPC surface")
 ipcMain.on('activity-focus', (_event, focus) => {
-  if (!focus || typeof focus.sessionId !== 'string') { activityReporter.focus(null); return; }
+  if (!focus || typeof focus.sessionId !== 'string' || !focus.sessionId || focus.sessionId.length > 200) {
+    activityReporter.focus(null);
+    return;
+  }
   activityReporter.focus({
     sessionId: focus.sessionId,
     name: typeof focus.name === 'string' ? focus.name.slice(0, 200) : '',
@@ -2955,6 +2963,7 @@ ipcMain.handle('updater-download', () => {
   return autoUpdater.downloadUpdate();
 });
 ipcMain.handle('updater-install', () => {
+  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
   if (!autoUpdater) return;
   autoUpdater.quitAndInstall();
 });
@@ -3060,6 +3069,9 @@ if (!gotSingleInstanceLock) {
         stdio: ['ignore', 'ignore', 'pipe'],
         env,
       });
+      // see .ai/contexts/activitywatch.md ("Running")
+      const activityId = `schedule:${name}:${Date.now()}`;
+      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${name}` });
 
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -3067,11 +3079,13 @@ if (!gotSingleInstanceLock) {
       child.on('exit', (code) => {
         if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
         log.info(`[schedule] ${name} finished (exit ${code})`);
+        activityReporter.sessionEnded(activityId);
         if (onDone) onDone();
       });
 
       child.on('error', (err) => {
         log.error(`[schedule] ${name} error:`, err.message);
+        activityReporter.sessionEnded(activityId);
         if (onDone) onDone();
       });
     }
@@ -3132,7 +3146,6 @@ app.on('window-all-closed', () => {
 });
 
 // see .ai/contexts/activitywatch.md ("Quitting")
-let activityFlushedForQuit = false;
 app.on('before-quit', (event) => {
   if (!activityFlushedForQuit && activityReporter.hasPendingWork) {
     event.preventDefault();

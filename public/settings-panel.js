@@ -91,7 +91,7 @@
     if (!isProject) {
       try { traceState = (await window.api.getActivityTraceState()) || traceState; } catch {};
     }
-    // Same kind of live switch — see .ai/contexts/activitywatch.md
+    // see .ai/contexts/activitywatch.md ("The IPC surface")
     let reportingState = { enabled: false, reachable: null, destination: 'ActivityWatch', url: '', buckets: {} };
     if (!isProject && typeof window.api.getActivityReportingState === 'function') {
       try { reportingState = (await window.api.getActivityReportingState()) || reportingState; } catch {};
@@ -380,9 +380,9 @@
             <span class="settings-label">What is sent</span>
             <div class="settings-description">
               Two separate buckets, so that the time you spent on a session is never added to the time it ran on its own.<br>
-              <strong>Your attention</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.attention) || '')}</code>: the session on screen while the window has focus, with its project and its name as the sidebar shows it. It appears in ActivityWatch's Editor view.<br>
-              <strong>What ran</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.running) || '')}</code>: every Claude session from start to exit, whether or not you were looking at it, with its project and — if you ever opened it — its name. Sessions overlap there, as they did. Each one is updated every minute while it runs, so a crash loses at most the last minute of it. Shells are not counted: a shell sitting open is not work running.<br>
-              No transcript content, prompt or command is ever sent.
+              <strong>Your attention</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.attention) || '')}</code>: the session whose terminal is on screen, while the window has focus and you are at the keyboard, with its project and its name. It stops after 3 minutes without input, and while Settings, Memory or another full-page view replaces the terminals. It appears in ActivityWatch's Editor view.<br>
+              <strong>What ran</strong> — <code>${escapeHtml((reportingState.buckets && reportingState.buckets.running) || '')}</code>: every Claude session from start to exit, scheduled runs included, whether or not you were looking at it, with its project and — if you ever opened it — its name. Sessions overlap there, as they did. Each one is updated every minute while it runs, so a crash loses at most the last minute of it. Shells are not counted: a shell sitting open is not work running.<br>
+              A session's name is the one you gave it, or the title generated for it; a session with neither is sent under its id. Its first prompt — which the sidebar shows for such a session — is never sent, nor is any other prompt, command or transcript content.
             </div>
           </div>
         </div>

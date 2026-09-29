@@ -83,16 +83,22 @@ function setActiveSession(id) {
 // see .ai/contexts/activitywatch.md ("Attention")
 function reportActivityFocus() {
   if (!window.api || typeof window.api.reportActivityFocus !== 'function') return;
-  if (!activeSessionId || !document.hasFocus()) { window.api.reportActivityFocus(null); return; }
+  const terminalShown = !terminalArea || terminalArea.style.display !== 'none';
+  if (!activeSessionId || !document.hasFocus() || !terminalShown) { window.api.reportActivityFocus(null); return; }
   const s = sessionMap.get(activeSessionId) || {};
   window.api.reportActivityFocus({
     sessionId: activeSessionId,
-    name: cleanDisplayName(s.name || s.aiTitle || s.summary) || '',
+    // Never s.summary, the first prompt — see .ai/contexts/activitywatch.md ("What reaches the server")
+    name: cleanDisplayName(s.name || s.aiTitle) || '',
     project: s.projectPath || '',
   });
 }
 window.addEventListener('focus', reportActivityFocus);
 window.addEventListener('blur', reportActivityFocus);
+// see .ai/contexts/activitywatch.md ("Attention")
+if (terminalArea && typeof MutationObserver === 'function') {
+  new MutationObserver(reportActivityFocus).observe(terminalArea, { attributes: true, attributeFilter: ['style'] });
+}
 // Persist slug group expand state across reloads
 function getExpandedSlugs() {
   try { return new Set(JSON.parse(sessionStorage.getItem('expandedSlugs') || '[]')); } catch { return new Set(); }
