@@ -14,6 +14,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 |---|---|
 | `git-changes.js` | Pure parser — no electron, no DOM, no fs. `require()`-d from `main.js` and from tests, same pattern as `remote-hosts.js` / `derive-project-path.js`. |
 | `git-changes-runner.js` | Runs the git commands, local or remote, behind one interface. |
+| `run-to-exit.js` | The local spawn both runners share: settles on `close`, drains past the stdout cap instead of killing — see "A capped read waits for git to exit". |
 | `git-changes-target.js` | cwd resolution for the panel's IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
 | `git-changes-file.js` | The content pair and the write target behind the editable diff: the `<rev>:<path>` guard, the repository-containment check, the read and the write. |
 | `git-changes-watch.js` | The registry behind `git-changes-watch`: arms `fs.watch`, debounces, re-arms after a rename, and reports the repo-relative path. |
@@ -36,7 +37,7 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 `createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
-- **Local** (`kind: 'local'`): `child_process.execFile('git', args, {cwd, timeout, maxBuffer})` — cwd is `execFile`'s own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s.
+- **Local** (`kind: 'local'`): `runToExit('git', args, {cwd, timeoutMs, maxBuffer})` (`run-to-exit.js`, a `child_process.spawn` with no shell) — cwd is the spawn's own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s. See "A capped read waits for git to exit".
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
 - **`invoke(args, remoteOpts)`** is the single choke point both `status()` and `diff()` go through: it prepends `--literal-pathspecs` (`buildGitArgs`, see "Quoting rule") to every argv/command, and threads `remoteOpts.maxStdoutBytes` to the remote transport only (the local path's `execFile` `maxBuffer` already bounds it).
 
@@ -90,9 +91,9 @@ git's default untracked mode; if the retry succeeds the result comes back
 `? dir/` rows, and a note saying the untracked listing is coarse.
 
 The retry is gated on the failure signature (`isStdoutCapFailure`: the remote
-transport's own `stdout exceeded <n> bytes`, or `execFile`'s
-`stdout maxBuffer length exceeded` — both non-localized, one ours and one
-Node's). Any other failure returns its own error untouched: retrying on every
+transport's own `stdout exceeded <n> bytes`, or the local runner's
+`stdout maxBuffer length exceeded`, worded as Node's `execFile` words it — both
+non-localized). Any other failure returns its own error untouched: retrying on every
 non-zero exit would tell a user whose repository is unreadable
 (`could not read directory: Permission denied`) that they have too many
 untracked files, and discard the real message on the way. If the retry itself
@@ -351,7 +352,7 @@ of them produces `reason: 'not-a-repo'`.
 **A cwd that is gone is ruled out before the corroboration is trusted.** The walk
 below answers "no `.git` anywhere" for a path that does not exist, so a deleted
 worktree outside a repository would otherwise be reported as "not a git
-repository". `execFile` happens to fail to spawn for such a cwd — code `-1`, not 128 — but the local and
+repository". The local spawn happens to fail for such a cwd — code `-1`, not 128 — but the local and
 remote transports differ here (`git -C <gone>` exits 128), so the check is an
 outcome of its own rather than something left to a code that happens not to
 match. It also decides the wording: `spawn git ENOENT` reads as "git is not
@@ -723,3 +724,30 @@ hook), the scratch-repo test wrote `tracked.txt` into the outer repository's
 index and rewrote its local `user.email`; the test helper now drops `GIT_*` /
 `HUSKY*` for the scratch repo and disables its hooks, and the runner no longer
 trusts them either.
+
+## A capped read waits for git to exit
+
+Both local runners (`defaultRunGit` in `git-changes-file.js`, `defaultLocalExec`
+in `git-changes-runner.js`) go through `runToExit` (`run-to-exit.js`), which
+settles on the child's `close` and never kills a child for overrunning its
+stdout cap. Past the cap it keeps reading and drops the bytes, so git runs to
+its own end; the result carries `overflow: true` and the same
+`stdout maxBuffer length exceeded` message `execFile` would give.
+
+The reason is Windows. There, a git that was killed leaves its working
+directory busy for a moment after `execFile` has reported its exit: the
+repository cannot be removed (`EBUSY` on `rmdir`) although neither the `git.exe`
+on `PATH` nor the `mingw64\bin\git.exe` it starts as its own child is still
+reported alive. A git that runs to its own end does not. On `windows-2022` the
+over-the-cap subtest of `test/git-changes-file-real-git.test.js` hit `EBUSY` in
+its cleanup in 24 of 8400 runs while the cap killed git, and in none of 8400
+once git was drained instead.
+
+A timeout still kills: a git that hangs cannot be waited for. The pipes are
+closed on this side first, as `execFile` does, so a grandchild that still holds
+them cannot delay `close`. On Windows a timed-out git therefore leaves its
+working directory busy for a moment after the call has returned, as above.
+
+`fs.rmSync`'s `maxRetries` does not cover this failure on Node 20 and 22: their
+recursive removal retries only after emptying a directory (`ENOTEMPTY`,
+`EPERM`); an `EBUSY` on the first `rmdir` of a directory is thrown at once.

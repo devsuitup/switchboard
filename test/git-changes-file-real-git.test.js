@@ -24,10 +24,7 @@ function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-')));
 }
 
-// The maxBuffer cap SIGTERMs an overrunning `git cat-file`, and execFile's
-// callback runs before that child has been reaped (measured: exitCode null,
-// killed true). On Windows a live process holds a handle on its working
-// directory, so removing the scratch repo can race it — hence the retries.
+// see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
 function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

@@ -2,7 +2,7 @@
 
 'use strict';
 
-const { execFile } = require('child_process');
+const { runToExit } = require('./run-to-exit');
 const fs = require('fs');
 const path = require('path');
 const { defaultRunRemoteCommand } = require('./remote-attach');
@@ -184,17 +184,11 @@ function localGitEnv() {
   return env;
 }
 
-function defaultLocalExec(args, { cwd, timeoutMs }) {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd, env: localGitEnv(), timeout: timeoutMs, maxBuffer: LOCAL_MAX_BUFFER, windowsHide: true },
-      (err, stdout, stderr) => {
-        if (err) {
-          resolve({ code: typeof err.code === 'number' ? err.code : -1, stdout: stdout || '', stderr: stderr || err.message || String(err) });
-          return;
-        }
-        resolve({ code: 0, stdout: stdout || '', stderr: stderr || '' });
-      });
-  });
+async function defaultLocalExec(args, { cwd, timeoutMs }) {
+  const result = await runToExit('git', args, { cwd, env: localGitEnv(), timeoutMs, maxBuffer: LOCAL_MAX_BUFFER });
+  const stdout = result.stdout.toString('utf8');
+  if (result.code === 0) return { code: 0, stdout, stderr: result.stderr };
+  return { code: result.code, stdout, stderr: result.stderr || result.message };
 }
 
 // Bounds what git wrote — see .ai/contexts/changes-view.md ("Bounded error messages")

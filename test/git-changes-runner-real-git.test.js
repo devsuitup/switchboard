@@ -42,9 +42,7 @@ function mkTmp() {
   return fs.realpathSync.native(dir);
 }
 
-// Same race as test/git-changes-file-real-git.test.js: a git child killed by a
-// cap is still terminating when the assertion returns, and on Windows it holds
-// its working directory until it dies.
+// see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
 function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
