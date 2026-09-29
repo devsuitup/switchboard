@@ -112,9 +112,11 @@ test('isSensitivePath: rejects traversal to .ssh via .claude path', () => {
 
 // ── isAllowedMemoryPath ───────────────────────────────────────────────────────
 
+// A name nothing on disk carries: a real ~/.claude/CLAUDE.md may be a symlink
+// out of ~/.claude, which the guard rightly refuses (see the symlink tests below).
 test('isAllowedMemoryPath: allows files under ~/.claude/', () => {
   const { isAllowedMemoryPath: allowed } = require('../ipc-path-validator');
-  assert.equal(allowed(path.join(CLAUDE_DIR, 'CLAUDE.md'), []), true);
+  assert.equal(allowed(path.join(CLAUDE_DIR, 'sb-test-no-such-file.md'), []), true);
 });
 
 test('isAllowedMemoryPath: allows files deep under ~/.claude/', () => {
