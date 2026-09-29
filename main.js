@@ -37,7 +37,7 @@ const activityTrace = require('./activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
-const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel } = require('./window-frame');
+const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -928,9 +928,7 @@ ipcMain.handle('clipboard-write-text', (_event, text) => {
 ipcMain.handle('popup-app-menu', (_event, position) => {
   const menu = Menu.getApplicationMenu();
   if (!menu || !mainWindow || mainWindow.isDestroyed()) return false;
-  const zoom = mainWindow.webContents.getZoomFactor();
-  const x = Math.round((Number(position && position.x) || 0) * zoom);
-  const y = Math.round((Number(position && position.y) || 0) * zoom);
+  const { x, y } = menuPopupPoint(position, mainWindow.webContents.getZoomFactor());
   menu.popup({ window: mainWindow, x, y });
   return true;
 });

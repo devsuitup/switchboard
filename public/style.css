@@ -15,6 +15,7 @@
   --text-muted: #9090a8;
   /* The window strip: see .ai/contexts/window-frame.md */
   --strip-height: 32px;
+  --strip-min-height: max(var(--strip-height), env(titlebar-area-height, 0px));
   --strip-inset-left: 0px;
   --strip-inset-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
@@ -4833,7 +4834,7 @@ body.window-frameless #sidebar-header {
   padding-top: 0;
 }
 body.window-frameless #sidebar-tabs {
-  height: var(--strip-height);
+  height: var(--strip-min-height);
   margin: 0 -20px;
   padding: 0 20px 0 max(20px, calc(var(--strip-inset-left) + 8px));
   -webkit-app-region: drag;
@@ -4869,7 +4870,7 @@ body.window-frameless #sidebar.collapsed {
   -webkit-app-region: drag;
 }
 body.window-frameless.platform-darwin:not(.window-full-screen) #sidebar.collapsed #sidebar-expand-btn {
-  margin-top: calc(var(--strip-height) + 8px);
+  margin-top: calc(var(--strip-min-height) + 8px);
 }
 
 body.window-frameless :is(
@@ -4882,7 +4883,7 @@ body.window-frameless :is(
   #work-files-viewer .viewer-toolbar,
   #activity-trace-viewer .viewer-toolbar
 ) {
-  min-height: var(--strip-height);
+  min-height: var(--strip-min-height);
   padding-right: calc(16px + var(--strip-inset-right));
   -webkit-app-region: drag;
 }
@@ -4900,7 +4901,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-id, #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(#terminal-header-id, #terminal-header-sandbox, #jsonl-viewer-session-id, .viewer-toolbar-path),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }

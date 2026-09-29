@@ -11,7 +11,7 @@ the same strip across the rest of the window.
 
 | File | Role |
 |---|---|
-| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName)` (the menu), `KEYBOARD_ROLES`, `STRIP_HEIGHT`. |
+| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName)` (the menu), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
 | `main.js` | Spreads `windowFrameOptions(process.platform)` into the `BrowserWindow`; `buildMenu()` installs the template; the `popup-app-menu` IPC opens it under the menu button. |
 | `preload.js` | `window.api.popupAppMenu(x, y)`. |
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
@@ -27,9 +27,17 @@ the same strip across the rest of the window.
 | macOS | `titleBarStyle: 'hidden'`, `trafficLightPosition` | The system traffic lights, moved to sit vertically centred in the strip. |
 
 The overlay's height is `STRIP_HEIGHT` (32 DIP) and its colour is
-`--surface-chrome`, so it reads as part of the strip. Both the overlay and the
-CSS take the height from one number: `--strip-height` in `style.css` must equal
-`STRIP_HEIGHT`, and the test holds that.
+`--surface-chrome`, so it reads as part of the strip. `--strip-height` in
+`style.css` equals `STRIP_HEIGHT`, and the test holds that. The two units
+differ under zoom: the overlay stays 32 DIP, while 32 CSS px shrink below
+100 %. The strip and the headers therefore take
+`--strip-min-height: max(var(--strip-height), env(titlebar-area-height, 0px))`.
+`env(titlebar-area-height)` is the overlay's height in CSS px, so it grows as
+the zoom shrinks (measured on Linux, Electron 41: 46.98 CSS px at factor 0.69,
+39 at 0.83, 32 at 1, 23 at 1.44), and the strip is never shorter than the
+controls. Above 100 % the strip keeps its 32 CSS px and is taller than the
+controls. On macOS and in full screen the variable is undefined and the strip is
+`--strip-height`.
 
 ## Keeping content out from under the controls
 
@@ -62,7 +70,9 @@ the main-area headers listed above. Chromium subtracts `no-drag` boxes from
 inside a drag region never receives the mouse. `no-drag` is therefore set on:
 
 - every interactive element: `button, input, select, textarea, a, [role="button"], [contenteditable]`;
-- the text a user copies from a header: `#terminal-header-id`, `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
+- the text a user copies from a header, or whose `title` tooltip must show (the
+  renderer gets no hover inside a drag region): `#terminal-header-id`,
+  `#terminal-header-sandbox`, `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
   `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
@@ -102,8 +112,15 @@ itself, so they do not depend on the menu, but they stay in it for the menu
 button.
 
 `#app-menu-btn` opens the same menu as a popup under itself
-(`Menu.popup`, coordinates scaled by the zoom factor). macOS hides the button:
+(`Menu.popup`, coordinates scaled by the zoom factor; `menuPopupPoint()`
+replaces a non-finite coordinate with 0). macOS hides the button:
 the system menu bar shows the menu there.
+
+On Windows and Linux the menu has no keyboard route: `Alt` and `F10` do not
+open it, and the ☰ button opens it only when it is focused and activated. `F10`
+is a terminal key (htop and mc quit on it), and a bare `Alt` tap would need
+press/release tracking that `Alt`+`Tab`, `Alt`+drag and focus loss can
+mistrigger, so neither is bound.
 
 A synthetic key from `webContents.sendInputEvent` or CDP does not reach the
 focus manager, so a menu accelerator cannot be exercised that way; the test
@@ -120,6 +137,17 @@ produced (`+`, `=`, `-`, `0`), the physical `Digit0` key, or the keypad's
 `NumpadAdd`, `NumpadSubtract` and `Numpad0`, with Ctrl (Cmd on macOS) held and
 Alt not. A match is applied in steps of 0.5, as the roles do, and the event is
 prevented, so neither the menu accelerator nor the terminal also receives it.
+`Digit0` counts only without Shift: on AZERTY `Ctrl`+`Shift`+`à` produces `0`
+and matches by its character, while on a US layout `Ctrl`+`Shift`+`0` produces
+`)` and reaches the terminal as before.
+
+The zoom roles themselves do not clamp (`webContents.zoomLevel += 0.5` in
+Electron 41), and `setZoomLevel` stores any level. Blink clamps only the
+applied factor, to [0.25, 5] (measured: level 10 stores 10 and renders at
+factor 5; level −10 renders at 0.25), so a stored level past that range makes
+the next presses in the other direction do nothing visible. `nextZoomLevel()`
+clamps the level to [−7.5, 8.5], the half-level steps inside Blink's range
+(factors 0.25 and 4.71).
 The roles stay in the menu for the menu button.
 
 ## States the window can be in

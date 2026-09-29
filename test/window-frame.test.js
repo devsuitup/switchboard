@@ -102,15 +102,83 @@ test('the controls are painted in the strip\'s own colours', () => {
   assert.equal(symbolColor.toLowerCase(), token('--text-muted'));
 });
 
+function splitTopLevel(list) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) {
+      parts.push(list.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(list.slice(start));
+  return parts.map((p) => p.trim().replace(/\s+/g, ' ')).filter(Boolean);
+}
+
+function selectorTokens(selectorText) {
+  const tokens = [];
+  for (const selector of splitTopLevel(selectorText)) {
+    const bare = selector.replace(/^body\.window-frameless\s*/, '');
+    const is = /^:is\(([\s\S]*)\)$/.exec(bare);
+    tokens.push(...(is ? splitTopLevel(is[1]) : [bare]));
+  }
+  return tokens;
+}
+
+function tokensOfRules(declaration) {
+  const tokens = new Set();
+  for (const m of CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (declaration.test(m[2])) for (const t of selectorTokens(m[1])) tokens.add(t);
+  }
+  return tokens;
+}
+
+const NO_DRAG = tokensOfRules(/-webkit-app-region:\s*no-drag/);
+
+test('the selector tokeniser splits :is() lists without breaking attribute selectors', () => {
+  assert.deepEqual(
+    selectorTokens('body.window-frameless :is(button, [role="button"]),\nbody.window-frameless #a .b'),
+    ['button', '[role="button"]', '#a .b'],
+  );
+});
+
 test('the strip is a drag region and every interactive element in it is exempt', () => {
   assert.match(CSS, /#sidebar-tabs\s*\{[^}]*-webkit-app-region:\s*drag/);
-  const noDrag = [...CSS.matchAll(/([^{}]+)\{[^{}]*-webkit-app-region:\s*no-drag[^{}]*\}/g)].map((m) => m[1]).join(',');
   for (const selector of ['button', 'input', 'select', 'textarea', 'a', '[role="button"]', '[contenteditable]']) {
-    assert.ok(noDrag.includes(selector), `${selector} must be no-drag`);
+    assert.ok(NO_DRAG.has(selector), `${selector} must be no-drag`);
   }
-  for (const overlay of ['.new-session-popover', '.terminal-context-menu', '.new-session-overlay', '.add-project-overlay']) {
-    assert.ok(noDrag.includes(overlay), `${overlay} can open over the strip and must be no-drag`);
+  for (const overlay of [
+    '.new-session-popover', '.terminal-context-menu', '.new-session-overlay', '.add-project-overlay',
+    '.jsonl-screenshot-fullscreen', '#update-toast', '.restore-toast',
+  ]) {
+    assert.ok(NO_DRAG.has(overlay), `${overlay} can open over the strip and must be no-drag`);
   }
+});
+
+test('header text that is copied or carries a tooltip is exempt from the drag region', () => {
+  for (const selector of ['#terminal-header-id', '#terminal-header-sandbox', '#jsonl-viewer-session-id', '.viewer-toolbar-path']) {
+    assert.ok(NO_DRAG.has(selector), `${selector} must be no-drag`);
+  }
+});
+
+test('every main-area header that drags is inset from the controls, and the reverse', () => {
+  const drag = tokensOfRules(/-webkit-app-region:\s*drag/);
+  drag.delete('#sidebar-tabs');
+  drag.delete('#sidebar.collapsed');
+  const inset = tokensOfRules(/padding-right:\s*calc\(16px \+ var\(--strip-inset-right\)\)/);
+  const tall = tokensOfRules(/min-height:\s*var\(--strip-min-height\)/);
+  assert.ok(drag.size > 0);
+  assert.deepEqual([...drag].sort(), [...inset].sort(), 'drag headers and right-inset headers must be the same list');
+  assert.deepEqual([...drag].sort(), [...tall].sort(), 'drag headers and headers at least as tall as the controls must be the same list');
+});
+
+test('the strip is never shorter than the controls overlay, whatever the zoom', () => {
+  assert.match(CSS, /--strip-min-height:\s*max\(\s*var\(--strip-height\),\s*env\(titlebar-area-height,\s*0px\)\s*\)/);
+  assert.match(CSS, /#sidebar-tabs\s*\{[^}]*height:\s*var\(--strip-min-height\)/);
 });
 
 test('the collapsed sidebar keeps a drag region', () => {
@@ -162,7 +230,7 @@ test('the menu button opens the application menu under itself', () => {
 
 // --- Zoom keys, whatever the layout ---
 
-const { zoomKey, nextZoomLevel } = require('../window-frame');
+const { zoomKey, nextZoomLevel, ZOOM_MIN_LEVEL, ZOOM_MAX_LEVEL, menuPopupPoint } = require('../window-frame');
 const key = (k, code, mods = {}) => ({ type: 'keyDown', key: k, code, control: false, meta: false, alt: false, shift: false, ...mods });
 
 test('zoom keys are read by the character produced, on US and AZERTY alike', () => {
@@ -173,6 +241,11 @@ test('zoom keys are read by the character produced, on US and AZERTY alike', () 
   assert.equal(zoomKey(key('-', 'Minus', ctrl), 'linux'), 'out');                         // US
   assert.equal(zoomKey(key('à', 'Digit0', ctrl), 'linux'), 'reset');                      // AZERTY, unshifted
   assert.equal(zoomKey(key('0', 'Digit0', ctrl), 'linux'), 'reset');
+  assert.equal(zoomKey(key('0', 'Digit0', { ...ctrl, shift: true }), 'linux'), 'reset');  // AZERTY Shift+à
+});
+
+test('Ctrl+Shift+0 on a US layout is not a zoom key', () => {
+  assert.equal(zoomKey(key(')', 'Digit0', { control: true, shift: true }), 'linux'), null);
 });
 
 test('the numeric keypad zooms too', () => {
@@ -196,6 +269,28 @@ test('zoom steps by half a level, and reset returns to 0', () => {
   assert.equal(nextZoomLevel(0, 'in'), 0.5);
   assert.equal(nextZoomLevel(0.5, 'out'), 0);
   assert.equal(nextZoomLevel(2, 'reset'), 0);
+});
+
+test('zoom stops at the range the renderer applies, on the half-level grid', () => {
+  assert.ok(1.2 ** ZOOM_MIN_LEVEL >= 0.25 && 1.2 ** (ZOOM_MIN_LEVEL - 0.5) < 0.25, 'Blink floors the zoom factor at 0.25');
+  assert.ok(1.2 ** ZOOM_MAX_LEVEL <= 5 && 1.2 ** (ZOOM_MAX_LEVEL + 0.5) > 5, 'Blink caps the zoom factor at 5');
+  assert.equal(nextZoomLevel(ZOOM_MAX_LEVEL, 'in'), ZOOM_MAX_LEVEL);
+  assert.equal(nextZoomLevel(ZOOM_MIN_LEVEL, 'out'), ZOOM_MIN_LEVEL);
+  assert.equal(nextZoomLevel(10, 'out'), ZOOM_MAX_LEVEL, 'a level set out of range comes back into it');
+  assert.equal(nextZoomLevel(-10, 'in'), ZOOM_MIN_LEVEL);
+});
+
+test('the menu popup point is scaled by the zoom factor and never carries a non-finite coordinate', () => {
+  assert.deepEqual(menuPopupPoint({ x: 8, y: 30 }, 1.5), { x: 12, y: 45 });
+  assert.deepEqual(menuPopupPoint({ x: Infinity, y: -Infinity }, 1), { x: 0, y: 0 });
+  assert.deepEqual(menuPopupPoint({ x: NaN, y: '12' }, 1), { x: 0, y: 12 });
+  assert.deepEqual(menuPopupPoint(null, 2), { x: 0, y: 0 });
+  assert.deepEqual(menuPopupPoint({ x: 10, y: 10 }, Infinity), { x: 10, y: 10 });
+  assert.deepEqual(menuPopupPoint({ x: 1e308, y: 0 }, 10), { x: 0, y: 0 });
+});
+
+test('main opens the menu popup at the guarded point', () => {
+  assert.match(MAIN_SRC, /const \{ x, y \} = menuPopupPoint\(position, mainWindow\.webContents\.getZoomFactor\(\)\);\s*menu\.popup\(\{ window: mainWindow, x, y \}\);/);
 });
 
 test('main applies the zoom keys and stops them there', () => {
