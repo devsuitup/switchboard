@@ -184,12 +184,17 @@ session, both writing its transcript, and input meant for this instance lands
 in a session the user is driving elsewhere.
 
 **The check** is main-side, on demand, over IPC `session-live-elsewhere`:
-`liveElsewhere(sessionId, sessionHasPty)` returns `{pid, cwd, startedAt}` or
-`null`.
+`liveElsewhere(sessionId, sessionHasPty, ptyPids)` returns `{pid, cwd,
+startedAt}` or `null`.
 
 - A session this instance holds a PTY for (`sessionHasPty`, which matches
   `realSessionId` too) is never live elsewhere: opening it is a re-attach, the
   case a renderer reload relies on.
+- A CLI this instance spawned is never live elsewhere either, even while its
+  PTY is still keyed by the pending id and `sessionHasPty` misses it: a pid that
+  is one of the PTY processes (`ptyPids`), or whose parent chain reaches this
+  main process, is excluded. The chain is read from `/proc/<pid>/stat` on Linux;
+  elsewhere only the PTY pids themselves are recognised.
 - Otherwise `findLiveProcess(sessionId)` reads `~/.claude/sessions/*.json`
   afresh — it does not use the watcher's maps, so it answers before the watcher
   attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file

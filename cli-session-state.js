@@ -20,6 +20,8 @@ let onIdle = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
 let readProcStart = defaultReadProcStart;
+let readParentPid = defaultReadParentPid;
+let ownPid = process.pid;
 let now = Date.now;
 
 let watcher = null;
@@ -40,6 +42,27 @@ function defaultIsProcessAlive(pid) {
   }
 }
 
+function defaultReadParentPid(pid) {
+  if (process.platform !== 'linux') return null;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+    return Number.isInteger(ppid) && ppid > 0 ? ppid : null;
+  } catch {
+    return null;
+  }
+}
+
+// see .ai/contexts/cli-session-state.md ("Live elsewhere")
+function descendsFromThisProcess(pid) {
+  let current = pid;
+  for (let depth = 0; depth < 64 && current && current > 1; depth++) {
+    if (current === ownPid) return true;
+    current = readParentPid(current);
+  }
+  return false;
+}
+
 function defaultReadProcStart(pid) {
   if (process.platform !== 'linux') return null;
   try {
@@ -58,6 +81,8 @@ function init(ctx) {
   log = ctx.log || { info() {}, debug() {}, warn() {}, error() {} };
   isProcessAlive = ctx.isProcessAlive || defaultIsProcessAlive;
   readProcStart = ctx.readProcStart || defaultReadProcStart;
+  readParentPid = ctx.readParentPid || defaultReadParentPid;
+  ownPid = ctx.ownPid || process.pid;
   now = ctx.now || Date.now;
   stop();
 }
@@ -229,7 +254,7 @@ function getStatus(sessionId) {
 }
 
 // On-demand scan, independent of the watcher -- see .ai/contexts/cli-session-state.md ("Live elsewhere")
-function findLiveProcess(sessionId) {
+function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
   let names;
   try { names = fs.readdirSync(dir); } catch { return null; }
@@ -240,6 +265,7 @@ function findLiveProcess(sessionId) {
     if (!raw || typeof raw !== 'object' || raw.sessionId !== sessionId) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
+    if (exclude(raw.pid)) continue;
     if (raw.procStart != null) {
       const actual = readProcStart(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
@@ -253,10 +279,11 @@ function findLiveProcess(sessionId) {
   return null;
 }
 
-function liveElsewhere(sessionId, hasPty) {
+function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
   if (hasPty(sessionId)) return null;
-  return findLiveProcess(sessionId);
+  const own = new Set(ptyPids());
+  return findLiveProcess(sessionId, { exclude: (pid) => own.has(pid) || descendsFromThisProcess(pid) });
 }
 
 module.exports = {

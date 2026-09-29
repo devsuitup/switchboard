@@ -146,5 +146,5 @@ test('index.html loads the guard before app.js, preload exposes the check, main 
   assert.match(read('preload.js'),
     /getSessionLiveElsewhere: \(id\) => ipcRenderer\.invoke\('session-live-elsewhere', id\)/);
   assert.match(read('main.js'),
-    /ipcMain\.handle\('session-live-elsewhere', \(_event, sessionId\) => cliSessionState\.liveElsewhere\(sessionId, sessionHasPty\)\)/);
+    /ipcMain\.handle\('session-live-elsewhere', \(_event, sessionId\) => cliSessionState\.liveElsewhere\(sessionId, sessionHasPty, ptyPids\)\)/);
 });

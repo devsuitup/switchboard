@@ -41,6 +41,8 @@ function boot(dir, opts = {}) {
     onIdle: () => {},
     isProcessAlive: opts.isProcessAlive || (() => true),
     readProcStart: opts.readProcStart || (() => '9373049'),
+    readParentPid: opts.readParentPid || (() => null),
+    ownPid: opts.ownPid,
   });
 }
 
@@ -131,7 +133,8 @@ test('on Linux, the default probes read the real start time of a real process', 
     const procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
 
     withDir((dir) => {
-      cliSessionState.init({ dir, activeSessions: new Map(), log: silentLog, onIdle: () => {} });
+      // ownPid off this tree: the child stands for another instance's CLI
+      cliSessionState.init({ dir, activeSessions: new Map(), log: silentLog, onIdle: () => {}, ownPid: -1 });
 
       writeState(dir, child.pid, { procStart });
       assert.equal(cliSessionState.liveElsewhere('sess-1', noPty).pid, child.pid,
@@ -143,5 +146,42 @@ test('on Linux, the default probes read the real start time of a real process', 
     });
   } finally {
     child.kill('SIGKILL');
+  }
+});
+
+// A session this instance spawned can still be keyed by its pending id when a
+// reload asks, so hasPty misses it; its CLI is still this instance's own.
+test('a CLI this instance spawned is never live elsewhere, even before its PTY is keyed by the real id', () => withDir((dir) => {
+  writeState(dir, 5001);
+  const parents = { 5001: 5000, 5000: 900 };   // claude -> shell -> this main process
+  boot(dir, { ownPid: 900, readParentPid: (pid) => parents[pid] || null });
+  assert.equal(cliSessionState.liveElsewhere('sess-1', noPty), null);
+}));
+
+test('a CLI that is the PTY process itself is this instance\'s own', () => withDir((dir) => {
+  writeState(dir, 5001);
+  boot(dir);
+  assert.equal(cliSessionState.liveElsewhere('sess-1', noPty, () => [5001]), null);
+}));
+
+test('a CLI under another process tree is still live elsewhere', () => withDir((dir) => {
+  writeState(dir, 5001);
+  const parents = { 5001: 7000, 7000: 1 };
+  boot(dir, { ownPid: 900, readParentPid: (pid) => parents[pid] || null });
+  assert.equal(cliSessionState.liveElsewhere('sess-1', noPty, () => [6000]).pid, 5001);
+}));
+
+test('on Linux, a real child of this process is recognised as its own through /proc', { skip: process.platform !== 'linux' }, async () => {
+  const dir = mkTmp();
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+  try {
+    await new Promise((r) => child.once('spawn', r));
+    writeState(dir, child.pid, { procStart: null });
+    cliSessionState.init({ dir, activeSessions: new Map(), log: silentLog, onIdle: () => {} });
+    assert.equal(cliSessionState.liveElsewhere('sess-1', noPty), null);
+  } finally {
+    child.kill();
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
