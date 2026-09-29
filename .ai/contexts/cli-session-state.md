@@ -206,17 +206,45 @@ ids past the cap are not looked up and resume as before the guard.
   attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file
   whose `sessionId` matches, whose `pid` is alive (`process.kill(pid, 0)`), and
   whose `procStart` matches the process that owns that pid now.
-- **`procStart` on Linux is field 22 of `/proc/<pid>/stat`** (start time in
-  clock ticks since boot; checked against CLI 2.1.284). A mismatch means the pid
-  was reused and the file is stale. On other platforms the value is not decoded
-  (on Windows it is a FILETIME-sized number whose origin is unverified), so
-  `readProcStart` returns `null` and liveness alone decides: a reused pid there
-  reads as live, and costs a spurious skip or confirm, never a duplicate. A
-  skipped entry stays in the working set (below), so the cost is one restart
-  without that session reopened. Comparing the descriptor's `startedAt` with
-  the process creation time would narrow the gap, but Node exposes no creation
-  time for another process on Windows: it would take a child process
-  (PowerShell) per pid or a native addon, so the gap stays.
+- **`procStart` is the creation time of the process that wrote the file**, and
+  a mismatch with the process that owns the pid now means the pid was reused and
+  the file is stale. Both forms were checked against real descriptors (CLI
+  2.1.278 on Windows, CLI 2.1.284 on Linux):
+  - Linux: field 22 of `/proc/<pid>/stat` (clock ticks since boot), read
+    synchronously as before.
+  - Windows: a **FILETIME** (100 ns ticks since 1601-01-01 UTC) of the process
+    creation. Measured 2026-09-29 on two live descriptors (`procStart`
+    134350561856777853 and 134351483470939507): each equals, digit for digit,
+    `(Get-Process -Id <pid>).StartTime.ToFileTimeUtc()`. It runs 2-5 s before
+    the descriptor's `startedAt` (the CLI starts, then writes).
+  - `pidDomain: "win32:anchor"`, present on those Windows descriptors, means
+    `pid` is the pid of the process that owns the descriptor and the one
+    `procStart` describes: on both, the process at that pid was `claude`, its
+    creation time equalled `procStart`, and its parent was another process
+    (the shell), so it is not a launcher pid. Any other `win32:*` domain, or a
+    `procStart` that is not 17-19 digits there, is not compared.
+- **Windows has no cheap way to read another process's creation time from
+  Node**, so `scanLiveProcesses` is async and makes one probe per scan batch,
+  never per descriptor: it collects the candidates first (session id asked for,
+  pid alive, not this instance's own), then asks `readProcStartMany(pids)`
+  once for all of them. The default probe on Windows is one
+  `powershell.exe -NoProfile` running `Get-Process -Id <pids>`, bounded by
+  `PROBE_TIMEOUT_MS` (2 s) and `MAX_PROBE_PIDS` (64 pids per batch; candidates
+  beyond that are not probed). About 0.7 s measured on a cold call, paid only
+  when at least one candidate carries a comparable `procStart`. The IPC
+  handlers are `ipcMain.handle`, so they simply return the promise.
+- **Undecidable stays live.** A probe that fails, times out, does not report a
+  pid (process gone, access denied), a missing `procStart`, an unrecognised
+  `pidDomain` or format, and every platform without a probe (macOS) all read as
+  "live": the automatic resume is skipped, never made. Only a decided mismatch
+  clears the file.
+  On Windows only `pidDomain === "win32:anchor"` with a string `procStart` of
+  17-19 digits is compared (a JSON number past 2^53 has already lost digits; a
+  descriptor without `pidDomain` is not known to carry a FILETIME). The probe
+  keeps the lines PowerShell printed when it exits non-zero (a candidate that died
+  after the liveness check makes it exit 1) and rejects only on timeout or a
+  spawn error. **Not closed:** a pid reused by an elevated or system process
+  yields no `StartTime` (measured: pid 4 prints no line), so it stays live.
 - `status` is not required: any live process holding the session counts.
 
 **The decision** is in `public/resume-guard.js` (`guardResume`), called by
@@ -246,9 +274,15 @@ reported by `showLiveElsewhereNotice` as one line in the restore toast style
 (`Not reopened: <name> is live in pid N`, or a count and the pids), dismissible
 and removed after 15 s.
 
-**The batch is read once, before the first spawn.** A CLI started elsewhere on
-one of the batch's sessions during the restore stagger (500 ms per session) is
-not seen; that session is resumed as before the guard.
+**The batch is read once, before the first spawn, on purpose.** A CLI started
+elsewhere on one of the batch's sessions during the restore stagger (500 ms per
+session) is not seen; that session is resumed as before the guard. A re-check
+before each automatic open was weighed and not added: a fresh scan per open is
+a PowerShell probe on Windows (about 0.7 s, more than the stagger it would sit
+in), and skipping the probe would bring back the reused-pid false positive this
+section closes; the window is the few seconds of a restore, the miss costs one
+second CLI on a session another process started at that moment, exactly what a
+manual open does after its confirm.
 
 The sidebar has no dedicated marker for such a session. Once the watcher has
 seen its state file, `getStatus()` gives it the same state+age line as any live

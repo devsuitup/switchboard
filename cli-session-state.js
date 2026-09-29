@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 
@@ -14,16 +15,20 @@ const MIN_RESCAN_INTERVAL_MS = 1000;
 const MAX_SEEDED_FILES = 200;
 const MAX_LIVE_QUERY_IDS = 200;
 const GET_STATUS_PROBE_THROTTLE_MS = 5000;
+const MAX_PROBE_PIDS = 64;
+const PROBE_TIMEOUT_MS = 2000;
+const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
 let onIdle = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
-let readProcStart = defaultReadProcStart;
+let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
 let ownPid = process.pid;
 let now = Date.now;
+let platform = process.platform;
 
 let watcher = null;
 let flushTimer = null;
@@ -75,16 +80,52 @@ function defaultReadProcStart(pid) {
   }
 }
 
+// see .ai/contexts/cli-session-state.md
+function probeProcStartWindows(pids, timeoutMs = PROBE_TIMEOUT_MS, exec = execFile) {
+  const ids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (ids.length === 0) return Promise.resolve(new Map());
+  const script = `Get-Process -Id ${ids.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { try { "$($_.Id) $($_.StartTime.ToFileTimeUtc())" } catch {} }; exit 0`;
+  const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return new Promise((resolve, reject) => {
+    exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1 << 20 },
+      (err, stdout) => {
+        if (err && (err.killed || typeof err.code !== 'number')) { reject(err); return; }
+        const out = new Map();
+        for (const line of String(stdout).split(/\r?\n/)) {
+          const m = /^(\d+) (\d+)$/.exec(line.trim());
+          if (m) out.set(Number(m[1]), m[2]);
+        }
+        resolve(out);
+      });
+  });
+}
+
+async function defaultReadProcStartMany(pids) {
+  if (process.platform === 'win32') return probeProcStartWindows(pids);
+  const out = new Map();
+  if (process.platform !== 'linux') return out;
+  for (const pid of pids) {
+    const start = defaultReadProcStart(pid);
+    if (start != null) out.set(pid, start);
+  }
+  return out;
+}
+
 function init(ctx) {
   dir = ctx.dir || DEFAULT_DIR;
   activeSessions = ctx.activeSessions;
   onIdle = ctx.onIdle;
   log = ctx.log || { info() {}, debug() {}, warn() {}, error() {} };
   isProcessAlive = ctx.isProcessAlive || defaultIsProcessAlive;
-  readProcStart = ctx.readProcStart || defaultReadProcStart;
+  readProcStartMany = ctx.readProcStartMany
+    || (ctx.readProcStart
+      ? async (pids) => new Map(pids.map((pid) => [pid, ctx.readProcStart(pid)]))
+      : defaultReadProcStartMany);
   readParentPid = ctx.readParentPid || defaultReadParentPid;
   ownPid = ctx.ownPid || process.pid;
   now = ctx.now || Date.now;
+  platform = ctx.platform || process.platform;
   stop();
 }
 
@@ -254,23 +295,48 @@ function getStatus(sessionId) {
   return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt };
 }
 
+function canCompareProcStart(raw) {
+  if (raw.procStart == null) return false;
+  const windowsDescriptor = typeof raw.pidDomain === 'string' && raw.pidDomain.startsWith('win32:');
+  if (platform === 'win32' || windowsDescriptor) {
+    return raw.pidDomain === 'win32:anchor'
+      && typeof raw.procStart === 'string'
+      && WINDOWS_FILETIME_RE.test(raw.procStart);
+  }
+  return true;
+}
+
 // On-demand scan, independent of the watcher -- see .ai/contexts/cli-session-state.md ("Live elsewhere")
-function scanLiveProcesses(sessionIds, exclude) {
+async function scanLiveProcesses(sessionIds, exclude) {
   const found = new Map();
   if (sessionIds.size === 0) return found;
   let names;
   try { names = fs.readdirSync(dir); } catch { return found; }
+  const candidates = [];
   for (const name of names) {
-    if (found.size === sessionIds.size) break;
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
     try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-    if (!raw || typeof raw !== 'object' || !sessionIds.has(raw.sessionId) || found.has(raw.sessionId)) continue;
+    if (!raw || typeof raw !== 'object' || !sessionIds.has(raw.sessionId)) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     if (exclude(raw.pid)) continue;
-    if (raw.procStart != null) {
-      const actual = readProcStart(raw.pid);
+    candidates.push(raw);
+  }
+
+  const toProbe = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))].slice(0, MAX_PROBE_PIDS);
+  let actualByPid = new Map();
+  if (toProbe.length > 0) {
+    try {
+      const probed = await readProcStartMany(toProbe);
+      if (probed instanceof Map) actualByPid = probed;
+    } catch {}
+  }
+
+  for (const raw of candidates) {
+    if (found.has(raw.sessionId)) continue;
+    if (canCompareProcStart(raw) && toProbe.includes(raw.pid)) {
+      const actual = actualByPid.get(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
     }
     found.set(raw.sessionId, {
@@ -282,9 +348,9 @@ function scanLiveProcesses(sessionIds, exclude) {
   return found;
 }
 
-function findLiveProcess(sessionId, { exclude = () => false } = {}) {
+async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
-  return scanLiveProcesses(new Set([sessionId]), exclude).get(sessionId) || null;
+  return (await scanLiveProcesses(new Set([sessionId]), exclude)).get(sessionId) || null;
 }
 
 function ownProcessFilter(ptyPids) {
@@ -292,13 +358,13 @@ function ownProcessFilter(ptyPids) {
   return (pid) => own.has(pid) || descendsFromThisProcess(pid);
 }
 
-function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
+async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
   if (hasPty(sessionId)) return null;
   return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
 }
 
-function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
+async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
   const result = {};
   if (!Array.isArray(sessionIds)) return result;
   const wanted = new Set();
@@ -306,7 +372,7 @@ function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
     if (typeof id === 'string' && id && !hasPty(id)) wanted.add(id);
   }
-  for (const [id, live] of scanLiveProcesses(wanted, ownProcessFilter(ptyPids))) result[id] = live;
+  for (const [id, live] of await scanLiveProcesses(wanted, ownProcessFilter(ptyPids))) result[id] = live;
   return result;
 }
 
@@ -316,6 +382,8 @@ module.exports = {
   liveElsewhere,
   liveElsewhereMany,
   MAX_LIVE_QUERY_IDS,
+  MAX_PROBE_PIDS,
+  probeProcStartWindows,
   ensureWatching,
   stop,
   parseState,
