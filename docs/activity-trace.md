@@ -377,13 +377,39 @@ buffers, so a slow disk delays the trace instead of blocking the main thread —
 the trade is that the last few lines may be lost on a hard crash. A clean quit
 flushes and closes (`app.quit` is the last line).
 
+### A segment is pruned only once its stream has closed
+
+`fs.createWriteStream` opens its file asynchronously, on the libuv thread
+pool, and with `flags: 'a'` that open creates the file if it is missing. A
+rotation retires a stream that may not have opened yet; if the prune unlinks
+that segment first, the open lands afterwards and recreates it. The queue has
+already dropped the path, so the recreated file is never pruned again: each
+one it happens to leaves the directory a segment further above the ceiling for
+good, with no `trace.prune-failed` line, since the unlink itself succeeded.
+
+`pruneSegments()` therefore stops at the first stale segment whose stream has
+not emitted `close` (the `unsettled` map in `activity-trace.js`, a count per
+path, since a same-second reactivation can reopen a path before its previous
+stream has closed). Every
+rotated stream prunes again on its own `close`, so the segment is removed as
+soon as its handle is released. The order occurs on the Windows CI runners,
+whose thread-pool opens can lag behind a burst of rotations; it has not been
+seen on the Linux runners. The test "a retired segment
+whose open lands late is not recreated behind the prune" holds one stream's
+open back to reproduce the order deterministically on any platform.
+
+A stream whose `close` never fires (the fallback in "Testing the async prune
+path" below) keeps its segment, and every segment queued after it, on disk
+until the process exits.
+
 ## Testing the async prune path
 
 `rotate()` runs `openSegment()` synchronously but hands the retired stream's
-cleanup (`pruneSegments`) to its `close()`, because Windows refuses to unlink
-a handle that is still open. `close()`, `setEnabled(false, ...)` and the
-module's own `close()` used to pass that continuation straight to `.end()`
-instead: `.end(callback)`'s callback fires on the stream's `finish` event,
+cleanup (`pruneSegments`) to its `close()` — "A segment is pruned only once
+its stream has closed" above says why pruning cannot run earlier. `close()`,
+`setEnabled(false, ...)` and the module's own `close()` used to pass that
+continuation straight to `.end()` instead: `.end(callback)`'s callback fires
+on the stream's `finish` event,
 which only means the data was handed off — `autoClose`'s own internal
 `fs.close()` runs after that, and only the stream's separate `close` event
 means the fd is actually released. That gap was invisible on Linux/macOS

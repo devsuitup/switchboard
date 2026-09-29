@@ -505,6 +505,49 @@ test('rotation still bounds the disk when the trace was armed at runtime', async
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// see docs/activity-trace.md "A segment is pruned only once its stream has closed"
+test('a retired segment whose open lands late is not recreated behind the prune', async () => {
+  const dir = tmpTraceDir('late-open');
+  const realCreate = fs.createWriteStream;
+  const made = [];
+  const reallyClosed = new Set();
+  let releaseFirstOpen;
+  const firstOpenGate = new Promise(r => { releaseFirstOpen = r; });
+  fs.createWriteStream = (file, opts) => {
+    const held = made.length === 0;
+    const s = realCreate.call(fs, file, {
+      ...opts,
+      fs: {
+        open: (p, f, m, cb) => (held ? firstOpenGate : Promise.resolve()).then(() => fs.open(p, f, m, cb)),
+        write: fs.write, writev: fs.writev, close: fs.close,
+      },
+    });
+    made.push(s);
+    s.on('close', () => reallyClosed.add(s));
+    return s;
+  };
+  let t;
+  try {
+    t = createActivityTrace({ enabled: true, maxSegmentBytes: 200, maxSegments: 2 });
+    t.init(dir);
+    for (let i = 0; i < 8; i++) t.trace('fill', 's1', { i, pad: 'xxxxxxxxxxxxxxxxxxxx' });
+    assert.ok(made.length >= 4, 'the run rotated past the ceiling');
+    await waitUntil(() => made.slice(1, -1).every(s => reallyClosed.has(s)));
+    releaseFirstOpen();
+    await new Promise(r => t.close(r));
+  } finally {
+    fs.createWriteStream = realCreate;
+  }
+  await waitUntil(() => made.every(s => reallyClosed.has(s)));
+
+  let files = [];
+  await waitUntil(() => { files = jsonlIn(dir); return files.length <= 2; });
+  assert.deepEqual(files, t.files.map(f => path.basename(f)).sort(),
+    'every segment on disk is one the queue still accounts for');
+  assert.equal(files.length, 2);
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
+
 test('the segment ceiling holds across repeated toggles, not just within one window', async () => {
   const dir = tmpTraceDir('toggle-cap');
   let now = Date.parse('2026-08-22T09:15:00.000Z');

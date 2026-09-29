@@ -180,6 +180,7 @@ function createActivityTrace(options = {}) {
   let warning = false;
   const segments = [];
   const unlinkFailures = new Set();
+  const unsettled = new Map(); // path -> streams not yet closed on it
   // Rotations retire a stream and wait for its own 'close' before pruning
   // (see rotate()). close()/setEnabled(false, ...) must wait for those too,
   // not just for the stream they retire themselves, or a still-open handle
@@ -250,6 +251,7 @@ function createActivityTrace(options = {}) {
       const stale = segments[0];
       // Redundant with trackSegment's de-duplication, kept as a backstop.
       if (stale === currentPath) return;
+      if (unsettled.has(stale)) return; // see the rotate() pointer below
       try {
         unlink(stale);
       } catch (err) {
@@ -283,6 +285,12 @@ function createActivityTrace(options = {}) {
     // createWriteStream is lazy; pruning must not race a file that has no inode yet.
     fs.writeFileSync(file, '', { flag: 'a' });
     const opened = fs.createWriteStream(file, { flags: 'a' });
+    unsettled.set(file, (unsettled.get(file) || 0) + 1);
+    opened.on('close', () => {
+      const left = unsettled.get(file) - 1;
+      if (left > 0) unsettled.set(file, left);
+      else unsettled.delete(file);
+    });
     opened.on('error', () => {
       if (stream === opened) { stream = null; currentPath = null; }
     });
@@ -304,9 +312,7 @@ function createActivityTrace(options = {}) {
     currentPath = null;
     segment += 1;
     try { openSegment(); } catch { stream = null; currentPath = null; }
-    // Windows refuses to unlink an open handle — wait for 'close', not
-    // .end(callback)'s 'finish'. See docs/activity-trace.md "Testing the
-    // async prune path".
+    // see docs/activity-trace.md "A segment is pruned only once its stream has closed"
     if (old) {
       pendingRotationCloses += 1;
       old.once('close', () => { pruneSegments(); onRotationCloseSettled(); });
