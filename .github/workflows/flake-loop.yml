@@ -20,17 +20,19 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Run the blob-over-the-cap subtest repeatedly
-        shell: bash
+        shell: pwsh
         run: |
-          runs=200; fail=0; ebusy=0
-          for i in $(seq 1 $runs); do
-            if ! node --test --test-name-pattern="blob over the cap" test/git-changes-file-real-git.test.js > out.txt 2>&1; then
-              fail=$((fail+1))
-              if grep -q EBUSY out.txt; then ebusy=$((ebusy+1)); fi
-              grep -E "not ok|EBUSY" out.txt | head -5
-            fi
-          done
-          echo "RESULT node=${{ matrix.node-version }} shard=${{ matrix.shard }} runs=$runs failed=$fail ebusy=$ebusy"
+          Get-Command git -All | ForEach-Object { "git candidate: $($_.Source)" }
+          $runs = 200; $fail = 0; $ebusy = 0
+          for ($i = 1; $i -le $runs; $i++) {
+            $out = node --test --test-name-pattern="blob over the cap" test/git-changes-file-real-git.test.js 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              $fail++
+              if ($out -match 'EBUSY') { $ebusy++ }
+              ($out -split "`n") | Select-String -Pattern 'not ok|EBUSY' | Select-Object -First 5 | ForEach-Object { $_.Line }
+            }
+          }
+          "RESULT node=${{ matrix.node-version }} shard=${{ matrix.shard }} runs=$runs failed=$fail ebusy=$ebusy"
 
   diag:
     runs-on: windows-2022
@@ -47,5 +49,5 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Observe git processes after a capped read
-        shell: bash
+        shell: pwsh
         run: node scripts/diag-capped-read.js 100 ${{ matrix.blob }}
