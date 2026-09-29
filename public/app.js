@@ -88,7 +88,7 @@ function reportActivityFocus() {
   const s = sessionMap.get(activeSessionId) || {};
   window.api.reportActivityFocus({
     sessionId: activeSessionId,
-    // Never s.summary, the first prompt — see .ai/contexts/activitywatch.md ("What reaches the server")
+    // see .ai/contexts/activitywatch.md ("What reaches the server")
     name: cleanDisplayName(s.name || s.aiTitle) || '',
     project: s.projectPath || '',
   });

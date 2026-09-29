@@ -741,3 +741,27 @@ test('the flush does not settle before the closing beat has been answered', asyn
   await flushed;
   assert.equal(settled, true);
 });
+
+test('a write still queued when reporting is turned off is never sent', async () => {
+  const sent = [];
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const reporter = createActivityWatchReporter({
+    hostname: 'host',
+    client: {
+      heartbeat: async () => true,
+      upsertSpan: async (id, bucket, data, startedAt, duration) => { sent.push(duration); await gate; return true; },
+    },
+    now: () => 0,
+    setIntervalFn: () => ({}),
+    clearIntervalFn: () => {},
+  });
+  reporter.setEnabled(true);
+  reporter.sessionStarted(A);
+  const ended = reporter.sessionEnded(A.sessionId);   // queued behind the start write
+  await new Promise(r => setImmediate(r));            // the start write is on the wire
+  reporter.setEnabled(false);
+  release();
+  assert.equal(await ended, false);
+  assert.equal(sent.length, 1, 'only the write already on the wire went out');
+});

@@ -134,6 +134,15 @@ test('a 4xx is the server answering, so it does not trigger a backoff', async ()
   assert.equal(h.logged.length, 0, 'and nothing is logged about an unreachable server');
 });
 
+test('a 5xx is a server that cannot take the write, so it backs off like an absent one', async () => {
+  const h = harness({ server: 503 });
+  assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), false);
+  assert.equal(h.client.sleeping, true);
+  const sent = h.calls.length;
+  await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60);
+  assert.equal(h.calls.length, sent, 'nothing is sent during the cooldown');
+});
+
 // aw-server answers 304 when the bucket is already there. fetch reports ok
 // only for 2xx, so a client that reads `ok` alone re-creates the bucket before
 // every single beat.
@@ -393,7 +402,7 @@ test('a first beat that fails leaves the bucket marked, so the retry has no merg
   let failBeats = true;
   const h = harness({ server: (url) => {
     if (/\/api\/0\/buckets\/[^/]+$/.test(url)) return failBeats ? 200 : 304;   // created, then already there
-    return failBeats ? 500 : 200;
+    return failBeats ? 400 : 200;
   } });
   assert.equal(await h.client.heartbeat('b', BUCKET, { project: 'x' }, 60), false);
   failBeats = false;

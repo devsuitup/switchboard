@@ -105,6 +105,7 @@ function createActivityWatchReporter(deps) {
 
     const write = (chains.get(sessionId) || Promise.resolve())
       .then(() => {
+        if (!enabled) return false;
         const values = span.writtenAs === sessionId ? [sessionId] : [span.writtenAs, sessionId];
         return client.upsertSpan(running.id, running.bucket, data, span.startedAt, duration, { key: 'session', values });
       })

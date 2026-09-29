@@ -58,8 +58,12 @@ function createActivityWatchClient(deps) {
       noteFailure();
       return null;
     }
+    if (!response || response.status >= 500) {
+      noteFailure();
+      return null;
+    }
     noteSuccess();
-    return response || null;
+    return response;
   }
 
   function post(path, body) {
