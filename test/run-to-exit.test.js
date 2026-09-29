@@ -52,6 +52,14 @@ test('runToExit: a timeout kills the child and settles only after it has exited'
   assert.ok(child.exitCode !== null || child.signalCode !== null, 'the killed child has exited by the time the call settles');
 });
 
+test('runToExit: a timeout settles even when a grandchild still holds the output pipes', async () => {
+  const script = "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'inherit' }); setInterval(() => {}, 1000);";
+  const started = Date.now();
+  const result = await node(script, { timeoutMs: 300 }).promise;
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 2500, `settled after ${Date.now() - started} ms, not when the grandchild let go of the pipes`);
+});
+
 test('runToExit: a spawn that never ran settles with code -1 and the spawn error', async () => {
   const result = await runToExit(process.execPath, ['-e', ''], { cwd: path.join(os.tmpdir(), 'switchboard-rte-missing-dir-does-not-exist'), env: process.env, timeoutMs: 10_000, maxBuffer: 1024 });
   assert.equal(result.code, -1);

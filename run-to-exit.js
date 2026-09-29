@@ -59,6 +59,8 @@ function runToExit(file, args, { cwd, env, timeoutMs, maxBuffer }, spawnFn = spa
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
+        child.stdout.destroy();
+        child.stderr.destroy();
         child.kill();
       }, timeoutMs);
     }

@@ -744,8 +744,10 @@ over-the-cap test in `test/git-changes-file-real-git.test.js` failed its cleanup
 on `windows-2022`. Letting git finish means the launcher exits only after the
 real git has, and `close` is the moment both are gone.
 
-A timeout still kills: a git that hangs cannot be waited for. On Windows that
-kill has the same launcher-only reach, so a timed-out git can outlive the call.
+A timeout still kills: a git that hangs cannot be waited for. The pipes are
+closed on this side first, as `execFile` does, so a surviving grandchild that
+still holds them cannot delay `close`. On Windows that kill has the same
+launcher-only reach, so a timed-out git can outlive the call.
 
 `fs.rmSync`'s `maxRetries` does not cover this failure on Node 20 and 22: their
 recursive removal retries only after emptying a directory (`ENOTEMPTY`,
