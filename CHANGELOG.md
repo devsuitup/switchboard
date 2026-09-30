@@ -4,6 +4,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A sandboxed session can no longer leave behind something that runs outside the sandbox later: Claude's settings, hooks, commands, agents, skills and plugins, in `~/.claude` and in the project's `.claude`, and the repository's git config and hooks are read-only inside it, and its changes to `~/.claude.json`, where the MCP servers are, are dropped when it ends. Change settings, permissions, plugins and MCP servers outside the sandbox; the Sandbox indicator's tooltip lists what stays writable. (#358)
+- A sandboxed session reaches the API when `/etc/resolv.conf` links into `/run`, as with systemd-resolved on Ubuntu. (#367)
+
 ## v0.0.85 — 2026-09-30
 
 ### New

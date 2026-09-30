@@ -54,7 +54,8 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
   [Terminal](terminal.md#panel-shell).
 - In the [sandbox](sandbox.md), a resumed worktree session also gets the
   repository root bound read-write, because the worktree's git metadata lives
-  there.
+  there; the repository's config and hooks stay read-only
+  ([What the sandbox protects](sandbox.md#git)).
 
 ## Cleaning up
 

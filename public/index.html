@@ -85,7 +85,7 @@
           <span id="terminal-header-shell" style="display:none;"></span>
         </div>
         <div id="terminal-header-controls">
-          <span id="terminal-header-sandbox" data-header-kind="indicator" style="display:none;" title="Running in a bubblewrap sandbox: only this project directory and Claude's own state are visible. Network and environment are NOT isolated.">Sandbox</span>
+          <span id="terminal-header-sandbox" data-header-kind="indicator" style="display:none;" title="Running in a bubblewrap sandbox: only this project directory and Claude's own state are visible. What Claude and git run later outside the sandbox is protected: settings, hooks, commands, agents, skills, plugins and git config are read-only, and changes to ~/.claude.json (MCP servers) are dropped. NOT isolated: network, environment, the project's own files and build scripts, CLAUDE.md and memory files, the claude binary of the native installer.">Sandbox</span>
           <button id="terminal-stop-btn" data-header-kind="action" title="Stop process" aria-label="Stop process"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg></button>
         </div>
       </div>
