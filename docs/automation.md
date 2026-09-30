@@ -8,7 +8,8 @@ Two mechanisms run Claude without you at the keyboard:
   requested by dropping a JSON file in a directory. Meant for scripts and
   harnesses.
 
-Both live in the running app: when Switchboard is not running, nothing fires.
+Both live in the running app: when Switchboard is not running, nothing fires. A
+schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
 
 ## Schedules
 
@@ -21,6 +22,7 @@ name: Morning audit
 cron: 0 9 * * 1-5
 enabled: true
 slug: morning-audit
+catch-up: true
 cli:
   permission-mode: auto
   allowed-tools: Bash,Read,Glob,Grep
@@ -39,6 +41,7 @@ The full, self-contained prompt Claude runs each time.
 | `cron` | When to run — see below | required |
 | `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
+| `catch-up` | `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
 | `cli.allowed-tools` | `--allowedTools` | `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` |
 | `cli.model` | `--model` | none |
@@ -68,8 +71,8 @@ ranges), or a step over the whole range `*/n`.
 Not supported: a step on a range or a start (`0-30/5`, `5/15`), names (`MON`,
 `JAN`), `7` for Sunday (Sunday is `0`), and aliases such as `@daily`. An
 expression that does not parse never matches, and no error is reported. There
-is no daylight-saving handling, and runs missed while the app was closed are not
-caught up.
+is no daylight-saving handling. A run missed while the app was closed or the
+machine asleep is skipped, unless the schedule has `catch-up: true`.
 
 ### A run
 
@@ -92,6 +95,52 @@ runs under its slug; open it to read the result.
   platform other than Linux a schedule with the sandbox on is skipped and an
   error logged. With the sandbox on, `add-dirs` entries are bound read-write.
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
+
+### Catching up a missed run
+
+A minute that passes while Switchboard is closed, or while the machine is
+suspended, is not seen by the scheduler, and a schedule due in that minute does
+not run. With `catch-up: true`, Switchboard records when the schedule last ran,
+and checks at startup, after the machine wakes up, and every minute: if the
+cron expression matched at least one minute since that run, the task runs
+**once**, however many runs were missed. Three missed days of a daily task give
+one run.
+
+- `true` may be written in any case and in quotes (`True`, `"true"`). Any
+  other value, and any other spelling of the key (`catch_up`, `catchup`), is
+  ignored without a warning, and the schedule does not catch up.
+- A schedule seen for the first time does not catch up: its record starts at
+  that moment. If that moment is a minute its cron matches, it runs on time.
+- Only the last seven days are looked at. A run due longer ago is not caught up.
+- A catch-up run is logged as `[schedule] Catching up: <name> (<cron>), due <time>`,
+  and the first message of its session reads
+  `Scheduled Task (catch-up: due <time>, started <time>): <prompt>`, both times
+  in UTC (ISO 8601). A run in its own minute is logged as `Triggering:` as usual.
+- While the previous run is still going, a catch-up is skipped like a tick, and
+  that minute counts as handled: it does not run when the previous run ends.
+- The record lives in `~/.switchboard/schedule-state/`, one small file per
+  schedule, never in the schedule file, so a schedule kept under version control
+  does not change when it runs.
+- Catch-up is off in an instance started with `SWITCHBOARD_DATA_DIR` set,
+  whatever its value: `task dev`, `task test-pr`, and any run from a checkout,
+  which sets it to `~/.switchboard-dev`. Such an instance runs every schedule on
+  its cron minute only, `catch-up: true` included, keeps no record, and logs
+  `catch-up is off` once at startup. It never catches up a run the installed app
+  has already made (see
+  [Testing a PR](testing-a-pr.md#3-schedules--check-before-you-launch)).
+- The minute is recorded when the run starts. A run whose `claude` fails to
+  start, or that is cut short by Switchboard exiting, is not caught up again.
+- If the recorded minute is ahead of the clock (the clock was set back, or was
+  fast and then corrected), a warning is logged and the record starts again
+  from the current minute, so the schedule runs at its next matching minute.
+- A schedule is known by its file path. Renaming or moving the file makes it a
+  new schedule, seen for the first time: it catches up only the runs missed
+  after that.
+- A schedule turned off with `enabled: false` is not looked at; turned back on,
+  it catches up a run it missed in the meantime, within the seven days.
+- **Run now** does not count as a run for the record.
+- If the record cannot be read or written, the schedule runs on its cron minute
+  as if it had no `catch-up`, and a warning is logged.
 
 ### Creating a schedule
 
