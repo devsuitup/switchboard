@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE,
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE, stripShellNoise,
 } = require('../bg-agents-roster');
 
 const STATE = JSON.stringify({
@@ -57,6 +57,29 @@ test('parseCliList keeps background and interactive entries and drops the rest',
   assert.equal(list[1].id, null);
   assert.equal(parseCliList('not json'), null);
   assert.equal(parseCliList('{}'), null);
+});
+
+test('parseCliList tolerates login-shell noise printed around the JSON', () => {
+  const json = JSON.stringify([{ id: 'bc3fd129', kind: 'background', sessionId: 's-bg', state: 'working' }], null, 2);
+  const before = 'Now using node v22.1.0 (npm v10)\n[nvm] default alias set\n"The fortune cookie says: [sic]"\n';
+  const after = '\nlogout [done]\n';
+  for (const text of [before + json, json + after, before + json + after]) {
+    const list = parseCliList(text);
+    assert.ok(Array.isArray(list), text);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].sessionId, 's-bg');
+  }
+  assert.equal(parseCliList('Now using node v22\n[not json]\ngarbage ]'), null);
+  assert.equal(parseCliList('fortune: be happy\n{"a":1}\n'), null);
+  assert.equal(parseCliList(''), null);
+});
+
+test('stripShellNoise drops the leading login-shell job-control lines and keeps the CLI stderr verbatim', () => {
+  const noise = 'bash: cannot set terminal process group (-1): Inappropriate ioctl for device\nbash: no job control in this shell\n';
+  assert.equal(stripShellNoise(noise + 'Error: session aaaaaaaa is not running\n  at x'), 'Error: session aaaaaaaa is not running\n  at x');
+  assert.equal(stripShellNoise('Error: bash: no job control in this shell is quoted here'), 'Error: bash: no job control in this shell is quoted here');
+  assert.equal(stripShellNoise(noise), '');
+  assert.equal(stripShellNoise(undefined), '');
 });
 
 function fixture() {

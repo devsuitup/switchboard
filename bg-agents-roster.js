@@ -52,9 +52,53 @@ function parseJobState(text) {
   };
 }
 
+const MAX_NOISY_CANDIDATES = 32;
+
+function arrayStarts(text) {
+  const out = [];
+  for (let i = text.indexOf('['); i !== -1 && out.length < MAX_NOISY_CANDIDATES; i = text.indexOf('[', i + 1)) {
+    if (!text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trim()) out.push(i);
+  }
+  return out;
+}
+
+function arrayEnds(text) {
+  const out = [];
+  for (let i = text.lastIndexOf(']'); i !== -1 && out.length < MAX_NOISY_CANDIDATES; i = i > 0 ? text.lastIndexOf(']', i - 1) : -1) {
+    const eol = text.indexOf('\n', i);
+    if (!text.slice(i + 1, eol === -1 ? text.length : eol).trim()) out.push(i);
+  }
+  return out;
+}
+
+function parseJsonArray(text) {
+  const s = String(text == null ? '' : text);
+  try { return JSON.parse(s); } catch { /* fall through to the noisy parse */ }
+  const starts = arrayStarts(s);
+  const ends = arrayEnds(s);
+  for (const a of starts) {
+    for (const b of ends) {
+      if (b <= a) continue;
+      try {
+        const v = JSON.parse(s.slice(a, b + 1));
+        if (Array.isArray(v)) return v;
+      } catch { /* next candidate */ }
+    }
+  }
+  return null;
+}
+
+const SHELL_NOISE_RE = /^(?:[\w./-]*sh): (?:no job control in this shell|cannot set terminal process group\b.*|initialize_job_control: .*)$/;
+
+function stripShellNoise(stderr) {
+  const lines = String(stderr == null ? '' : stderr).split('\n');
+  let i = 0;
+  while (i < lines.length && SHELL_NOISE_RE.test(lines[i].trim())) i++;
+  return lines.slice(i).join('\n').trim();
+}
+
 function parseCliList(text) {
-  let raw;
-  try { raw = JSON.parse(text); } catch { return null; }
+  const raw = parseJsonArray(text);
   if (!Array.isArray(raw)) return null;
   const out = [];
   for (const s of raw) {
@@ -172,5 +216,5 @@ function parseDispatchOutput(stdout) {
 
 module.exports = {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput,
-  sessionIdFromLinkScanPath, JOB_ID_RE, JOB_STATES,
+  sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES,
 };

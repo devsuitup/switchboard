@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE,
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
 } = require('./bg-agents-roster');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
@@ -196,7 +196,7 @@ async function runVerb(verb, id) {
   }
   const result = await run([verb, id], { cwd: cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;
-  const error = ok ? null : (String(result.stderr).trim() || `claude ${verb} exited with ${result.code}`);
+  const error = ok ? null : (stripShellNoise(result.stderr) || `claude ${verb} exited with ${result.code}`);
   await reconcile();
   return ok ? { ok: true } : { ok: false, error };
 }

@@ -195,6 +195,32 @@ test('runVerb reports the CLI stderr when it fails', async () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('runVerb strips the login-shell job-control noise from the CLI stderr it reports', async () => {
+  const dir = mkTmp();
+  try {
+    const stderr = 'bash: cannot set terminal process group (-1): Inappropriate ioctl for device\nbash: no job control in this shell\nError: no such session\n';
+    const runClaude = async (argv) => (argv[0] === 'agents'
+      ? { code: 0, stdout: JSON.stringify(CLI_LIST), stderr: '' }
+      : { code: 1, stdout: '', stderr });
+    boot(dir, { cli: { calls: [], runClaude } });
+    bgAgents.start();
+    const r = await bgAgents.runVerb('rm', 'bbbbbbbb');
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'Error: no such session');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a reconcile tolerates login-shell noise printed before the JSON list', async () => {
+  const dir = mkTmp();
+  try {
+    const runClaude = async () => ({ code: 0, stdout: 'Now using node v22\n' + JSON.stringify(CLI_LIST), stderr: '' });
+    boot(dir, { cli: { calls: [], runClaude } });
+    bgAgents.start();
+    const snap = await bgAgents.reconcile();
+    assert.equal(snap.daemonReachable, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('dispatch runs `claude --bg …` in the project directory and returns the printed id', async () => {
   const dir = mkTmp();
   try {
