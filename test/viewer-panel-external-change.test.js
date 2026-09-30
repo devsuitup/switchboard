@@ -563,3 +563,68 @@ test('a panel destroyed before its watch is acknowledged gives the watch back', 
     assert.deepEqual(t.state.unwatchCalls, [FILE]);
   } finally { t.destroy(); }
 });
+
+test('while the "changed on disk" notice is up, a plain save asks before writing over the session', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    await t.externalWrite('session\n');
+    assert.match(noticeText(t), /changed on disk/);
+
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.deepEqual(t.state.confirms, ['Overwrite the file on disk with your edits?']);
+    assert.equal(t.state.saves.length, 0, 'a declined confirm writes nothing');
+    assert.match(noticeText(t), /changed on disk/, 'and keeps the notice');
+
+    t.state.confirmAnswer = true;
+    await t.panel._save();
+    assert.equal(t.state.saves.length, 1);
+    assert.equal(t.state.saves[0].expected, 'session\n', 'still checked, against the write the notice named');
+    assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+test('while the "not saved" notice is up, a plain save asks too, even after the re-read moved the baseline', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    t.state.disk = 'session\n';
+    t.state.saveImpl = (fp, content, expected) => (expected === t.state.disk
+      ? (t.state.disk = content, { ok: true })
+      : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
+    await t.panel._save();
+    t.state.fileChanged(FILE);
+    await tick();
+    assert.match(noticeText(t), /your edits were not saved/);
+
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.equal(t.state.saves.length, 1, 'no second write without the confirm');
+    assert.equal(t.state.disk, 'session\n');
+  } finally { t.destroy(); }
+});
+
+test("a save queued on the previous file does not re-send the new file's first save", async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = pendingSaves(t);
+    const first = t.panel._save();
+    t.panel._save();
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    await t.open('other\n', other);
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    finish[0]();
+    await first;
+    finish[1]();
+    await tick();
+    await tick();
+    assert.deepEqual(t.state.saves.map((x) => x.filePath), [FILE, other], "B's save goes out once");
+  } finally { t.destroy(); }
+});

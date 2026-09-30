@@ -168,3 +168,55 @@ test('a queued click is dropped when the first save fails', async () => {
     assert.deepEqual(ctx.calls.alerts, ['Save failed: disk full']);
   } finally { ctx.destroy(); }
 });
+
+test('a rejected save IPC is reported', async () => {
+  const ctx = setup({ saveImpl: () => Promise.reject(new Error('the channel is gone')) });
+  try {
+    await openDiffAndSave(ctx);
+    assert.deepEqual(ctx.calls.alerts, ['Save failed: the channel is gone']);
+  } finally { ctx.destroy(); }
+});
+
+test('an answered diff disables Save, and a save request on it writes nothing', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    assert.equal(btn.disabled, false);
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.equal(btn.disabled, true, 'Save says it is off');
+    assert.match(btn.title, /answered/);
+    await ctx.window.handleDiffSave();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a queued click is not sent once its diff has been replaced', async () => {
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on('unhandledRejection', onRejection);
+  const finishers = [];
+  const ctx = setup({ saveImpl: () => new Promise((resolve) => { finishers.push(resolve); }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    ctx.calls.openDiff('s1', 'd2', { oldFilePath: '/repo/b.js', oldContent: 'b\n', newContent: 'b2\n' });
+    await flush();
+    finishers[0]({ ok: true });
+    await flush();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ctx.calls.saves.length, 1, 'the replaced diff is not saved again');
+    assert.deepEqual(rejections, []);
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    ctx.destroy();
+  }
+});

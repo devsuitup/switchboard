@@ -287,12 +287,19 @@ async function handleDiffSave() {
   const state = currentPanelSessionId ? getSessionState(currentPanelSessionId) : null;
   const tab = state?.currentTab;
   if (!tab || tab.type !== 'diff' || !tab.editorView || !tab.filePath) return;
-  await saveDiffTab(state, tab);
+  await saveDiffTab(tab);
+}
+
+function updateDiffSaveButton(tab) {
+  const btn = diffToolbarEl && diffToolbarEl.querySelector('.fp-save-btn');
+  if (!btn) return;
+  btn.disabled = !!tab.resolved;
+  btn.title = tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
 }
 
 // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
-async function saveDiffTab(state, tab) {
-  if (state.currentTab !== tab || tab.resolved || !tab.editorView) return;
+async function saveDiffTab(tab) {
+  if (tab.resolved || !tab.editorView) return;
   if (tab.saving) {
     tab.saveQueued = true;
     return;
@@ -328,7 +335,7 @@ async function saveDiffTab(state, tab) {
     tab.saving = false;
     const queued = tab.saveQueued;
     tab.saveQueued = false;
-    if (queued && saved) saveDiffTab(state, tab);
+    if (queued && saved) saveDiffTab(tab);
   }
 }
 
@@ -670,6 +677,8 @@ function renderDiffContent(sessionId, tab) {
   if (titleEl) titleEl.textContent = tab.label;
   if (pathEl) pathEl.textContent = tab.filePath || '';
 
+  updateDiffSaveButton(tab);
+
   // Accept/reject buttons are rendered synchronously so the UI appears
   // immediately; the diff viewer itself is deferred until the bundle loads.
   if (!tab.resolved) {
@@ -721,6 +730,7 @@ function renderDiffContent(sessionId, tab) {
 function handleDiffAction(sessionId, tab, action) {
   if (tab.resolved) return;
   tab.resolved = true;
+  updateDiffSaveButton(tab);
 
   if (action === 'accept') {
     let editedContent = null;

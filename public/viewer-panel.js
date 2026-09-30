@@ -433,6 +433,10 @@ class ViewerPanel {
       this._saveQueued = true;
       return;
     }
+    if (!overwrite && (this._noticeState === 'changed' || this._noticeState === 'stale')) {
+      if (typeof window.confirm === 'function'
+        && !window.confirm('Overwrite the file on disk with your edits?')) return;
+    }
     const content = this.getContent();
     const expected = overwrite ? null : this._diskContent;
     const myGen = this._openGen;
@@ -473,8 +477,6 @@ class ViewerPanel {
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
     this._unwatchFile();
-    this._pendingSave = null;
-    this._saveQueued = false;
     if (this.editorView) {
       this.editorView.destroy();
       this.editorView = null;
