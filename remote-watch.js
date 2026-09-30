@@ -4,6 +4,7 @@
 const { REMOTE_PROJECTS_REL, REMOTE_SESSIONS_REL } = require('./remote-transport');
 const { isSafeRelPath } = require('./remote-hosts');
 const { backoffDelayMs } = require('./remote-index');
+const { resolveSshPath: defaultResolveSshPath } = require('./remote-ssh-binary');
 
 const NOOP_LOG = { info() {}, warn() {}, error() {} };
 const NO_INOTIFYWAIT_MARKER = 'SWITCHBOARD-NO-INOTIFYWAIT';
@@ -53,6 +54,7 @@ function parseWatchLine(line) {
 
 function createRemoteWatcher(opts = {}) {
   const spawnFn = opts.spawn || require('child_process').spawn;
+  const resolveSshPath = opts.resolveSshPath || defaultResolveSshPath;
   const log = opts.log || NOOP_LOG;
   const setT = (opts.timers && opts.timers.setTimeout) || setTimeout;
   const clearT = (opts.timers && opts.timers.clearTimeout) || clearTimeout;
@@ -134,7 +136,7 @@ function createRemoteWatcher(opts = {}) {
     if (s.stopped || s.unwatchable) return;
     let child;
     try {
-      child = spawnFn('ssh', buildSshArgs(s.alias), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnFn(resolveSshPath(), buildSshArgs(s.alias), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       log.warn(`[remote-watch:${s.alias}] spawn failed: ${err.message}`);
       s.failures += 1;

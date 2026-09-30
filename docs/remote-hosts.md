@@ -29,18 +29,34 @@ system `ssh` and `scp` with `BatchMode=yes`, so the host must be reachable
 without a prompt (a key or an agent), and everything else — user, port, jump
 hosts, `ControlMaster` — comes from your SSH configuration.
 
-Which `ssh` runs depends on the operation:
-
-- **The terminal attached to a remote tmux session** runs `SWITCHBOARD_SSH_PATH`
-  when it is set; otherwise `/usr/bin/ssh` on macOS and Linux, and on Windows
-  `System32\OpenSSH\ssh.exe` or Git's `usr\bin\ssh.exe`, whichever exists
-  first; otherwise `ssh` from the `PATH`.
-- **Everything else** — the pulls (`ssh` and `scp`), the watch connection, the
-  probe before an attach, stop, and the Changes view — runs `ssh` and `scp` from
-  the `PATH` Switchboard was started with, whatever `SWITCHBOARD_SSH_PATH` says.
-
 The settings are stored as `remoteHosts` and `remoteRefreshMs` in the global
 settings. With no host declared, nothing runs: no timer, no ssh, no mirror.
+
+### Which ssh and scp run
+
+Every remote operation — the pulls, the watch connection, the probe before an
+attach, the attached terminal, stop, and the Changes view — runs the same
+`ssh`, the first of:
+
+1. `SWITCHBOARD_SSH_PATH`, when it is set;
+2. `/usr/bin/ssh` on macOS and Linux, and on Windows `System32\OpenSSH\ssh.exe`
+   or Git's `usr\bin\ssh.exe`, whichever exists first;
+3. `ssh` from the `PATH` Switchboard was started with.
+
+The pulls copy transcripts with `scp`, the first of:
+
+1. `SWITCHBOARD_SCP_PATH`, when it is set;
+2. the `scp` in the directory of an absolute `SWITCHBOARD_SSH_PATH` (`scp.exe`
+   when that path ends in `.exe`), when that file exists;
+3. `/usr/bin/scp` on macOS and Linux, and on Windows
+   `System32\OpenSSH\scp.exe` or Git's `usr\bin\scp.exe`, whichever exists
+   first;
+4. `scp` from the `PATH`.
+
+A `SWITCHBOARD_SSH_PATH` that names a wrapper with no `scp` beside it leaves
+`scp` to steps 3 and 4; set `SWITCHBOARD_SCP_PATH` when that is not the `scp`
+to run. Both variables are read from the environment Switchboard was started
+with.
 
 ## Requirements on the host
 

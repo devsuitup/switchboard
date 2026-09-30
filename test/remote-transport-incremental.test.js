@@ -14,6 +14,7 @@ const { EventEmitter } = require('events');
 const { Readable } = require('stream');
 
 const { createSshTransport, REMOTE_PROJECTS_REL } = require('../remote-transport');
+const { resolveSshPath } = require('../remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();
@@ -59,7 +60,7 @@ test('fetchIncremental issues tail -c +N (N = offset+1) as the remote command', 
     assert.deepEqual(r.fetched, ['-srv-a/a.jsonl']);
     assert.equal(spawn.calls.length, 1);
     const { cmd, args } = spawn.calls[0];
-    assert.equal(cmd, 'ssh');
+    assert.equal(cmd, resolveSshPath());
     assert.equal(args[args.length - 2], 'planificator');
     const command = args[args.length - 1];
     assert.equal(command, `tail -c +101 '${REMOTE_PROJECTS_REL}/-srv-a/a.jsonl'`);
