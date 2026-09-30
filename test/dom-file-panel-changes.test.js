@@ -703,6 +703,29 @@ test('the Changes toggle follows the session the header shows', async () => {
   } finally { ctx.destroy(); }
 });
 
+test('the Changes toggle stays off while the panel shows a file or an MCP diff', async () => {
+  for (const takeover of ['file', 'diff']) {
+    const ctx = setupFilePanelDom();
+    try {
+      ctx.window.switchPanel('s1');
+      const btn = ctx.document.getElementById('changes-toggle-btn');
+      btn.click();
+      await flush();
+      assert.equal(btn.classList.contains('active'), true);
+
+      if (takeover === 'file') {
+        ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      } else {
+        ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
+      }
+      await flush();
+      assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true, `the ${takeover} tab is shown`);
+      assert.equal(btn.classList.contains('active'), false, `a ${takeover} tab is not the Changes tab`);
+      assert.equal(btn.getAttribute('aria-pressed'), 'false');
+    } finally { ctx.destroy(); }
+  }
+});
+
 // --- Editing in place ----------------------------------------------------
 
 test('a local changed file opens in an editable diff over the content pair, with Save and the mode toggle', async () => {

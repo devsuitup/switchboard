@@ -12,6 +12,8 @@ const terminalHeader = document.getElementById('terminal-header');
 const terminalHeaderName = document.getElementById('terminal-header-name');
 const terminalHeaderId = document.getElementById('terminal-header-id');
 const terminalHeaderStatus = document.getElementById('terminal-header-status');
+// sessionId -> the exit code its process last reported.
+const sessionExitCodes = new Map();
 const terminalHeaderShell = document.getElementById('terminal-header-shell');
 const terminalHeaderSandbox = document.getElementById('terminal-header-sandbox');
 // sessionId -> whether that session's claude runs inside the bwrap sandbox.
@@ -474,6 +476,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     pollActiveSessions();
     return;
   }
+  sessionExitCodes.set(sessionId, exitCode);
   if (entry) {
     entry.closed = true;
     // Write a visible exit banner so the user can see when the process ended
@@ -962,8 +965,11 @@ function updateRunningIndicators() {
 function updateTerminalHeader() {
   if (!activeSessionId) return;
   const running = activePtyIds.has(activeSessionId);
+  if (running) sessionExitCodes.delete(activeSessionId);
+  const status = terminalStatusLabel(running, sessionExitCodes.get(activeSessionId));
   terminalHeaderStatus.className = running ? 'running' : 'stopped';
-  terminalHeaderStatus.textContent = running ? 'Running' : 'Stopped';
+  terminalHeaderStatus.title = status;
+  terminalHeaderStatus.setAttribute('aria-label', status);
   terminalStopBtn.style.display = running ? '' : 'none';
   updatePtyTitle();
 }

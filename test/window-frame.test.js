@@ -160,7 +160,7 @@ test('the strip is a drag region and every interactive element in it is exempt',
 });
 
 test('header text that is copied or carries a tooltip is exempt from the drag region', () => {
-  for (const selector of ['#terminal-header-id', '#terminal-header-controls [data-header-kind]', '#jsonl-viewer-session-id', '.viewer-toolbar-path']) {
+  for (const selector of ['#terminal-header-status', '#terminal-header-id', '#terminal-header-controls [data-header-kind]', '#jsonl-viewer-session-id', '.viewer-toolbar-path']) {
     assert.ok(NO_DRAG.has(selector), `${selector} must be no-drag`);
   }
 });

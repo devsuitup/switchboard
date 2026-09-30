@@ -93,12 +93,12 @@ and pinned by `test/header-controls.test.js`:
 
 | Kind | Controls, left to right | Look |
 |---|---|---|
-| `indicator` | `#terminal-header-status` (Running / Stopped), `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
+| `indicator` | `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
 | `toggle` | `#panel-terminal-toggle-btn` (Shell), `#changes-toggle-btn` (Changes) | `.icon-btn`: the sidebar filter row's square outlined button (`#running-toggle` and its siblings share the rule), a 14 px icon, the name in `title` and `aria-label`, and the filter buttons' accent `.active` state with `aria-pressed`. |
 | `action` | `#terminal-stop-btn` | A borderless red icon, last, set apart from the toggles by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
 
-Each element carries its kind as `data-header-kind`. The static ones (status,
-sandbox, Stop) are written in `index.html` in the declared order. The modules
+Each element carries its kind as `data-header-kind`. The static ones (sandbox,
+Stop) are written in `index.html` in the declared order. The modules
 that build the others (`addMcpToggle` and `addChangesToggle` in `file-panel.js`,
 `addPanelTerminalToggle` in `panel-terminal.js`) hand their element to
 `placeHeaderControl()`, which inserts it before the next declared control
@@ -111,9 +111,29 @@ The Changes toggle is on while the panel shows the Changes tab of the session
 in the header: `renderTabContent` sets it from the tab it renders, and
 `hidePanel` clears it when the panel closes.
 
-The header's vertical padding is 5 px around the 26 px buttons. The terminal
-container starts at the header's bottom, so a change to that padding changes
-every terminal's row count.
+The session process's state is not in that row: `#terminal-header-status` is
+an 8 px dot right before `#terminal-header-name`, with no text, green with a
+glow while running and grey otherwise. `updateTerminalHeader` (`app.js`) puts
+the state in words in its `title` and `aria-label` (`role="img"`), through
+`terminalStatusLabel()`: `Running`, `Exited (code N)` once `process-exited`
+reported a code for the session, `Stopped` when none is known. It is in the
+no-drag list so its tooltip shows.
+
+The header's vertical padding is 2 px around the 26 px buttons, so its content
+(31 px with the border) stays under `--strip-min-height` and the header is
+exactly as tall as the sidebar's strip. `test/header-controls.test.js` pins
+that arithmetic.
+
+The terminal container starts at the header's bottom, so the header's height
+decides how many rows fit. When the file panel opens or closes,
+`refitActiveTerminal` (`file-panel.js`) refits the session terminal with
+`safeFit`, the same clamped fit the container's ResizeObserver applies (see
+`clampRowsToContentBox` in `terminal-manager.js`). A raw `FitAddon.fit()` there
+counts the container's vertical padding as drawable space: whenever the
+container's height modulo the cell height is under that padding, the terminal
+is resized to N+1 rows, then back to N by the observer, and a resize while the
+panel shell's WebGL context comes up leaves the session terminal painted blank
+until its next refresh.
 
 ## What the platform does with the drag region
 

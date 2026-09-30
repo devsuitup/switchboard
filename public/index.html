@@ -78,13 +78,13 @@
     <div id="terminal-area">
       <div id="terminal-header" style="display:none;">
         <div id="terminal-header-info">
+          <span id="terminal-header-status" role="img"></span>
           <span id="terminal-header-name"></span>
           <span id="terminal-header-pty-title" style="display:none;"></span>
           <span id="terminal-header-id"></span>
           <span id="terminal-header-shell" style="display:none;"></span>
         </div>
         <div id="terminal-header-controls">
-          <span id="terminal-header-status" data-header-kind="indicator"></span>
           <span id="terminal-header-sandbox" data-header-kind="indicator" style="display:none;" title="Running in a bubblewrap sandbox: only this project directory and Claude's own state are visible. Network and environment are NOT isolated.">Sandbox</span>
           <button id="terminal-stop-btn" data-header-kind="action" title="Stop process" aria-label="Stop process"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg></button>
         </div>

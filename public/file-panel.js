@@ -1585,7 +1585,7 @@ function refitActiveTerminal() {
     if (typeof openSessions !== 'undefined' && currentPanelSessionId) {
       const entry = openSessions.get(currentPanelSessionId);
       if (entry && entry.fitAddon) {
-        try { entry.fitAddon.fit(); } catch {}
+        try { safeFit(entry); } catch {}
       }
     }
   });

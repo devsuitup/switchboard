@@ -2,7 +2,6 @@
 'use strict';
 
 const HEADER_CONTROLS = Object.freeze([
-  Object.freeze({ id: 'terminal-header-status', kind: 'indicator' }),
   Object.freeze({ id: 'terminal-header-sandbox', kind: 'indicator' }),
   Object.freeze({ id: 'ide-emulation-indicator', kind: 'indicator' }),
   Object.freeze({ id: 'panel-terminal-toggle-btn', kind: 'toggle' }),
@@ -14,6 +13,12 @@ const HEADER_TOGGLE_ICONS = Object.freeze({
   shell: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3l-3 3"/><path d="M13 15h3"/><path d="M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-14a2 2 0 0 1-2-2z"/></svg>',
   changes: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="M14 9l-3-3l3-3"/><path d="M13 18h-5a2 2 0 0 1-2-2v-8"/><path d="M10 15l3 3l-3 3"/></svg>',
 });
+
+function terminalStatusLabel(running, exitCode) {
+  if (running) return 'Running';
+  if (Number.isInteger(exitCode)) return `Exited (code ${exitCode})`;
+  return 'Stopped';
+}
 
 function headerControlSpec(id) {
   const spec = HEADER_CONTROLS.find((c) => c.id === id);
@@ -57,5 +62,5 @@ function setHeaderToggle(btn, on) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { HEADER_CONTROLS, HEADER_TOGGLE_ICONS, placeHeaderControl, createHeaderToggle, setHeaderToggle };
+  module.exports = { HEADER_CONTROLS, HEADER_TOGGLE_ICONS, placeHeaderControl, createHeaderToggle, setHeaderToggle, terminalStatusLabel };
 }

@@ -250,6 +250,7 @@ const rendererCrossFileGlobals = {
   placeHeaderControl: 'readonly',
   createHeaderToggle: 'readonly',
   setHeaderToggle: 'readonly',
+  terminalStatusLabel: 'readonly',
   fileUriToPath: 'readonly',
   createTerminalPathResolver: 'readonly',
   registerTerminalPathLinks: 'readonly',

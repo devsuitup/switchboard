@@ -1378,7 +1378,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 16px;
+  padding: 2px 16px;
   background: var(--surface-chrome);
   border-bottom: 1px solid var(--hairline);
   flex-shrink: 0;
@@ -1465,20 +1465,18 @@ body { display: flex; flex-direction: column; }
   margin-left: 8px;
 }
 
-#terminal-header-controls #terminal-header-status.running {
-  color: #3ecf5a;
-}
-
-#terminal-header-controls #terminal-header-status.running::before {
-  box-shadow: 0 0 6px rgba(62,207,90,0.5);
-}
-
-#terminal-header-controls #terminal-header-status.stopped {
-  color: #7a7a90;
-}
-
-#terminal-header-controls #terminal-header-status.stopped::before {
+#terminal-header-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
   background: #6a6a80;
+  cursor: default;
+}
+
+#terminal-header-status.running {
+  background: #3ecf5a;
+  box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
 
 #terminal-header-controls #terminal-header-sandbox {
@@ -4452,12 +4450,6 @@ body { display: flex; flex-direction: column; }
   color: var(--text-muted);
 }
 
-#panel-terminal-toggle-btn.active {
-  border-color: rgba(120,130,255,0.45);
-  color: #a0a8ff;
-  background: rgba(120,130,255,0.10);
-}
-
 /* Editor hosts — see .ai/contexts/viewer-panel.md */
 #file-panel-body,
 #changes-diff-host {
@@ -4894,7 +4886,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }

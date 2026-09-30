@@ -15,11 +15,14 @@ const {
   placeHeaderControl,
   createHeaderToggle,
   setHeaderToggle,
+  terminalStatusLabel,
 } = require('../public/header-controls');
+const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 
 const HTML = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
-const CSS = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const RAW_CSS = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
+const CSS = RAW_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const KIND_RANK = { indicator: 0, toggle: 1, action: 2 };
 
@@ -34,7 +37,6 @@ function rowIds(doc) {
 
 test('the row is declared once: indicators, then panel toggles, then Stop last', () => {
   assert.deepEqual(HEADER_CONTROLS.map((c) => [c.id, c.kind]), [
-    ['terminal-header-status', 'indicator'],
     ['terminal-header-sandbox', 'indicator'],
     ['ide-emulation-indicator', 'indicator'],
     ['panel-terminal-toggle-btn', 'toggle'],
@@ -52,7 +54,7 @@ test('index.html carries its static controls in the declared order, marked with 
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-header-status', 'terminal-header-sandbox', 'terminal-stop-btn']);
+  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-stop-btn']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -62,8 +64,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['terminal-stop-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox', 'terminal-header-status'],
-    ['changes-toggle-btn', 'terminal-header-status', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
+    ['terminal-stop-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
+    ['changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {
@@ -162,4 +164,78 @@ test('Stop is set apart from the toggles by a divider that is not part of its hi
   const divider = ruleBodies(/^#terminal-stop-btn::before$/);
   assert.equal(divider.length, 1);
   assert.match(divider[0].body, /pointer-events:\s*none/);
+});
+
+test('the process status is a dot right before the session name, with its words in the tooltip', () => {
+  const doc = new JSDOM(HTML).window.document;
+  const dot = doc.getElementById('terminal-header-status');
+  assert.equal(dot.parentElement.id, 'terminal-header-info');
+  assert.equal(dot.nextElementSibling.id, 'terminal-header-name', 'the dot sits right before the name');
+  assert.equal(dot.textContent, '', 'no text beside the dot');
+  assert.equal(dot.getAttribute('role'), 'img', 'so that its aria-label is read');
+  assert.equal(HEADER_CONTROLS.some((c) => c.id === 'terminal-header-status'), false, 'it is not in the right-hand row');
+
+  assert.equal(terminalStatusLabel(true, undefined), 'Running');
+  assert.equal(terminalStatusLabel(true, 1), 'Running', 'a relaunched session is running whatever its last exit');
+  assert.equal(terminalStatusLabel(false, 0), 'Exited (code 0)');
+  assert.equal(terminalStatusLabel(false, 137), 'Exited (code 137)');
+  assert.equal(terminalStatusLabel(false, undefined), 'Stopped');
+
+  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
+  assert.match(app, /terminalHeaderStatus\.title = status;/);
+  assert.match(app, /terminalHeaderStatus\.setAttribute\('aria-label', status\);/);
+  assert.doesNotMatch(app, /terminalHeaderStatus\.textContent/, 'the dot carries no text');
+});
+
+// jsdom cascades the real stylesheet with specificity, so a later, more
+// specific rule for one toggle shows up here as a difference.
+function cascadedRow() {
+  const dom = new JSDOM(`<!DOCTYPE html><head><style>${RAW_CSS}</style></head><body class="window-frameless platform-linux">
+    <div id="terminal-header"><div id="terminal-header-info"><span id="terminal-header-status"></span><span id="terminal-header-name">n</span></div>
+    <div id="terminal-header-controls">
+      <button id="panel-terminal-toggle-btn" class="icon-btn active"></button>
+      <button id="changes-toggle-btn" class="icon-btn active"></button>
+      <button id="running-toggle" class="active"></button>
+      <button id="archive-toggle" class="active"></button>
+    </div></div></body>`);
+  return dom.window;
+}
+
+test('both header toggles cascade to the same on state, the sidebar filter buttons\' accent one', () => {
+  const window = cascadedRow();
+  const look = (id) => {
+    const cs = window.getComputedStyle(window.document.getElementById(id));
+    return { color: cs.color, border: cs.borderTopColor, background: cs.backgroundColor };
+  };
+  const shell = look('panel-terminal-toggle-btn');
+  assert.ok(shell.color && shell.border && shell.background, 'the cascade resolved the three properties');
+  assert.deepEqual(look('changes-toggle-btn'), shell);
+  assert.deepEqual(look('archive-toggle'), shell, 'the same accent on state as the sidebar\'s archive filter');
+});
+
+test('the status dot cascades to grey when stopped and green when running', () => {
+  const window = cascadedRow();
+  const dot = window.document.getElementById('terminal-header-status');
+  dot.className = 'stopped';
+  const stopped = window.getComputedStyle(dot).backgroundColor;
+  dot.className = 'running';
+  const running = window.getComputedStyle(dot).backgroundColor;
+  assert.notEqual(stopped, running);
+  assert.match(`${stopped} ${running}`, /#6a6a80|rgb\(106, 106, 128\)/i);
+  assert.match(running, /#3ecf5a|rgb\(62, 207, 90\)/i);
+});
+
+test('the header is exactly as tall as the strip: its buttons and padding fit inside the strip\'s minimum height', () => {
+  const header = ruleBodies(/^#terminal-header$/);
+  assert.equal(header.length, 1);
+  const m = /padding:\s*(\d+)px\s+16px;/.exec(header[0].body);
+  assert.ok(m, '#terminal-header keeps a vertical and a 16px horizontal padding');
+  assert.equal(Number(m[1]), 2);
+  assert.match(header[0].body, /border-bottom:\s*1px solid/);
+  const button = ruleBodies(/#running-toggle,[^{]*\.icon-btn\s*$/)[0].body;
+  const buttonHeight = Number(/height:\s*(\d+)px/.exec(button)[1]);
+  assert.ok(buttonHeight + 2 * Number(m[1]) + 1 <= STRIP_HEIGHT,
+    'the content stays under --strip-min-height, so the header takes the strip\'s height and not its own');
+  assert.ok(buttonHeight + 2 * (Number(m[1]) + 1) + 1 > STRIP_HEIGHT,
+    'one more pixel of padding and the header would outgrow the strip');
 });
