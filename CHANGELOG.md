@@ -14,6 +14,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The Changes panel and its editor use the app's own look: icon buttons, the dark surfaces of the sidebar, a badge for each file's state, and softer diff colours. (#351)
 
 ### Fixed
+- Saving from the file panel, the Memory panel or the MCP diff tab no longer overwrites a file that changed on disk since you opened it. You are told, and asked before your edits replace it. (#355)
+- When an open file changes on disk, the panel reloads it if you have no unsaved edits, and otherwise keeps them and offers Reload or Keep my edits. It keeps noticing changes after the file is replaced, deleted or recreated. (#355)
+- Switching tabs or sessions no longer drops a file tab's unsaved edits. (#355)
+- Undo no longer brings back an edit made in another file, or before the file was reloaded. (#355)
 - The Changes panel works when a session's directory is below the repository root; tracked files' diffs came back empty there. (#350)
 - A file with a merge conflict is badged `U` (Unmerged) in the Changes list, instead of Added or Deleted. (#351)
 - A plain terminal no longer types its `claude` shim into the shell, so the line stays out of your shell history and off the screen. (#352)
