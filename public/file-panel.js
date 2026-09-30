@@ -26,6 +26,7 @@ let currentPanelSessionId = null;
 
 // ViewerPanel instance for file-type tabs
 let fpViewerPanel = null;
+let fpViewerOwner = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -273,8 +274,9 @@ function handleClose() {
       unwatchChangesFile(currentPanelSessionId, tab);
       destroyChangesEditor(tab);
     }
-    if (tab.type === 'file') {
+    if (tab.type === 'file' && fpViewerOwner === tab) {
       fpViewerPanel.destroy();
+      fpViewerOwner = null;
     }
     state.currentTab = null;
   }
@@ -509,8 +511,9 @@ function destroyCurrentTab(state, { stash = true } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
-  if (tab.type === 'file') {
+  if (tab.type === 'file' && fpViewerOwner === tab) {
     fpViewerPanel.destroy();
+    fpViewerOwner = null;
   }
 }
 
@@ -633,6 +636,19 @@ function renderPanel(sessionId) {
   renderTabContent(sessionId, state.currentTab);
 }
 
+// see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+function showFileTabInViewer(tab) {
+  if (fpViewerOwner === tab) return;
+  if (fpViewerOwner && fpViewerOwner.type === 'file') {
+    fpViewerOwner.viewerState = fpViewerPanel.snapshot();
+  }
+  fpViewerOwner = tab;
+  const saved = tab.viewerState && tab.viewerState.filePath === tab.filePath ? tab.viewerState : null;
+  tab.viewerState = null;
+  if (saved) fpViewerPanel.open(tab.label, tab.filePath, saved.content, saved);
+  else fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+}
+
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
@@ -651,7 +667,7 @@ function renderTabContent(sessionId, tab) {
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = 'none';
     vpContainer.style.display = 'flex';
-    fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+    showFileTabInViewer(tab);
     if (tab.pendingLine) {
       fpViewerPanel.revealLine(tab.pendingLine);
       tab.pendingLine = null;

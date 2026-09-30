@@ -64,7 +64,7 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 
 ### Main
 
-`save-file-for-panel` and `save-memory` are `createPanelSaveHandlers` in `viewer-save-guard.js`, registered by `main.js` with its path policies injected (`isSensitivePath`, `resolveAllowedMemoryPath`, `invalidateFtsSignature`). Each validates the path, then `writeIfUnmoved`, which runs `refuseIfMoved`:
+`save-file-for-panel` and `save-memory` are `createPanelSaveHandlers` in `viewer-save-guard.js`, registered by `main.js` with its path policies injected (`isSensitivePath`, `resolveAllowedMemoryPath`, `invalidateFtsSignature`). `test/viewer-save-guard.test.js` lifts that policy object out of `main.js` and runs it against the real validator functions, so a policy swapped for a permissive stub fails there. Each handler validates the path — `save-memory`: a `.md` file, resolved through the memory allowlist, written at the resolved path; both: the file exists — then `writeIfUnmoved`, which runs `refuseIfMoved`:
 
 - `expected` not a string → refused, `reason: 'invalid-expected'`. There is no blind write.
 - The file on disk, line endings folded to `\n`, differs from `expected` → refused, `reason: 'stale'`, with **`disk`: the text it compared**, folded the same way.
@@ -92,8 +92,9 @@ A re-read while the buffer is **dirty never moves it**; it only updates `_lastSe
 
 ### A stale refusal
 
-Main returns the disk text it compared. The panel asks `confirm('Overwrite the file on disk with your edits?')`:
+Main returns the disk text it compared. The panel shows the "not saved" notice, then asks `confirm('This file changed on disk since you opened it. Overwrite it with your edits?')` — worded like the diff tab's, because a refusal can be the first the user hears of the other write (nothing raised "changed on disk" before it):
 - On yes, that text becomes `_agreedBase` and the save is retried with it. If the retry is refused too, the disk moved while the confirm was open: the panel asks again with the new text, and never writes without a compare.
+- If the panel was switched to another file while the save or the confirm was pending (`_openGen`), nothing is retried and nothing is asked about the new file.
 - On no, nothing is written and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** and **Overwrite**. **Overwrite** is a plain save that goes through the same check and confirm.
 
 A plain save while the "changed on disk" notice is up is refused the same way, because the dirty re-read did not move the base, and asks the same confirm. **Keep my edits** is the agreement given ahead of time: the next save carries the disk the notice described and goes out without asking, and a further write nobody has read is still refused.
@@ -121,6 +122,21 @@ Everything below is presentation; none of it carries the rule.
 - **The queue.** One save is in flight at a time (`_pendingSave`). A save requested meanwhile is queued, and sent once the first returns ok, carrying the base that save left; if the session wrote in between, main refuses it and the panel asks. It is dropped if the first save fails. `open()` resets the pending save and the queue, so a save of the newly opened file goes out on its own, and the previous file's save touches neither when it resolves. The MCP diff tab queues a click during a save the same way (`tab.saving`), and drops it once the tab has lost its editor.
 - **An answered diff.** Once a diff is answered (Accept or Reject, `tab.resolved`), the session writes the file itself and the base no longer describes the disk. Save is refused, and the shared diff Save button is disabled with a title saying why, until the session closes the tab. The button's state is set on each render of a diff tab, so a diff opened after an answered one has Save enabled again.
 - **Other failures.** A save refused for any other reason, or whose IPC rejects, shows `Save failed: <reason>` in the notice.
+
+## One viewer, several file tabs
+
+`file-panel.js` has one `ViewerPanel` (`fpViewerPanel`) for the `'file'` tabs of every session, and `fpViewerOwner` records the tab it is showing. `showFileTabInViewer` is the only way a file tab reaches it:
+
+- The owner being shown again is left as it is — not reopened — so a save in flight, the queue, the notice and the buffer are untouched by a re-render.
+- Another file tab taking the viewer first stores the owner's `snapshot()` (buffer, `_agreedBase`, `_lastSeenDisk`) on that tab as `viewerState`.
+- A tab with a `viewerState` for its path is reopened from it with `open(title, path, buffer, restore)`, then re-read at once, so a write made while it was away is treated like any other: a clean buffer reloads, a dirty one keeps its edits and says so. `tab.content`, the content first read when the tab opened, is used only for the tab's first showing.
+- Destroying a file tab destroys the viewer only if that tab is its owner; a tab that never reached the viewer, or no longer holds it, has nothing in it to tear down.
+
+A save of the previous owner still in flight when another tab takes the viewer resolves against a newer `_openGen` and is dropped from the panel's bookkeeping; its write has happened, so the snapshot's base is older than the disk and the next save of that tab is refused by main and asks, rather than written blind.
+
+## Undo
+
+Content the panel puts in the editor itself — the file `open()` shows, `_createEditor`'s initial fill, a quiet reload — goes through `_setDocument`, which marks the transaction `Transaction.addToHistory.of(false)` (`window.CMTransaction`, exported by `codemirror-setup.js`). Undo therefore steps only through the user's own edits: after a quiet reload, Ctrl+Z cannot bring back content the disk no longer holds, which the next save would otherwise write over the file. `test/viewer-panel-undo.test.js` drives this against the real CodeMirror.
 
 ## Watching the file
 

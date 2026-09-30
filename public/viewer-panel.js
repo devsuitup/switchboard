@@ -290,10 +290,10 @@ class ViewerPanel {
    * codemirror-bundle.js has been loaded (first call triggers the load; all
    * subsequent calls share the same cached Promise and resolve near-instantly).
    */
-  open(title, filePath, content) {
+  open(title, filePath, content, restore = null) {
     this._unwatchFile();
-    this._agreedBase = asEditorText(content);
-    this._lastSeenDisk = this._agreedBase;
+    this._agreedBase = asEditorText(restore ? restore.agreedBase : content);
+    this._lastSeenDisk = restore ? asEditorText(restore.lastSeenDisk) : this._agreedBase;
     this._pendingSave = null;
     this._saveQueued = false;
     this._setNotice(null);
@@ -347,9 +347,7 @@ class ViewerPanel {
       if (!this.editorView) {
         this._createEditor(c, fp);
       } else {
-        this.editorView.dispatch({
-          changes: { from: 0, to: this.editorView.state.doc.length, insert: c },
-        });
+        this._setDocument(c);
       }
 
       // Set wrap default based on file type
@@ -367,6 +365,7 @@ class ViewerPanel {
       if (wantPreview) {
         this._setPreview(true);
       }
+      if (restore) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
     });
@@ -393,11 +392,7 @@ class ViewerPanel {
       );
     } else {
       this.editorView = window.createPlanEditor(this.editorEl);
-      if (content) {
-        this.editorView.dispatch({
-          changes: { from: 0, to: this.editorView.state.doc.length, insert: content },
-        });
-      }
+      if (content) this._setDocument(content);
     }
   }
 
@@ -444,8 +439,10 @@ class ViewerPanel {
       let result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       while (this._openGen === myGen && result && result.reason === 'stale' && typeof result.disk === 'string') {
         this._lastSeenDisk = asEditorText(result.disk);
+        this._setNotice('stale');
         if (typeof window.confirm !== 'function'
-          || !window.confirm('Overwrite the file on disk with your edits?')) break;
+          || !window.confirm('This file changed on disk since you opened it. Overwrite it with your edits?')
+          || this._openGen !== myGen) break;
         this._agreedBase = this._lastSeenDisk;
         result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       }
@@ -570,12 +567,21 @@ class ViewerPanel {
     this._setNotice(null);
   }
 
+  // see .ai/contexts/viewer-panel.md ("Undo")
+  _setDocument(text) {
+    const transaction = { changes: { from: 0, to: this.editorView.state.doc.length, insert: text } };
+    if (window.CMTransaction) transaction.annotations = window.CMTransaction.addToHistory.of(false);
+    this.editorView.dispatch(transaction);
+  }
+
+  // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+  snapshot() {
+    if (!this.editorView || !this.filePath) return null;
+    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk };
+  }
+
   _replaceContent(newContent) {
-    if (newContent !== this.getContent()) {
-      this.editorView.dispatch({
-        changes: { from: 0, to: this.editorView.state.doc.length, insert: newContent },
-      });
-    }
+    if (newContent !== this.getContent()) this._setDocument(newContent);
     if (this.previewMode) {
       this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
     }

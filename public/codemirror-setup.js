@@ -1,5 +1,5 @@
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, highlightSpecialChars, ViewPlugin, Decoration } from '@codemirror/view';
-import { EditorState, StateField, StateEffect, Compartment } from '@codemirror/state';
+import { EditorState, StateField, StateEffect, Compartment, Transaction } from '@codemirror/state';
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -561,6 +561,7 @@ window.createMergeViewer = createMergeViewer;
 window.createUnifiedMergeViewer = createUnifiedMergeViewer;
 window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
+window.CMTransaction = Transaction;
 window.CMMergeView = MergeView;
 // A merge view exposes its editable side as `.b` — see .ai/contexts/terminal-path-links.md
 function revealLine(view, lineNumber) {

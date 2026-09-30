@@ -603,7 +603,7 @@ test('once a clean buffer has been reloaded quietly, a save goes out without ask
 
 
 
-const OVERWRITE = 'Overwrite the file on disk with your edits?';
+const OVERWRITE = 'This file changed on disk since you opened it. Overwrite it with your edits?';
 
 test('a dirty re-read does not move the baseline: a plain save is refused by main, then confirmed, then written with the agreed text', async () => {
   const t = setup({ disk: 'one\n' });
@@ -793,5 +793,61 @@ test('a notice clears once the disk is back to the agreed base, and the edits st
     await t.panel._save();
     assert.deepEqual(t.state.confirms, [], 'nothing to agree to');
     assert.equal(t.state.disk, 'one\nmine');
+  } finally { t.destroy(); }
+});
+
+test('a stale refusal nothing had announced shows its notice and says the file changed before asking', async () => {
+  const t = setup({ disk: 'written by the session\n' });
+  try {
+    await t.open('first read\n');
+    t.editor().type('mine');
+    let noticeAtConfirm = null;
+    t.window.confirm = (msg) => {
+      t.state.confirms.push(msg);
+      noticeAtConfirm = visible(t.notice()) ? noticeText(t) : null;
+      return false;
+    };
+    await t.panel._save();
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+    assert.match(noticeAtConfirm, /changed on disk since you opened it/, 'the notice is up while the user decides');
+    assert.equal(t.state.disk, 'written by the session\n');
+  } finally { t.destroy(); }
+});
+
+test('switching file during the confirm sends no retry, for either file', async () => {
+  const t = setup({ disk: 'session\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    t.window.confirm = (msg) => {
+      t.state.confirms.push(msg);
+      t.panel.open('other', other, 'other\n');
+      return true;
+    };
+    await t.panel._save();
+    await tick();
+    assert.equal(t.state.saves.length, 1, 'only the refused first save');
+    assert.equal(t.state.saves[0].filePath, FILE);
+    assert.equal(t.state.disk, 'session\n');
+  } finally { t.destroy(); }
+});
+
+test('a stale refusal that comes back after the file was switched asks nothing about the new file', async () => {
+  const t = setup({ disk: 'session\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    let finish;
+    t.state.saveImpl = (fp, content, expected) => new Promise((resolve) => {
+      finish = () => resolve(mainSave(t.state, content, expected));
+    });
+    const saving = t.panel._save();
+    await t.open('other\n', '/home/u/.claude/projects/p/memory/other.md');
+    finish();
+    await saving;
+    assert.deepEqual(t.state.confirms, []);
+    assert.equal(t.state.saves.length, 1);
+    assert.equal(visible(t.notice()), false);
   } finally { t.destroy(); }
 });
