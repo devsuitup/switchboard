@@ -1169,6 +1169,7 @@ body { display: flex; flex-direction: column; }
 .session-launch-config-btn,
 .session-fork-btn,
 .session-jsonl-btn,
+.session-bridge-btn,
 .session-delete-btn,
 .session-archive-btn {
   cursor: pointer;
@@ -3070,6 +3071,15 @@ body { display: flex; flex-direction: column; }
   background: rgba(64,200,200,0.1);
 }
 
+.session-bridge-btn {
+  color: #8a7ab8;
+}
+
+.session-bridge-btn:hover {
+  color: #b8a4f0;
+  background: rgba(184,164,240,0.1);
+}
+
 /* Memory sidebar content */
 #memory-content {
   flex: 1;
@@ -4010,11 +4020,18 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  box-sizing: border-box;
+  padding: 16px;
+  padding-top: calc(var(--strip-min-height) + 16px);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
 
 .new-session-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  box-sizing: border-box;
   background: #1e1e2a;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px;
@@ -4023,6 +4040,17 @@ body { display: flex; flex-direction: column; }
   max-width: 90vw;
   box-shadow: 0 16px 48px rgba(0,0,0,0.4);
 }
+
+.new-session-dialog .new-session-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.new-session-dialog .new-session-body::-webkit-scrollbar { width: 5px; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-track { background: transparent; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
 
 .new-session-dialog h3 {
   font-size: 15px;

@@ -39,20 +39,13 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createWhatsNew } = require('./changelog');
+const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction.
-const cleanPtyEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) =>
-    !k.startsWith('ELECTRON_') &&
-    !k.startsWith('GOOGLE_API_KEY') &&
-    k !== 'NODE_OPTIONS' &&
-    k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-    k !== 'WT_SESSION'
-  )
-);
+const cleanPtyEnv = cleanEnv(process.env);
 
 // Windows: prefer node-pty's bundled ConPTY (conpty.dll + OpenConsole.exe)
 // over the OS inbox one. The inbox ConPTY re-renders TUI frames itself and is a

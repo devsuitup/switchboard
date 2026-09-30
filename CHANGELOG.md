@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- A session that has a claude.ai bridge shows an Open on claude.ai button in its sidebar row, which opens that session on claude.ai; a session without one shows nothing. (#213)
 - A schedule with `catch-up: true` in its front matter runs once, as soon as Switchboard starts or the machine wakes up, when it fell due while Switchboard was closed or the machine asleep, however many runs were missed in the last seven days. Without it, a missed run is still skipped. (#334)
 ### Fixed
 - A sandboxed session can no longer leave behind something that runs outside the sandbox later: in `~/.claude` and in every `.claude` of the project, worktrees included, only the session's own state (its transcripts, todos, credentials) stays writable, each repository's config and hooks are read-only, other sessions' shell snapshots and session hooks are out of its reach, and its changes to `~/.claude.json`, where the MCP servers are, are dropped when it ends. A new `.git/commondir`, or a repository or worktree the session creates, still carries config and hooks git will follow. Change settings, permissions, plugins and MCP servers outside the sandbox; the Sandbox indicator's tooltip lists what stays writable. (#358)
@@ -18,9 +19,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - The "Finishing indexing before restoring N sessions" bar no longer stays up when a saved session is not in the index: once indexing is over the session is dropped from the restore and a notice names it. (#376)
+- A session started from a Switchboard that was itself launched inside a Claude Code session is now a top-level session: it saves its transcript and no longer inherits the parent session's id, socket or IDE link. `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` and provider switches are kept. (#378)
 - A file with unsaved edits in the panel is no longer discarded when the session opens another file, proposes an edit, or a link opens Changes. It is kept aside, named above the file shown, and comes back when the diff or Changes closes, with a notice if the file changed on disk. (#364)
 - Saving a file in the panel before its editor has finished loading no longer empties the file on disk; Save stays disabled until the file is shown. (#369)
 - `SWITCHBOARD_SSH_PATH` now applies to every connection to a remote host, not only the attached terminal: the pulls, the copy of transcripts, the watch connection, stop and the Changes view use it too. Transcripts are copied with the `scp` beside it, or with `SWITCHBOARD_SCP_PATH` when set. (#359)
+- The New Session and Resume Session dialogs no longer grow taller than a short window: they stay below the title strip, the title and the Start or Resume and Cancel buttons stay visible, and the options in between scroll. (#377)
 
 ## v0.0.85 — 2026-09-30
 
