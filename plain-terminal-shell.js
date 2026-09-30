@@ -51,11 +51,7 @@ ZDOTDIR=$_sb_init_dir
 `,
   '.zshrc': `${HEADER}${zshStep('.zshrc')}
 ${POSIX_SHIM}
-if [[ -o login ]]; then
-  ZDOTDIR=$_sb_init_dir
-else
-${ZSH_RESTORE.replace(/^/gm, '  ')}
-fi
+ZDOTDIR=$_sb_init_dir
 `,
   '.zlogin': `${HEADER}${zshStep('.zlogin')}
 ${ZSH_RESTORE}
@@ -84,18 +80,22 @@ function writeInitFiles(initDir) {
   }
 }
 
-const _written = new Map();
+function initFilePaths(initDir) {
+  return [bashRcPath(initDir), ...Object.keys(ZSH_FILES).map((name) => path.join(zshDir(initDir), name))];
+}
+
+const _written = new Set();
 function ensureInitFiles(initDir, log) {
-  if (!_written.has(initDir)) {
-    try {
-      writeInitFiles(initDir);
-      _written.set(initDir, true);
-    } catch (err) {
-      if (log) log.warn(`[plain-terminal] cannot write shell init files in ${initDir}: ${err.message}`);
-      _written.set(initDir, false);
-    }
+  if (_written.has(initDir) && initFilePaths(initDir).every((f) => fs.existsSync(f))) return true;
+  try {
+    writeInitFiles(initDir);
+    _written.add(initDir);
+    return true;
+  } catch (err) {
+    if (log) log.warn(`[plain-terminal] cannot write shell init files in ${initDir}: ${err.message}`);
+    _written.delete(initDir);
+    return false;
   }
-  return _written.get(initDir);
 }
 
 /**
@@ -126,4 +126,4 @@ function plainTerminalLaunch({ shell, args, env, initDir, platform = process.pla
   return { args, env: outEnv, typed: TYPED_SHIM };
 }
 
-module.exports = { plainTerminalLaunch, ensureInitFiles, writeInitFiles, TYPED_SHIM, FISH_SHIM, HINT };
+module.exports = { plainTerminalLaunch, ensureInitFiles, writeInitFiles, BASHRC, TYPED_SHIM, FISH_SHIM, HINT };

@@ -23,17 +23,24 @@ interactive shell records it in its history like any command the user typed.
 
 `<data dir>/shell-init/` — the directory of `switchboard.db`, so
 `SWITCHBOARD_DATA_DIR` isolates it with everything else. `ensureInitFiles()`
-writes them on the first plain terminal of a process and not again: one write
-per launch, never one per terminal, and a new version's content replaces the
-old one at the next launch. Nothing under `$HOME` is written or changed. When
-the write fails, bash and zsh get the typed fallback below and a warning is
-logged.
+writes them on the first plain terminal of a process, so a new version's
+content replaces the old one at the next launch. Each later plain terminal only
+checks that the files still exist, and writes them again if any is missing: a
+deleted `--rcfile` would otherwise start bash silently with none of the user's
+startup files and a bare `PATH`, and zsh with none of theirs. Nothing under
+`$HOME` is written or changed. When the write fails, bash and zsh get the typed
+fallback below and a warning is logged.
 
 ```
 shell-init/
   bashrc
   zsh/.zshenv  zsh/.zprofile  zsh/.zshrc  zsh/.zlogin
 ```
+
+`zsh/` can also hold a `.zcompdump` that zsh writes itself: Ubuntu's
+`/etc/zsh/zshrc` runs `compinit` while `ZDOTDIR` still points at the generated
+directory, and `compinit` keeps its dump in `$ZDOTDIR`. The `compinit` of the
+next plain zsh terminal reuses it; `ensureInitFiles()` neither writes nor removes it.
 
 ## Mechanism per shell
 
@@ -69,10 +76,15 @@ default `~/.profile` sources `~/.bashrc`.
 Differences from a real login shell, all consequences of the shell not being
 one:
 
-- `shopt -q login_shell` is false, and `logout` refuses (use `exit`).
+- `shopt -q login_shell` is false, and `logout` refuses (use `exit`). A user
+  `~/.bashrc` that branches on `login_shell` takes its non-login branch (not
+  verified on a real configuration).
 - `~/.bash_logout` does not run on exit.
 - A bash built with `SYS_BASHRC` (Debian, Ubuntu) reads `/etc/bash.bashrc`
   before the rcfile, and `/etc/profile` sources it again: it runs twice.
+- On Fedora and RHEL, `/etc/bashrc` sources `/etc/profile.d/*.sh` again when
+  `! shopt -q login_shell`, so `/etc/profile.d` probably runs twice there (not
+  verified).
 
 ### zsh: a generated `ZDOTDIR`
 
@@ -91,14 +103,16 @@ value `ZDOTDIR` has *at that moment*. Each generated file:
 4. points `ZDOTDIR` back at the generated directory, so zsh reads the next
    generated file.
 
-`.zshrc` defines the shim after the user's `.zshrc`. The last file read
-(`.zlogin` for a login shell, `.zshrc` otherwise) restores the user's `ZDOTDIR`
-for good and unsets its own `_sb_*` variables, so child shells, `.zlogout` and
+`.zshrc` defines the shim after the user's `.zshrc`. `.zlogin`, the last file a
+login shell reads, restores the user's `ZDOTDIR` for good and unsets its own `_sb_*` variables, so child shells, `.zlogout` and
 anything the user runs see their own configuration. A `ZDOTDIR` present in the
 environment Switchboard was started with is handed over as
 `SWITCHBOARD_USER_ZDOTDIR` and unset by `.zshenv`.
 
 Limits:
+
+- zsh is always started as a login shell (`-l -i`). A non-login zsh would never
+  read `.zlogin`, and `ZDOTDIR` would stay on the generated directory.
 
 - A `/etc/zshenv` (or `/etc/zsh/zshenv`) that assigns `ZDOTDIR`
   unconditionally runs before the generated `.zshenv`; zsh then never reads the

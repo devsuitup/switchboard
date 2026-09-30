@@ -11,7 +11,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const {
-  plainTerminalLaunch, writeInitFiles, ensureInitFiles, TYPED_SHIM, FISH_SHIM, HINT,
+  plainTerminalLaunch, writeInitFiles, ensureInitFiles, BASHRC, TYPED_SHIM, FISH_SHIM, HINT,
 } = require('../plain-terminal-shell');
 const { shellArgs } = require('../shell-profiles');
 
@@ -107,6 +107,26 @@ test('ensureInitFiles writes once per directory and reports a failure as false',
   }
 });
 
+test('ensureInitFiles rewrites the files when they disappear while the app runs', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-init-'));
+  try {
+    assert.equal(ensureInitFiles(dir), true);
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.equal(ensureInitFiles(dir), true);
+    assert.equal(fs.readFileSync(path.join(dir, 'bashrc'), 'utf8'), BASHRC);
+    fs.rmSync(path.join(dir, 'zsh', '.zlogin'));
+    assert.equal(ensureInitFiles(dir), true);
+    assert.ok(fs.existsSync(path.join(dir, 'zsh', '.zlogin')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the bash rcfile starts with /etc/profile, as a login shell does', () => {
+  const lines = BASHRC.split('\n').filter((l) => !l.startsWith('#'));
+  assert.equal(lines[0], 'if [ -f /etc/profile ]; then . /etc/profile; fi');
+});
+
 // ── the generated files, run by real shells ─────────────────────────────────
 
 function findShell(name, envVar) {
@@ -152,15 +172,20 @@ test('real bash: the login files run as a login shell would, then the shim is de
   } finally { s.cleanup(); }
 });
 
-test('real bash: ~/.bash_profile wins over ~/.profile, as in a login shell', (t) => {
-  if (!BASH) return t.skip('bash not found');
+function bashLoginWinner(files) {
   const s = sandbox();
   try {
-    fs.writeFileSync(path.join(s.home, '.bash_profile'), 'W=bash_profile\n');
-    fs.writeFileSync(path.join(s.home, '.profile'), 'W=profile\n');
+    for (const name of files) fs.writeFileSync(path.join(s.home, name), `W=${name}\n`);
     const l = plainTerminalLaunch({ shell: BASH, args: shellArgs(BASH), env: { HOME: s.home, PATH: process.env.PATH }, initDir: s.init, platform: process.platform });
-    assert.match(run(BASH, l.args, l.env, 'echo "W=$W"'), /^W=bash_profile$/m);
+    return (run(BASH, l.args, l.env, 'echo "W=$W"').match(/^W=(.*)$/m) || [])[1];
   } finally { s.cleanup(); }
+}
+
+test('real bash: the first of ~/.bash_profile, ~/.bash_login, ~/.profile is read, and only it', (t) => {
+  if (!BASH) return t.skip('bash not found');
+  assert.equal(bashLoginWinner(['.bash_profile', '.bash_login', '.profile']), '.bash_profile');
+  assert.equal(bashLoginWinner(['.bash_login', '.profile']), '.bash_login');
+  assert.equal(bashLoginWinner(['.profile']), '.profile');
 });
 
 function zshCase(t, { userZdotdir, files }) {
@@ -229,5 +254,6 @@ test('main.js: the plain-terminal branch spawns what plainTerminalLaunch returns
   assert.match(branch, /ptyProcess\.write\(launch\.typed\);/);
   assert.doesNotMatch(branch, /BASH_ENV|\bENV:/);
   assert.doesNotMatch(main, /claudeShim/);
+  assert.match(branch, /initDir: ensurePlainTerminalInitFiles\(PLAIN_TERMINAL_INIT_DIR, log\) \? PLAIN_TERMINAL_INIT_DIR : null,/);
   assert.match(main, /const PLAIN_TERMINAL_INIT_DIR = path\.join\(path\.dirname\(DB_PATH\), 'shell-init'\);/);
 });
