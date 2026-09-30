@@ -38,7 +38,7 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
-const { whatsNewOnStartup, whatsNewForVersion } = require('./changelog');
+const { createWhatsNew } = require('./changelog');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -153,6 +153,9 @@ const {
   closeDb,
   DB_PATH,
 } = require('./db');
+
+// see docs/changelog.md ("What's new in the app")
+const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
 
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
@@ -436,38 +439,24 @@ function buildMenu() {
 
 // --- What's new (see docs/changelog.md) ---
 
-const CHANGELOG_PATH = path.join(__dirname, 'CHANGELOG.md');
-const readChangelog = () => fs.readFileSync(CHANGELOG_PATH, 'utf8');
-
-function recordLastSeenVersion(version) {
-  const global = getSetting('global') || {};
-  global.lastSeenVersion = version;
-  setSetting('global', global);
-}
+const whatsNew = createWhatsNew({
+  getSetting,
+  setSetting,
+  currentVersion: app.getVersion(),
+  existingInstall: INSTALL_PREDATES_LAUNCH,
+  lastSeenDefault: SETTING_DEFAULTS.lastSeenVersion,
+  readChangelog: () => fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8'),
+  log,
+});
 
 function showWhatsNewFromMenu() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const currentVersion = app.getVersion();
-  const { sections, error } = whatsNewForVersion({ currentVersion, readChangelog });
-  if (error) {
-    log.warn(`[whats-new] ${error}`);
-    return;
-  }
-  mainWindow.webContents.send('show-whats-new', { version: currentVersion, sections });
+  const payload = whatsNew.forMenu();
+  if (payload) mainWindow.webContents.send('show-whats-new', payload);
 }
 
-ipcMain.handle('whats-new-startup', () => {
-  const currentVersion = app.getVersion();
-  const lastSeenVersion = (getSetting('global') || {}).lastSeenVersion ?? SETTING_DEFAULTS.lastSeenVersion;
-  const { sections, record, error } = whatsNewOnStartup({ currentVersion, lastSeenVersion, readChangelog });
-  if (error) log.warn(`[whats-new] ${error}`);
-  if (record) recordLastSeenVersion(record);
-  return sections ? { version: currentVersion, sections } : null;
-});
-
-ipcMain.handle('whats-new-dismissed', () => {
-  recordLastSeenVersion(app.getVersion());
-});
+ipcMain.handle('whats-new-startup', () => whatsNew.startup());
+ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
 
 // --- Session cache helpers ---
 

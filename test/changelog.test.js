@@ -12,6 +12,8 @@ const {
   sectionsBetween,
   whatsNewOnStartup,
   whatsNewForVersion,
+  createWhatsNew,
+  VERSION_BEFORE_WHATS_NEW,
 } = require('../changelog');
 
 const ROOT = path.join(__dirname, '..');
@@ -139,17 +141,94 @@ test('startup after an update shows the sections since the last seen version and
 test('startup on a fresh install shows nothing, records the current version and never reads the file', () => {
   for (const lastSeenVersion of [undefined, null, '']) {
     const read = reader(SAMPLE);
-    const result = whatsNewOnStartup({ currentVersion: '0.0.100', lastSeenVersion, readChangelog: read });
+    const result = whatsNewOnStartup({ currentVersion: '0.0.100', lastSeenVersion, existingInstall: false, readChangelog: read });
     assert.equal(result.sections, null);
     assert.equal(result.record, '0.0.100');
     assert.equal(read.calls(), 0);
   }
 });
 
-test('startup with an unreadable stored version records the current one and shows nothing', () => {
-  const result = whatsNewOnStartup({ currentVersion: '0.0.100', lastSeenVersion: 'garbage', readChangelog: reader(SAMPLE) });
+test('startup on a fresh install with an unreadable stored version records the current one and shows nothing', () => {
+  const result = whatsNewOnStartup({ currentVersion: '0.0.100', lastSeenVersion: 'garbage', existingInstall: false, readChangelog: reader(SAMPLE) });
   assert.equal(result.sections, null);
   assert.equal(result.record, '0.0.100');
+});
+
+test('an existing install with no lastSeenVersion is shown every section after the last version without the dialog', () => {
+  assert.equal(VERSION_BEFORE_WHATS_NEW, '0.0.84');
+  const text = SAMPLE.replace('## v0.0.98 — 2026-10-01', '## v0.0.84 — 2026-09-29');
+  for (const lastSeenVersion of [undefined, null, '', 'garbage']) {
+    const result = whatsNewOnStartup({ currentVersion: '0.0.100', lastSeenVersion, existingInstall: true, readChangelog: reader(text) });
+    assert.deepEqual(result.sections.map((s) => s.version), ['0.0.100', '0.0.99'], `lastSeenVersion=${String(lastSeenVersion)}`);
+    assert.equal(result.record, null);
+  }
+});
+
+test('an existing install still on the last version without the dialog shows nothing and never reads the file', () => {
+  const read = reader(SAMPLE);
+  const result = whatsNewOnStartup({ currentVersion: '0.0.84', lastSeenVersion: undefined, existingInstall: true, readChangelog: read });
+  assert.equal(result.sections, null);
+  assert.equal(result.record, null);
+  assert.equal(read.calls(), 0);
+});
+
+function memorySettings(initial = {}) {
+  const rows = new Map(Object.entries(initial).map(([k, v]) => [k, JSON.stringify(v)]));
+  return {
+    getSetting: (key) => (rows.has(key) ? JSON.parse(rows.get(key)) : null),
+    setSetting: (key, value) => { rows.set(key, JSON.stringify(value)); },
+  };
+}
+
+function service(settings, overrides = {}) {
+  const warnings = [];
+  const whatsNew = createWhatsNew({
+    ...settings,
+    currentVersion: '0.0.100',
+    existingInstall: true,
+    lastSeenDefault: null,
+    readChangelog: reader(SAMPLE),
+    log: { warn: (msg) => warnings.push(msg) },
+    ...overrides,
+  });
+  return { whatsNew, warnings };
+}
+
+test('dismissing the dialog persists the running version, so the next start shows nothing', () => {
+  const settings = memorySettings({ global: { lastSeenVersion: '0.0.98', windowBounds: { x: 1 } } });
+  const first = service(settings).whatsNew;
+  assert.deepEqual(first.startup().sections.map((s) => s.version), ['0.0.100', '0.0.99']);
+  first.dismissed();
+  assert.deepEqual(settings.getSetting('global'), { lastSeenVersion: '0.0.100', windowBounds: { x: 1 } });
+  assert.equal(service(settings).whatsNew.startup(), null);
+});
+
+test('the dialog shown on startup comes back on the next start if it was never dismissed', () => {
+  const settings = memorySettings({ global: { lastSeenVersion: '0.0.98' } });
+  assert.ok(service(settings).whatsNew.startup());
+  assert.ok(service(settings).whatsNew.startup());
+});
+
+test('a fresh install records the running version on its first start, and shows nothing on the next', () => {
+  const settings = memorySettings();
+  assert.equal(service(settings, { existingInstall: false }).whatsNew.startup(), null);
+  assert.equal(settings.getSetting('global').lastSeenVersion, '0.0.100');
+  assert.equal(service(settings).whatsNew.startup(), null);
+});
+
+test('startup and the menu log a broken changelog and write nothing', () => {
+  const settings = memorySettings({ global: { lastSeenVersion: '0.0.98' } });
+  const { whatsNew, warnings } = service(settings, { readChangelog: reader('## nonsense') });
+  assert.equal(whatsNew.startup(), null);
+  assert.equal(whatsNew.forMenu(), null);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /\[whats-new\] malformed heading/);
+  assert.deepEqual(settings.getSetting('global'), { lastSeenVersion: '0.0.98' });
+});
+
+test('the menu gives the running version section with the version it belongs to', () => {
+  const { whatsNew } = service(memorySettings());
+  assert.deepEqual(whatsNew.forMenu(), { version: '0.0.100', sections: [parseChangelog(SAMPLE).versions[0]] });
 });
 
 test('startup on the same or an older version shows nothing and records nothing', () => {

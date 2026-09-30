@@ -3,7 +3,8 @@
 // see docs/changelog.md
 
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)$/;
-const VERSION_HEADING_RE = /^## v(\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2})$/;
+const VERSION_BEFORE_WHATS_NEW = '0.0.84';
+const VERSION_HEADING_RE =/^## v(\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2})$/;
 
 function parseVersion(value) {
   const m = typeof value === 'string' ? VERSION_RE.exec(value) : null;
@@ -70,8 +71,11 @@ function readSections(readChangelog) {
   }
 }
 
-function whatsNewOnStartup({ currentVersion, lastSeenVersion, readChangelog }) {
-  if (!isVersion(lastSeenVersion)) return { sections: null, record: currentVersion, error: null };
+function whatsNewOnStartup({ currentVersion, lastSeenVersion, existingInstall, readChangelog }) {
+  if (!isVersion(lastSeenVersion)) {
+    if (!existingInstall) return { sections: null, record: currentVersion, error: null };
+    lastSeenVersion = VERSION_BEFORE_WHATS_NEW;
+  }
   if (compareVersions(currentVersion, lastSeenVersion) <= 0) return { sections: null, record: null, error: null };
   const { versions, error } = readSections(readChangelog);
   if (error) return { sections: null, record: null, error };
@@ -88,4 +92,40 @@ function whatsNewForVersion({ currentVersion, readChangelog }) {
   return { sections: [section], error: null };
 }
 
-module.exports = { compareVersions, parseChangelog, sectionsBetween, whatsNewOnStartup, whatsNewForVersion };
+function createWhatsNew({ getSetting, setSetting, currentVersion, existingInstall, lastSeenDefault, readChangelog, log }) {
+  const record = (version) => {
+    const global = getSetting('global') || {};
+    global.lastSeenVersion = version;
+    setSetting('global', global);
+  };
+  return {
+    startup() {
+      const lastSeenVersion = (getSetting('global') || {}).lastSeenVersion ?? lastSeenDefault;
+      const result = whatsNewOnStartup({ currentVersion, lastSeenVersion, existingInstall, readChangelog });
+      if (result.error) log.warn(`[whats-new] ${result.error}`);
+      if (result.record) record(result.record);
+      return result.sections ? { version: currentVersion, sections: result.sections } : null;
+    },
+    dismissed() {
+      record(currentVersion);
+    },
+    forMenu() {
+      const { sections, error } = whatsNewForVersion({ currentVersion, readChangelog });
+      if (error) {
+        log.warn(`[whats-new] ${error}`);
+        return null;
+      }
+      return { version: currentVersion, sections };
+    },
+  };
+}
+
+module.exports = {
+  VERSION_BEFORE_WHATS_NEW,
+  compareVersions,
+  parseChangelog,
+  sectionsBetween,
+  whatsNewOnStartup,
+  whatsNewForVersion,
+  createWhatsNew,
+};
