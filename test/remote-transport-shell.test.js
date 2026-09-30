@@ -81,40 +81,52 @@ test('LIST_COMMAND: only a digit-named .json FILE is read — never a .key file,
     const { sessionsBlock } = splitListOutput(result.stdout);
     const markers = sessionsBlock.split('\n').filter((line) => line.startsWith(ALIVE_MARKER_PREFIX));
     assert.equal(markers.length, 1,
-      'exactly one descriptor read: the directory, the .key file and any symlink are all excluded');
+      `exactly one descriptor read: the directory, the .key file and any symlink are all excluded; stderr: ${result.stderr}`);
     assert.ok(sessionsBlock.startsWith('{"pid":4242,"sessionId":"abc"}\n'), 'the one descriptor read is the valid one');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// F9 (audit-fable-2026-09-11): the ALIVE marker must reflect a real /proc
-// check on whatever host runs the shell, for both the "alive" and the "dead"
-// case, then parseSessions() must act on it. Uses the shell's own $$ as the
-// "alive" pid — self-referential, so it is a real live process under this
-// same shell's own /proc view whether that's a real Linux /proc (CI's
-// ubuntu-latest leg) or Git Bash's narrower emulation (this machine, CI's
-// windows-2022 leg) — no assumption about a specific pid being visible.
-test('LIST_COMMAND: ALIVE marker reflects real /proc liveness, and parseSessions drops only the dead one', { skip: SH_SKIP }, () => {
+function sessionsSandbox(descriptors) {
   const dir = sandbox();
+  const sessionsDir = path.join(dir, '.claude', 'sessions');
+  fs.mkdirSync(path.join(dir, '.claude', 'projects'), { recursive: true });
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  for (const [pid, sessionId] of descriptors) {
+    fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({ pid, sessionId }));
+  }
+  return dir;
+}
+
+function listSessions(dir, command) {
+  const result = spawnSync('sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const { sessionsBlock } = splitListOutput(result.stdout);
+  const markers = sessionsBlock.split('\n').filter((line) => line.startsWith(ALIVE_MARKER_PREFIX));
+  return { markers, ...parseSessions(sessionsBlock) };
+}
+
+// see .ai/contexts/session-cache.md ("Remote SSH hosts (issue #211)", liveness marker)
+test('LIST_COMMAND: the ALIVE marker follows the pid directory under /proc, and parseSessions drops only the dead one', { skip: SH_SKIP }, () => {
+  const procCheck = '"/proc/$pid"';
+  assert.equal(LIST_COMMAND.split(procCheck).length, 2, 'liveness is read from exactly one /proc/$pid check');
+  const dir = sessionsSandbox([[4242, 'live'], [4343, 'dead']]);
   try {
-    const sessionsDir = path.join(dir, '.claude', 'sessions');
-    fs.mkdirSync(path.join(dir, '.claude', 'projects'), { recursive: true });
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    // A pid astronomically unlikely to exist on any OS's pid space.
-    fs.writeFileSync(path.join(sessionsDir, '999999999.json'), JSON.stringify({ pid: 999999999, sessionId: 'dead' }));
-
-    // The live descriptor is written by the shell itself, naming its own
-    // $$, right before LIST_COMMAND runs in the same shell instance.
-    const script = `printf '{"pid":%s,"sessionId":"live"}' "$$" > ".claude/sessions/$$.json"; ${LIST_COMMAND}`;
-    const result = spawnSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8' });
-
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stdout.includes(`${ALIVE_MARKER_PREFIX}1`), 'the live descriptor must be marked ALIVE:1');
-    assert.ok(result.stdout.includes(`${ALIVE_MARKER_PREFIX}0`), 'the dead descriptor must be marked ALIVE:0');
-
-    const { sessionsBlock } = splitListOutput(result.stdout);
-    const { sessions, dropped } = parseSessions(sessionsBlock);
-    assert.equal(sessions.length, 1, 'only the live descriptor survives parseSessions');
-    assert.equal(sessions[0].sessionId, 'live');
+    fs.mkdirSync(path.join(dir, 'proc', '4242'), { recursive: true });
+    const { markers, sessions, dropped } = listSessions(dir, LIST_COMMAND.replace(procCheck, '"proc/$pid"'));
+    assert.deepEqual(markers, [`${ALIVE_MARKER_PREFIX}1`, `${ALIVE_MARKER_PREFIX}0`]);
+    assert.deepEqual(sessions.map((s) => s.sessionId), ['live']);
     assert.equal(dropped, 1);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('LIST_COMMAND: on Linux the ALIVE marker reads the real /proc', {
+  skip: SH_SKIP || (process.platform !== 'linux' && 'only Linux guarantees /proc/<pid> for a running process'),
+}, () => {
+  const dir = sessionsSandbox([[process.pid, 'live'], [999999999, 'dead']]);
+  try {
+    const { sessions, dropped } = listSessions(dir, LIST_COMMAND);
+    assert.deepEqual(sessions.map((s) => s.sessionId), ['live']);
+    assert.equal(dropped, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
