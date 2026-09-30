@@ -607,6 +607,9 @@ test('real git: missingCwdError says nothing about a directory that is simply th
 // --- untracked line counts at status time ---------------------------------
 // see .ai/contexts/changes-view.md ("Untracked line counts")
 
+// The pass's time budget is load-dependent; these tests pin the caps, not the clock.
+const UNHURRIED = { ...UNTRACKED_COUNT_LIMITS, timeBudgetMs: 120_000 };
+
 function writeUntrackedCountFixture(repoDir) {
   fs.writeFileSync(path.join(repoDir, 'three.txt'), 'a\nb\nc\n');
   fs.writeFileSync(path.join(repoDir, 'no-final-newline.txt'), 'x\ny');
@@ -624,7 +627,7 @@ test('real git: status counts every untracked text file, with no diff call, and 
     initRepo(repoDir);
     writeUntrackedCountFixture(repoDir);
 
-    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED });
     const status = await runner.status();
     assert.equal(status.ok, true);
     const byPath = new Map(status.files.map((f) => [f.path, f]));
@@ -662,7 +665,7 @@ test('real git: a .gitattributes diff setting overrides the content sniff, as it
     fs.writeFileSync(path.join(repoDir, 'text.dat'), 'plain\ntext\n');
     fs.writeFileSync(path.join(repoDir, 'forced.bin'), Buffer.from('a\0b\nc\n'));
 
-    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED });
     const status = await runner.status();
     const byPath = new Map(status.files.map((f) => [f.path, f]));
 
@@ -685,7 +688,7 @@ test('real git: an untracked file over the per-file byte cap is marked too large
     fs.writeFileSync(path.join(repoDir, 'huge.log'), Buffer.alloc(UNTRACKED_COUNT_LIMITS.maxFileBytes + 1, 0x0a));
     fs.writeFileSync(path.join(repoDir, 'at-cap.log'), Buffer.alloc(UNTRACKED_COUNT_LIMITS.maxFileBytes, 0x0a));
 
-    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED }).status();
     const byPath = new Map(status.files.map((f) => [f.path, f]));
     assert.equal(byPath.get('huge.log').added, null);
     assert.equal(byPath.get('huge.log').countStatus, 'too-large');
@@ -704,7 +707,7 @@ test('real git: past the file-count cap the remaining untracked rows are marked 
     const n = UNTRACKED_COUNT_LIMITS.maxFiles + 5;
     for (let i = 0; i < n; i++) fs.writeFileSync(path.join(repoDir, 'many', `f${String(i).padStart(5, '0')}.txt`), 'l\n');
 
-    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED }).status();
     const untracked = status.files.filter((f) => f.untracked);
     assert.equal(untracked.length, n);
     assert.equal(untracked.filter((f) => f.added === 1).length, UNTRACKED_COUNT_LIMITS.maxFiles);
@@ -727,7 +730,7 @@ test('real git: past the total byte budget the remaining untracked rows are mark
     const fit = Math.floor(UNTRACKED_COUNT_LIMITS.maxTotalBytes / perFile);
     for (let i = 0; i <= fit; i++) fs.writeFileSync(path.join(repoDir, `chunk${String(i).padStart(2, '0')}.log`), Buffer.alloc(perFile, 0x0a));
 
-    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED }).status();
     const untracked = status.files.filter((f) => f.untracked);
     assert.equal(untracked.filter((f) => f.added === perFile).length, fit);
     assert.deepEqual(untracked.filter((f) => f.countStatus === 'over-cap').map((f) => f.path), [untracked[untracked.length - 1].path]);
@@ -753,7 +756,7 @@ test('real git: a leaf symlink counts as the one line git renders for it; a syml
       return;
     }
 
-    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED });
     const status = await runner.status();
     const byPath = new Map(status.files.map((f) => [f.path, f]));
     const opened = await runner.diff('link-to-file', { untracked: true });
@@ -761,6 +764,66 @@ test('real git: a leaf symlink counts as the one line git renders for it; a syml
     assert.equal(byPath.get('link-to-file').added, opened.added);
     assert.equal(byPath.get('link-to-dir').added, null);
     assert.equal(byPath.get('link-to-dir').countStatus, 'unavailable');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: a session cwd below the repository root counts, diffs and opens every row by its root-relative path (mutation target: resolving status paths against the session cwd)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, 'sub'));
+    fs.writeFileSync(path.join(repoDir, 'crlf.txt'), 'one\r\ntwo\r\n');
+    fs.writeFileSync(path.join(repoDir, 'sub', 'crlf.txt'), 'a\nb\nc\nd\ne\n');
+    fs.writeFileSync(path.join(repoDir, 'top.txt'), 'x\n');
+    fs.writeFileSync(path.join(repoDir, 'sub', 'inner.txt'), 'i1\ni2\ni3\n');
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: path.join(repoDir, 'sub'), countLimits: UNHURRIED });
+    const status = await runner.status();
+    assert.equal(status.ok, true);
+    const byPath = new Map(status.files.map((f) => [f.path, f]));
+    assert.equal(byPath.get('crlf.txt').added, 2, 'the root crlf.txt, not sub/crlf.txt');
+    assert.equal(byPath.get('sub/crlf.txt').added, 5);
+    assert.equal(byPath.get('top.txt').added, 1);
+    assert.equal(byPath.get('sub/inner.txt').added, 3);
+    assert.equal(status.totals.uncounted, 0);
+
+    for (const p of ['crlf.txt', 'sub/crlf.txt', 'top.txt', 'sub/inner.txt']) {
+      const opened = await runner.diff(p, { untracked: true });
+      assert.equal(opened.ok, true, `${p} opens from a subdirectory cwd`);
+      assert.equal(opened.added, byPath.get(p).added, `${p}: the count opening reports is the one the list showed`);
+    }
+
+    const tracked = await runner.diff('tracked.txt');
+    assert.equal(tracked.ok, true);
+    assert.match(tracked.content, /^\+line2$/m, 'a tracked row at the root diffs from a subdirectory cwd too');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: the binary sniff window ends where git\'s does — a NUL at byte 7999 is binary, at byte 8000 it is text (mutation target: an off-by-one window)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const inWindow = Buffer.alloc(9000, 0x61);
+    inWindow[7999] = 0;
+    inWindow[8999] = 0x0a;
+    const pastWindow = Buffer.alloc(9000, 0x61);
+    pastWindow[8000] = 0;
+    pastWindow[8999] = 0x0a;
+    fs.writeFileSync(path.join(repoDir, 'nul-7999.dat'), inWindow);
+    fs.writeFileSync(path.join(repoDir, 'nul-8000.dat'), pastWindow);
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir, countLimits: UNHURRIED });
+    const byPath = new Map((await runner.status()).files.map((f) => [f.path, f]));
+    assert.equal((await runner.diff('nul-7999.dat', { untracked: true })).added, null, 'git: binary');
+    assert.equal(byPath.get('nul-7999.dat').countStatus, 'binary');
+    assert.equal((await runner.diff('nul-8000.dat', { untracked: true })).added, 1, 'git: text');
+    assert.equal(byPath.get('nul-8000.dat').added, 1);
   } finally {
     cleanup(tmp);
   }

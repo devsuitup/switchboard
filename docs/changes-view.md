@@ -58,10 +58,11 @@ A row that has no count says why, in place of the numbers:
 
 | Marker | Meaning |
 |---|---|
-| `binary` | A binary file, tracked or not — git gives it no line count. A `.gitattributes` `binary` or `-diff` setting counts as binary, as it does for git. |
-| `too large` | An untracked file over 1 MiB. Opening it counts it when it can. |
-| `not counted` | Past the first 500 untracked files, or past 8 MiB read in one refresh. Opening it counts it. |
+| `binary` | A binary file, tracked or not — git gives it no line count. A `.gitattributes` `binary` or `-diff` setting, or a diff driver configured with `binary = true`, counts as binary, as it does for git. |
+| `too large` | An untracked file over 1 MiB: too large to count. |
+| `not counted` | Past the first 500 untracked files, past 8 MiB read in one refresh, or not reached within the refresh's one-second counting limit (a slow or network drive). Opening it counts it. |
 | `count on open` | A remote session: untracked files are counted when you open them. |
+| `directory` | The untracked listing is collapsed (see "Very large working trees"): the row stands for a whole directory. |
 | `no count` | The file could not be read, or is a link to a directory. |
 
 When some rows have no count, the header says how many it leaves out:

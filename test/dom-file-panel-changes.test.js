@@ -389,8 +389,9 @@ test('every count status renders its own marker, never a blank cell, and a track
       { path: 'late.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'over-cap' },
       { path: 'far.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
       { path: 'gone.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'unavailable' },
+      { path: 'vendor/', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'collapsed' },
     ],
-    totals: { files: 6, added: 4, deleted: 0, uncounted: 5 },
+    totals: { files: 7, added: 4, deleted: 0, uncounted: 6 },
   };
   const ctx = setupFilePanelDom({ statusImpl: () => status });
   try {
@@ -405,7 +406,39 @@ test('every count status renders its own marker, never a blank cell, and a track
     assert.equal(cell('late.txt'), 'not counted');
     assert.equal(cell('far.txt'), 'count on open');
     assert.equal(cell('gone.txt'), 'no count');
-    assert.equal(ctx.document.getElementById('changes-summary').textContent, '6 files changed +4 −0 (5 files not counted)');
+    assert.equal(cell('vendor/'), 'directory', 'a collapsed directory entry is not promised a count on open');
+    const title = (p) => ctx.document.querySelector(`.changes-file-row[data-path="${p}"] .changes-count-note`).title;
+    assert.doesNotMatch(title('vendor/'), /open/i);
+    assert.doesNotMatch(title('big.log'), /open/i, 'a file over the count limit is not promised a count on open');
+    assert.equal(ctx.document.getElementById('changes-summary').textContent, '7 files changed +4 −0 (6 files not counted)');
+  } finally { ctx.destroy(); }
+});
+
+test('an untracked count lands on the untracked record, never on a tracked row with the same path (mutation target: matching on path alone)', async () => {
+  // `git rm --cached new.txt` leaves both a staged deletion and an untracked file at one path.
+  const status = {
+    ok: true,
+    kind: 'remote',
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'new.txt', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'D', added: 0, deleted: 9, countStatus: null },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
+    ],
+    totals: { files: 2, added: 0, deleted: 9, uncounted: 1 },
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => status, diffImpl: () => UNTRACKED_DIFF_RESULT });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelectorAll('.changes-file-row')[1].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+    closeEditorBtn(ctx).click();
+
+    const cells = [...ctx.document.querySelectorAll('.changes-file-row .changes-file-counts')].map((c) => c.textContent);
+    assert.deepEqual(cells, ['+0−9', '+2−0'], 'the deletion keeps its own counts; the untracked file gets its count');
+    assert.equal(ctx.document.getElementById('changes-summary').textContent, '2 files changed +2 −9');
   } finally { ctx.destroy(); }
 });
 

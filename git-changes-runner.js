@@ -86,18 +86,18 @@ function toGitPath(p, pathOps) {
 }
 
 // git follows a symlink to a directory — see .ai/contexts/changes-view.md ("Untracked files")
-function leafSymlinkIsDiffable(resolved, fsOps) {
+async function leafSymlinkIsDiffable(resolved, fsOps) {
   let target;
   try {
-    target = fsOps.stat(resolved);
+    target = await fsOps.stat(resolved);
   } catch {
     return true;
   }
   return target.isFile();
 }
 
-function resolveParentDir(root, dir, fsOps, pathOps) {
-  const parent = fsOps.realpath(dir);
+async function resolveParentDir(root, dir, fsOps, pathOps) {
+  const parent = await fsOps.realpath(dir);
   const inside = !!parent && isInsideRoot(root, parent, pathOps);
   return { parent, inside, rel: inside ? pathOps.relative(root, parent) : null };
 }
@@ -109,21 +109,22 @@ function cached(cache, key, compute) {
 }
 
 // Containment for a --no-index operand; `cache` shares the per-directory work across one batch — see .ai/contexts/changes-view.md ("Untracked files")
-function resolveLocalNoIndexTarget(cwd, filePath, fsOps = DEFAULT_FS_OPS, pathOps = path, cache = null) {
+async function resolveLocalNoIndexTarget(root, filePath, fsOps = ASYNC_FS_OPS, pathOps = path, cache = null) {
   if (!isSafeNoIndexPath(filePath)) return null;
 
   try {
-    const root = cached(cache, '\0root', () => fsOps.realpath(cwd));
-    if (!root) return null;
-    const absolute = pathOps.resolve(root, filePath);
-    const dir = cached(cache, pathOps.dirname(absolute), () => resolveParentDir(root, pathOps.dirname(absolute), fsOps, pathOps));
+    const realRoot = await cached(cache, '\0root', () => fsOps.realpath(root));
+    if (!realRoot) return null;
+    const absolute = pathOps.resolve(realRoot, filePath);
+    const dirname = pathOps.dirname(absolute);
+    const dir = await cached(cache, dirname, () => resolveParentDir(realRoot, dirname, fsOps, pathOps));
     if (!dir.inside) return null;
 
     const base = pathOps.basename(absolute);
     const resolved = pathOps.join(dir.parent, base);
-    const stat = fsOps.lstat(resolved);
+    const stat = await fsOps.lstat(resolved);
     if (!stat.isFile() && !stat.isSymbolicLink()) return null;
-    if (stat.isSymbolicLink() && !leafSymlinkIsDiffable(resolved, fsOps)) return null;
+    if (stat.isSymbolicLink() && !(await leafSymlinkIsDiffable(resolved, fsOps))) return null;
 
     const operand = toGitPath(dir.rel ? pathOps.join(dir.rel, base) : base, pathOps);
     return isSafeNoIndexPath(operand) ? { operand, resolved, stat } : null;
@@ -132,96 +133,157 @@ function resolveLocalNoIndexTarget(cwd, filePath, fsOps = DEFAULT_FS_OPS, pathOp
   }
 }
 
-function resolveLocalNoIndexOperand(cwd, filePath, fsOps = DEFAULT_FS_OPS, pathOps = path) {
-  const target = resolveLocalNoIndexTarget(cwd, filePath, fsOps, pathOps);
+async function resolveLocalNoIndexOperand(root, filePath, fsOps = ASYNC_FS_OPS, pathOps = path) {
+  const target = await resolveLocalNoIndexTarget(root, filePath, fsOps, pathOps);
   return target ? target.operand : null;
 }
 
-// Never blocks on a FIFO, never follows a leaf swapped for a symlink — see .ai/contexts/changes-view.md ("Untracked line counts")
-function readRegularFileUpTo(p, maxBytes) {
-  const flags = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0);
-  const fd = fs.openSync(p, flags);
+const PROC_FD_DIR = '/proc/self/fd';
+
+// The opened file is the one containment resolved — see .ai/contexts/changes-view.md ("Untracked line counts")
+async function openedFileIs(handle, resolved, expected, pathOps = path) {
+  const st = await handle.stat({ bigint: true });
+  if (!st.isFile()) return null;
+  if (String(st.dev) !== String(expected.dev) || String(st.ino) !== String(expected.ino)) return null;
+  let opened = null;
   try {
-    const st = fs.fstatSync(fd);
-    if (!st.isFile()) return null;
-    const buf = Buffer.allocUnsafe(Math.min(st.size, maxBytes) + 1);
+    opened = await fs.promises.readlink(`${PROC_FD_DIR}/${handle.fd}`);
+  } catch {
+    opened = null;
+  }
+  if (opened !== null) return opened === resolved ? st : null;
+  const parent = pathOps.dirname(resolved);
+  return (await fs.promises.realpath(parent)) === parent ? st : null;
+}
+
+// Never blocks on a FIFO, never reads past the cap, never reads a file other than `resolved` — see .ai/contexts/changes-view.md ("Untracked line counts")
+async function readRegularFileUpTo(resolved, maxBytes, expected) {
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0);
+  const handle = await fs.promises.open(resolved, flags);
+  try {
+    const st = await openedFileIs(handle, resolved, expected);
+    if (!st) return null;
+    const buf = Buffer.allocUnsafe(Math.min(Number(st.size), maxBytes) + 1);
     let n = 0;
     while (n < buf.length) {
-      const read = fs.readSync(fd, buf, n, buf.length - n, null);
-      if (read === 0) break;
-      n += read;
+      const { bytesRead } = await handle.read(buf, n, buf.length - n, null);
+      if (bytesRead === 0) break;
+      n += bytesRead;
     }
     return buf.subarray(0, n);
   } finally {
-    fs.closeSync(fd);
+    await handle.close();
   }
 }
 
+// Async fs seam for containment and the count pass — see .ai/contexts/changes-view.md ("Untracked line counts")
+const ASYNC_FS_OPS = {
+  realpath: (p) => fs.promises.realpath(p),
+  lstat: (p) => fs.promises.lstat(p, { bigint: true }),
+  stat: (p) => fs.promises.stat(p),
+  readUpTo: readRegularFileUpTo,
+};
+
 // Bounds on the local untracked count pass — see .ai/contexts/changes-view.md ("Untracked line counts")
-const UNTRACKED_COUNT_MAX_FILES = 500;
-const UNTRACKED_COUNT_MAX_FILE_BYTES = 1024 * 1024;
-const UNTRACKED_COUNT_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const UNTRACKED_COUNT_LIMITS = Object.freeze({
-  maxFiles: UNTRACKED_COUNT_MAX_FILES,
-  maxFileBytes: UNTRACKED_COUNT_MAX_FILE_BYTES,
-  maxTotalBytes: UNTRACKED_COUNT_MAX_TOTAL_BYTES,
+  maxFiles: 500,
+  maxFileBytes: 1024 * 1024,
+  maxTotalBytes: 8 * 1024 * 1024,
+  timeBudgetMs: 1000,
+  concurrency: 2,
 });
 
-// The sync half of the local count: containment, then a capped read — see .ai/contexts/changes-view.md ("Untracked line counts")
-function measureUntrackedLocal(cwd, paths, fsOps = DEFAULT_FS_OPS, limits = UNTRACKED_COUNT_LIMITS) {
+// Slots held by count-pass workers, across every pass in the process — see .ai/contexts/changes-view.md ("Untracked line counts")
+let countSlotsInUse = 0;
+
+function untrackedCountSlotsInUse() {
+  return countSlotsInUse;
+}
+
+async function measureOneUntracked(root, p, ctx) {
+  const target = await resolveLocalNoIndexTarget(root, p, ctx.fsOps, path, ctx.cache);
+  if (!target) return { countStatus: COUNT_STATUS.UNAVAILABLE };
+  if (target.stat.isSymbolicLink()) return { added: 1, deleted: 0 };
+  const size = Number(target.stat.size);
+  if (size > ctx.limits.maxFileBytes) return { countStatus: COUNT_STATUS.TOO_LARGE };
+  if (size > ctx.budget) return { countStatus: COUNT_STATUS.OVER_CAP };
+  ctx.budget -= size;
+  let buf = null;
+  try {
+    buf = await ctx.fsOps.readUpTo(target.resolved, ctx.limits.maxFileBytes, target.stat);
+  } catch {
+    buf = null;
+  }
+  if (!buf) return { countStatus: COUNT_STATUS.UNAVAILABLE };
+  ctx.budget -= buf.length - size;
+  if (buf.length > ctx.limits.maxFileBytes) return { countStatus: COUNT_STATUS.TOO_LARGE };
+  return { operand: target.operand, ...countBufferLines(buf) };
+}
+
+// Off the main thread's critical path: async, slot-bounded, time-boxed — see .ai/contexts/changes-view.md ("Untracked line counts")
+async function measureUntrackedLocal(root, paths, fsOps = ASYNC_FS_OPS, limits = UNTRACKED_COUNT_LIMITS) {
+  const candidates = paths.slice(0, limits.maxFiles);
+  const ctx = { fsOps: { ...ASYNC_FS_OPS, ...fsOps }, limits, cache: new Map(), budget: limits.maxTotalBytes };
   const results = new Map();
   const measured = [];
-  const containmentCache = new Map();
-  const readUpTo = fsOps.readUpTo || readRegularFileUpTo;
-  let budget = limits.maxTotalBytes;
+  let next = 0;
+  let open = true;
+  const deadline = Date.now() + limits.timeBudgetMs;
 
-  paths.slice(0, limits.maxFiles).forEach((p) => {
-    const target = resolveLocalNoIndexTarget(cwd, p, fsOps, path, containmentCache);
-    if (!target) {
-      results.set(p, { countStatus: COUNT_STATUS.UNAVAILABLE });
-      return;
-    }
-    if (target.stat.isSymbolicLink()) {
-      results.set(p, { added: 1, deleted: 0 });
-      return;
-    }
-    if (target.stat.size > limits.maxFileBytes) {
-      results.set(p, { countStatus: COUNT_STATUS.TOO_LARGE });
-      return;
-    }
-    if (target.stat.size > budget) {
-      results.set(p, { countStatus: COUNT_STATUS.OVER_CAP });
-      return;
-    }
-    let buf;
+  async function worker() {
+    countSlotsInUse += 1;
     try {
-      buf = readUpTo(target.resolved, limits.maxFileBytes);
-    } catch {
-      buf = null;
+      while (open && next < candidates.length && Date.now() < deadline) {
+        const p = candidates[next++];
+        let outcome;
+        try {
+          outcome = await measureOneUntracked(root, p, ctx);
+        } catch {
+          outcome = { countStatus: COUNT_STATUS.UNAVAILABLE };
+        }
+        if (!open) break;
+        if (outcome.operand !== undefined) measured.push({ path: p, ...outcome });
+        else results.set(p, outcome);
+      }
+    } finally {
+      countSlotsInUse -= 1;
     }
-    if (!buf) {
-      results.set(p, { countStatus: COUNT_STATUS.UNAVAILABLE });
-      return;
-    }
-    if (buf.length > limits.maxFileBytes) {
-      results.set(p, { countStatus: COUNT_STATUS.TOO_LARGE });
-      return;
-    }
-    budget -= buf.length;
-    measured.push({ path: p, operand: target.operand, ...countBufferLines(buf) });
-  });
+  }
 
-  return { results, measured };
+  const workers = Math.max(0, Math.min(limits.concurrency - countSlotsInUse, candidates.length));
+  let timer = null;
+  const expired = new Promise((resolve) => { timer = setTimeout(resolve, limits.timeBudgetMs); });
+  await Promise.race([Promise.all(Array.from({ length: workers }, worker)), expired]);
+  clearTimeout(timer);
+  open = false;
+  return { results: new Map(results), measured: measured.slice() };
 }
 
 // A `diff` attribute overrides the content sniff, as it does for git's own diff — see .ai/contexts/changes-view.md ("Untracked line counts")
-function settleUntrackedCounts(results, measured, diffAttrs) {
+function settleUntrackedCounts(results, measured, diffAttrs, binaryDrivers = new Set()) {
   for (const m of measured) {
     const attr = diffAttrs.get(m.operand);
-    const binary = attr === 'unset' || (attr !== 'set' && m.hasNul);
+    const driverBinary = typeof attr === 'string' && binaryDrivers.has(attr);
+    const binary = attr === 'unset' || driverBinary || (attr !== 'set' && m.hasNul);
     results.set(m.path, binary ? { countStatus: COUNT_STATUS.BINARY } : { added: m.lines, deleted: 0 });
   }
   return results;
+}
+
+const DIFF_ATTR_KEYWORDS = new Set(['set', 'unset', 'unspecified']);
+
+// `git config -z --get-regexp` output → the drivers whose `binary` is true
+function parseBinaryDrivers(text) {
+  const drivers = new Set();
+  for (const record of String(text || '').split('\0')) {
+    const nl = record.indexOf('\n');
+    if (nl === -1) continue;
+    const key = record.slice(0, nl);
+    const value = record.slice(nl + 1).trim().toLowerCase();
+    const m = /^diff\.(.+)\.binary$/s.exec(key);
+    if (m && ['true', 'yes', 'on', '1'].includes(value)) drivers.add(m[1]);
+  }
+  return drivers;
 }
 
 // true/false/null (undecidable) — see .ai/contexts/changes-view.md ("Not a repository")
@@ -330,8 +392,8 @@ function isStdoutCapFailure(result) {
   return /stdout exceeded \d+ bytes/.test(stderr) || /maxBuffer length exceeded/i.test(stderr);
 }
 
-// {kind, cwd, alias, exec, timeoutMs, fsOps} — see .ai/contexts/changes-view.md ("Runner interface")
-function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {}) {
+// {kind, cwd, alias, exec, timeoutMs, fsOps, countLimits} — see .ai/contexts/changes-view.md ("Runner interface")
+function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, countLimits } = {}) {
   if (kind !== 'local' && kind !== 'remote') {
     throw new Error('createGitChangesRunner requires kind "local" or "remote"');
   }
@@ -345,40 +407,81 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
   const effectiveTimeout = timeoutMs || (kind === 'local' ? DEFAULT_LOCAL_TIMEOUT_MS : DEFAULT_REMOTE_TIMEOUT_MS);
 
   const runExec = exec || (kind === 'local'
-    ? (args, localOpts) => defaultLocalExec(args, { cwd, timeoutMs: effectiveTimeout, input: localOpts && localOpts.input })
+    ? (args, localOpts = {}) => defaultLocalExec(args, { cwd: localOpts.cwd || cwd, timeoutMs: effectiveTimeout, input: localOpts.input })
     : (command, remoteOpts) => defaultRunRemoteCommand(alias, command, {
         timeoutMs: effectiveTimeout,
         maxStdoutBytes: remoteOpts && remoteOpts.maxStdoutBytes,
       }));
 
-  // remoteOpts (maxStdoutBytes) matter only for the remote transport — see .ai/contexts/changes-view.md ("Remote transport stdout cap")
-  function invoke(args, remoteOpts) {
+  const containmentFs = fsOps || ASYNC_FS_OPS;
+
+  // opts.at runs the command in that directory instead of the session cwd; maxStdoutBytes matters only remotely — see .ai/contexts/changes-view.md ("Remote transport stdout cap")
+  function invoke(args, opts = {}) {
     const fullArgs = buildGitArgs(args);
-    return kind === 'local' ? runExec(fullArgs) : runExec(buildRemoteGitCommand(cwd, fullArgs), remoteOpts);
+    const at = opts.at || cwd;
+    if (kind === 'local') {
+      const localOpts = {};
+      if (opts.at) localOpts.cwd = opts.at;
+      if (opts.input !== undefined) localOpts.input = opts.input;
+      return runExec(fullArgs, localOpts);
+    }
+    return runExec(buildRemoteGitCommand(at, fullArgs), { maxStdoutBytes: opts.maxStdoutBytes });
   }
 
-  function invokeLocalWithInput(args, input) {
-    return runExec(buildGitArgs(args), { input });
+  // Status paths are relative to the repository root, not the session cwd — see .ai/contexts/changes-view.md ("Paths are relative to the repository root")
+  let rootLookup = null;
+  function repoRoot() {
+    if (!rootLookup) {
+      rootLookup = (async () => {
+        try {
+          const result = await invoke(['rev-parse', '--show-toplevel']);
+          if (result.code !== 0) return null;
+          const top = String(result.stdout || '').replace(/\r?\n$/, '');
+          const absolute = kind === 'local' ? path.isAbsolute(top) : top.startsWith('/');
+          return isSafeCwd(top) && absolute ? top : null;
+        } catch {
+          return null;
+        }
+      })();
+    }
+    return rootLookup;
   }
 
-  async function diffAttributes(operands) {
-    if (operands.length === 0) return new Map();
+  async function gitAtRoot(args, opts = {}) {
+    const root = await repoRoot();
+    return invoke(args, { ...opts, at: root || cwd });
+  }
+
+  async function diffAttributes(root, operands) {
+    if (operands.length === 0) return { attrs: new Map(), binaryDrivers: new Set() };
+    let attrs = new Map();
     try {
-      const result = await invokeLocalWithInput(['check-attr', '-z', '--stdin', 'diff'], operands.join('\0') + '\0');
-      return result.code === 0 ? parseCheckAttr(result.stdout) : new Map();
+      const result = await invoke(['check-attr', '-z', '--stdin', 'diff'], { at: root, input: operands.join('\0') + '\0' });
+      if (result.code === 0) attrs = parseCheckAttr(result.stdout);
     } catch {
-      return new Map();
+      attrs = new Map();
+    }
+    const drivers = [...new Set(attrs.values())].filter((v) => !DIFF_ATTR_KEYWORDS.has(v));
+    if (drivers.length === 0) return { attrs, binaryDrivers: new Set() };
+    try {
+      const config = await invoke(['config', '-z', '--get-regexp', '^diff\\..*\\.binary$'], { at: root });
+      return { attrs, binaryDrivers: config.code === 0 ? parseBinaryDrivers(config.stdout) : new Set() };
+    } catch {
+      return { attrs, binaryDrivers: new Set() };
     }
   }
 
   // {counts, uncountedStatus} for mergeChanges — see .ai/contexts/changes-view.md ("Untracked line counts")
   async function untrackedCounts(files, collapsed) {
     if (kind !== 'local') return { counts: null, uncountedStatus: COUNT_STATUS.ON_OPEN };
-    if (collapsed) return { counts: null, uncountedStatus: COUNT_STATUS.OVER_CAP };
+    if (collapsed) return { counts: null, uncountedStatus: COUNT_STATUS.COLLAPSED };
     const paths = files.filter((f) => f.untracked).map((f) => f.path);
-    const { results, measured } = measureUntrackedLocal(cwd, paths, fsOps || DEFAULT_FS_OPS);
-    const attrs = await diffAttributes(measured.map((m) => m.operand));
-    return { counts: settleUntrackedCounts(results, measured, attrs), uncountedStatus: COUNT_STATUS.OVER_CAP };
+    if (paths.length === 0) return { counts: null, uncountedStatus: COUNT_STATUS.OVER_CAP };
+    const root = await repoRoot();
+    if (!root) return { counts: null, uncountedStatus: COUNT_STATUS.UNAVAILABLE };
+    const { results, measured } = await measureUntrackedLocal(root, paths, containmentFs, countLimits || UNTRACKED_COUNT_LIMITS);
+    const { attrs, binaryDrivers } = await diffAttributes(root, measured.map((m) => m.operand));
+    return { counts: settleUntrackedCounts(results, measured, attrs, binaryDrivers), uncountedStatus: COUNT_STATUS.OVER_CAP };
   }
 
   function cwdRefusal() {
@@ -457,17 +560,17 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
   }
 
   // The operand git receives is the guard's own, never the caller's — see .ai/contexts/changes-view.md ("Untracked files")
-  async function resolveUntrackedOperand(filePath) {
+  async function resolveUntrackedOperand(filePath, root) {
     if (!isSafeNoIndexPath(filePath)) return { ok: false, error: 'invalid path' };
 
     if (kind === 'local') {
-      const operand = resolveLocalNoIndexOperand(cwd, filePath, fsOps || DEFAULT_FS_OPS);
+      const operand = await resolveLocalNoIndexOperand(root, filePath, containmentFs);
       return operand ? { ok: true, operand } : { ok: false, error: 'invalid path' };
     }
 
     let listed;
     try {
-      listed = await invoke(['ls-files', '--others', '--exclude-standard', '-z', '--', filePath], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES });
+      listed = await invoke(['ls-files', '--others', '--exclude-standard', '-z', '--', filePath], { at: root, maxStdoutBytes: STATUS_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -478,13 +581,15 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
 
   // `--no-index` exits 1 on a difference — see .ai/contexts/changes-view.md ("Untracked files")
   async function untrackedDiff(filePath) {
-    const contained = await resolveUntrackedOperand(filePath);
+    if (!isSafeNoIndexPath(filePath)) return { ok: false, error: 'invalid path' };
+    const root = (await repoRoot()) || cwd;
+    const contained = await resolveUntrackedOperand(filePath, root);
     if (!contained.ok) return { ok: false, error: contained.error };
 
     let result;
     try {
       result = await invoke(['-c', 'core.quotepath=false', 'diff', '--no-index', '--', NO_INDEX_EMPTY_SIDE, contained.operand],
-        { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
+        { at: root, maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -507,7 +612,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps } = {
 
     let result;
     try {
-      result = await invoke(args, { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
+      result = await gitAtRoot(args, { maxStdoutBytes: DIFF_MAX_STDOUT_BYTES });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -534,6 +639,8 @@ module.exports = {
   resolveLocalNoIndexOperand,
   measureUntrackedLocal,
   readRegularFileUpTo,
+  untrackedCountSlotsInUse,
+  parseBinaryDrivers,
   UNTRACKED_COUNT_LIMITS,
   gitEntryAtOrAbove,
   missingCwdError,

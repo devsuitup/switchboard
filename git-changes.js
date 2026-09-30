@@ -165,6 +165,7 @@ const COUNT_STATUS = Object.freeze({
   TOO_LARGE: 'too-large',
   OVER_CAP: 'over-cap',
   ON_OPEN: 'on-open',
+  COLLAPSED: 'collapsed',
   UNAVAILABLE: 'unavailable',
 });
 

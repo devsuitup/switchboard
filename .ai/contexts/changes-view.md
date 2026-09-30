@@ -36,11 +36,32 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 ## Runner interface (`git-changes-runner.js`)
 
-`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), counts the untracked files on a local session (see "Untracked line counts"), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
+`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps, countLimits})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), counts the untracked files on a local session (see "Untracked line counts"), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
 - **Local** (`kind: 'local'`): `runToExit('git', args, {cwd, timeoutMs, maxBuffer})` (`run-to-exit.js`, a `child_process.spawn` with no shell) — cwd is the spawn's own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s. See "A capped read waits for git to exit".
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
 - **`invoke(args, remoteOpts)`** is the single choke point both `status()` and `diff()` go through: it prepends `--literal-pathspecs` (`buildGitArgs`, see "Quoting rule") to every argv/command, and threads `remoteOpts.maxStdoutBytes` to the remote transport only (the local path's `execFile` `maxBuffer` already bounds it).
+
+### Paths are relative to the repository root
+
+`git status --porcelain=v2` and `git diff --numstat` print paths relative to
+the repository root, whatever the cwd; `git diff -- <path>`, `git ls-files`,
+`git check-attr` and a `--no-index` operand take theirs relative to the cwd.
+Measured with the cwd in `repo/sub`: status lists `top.txt` and `sub/in.txt`,
+and `git diff -- top.txt` and `git diff -- sub/in.txt` both print nothing. A
+session's cwd is often a subdirectory, so the runner runs every path-taking
+command at the root that `git rev-parse --show-toplevel` names (`repoRoot()`,
+looked up once per runner — main builds one runner per IPC call): diffs,
+tracked or not, the remote `ls-files` check, `check-attr`, and the local
+count pass and untracked-diff containment, which resolve against that root.
+The three status commands stay at the cwd, whose output does not depend on it.
+
+The lookup's answer is used only if it is an absolute path with no control
+character (`isSafeCwd`); anything else is ignored. Without a root, a diff
+falls back to the cwd and the count pass marks every untracked row
+`unavailable`. Cost: one more git call before each diff (a local spawn, or one
+sequential ssh round trip on a remote session), and one per local `status()`
+that has untracked files.
 
 ### Quoting rule: literal pathspecs, `-z`, a stdout cap, and single-quote escaping — not an allowlist
 
@@ -166,8 +187,8 @@ does, in two layers:
   *outside* it yields an operand with no `..`, not absolute, that reads anything
   under that directory (measured: raw git prints the out-of-repo file for
   `link-to-dir/outside-secret.txt`). What each transport can do about it differs:
-  - **Local** (`resolveLocalNoIndexOperand`): `fs.realpathSync.native` on the
-    cwd and on the operand's **parent directory**, and the parent must be the
+  - **Local** (`resolveLocalNoIndexOperand`, async): `fs.promises.realpath` on
+    the repository root and on the operand's **parent directory**, and the parent must be the
     resolved root or below it (`path.relative`, not a string prefix — a sibling
     named `/repo-evil` shares the prefix but is not inside `/repo`). The parent
     rather than the leaf, because git treats the leaf differently depending on
@@ -210,9 +231,11 @@ does, in two layers:
     what closes the directory-symlink case. Cost: one extra ssh round-trip per
     untracked row click, sequential (running it alongside the diff would mean
     the far host had already read the file).
-  - `fsOps` (`{realpath, lstat, stat}`) is dependency injection for tests only,
-    the same seam `remote-attach.js` uses for `spawnFn`; production always takes
-    the real fs. `resolveLocalNoIndexOperand` takes a fourth `pathOps` argument
+  - `fsOps` (`{realpath, lstat, stat, readUpTo}`, each sync or
+    promise-returning, since the containment awaits them) is dependency
+    injection for tests only, the same seam `remote-attach.js` uses for
+    `spawnFn`; production always takes the real fs (`ASYNC_FS_OPS`), and
+    `countLimits` likewise only ever comes from a test. `resolveLocalNoIndexOperand` takes a fourth `pathOps` argument
     for the same reason — see "Path arithmetic across platforms" below.
 
 #### Path arithmetic across platforms
@@ -275,11 +298,12 @@ says why.
 
 | `countStatus` | Set by | Meaning |
 |---|---|---|
-| `binary` | numstat `-` (tracked); NUL sniff or `diff` attribute (untracked, local); `Binary files … differ` (on open) | git gives no line count |
-| `too-large` | local pass (file over `UNTRACKED_COUNT_MAX_FILE_BYTES`); on open (diff truncated at 512 KB) | too large to count here |
-| `over-cap` | local pass past `UNTRACKED_COUNT_MAX_FILES` or `UNTRACKED_COUNT_MAX_TOTAL_BYTES`; every row of a collapsed listing | not counted up front |
+| `binary` | numstat `-` (tracked); NUL sniff, `diff` attribute or a `diff.<driver>.binary` driver (untracked, local); `Binary files … differ` (on open) | git gives no line count |
+| `too-large` | local pass (file over 1 MiB); on open (diff truncated at 512 KB) | too large to count |
+| `over-cap` | local pass: past 500 files, past the 8 MiB byte budget, or not reached within the time budget | not counted up front |
 | `on-open` | every untracked row of a remote session | counted when opened |
-| `unavailable` | local pass: containment refused (a link to a directory, a path escaping the root) or the read failed | no count |
+| `collapsed` | every untracked row of a collapsed listing (`? dir/`) | a directory entry: nothing to open, nothing counted |
+| `unavailable` | local pass: containment refused (a link to a directory, a path escaping the root), the read failed, or the repository root is unknown | no count |
 
 `totals.uncounted` is the number of files whose `added` is not a number; the
 renderer appends `(N files not counted)` to the header whenever it is non-zero,
@@ -287,65 +311,98 @@ so the header total never silently excludes a file. `totals.added/deleted`
 still sum only known counts — `null` is never folded in as `0`.
 
 **Local: counted from disk during `status()`** (`measureUntrackedLocal`, then
-`settleUntrackedCounts`, in `git-changes-runner.js`). In status order, which is
-the order rows are shown:
+`settleUntrackedCounts`, in `git-changes-runner.js`), against the repository
+root (see "Paths are relative to the repository root" below). Every filesystem
+call is asynchronous (`ASYNC_FS_OPS`, `fs.promises`): the pass never blocks the
+main process on a filesystem call, only libuv threadpool threads. In status
+order, which is the order rows are shown:
 
-1. The first `UNTRACKED_COUNT_MAX_FILES` (500) untracked paths go through the
-   same containment as the untracked diff (`resolveLocalNoIndexTarget`, the
-   function behind `resolveLocalNoIndexOperand`). Within one pass the root's
-   realpath and each parent directory's realpath-and-containment verdict are
-   computed once and shared (`cache`); per file that leaves one `lstat`. The
-   rest are not looked at; the merge marks them `over-cap`.
+1. The first 500 untracked paths go through the same containment as the
+   untracked diff (`resolveLocalNoIndexTarget`, the function behind
+   `resolveLocalNoIndexOperand`). Within one pass the root's realpath and each
+   parent directory's realpath-and-containment verdict are computed once and
+   shared (`cache`). The rest are not looked at; the merge marks them
+   `over-cap`.
 2. A symlink that passes containment counts as 1 — git renders it as its
    target string, one line — and is never opened.
 3. A regular file over 1 MiB (`lstat` size) is `too-large` without being read.
    One whose size exceeds what is left of the 8 MiB per-pass budget is
-   `over-cap`; a smaller file later in the list may still fit.
+   `over-cap`; a smaller file later in the list may still fit. The size is
+   reserved before the read, so concurrent workers cannot overrun the budget.
 4. The read (`readRegularFileUpTo`) opens with `O_NONBLOCK | O_NOFOLLOW`
-   (POSIX; both absent on Windows, where they are 0), re-checks `fstat` for a
-   regular file, and reads at most cap + 1 bytes — a file that was swapped for
-   a FIFO or a symlink, or grew, after the `lstat` cannot block the main
-   process or read past the cap.
+   (POSIX; both are 0 on Windows), then checks that the handle is the file
+   containment resolved (`openedFileIs`): a regular file whose `dev`/`ino`
+   equal the `lstat`'s, and, on Linux, whose `/proc/self/fd/<n>` path is
+   exactly the resolved path — which catches a parent directory swapped for a
+   symlink between containment and `open`, since the cache holds that
+   parent's verdict for the whole pass. Where `/proc/self/fd` is absent (macOS,
+   Windows) the parent's realpath is re-read after `open` and must be
+   unchanged; a swap that is undone between `open` and that re-read is the
+   residual race there. It reads at most cap + 1 bytes, and a file that grew
+   past the cap after the `lstat` is `too-large`.
 5. `countBufferLines` counts the way git counts a new file's additions: one per
-   `\n`, plus one for a final line without a newline; a NUL in the first 8000
-   bytes (git's `buffer_is_binary` window) means binary.
-6. One `git check-attr -z --stdin diff` over the counted operands (paths on
-   stdin via `runToExit`'s `input`, never on the command line — Windows caps a
-   command line at 32 767 characters). `unset` (`binary`, `-diff`) makes the
-   file binary whatever its content; `set` makes it text even with a NUL.
-   Measured: `git diff --no-index` honours `*.dat binary` for an untracked
-   text file, so without this step the list and the opened file would
-   disagree. A failed `check-attr` falls back to the content sniff alone.
+   `\n`, plus one for a final line without a newline; a NUL in bytes 0–7999
+   (git's `buffer_is_binary` window, pinned against real git: a NUL at 7999 is
+   binary, at 8000 text) means binary.
+6. One `git check-attr -z --stdin diff` over the counted operands, run at the
+   root (paths on stdin via `runToExit`'s `input`, never on the command line —
+   Windows caps a command line at 32 767 characters). `unset` (`binary`,
+   `-diff`) makes the file binary whatever its content; `set` makes it text
+   even with a NUL. Measured: `git diff --no-index` honours `*.dat binary` for
+   an untracked text file, so without this step the list and the opened file
+   would disagree. When an attribute names a driver, one
+   `git config -z --get-regexp '^diff\..*\.binary$'` says which drivers are
+   binary; with no driver named, that call is not made. A failed `check-attr`
+   falls back to the content sniff alone. A driver's `textconv` is not applied:
+   such a file is counted from its raw bytes.
+
+**Bounded, whatever the filesystem does.** A pass runs at most
+`UNTRACKED_COUNT_LIMITS.concurrency` (2) workers, and the count is
+process-wide: `countSlotsInUse` counts workers of every pass, and a worker
+gives its slot back only once its current call has returned. A call that
+never returns — an offline NFS or SMB mount behind a symlink, where `stat`
+hangs — therefore holds its slot, and later passes start fewer workers, down
+to none: at most two threadpool threads (of libuv's default four) can ever be
+stuck on this pass, never one more per refresh. The pass itself returns after
+`timeBudgetMs` (1 000 ms) whatever is still in flight; what it has not
+finished is `over-cap`, and a straggler that settles later writes nothing.
 
 `test/git-changes-runner-real-git.test.js` checks each status count against
 the count `runner.diff(path, {untracked: true})` reports for the same file
 (LF, CRLF, no final newline, empty, nested, binary, attribute-binary,
-attribute-text, leaf symlink), and pins the per-file cap, the count cap and the
-byte budget.
+attribute-text, leaf symlink, both sides of the 8000-byte sniff window, and a
+session cwd in a subdirectory), and pins the per-file cap, the count cap and
+the byte budget. Those tests pass `countLimits` with a long time budget: the
+budget depends on the machine's load, the caps do not.
+`test/git-changes-runner.test.js` pins the time budget, the slot accounting
+under a call that never returns, the grown-file check, and both identity
+checks of `openedFileIs` (a different inode; a parent swapped for a symlink).
 
-**Measured cost** (git 2.53, Linux, a shared workstation under load ≈ 4,
-`nice -n 19`; synthetic repo with 20 000 untracked files of 3 lines each,
-~40-character names, 809 KB of `-uall` porcelain; medians of 9–11 runs,
-ranges in brackets):
+**Measured cost** (git 2.53, Linux, 14 cores; a shared workstation, load
+average given per run; everything under `nice -n 19`; synthetic repo with
+20 000 untracked files of 3 lines each, ~40-character names, 809 KB of `-uall`
+porcelain; medians, ranges in brackets):
 
-| | ms |
-|---|---|
-| The three status git calls alone | 45–50 (37–59) |
-| `status()` without the pass | 59–61 (39–101) |
-| `status()` with the pass | 97 (82–142) |
-| of which the synchronous pass, 500 files (main process) | 17 (12–27) |
-| of which `check-attr`, 500 paths (async spawn) | 11 (8–13) |
+| Repository (load average) | `status()` without the pass | `status()` with the pass | Longest event-loop gap, without / with |
+|---|---|---|---|
+| 20 000 untracked files, 500 counted (4.0–4.6) | 27 (19–44) | 87–93 (59–109) | 11 / 11 |
+| 500 untracked files of 16 KiB, all counted (4.5) | 8 (6–18) | 67 (43–80) | 7 / 7 |
+| 12 untracked files of 1 000 000 bytes: 8 read, 4 `over-cap` (4.0) | 10 (7–14) | 24 (19–35) | 8 / 7 |
 
-Byte-budget worst case — 12 untracked files of 1 000 000 bytes: 8 are read
-(8 MB), 4 are `over-cap`; the synchronous pass takes 16 ms (13–26), `status()`
-44–47 ms against 22 ms before.
+All figures in ms, 11 runs each, alternating the two versions. The longest
+event-loop gap is sampled by a 1 ms timer during the call; it is the same with
+and without the pass, because the synchronous work in `status()` is the
+porcelain parse and merge, which the pass does not add to. The pass itself adds
+wall time only. The pass alone, 500 files of the 20 000-file repo, at load
+average ≈ 20: 85 ms median (59–105) with 2 workers, 224 ms (144–360) with 1,
+87 ms (61–93) with 4 — 2 is where more workers stop helping.
 
 Without the per-directory cache, containment costs ~27 µs per file (two
-`realpathSync.native` and two `path.relative` each), and reading and counting
-all 20 000 files takes ~750 ms of synchronous work — hence both the cache and
-the file-count cap. 500 matches `MAX_CHANGES_ROWS`: the list shows at most 500
-rows, so at most 500 untracked rows are ever on screen, and they are the first
-500 untracked paths in status order — the ones the pass counts.
+`realpath` and two `path.relative` each), and reading and counting all 20 000
+files synchronously takes ~750 ms — hence the cache and the file-count cap.
+500 matches `MAX_CHANGES_ROWS`: the list shows at most 500 rows, so at most 500
+untracked rows are ever on screen, and they are the first 500 untracked paths
+in status order — the ones the pass counts.
 
 **Remote: `count on open`.** A batched count cannot share status's round trip:
 the untracked list is only known once status has returned, so counting in the
@@ -363,9 +420,13 @@ stdout it has just read (`countNewFileDiffAdditions`) and returns
 `{added, deleted: 0}` — or `added: null` with `countStatus` `binary` or
 `too-large` (truncated at 512 KB) — alongside the content. The local editor
 path counts from the file it has just read (`countAddedLines`).
-`applyUntrackedCounts` in `public/file-panel.js` writes either onto the record
-and re-derives the totals, `uncounted` included; a marker never replaces a
-count already there. A refresh recomputes everything, since the file may have
+`applyUntrackedCounts` in `public/file-panel.js` writes either onto the
+untracked record with that path — a staged deletion and an untracked file can
+share one (`git rm --cached`) — and re-derives the totals, `uncounted`
+included; a marker never replaces a count already there. A `too-large` file
+stays uncounted on open unless the local editor opens it (up to 2 MiB), so its
+tooltip promises no count; a `collapsed` row is a directory and cannot be
+opened at all. A refresh recomputes everything, since the file may have
 changed.
 
 A `--no-index` diff's file-header lines are `--- /dev/null` and `+++ b/<path>`

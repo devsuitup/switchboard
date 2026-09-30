@@ -273,6 +273,12 @@ test('countBufferLines: a NUL within git\'s 8000-byte sniff window is binary; on
   const edge = Buffer.alloc(BINARY_SNIFF_BYTES + 10, 0x61);
   edge[BINARY_SNIFF_BYTES - 1] = 0;
   assert.equal(countBufferLines(edge).hasNul, true);
+  const first = Buffer.alloc(9000, 0x61);
+  first[8000] = 0;
+  assert.equal(countBufferLines(first).hasNul, false, 'index 8000 is the first byte git does not look at');
+  const last = Buffer.alloc(9000, 0x61);
+  last[7999] = 0;
+  assert.equal(countBufferLines(last).hasNul, true, 'index 7999 is the last byte git looks at');
 });
 
 test('parseCheckAttr: reads -z triples into path → value', () => {

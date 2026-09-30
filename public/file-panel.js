@@ -965,8 +965,8 @@ function countAddedLines(content) {
 function applyUntrackedCounts(tab, expectedData, filePath, added, deleted, countStatus) {
   if (typeof added !== 'number' && typeof countStatus !== 'string') return;
   if (!tab.data || tab.data !== expectedData || !Array.isArray(tab.data.files)) return;
-  const record = tab.data.files.find((f) => f.path === filePath);
-  if (!record || !record.untracked) return;
+  const record = tab.data.files.find((f) => f.path === filePath && f.untracked);
+  if (!record) return;
 
   if (typeof added === 'number') {
     record.added = added;
@@ -1095,9 +1095,10 @@ function renderChangesList(sessionId, tab) {
 // A row with no count says why — see .ai/contexts/changes-view.md ("Untracked line counts")
 const COUNT_STATUS_MARKERS = {
   binary: { label: 'binary', title: 'Binary file: no line count' },
-  'too-large': { label: 'too large', title: 'Too large to count up front; opening the file counts it when it can' },
-  'over-cap': { label: 'not counted', title: 'Past the number of new files counted up front; opening the file counts it' },
+  'too-large': { label: 'too large', title: 'Over 1 MiB: too large to count' },
+  'over-cap': { label: 'not counted', title: 'Not counted up front (past the first 500 new files, 8 MiB read, or the time limit); opening the file counts it' },
   'on-open': { label: 'count on open', title: 'Remote session: the line count comes when the file is opened' },
+  collapsed: { label: 'directory', title: 'Too many untracked files to list: this entry stands for a whole directory, whose files are not counted' },
   unavailable: { label: 'no count', title: 'This file could not be read for a line count' },
 };
 
