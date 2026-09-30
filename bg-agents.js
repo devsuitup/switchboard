@@ -24,6 +24,7 @@ let makeIsOwnPid = () => () => false;
 let isAttachedHere = () => false;
 
 let started = false;
+let generation = 0;
 let dirWatcher = null;
 const jobWatchers = new Map();
 const jobs = new Map();
@@ -89,7 +90,7 @@ function readJob(id) {
 }
 
 function watchJob(id) {
-  if (jobWatchers.has(id)) return;
+  if (!started || jobWatchers.has(id)) return;
   readJob(id);
   try {
     const watcher = fs.watch(path.join(jobsDir, id), (_eventType, filename) => {
@@ -105,6 +106,7 @@ function watchJob(id) {
 }
 
 function syncJobWatchers() {
+  if (!started) return;
   let names;
   try { names = fs.readdirSync(jobsDir); } catch { names = []; }
   const ids = names.filter(n => JOB_ID_RE.test(n)).sort().slice(0, MAX_JOBS);
@@ -139,6 +141,7 @@ function start() {
 
 function stop() {
   started = false;
+  generation++;
   if (dirWatcher) { try { dirWatcher.close(); } catch {} dirWatcher = null; }
   for (const watcher of jobWatchers.values()) { try { watcher.close(); } catch {} }
   jobWatchers.clear();
@@ -161,7 +164,9 @@ async function run(argv, opts) {
 }
 
 async function reconcile() {
+  const gen = generation;
   const result = await run(['agents', '--json', '--all'], { cwd: homeDir, timeout: LIST_TIMEOUT_MS });
+  if (gen !== generation || !started) return getSnapshot();
   const list = result.code === 0 ? parseCliList(result.stdout) : null;
   if (list) {
     cliList = list;

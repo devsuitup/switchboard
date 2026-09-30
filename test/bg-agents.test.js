@@ -211,18 +211,53 @@ test('dispatch runs `claude --bg …` in the project directory and returns the p
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('stop releases the watchers: a later write reaches nobody', async () => {
+function trackWatchers(t) {
+  const open = new Set();
+  const real = fs.watch;
+  t.mock.method(fs, 'watch', (...args) => {
+    const w = real.apply(fs, args);
+    open.add(w);
+    const close = w.close.bind(w);
+    w.close = () => { open.delete(w); close(); };
+    return w;
+  });
+  return open;
+}
+
+test('stop closes every watcher it opened', async (t) => {
   const dir = mkTmp();
   try {
     writeJob(dir, 'aaaaaaaa', { state: 'working' });
+    writeJob(dir, 'bbbbbbbb', { state: 'done' });
+    const open = trackWatchers(t);
     boot(dir);
     bgAgents.start();
-    let fired = 0;
-    bgAgents.onChange(() => fired++);
+    assert.equal(open.size, 3);
     bgAgents.stop();
-    writeJob(dir, 'aaaaaaaa', { state: 'done' });
-    await delay(bgAgents.FLUSH_MS * 3);
-    assert.equal(fired, 0);
+    assert.equal(open.size, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a reconcile still running when stop() is called arms nothing and restores nothing', async (t) => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working' });
+    writeJob(dir, 'bbbbbbbb', { state: 'done' });
+    const open = trackWatchers(t);
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const runClaude = async () => { await gate; return { code: 0, stdout: JSON.stringify(CLI_LIST), stderr: '' }; };
+    boot(dir, { cli: { runClaude, calls: [] } });
+    bgAgents.start();
+    const pending = bgAgents.reconcile();
+    bgAgents.stop();
+    assert.equal(open.size, 0);
+    release();
+    const snap = await pending;
+    assert.equal(open.size, 0, 'no watcher armed after stop');
+    assert.equal(snap.daemonReachable, false);
+    assert.equal(bgAgents.getSnapshot().daemonReachable, false);
+    assert.deepEqual(bgAgents.getSnapshot().roster, []);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
