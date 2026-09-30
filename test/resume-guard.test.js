@@ -170,6 +170,15 @@ test('an automatic resume of a session the daemon runs is still refused', async 
   assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), false);
 });
 
+test('a live bg descriptor without a usable jobId is refused: no resume offer, no attach', async () => {
+  for (const jobId of [null, undefined, '']) {
+    const api = makeApi({ ...LIVE_BG, jobId });
+    const { confirm, messages } = makeConfirm(true);
+    assert.equal(await guardResume(SESSION, { api, confirm }), false);
+    assert.equal(messages.length, 0);
+  }
+});
+
 test('app.js turns the attach verdict into attach options and skips the guard for an explicit attach', () => {
   const app = read('public/app.js');
   assert.match(app, /customOptions\?\.type === 'attach'\s*\?\s*true\s*:\s*await guardResume\(/);
