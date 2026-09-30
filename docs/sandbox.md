@@ -4,19 +4,20 @@ With **Sandbox** on, Switchboard runs `claude` inside a
 [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox that
 shows it the project directory and Claude's own state, and hides the rest of
 the filesystem — the rest of `$HOME` in particular. What Claude and git would
-later run outside the sandbox — settings, hooks, commands, agents, skills,
-plugins, MCP servers, a repository's config and hooks — is out of the
-session's reach ([What the sandbox protects](#what-the-sandbox-protects)). It is a
+later run outside the sandbox — everything in `~/.claude` and `.claude` but
+the session's own state, MCP servers, a repository's config and hooks — is out
+of the session's reach ([What the sandbox protects](#what-the-sandbox-protects)). It is a
 **filesystem** boundary: the network and the environment are the host's.
 
 The terminal header of a sandboxed session shows a **Sandbox** indicator, a
 green dot and the word, among the indicators on the right. Its tooltip:
 *Running in a bubblewrap sandbox: only this project directory and Claude's own
 state are visible. What Claude and git run later outside the sandbox is
-protected: settings, hooks, commands, agents, skills, plugins and git config
-are read-only, and changes to ~/.claude.json (MCP servers) are dropped. NOT
-isolated: network, environment, the project's own files and build scripts,
-CLAUDE.md and memory files, the claude binary of the native installer.* The
+protected: in ~/.claude and .claude only session state (transcripts, todos,
+credentials) is writable, git config and hooks are read-only, and changes to
+~/.claude.json (MCP servers) are dropped. NOT isolated: network, environment,
+the project's own files and build scripts, the project's CLAUDE.md and memory
+files, the claude binary of the native installer.* The
 badge is also shown when Switchboard reattaches to a running sandboxed session.
 
 ## Turning it on
@@ -69,8 +70,10 @@ The script (`scripts/claude-sandbox.sh`):
 2. works out what to bind, listed below;
 3. refuses to bind `/`, `$HOME` or any parent of `$HOME` — a session launched
    from the wrong directory would otherwise expose everything;
-4. refuses a bound directory whose `.claude` or `.git` is a symbolic link, and
-   a repository whose hooks directory, `config` or `commondir` is one (see
+4. refuses a bound directory whose `.claude` or `.git` is a symbolic link, a
+   repository whose hooks directory, `config` or `commondir` is one, a
+   repository whose git paths contain a newline, and a state entry of
+   `~/.claude` linked to `$HOME` or a parent of it (see
    [below](#what-the-sandbox-protects));
 5. builds the sandbox once around `/bin/true` as a pre-flight, so a namespace or
    mount problem is reported as bwrap's own error before `claude` starts;
@@ -125,19 +128,29 @@ the same repository. Inside the sandbox, these are read-only or discarded.
 The directory itself is a private tmpfs, and each entry that exists at launch
 is mounted back onto it:
 
+Only the state the CLI writes during a session is read-write; every other
+entry is read-only, whatever it is — settings, hooks, commands, agents,
+skills, plugins, `keybindings.json`, `CLAUDE.md`, `rules`, `output-styles`, a
+status-line script with no extension, a directory a future CLI version adds.
+
 | Entry | Inside the sandbox |
 |---|---|
-| `settings.json`, `settings.local.json`, `hooks`, `commands`, `agents`, `skills`, `plugins`, `workflows`, `routines`, `launch.json`, `scheduled_tasks.json`, `daemon.json`, `remote-settings.json`, `remote-settings-consent.json`, `remote-settings-helper-consent`, `cowork_plugins` | read-only |
-| A file that is executable, or named `*.sh`, `*.bash`, `*.zsh`, `*.py`, `*.js`, `*.mjs`, `*.cjs`, `*.ts`, `*.rb` or `*.pl` — a status line or hook script, say | read-only |
-| A symbolic link | recreated as the same link on the tmpfs. If it is one of the entries above and its target lies in a directory the sandbox can write (the project, say), the target is mounted read-only too; a target the sandbox cannot see stays invisible |
-| A symbolic link directly inside one of the read-only directories (`skills/<name>` linked from elsewhere, say) | its target is mounted read-only when the sandbox could otherwise write it |
-| Everything else: `projects`, `todos`, `shell-snapshots`, `session-env`, `.credentials.json`, `history.jsonl`… | read-write |
+| In `~/.claude`: `projects`, `todos`, `shell-snapshots`, `session-env`, `statsig`, `file-history`, `sessions`, `plans`, `tasks`, `backups`, `cache`, `paste-cache`, `image-cache`, `downloads`, `feedback`, `debug`, `telemetry`, `state`, `jobs`, `usage-data`, `agent-memory`, `.credentials.json`, `history.jsonl`, `.last-cleanup`, `.last-update-result.json`, `mcp-needs-auth-cache.json`, `policy-limits.json`, `policy-limits.json.stamp.json`, `stats-cache.json` | read-write |
+| In a project's `.claude`: `worktrees`, `agent-memory`, `agent-memory-local` | read-write |
+| Any other file or directory | read-only |
+| A symbolic link to one of the read-write entries (`projects` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves. A target that is `$HOME` or contains it is refused |
+| Any other symbolic link | recreated as the same link on the tmpfs. When its target lies in a directory the sandbox can write (the project, say), the target is mounted read-only too; a target the sandbox cannot see stays invisible |
+| A symbolic link at any depth inside a read-only directory, or inside a linked directory mounted read-only (`skills/<name>/…` linked from elsewhere, say) | its target is mounted read-only when the sandbox could otherwise write it, and the links below that target are followed in turn |
+
+`ide` is read-only: it holds the lock files that tell a later session which
+local port is its IDE. Switchboard writes them from outside the sandbox when
+IDE Emulation is on, and the sandboxed session reads them.
 
 Anything the session creates directly in the directory — a new
 `settings.local.json`, a new `hooks` directory, a replaced link — lives in the
 tmpfs and is gone when the session ends. So that the session's own state is not
 lost that way, `projects`, `todos`, `shell-snapshots`, `session-env`,
-`statsig`, `file-history`, `sessions`, `ide`, `plans` and `tasks` are created
+`statsig`, `file-history`, `sessions`, `plans`, `tasks` and `ide` are created
 in `~/.claude` before launch when missing, and a bound directory without a
 `.claude` gets an empty one (skipped when the directory is not writable).
 
@@ -193,9 +206,10 @@ directory instead of linking `.git/hooks` to it.
 - **Claude's state, across projects.** `~/.claude` holds the credentials and
   every project's transcripts and memory files. A sandboxed session can read
   all of them, and write the transcripts and memory files.
-- **Instructions.** `CLAUDE.md` files, memory files under
-  `~/.claude/projects/*/memory`, `rules` and `output-styles` stay writable.
-  They are read by later sessions as instructions, not run.
+- **Instructions.** The project's `CLAUDE.md` files, memory files under
+  `~/.claude/projects/*/memory`, and agent memory (`agent-memory`,
+  `agent-memory-local`) stay writable. They are read by later sessions as
+  instructions, not run.
 - **The project's own files.** The working directory is read-write: whatever
   runs them later outside the sandbox runs what the session wrote — build
   scripts, `package.json` scripts, direnv's `.envrc`, editor tasks, and the
@@ -233,6 +247,9 @@ directory instead of linking `.git/hooks` to it.
 - Nothing can write the repository's config: `git config` and
   `git remote add` fail, `git push -u` records no upstream, and husky's
   install step cannot set up its hooks.
+- Anything else written into an existing entry of `~/.claude` that is not on
+  the read-write list fails: the state a hook or status line keeps there, or
+  a directory a newer CLI writes to.
 - A symbolic link in `~/.claude` whose target is in no bound directory — a
   `settings.json` or `agents` kept in a dotfiles repository, say — dangles
   inside the sandbox, so the session runs without it.

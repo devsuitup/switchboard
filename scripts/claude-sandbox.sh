@@ -14,10 +14,10 @@
 #                forwards "Additional Directories" and the project root here;
 #                paths containing ':' or a newline cannot be transported and
 #                are dropped on the app side)
-#   protected:   what an unsandboxed claude or git would later run — the
-#                settings, hooks, commands, agents, skills and plugins in
-#                ~/.claude and in each bound directory's .claude, a private
-#                copy of ~/.claude.json, each repository's config and hooks
+#   protected:   what an unsandboxed claude or git would later run — every
+#                entry of ~/.claude and of each bound directory's .claude
+#                that is not listed session state, a private copy of
+#                ~/.claude.json, each repository's config and hooks
 #   network:     shared with the host — Claude needs the API, and the
 #                Switchboard IDE bridge listens on localhost
 #
@@ -88,15 +88,20 @@ RW_STATE_DIRS=(
 )
 CLAUDE_JSON="$HOME/.claude.json"
 
-# What each entry of a .claude directory gets is decided here; see
-# docs/sandbox.md, "What the sandbox protects".
-PROTECTED_CLAUDE_ENTRIES=(
-  settings.json settings.local.json hooks commands agents skills plugins
-  workflows routines launch.json scheduled_tasks.json daemon.json
-  remote-settings.json remote-settings-consent.json remote-settings-helper-consent
-  cowork_plugins
+# The only entries of a .claude directory the sandbox can write; every other
+# one is read-only. See docs/sandbox.md, "What the sandbox protects".
+USER_STATE_ENTRIES=(
+  projects todos shell-snapshots session-env statsig file-history sessions
+  plans tasks backups cache paste-cache image-cache downloads feedback debug
+  telemetry state jobs usage-data agent-memory
+  .credentials.json history.jsonl .last-cleanup .last-update-result.json
+  mcp-needs-auth-cache.json policy-limits.json policy-limits.json.stamp.json
+  stats-cache.json
 )
-CLAUDE_STATE_ENTRIES=(projects todos shell-snapshots session-env statsig file-history sessions ide plans tasks)
+PROJECT_STATE_ENTRIES=(worktrees agent-memory agent-memory-local)
+# Created in ~/.claude before launch when missing, so that they are mounted
+# from the host rather than left to the tmpfs.
+USER_PRECREATED_DIRS=(projects todos shell-snapshots session-env statsig file-history sessions plans tasks ide)
 
 # Project directory plus whatever Switchboard forwarded. These must already
 # exist — creating a mistyped "Additional Directory" on the host would be worse
@@ -136,7 +141,7 @@ done
 # True when $1 is at or below one of the read-write state dirs.
 under_rw_state() {
   local candidate="$1/" d
-  for d in "$CLAUDE_DIR" "${RW_STATE_DIRS[@]}"; do
+  for d in "${RW_STATE_DIRS[@]}"; do
     case "$candidate" in "$d"/*) return 0 ;; esac
   done
   return 1
@@ -222,40 +227,63 @@ sandbox_view() {
   return 1
 }
 
-is_protected_entry() {
-  local name="$1" path="$2" p
-  for p in "${PROTECTED_CLAUDE_ENTRIES[@]}"; do
-    [ "$name" = "$p" ] && return 0
+in_list() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [ "$needle" = "$item" ] && return 0
   done
-  if [ -f "$path" ]; then
-    [ -x "$path" ] && return 0
-    case "$name" in *.sh|*.bash|*.zsh|*.py|*.js|*.mjs|*.cjs|*.ts|*.rb|*.pl) return 0 ;; esac
-  fi
   return 1
 }
 
-# Queues the target of symlink $1 for a read-only mount, when the sandbox could
-# otherwise write it through another bind.
+# Queues the target of symlink $1 for a read-only mount when the sandbox could
+# otherwise write it through another bind, then does the same for every link
+# below that target when it is a directory.
 protect_link_target() {
   local target view
   target="$(readlink -f "$1" 2>/dev/null)" || return 0
   [ -n "$target" ] && [ -e "$target" ] || return 0
-  if view="$(sandbox_view "$target")"; then
-    PROTECT_ARGS+=(--ro-bind "$target" "$view")
-    debug "ro-bind $view (target of $1)"
-  else
+  if ! view="$(sandbox_view "$target")"; then
     debug "link $1 -> $target is not visible in the sandbox"
+    return 0
   fi
+  case "$PROTECTED_TARGETS" in *$'\n'"$target"$'\n'*) return 0 ;; esac
+  PROTECTED_TARGETS+="$target"$'\n'
+  PROTECT_ARGS+=(--ro-bind "$target" "$view")
+  debug "ro-bind $view (target of $1)"
+  [ -d "$target" ] && protect_links_below "$target"
+}
+
+# Every symbolic link at any depth below directory $1.
+protect_links_below() {
+  local l
+  while IFS= read -r -d '' l; do
+    protect_link_target "$l"
+  done < <(find "$1" -mindepth 1 -type l -print0 2>/dev/null)
+}
+
+# A symlinked state entry keeps working: its target is bound read-write at its
+# own path, so the link resolves inside the sandbox.
+bind_state_link_target() {
+  local link="$1" target
+  target="$(readlink -f "$link" 2>/dev/null)" || return 0
+  [ -n "$target" ] && [ -e "$target" ] || { debug "state link $link dangles"; return 0; }
+  case "$HOME/" in
+    "$target"/*) fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own." ;;
+  esac
+  BIND_ARGS+=(--bind "$target" "$target")
+  debug "rw-bind $target (target of $link)"
 }
 
 # A .claude directory becomes a private tmpfs: every entry that exists is bound
-# back, read-only when it configures what claude runs, and anything created at
-# its top level is discarded with the sandbox.
+# back, read-write when $2 (the name of a state list) lists it and read-only
+# otherwise, and anything created at its top level is discarded with the
+# sandbox.
 bind_claude_dir() {
-  local dir="$1" e name l
+  local dir="$1" list="$2" e name restore_glob
+  local -n state_entries="$list"
   BIND_ARGS+=(--tmpfs "$dir")
   debug "tmpfs $dir"
-  local restore_glob
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
   for e in "$dir"/*; do
@@ -263,18 +291,18 @@ bind_claude_dir() {
     if [ -L "$e" ]; then
       BIND_ARGS+=(--symlink "$(readlink "$e")" "$e")
       debug "symlink $e"
-      if is_protected_entry "$name" "$e"; then protect_link_target "$e"; fi
-    elif is_protected_entry "$name" "$e"; then
-      BIND_ARGS+=(--ro-bind "$e" "$e")
-      debug "ro-bind $e"
-      if [ -d "$e" ]; then
-        for l in "$e"/*; do
-          [ -L "$l" ] && protect_link_target "$l"
-        done
+      if in_list "$name" "${state_entries[@]}"; then
+        bind_state_link_target "$e"
+      else
+        protect_link_target "$e"
       fi
-    else
+    elif in_list "$name" "${state_entries[@]}"; then
       BIND_ARGS+=(--bind "$e" "$e")
       debug "rw-bind $e"
+    else
+      BIND_ARGS+=(--ro-bind "$e" "$e")
+      debug "ro-bind $e"
+      [ -d "$e" ] && protect_links_below "$e"
     fi
   done
   eval "$restore_glob"
@@ -306,6 +334,9 @@ protect_git() {
   if command -v git >/dev/null 2>&1 &&
      out="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
             git rev-parse --path-format=absolute --git-dir --git-common-dir --git-path hooks 2>/dev/null)"; then
+    if [ "$(printf '%s\n' "$out" | wc -l)" -ne 3 ]; then
+      fail "refusing to launch: a git path of $d contains a newline (the repository, its git directory or core.hooksPath), so the sandbox cannot tell which paths to protect."
+    fi
     { IFS= read -r git_dir; IFS= read -r common_dir; IFS= read -r hooks_dir; } <<<"$out"
   elif [ -d "$d/.git" ]; then
     git_dir="$d/.git"; common_dir="$git_dir"; hooks_dir="$common_dir/hooks"
@@ -342,7 +373,7 @@ bind_project_dir() {
   if [ -L "$d/.claude" ]; then
     fail "refusing to launch: $d/.claude is a symbolic link. The sandbox protects it with read-only mounts, which cannot stop the link itself from being replaced. Replace the link with the directory it points to, or turn Sandbox off for this session."
   elif [ -d "$d/.claude" ]; then
-    bind_claude_dir "$d/.claude"
+    bind_claude_dir "$d/.claude" PROJECT_STATE_ENTRIES
   elif [ -e "$d/.claude" ]; then
     BIND_ARGS+=(--ro-bind "$d/.claude" "$d/.claude")
     debug "ro-bind $d/.claude"
@@ -386,6 +417,7 @@ done
 build_bwrap_args() {
   BIND_ARGS=()
   PROTECT_ARGS=()
+  PROTECTED_TARGETS=$'\n'
   MISSING_DIRS=()
   GIT_WORKTREES=()
   local d name
@@ -417,11 +449,11 @@ build_bwrap_args() {
       debug "defer rw-bind $d (does not exist yet)"
     fi
   done
-  for name in "${CLAUDE_STATE_ENTRIES[@]}"; do
+  for name in "${USER_PRECREATED_DIRS[@]}"; do
     d="$CLAUDE_DIR/$name"
     [ -e "$d" ] || [ -L "$d" ] || MISSING_DIRS+=("$d")
   done
-  bind_claude_dir "$CLAUDE_DIR"
+  bind_claude_dir "$CLAUDE_DIR" USER_STATE_ENTRIES
   # fd 9 carries the private copy; see claude_json_source.
   BIND_ARGS+=(--file 9 "$CLAUDE_JSON")
   debug "private copy of $CLAUDE_JSON"

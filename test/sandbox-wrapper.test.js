@@ -300,7 +300,13 @@ function seedClaudeDir(home) {
   fs.writeFileSync(path.join(dir, '.credentials.json'), '{}\n');
   fs.writeFileSync(path.join(dir, 'history.jsonl'), '');
   fs.writeFileSync(path.join(dir, 'statusline.sh'), 'echo status\n');
-  fs.writeFileSync(path.join(dir, 'notify'), '#!/bin/sh\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'statusline'), 'echo status\n', { mode: 0o644 });
+  fs.writeFileSync(path.join(dir, 'keybindings.json'), '[]\n');
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '');
+  fs.writeFileSync(path.join(dir, 'policy-limits.json'), '{}\n');
+  for (const d of ['output-styles', 'rules', 'ide', 'some-future-dir', 'todos', 'agent-memory']) {
+    fs.mkdirSync(path.join(dir, d));
+  }
   return dir;
 }
 
@@ -318,12 +324,13 @@ test('sandbox wrapper: ~/.claude is a private tmpfs, its state bound back read-w
       const tmpfs = mountAt(ops, dir);
       assert.equal(tmpfs?.op, '--tmpfs', 'new entries at the top of ~/.claude must land in a private tmpfs');
 
-      for (const name of ['settings.json', 'settings.local.json', 'hooks', 'commands', 'agents', 'skills', 'plugins', 'statusline.sh', 'notify']) {
+      for (const name of ['settings.json', 'settings.local.json', 'hooks', 'commands', 'agents', 'skills', 'plugins',
+        'statusline.sh', 'statusline', 'keybindings.json', 'CLAUDE.md', 'output-styles', 'rules', 'ide', 'some-future-dir']) {
         const m = mountAt(ops, path.join(dir, name));
-        assert.equal(m?.op, '--ro-bind', `${name} must be read-only`);
+        assert.equal(m?.op, '--ro-bind', `${name} must be read-only: only listed state is writable`);
         assert.ok(m.index > tmpfs.index, `${name} must be mounted on top of the tmpfs`);
       }
-      for (const name of ['projects', 'shell-snapshots', '.credentials.json', 'history.jsonl']) {
+      for (const name of ['projects', 'shell-snapshots', 'todos', 'agent-memory', '.credentials.json', 'history.jsonl', 'policy-limits.json']) {
         const m = mountAt(ops, path.join(dir, name));
         assert.equal(m?.op, '--bind', `${name} must stay read-write`);
         assert.ok(m.index > tmpfs.index, `${name} must be mounted on top of the tmpfs`);
@@ -370,6 +377,89 @@ test('sandbox wrapper: a symlinked ~/.claude entry is recreated as a link, and i
     }
   });
 
+test('sandbox wrapper: a link at any depth under a read-only entry has its target protected, through linked directories too',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(path.join(dir, 'skills', 'a', 'b'), { recursive: true });
+      const deep = path.join(rig.proj, 'deep.md');
+      fs.writeFileSync(deep, '');
+      fs.symlinkSync(deep, path.join(dir, 'skills', 'a', 'b', 'x'));
+      const shared = path.join(rig.proj, 'shared');
+      const further = path.join(rig.proj, 'further.sh');
+      fs.mkdirSync(path.join(shared, 'inner'), { recursive: true });
+      fs.writeFileSync(further, '');
+      fs.symlinkSync(further, path.join(shared, 'inner', 'y'));
+      fs.symlinkSync(shared, path.join(dir, 'skills', 'a', 'linked'));
+
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, deep)?.op, '--ro-bind', 'a link three levels down must have its target protected');
+      assert.equal(mountAt(ops, shared)?.op, '--ro-bind');
+      assert.equal(mountAt(ops, further)?.op, '--ro-bind', 'a link inside a linked directory must be followed too');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a cycle of directory links under a read-only entry is followed once, not forever',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(path.join(dir, 'skills'), { recursive: true });
+      const loop = path.join(rig.proj, 'loop');
+      fs.mkdirSync(loop);
+      fs.symlinkSync(loop, path.join(loop, 'self'));
+      fs.symlinkSync(loop, path.join(dir, 'skills', 'loop'));
+      const res = spawnSync('bash', [SCRIPT, '--version'], {
+        cwd: rig.proj, encoding: 'utf8', timeout: 20000,
+        env: cleanEnv({ HOME: rig.home, PATH: `${path.join(rig.root, 'bin')}:${process.env.PATH}` }),
+      });
+      assert.equal(res.status, 0, res.error ? String(res.error) : res.stderr);
+      const binds = parseMounts(rig.lastBwrapArgs()).filter(o => o.dest === loop);
+      assert.equal(binds.length, 1, 'the target must be mounted once');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a symlinked state entry has its target bound read-write, so the session\'s state still lands',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const store = path.join(rig.root, 'store', 'projects');
+      fs.mkdirSync(store, { recursive: true });
+      fs.symlinkSync(store, path.join(dir, 'projects'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dir, 'projects'))?.op, '--symlink');
+      assert.deepEqual([mountAt(ops, store)?.op, mountAt(ops, store)?.src], ['--bind', store]);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a symlinked state entry whose target contains $HOME',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      fs.symlinkSync(rig.root, path.join(dir, 'projects'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /projects links to .* which contains \$HOME/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: the state dirs the CLI writes are created before launch, so they are not lost in the tmpfs',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
@@ -378,11 +468,15 @@ test('sandbox wrapper: the state dirs the CLI writes are created before launch, 
       const { status, stderr } = rig.run();
       assert.equal(status, 0, stderr);
       const ops = parseMounts(rig.lastBwrapArgs());
-      for (const name of ['projects', 'todos', 'shell-snapshots', 'session-env', 'sessions', 'ide']) {
+      for (const name of ['projects', 'todos', 'shell-snapshots', 'session-env', 'sessions']) {
         const p = path.join(rig.home, '.claude', name);
         assert.ok(fs.statSync(p).isDirectory(), `${name} must exist on the host`);
         assert.equal(mountAt(ops, p)?.op, '--bind', `${name} must be bound read-write`);
       }
+      const ide = path.join(rig.home, '.claude', 'ide');
+      assert.ok(fs.statSync(ide).isDirectory(), 'ide must exist, so lock files Switchboard writes later are visible');
+      assert.equal(mountAt(ops, ide)?.op, '--ro-bind',
+        'ide must be read-only: its lock files tell later sessions which port to trust');
     } finally {
       rig.cleanup();
     }
@@ -412,7 +506,9 @@ test('sandbox wrapper: the project\'s .claude gets the same treatment as ~/.clau
       const dot = path.join(rig.proj, '.claude');
       fs.mkdirSync(path.join(dot, 'commands'), { recursive: true });
       fs.mkdirSync(path.join(dot, 'worktrees'));
+      fs.mkdirSync(path.join(dot, 'agent-memory'));
       fs.writeFileSync(path.join(dot, 'settings.json'), '{}\n');
+      fs.writeFileSync(path.join(dot, 'statusline'), 'echo\n');
 
       const { status, stderr } = rig.run();
       assert.equal(status, 0, stderr);
@@ -424,6 +520,8 @@ test('sandbox wrapper: the project\'s .claude gets the same treatment as ~/.clau
       assert.equal(mountAt(ops, path.join(dot, 'settings.json'))?.op, '--ro-bind');
       assert.equal(mountAt(ops, path.join(dot, 'commands'))?.op, '--ro-bind');
       assert.equal(mountAt(ops, path.join(dot, 'worktrees'))?.op, '--bind');
+      assert.equal(mountAt(ops, path.join(dot, 'agent-memory'))?.op, '--bind');
+      assert.equal(mountAt(ops, path.join(dot, 'statusline'))?.op, '--ro-bind', 'an unlisted entry must be read-only');
     } finally {
       rig.cleanup();
     }
@@ -602,6 +700,21 @@ test('sandbox wrapper: in a linked worktree, the .git file and the worktree\'s c
     }
   });
 
+test('sandbox wrapper: refuses a repository whose git paths contain a newline, which cannot be read back reliably',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, 'config', 'core.hooksPath', 'hooks\nsplit');
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /newline/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: refuses a project whose .git is a symbolic link',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
@@ -673,6 +786,10 @@ attempt user-command 'echo evil > "$C/commands/evil.md"'
 attempt user-agent-through-link 'echo evil > "$C/agents/evil.md"'
 attempt user-skill 'mkdir -p "$C/skills/evil" && echo evil > "$C/skills/evil/SKILL.md"'
 attempt user-statusline-script 'echo evil > "$C/statusline.sh"'
+attempt user-statusline-extensionless 'echo evil > "$C/statusline"'
+attempt user-keybindings 'echo evil > "$C/keybindings.json"'
+attempt ide-lock 'echo "{\"port\":1}" > "$C/ide/1.lock"'
+attempt skill-deep-link 'echo evil > "$C/skills/a/b/x"'
 attempt mcp-servers 'echo "{\"mcpServers\":{\"evil\":{\"command\":\"evil\"}}}" > "$HOME/.claude.json"'
 attempt project-settings 'echo evil > .claude/settings.json'
 attempt project-settings-local-created 'echo evil > .claude/settings.local.json'
@@ -694,9 +811,16 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
     const rig = makeRig({ claudeRunsArg: true });
     try {
       const C = path.join(rig.home, '.claude');
-      for (const d of ['hooks', 'commands', 'skills', 'projects']) fs.mkdirSync(path.join(C, d), { recursive: true });
+      for (const d of ['hooks', 'commands', 'skills/a/b', 'ide']) fs.mkdirSync(path.join(C, d), { recursive: true });
+      const store = path.join(rig.root, 'store', 'projects');
+      fs.mkdirSync(store, { recursive: true });
+      fs.symlinkSync(store, path.join(C, 'projects'));
       fs.writeFileSync(path.join(C, '.credentials.json'), 'old\n');
       fs.writeFileSync(path.join(C, 'statusline.sh'), 'echo status\n');
+      fs.writeFileSync(path.join(C, 'statusline'), 'echo status\n');
+      fs.writeFileSync(path.join(C, 'keybindings.json'), '[]\n');
+      fs.writeFileSync(path.join(rig.proj, 'deep.md'), 'skill\n');
+      fs.symlinkSync(path.join(rig.proj, 'deep.md'), path.join(C, 'skills', 'a', 'b', 'x'));
       const dotfiles = path.join(rig.proj, 'dotfiles');
       fs.mkdirSync(dotfiles);
       fs.writeFileSync(path.join(dotfiles, 'settings.json'), '{}\n');
@@ -724,6 +848,10 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       assert.deepEqual(fs.readdirSync(lab), [], `a symlinked agents dir must be unchanged\n${said}`);
       assert.ok(gone(path.join(C, 'skills', 'evil')), `user skills must be read-only\n${said}`);
       assert.equal(read(path.join(C, 'statusline.sh')), 'echo status\n', `a script in ~/.claude must be read-only\n${said}`);
+      assert.equal(read(path.join(C, 'statusline')), 'echo status\n', `an extensionless script must be read-only\n${said}`);
+      assert.equal(read(path.join(C, 'keybindings.json')), '[]\n', `keybindings must be read-only\n${said}`);
+      assert.ok(gone(path.join(C, 'ide', '1.lock')), `an IDE lock file must not reach the host\n${said}`);
+      assert.equal(read(path.join(rig.proj, 'deep.md')), 'skill\n', `a deep skill link's target must be read-only\n${said}`);
       assert.equal(read(path.join(rig.home, '.claude.json')), '{"mcpServers":{}}\n', `MCP servers must not reach the host\n${said}`);
       assert.equal(read(path.join(rig.proj, '.claude', 'settings.json')), '{}\n', `project settings must be read-only\n${said}`);
       assert.ok(gone(path.join(rig.proj, '.claude', 'settings.local.json')), `new project settings must not reach the host\n${said}`);
@@ -736,7 +864,7 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       assert.ok(gone(path.join(rig.proj, '.git-x')) && fs.existsSync(path.join(rig.proj, '.git', 'config')),
         `.git must not be movable\n${said}`);
 
-      assert.equal(read(path.join(C, 'projects', 'p', 's.jsonl')), '{}\n', `a transcript must be written\n${said}`);
+      assert.equal(read(path.join(store, 'p', 's.jsonl')), '{}\n', `a transcript must land through a symlinked projects\n${said}`);
       assert.equal(read(path.join(C, '.credentials.json')), 'refreshed\n', `credentials must be refreshable\n${said}`);
       assert.equal(read(path.join(rig.proj, 'src.js')), 'export {}\n', `a source file must be written\n${said}`);
       assert.equal(git(rig.proj, 'log', '--format=%s', '-1'), 'src', `a commit must land\n${said}`);
