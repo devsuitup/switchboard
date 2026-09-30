@@ -4,9 +4,15 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.86 — 2026-10-01
+
 ### New
 - A session that has a claude.ai bridge shows an Open on claude.ai button in its sidebar row, which opens that session on claude.ai; a session without one shows nothing. (#213)
 - A schedule with `catch-up: true` in its front matter runs once, as soon as Switchboard starts or the machine wakes up, when it fell due while Switchboard was closed or the machine asleep, however many runs were missed in the last seven days. Without it, a missed run is still skipped. (#334)
+
+### Changed
+- Without `SWITCHBOARD_SSH_PATH`, the terminal attached to a remote session now runs the `ssh` found on your `PATH` before `/usr/bin/ssh` or the Windows system client, like every other remote operation. `SWITCHBOARD_SSH_PATH` must be an absolute path: a relative one is ignored, with a warning in the log. (#359)
+
 ### Fixed
 - Hovering terminal output no longer freezes Switchboard when the session's working directory is on a slow network drive: the paths on the line are checked a few at a time without blocking the app. (#322)
 - A sandboxed session can no longer leave behind something that runs outside the sandbox later: in `~/.claude` and in every `.claude` of the project, worktrees included, only the session's own state (its transcripts, todos, credentials) stays writable, each repository's config and hooks are read-only, other sessions' shell snapshots and session hooks are out of its reach, and its changes to `~/.claude.json`, where the MCP servers are, are dropped when it ends. A new `.git/commondir`, or a repository or worktree the session creates, still carries config and hooks git will follow. Change settings, permissions, plugins and MCP servers outside the sandbox; the Sandbox indicator's tooltip lists what stays writable. (#358)
@@ -14,11 +20,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A project that gets its first schedule after this change does not run it until you have opened a session in that project or added it with Add project; a schedule is no longer picked up just because its file appears in a project Switchboard has never recorded. (#372)
 - The podman socket is no longer bound into the sandbox by default: through it a session can mount any host path into a container. Put `SWITCHBOARD_SANDBOX_PODMAN=1` in the Pre-launch Command to bind it. (#358)
 - A sandboxed session reaches the API when `/etc/resolv.conf` links into `/run`, as with systemd-resolved on Ubuntu. (#367)
-
-### Changed
-- Without `SWITCHBOARD_SSH_PATH`, the terminal attached to a remote session now runs the `ssh` found on your `PATH` before `/usr/bin/ssh` or the Windows system client, like every other remote operation. `SWITCHBOARD_SSH_PATH` must be an absolute path: a relative one is ignored, with a warning in the log. (#359)
-
-### Fixed
 - The "Finishing indexing before restoring N sessions" bar no longer stays up when a saved session is not in the index: once indexing is over the session is dropped from the restore and a notice names it. (#376)
 - A filter or a search no longer files the subagents of a hidden session under "Orphan subagents". With the starred, running or today filter on, they are hidden with their session; a search hit inside a subagent shows it under its session. The group keeps only subagents whose session is gone. (#356)
 - A session started from a Switchboard that was itself launched inside a Claude Code session is now a top-level session: it saves its transcript and no longer inherits the parent session's id, socket or IDE link. `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` and provider switches are kept. (#378)
