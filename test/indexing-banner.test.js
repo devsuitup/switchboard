@@ -2,8 +2,7 @@
 //
 // app.js is a monolithic renderer file that performs many document.getElementById
 // calls and kicks off loadProjects() at module load time, making it impractical to
-// load via vm.runInContext in jsdom without a massive DOM scaffolding (see
-// test/exit-banner.test.js, same codebase precedent). So the thin DOM-toggle wrapper
+// load via vm.runInContext in jsdom without a massive DOM scaffolding. So the thin DOM-toggle wrapper
 // (updateIndexingBanner) is exercised via a hand-wired harness that mirrors its body,
 // while the actual text-formatting logic — formatIndexingBannerText, a pure function
 // that lives in public/utils.js — is loaded and tested for real via dom-setup.js.

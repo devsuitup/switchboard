@@ -30,7 +30,7 @@ A file link in the terminal opens here too, when it points at one of this sessio
 ## What it shows
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
-- One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts.
+- One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts — or a marker saying why it has none (see "Counts for new files").
 - Clicking a row opens that file below the list, which stays on screen — the current row is highlighted, and clicking another row swaps the file without going back anywhere. An untracked file opens too, as an all-additions diff. A binary file shows a one-line note instead of its bytes.
 - Drag the divider between the list and the file to give either one more room; the position is remembered.
 - A brand-new directory is listed file by file, not as a single folder row.
@@ -50,16 +50,27 @@ so under the header. Your tracked changes are unaffected.
 
 ### Counts for new files
 
-Git reports line counts for tracked files only, so an untracked file's row
-starts without any, and the header's `+A −B` does not include it yet. Click the
-row once: its diff is fetched, the row gets its `+added −0`, and the header
-total grows by the same amount. This is deliberate — counting every new file up
-front would mean running one extra git command per untracked file on every
-refresh (and one ssh round-trip each, for a remote session), which a repo with a
-large untracked tree would feel. A refresh resets them, since the file may have
-changed since — with one exception: **saving the file you are editing keeps its
-counts**, because the save is itself the measurement. The Refresh button, and a
-refresh triggered by the session finishing a turn, reset them as before.
+On a local session, an untracked file's row shows its `+added −0` as soon as
+the list is shown, like a tracked file's, and the header total includes it.
+The count is the number git's own diff of that file reports.
+
+A row that has no count says why, in place of the numbers:
+
+| Marker | Meaning |
+|---|---|
+| `binary` | A binary file, tracked or not — git gives it no line count. A `.gitattributes` `binary` or `-diff` setting, or a diff driver configured with `binary = true`, counts as binary, as it does for git. |
+| `too large` | An untracked file over 1 MiB: too large to count. |
+| `not counted` | Past the first 500 untracked files, past 8 MiB read in one refresh, or not reached within the refresh's one-second counting limit (a slow or network drive). Opening it counts it. |
+| `count on open` | A remote session: untracked files are counted when you open them. |
+| `directory` | The untracked listing is collapsed (see "Very large working trees"): the row stands for a whole directory. |
+| `no count` | The file could not be read, or is a link to a directory. |
+
+When some rows have no count, the header says how many it leaves out:
+`12 files changed +340 −20 (2 files not counted)`.
+
+Opening a row that has a marker fills in its count once the diff is fetched,
+and the header total grows by the same amount. A refresh measures again, since
+the file may have changed.
 
 ## Editing a file
 

@@ -102,29 +102,19 @@ function reclampPanelTerminalHeight() {
 }
 
 function addPanelTerminalToggle() {
-  const controls = document.getElementById('terminal-header-controls');
-  if (!controls) return;
-
-  panelTerminalToggleBtn = document.createElement('button');
-  panelTerminalToggleBtn.id = 'panel-terminal-toggle-btn';
-  panelTerminalToggleBtn.className = 'fp-toolbar-btn';
-  panelTerminalToggleBtn.textContent = 'Shell';
-  panelTerminalToggleBtn.title = 'Open a shell in this session\'s working directory';
-  panelTerminalToggleBtn.addEventListener('click', () => {
-    if (panelTerminalOwnerId) togglePanelTerminal(panelTerminalOwnerId);
+  panelTerminalToggleBtn = createHeaderToggle({
+    id: 'panel-terminal-toggle-btn',
+    label: 'Shell',
+    title: 'Open a shell in this session\'s working directory',
+    icon: 'shell',
+    onClick: () => {
+      if (panelTerminalOwnerId) togglePanelTerminal(panelTerminalOwnerId);
+    },
   });
-
-  const stopBtn = document.getElementById('terminal-stop-btn');
-  if (stopBtn) {
-    controls.insertBefore(panelTerminalToggleBtn, stopBtn);
-  } else {
-    controls.appendChild(panelTerminalToggleBtn);
-  }
 }
 
 function updatePanelTerminalToggle() {
-  if (!panelTerminalToggleBtn) return;
-  panelTerminalToggleBtn.classList.toggle('active', panelTerminalIsOpen(panelTerminalOwnerId));
+  setHeaderToggle(panelTerminalToggleBtn, panelTerminalIsOpen(panelTerminalOwnerId));
 }
 
 // ── Height ──────────────────────────────────────────────────────────
@@ -339,13 +329,13 @@ function resyncPanelFor(sessionId) {
 }
 
 // see .ai/contexts/panel-terminal.md ("Lifecycle")
-function notePanelTerminalExit(panelSessionId, exitCode) {
+function notePanelTerminalExit(panelSessionId, exitCode, signal, stopped) {
   const entry = openSessions.get(panelSessionId);
   if (!entry) return;
   entry.closed = true;
-  const colour = exitCode === 0 ? '\x1b[2m' : '\x1b[33m';
+  const exit = { exitCode, signal: signal || null, stopped: !!stopped };
   try {
-    entry.terminal.write(`\r\n${colour}── shell exited (code ${exitCode}) — toggle Shell off and on for a new one ──\x1b[0m\r\n`);
+    entry.terminal.write(`\r\n${exitBannerColour(exit)}── shell ${exitBannerPhrase(exit)} — toggle Shell off and on for a new one ──\x1b[0m\r\n`);
   } catch {}
 }
 

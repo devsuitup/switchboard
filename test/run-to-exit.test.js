@@ -75,6 +75,13 @@ test('runToExit: a clean exit returns stdout and stderr with code 0', async () =
   assert.equal(result.message, '');
 });
 
+test('runToExit: input is written to the child\'s stdin and closed, so a --stdin reader finishes', async () => {
+  const script = "let s=''; process.stdin.on('data', (c) => { s += c; }); process.stdin.on('end', () => process.stdout.write(s.split('\\0').join('|')));";
+  const result = await runToExit(process.execPath, ['-e', script], { cwd: process.cwd(), env: process.env, timeoutMs: 10_000, maxBuffer: 1024, input: 'a\0b\0' });
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.toString('utf8'), 'a|b|');
+});
+
 test('runToExit: a non-zero exit keeps its code and stderr', async () => {
   const result = await node("process.stderr.write('fatal: nope'); process.exitCode = 3;").promise;
   assert.equal(result.code, 3);
