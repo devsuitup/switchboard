@@ -139,6 +139,23 @@ Each showing of a file in the viewer carries a token (`_token`): a fresh `open()
 
 Keying by path would hand one tab's result to another: a clean tab in another session on the same file would take the saving tab's base while still showing the old content, and its next save would pass main's check and replace the write. The file panel shows no dirty marker of its own, so without the record a failed save would go unreported.
 
+## An open aimed at a file tab
+
+A session holds one tab. `openFileTab` — reached from the MCP `openFile` tool and from a terminal path link (`openFileInPanel`) — never replaces that session's file tab in a way that drops unsaved edits. The rule applies to a tab that has reached the viewer, the one `fpViewerOwner` points at or one holding a `viewerState`; a tab that never did has no edits, no token and no save record, and is replaced as before.
+
+| The open names | The tab | What happens |
+|---|---|---|
+| the same file | shown in the viewer | The tab is kept, token, queue and notice included, and re-read at once (`rereadFromDisk`). A clean buffer reloads; a dirty one keeps the edits and shows "changed on disk" when the session's content differs from the base. A line, if the open carries one, is revealed. |
+| the same file | away from the viewer | The tab is kept with its `viewerState` and its token; when it is shown again it is restored and re-read like any return, and a save record waiting under its token (`_detachedSaves`) is applied. |
+| another file | clean, shown or away | Replaced without asking. |
+| another file | dirty, shown or away | `confirm('<tab> has unsaved edits. Discard them to open <file>?')`. Yes replaces the tab; no drops the open and leaves the tab, its edits and its token as they were. |
+
+Dirty is the viewer's own `_isDirty` for the tab it shows (`hasUnsavedEdits`), and for a tab away from it `snapshotHasUnsavedEdits`: the snapshot's buffer differs from its `agreedBase`, unless a save that finished while the tab was away wrote exactly that buffer (a `written` record under its token). A save that failed while away leaves the buffer different from the base, so the tab counts as dirty and the open asks.
+
+An open only ever reads and replaces the tab of the session it is aimed at. Another session's tab, shown in the viewer or away, is not touched, whatever file it holds: the viewer is torn down only when the replaced tab is its owner.
+
+The same-file case re-reads the disk rather than taking the content the session sent. `_agreedBase` moves only on the events of "The agreed base", so a save after the open is refused by main if the session wrote the file, and asks.
+
 ## Undo
 
 Undo steps only through the user's own edits to the file on screen. The two editors a `ViewerPanel` builds (`createPlanEditor`, `createEditableViewer`) hold `history()` in a compartment (`view._historyCompartment`). Whenever the panel puts content in the editor itself — `open()` of another file, `_createEditor`'s initial fill, a restored snapshot, a quiet reload, **Reload** — `_setDocument` replaces the document and then calls `cmResetHistory`. That helper, exported by `codemirror-setup.js`, reconfigures the compartment to nothing and back: removing the extension drops its state, and adding it back starts an empty history. Reconfiguring to `history()` in a single step would keep the old state, because the history field is the same.

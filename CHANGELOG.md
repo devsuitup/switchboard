@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- When a session opens a file in the panel over a tab with unsaved edits, the edits are no longer discarded. The same file keeps them and says if it changed on disk; another file asks first. (#364)
+
 ## v0.0.85 — 2026-09-30
 
 ### New

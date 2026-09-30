@@ -467,8 +467,15 @@ function openDiffTab(sessionId, diffId, data) {
   }
 }
 
+// see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
 function openFileTab(sessionId, data) {
   const state = getSessionState(sessionId);
+  const current = state.currentTab;
+  if (current && current.type === 'file' && (fpViewerOwner === current || current.viewerState)) {
+    if (current.filePath === data.filePath) return reopenFileTab(sessionId, state, current, data);
+    if (fileTabHasUnsavedEdits(current)
+      && !window.confirm(`${current.label} has unsaved edits. Discard them to open ${basename(data.filePath)}?`)) return;
+  }
 
   // Destroy previous
   destroyCurrentTab(state);
@@ -487,6 +494,20 @@ function openFileTab(sessionId, data) {
     showPanel(state);
     renderPanel(sessionId);
   }
+}
+
+function reopenFileTab(sessionId, state, tab, data) {
+  if (Number.isInteger(data.line) && data.line > 0) tab.pendingLine = data.line;
+  if (fpViewerOwner === tab) fpViewerPanel.rereadFromDisk();
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
+function fileTabHasUnsavedEdits(tab) {
+  if (fpViewerOwner === tab) return fpViewerPanel.hasUnsavedEdits();
+  return fpViewerPanel.snapshotHasUnsavedEdits(tab.viewerState);
 }
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")

@@ -593,6 +593,20 @@ class ViewerPanel {
     if (window.cmResetHistory) window.cmResetHistory(this.editorView);
   }
 
+  // see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+  hasUnsavedEdits() {
+    return this._isDirty();
+  }
+
+  snapshotHasUnsavedEdits(state) {
+    const detached = this._detachedSaves.get(state.token);
+    return state.content !== state.agreedBase && !(detached && detached.written === asEditorText(state.content));
+  }
+
+  rereadFromDisk() {
+    return this._reloadFromDisk();
+  }
+
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
   snapshot() {
     if (!this.editorView || !this.filePath) return null;
