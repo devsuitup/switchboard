@@ -94,6 +94,8 @@ const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-termin
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
+const { createViewerWatchRegistry } = require('./viewer-file-watch');
+const { createMainPanelSaves } = require('./viewer-save-guard');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
 const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
@@ -994,68 +996,40 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     if (buf.includes(0)) return { ok: false, error: 'binary file' };
     return { ok: true, content: buf.toString('utf8') };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, code: err.code };
   }
 });
 
-ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
-  try {
-    const resolved = path.resolve(filePath);
-    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
-    // Close the sub-second window between save and search: if the saved file
-    // belongs to a type that the FTS index tracks, invalidate its signature so
-    // the next get-work-files / get-memories call triggers a full reindex
-    // (matching the explicit invalidation in save-memory / delete-work-file).
-    if (resolved.includes('/.work-files/')) invalidateFtsSignature('work-file');
-    if (resolved.endsWith('.md')) invalidateFtsSignature('memory');
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+const panelSaves = createMainPanelSaves({
+  getKnownProjectPaths,
+  invalidateFtsSignature,
+  onError: (err) => console.error('Error saving memory file:', err),
 });
+
+ipcMain.handle('save-file-for-panel', (_event, filePath, content, expected) => panelSaves.saveFileForPanel(filePath, content, expected));
 
 // ── File Watching (for viewer panels) ────────────────────────────────
-const fileWatchers = new Map(); // filePath → FSWatcher
+const fileWatchers = createViewerWatchRegistry({
+  send: (resolved) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('file-changed', resolved);
+    }
+  },
+});
 
 function closeAllFileWatchers() {
-  for (const watcher of fileWatchers.values()) {
-    try { watcher.close(); } catch {}
-  }
-  fileWatchers.clear();
+  fileWatchers.closeAll();
 }
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
   if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-  if (fileWatchers.has(resolved)) return { ok: true };
-  try {
-    let debounce = null;
-    const watcher = fs.watch(resolved, (eventType) => {
-      if (eventType !== 'change') return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('file-changed', resolved);
-        }
-      }, 300);
-    });
-    fileWatchers.set(resolved, watcher);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return fileWatchers.watch(resolved);
 });
 
 ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
-  const watcher = fileWatchers.get(resolved);
-  if (watcher) {
-    watcher.close();
-    fileWatchers.delete(resolved);
-  }
-  return { ok: true };
+  return fileWatchers.unwatch(path.resolve(filePath));
 });
 
 // Full re-scan triggered from the UI. Re-reads every jsonl file in the worker
@@ -1412,26 +1386,7 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 });
 
 // --- IPC: save-memory ---
-ipcMain.handle('save-memory', (_event, filePath, content) => {
-  try {
-    const literal = path.resolve(filePath);
-    if (!literal.endsWith('.md')) return { ok: false, error: 'not a .md file' };
-    // Same requirement as read-memory: existsSync/writeFileSync below must
-    // target the guard's resolved path, not `literal` again.
-    const resolved = resolveAllowedMemoryPath(literal);
-    if (!resolved) return { ok: false, error: 'path not allowed' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
-    // Invalidate the FTS signature so the next get-memories call reindexes
-    // (mtime change is caught by the signature, but an explicit invalidation
-    // guards against sub-second writes where the mtime might not advance).
-    invalidateFtsSignature('memory');
-    return { ok: true };
-  } catch (err) {
-    console.error('Error saving memory file:', err);
-    return { ok: false, error: err.message };
-  }
-});
+ipcMain.handle('save-memory', (_event, filePath, content, expected) => panelSaves.saveMemory(filePath, content, expected));
 
 // --- IPC: get-work-files ---
 // Walks <projectPath>/.work-files/ recursively for all known projects.

@@ -26,6 +26,7 @@ let currentPanelSessionId = null;
 
 // ViewerPanel instance for file-type tabs
 let fpViewerPanel = null;
+let fpViewerOwner = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -124,7 +125,7 @@ function initFilePanel() {
 
   fpViewerPanel = new ViewerPanel(vpContainer, {
     language: 'auto',
-    onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
+    onSave: (filePath, content, expected) => window.api.saveFileForPanel(filePath, content, expected),
     onClose: handleClose,
   });
 
@@ -286,8 +287,9 @@ function handleClose() {
       unwatchChangesFile(currentPanelSessionId, tab);
       destroyChangesEditor(tab);
     }
-    if (tab.type === 'file') {
+    if (tab.type === 'file' && fpViewerOwner === tab) {
       fpViewerPanel.destroy();
+      fpViewerOwner = null;
     }
     state.currentTab = null;
   }
@@ -300,6 +302,23 @@ async function handleDiffSave() {
   const state = currentPanelSessionId ? getSessionState(currentPanelSessionId) : null;
   const tab = state?.currentTab;
   if (!tab || tab.type !== 'diff' || !tab.editorView || !tab.filePath) return;
+  await saveDiffTab(tab);
+}
+
+function updateDiffSaveButton(tab) {
+  const btn = diffToolbarEl && diffToolbarEl.querySelector('.fp-save-btn');
+  if (!btn) return;
+  btn.disabled = !!tab.resolved;
+  btn.title = tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
+}
+
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+async function saveDiffTab(tab) {
+  if (tab.resolved || !tab.editorView) return;
+  if (tab.saving) {
+    tab.saveQueued = true;
+    return;
+  }
 
   let content;
   if (tab._diffMode === 'inline') {
@@ -309,10 +328,31 @@ async function handleDiffSave() {
   }
   if (content == null) return;
 
-  const result = await window.api.saveFileForPanel(tab.filePath, content);
-  if (result.ok) {
-    const btn = diffToolbarEl.querySelector('.fp-save-btn');
-    if (btn) flashButtonText(btn, 'Saved!');
+  tab.saving = true;
+  let saved = false;
+  try {
+    let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
+    while (result && result.reason === 'stale' && typeof result.disk === 'string'
+      && typeof window.confirm === 'function'
+      && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
+      tab.diskBaseline = result.disk;
+      result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
+    }
+    if (result && result.ok) {
+      saved = true;
+      tab.diskBaseline = content.replace(/\r\n?/g, '\n');
+      const btn = diffToolbarEl.querySelector('.fp-save-btn');
+      if (btn) flashButtonText(btn, 'Saved!');
+    } else if (result && result.reason !== 'stale' && typeof window.alert === 'function') {
+      window.alert(`Save failed: ${result.error || 'unknown error'}`);
+    }
+  } catch (err) {
+    if (typeof window.alert === 'function') window.alert(`Save failed: ${(err && err.message) || 'unknown error'}`);
+  } finally {
+    tab.saving = false;
+    const queued = tab.saveQueued;
+    tab.saveQueued = false;
+    if (queued && saved) saveDiffTab(tab);
   }
 }
 
@@ -414,6 +454,7 @@ function openDiffTab(sessionId, diffId, data) {
     diffId,
     oldContent: data.oldContent,
     newContent: data.newContent,
+    diskBaseline: typeof data.oldContent === 'string' ? data.oldContent.replace(/\r\n?/g, '\n') : null,
     resolved: false,
     editorView: null,
   };
@@ -496,8 +537,9 @@ function destroyCurrentTab(state, { stash = true } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
-  if (tab.type === 'file') {
+  if (tab.type === 'file' && fpViewerOwner === tab) {
     fpViewerPanel.destroy();
+    fpViewerOwner = null;
   }
 }
 
@@ -621,6 +663,19 @@ function renderPanel(sessionId) {
   renderTabContent(sessionId, state.currentTab);
 }
 
+// see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+function showFileTabInViewer(tab) {
+  if (fpViewerOwner === tab) return;
+  if (fpViewerOwner && fpViewerOwner.type === 'file') {
+    fpViewerOwner.viewerState = fpViewerPanel.snapshot();
+  }
+  fpViewerOwner = tab;
+  const saved = tab.viewerState && tab.viewerState.filePath === tab.filePath ? tab.viewerState : null;
+  tab.viewerState = null;
+  if (saved) fpViewerPanel.open(tab.label, tab.filePath, saved.content, saved);
+  else fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+}
+
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
@@ -641,7 +696,7 @@ function renderTabContent(sessionId, tab) {
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = 'none';
     vpContainer.style.display = 'flex';
-    fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+    showFileTabInViewer(tab);
     if (tab.pendingLine) {
       fpViewerPanel.revealLine(tab.pendingLine);
       tab.pendingLine = null;
@@ -668,6 +723,8 @@ function renderDiffContent(sessionId, tab) {
   const pathEl = diffToolbarEl.querySelector('#diff-path');
   if (titleEl) titleEl.textContent = tab.label;
   if (pathEl) pathEl.textContent = tab.filePath || '';
+
+  updateDiffSaveButton(tab);
 
   // Accept/reject buttons are rendered synchronously so the UI appears
   // immediately; the diff viewer itself is deferred until the bundle loads.
@@ -720,6 +777,7 @@ function renderDiffContent(sessionId, tab) {
 function handleDiffAction(sessionId, tab, action) {
   if (tab.resolved) return;
   tab.resolved = true;
+  updateDiffSaveButton(tab);
 
   if (action === 'accept') {
     let editedContent = null;

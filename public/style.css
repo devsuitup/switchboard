@@ -4901,15 +4901,29 @@ body { display: flex; flex-direction: column; }
   border-top: 1px solid var(--hairline);
 }
 
-#changes-diff-notice {
+#changes-diff-notice,
+.viewer-panel-notice {
   padding: 6px 12px;
   font-size: 11px;
   color: var(--text-muted);
   border-bottom: 1px solid var(--hairline);
 }
 
-#changes-diff-notice.changes-error {
+#changes-diff-notice.changes-error,
+.viewer-panel-notice.changes-error {
   color: #e05070;
+}
+
+.viewer-panel-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.viewer-panel-notice-text {
+  flex: 1 1 200px;
 }
 
 #changes-diff-host {

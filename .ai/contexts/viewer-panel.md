@@ -1,6 +1,6 @@
 # Context: viewer-panel
 
-**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **2 callsites** in `public/app.js`: `memoryPanel` (Memory tab), `workFilesPanel` (.work-files tab). Optionally read-only or savable. Watches the file on disk and auto-reloads on external changes.
+**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **2 callsites** in `public/app.js`: `memoryPanel` (Memory tab), `workFilesPanel` (.work-files tab). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
 
 ## Key files
 
@@ -8,6 +8,8 @@
 |---|---|---|
 | `public/viewer-panel.js` | ~415 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
 | `public/viewer-toolbar.js` | ~265 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. |
+| `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
+| `viewer-save-guard.js` | ~100 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -19,7 +21,7 @@ const panel = new ViewerPanel(container, {
   language: 'markdown' | 'auto',  // editor mode
   storageKey: string,     // localStorage key for preview-mode persistence
   format: bool,           // show JSON/JSONL prettify button (auto-hidden for non-json files)
-  onSave: async (filePath, content) => result,  // shows Save button
+  onSave: async (filePath, content, expected) => result,  // shows Save button; expected is required, see "Saving over a file that moved"
   onDelete: async (filePath) => result,         // shows Delete button (with window.confirm)
   onClose: () => void,    // shows Close button
 });
@@ -52,10 +54,112 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 
 - **`open()` is the entry point — not the constructor**. Constructor creates an empty editor; `open()` swaps in content. Calling `open()` again on the same instance reuses the CodeMirror state via `editorView.dispatch({changes})`.
 - **File watch lifecycle**: each `open()` unwatches the previous path, then watches the new one. `destroy()` unwatches but is rarely called. **If you spawn a new ViewerPanel without destroying the old one, both will keep watchers alive.**
-- **The `_saving` flag debounces external-change reloads**: while a save is in flight, incoming `file-changed` events for the same path are ignored for 500 ms (avoids reload-loop after our own save).
 - **`format` is a renderer-only transform** — it modifies the editor's document, doesn't write to disk. Use `save` separately if you want to persist.
 - **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
 - **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Three sinks share this rule: `viewer-panel.js:397`, `viewer-toolbar.js:47`, and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
+
+## Saving over a file that moved
+
+**One rule, enforced by main: every save carries, as `expected`, the exact disk content the user agreed to replace, and main refuses anything else.** The renderer's job is to know what the user agreed to; main's compare is what keeps a write the user did not agree to from being replaced. No path in the viewer or the MCP diff tab sends a save without `expected`, and main refuses one that does.
+
+### Main
+
+`save-file-for-panel` and `save-memory` are the handlers `createMainPanelSaves` builds in `viewer-save-guard.js`. It takes the path checks (`isSensitivePath`, the memory allowlist) from `ipc-path-validator.js` itself; `main.js` hands it only its own state, `getKnownProjectPaths` and `invalidateFtsSignature`. `test/viewer-save-guard.test.js` builds the same handlers with `createMainPanelSaves`, so what it exercises is what main registers, and no binding in `main.js` can make the save path permissive. Each handler validates the path — `save-memory`: a `.md` file, resolved through the memory allowlist, written at the resolved path; both: the file exists — then `writeIfUnmoved`, which runs `refuseIfMoved`:
+
+- `expected` not a string → refused, `reason: 'invalid-expected'`. There is no blind write.
+- The file on disk, line endings folded to `\n`, differs from `expected` → refused, `reason: 'stale'`, with **`disk`: the text it compared**, folded the same way.
+- Otherwise the content is written and the FTS signature invalidated.
+
+The compare and the write are not atomic: a write landing between the read and `writeFileSync` is still replaced, the same window the Changes panel's version token has.
+
+### The agreed base
+
+`ViewerPanel` keeps `_agreedBase`, sent as `expected`, and `_lastSeenDisk`, the disk as last read. Both are held with line endings folded (`asEditorText`), because CodeMirror splits on `\r\n` and `\r` and hands its document back joined with `\n`.
+
+`_agreedBase` moves only when the user has nothing to lose or has agreed:
+
+| Event | `_agreedBase` becomes |
+|---|---|
+| `open()` | the content opened |
+| a re-read while the buffer is clean (then reloaded) | the new disk |
+| a re-read that finds the disk equal to the buffer | the new disk |
+| a save that succeeded | what was written |
+| **Keep my edits** | `_lastSeenDisk`, the disk the notice described |
+| **Reload** | the disk re-read |
+| a confirm after a stale refusal | the `disk` main returned |
+
+A re-read while the buffer is **dirty never moves it**; it only updates `_lastSeenDisk` and raises the notice. The buffer is clean when it equals `_agreedBase` or the disk last seen before this read.
+
+### A stale refusal
+
+Main returns the disk text it compared. The panel shows the "not saved" notice, then asks `confirm('This file changed on disk since you opened it. Overwrite it with your edits?')` — worded like the diff tab's, because a refusal can be the first the user hears of the other write (nothing raised "changed on disk" before it):
+- On yes, that text becomes `_agreedBase` and the save is retried with it. If the retry is refused too, the disk moved while the confirm was open: the panel asks again with the new text, and never writes without a compare.
+- If the panel was switched to another file while the save or the confirm was pending (`_openGen`), nothing is retried and nothing is asked about the new file.
+- On no, nothing is written and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** and **Overwrite**. **Overwrite** is a plain save that goes through the same check and confirm.
+
+A plain save while the "changed on disk" notice is up is refused the same way, because the dirty re-read did not move the base, and asks the same confirm. **Keep my edits** is the agreement given ahead of time: the next save carries the disk the notice described and goes out without asking, and a further write nobody has read is still refused.
+
+The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')`; a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `window.alert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
+
+### What the rest is for
+
+Everything below is presentation; none of it carries the rule.
+
+- **Re-reads.** Every `file-changed` event re-reads the file.
+
+  | On disk | Result |
+  |---|---|
+  | the save in flight (`_pendingSave`) | our own echo: nothing |
+  | equal to the buffer | base moves, notice cleared |
+  | equal to `_agreedBase` | a "gone", "cannot be read" or "changed" notice is cleared (a `touch`, an undone write, an identical recreate) |
+  | changed, buffer clean | reloaded quietly |
+  | changed, buffer dirty | buffer untouched; "This file changed on disk since you opened it…" with **Reload** and **Keep my edits** — unless the notice already says a save was not saved, which it keeps with its **Overwrite** |
+  | missing (`ENOENT`) | buffer untouched; "This file no longer exists on disk", and that the edits are kept when there are any |
+  | unreadable | buffer untouched; the reason |
+
+  **Reload** asks `window.confirm('This file has unsaved edits. Discard them?')` when the buffer is dirty, as the Changes panel does. `read-file-for-panel` returns the error's `code`, which is how the renderer tells `ENOENT` apart. A re-read that resolves after `open()` has moved to another file is dropped (`_openGen`).
+- **Notice after a save.** A successful save clears the notice unless a re-read raised "changed on disk" while it was in flight (`_noticeSeq`); the base has moved to what was written, so the next save against that later write is refused and asks.
+- **The queue.** One save is in flight at a time (`_pendingSave`). A save requested meanwhile is queued, and sent once the first returns ok, carrying the base that save left; if the session wrote in between, main refuses it and the panel asks. It is dropped if the first save fails. `open()` resets the pending save and the queue, so a save of the newly opened file goes out on its own, and the previous file's save touches neither when it resolves. The MCP diff tab queues a click during a save the same way (`tab.saving`), and drops it once the tab has lost its editor.
+- **An answered diff.** Once a diff is answered (Accept or Reject, `tab.resolved`), the session writes the file itself and the base no longer describes the disk. Save is refused, and the shared diff Save button is disabled with a title saying why, until the session closes the tab. The button's state is set on each render of a diff tab, so a diff opened after an answered one has Save enabled again.
+- **Other failures.** A save refused for any other reason, or whose IPC rejects, shows `Save failed: <reason>` in the notice.
+
+## One viewer, several file tabs
+
+`file-panel.js` has one `ViewerPanel` (`fpViewerPanel`) for the `'file'` tabs of every session, and `fpViewerOwner` records the tab it is showing. `showFileTabInViewer` is the only way a file tab reaches it:
+
+- The owner being shown again is left as it is — not reopened — so a save in flight, the queue, the notice and the buffer are untouched by a re-render.
+- Another file tab taking the viewer first stores the owner's `snapshot()` (buffer, `_agreedBase`, `_lastSeenDisk`) on that tab as `viewerState`.
+- A tab with a `viewerState` for its path is reopened from it with `open(title, path, buffer, restore)`, then re-read at once, so a write made while it was away is treated like any other: a clean buffer reloads, a dirty one keeps its edits and says so. `tab.content`, the content first read when the tab opened, is used only for the tab's first showing.
+- Destroying a file tab destroys the viewer only if that tab is its owner; a tab that never reached the viewer, or no longer holds it, has nothing in it to tear down.
+
+Each showing of a file in the viewer carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the tab's snapshot, so the token names the tab, not the path — two sessions' tabs on the same file have different tokens. A save captures the token when it starts, and when it resolves:
+
+- if the viewer holds that token — the tab never left, or came back while the save was in flight — the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
+- otherwise the tab is away, and the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`) and applied — once, then deleted — when that tab is restored.
+
+Keying by path would hand one tab's result to another: a clean tab in another session on the same file would take the saving tab's base while still showing the old content, and its next save would pass main's check and replace the write. The file panel shows no dirty marker of its own, so without the record a failed save would go unreported.
+
+## Undo
+
+Undo steps only through the user's own edits to the file on screen. The two editors a `ViewerPanel` builds (`createPlanEditor`, `createEditableViewer`) hold `history()` in a compartment (`view._historyCompartment`). Whenever the panel puts content in the editor itself — `open()` of another file, `_createEditor`'s initial fill, a restored snapshot, a quiet reload, **Reload** — `_setDocument` replaces the document and then calls `cmResetHistory`. That helper, exported by `codemirror-setup.js`, reconfigures the compartment to nothing and back: removing the extension drops its state, and adding it back starts an empty history. Reconfiguring to `history()` in a single step would keep the old state, because the history field is the same.
+
+Keeping those replacements out of the history is not enough. The user's earlier entries are mapped through a whole-document replace and stay undoable: a deletion made in one file would be re-inserted into the next file the panel opens, or into the content a quiet reload brought, and the next save — whose `expected` is the disk — would write it. One viewer serves every session's file tabs, so the text could land in another session's file. A restored snapshot starts with an empty history for the same reason; the history is not part of the snapshot. `test/viewer-panel-undo.test.js` drives both cases, with deletions, against the real CodeMirror.
+
+## Watching the file
+
+`watch-file` watches the **directory** holding the file and reports every event that names the file, whatever its type. A watch on the file itself is armed on its inode, and an atomic replace — `git checkout`, `sed -i`, most editors' save — writes a temporary file and renames it over the target, leaving the watch on an inode nothing writes to any more; a delete ends it outright, so the file's recreation is never seen. The directory entry outlives both, so a rename over the file, a delete, a recreate, and every write after them keep reaching the panel with nothing to re-arm.
+
+- The path is resolved with `fs.realpathSync.native`, so the watched name carries the on-disk case and a symlinked file is watched in the directory of its target, where its writes happen. A path that does not resolve is watched as given.
+- A symlink is **also** watched in its own directory, under the link's name. GNU `sed -i` without `--follow-symlinks` and rename-over editors replace the link itself with a regular file; the target's directory never hears that, the link's does.
+- Events for other files in the directory are dropped by name — compared case-insensitively on `win32` and `darwin` (`sameFileName`), exactly elsewhere. An event with no filename is reported, since the renderer re-reads and compares anyway.
+- Events are debounced (300 ms) into one `file-changed`.
+- An `error` from the watcher (its directory removed) is swallowed; the watch is then dead, which is the one case not recovered.
+
+The renderer records a watch (`_watchedPath`) only once `watch-file` answers `ok`, so a failed watch is never released by a later `unwatch-file` that would take another panel's reference. A watch acknowledged after the panel has moved to another file is released at once.
+
+`createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a file tab showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
+
+The Changes panel's registry (`git-changes-watch.js`) solves the same problem differently, by re-arming on the file after a `rename`. The two are not merged.
 
 ## Non-obvious behaviors
 

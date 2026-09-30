@@ -3,7 +3,7 @@
  *
  * A single component used by memory viewer, work files viewer, and file panel.
  * Manages toolbar, editor, preview area, and all interactions.
- * Watches files for external changes and reloads automatically.
+ * Watches files for external changes: reloads a clean buffer, and asks before replacing a dirty one.
  *
  * Toolbar buttons are shown/hidden automatically based on file type:
  *   - Preview: shown for markdown files
@@ -41,6 +41,11 @@ function loadCodeMirrorBundle() {
 
 window.loadCodeMirrorBundle = loadCodeMirrorBundle;
 
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+function asEditorText(text) {
+  return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
+}
+
 class ViewerPanel {
   /**
    * @param {HTMLElement} container - Parent element to render into
@@ -62,7 +67,14 @@ class ViewerPanel {
     this.previewMode = opts.storageKey ? localStorage.getItem(opts.storageKey) === 'true' : false;
     this.wrapMode = false;
     this._watchedPath = null;
-    this._saving = false;
+    this._pendingSave = null;
+    this._saveQueued = false;
+    this._agreedBase = null;
+    this._lastSeenDisk = null;
+    this._noticeState = null;
+    this._noticeSeq = 0;
+    this._detachedSaves = new WeakMap();
+    this._token = null;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -80,6 +92,8 @@ class ViewerPanel {
 
     // Hide preview initially (shown in open() if markdown)
     if (this.toolbar.previewBtn) this.toolbar.previewBtn.style.display = 'none';
+
+    this._buildNotice();
 
     // Create editor area
     this.editorEl = document.createElement('div');
@@ -100,13 +114,80 @@ class ViewerPanel {
 
     // Listen for file changes from main process
     this._onFileChanged = (changedPath) => {
-      if (changedPath === this._watchedPath && !this._saving) {
+      if (changedPath === this._watchedPath) {
         this._reloadFromDisk();
       }
     };
     if (window.api.onFileChanged) {
       window.api.onFileChanged(this._onFileChanged);
     }
+  }
+
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+  _buildNotice() {
+    this.noticeEl = document.createElement('div');
+    this.noticeEl.className = 'viewer-panel-notice';
+    this.noticeEl.style.display = 'none';
+
+    this.noticeTextEl = document.createElement('span');
+    this.noticeTextEl.className = 'viewer-panel-notice-text';
+    this.noticeEl.appendChild(this.noticeTextEl);
+
+    this.noticeReloadBtn = document.createElement('button');
+    this.noticeReloadBtn.className = 'fp-toolbar-btn viewer-panel-notice-reload';
+    this.noticeReloadBtn.textContent = 'Reload';
+    this.noticeReloadBtn.title = 'Re-read this file from disk, discarding your unsaved edits';
+    this.noticeReloadBtn.addEventListener('click', () => this._reloadDiscardingEdits());
+    this.noticeEl.appendChild(this.noticeReloadBtn);
+
+    this.noticeKeepBtn = document.createElement('button');
+    this.noticeKeepBtn.className = 'fp-toolbar-btn viewer-panel-notice-keep';
+    this.noticeKeepBtn.textContent = 'Keep my edits';
+    this.noticeKeepBtn.title = 'Keep your edits in the editor; saving writes them over the file';
+    this.noticeKeepBtn.addEventListener('click', () => {
+      this._agreedBase = this._lastSeenDisk;
+      this._setNotice(null);
+    });
+    this.noticeEl.appendChild(this.noticeKeepBtn);
+
+    this.noticeOverwriteBtn = document.createElement('button');
+    this.noticeOverwriteBtn.className = 'fp-toolbar-btn viewer-panel-notice-overwrite';
+    this.noticeOverwriteBtn.textContent = 'Overwrite';
+    this.noticeOverwriteBtn.title = 'Write your edits over the file on disk';
+    this.noticeOverwriteBtn.addEventListener('click', () => this._save());
+    this.noticeEl.appendChild(this.noticeOverwriteBtn);
+
+    this.container.insertBefore(this.noticeEl, this.toolbar.el.nextSibling);
+  }
+
+  _setNotice(state, detail) {
+    this._noticeState = state;
+    let text = '';
+    if (state === 'changed') {
+      text = 'This file changed on disk since you opened it. Reload to discard your unsaved edits, or keep them and save over the file.';
+    } else if (state === 'stale') {
+      text = 'This file changed on disk since you opened it — your edits were not saved. Reload to discard them, or overwrite the file with them.';
+    } else if (state === 'gone') {
+      text = this._isDirty()
+        ? 'This file no longer exists on disk. Your unsaved edits are kept in the editor.'
+        : 'This file no longer exists on disk.';
+    } else if (state === 'unreadable') {
+      text = `This file can no longer be read: ${detail}`;
+    } else if (state === 'save-failed') {
+      text = `Save failed: ${detail}`;
+    }
+    this.noticeTextEl.textContent = text;
+    this.noticeEl.style.display = state ? '' : 'none';
+    this.noticeEl.classList.toggle('changes-error', !!state);
+    this.noticeReloadBtn.style.display = state === 'changed' || state === 'stale' ? '' : 'none';
+    this.noticeKeepBtn.style.display = state === 'changed' ? '' : 'none';
+    this.noticeOverwriteBtn.style.display = state === 'stale' ? '' : 'none';
+  }
+
+  _isDirty(seenDisk = this._lastSeenDisk) {
+    if (!this.editorView || this._agreedBase === null) return false;
+    const buffer = this.getContent();
+    return buffer !== this._agreedBase && buffer !== seenDisk;
   }
 
   _wireEvents() {
@@ -211,8 +292,20 @@ class ViewerPanel {
    * codemirror-bundle.js has been loaded (first call triggers the load; all
    * subsequent calls share the same cached Promise and resolve near-instantly).
    */
-  open(title, filePath, content) {
+  open(title, filePath, content, restore = null) {
     this._unwatchFile();
+    this._agreedBase = asEditorText(restore ? restore.agreedBase : content);
+    this._lastSeenDisk = restore ? asEditorText(restore.lastSeenDisk) : this._agreedBase;
+    this._pendingSave = null;
+    this._saveQueued = false;
+    this._setNotice(null);
+    this._token = (restore && restore.token) || {};
+    const detached = this._detachedSaves.get(this._token);
+    this._detachedSaves.delete(this._token);
+    if (detached) {
+      if (detached.error) this._setNotice('save-failed', detached.error);
+      else this._agreedBase = this._lastSeenDisk = detached.written;
+    }
 
     this.filePath = filePath;
     this.toolbar.setTitle(title);
@@ -263,9 +356,7 @@ class ViewerPanel {
       if (!this.editorView) {
         this._createEditor(c, fp);
       } else {
-        this.editorView.dispatch({
-          changes: { from: 0, to: this.editorView.state.doc.length, insert: c },
-        });
+        this._setDocument(c);
       }
 
       // Set wrap default based on file type
@@ -283,6 +374,7 @@ class ViewerPanel {
       if (wantPreview) {
         this._setPreview(true);
       }
+      if (restore) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
     });
@@ -309,11 +401,7 @@ class ViewerPanel {
       );
     } else {
       this.editorView = window.createPlanEditor(this.editorEl);
-      if (content) {
-        this.editorView.dispatch({
-          changes: { from: 0, to: this.editorView.state.doc.length, insert: content },
-        });
-      }
+      if (content) this._setDocument(content);
     }
   }
 
@@ -344,18 +432,64 @@ class ViewerPanel {
     this.toolbar.setWrapMode(this.wrapMode);
   }
 
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save() {
     if (!this.opts.onSave || !this.filePath) return;
-    this._saving = true;
-    const content = this.getContent();
-    try {
-      const result = await this.opts.onSave(this.filePath, content);
-      if (result && result.ok !== false) {
-        this.toolbar.flashSave();
-      }
-    } finally {
-      setTimeout(() => { this._saving = false; }, 500);
+    if (this._pendingSave !== null) {
+      this._saveQueued = true;
+      return;
     }
+    const content = this.getContent();
+    const token = this._token;
+    const myGen = this._openGen;
+    const noticeSeq = this._noticeSeq;
+    this._pendingSave = asEditorText(content);
+    let saved = false;
+    try {
+      let result = await this.opts.onSave(this.filePath, content, this._agreedBase);
+      while (this._openGen === myGen && result && result.reason === 'stale' && typeof result.disk === 'string') {
+        this._lastSeenDisk = asEditorText(result.disk);
+        this._setNotice('stale');
+        if (typeof window.confirm !== 'function'
+          || !window.confirm('This file changed on disk since you opened it. Overwrite it with your edits?')
+          || this._openGen !== myGen) break;
+        this._agreedBase = this._lastSeenDisk;
+        result = await this.opts.onSave(this.filePath, content, this._agreedBase);
+      }
+      if (this._token !== token) {
+        this._recordDetachedSave(token, content, result);
+        return;
+      }
+      if (result && result.ok !== false) {
+        saved = true;
+        this._agreedBase = asEditorText(content);
+        if (this._noticeSeq === noticeSeq) {
+          this._lastSeenDisk = this._agreedBase;
+          this._setNotice(null);
+        }
+        this.toolbar.flashSave();
+      } else if (result && result.reason === 'stale') {
+        this._setNotice('stale');
+      } else if (result) {
+        this._setNotice('save-failed', result.error || 'unknown error');
+      }
+    } catch (err) {
+      if (this._token === token) this._setNotice('save-failed', (err && err.message) || 'unknown error');
+      else this._recordDetachedSave(token, content, { ok: false, error: err && err.message });
+    } finally {
+      if (this._openGen === myGen) {
+        this._pendingSave = null;
+        const queued = this._saveQueued;
+        this._saveQueued = false;
+        if (queued && saved) this._save();
+      }
+    }
+  }
+
+  // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+  _recordDetachedSave(token, content, result) {
+    if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
+    else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
   }
 
   getContent() {
@@ -381,32 +515,92 @@ class ViewerPanel {
 
   _watchFile(filePath) {
     if (!filePath || !window.api.watchFile) return;
-    this._watchedPath = filePath;
-    window.api.watchFile(filePath);
+    const token = {};
+    this._watchToken = token;
+    Promise.resolve(window.api.watchFile(filePath)).then((result) => {
+      if (!result || result.ok === false) return;
+      if (this._watchToken === token) this._watchedPath = filePath;
+      else if (window.api.unwatchFile) window.api.unwatchFile(filePath);
+    }).catch(() => {});
   }
 
   _unwatchFile() {
+    this._watchToken = null;
     if (this._watchedPath && window.api.unwatchFile) {
       window.api.unwatchFile(this._watchedPath);
       this._watchedPath = null;
     }
   }
 
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _reloadFromDisk() {
-    if (!this.filePath || !window.api.readFileForPanel) return;
+    if (!this.filePath || !window.api.readFileForPanel || !this.editorView) return;
+    const myGen = this._openGen;
     const result = await window.api.readFileForPanel(this.filePath);
-    if (!result.ok) return;
+    if (this._openGen !== myGen || !this.editorView || !result) return;
 
-    const newContent = result.content;
-    const currentContent = this.getContent();
-    if (newContent === currentContent) return;
-
-    if (this.editorView) {
-      this.editorView.dispatch({
-        changes: { from: 0, to: this.editorView.state.doc.length, insert: newContent },
-      });
+    if (!result.ok) {
+      if (result.code === 'ENOENT') this._setNotice('gone');
+      else this._setNotice('unreadable', result.error || 'unknown error');
+      return;
     }
 
+    const newContent = asEditorText(result.content);
+    const previouslySeen = this._lastSeenDisk;
+    this._lastSeenDisk = newContent;
+    if (this._pendingSave !== null && newContent === this._pendingSave) return;
+
+    if (newContent === this.getContent()) {
+      this._agreedBase = newContent;
+      this._setNotice(null);
+      return;
+    }
+    if (newContent === this._agreedBase) {
+      if (['gone', 'unreadable', 'changed'].includes(this._noticeState)) this._setNotice(null);
+      return;
+    }
+    if (!this._isDirty(previouslySeen)) {
+      this._agreedBase = newContent;
+      this._replaceContent(newContent);
+      this._setNotice(null);
+      return;
+    }
+    if (this._noticeState !== 'stale') this._setNotice('changed');
+    this._noticeSeq += 1;
+  }
+
+  async _reloadDiscardingEdits() {
+    if (this._isDirty() && typeof window.confirm === 'function'
+      && !window.confirm('This file has unsaved edits. Discard them?')) return;
+    if (!this.filePath || !window.api.readFileForPanel) return;
+    const myGen = this._openGen;
+    const result = await window.api.readFileForPanel(this.filePath);
+    if (this._openGen !== myGen || !this.editorView || !result) return;
+    if (!result.ok) {
+      if (result.code === 'ENOENT') this._setNotice('gone');
+      else this._setNotice('unreadable', result.error || 'unknown error');
+      return;
+    }
+    this._agreedBase = asEditorText(result.content);
+    this._lastSeenDisk = this._agreedBase;
+    this._replaceContent(this._agreedBase);
+    this._setNotice(null);
+  }
+
+  // see .ai/contexts/viewer-panel.md ("Undo")
+  _setDocument(text) {
+    this.editorView.dispatch({ changes: { from: 0, to: this.editorView.state.doc.length, insert: text } });
+    if (window.cmResetHistory) window.cmResetHistory(this.editorView);
+  }
+
+  // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+  snapshot() {
+    if (!this.editorView || !this.filePath) return null;
+    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
+  }
+
+  _replaceContent(newContent) {
+    if (newContent !== this.getContent()) this._setDocument(newContent);
     if (this.previewMode) {
       this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
     }
