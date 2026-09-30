@@ -145,6 +145,33 @@ test('indexing ends with a session only in the last batch: it is reloaded and re
   h.dom.window.close();
 });
 
+test('indexing-finished with no planner, or a settled one, does not reload the projects', async () => {
+  const h = setupTick({ mode: 'auto', indexed: ['ok', 'ghost'], preplanned: false });
+  vm.runInContext('var loads = 0; loadProjects = async () => { loads++; };', h.ctx);
+  await vm.runInContext('markRestoreIndexingDone()', h.ctx);
+  assert.equal(vm.runInContext('loads', h.ctx), 0, 'no planner');
+  assert.equal(vm.runInContext('restoreIndexingDone', h.ctx), true);
+
+  vm.runInContext(`restorePlanner = createRestorePlanner({ savedSet: [] });`, h.ctx);
+  await vm.runInContext('markRestoreIndexingDone()', h.ctx);
+  assert.equal(vm.runInContext('loads', h.ctx), 0, 'settled planner');
+  h.dom.window.close();
+});
+
+test('a reload that keeps failing leaves the sessions unreported and the planner waiting', async () => {
+  const h = setupTick({ mode: 'ask', indexed: ['ok'] });
+  vm.runInContext('var loads = 0; loadProjects = async () => { loads++; throw new Error("ipc"); };', h.ctx);
+  await vm.runInContext('markRestoreIndexingDone()', h.ctx);
+  assert.equal(vm.runInContext('loads', h.ctx), 2, 'retried once');
+  assert.equal(h.doc.getElementById('restore-unavailable-toast'), null);
+  assert.equal(vm.runInContext('restorePlanner.isSettled()', h.ctx), false);
+
+  vm.runInContext('loadProjects = async () => {};', h.ctx);
+  await vm.runInContext('markRestoreIndexingDone()', h.ctx);
+  assert.ok(h.doc.getElementById('restore-unavailable-toast'), 'the next event settles it');
+  h.dom.window.close();
+});
+
 test('indexing already finished when the planner starts (event missed): restore settles without any event', async () => {
   const h = setupTick({ mode: 'ask', indexed: ['ok'], preplanned: false, finished: true });
   await vm.runInContext('restoreWorkingSet()', h.ctx);

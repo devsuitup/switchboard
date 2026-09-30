@@ -366,10 +366,15 @@ function showLiveElsewhereNotice(skipped) {
 
 async function markRestoreIndexingDone() {
   restoreIndexingDone = true;
-  try {
-    await loadProjects();
-  } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
-  await tickRestorePlanner();
+  if (!restorePlanner || restorePlanner.isSettled()) return;
+  let reloaded = false;
+  for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
+    try {
+      await loadProjects();
+      reloaded = true;
+    } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
+  }
+  if (reloaded) await tickRestorePlanner();
 }
 
 async function maybeRetryRestoreWorkingSet() {
