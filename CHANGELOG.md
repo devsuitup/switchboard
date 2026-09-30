@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.85 — 2026-09-30
+
 ### New
 - After an update, a "What's new" dialog lists the changes of every version since the one you last ran. Help → What's new opens it again for the current version. (#363)
 - An untracked file's line counts show in the Changes list without opening it, and count in the header total. A row that cannot be counted says why: binary, too large, not counted, or count on open for a remote session. (#350)
