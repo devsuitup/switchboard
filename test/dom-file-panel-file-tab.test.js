@@ -43,7 +43,7 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { saves: [], openFile: null, openDiff: null, closeTab: null, closeAllDiffs: null, diffResponses: [], confirms: [], confirmAnswer: false, revealed: [], changed: new Set(), fileChanged: [] };
+  const calls = { saves: [], openFile: null, openDiff: null, closeTab: null, closeAllDiffs: null, diffResponses: [], confirms: [], confirmAnswer: false, revealed: [], changed: new Set(), fileChanged: [], holdBundle: false, scripts: [] };
   let editor = null;
 
   window.api = new Proxy({
@@ -97,7 +97,10 @@ function setup() {
   const realCreate = window.document.createElement.bind(window.document);
   window.document.createElement = function (tag, ...args) {
     const el = realCreate(tag, ...args);
-    if (String(tag).toLowerCase() === 'script') Promise.resolve().then(() => el.onload && el.onload());
+    if (String(tag).toLowerCase() === 'script') {
+      if (calls.holdBundle) calls.scripts.push(el);
+      else Promise.resolve().then(() => el.onload && el.onload());
+    }
     return el;
   };
 
@@ -1177,7 +1180,7 @@ test('a held tab restored by an open, then opened again before its editor exists
 test('held files whose names collide get the shortest distinct path, and a file at the root starts with /', async () => {
   const ctx = setup();
   try {
-    const paths = ['/a/x/a.md', '/b/x/a.md', '/a.md'];
+    const paths = ['/a/x/a.md', '/b/x/a.md', '/a.md', '/repo/q.md'];
     ctx.disk.set(C, 'c0\n');
     ctx.window.switchPanel('s1');
     for (const p of paths) {
@@ -1188,7 +1191,7 @@ test('held files whose names collide get the shortest distinct path, and a file 
     }
     ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
     await flush();
-    assert.deepEqual(heldBar(ctx), ['a/x/a.md', 'b/x/a.md', '/a.md']);
+    assert.deepEqual(heldBar(ctx), ['a/x/a.md', 'b/x/a.md', '/a.md', 'q.md'], 'a name that does not clash stays short');
   } finally { ctx.destroy(); }
 });
 
@@ -1208,5 +1211,103 @@ test('a re-read queued for one open is not carried into the next one', async () 
     ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
     await flush();
     assert.deepEqual(reads, [A], 'a plain open of another file does not re-read');
+  } finally { ctx.destroy(); }
+});
+
+test('a restored tab replaced by another open before its editor exists is held, not dropped', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.disk.set(B, 'b0\n');
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.calls.openFile('s1', { filePath: B, content: 'b0\n' });
+    await flush();
+    assert.equal(ctx.viewer().filePath, B);
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('a restored tab replaced by a diff before its editor exists comes back when the diff closes', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.equal(ctx.viewer().filePath, A);
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('after the editor bundle fails to load, opening the file again shows it', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.holdBundle = true;
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    ctx.calls.scripts[0].onerror(new Error('no bundle'));
+    await flush();
+    assert.equal(ctx.viewer().editorView, null);
+
+    ctx.calls.holdBundle = false;
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(content(ctx), 'a0\n');
+    ctx.editor().type('Y');
+    await save(ctx);
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a0\nY', expected: 'a0\n' });
+  } finally { ctx.destroy(); }
+});
+
+test('a session write reported while the editor bundle loads is read once the editor exists', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.holdBundle = true;
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    ctx.disk.set(A, 'session\n');
+    fireFileChanged(ctx, A);
+    await flush();
+    ctx.calls.holdBundle = false;
+    ctx.calls.scripts[0].onload();
+    await flush();
+    assert.equal(content(ctx), 'session\n');
+    ctx.editor().type('Y');
+    await save(ctx);
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'session\nY', expected: 'session\n' });
+  } finally { ctx.destroy(); }
+});
+
+test('a restored tab opened again before its editor exists keeps the save failure it just reported', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    const held = holdSaves(ctx);
+    pressSave(ctx);
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    held.pending[0]({ ok: false, error: 'disk full' });
+    await flush();
+    held.release();
+
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
   } finally { ctx.destroy(); }
 });

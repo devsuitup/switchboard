@@ -105,7 +105,7 @@ The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, whi
 
 Everything below is presentation; none of it carries the rule.
 
-- **Re-reads.** Every `file-changed` event re-reads the file.
+- **Re-reads.** Every `file-changed` event re-reads the file, through `rereadFromDisk` — queued like any other re-read while the document is not in the editor yet (see "A document not yet in the editor").
 
   | On disk | Result |
   |---|---|
@@ -163,12 +163,19 @@ The bar (`#file-panel-held`) has `role="status"`, so a screen reader announces i
 
 It is shown with `open(…, restore)` and re-read at once, like any return to the viewer: a write made while it was held — the diff the user just accepted, for instance — raises "changed on disk", and `_agreedBase` has not moved, so a save against that write is refused by main and asks. The bar is not shown over a diff: leaving an unanswered diff would leave the CLI waiting on it.
 
+### A document not yet in the editor
+
+`open()` puts its document in the editor only once the CodeMirror bundle has loaded. Until then the panel holds it as `_pendingContent`, and that is the buffer: `_isDirty` and `snapshot()` read it, so a restored tab replaced again before its editor exists is held with its edits, whichever route replaces it.
+
+- A re-read asked for while the load is in flight (`rereadFromDisk`, from a same-file open or from the file watch) is queued (`_rereadQueued`) and runs once the document is in the editor. A new `open()` clears the queue. Reopening instead would call `open()` again, which clears the notice: a save failure just applied from a held tab's record would vanish.
+- If the bundle fails to load, the open is no longer in flight but the document is still not in the editor. The next re-read opens the panel again from its own snapshot (buffer, bases, token), and the load is retried: `loadCodeMirrorBundle` forgets a failed load.
+
 ### Per route
 
 | Route | Over a dirty file tab | Over a clean file tab |
 |---|---|---|
 | `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly |
-| `openFile` / path link, same file, tab shown, its `open()` not yet applied (the CodeMirror bundle loading, or a restore still pending) | the re-read is queued (`_rereadQueued`) and runs once `open()` has put its document in the editor, so a restored snapshot is re-read, never replaced; a new `open()` clears the queue | the same |
+| `openFile` / path link, same file, tab shown, its `open()` not yet applied (the CodeMirror bundle loading, or a restore still pending) | the re-read is queued; see "A document not yet in the editor" | the same |
 | `openFile` / path link, same file, tab away | kept with its snapshot and token, restored and re-read on return | the same |
 | `openFile` / path link, another file | tab held, the new file shown, the bar names the held one | replaced |
 | `openDiff` | tab held, restored when the session closes the diff | replaced; closing the diff closes the panel |

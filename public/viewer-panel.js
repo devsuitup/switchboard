@@ -75,6 +75,7 @@ class ViewerPanel {
     this._noticeSeq = 0;
     this._detachedSaves = new WeakMap();
     this._token = null;
+    this._pendingContent = null;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -115,7 +116,7 @@ class ViewerPanel {
     // Listen for file changes from main process
     this._onFileChanged = (changedPath) => {
       if (changedPath === this._watchedPath) {
-        this._reloadFromDisk();
+        this.rereadFromDisk();
       }
     };
     if (window.api.onFileChanged) {
@@ -185,9 +186,18 @@ class ViewerPanel {
   }
 
   _isDirty(seenDisk = this._lastSeenDisk) {
-    if (!this.editorView || this._agreedBase === null) return false;
-    const buffer = this.getContent();
+    if (!this._hasDocument() || this._agreedBase === null) return false;
+    const buffer = this._buffer();
     return buffer !== this._agreedBase && buffer !== seenDisk;
+  }
+
+  // see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+  _hasDocument() {
+    return this._pendingContent !== null || !!this.editorView;
+  }
+
+  _buffer() {
+    return this._pendingContent !== null ? this._pendingContent : this.getContent();
   }
 
   _wireEvents() {
@@ -308,6 +318,7 @@ class ViewerPanel {
     }
 
     this.filePath = filePath;
+    this._title = title;
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
 
@@ -343,6 +354,7 @@ class ViewerPanel {
     const pending = { content, filePath, isMd };
     this._openPending = true;
     this._rereadQueued = false;
+    this._pendingContent = asEditorText(content);
 
     // Defer all CodeMirror work until the bundle is available.
     loadCodeMirrorBundle().then(() => {
@@ -377,9 +389,11 @@ class ViewerPanel {
         this._setPreview(true);
       }
       this._openPending = false;
+      this._pendingContent = null;
       if (restore || this._rereadQueued) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
+      this._openPending = false;
     });
   }
 
@@ -614,13 +628,18 @@ class ViewerPanel {
       this._rereadQueued = true;
       return;
     }
+    if (this._pendingContent !== null) {
+      const state = this.snapshot();
+      this.open(this._title, this.filePath, state.content, state);
+      return;
+    }
     this._reloadFromDisk();
   }
 
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
   snapshot() {
-    if (!this.editorView || !this.filePath) return null;
-    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
+    if (!this._hasDocument() || !this.filePath) return null;
+    return { filePath: this.filePath, content: this._buffer(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
   }
 
   _replaceContent(newContent) {
