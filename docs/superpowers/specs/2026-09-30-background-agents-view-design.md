@@ -138,9 +138,10 @@ IPC, and two callbacks from `app.js`: open a terminal tab, open the JSONL
 viewer. Renders with `morphdom` from an in-memory model so a roster update
 keeps the selection and the scroll.
 
-Container `#agents-viewer` inside `#terminal-area`, a sibling of
-`#grid-viewer`, shown and hidden the way the grid is (hide the active
-terminal, refit on return). Toggle button in the sidebar filter row next to
+Container `#agents-viewer`, a sibling of `#jsonl-viewer` outside
+`#terminal-area`, shown the way the Stats tab shows its viewer (hide
+`#terminal-area`, which keeps the grid's state intact) and hidden by
+restoring whichever of grid, active session or placeholder was there. Toggle button in the sidebar filter row next to
 the grid button; shortcut `agentsToggle` (default Ctrl+Shift+A, Cmd on macOS)
 registered in `shortcuts.js` and listed in `docs/keyboard-shortcuts.md`. Open
 state persists in `localStorage.agentsViewActive`. Closing the view does not
@@ -167,17 +168,14 @@ Layout: a master list and a detail pane.
 - List row: state glyph reusing the rungs of `session-state.js` (busy
   spinner, waiting orange, idle green, done/stopped grey, external
   interactive as a hollow circle), name, `--agent`, `state·status`,
-  abbreviated project path, age, a `⋯` menu. Sort: `working` first, then
+  abbreviated project path, age. Sort: `working` first, then
   `startedAt` descending. The "Finished" filter (on by default) shows or
   hides `done`/`stopped`; persisted in `localStorage.agentsShowFinished`.
 - Detail pane for the selected row: `detail`, tokens, model, start time,
   pid, `fan[]` with duration and state, `children[]` as clickable links
   (`shell.openExternal`, already exposed), `output.result`. For an external
   interactive session: name, cwd, status, and only the Transcript action.
-- `⋯` menu and detail buttons: Attach, Transcript, Stop, Respawn, Delete,
-  disabled by state (Stop only when `working`; Delete never when `working`;
-  Respawn and Attach never on an interactive session). A verb in flight greys
-  the row; its error shows in the detail pane, never in a modal.
+- A row click selects it; the detail pane carries the verbs.
 - "New agent" opens the dispatch dialog.
 - Banner under the header when `daemonReachable` is false: "The daemon is
   not answering; state comes from files only." Verbs other than Transcript
@@ -206,7 +204,9 @@ daemon worker's descriptor with no change. No `--resume`, no fork, ever.
   like any pty.
 
 **Stop, Respawn, Delete.** `execFile('claude', [verb, id])` in the session's
-cwd, 15 s timeout, no shell. Each returns `{ok, error}` (stderr verbatim)
+cwd, 15 s timeout, through the user's login shell with an argv quoted by
+`quoteArgvForShell`, the scheduler's existing path in `main.js`; never a
+command string built by hand. Each returns `{ok, error}` (stderr verbatim)
 and triggers a reconciliation. Delete asks for confirmation with the CLI's
 own wording: the conversation and its worktree go, when that is safe. Stop
 or Delete on a session attached here detaches first.
@@ -223,7 +223,9 @@ same pieces as the New Session dialog:
 | Permission mode / Dangerous Skip (as in New Session) | `--permission-mode <m>` or `--dangerously-skip-permissions` |
 | Additional directories | one `--add-dir` per entry, through the existing `parseAddDirs` |
 
-Command: `claude --bg [options] <prompt>` via `execFile`, never a shell. The
+Command: `claude --bg [options] <prompt>` via `execFile`, through the user's
+login shell with an argv quoted by `quoteArgvForShell`, the scheduler's
+existing path in `main.js`; never a command string built by hand. The
 printed id is parsed; on success the roster is reconciled and the new row
 selected. If the id does not parse, the result is `{ok: true, id: null}`;
 the row appears through the files.
@@ -257,8 +259,10 @@ badge and no cost, and the guard's protection does not depend on it.
 
 1. Never `--resume` or `--fork-session` a session whose job is `working`.
    `claude attach` is the only path to a live job.
-2. Every write to the daemon goes through the CLI with `execFile` and no
-   shell. The control socket and `control.key` are never touched.
+2. Every write to the daemon goes through the CLI through the user's login
+   shell with an argv quoted by `quoteArgvForShell`, the scheduler's existing
+   path in `main.js`; never a command string built by hand. The control socket
+   and `control.key` are never touched.
 3. Closing an attach tab detaches; it never kills the session. `claude stop`
    is the only stop.
 4. No steady-state cost before the view is first opened (ADR 0002).
