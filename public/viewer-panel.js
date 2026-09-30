@@ -292,6 +292,8 @@ class ViewerPanel {
   open(title, filePath, content) {
     this._unwatchFile();
     this._diskContent = asEditorText(content);
+    this._pendingSave = null;
+    this._saveQueued = false;
     this._setNotice(null);
 
     this.filePath = filePath;
@@ -455,10 +457,12 @@ class ViewerPanel {
     } catch (err) {
       if (this._openGen === myGen) this._setNotice('save-failed', (err && err.message) || 'unknown error');
     } finally {
-      this._pendingSave = null;
-      const queued = this._saveQueued;
-      this._saveQueued = false;
-      if (queued && saved && this._openGen === myGen) this._save();
+      if (this._openGen === myGen) {
+        this._pendingSave = null;
+        const queued = this._saveQueued;
+        this._saveQueued = false;
+        if (queued && saved && this._diskGen === diskGen) this._save();
+      }
     }
   }
 
@@ -469,6 +473,8 @@ class ViewerPanel {
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
     this._unwatchFile();
+    this._pendingSave = null;
+    this._saveQueued = false;
     if (this.editorView) {
       this.editorView.destroy();
       this.editorView = null;

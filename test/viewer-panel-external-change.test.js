@@ -455,3 +455,111 @@ test('an external write read back while our save is in flight is not hidden by t
     assert.equal(t.panel._isDirty(), true, 'the baseline is the later write, not our save');
   } finally { t.destroy(); }
 });
+
+function pendingSaves(t) {
+  const finishers = [];
+  t.state.saveImpl = (fp, content) => new Promise((resolve) => {
+    finishers.push((result = { ok: true }) => { if (result.ok) t.state.disk = content; resolve(result); });
+  });
+  return finishers;
+}
+
+test('a queued save is dropped when the session wrote the file during the first save', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = pendingSaves(t);
+    const first = t.panel._save();
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    await t.externalWrite('session\n');
+    assert.match(noticeText(t), /changed on disk/);
+    finish[0]();
+    await first;
+    await tick();
+    assert.equal(t.state.saves.length, 1, 'the queued save must not overwrite the reported write');
+    assert.match(noticeText(t), /changed on disk/, 'the notice stays');
+  } finally { t.destroy(); }
+});
+
+test('a queued save is dropped when the first save fails', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = pendingSaves(t);
+    const first = t.panel._save();
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    finish[0]({ ok: false, error: 'disk full' });
+    await first;
+    await tick();
+    assert.equal(t.state.saves.length, 1);
+    assert.equal(noticeText(t), 'Save failed: disk full');
+  } finally { t.destroy(); }
+});
+
+test('a save on a file opened while the previous file was saving goes out on its own', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = pendingSaves(t);
+    const first = t.panel._save();
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    await t.open('other\n', other);
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    assert.equal(t.state.saves.length, 2, 'the save of the new file is not queued behind the old one');
+    assert.equal(t.state.saves[1].filePath, other);
+    assert.equal(t.state.saves[1].content, 'other\nB');
+    finish[0]();
+    await first;
+    await tick();
+    assert.equal(t.state.saves.length, 2);
+  } finally { t.destroy(); }
+});
+
+test("the previous file's save resolving does not release the new file's in-flight save", async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = pendingSaves(t);
+    const first = t.panel._save();
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    await t.open('other\n', other);
+    t.editor().type('B');
+    t.panel._save();
+    t.editor().type('C');
+    t.panel._save();
+    await tick();
+    assert.equal(t.state.saves.length, 2, 'the second save of the new file waits');
+    finish[0]();
+    await first;
+    await tick();
+    assert.equal(t.state.saves.length, 2, 'still waiting for its own first save, not for the old file');
+    finish[1]();
+    await tick();
+    await tick();
+    assert.equal(t.state.saves.length, 3);
+    assert.equal(t.state.saves[2].content, 'other\nBC');
+  } finally { t.destroy(); }
+});
+
+test('a panel destroyed before its watch is acknowledged gives the watch back', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    let ack;
+    t.state.watchImpl = () => new Promise((resolve) => { ack = () => resolve({ ok: true }); });
+    t.panel.open('note', FILE, 'one\n');
+    t.panel.destroy();
+    ack();
+    await tick();
+    assert.deepEqual(t.state.unwatchCalls, [FILE]);
+  } finally { t.destroy(); }
+});

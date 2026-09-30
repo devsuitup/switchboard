@@ -287,6 +287,16 @@ async function handleDiffSave() {
   const state = currentPanelSessionId ? getSessionState(currentPanelSessionId) : null;
   const tab = state?.currentTab;
   if (!tab || tab.type !== 'diff' || !tab.editorView || !tab.filePath) return;
+  await saveDiffTab(state, tab);
+}
+
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+async function saveDiffTab(state, tab) {
+  if (state.currentTab !== tab || tab.resolved || !tab.editorView) return;
+  if (tab.saving) {
+    tab.saveQueued = true;
+    return;
+  }
 
   let content;
   if (tab._diffMode === 'inline') {
@@ -296,18 +306,29 @@ async function handleDiffSave() {
   }
   if (content == null) return;
 
-  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
-  let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
-  if (result && result.reason === 'stale' && typeof window.confirm === 'function'
-    && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
-    result = await window.api.saveFileForPanel(tab.filePath, content, null);
-  }
-  if (result && result.ok) {
-    tab.diskBaseline = content.replace(/\r\n?/g, '\n');
-    const btn = diffToolbarEl.querySelector('.fp-save-btn');
-    if (btn) flashButtonText(btn, 'Saved!');
-  } else if (result && result.reason !== 'stale' && typeof window.alert === 'function') {
-    window.alert(`Save failed: ${result.error || 'unknown error'}`);
+  tab.saving = true;
+  let saved = false;
+  try {
+    let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
+    if (result && result.reason === 'stale' && typeof window.confirm === 'function'
+      && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
+      result = await window.api.saveFileForPanel(tab.filePath, content, null);
+    }
+    if (result && result.ok) {
+      saved = true;
+      tab.diskBaseline = content.replace(/\r\n?/g, '\n');
+      const btn = diffToolbarEl.querySelector('.fp-save-btn');
+      if (btn) flashButtonText(btn, 'Saved!');
+    } else if (result && result.reason !== 'stale' && typeof window.alert === 'function') {
+      window.alert(`Save failed: ${result.error || 'unknown error'}`);
+    }
+  } catch (err) {
+    if (typeof window.alert === 'function') window.alert(`Save failed: ${(err && err.message) || 'unknown error'}`);
+  } finally {
+    tab.saving = false;
+    const queued = tab.saveQueued;
+    tab.saveQueued = false;
+    if (queued && saved) saveDiffTab(state, tab);
   }
 }
 

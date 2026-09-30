@@ -116,3 +116,55 @@ test('any other refusal is reported', async () => {
     assert.deepEqual(ctx.calls.alerts, ['Save failed: File does not exist']);
   } finally { ctx.destroy(); }
 });
+
+test('a declined overwrite is not followed by a "Save failed" alert', async () => {
+  const ctx = setup({ saveImpl: () => ({ ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' }), confirmAnswer: false });
+  try {
+    await openDiffAndSave(ctx);
+    assert.equal(ctx.calls.confirms.length, 1);
+    assert.deepEqual(ctx.calls.alerts, []);
+  } finally { ctx.destroy(); }
+});
+
+test('two quick Save clicks do not raise a false "changed on disk" confirm', async () => {
+  const finishers = [];
+  const ctx = setup({ saveImpl: (expected) => new Promise((resolve) => {
+    finishers.push(() => resolve(expected === 'old\n' || expected === 'proposed\n' ? { ok: true } : { ok: false, reason: 'stale', error: 'stale' }));
+  }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1, 'the second click waits for the first');
+    finishers[0]();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 2);
+    assert.equal(ctx.calls.saves[1].expected, 'proposed\n', 'checked against what the first save wrote');
+    finishers[1]();
+    await flush();
+    assert.deepEqual(ctx.calls.confirms, []);
+    assert.deepEqual(ctx.calls.alerts, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a queued click is dropped when the first save fails', async () => {
+  const finishers = [];
+  const ctx = setup({ saveImpl: () => new Promise((resolve) => { finishers.push(resolve); }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    finishers[0]({ ok: false, error: 'disk full' });
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1);
+    assert.deepEqual(ctx.calls.alerts, ['Save failed: disk full']);
+  } finally { ctx.destroy(); }
+});
