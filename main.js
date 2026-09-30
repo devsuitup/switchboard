@@ -92,6 +92,7 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
+const { watchFileForViewer } = require('./viewer-file-watch');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
 const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
@@ -967,7 +968,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     if (buf.includes(0)) return { ok: false, error: 'binary file' };
     return { ok: true, content: buf.toString('utf8') };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, code: err.code };
   }
 });
 
@@ -1004,15 +1005,12 @@ ipcMain.handle('watch-file', (_event, filePath) => {
   if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
-    let debounce = null;
-    const watcher = fs.watch(resolved, (eventType) => {
-      if (eventType !== 'change') return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
+    const watcher = watchFileForViewer(resolved, {
+      send: () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('file-changed', resolved);
         }
-      }, 300);
+      },
     });
     fileWatchers.set(resolved, watcher);
     return { ok: true };

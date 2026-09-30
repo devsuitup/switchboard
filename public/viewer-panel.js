@@ -3,7 +3,7 @@
  *
  * A single component used by memory viewer, work files viewer, and file panel.
  * Manages toolbar, editor, preview area, and all interactions.
- * Watches files for external changes and reloads automatically.
+ * Watches files for external changes: reloads a clean buffer, and asks before replacing a dirty one.
  *
  * Toolbar buttons are shown/hidden automatically based on file type:
  *   - Preview: shown for markdown files
@@ -41,6 +41,11 @@ function loadCodeMirrorBundle() {
 
 window.loadCodeMirrorBundle = loadCodeMirrorBundle;
 
+// see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
+function asEditorText(text) {
+  return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
+}
+
 class ViewerPanel {
   /**
    * @param {HTMLElement} container - Parent element to render into
@@ -63,6 +68,8 @@ class ViewerPanel {
     this.wrapMode = false;
     this._watchedPath = null;
     this._saving = false;
+    this._diskContent = null;
+    this._noticeState = null;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -80,6 +87,8 @@ class ViewerPanel {
 
     // Hide preview initially (shown in open() if markdown)
     if (this.toolbar.previewBtn) this.toolbar.previewBtn.style.display = 'none';
+
+    this._buildNotice();
 
     // Create editor area
     this.editorEl = document.createElement('div');
@@ -107,6 +116,59 @@ class ViewerPanel {
     if (window.api.onFileChanged) {
       window.api.onFileChanged(this._onFileChanged);
     }
+  }
+
+  // see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
+  _buildNotice() {
+    this.noticeEl = document.createElement('div');
+    this.noticeEl.className = 'viewer-panel-notice';
+    this.noticeEl.style.display = 'none';
+
+    this.noticeTextEl = document.createElement('span');
+    this.noticeTextEl.className = 'viewer-panel-notice-text';
+    this.noticeEl.appendChild(this.noticeTextEl);
+
+    this.noticeReloadBtn = document.createElement('button');
+    this.noticeReloadBtn.className = 'fp-toolbar-btn viewer-panel-notice-reload';
+    this.noticeReloadBtn.textContent = 'Reload';
+    this.noticeReloadBtn.title = 'Re-read this file from disk, discarding your unsaved edits';
+    this.noticeReloadBtn.addEventListener('click', () => this._reloadDiscardingEdits());
+    this.noticeEl.appendChild(this.noticeReloadBtn);
+
+    this.noticeKeepBtn = document.createElement('button');
+    this.noticeKeepBtn.className = 'fp-toolbar-btn viewer-panel-notice-keep';
+    this.noticeKeepBtn.textContent = 'Keep my edits';
+    this.noticeKeepBtn.title = 'Keep your edits in the editor; saving writes them over the file';
+    this.noticeKeepBtn.addEventListener('click', () => this._setNotice(null));
+    this.noticeEl.appendChild(this.noticeKeepBtn);
+
+    this.container.insertBefore(this.noticeEl, this.toolbar.el.nextSibling);
+  }
+
+  _setNotice(state, detail) {
+    this._noticeState = state;
+    let text = '';
+    if (state === 'changed') {
+      text = 'This file changed on disk since you opened it. Reload to discard your unsaved edits, or keep them and save over the file.';
+    } else if (state === 'gone') {
+      text = this._isDirty()
+        ? 'This file no longer exists on disk. Your unsaved edits are kept in the editor.'
+        : 'This file no longer exists on disk.';
+    } else if (state === 'unreadable') {
+      text = `This file can no longer be read: ${detail}`;
+    } else if (state === 'save-failed') {
+      text = `Save failed: ${detail}`;
+    }
+    this.noticeTextEl.textContent = text;
+    this.noticeEl.style.display = state ? '' : 'none';
+    this.noticeEl.classList.toggle('changes-error', !!state);
+    this.noticeReloadBtn.style.display = state === 'changed' ? '' : 'none';
+    this.noticeKeepBtn.style.display = state === 'changed' ? '' : 'none';
+  }
+
+  _isDirty() {
+    if (!this.editorView || this._diskContent === null) return false;
+    return this.getContent() !== this._diskContent;
   }
 
   _wireEvents() {
@@ -213,6 +275,8 @@ class ViewerPanel {
    */
   open(title, filePath, content) {
     this._unwatchFile();
+    this._diskContent = asEditorText(content);
+    this._setNotice(null);
 
     this.filePath = filePath;
     this.toolbar.setTitle(title);
@@ -351,7 +415,11 @@ class ViewerPanel {
     try {
       const result = await this.opts.onSave(this.filePath, content);
       if (result && result.ok !== false) {
+        this._diskContent = asEditorText(content);
+        this._setNotice(null);
         this.toolbar.flashSave();
+      } else if (result) {
+        this._setNotice('save-failed', result.error || 'unknown error');
       }
     } finally {
       setTimeout(() => { this._saving = false; }, 500);
@@ -392,21 +460,63 @@ class ViewerPanel {
     }
   }
 
+  // see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
   async _reloadFromDisk() {
-    if (!this.filePath || !window.api.readFileForPanel) return;
+    if (!this.filePath || !window.api.readFileForPanel || !this.editorView) return;
+    const myGen = this._openGen;
     const result = await window.api.readFileForPanel(this.filePath);
-    if (!result.ok) return;
+    if (this._openGen !== myGen || !this.editorView || !result) return;
 
-    const newContent = result.content;
-    const currentContent = this.getContent();
-    if (newContent === currentContent) return;
+    if (!result.ok) {
+      if (result.code === 'ENOENT') this._setNotice('gone');
+      else this._setNotice('unreadable', result.error || 'unknown error');
+      return;
+    }
 
-    if (this.editorView) {
+    const newContent = asEditorText(result.content);
+    const wasDirty = this._isDirty();
+    const diskMoved = newContent !== this._diskContent;
+    this._diskContent = newContent;
+
+    if (newContent === this.getContent()) {
+      this._setNotice(null);
+      return;
+    }
+    if (!diskMoved) {
+      if (this._noticeState === 'gone' || this._noticeState === 'unreadable') this._setNotice(null);
+      return;
+    }
+    if (wasDirty) {
+      this._setNotice('changed');
+      return;
+    }
+    this._replaceContent(newContent);
+    this._setNotice(null);
+  }
+
+  async _reloadDiscardingEdits() {
+    if (this._isDirty() && typeof window.confirm === 'function'
+      && !window.confirm('This file has unsaved edits. Discard them?')) return;
+    if (!this.filePath || !window.api.readFileForPanel) return;
+    const myGen = this._openGen;
+    const result = await window.api.readFileForPanel(this.filePath);
+    if (this._openGen !== myGen || !this.editorView || !result) return;
+    if (!result.ok) {
+      if (result.code === 'ENOENT') this._setNotice('gone');
+      else this._setNotice('unreadable', result.error || 'unknown error');
+      return;
+    }
+    this._diskContent = asEditorText(result.content);
+    this._replaceContent(this._diskContent);
+    this._setNotice(null);
+  }
+
+  _replaceContent(newContent) {
+    if (newContent !== this.getContent()) {
       this.editorView.dispatch({
         changes: { from: 0, to: this.editorView.state.doc.length, insert: newContent },
       });
     }
-
     if (this.previewMode) {
       this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
     }
