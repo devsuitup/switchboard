@@ -4495,11 +4495,11 @@ body { display: flex; flex-direction: column; }
 #file-panel-body .cm-deletedChunk .cm-deletedText,
 #changes-diff-host .cm-merge-a .cm-changedText,
 #changes-diff-host .cm-deletedChunk .cm-deletedText {
-  background: rgba(224,80,112,0.12) !important;
+  background: rgba(224,80,112,0.35) !important;
 }
 #file-panel-body .cm-merge-b .cm-changedText,
 #changes-diff-host .cm-merge-b .cm-changedText {
-  background: rgba(62,207,90,0.12) !important;
+  background: rgba(62,207,90,0.3) !important;
 }
 #file-panel-body .cm-deletedChunk,
 #changes-diff-host .cm-deletedChunk {
@@ -4673,7 +4673,8 @@ body { display: flex; flex-direction: column; }
 
 .changes-state-a { color: #3ecf5a; }
 .changes-state-m { color: #e0a030; }
-.changes-state-d { color: #e05070; }
+.changes-state-d,
+.changes-state-u { color: #e05070; }
 .changes-state-r,
 .changes-state-c { color: var(--accent); }
 .changes-state-\? { color: var(--text-muted); }

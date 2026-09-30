@@ -68,7 +68,7 @@ function parseStatusPorcelainV2(text) {
     if (raw.startsWith('u ')) {
       const m = UNMERGED_RE.exec(raw);
       if (!m) continue;
-      files.push(makeOrdinaryFile(m.groups.path, m.groups.xy, false, null));
+      files.push({ ...makeOrdinaryFile(m.groups.path, m.groups.xy, false, null), state: 'U' });
       continue;
     }
     if (raw.startsWith('? ')) {

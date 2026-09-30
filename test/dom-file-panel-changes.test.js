@@ -190,12 +190,20 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     },
     setActivity: read('setActivity'),
     clampListHeight: read('clampChangesListHeight'),
+    icons: read('FP_ICONS'),
     stashOf: (sessionId) => {
       const state = read('filePanelState').get(sessionId);
       return state ? state.changesStash : undefined;
     },
     destroy: () => window.close(),
   };
+}
+
+// An icon as the DOM serialises it, so it compares with a button's innerHTML.
+function iconHtml(ctx, name) {
+  const holder = ctx.document.createElement('span');
+  holder.innerHTML = ctx.icons[name];
+  return holder.innerHTML;
 }
 
 function flush() {
@@ -882,9 +890,11 @@ test('the mode toggle cycles side-by-side → inline → plain, persists under i
     assert.equal(modeBtn.dataset.mode, 'inline');
     assert.equal(modeBtn.textContent, '', 'an icon, not a word');
     assert.match(modeBtn.title, /^Inline diff — click for plain editor/);
+    assert.equal(modeBtn.innerHTML, iconHtml(ctx, 'inline'), 'the icon is the current mode');
 
     modeBtn.click();
     await flush();
+    assert.equal(modeBtn.innerHTML, iconHtml(ctx, 'plain'), 'the icon follows the mode, not the next one');
     assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'plain');
     assert.equal(ctx.window.localStorage.getItem('filePanelDiffMode'), null, 'the MCP diff tab keeps its own key');
     assert.equal(ctx.editors[1].box.mode, 'plain');
@@ -893,10 +903,12 @@ test('the mode toggle cycles side-by-side → inline → plain, persists under i
     modeBtn.click();
     await flush();
     assert.equal(ctx.editors[2].box.mode, 'side-by-side');
+    assert.equal(modeBtn.innerHTML, iconHtml(ctx, 'side-by-side'));
 
     modeBtn.click();
     await flush();
     assert.equal(ctx.editors[3].box.mode, 'inline');
+    assert.equal(modeBtn.innerHTML, iconHtml(ctx, 'inline'));
     assert.equal(ctx.window.localStorage.getItem('changesDiffMode'), 'inline');
   } finally { ctx.destroy(); }
 });
@@ -1923,9 +1935,11 @@ test('the MCP diff tab\'s mode toggle is an icon button that names the current m
     assert.equal(btn.textContent.trim(), '');
     assert.equal(btn.dataset.mode, 'side-by-side');
     assert.equal(btn.title, 'Side-by-side diff — click for inline diff');
+    assert.equal(btn.innerHTML, iconHtml(ctx, 'side-by-side'));
     btn.click();
     await flush();
     assert.equal(btn.dataset.mode, 'inline');
+    assert.equal(btn.innerHTML, iconHtml(ctx, 'inline'));
     assert.equal(btn.title, 'Inline diff — click for side-by-side diff');
     assert.equal(ctx.window.localStorage.getItem('filePanelDiffMode'), 'inline');
   } finally { ctx.destroy(); }
@@ -1937,9 +1951,22 @@ test('a row\'s state is a badge whose tooltip names the state', async () => {
     ctx.window.switchPanel('s1');
     ctx.window.openChangesTab('s1');
     await flush();
-    const badges = [...ctx.document.querySelectorAll('.changes-file-row .changes-file-state')];
-    assert.ok(badges.length > 0);
-    for (const badge of badges) assert.ok(badge.title && badge.title !== badge.textContent, `${badge.textContent}: a word for the letter`);
+    const titles = Object.fromEntries([...ctx.document.querySelectorAll('.changes-file-row')]
+      .map((row) => [row.dataset.path, row.querySelector('.changes-file-state').title]));
+    assert.deepEqual(titles, { 'src/a.js': 'Modified', 'new.txt': 'Untracked' });
+  } finally { ctx.destroy(); }
+});
+
+test('an unmerged row is named Unmerged, not Added or Deleted', async () => {
+  const conflicted = { path: 'c.js', origPath: null, staged: true, unstaged: true, untracked: false, renamed: false, state: 'U', added: null, deleted: null };
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ files: [conflicted], totals: { files: 1, added: 0, deleted: 0 } }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+    const badge = ctx.document.querySelector('.changes-file-row[data-path="c.js"] .changes-file-state');
+    assert.equal(badge.textContent, 'U');
+    assert.equal(badge.title, 'Unmerged');
   } finally { ctx.destroy(); }
 });
 
