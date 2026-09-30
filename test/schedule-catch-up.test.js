@@ -13,7 +13,7 @@ const EventEmitter = require('events');
 const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-catch-up-')));
 process.env.HOME = ROOT;
 process.env.USERPROFILE = ROOT;
-process.env.SWITCHBOARD_DATA_DIR = path.join(ROOT, 'data');
+delete process.env.SWITCHBOARD_DATA_DIR;
 
 const { startScheduler, claimScheduleMinute, scanSchedules } = require('../schedule-runner');
 
@@ -405,3 +405,33 @@ for (const [line, expected] of [
     assert.equal(schedule.catchUp, expected);
   });
 }
+
+test('catch-up: an instance with SWITCHBOARD_DATA_DIR set does not catch up, and says so once', (t) => {
+  const r = rig({ cron: '0 20 * * *' });
+  fakeClock(t, at(5, 12, 0, 30));
+  r.start()();
+
+  process.env.SWITCHBOARD_DATA_DIR = path.join(ROOT, 'isolated');
+  t.after(() => { delete process.env.SWITCHBOARD_DATA_DIR; });
+  t.mock.timers.setTime(at(8, 9, 0, 30));
+  const stop = r.start();
+  t.mock.timers.tick(5 * 60_000);
+  stop();
+
+  assert.equal(r.runs.length, 0, 'the runs missed since Jan 5 are not caught up');
+  assert.equal(r.lines.filter((l) => l.includes('catch-up is off')).length, 1);
+});
+
+test('catch-up: an instance with SWITCHBOARD_DATA_DIR set runs an opted-in schedule on cron, without a record', (t) => {
+  const r = rig({ cron: '0 20 * * *' });
+  process.env.SWITCHBOARD_DATA_DIR = path.join(ROOT, 'isolated');
+  t.after(() => { delete process.env.SWITCHBOARD_DATA_DIR; });
+  fakeClock(t, at(5, 19, 59, 30));
+  const stop = r.start();
+  t.mock.timers.tick(60_000);
+  stop();
+
+  assert.equal(r.runs.length, 1);
+  assert.equal(fs.existsSync(STATE_DIR), false);
+  assert.ok(!r.lines.some((l) => l.includes('Cannot read')), 'no warning on each tick');
+});

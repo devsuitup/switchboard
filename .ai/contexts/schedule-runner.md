@@ -13,7 +13,7 @@
 
 From `schedule-runner.js`:
 
-- `startScheduler(log, runCommand, { resumeSource, stateDir })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, and `stateDir: <dirname(DB_PATH)>/schedule-state`. Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron.
+- `startScheduler(log, runCommand, { resumeSource, stateDir })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, and `stateDir: <dirname(DB_PATH)>/schedule-state`. Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron. With `SWITCHBOARD_DATA_DIR` set, catch-up is off altogether (see [Catch-up](#catch-up), "Isolated instances").
 - `claimScheduleMinute(stateDir, key, minuteMs, info)` — exclusive-create one record file; `false` when it already exists. Exported for tests.
 - `scanSchedules(log)` — scan all known projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`.
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns the session UUID.
@@ -86,7 +86,7 @@ cli:
 A schedule with `catch-up: true` runs once, late, when at least one
 minute its cron matched went by with no check looking at it.
 
-**The record.** `<data dir>/schedule-state/<key>-<minuteMs>.json`, where
+**The record.** `~/.switchboard/schedule-state/<key>-<minuteMs>.json` (the `stateDir` option), where
 `<key>` is the first 16 hex characters of the SHA-256 of the listed
 `filePath` (the path in `.claude/commands/`, not a symlink's target) and
 `<minuteMs>` is the epoch of the latest minute *handled*: run, skipped as still
@@ -110,14 +110,25 @@ empty window. The record is created with `writeFileSync(..., { flag: 'wx' })`:
 a second claim of the same minute gets `EEXIST`, logs `already triggered for
 that minute` and skips.
 
-**Per instance, on purpose.** The directory is derived from `DB_PATH`, so it
-follows `SWITCHBOARD_DATA_DIR`. A shared record would let a `task dev` or
-`task test-pr` instance scanning the same `~/.claude/projects` win the claim of
-an on-time minute or a startup catch-up, and run the task with its own isolated
-settings (sandbox, shell profile) while the installed app skipped it: a run with
-the wrong settings, or no run when `claude` is only on the right profile's PATH.
-Per instance, a test instance duplicates a run, as it already does for a
-schedule without `catch-up` (`docs/testing-a-pr.md`), and never takes one away.
+**Isolated instances.** `startScheduler` turns catch-up off when `process.env.SWITCHBOARD_DATA_DIR` is
+set, whatever its value, and logs `catch-up is off` once. `main.js` sets that
+variable to `~/.switchboard-dev` for any unpackaged run, so `task dev`,
+`task test-pr` and `npm start` all run with catch-up off; only the installed
+app (no variable) catches up. With it off, no record is read or written and an
+opted-in schedule is matched on ticks like any other, exactly as without the
+key.
+
+Both alternatives lose. A record shared across instances lets a test instance
+scanning the same `~/.claude/projects` win the claim of an on-time minute or a
+startup catch-up and run the task with its own isolated settings (sandbox,
+shell profile) while the installed app skips it: a run with the wrong settings,
+or no run when `claude` is only on the right profile's PATH. A record per
+instance makes every relaunch of a test instance catch up, once per opted-in
+schedule, runs the installed app has already made, possibly days of them.
+
+The record directory is passed from `main.js` as
+`<dirname(DB_PATH)>/schedule-state`, which for the installed app is
+`~/.switchboard/schedule-state`.
 
 **First sight.** No file for the key → write the baseline at the minute before
 the current one, and carry on: nothing missed is caught up, but a file first

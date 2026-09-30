@@ -328,6 +328,9 @@ function buildScheduleCommand(sessionId, schedule) {
 function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   let running = true;
   const runningTasks = new Set();
+  // see .ai/contexts/schedule-runner.md ("Isolated instances")
+  const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
+  if (!catchUpOn) log.info('[schedule] catch-up is off: SWITCHBOARD_DATA_DIR isolates this instance, schedules run on cron only');
 
   function launch(schedule, dueMs) {
     const taskKey = `${schedule.folder}:${schedule.slug}`;
@@ -384,7 +387,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
     const now = new Date();
     const schedules = scanSchedules(log);
     let state = null;
-    if (schedules.some(s => s.catchUp)) {
+    if (catchUpOn && schedules.some(s => s.catchUp)) {
       try {
         state = readScheduleState(stateDir);
       } catch (err) {

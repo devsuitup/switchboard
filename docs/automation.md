@@ -118,12 +118,15 @@ one run.
   in UTC (ISO 8601). A run in its own minute is logged as `Triggering:` as usual.
 - While the previous run is still going, a catch-up is skipped like a tick, and
   that minute counts as handled: it does not run when the previous run ends.
-- The record lives in `schedule-state/` in the instance's data directory
-  (`~/.switchboard/` for the installed app, `SWITCHBOARD_DATA_DIR` when set),
-  one small file per schedule, never in the schedule file, so a schedule kept
-  under version control does not change when it runs. Each instance keeps its
-  own record: a second instance on the same projects runs the schedule too, as
-  it does a schedule without `catch-up` (see
+- The record lives in `~/.switchboard/schedule-state/`, one small file per
+  schedule, never in the schedule file, so a schedule kept under version control
+  does not change when it runs.
+- Catch-up is off in an instance started with `SWITCHBOARD_DATA_DIR` set,
+  whatever its value: `task dev`, `task test-pr`, and any run from a checkout,
+  which sets it to `~/.switchboard-dev`. Such an instance runs every schedule on
+  its cron minute only, `catch-up: true` included, keeps no record, and logs
+  `catch-up is off` once at startup. It never catches up a run the installed app
+  has already made (see
   [Testing a PR](testing-a-pr.md#3-schedules--check-before-you-launch)).
 - The minute is recorded when the run starts. A run whose `claude` fails to
   start, or that is cut short by Switchboard exiting, is not caught up again.
