@@ -1432,6 +1432,40 @@ test('measureUntrackedLocal: a pass queued behind a long one still gets its turn
   assert.equal(outA.measured.length, 40);
 });
 
+test('measureUntrackedLocal: a worker granted a slot after the last file was taken measures nothing (mutation target: the work check after the grant)', async () => {
+  let release;
+  const hung = new Promise((resolve) => { release = resolve; });
+  const blocker = {
+    realpath: (p) => p,
+    lstat: async () => { await hung; return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const lstats = [];
+  const fsOps = {
+    realpath: (p) => p,
+    lstat: (p) => { lstats.push(p); return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const limits = { ...TEST_LIMITS, concurrency: 2, timeBudgetMs: 60_000 };
+  const before = untrackedCountSlotsInUse();
+  const blocked = measureUntrackedLocal(REPO, ['hold.txt'], blocker, limits);
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    const out = await measureUntrackedLocal(REPO, ['a.txt', 'b.txt'], fsOps, limits);
+    assert.deepEqual(out.measured.map((m) => m.path).sort(), ['a.txt', 'b.txt']);
+    assert.equal(out.results.has(undefined), false, 'no outcome is recorded for a file that does not exist');
+    assert.equal(out.results.size, 0);
+    assert.equal(lstats.length, 2, 'exactly one lstat per file');
+  } finally {
+    release();
+    await blocked;
+  }
+  assert.equal(untrackedCountSlotsInUse(), before);
+  assert.equal(untrackedCountSlotWaiters(), 0);
+});
+
 test('measureUntrackedLocal: queued passes are served in the order they asked (mutation target: a LIFO queue)', async () => {
   let release;
   const hung = new Promise((resolve) => { release = resolve; });

@@ -379,7 +379,10 @@ most two threadpool threads (of libuv's default four) can ever be stuck on
 this pass, never one more per refresh. The pass itself returns after
 `timeBudgetMs` (1 000 ms) whatever is still in flight or still queued; what it
 has not finished is `over-cap`, its queued requests are withdrawn, and a
-straggler that settles later writes nothing.
+straggler that settles later writes nothing. A worker checks for work again
+once granted, since another worker may have taken the last file while it
+queued (`hasWork`); the `open` flag and the deadline in that check describe the
+same end of the pass, so either one alone stops new files.
 
 `test/git-changes-runner-real-git.test.js` checks each status count against
 the count `runner.diff(path, {untracked: true})` reports for the same file
