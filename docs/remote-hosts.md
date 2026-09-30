@@ -39,24 +39,36 @@ attach, the attached terminal, stop, and the Changes view — runs the same
 `ssh`, the first of:
 
 1. `SWITCHBOARD_SSH_PATH`, when it is set;
-2. `/usr/bin/ssh` on macOS and Linux, and on Windows `System32\OpenSSH\ssh.exe`
-   or Git's `usr\bin\ssh.exe`, whichever exists first;
-3. `ssh` from the `PATH` Switchboard was started with.
+2. `ssh` from the `PATH` Switchboard was started with (`ssh.exe` on Windows),
+   so a Homebrew OpenSSH on macOS or Git's ssh on Windows is found first;
+3. `/usr/bin/ssh` on macOS and Linux, and on Windows `System32\OpenSSH\ssh.exe`
+   or Git's `usr\bin\ssh.exe`, whichever exists first.
 
 The pulls copy transcripts with `scp`, the first of:
 
 1. `SWITCHBOARD_SCP_PATH`, when it is set;
-2. the `scp` in the directory of an absolute `SWITCHBOARD_SSH_PATH` (`scp.exe`
-   when that path ends in `.exe`), when that file exists;
-3. `/usr/bin/scp` on macOS and Linux, and on Windows
+2. the `scp` in the directory of `SWITCHBOARD_SSH_PATH` (`scp.exe` when that
+   path ends in `.exe`), when that file exists;
+3. `scp` from the `PATH`;
+4. `/usr/bin/scp` on macOS and Linux, and on Windows
    `System32\OpenSSH\scp.exe` or Git's `usr\bin\scp.exe`, whichever exists
-   first;
-4. `scp` from the `PATH`.
+   first.
 
-A `SWITCHBOARD_SSH_PATH` that names a wrapper with no `scp` beside it leaves
-`scp` to steps 3 and 4; set `SWITCHBOARD_SCP_PATH` when that is not the `scp`
-to run. Both variables are read from the environment Switchboard was started
-with.
+`scp` is always told to connect with the `ssh` chosen above (`scp -S`), so a
+wrapper named by `SWITCHBOARD_SSH_PATH` also carries the copies. A wrapper with
+no `scp` beside it leaves `scp` itself to steps 3 and 4; set
+`SWITCHBOARD_SCP_PATH` when that is not the `scp` to run.
+
+Both variables:
+
+- must be absolute paths; a relative value is ignored, with a warning in the
+  log, and the next step applies;
+- must name an executable, not a script run through a shell: on Windows a
+  `.cmd` or `.bat` file cannot be started (the log says so), so point at an
+  `.exe`;
+- are trimmed, and a blank value counts as unset;
+- are read, and the binaries looked up, once per run of Switchboard: after
+  changing them or installing an ssh, restart it.
 
 ## Requirements on the host
 

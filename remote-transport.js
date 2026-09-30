@@ -241,7 +241,7 @@ function createSshTransport(opts = {}) {
     const tmpPath = destPath + '.part';
     // Deliberately unquoted; isSafeMirrorRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     const remote = `${alias}:${REMOTE_PROJECTS_REL}/${rel}`;
-    const res = await run(resolveScpPath(), [...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
+    const res = await run(resolveScpPath(), ['-S', resolveSshPath(), ...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
       timeoutMs: fetchTimeoutMs,
     });
     if (res.code !== 0 || res.timedOut) {

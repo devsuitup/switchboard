@@ -488,6 +488,7 @@ const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
+require('./remote-ssh-binary').setResolverLog(log);
 const { createRemoteIndexer } = require('./remote-index');
 const { createRemoteWatcher } = require('./remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');

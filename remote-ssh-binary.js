@@ -4,41 +4,97 @@
 const fs = require('fs');
 const path = require('path');
 
-function pathFor(platform) {
-  return platform === 'win32' ? path.win32 : path.posix;
+function defaultIsExecutable(p) {
+  const st = fs.statSync(p);
+  if (!st.isFile()) return false;
+  if (process.platform !== 'win32') fs.accessSync(p, fs.constants.X_OK);
+  return true;
 }
 
-function candidates(name, { env, platform }) {
-  if (platform !== 'win32') return [`/usr/bin/${name}`];
-  const p = path.win32;
-  return [
-    p.join(env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', `${name}.exe`),
-    p.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', `${name}.exe`),
-  ];
+function probe(p, isExecutable) {
+  try { return !!isExecutable(p); } catch { return false; }
 }
 
-function firstExisting(paths, existsSync) {
-  for (const c of paths) {
-    try { if (existsSync(c)) return c; } catch {}
+function envValue(env, name) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+  return key === undefined ? undefined : env[key];
+}
+
+function createBinaryResolver({ env = process.env, platform = process.platform, isExecutable = defaultIsExecutable, log = console } = {}) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const exe = platform === 'win32' ? '.exe' : '';
+  const cache = new Map();
+
+  function configured(name) {
+    const raw = env[name];
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return null;
+    if (!p.isAbsolute(value)) {
+      log.warn(`[remote] ${name}=${JSON.stringify(value)} is ignored: it must be an absolute path`);
+      return null;
+    }
+    if (platform === 'win32' && /\.(cmd|bat)$/i.test(value)) {
+      log.warn(`[remote] ${name}=${JSON.stringify(value)} is a batch script, which cannot be started without a shell: name an .exe`);
+    }
+    return value;
   }
-  return null;
-}
 
-function resolveSshPath({ env = process.env, platform = process.platform, existsSync = fs.existsSync } = {}) {
-  if (env.SWITCHBOARD_SSH_PATH) return env.SWITCHBOARD_SSH_PATH;
-  return firstExisting(candidates('ssh', { env, platform }), existsSync) || 'ssh';
-}
-
-function resolveScpPath({ env = process.env, platform = process.platform, existsSync = fs.existsSync } = {}) {
-  if (env.SWITCHBOARD_SCP_PATH) return env.SWITCHBOARD_SCP_PATH;
-  const sshPath = env.SWITCHBOARD_SSH_PATH;
-  const p = pathFor(platform);
-  if (sshPath && p.isAbsolute(sshPath)) {
-    const ext = /\.exe$/i.test(sshPath) ? p.extname(sshPath) : '';
-    const sibling = firstExisting([p.join(p.dirname(sshPath), `scp${ext}`)], existsSync);
-    if (sibling) return sibling;
+  function onPath(name) {
+    const dirs = String(envValue(env, 'PATH') || '').split(p.delimiter).filter((d) => d && p.isAbsolute(d));
+    for (const dir of dirs) {
+      const candidate = p.join(dir, name + exe);
+      if (probe(candidate, isExecutable)) return candidate;
+    }
+    return null;
   }
-  return firstExisting(candidates('scp', { env, platform }), existsSync) || 'scp';
+
+  function system(name) {
+    const candidates = platform === 'win32'
+      ? [
+          p.join(env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', `${name}.exe`),
+          p.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', `${name}.exe`),
+        ]
+      : [`/usr/bin/${name}`];
+    return candidates.find((c) => probe(c, isExecutable)) || null;
+  }
+
+  function memo(key, compute) {
+    if (!cache.has(key)) cache.set(key, compute());
+    return cache.get(key);
+  }
+
+  const sshConfigured = () => memo('ssh-env', () => configured('SWITCHBOARD_SSH_PATH'));
+
+  function resolveSshPath() {
+    return memo('ssh', () => sshConfigured() || onPath('ssh') || system('ssh') || 'ssh');
+  }
+
+  function besideSsh() {
+    const ssh = sshConfigured();
+    if (!ssh) return null;
+    const ext = /\.exe$/i.test(ssh) ? p.extname(ssh) : '';
+    const sibling = p.join(p.dirname(ssh), `scp${ext}`);
+    return probe(sibling, isExecutable) ? sibling : null;
+  }
+
+  function resolveScpPath() {
+    return memo('scp', () => configured('SWITCHBOARD_SCP_PATH') || besideSsh() || onPath('scp') || system('scp') || 'scp');
+  }
+
+  return { resolveSshPath, resolveScpPath };
 }
 
-module.exports = { resolveSshPath, resolveScpPath };
+let processLog = null;
+let processResolver = null;
+
+function current() {
+  if (!processResolver) processResolver = createBinaryResolver({ log: processLog || console });
+  return processResolver;
+}
+
+function resolveSshPath() { return current().resolveSshPath(); }
+function resolveScpPath() { return current().resolveScpPath(); }
+function resetResolvedBinaries() { processResolver = null; }
+function setResolverLog(log) { processLog = log; processResolver = null; }
+
+module.exports = { createBinaryResolver, resolveSshPath, resolveScpPath, resetResolvedBinaries, setResolverLog };

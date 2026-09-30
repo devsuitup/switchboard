@@ -117,6 +117,56 @@ or deleted from here.
   stale for up to 5 minutes; the pull remains the ground truth and the only
   path for a host with no push channel (see below).
 
+### Remote hosts — ssh and scp binaries (issue #359)
+
+`remote-ssh-binary.js` is the one place that decides which `ssh` and `scp` run;
+the order is user-facing and stated in `docs/remote-hosts.md` ("Which ssh and
+scp run"). What the code relies on:
+
+- **One value for every consumer.** The attach PTY is spawned with the home
+  directory as cwd (`main.js` `spawnPty`), the `child_process` sites with the
+  app's cwd. A relative value, or a bare name looked up late, could name two
+  binaries; the resolver therefore returns an absolute path whenever it finds
+  one (the PATH is searched by the resolver itself, relative PATH entries
+  skipped) and ignores a relative `SWITCHBOARD_SSH_PATH`/`SWITCHBOARD_SCP_PATH`
+  with a warning. The bare name is returned only when nothing was found.
+- **scp is given its ssh.** `scp` starts its own ssh from a path compiled into
+  it, not from `SWITCHBOARD_SSH_PATH`; `fetchOne` passes `-S <resolved ssh>` so
+  the copy uses the same client as everything else.
+- **Resolved once per process.** Each lookup probes the disk (PATH entries,
+  then the system candidates); on Windows a UNC entry can stall the main thread,
+  and `fetchFiles` copies files in the hundreds. The result is memoised in
+  the module; `resetResolvedBinaries()` exists for tests, and
+  `createBinaryResolver({ env, platform, isExecutable, log })` gives a
+  resolver with no process state. `main.js` hands it the app log with
+  `setResolverLog`.
+- **No shell.** Every spawn is shell-less. On Windows Node refuses a `.cmd` or
+  `.bat` without a shell (`EINVAL`), so such a value is kept, and a warning
+  says to name an `.exe` instead.
+
+`test/remote-ssh-spawn-sites.test.js` holds the guarantee that nothing bypasses
+the resolver. It parses every main-process module (root `*.js` and `workers/`)
+with espree and eslint-scope and follows the values that reach a spawn:
+
+- **Spawners.** A call is a spawn site when its callee evaluates to a
+  `child_process` or `node-pty` function, however it was reached: a
+  destructuring rename, a member of the `require` result, an alias of the
+  module, an `opts.spawn || …` default. Spawners injected purely through
+  options (`spawnPtyFn`) are listed by hand.
+- **Programs.** Each site's program argument is followed through constants,
+  destructuring, defaults, `path.join`'s last segment, and a local wrapper's
+  callers (`run` in `remote-transport.js`). The verdicts are: a resolver call,
+  another literal (`git`, `powershell.exe`), an ssh/scp literal (a bypass), or
+  unresolved.
+- **Failures.** A bypass fails the test, and so does an unresolved site outside
+  `UNRESOLVED_ALLOWED`, where each entry names its enclosing function and why its
+  program is not ssh. A second test fails on any call anywhere that passes an
+  ssh/scp name as its first argument; it covers the callers of exported
+  wrappers such as `runToExit`.
+- **Enumeration.** The resolver-backed sites are compared to an explicit table,
+  so a new one is noticed. The scanner is itself tested on fixtures that
+  reproduce each known evasion.
+
 ### Remote hosts — watch channel (issue #240)
 
 `remote-watch.js` keeps one long-lived `ssh -tt … inotifywait` child per
