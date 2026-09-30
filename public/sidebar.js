@@ -465,13 +465,12 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
 }
 
 // See .ai/contexts/subagent-observability.md (slug-group orphan-detection fix)
-function collectTopLevelSessionIds(el) {
-  const ids = [];
-  if (el.dataset && el.dataset.sessionId && !el.dataset.subagent) ids.push(el.dataset.sessionId);
-  el.querySelectorAll('[data-session-id]').forEach((child) => {
-    if (!child.dataset.subagent) ids.push(child.dataset.sessionId);
-  });
-  return ids;
+function narrowSessionsToSearch(sessions, matchIds) {
+  const matchedParents = new Set();
+  for (const s of sessions) {
+    if (s.parentSessionId && matchIds.has(s.sessionId)) matchedParents.add(s.parentSessionId);
+  }
+  return sessions.filter(s => matchIds.has(s.sessionId) || matchedParents.has(s.sessionId));
 }
 
 function buildSlugGroup(slug, sessions, subagentIndex) {
@@ -723,12 +722,13 @@ function renderProjects(projects, resort) {
 
     return {
       filtered, visible, older, subagentIndex,
+      topLevelIds: new Set(allSessions.filter(s => !s.parentSessionId).map(s => s.sessionId)),
       sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
     };
   }
 
   // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older, subagentIndex, projectPath) {
+  function buildSessionsList(fId, visible, older, subagentIndex, projectPath, topLevelIds) {
     const sessionsList = document.createElement('div');
     sessionsList.className = 'project-sessions';
     sessionsList.id = 'sessions-' + fId;
@@ -757,12 +757,11 @@ function renderProjects(projects, resort) {
     }
 
     // Orphan subagents: children whose parentSessionId has no top-level session in this project.
-    // See .ai/contexts/subagent-observability.md for why collectTopLevelSessionIds is needed here.
+    // see .ai/contexts/subagent-observability.md
     if (subagentIndex) {
-      const allTopLevelIds = new Set([...visible, ...older].flatMap(i => collectTopLevelSessionIds(i.element)));
       const orphans = [];
       for (const [parentId, kids] of subagentIndex) {
-        if (!allTopLevelIds.has(parentId)) {
+        if (!topLevelIds.has(parentId)) {
           for (const k of kids) orphans.push(k);
         }
       }
@@ -812,7 +811,7 @@ function renderProjects(projects, resort) {
 
     const result = processProjectSessions(project, resort);
     if (!result) continue;
-    const { filtered, visible, older, subagentIndex, sortOrderEntry } = result;
+    const { filtered, visible, older, subagentIndex, topLevelIds, sortOrderEntry } = result;
     newSortedOrder.push(sortOrderEntry);
     const fId = folderId(project.projectPath);
 
@@ -883,7 +882,7 @@ function renderProjects(projects, resort) {
     }
     header.appendChild(newBtn);
 
-    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath);
+    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath, topLevelIds);
 
     // Auto-collapse if project path is missing, most recent session is older than threshold, or project matched with no sessions
     if (project.missing) {
@@ -937,7 +936,7 @@ function renderProjects(projects, resort) {
       wtNewBtn.title = 'New session in worktree';
       wtHeader.appendChild(wtNewBtn);
 
-      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath);
+      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath, wtResult.topLevelIds);
       wtSessionsList.className = 'worktree-sessions';
 
       // Auto-collapse worktree if stale
