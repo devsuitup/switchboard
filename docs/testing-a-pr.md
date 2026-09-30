@@ -186,11 +186,16 @@ session's `CLAUDE_CODE_*` variables (`CLAUDE_CODE_SSE_PORT`,
 
 ### The reloader and this repository
 
-A run from source reloads its renderer when a file of its checkout changes —
-see [Development](development.md#running-from-source-next-to-an-installed-copy).
-Saving a file of the PR's own worktree through the Changes editor therefore
-reloads the page that saved it. Test editing against another repository, or
-against the packaged build.
+A run from source watches its own checkout — see
+[Development](development.md#running-from-source-next-to-an-installed-copy):
+
+- **A change to a main-process module relaunches the whole instance, and every
+  session it runs dies.** Re-running `task test-pr` for a new push of the PR
+  checks out the new commit in the worktree: if the test instance is still
+  running, it relaunches, killing its sessions. Stop the test instance first.
+- Any other file change reloads the renderer. Saving a file of the PR's own
+  worktree through the Changes editor therefore reloads the page that saved
+  it. Test editing against another repository, or against the packaged build.
 
 ## Comparing two instances
 
@@ -250,8 +255,8 @@ client that calls `Runtime.evaluate` over a target's WebSocket.
   not react to a press where the pointer never was.
 - **Opening a session during a window spoils it**: its `claude --resume` output
   dwarfs the effect measured. Measure again.
-- **Every smooth 60 fps animation costs a compositing floor** — about 27 % of a
-  GPU core on the reference machine. Measure a baseline without animation first.
+- **Every smooth 60 fps animation costs a compositing floor**: the whole window
+  is composited on every frame. Measure a baseline without animation first.
 
 ## Testing the packaged build
 

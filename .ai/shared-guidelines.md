@@ -63,16 +63,12 @@ To test a specific PR live, alongside the running AppImage, use `task test-pr PR
 
 ### 2. Running `npm run build:linux` CAN kill the running instance — and so can the `cp` to ~/Applications (Linux-specific example — see note above)
 
-**Corrected 2026-05-31** — the previous version of this section claimed the build was safe. It isn't.
-
-`npm run build:linux` invokes `electron-builder`, which by default runs `@electron/rebuild` against the native modules (`better-sqlite3`, `node-pty`). Those `.node` files are `dlopen()`-loaded by the running AppImage. If the rebuild replaces them via `truncate+write` (instead of atomic `rename`), the running process loses access to its native binding at the next call → segfault → kernel SIGKILL with no app-level trace in `~/.config/switchboard/logs/main.log`.
-
-**Witnessed 2026-05-31** — running AppImage went silent in main.log between `13:49:42` and `13:58:42` during a background `npm run build:linux`. No SIGTERM logged. User noticed the death and relaunched manually.
+`npm run build:linux` invokes `electron-builder`, which by default runs `@electron/rebuild` against the native modules (`better-sqlite3`, `node-pty`) and rewrites their `.node` files. A running instance that has those files `dlopen()`-loaded loses its native binding at the next call when they are rewritten in place (`truncate+write` rather than an atomic `rename`): segfault, kernel SIGKILL, and no app-level trace in `~/.config/switchboard/logs/main.log`.
 
 **Rules**:
 - **NEVER run `npm run build:linux` (or `task build`) while the user's AppImage is running** without explicit confirmation. Ask first. The user may need to quit before you start the build.
-- **Building while running IS safe with `--config.npmRebuild=false`** (`npm run bundle:codemirror && electron-builder --linux --config.npmRebuild=false`): electron-builder logs `skipped dependencies rebuild` and never rewrites the `dlopen()`-loaded `.node` files. Field-proven 2026-06-02 (×2) and 2026-06-04 — the live process survived every build.
-- The **`cp dist/*.AppImage ~/Applications/Switchboard.AppImage` step is NOT reliably safe** — **corrected 2026-06-04** (the previous claim "verified safe 2026-05-31" held twice on 2026-06-02 then failed). The mmap/paging concern is indeed moot (`/tmp/.mount_*`), but **`appimagelauncherd` watches `~/Applications/`**: on file replacement it re-runs desktop integration ("Cleaning up old desktop integration files", 17:17:33) and the running instance was **cleanly terminated 15 s later** (systemd scope end 17:17:48, no segfault, no kernel trace — user confirmed they did not quit). Non-deterministic: it survived the same swap twice before. **Treat the `cp` as the disruptive step**: do it only when the user is ready to restart, or have them quit first.
+- **Building while running is safe with `--config.npmRebuild=false`** (`npm run bundle:codemirror && electron-builder --linux --config.npmRebuild=false`): electron-builder logs `skipped dependencies rebuild` and never rewrites the `.node` files.
+- **The `cp dist/*.AppImage ~/Applications/Switchboard.AppImage` step is not safe either.** The running process does not need the on-disk file (it runs from `/tmp/.mount_*`), but `appimagelauncherd` watches `~/Applications/`: on a replaced file it re-runs desktop integration, which can terminate the running instance cleanly, with no segfault and no kernel trace. It does not happen on every replacement. **Treat the `cp` as the disruptive step**: do it only when the user is ready to restart, or have them quit first.
 
 The new code takes effect on **next launch only** (after the user fully quits and relaunches).
 

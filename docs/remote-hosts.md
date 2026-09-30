@@ -27,8 +27,17 @@ saved, and the page lists it. A duplicate alias keeps its first row.
 Switchboard never stores or reads a key, a password or a port: it runs the
 system `ssh` and `scp` with `BatchMode=yes`, so the host must be reachable
 without a prompt (a key or an agent), and everything else — user, port, jump
-hosts, `ControlMaster` — comes from your SSH configuration. `SWITCHBOARD_SSH_PATH`
-overrides the `ssh` binary.
+hosts, `ControlMaster` — comes from your SSH configuration.
+
+Which `ssh` runs depends on the operation:
+
+- **The terminal attached to a remote tmux session** runs `SWITCHBOARD_SSH_PATH`
+  when it is set; otherwise `/usr/bin/ssh` on macOS and Linux, and on Windows
+  `System32\OpenSSH\ssh.exe` or Git's `usr\bin\ssh.exe`, whichever exists
+  first; otherwise `ssh` from the `PATH`.
+- **Everything else** — the pulls (`ssh` and `scp`), the watch connection, the
+  probe before an attach, stop, and the Changes view — runs `ssh` and `scp` from
+  the `PATH` Switchboard was started with, whatever `SWITCHBOARD_SSH_PATH` says.
 
 The settings are stored as `remoteHosts` and `remoteRefreshMs` in the global
 settings. With no host declared, nothing runs: no timer, no ssh, no mirror.

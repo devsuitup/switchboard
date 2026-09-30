@@ -90,18 +90,27 @@ What the data directory does not isolate:
 - **Schedules.** Every instance scans every project's `schedule-*.md` and fires
   them: an enabled schedule runs once per instance.
 
-A run from source loads `electron-reloader`, which reloads the renderer when a
-file of the checkout changes — including one the app itself writes, such as a
-file saved from the Changes editor. Files under dot-directories (`.work-files/`
-among them), `node_modules` and source maps do not trigger it. A packaged build
-has no reloader.
+A run from source loads `electron-reloader`, which watches the checkout:
+
+- **A change to a module the main process has loaded** — `main.js`, `db.js`,
+  any other root `*.js` it requires — **relaunches the whole app**
+  (`app.relaunch()` then `app.exit(0)`). Every PTY of that instance dies with
+  it: its Claude sessions, terminals and panel shells stop, mid-turn or not.
+  Editing the code, a `git checkout`, a `git pull` or a `git stash` in the
+  checkout of a running instance all do it.
+- **Any other change** — `public/`, or a file the app itself writes, such as one
+  saved from the Changes editor — reloads the renderer.
+
+Files under dot-directories (`.work-files/` among them), `node_modules` and
+source maps do not trigger it. A packaged build has no reloader.
 
 ### Building and replacing while an installed copy runs
 
 - `task build` / `npm run build:linux` runs electron-builder, which by default
-  rebuilds the native modules in the checkout's `node_modules`. An installed
-  AppImage has been killed during such a build. Build with the rebuild off while
-  an installed copy runs:
+  rebuilds the native modules (`better-sqlite3`, `node-pty`) and rewrites their
+  `.node` files. A running instance that has those files `dlopen()`-loaded
+  crashes at its next native call when they are rewritten in place. Build with
+  the rebuild off while an instance runs:
   `npm run bundle:codemirror && npx electron-builder --linux --config.npmRebuild=false`
   (electron-builder then logs `skipped dependencies rebuild`).
 - Copying a new AppImage over `~/Applications/Switchboard.AppImage` can end the

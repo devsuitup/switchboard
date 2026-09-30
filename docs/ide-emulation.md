@@ -30,8 +30,11 @@ For each Claude session it launches, Switchboard:
 
 The CLI connects with the token and calls the IDE tools Switchboard implements:
 `openFile`, `openDiff`, `close_tab`, `closeAllDiffTabs` and `getDiagnostics`.
-The lock file is removed when the session stops, and lock files left by a
-crashed instance are removed at startup.
+The lock file is removed when the session stops. At startup, Switchboard also
+removes any lock file in `~/.claude/ide/` that names Switchboard and whose pid is
+its own process's — a lock left by an earlier instance that crashed and whose
+pid the new process happens to reuse. Locks carrying any other pid are left in
+place.
 
 Remote sessions and scheduled runs never get the bridge.
 

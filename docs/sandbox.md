@@ -53,8 +53,11 @@ Pre-launch Command, when set, stays in front of the whole line, so it runs
 
 The script (`scripts/claude-sandbox.sh`):
 
-1. finds `claude` on the `PATH` (a shell function or alias named `claude` is
-   refused: the sandbox has to exec a file) and resolves symbolic links;
+1. looks `claude` up on the `PATH` only (`type -P`) and resolves symbolic
+   links. A shell function or alias named `claude` — a wrapper in your profile,
+   say — is therefore **bypassed**: the sandbox execs the binary it finds on the
+   `PATH`, without the wrapper's arguments or environment. The launch is refused
+   only when no executable `claude` file is found at all;
 2. works out what to bind, listed below;
 3. refuses to bind `/`, `$HOME` or any parent of `$HOME` — a session launched
    from the wrong directory would otherwise expose everything;

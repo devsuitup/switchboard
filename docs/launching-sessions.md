@@ -69,7 +69,8 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
   worktree, not the repository.
 - A session whose row exists but whose transcript was never written (a launch
   that failed at once) is started with `--session-id` and the same id, rather
-  than resumed.
+  than resumed — and, like any start, gets `--worktree` when the effective
+  settings have Worktree on.
 - On bash, zsh, sh, dash and ksh the command starts with `cd <directory> &&`,
   so a shell profile that changes directory cannot move `claude` elsewhere.
 - The command runs in the shell chosen by **Shell Profile**. **Auto** takes
@@ -89,8 +90,9 @@ the directory it was started in.
 ## Fork
 
 **Fork session** on a row starts a new session with
-`claude --resume <id> --fork-session`, using the project's effective settings.
-The CLI copies the conversation into a new session id; the original is left
+`claude --resume <id> --fork-session`, using the project's effective settings —
+including Worktree, which adds `--worktree [name]`: the fork then runs in a new
+worktree (see [Worktree sessions](worktrees.md)). The CLI copies the conversation into a new session id; the original is left
 as it was. The new row appears at once and takes the new id when the CLI
 writes the forked transcript.
 

@@ -61,49 +61,52 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { _electron: electron } = require('playwright-core');
 
-const APP = path.resolve(process.argv[2]);
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-home-'));
-const data = path.join(home, '.switchboard-test');
-const env = {
-  // Drop the variables of any Claude session this script runs under.
-  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CLAUDE'))),
-  HOME: home,
-  XDG_CONFIG_HOME: path.join(home, '.config'),
-  SWITCHBOARD_DATA_DIR: data,
-  SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
-  GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-};
+// A fixture repository with one commit, and a two-line transcript so the project shows in the sidebar.
+function makeFixture(home, env) {
+  const repo = path.join(home, 'work', 'fixture');
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: repo, env });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'README.md'), '# fixture\n');
+  git('add', '.');
+  git('commit', '-qm', 'init');
 
-// A fixture repository with one commit.
-const repo = path.join(home, 'work', 'fixture');
-fs.mkdirSync(repo, { recursive: true });
-const git = (...args) => execFileSync('git', args, { cwd: repo, env });
-git('init', '-q', '-b', 'main');
-fs.writeFileSync(path.join(repo, 'README.md'), '# fixture\n');
-git('add', '.');
-git('commit', '-qm', 'init');
+  const sid = '00000000-0000-4000-8000-000000000001';
+  const now = new Date().toISOString();
+  const projectDir = path.join(home, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, `${sid}.jsonl`), [
+    { type: 'user', sessionId: sid, cwd: repo, timestamp: now, uuid: 'u1',
+      message: { role: 'user', content: 'fixture' } },
+    { type: 'assistant', sessionId: sid, cwd: repo, timestamp: now, uuid: 'a1', parentUuid: 'u1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+  return { repo, git };
+}
 
-// A two-line transcript, so the project shows in the sidebar.
-const sid = '00000000-0000-4000-8000-000000000001';
-const now = new Date().toISOString();
-const projectDir = path.join(home, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'));
-fs.mkdirSync(projectDir, { recursive: true });
-fs.writeFileSync(path.join(projectDir, `${sid}.jsonl`), [
-  { type: 'user', sessionId: sid, cwd: repo, timestamp: now, uuid: 'u1',
-    message: { role: 'user', content: 'fixture' } },
-  { type: 'assistant', sessionId: sid, cwd: repo, timestamp: now, uuid: 'a1', parentUuid: 'u1',
-    message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
-].map((line) => JSON.stringify(line)).join('\n') + '\n');
-
-(async () => {
-  const app = await electron.launch({
-    executablePath: require(path.join(APP, 'node_modules', 'electron')),
-    args: [APP, '--no-sandbox'],
-    cwd: APP,
-    env,
-  });
+async function main(appDir) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-home-'));
+  let app;
   try {
+    const data = path.join(home, '.switchboard-test');
+    const env = {
+      // Drop the variables of any Claude session this script runs under.
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CLAUDE'))),
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, '.config'),
+      SWITCHBOARD_DATA_DIR: data,
+      SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
+      GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+      GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+    };
+    makeFixture(home, env);
+
+    app = await electron.launch({
+      executablePath: require(path.join(appDir, 'node_modules', 'electron')),
+      args: [appDir, '--no-sandbox'],
+      cwd: appDir,
+      env,
+    });
     const page = await app.firstWindow();
     // A plain terminal from the project's "+", never the fixture's session row.
     await page.locator('.project-new-btn').first().click();
@@ -113,10 +116,12 @@ fs.writeFileSync(path.join(projectDir, `${sid}.jsonl`), [
     console.log('sessions:', await page.locator('.session-item').count());
     await page.screenshot({ path: 'live.png' });
   } finally {
-    await app.close();
+    if (app) await app.close().catch(() => {});
     fs.rmSync(home, { recursive: true, force: true });
   }
-})().catch((err) => { console.error(err); process.exit(1); });
+}
+
+main(path.resolve(process.argv[2])).catch((err) => { console.error(err); process.exitCode = 1; });
 ```
 
 Run it against a checkout whose `node_modules` is installed and whose CodeMirror
@@ -135,14 +140,17 @@ From there:
 - `page.evaluate(() => …)` runs in the renderer. A terminal's text is in its
   xterm buffer: `window._openSessions` maps session ids to entries whose
   `terminal.buffer.active` can be read line by line.
-- The script's `git(...)` still works on the fixture repository once the app
-  runs, to make changes for the [Changes view](changes-view.md) to show.
+- `makeFixture` returns the repository and a `git(...)` helper: keep them in
+  `main` to make changes, once the app runs, for the
+  [Changes view](changes-view.md) to show.
 - Assert structure and geometry (element boxes, computed styles) rather than
   pixels; take screenshots to look at, and keep them under `.work-files/`.
 - Run one instance at a time, niced: each is a full Electron.
 
-Close the app and delete the temporary `HOME` in a `finally`, as above, or
-temporary homes accumulate in `/tmp`.
+Everything after `mkdtempSync` — the fixture, the launch, the test — runs inside
+the `try`, so the `finally` closes the app, if it started, and deletes the
+temporary `HOME` on every path, a failed `git` or a failed launch included.
+Keep new steps inside it, or temporary homes accumulate in `/tmp`.
 
 Turning such journeys into a CI suite is tracked in
 [#304](https://github.com/devsuitup/switchboard/issues/304).

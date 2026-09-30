@@ -18,8 +18,18 @@ Switchboard passes `--worktree`, followed by the name when one is given, to
 it; without a name, the CLI picks one. The worktree lands at
 `<repository>/.claude/worktrees/<name>/`.
 
-The option applies only when a session **starts**. It is ignored on resume and
-on fork, which keep the directory the session already runs in. It is also
+The option applies to every launch that starts a session rather than resuming
+one:
+
+- a new session;
+- a **fork**: with Worktree on in the effective settings, the command is
+  `claude --resume <id> --fork-session --worktree [name]`, so the fork runs in a
+  new worktree;
+- a row whose transcript was never written, which is started with
+  `--session-id` rather than resumed.
+
+It is ignored on a plain resume, which keeps the directory the session already
+runs in. It is also
 dropped, with a warning in the main log, when the project directory is not
 inside a git repository: `claude` refuses `--worktree` outside one, and the
 session starts in the project directory instead.
@@ -33,7 +43,8 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
   worktree's own encoded path in `~/.claude/projects/`. Switchboard maps any
   directory of the form `<repo>/.claude/worktrees/<name>`,
   `<repo>/.claude-worktrees/<name>` or `<repo>/.worktrees/<name>` back to
-  `<repo>` when that directory exists, so the session is listed in the
+  `<repo>` when `<repo>` exists — whether the worktree still does or not — so
+  the session is listed in the
   repository's project, beside the sessions run in the repository itself.
 - **Resume and fork** run in the directory recorded in the session's
   transcript — the worktree — because `claude --resume` looks the session up

@@ -4551,8 +4551,8 @@ test('session serialization: two triggers on different sessions still run in par
 // see .ai/contexts/trigger-watcher.md, "Target guard"
 
 // These fold only on win32 (NTFS/ReFS case-insensitivity, \ as the native
-// separator, the \\?\ long-path prefix) -- CI also runs on Linux and macOS
-// (see docs/testing-a-pr.md / README "Tooling"), where none of that applies,
+// separator, the \\?\ long-path prefix) -- CI also runs on Linux
+// (see docs/development.md, "Tests"), where none of that applies,
 // so the platform-specific claims are gated and a platform-neutral variant
 // covers every OS. This suite failed exactly this way on ubuntu on first
 // submission (node 20 and 22): a hardcoded Windows-style pair compared equal
