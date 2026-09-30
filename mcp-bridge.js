@@ -232,7 +232,8 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 }
 
 async function handleOpenFile(entry, rpcId, args, log) {
-  const { filePath, preview, startText, endText } = args;
+  const { preview, startText, endText } = args;
+  const filePath = path.resolve(args.filePath);
 
   let content = '';
   try {

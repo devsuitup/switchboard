@@ -43,11 +43,25 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { saves: [], openFile: null, confirms: [], confirmAnswer: false, revealed: [] };
+  const calls = { saves: [], openFile: null, openDiff: null, closeTab: null, closeAllDiffs: null, diffResponses: [], confirms: [], confirmAnswer: false, revealed: [], changed: new Set() };
   let editor = null;
 
   window.api = new Proxy({
     onMcpOpenFile: (cb) => { calls.openFile = cb; },
+    onMcpOpenDiff: (cb) => { calls.openDiff = cb; },
+    onMcpCloseTab: (cb) => { calls.closeTab = cb; },
+    onMcpCloseAllDiffs: (cb) => { calls.closeAllDiffs = cb; },
+    mcpDiffResponse: (sessionId, diffId, action) => { calls.diffResponses.push({ sessionId, diffId, action }); },
+    gitChangesLocate: (sessionId, p) => Promise.resolve(calls.changed.has(p)
+      ? { ok: true, changed: true, relPath: path.basename(p), staged: false, untracked: false }
+      : { ok: true, changed: false }),
+    gitChangesStatus: () => Promise.resolve({
+      ok: true, kind: 'local', branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+      files: [...calls.changed].map((p) => ({ path: path.basename(p), origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 1, deleted: 0 })),
+      totals: { files: calls.changed.size, added: calls.changed.size, deleted: 0, uncounted: 0 },
+    }),
+    gitChangesFile: () => Promise.resolve({ ok: true, original: 'c0\n', current: 'c1\n', version: 'v1' }),
+    gitChangesDiff: () => Promise.resolve({ ok: true, content: '@@ -1 +1 @@\n-c0\n+c1\n', truncated: false }),
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
     readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, content: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
@@ -69,6 +83,14 @@ function setup() {
   window.cmRevealLine = (view, line) => calls.revealed.push(line);
   window.createEditableViewer = (parent, content) => { editor = fakeEditor(content); return editor; };
   window.createPlanEditor = () => { editor = fakeEditor(''); return editor; };
+  const fakeMerge = (parent, _old, proposed) => {
+    const el = window.document.createElement('div');
+    parent.appendChild(el);
+    const doc = { toString: () => proposed };
+    return { dom: el, b: { state: { doc } }, state: { doc }, destroy() { el.remove(); } };
+  };
+  window.createMergeViewer = fakeMerge;
+  window.createUnifiedMergeViewer = fakeMerge;
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   const realCreate = window.document.createElement.bind(window.document);
@@ -493,51 +515,244 @@ async function dirtyTabShown(ctx) {
   ctx.editor().type('mine');
 }
 
-test('another file opened over a dirty tab that is away asks first, and a no keeps the edits (the issue)', async () => {
+const heldBar = (ctx) => {
+  const el = ctx.window.document.getElementById('file-panel-held');
+  return el.style.display === 'none' ? null : [...el.querySelectorAll('button')].map((b) => b.textContent);
+};
+
+const panelOpen = (ctx) => ctx.window.document.getElementById('file-panel').classList.contains('open');
+
+const closeButton = (ctx) => ctx.window.document.querySelector('#file-panel-viewer .fp-close-btn');
+
+test('another file opened over a dirty tab that is away holds the tab, with no question (the issue)', async () => {
   const ctx = setup();
   try {
     await dirtyTabAway(ctx);
     ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
     await flush();
-    assert.deepEqual(ctx.calls.confirms, ['a.md has unsaved edits. Discard them to open c.md?']);
-    assert.equal(content(ctx), 'b0\n', "the shown tab of s2 is untouched");
+    assert.equal(content(ctx), 'b0\n', 'the shown tab of s2 is untouched');
 
     ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(ctx.viewer().filePath, C);
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+
+    ctx.window.document.querySelector('#file-panel-held button').click();
     await flush();
     assert.equal(ctx.viewer().filePath, A);
     assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(heldBar(ctx), null, 'the clean c.md is not held');
     await save(ctx);
     assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a0\nmine', expected: 'a0\n' });
+    assert.deepEqual(ctx.calls.confirms, []);
   } finally { ctx.destroy(); }
 });
 
-test('another file opened over a dirty tab that is away replaces it once the user agrees', async () => {
-  const ctx = setup();
-  try {
-    await dirtyTabAway(ctx);
-    ctx.calls.confirmAnswer = true;
-    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
-    ctx.window.switchPanel('s1');
-    await flush();
-    assert.equal(ctx.calls.confirms.length, 1);
-    assert.equal(ctx.viewer().filePath, C);
-    assert.equal(content(ctx), 'c0\n');
-  } finally { ctx.destroy(); }
-});
-
-test('another file opened over the dirty tab the viewer shows asks first, and a no keeps the edits', async () => {
+test('another file opened over the dirty tab the viewer shows holds it, and opening its file again brings the edits back', async () => {
   const ctx = setup();
   try {
     await dirtyTabShown(ctx);
     ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
     await flush();
-    assert.deepEqual(ctx.calls.confirms, ['a.md has unsaved edits. Discard them to open c.md?']);
+    assert.equal(ctx.viewer().filePath, C);
+    assert.equal(content(ctx), 'c0\n');
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(heldBar(ctx), null);
+    assert.deepEqual(ctx.calls.confirms, []);
+  } finally { ctx.destroy(); }
+});
+
+test('five opens in a row over dirty tabs raise no modal and hold every dirty tab', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.disk.set(B, 'b0\n');
+    ctx.calls.openFile('s1', { filePath: B, content: 'b0\n' });
+    await flush();
+    ctx.editor().type('theirs');
+    for (const name of ['c', 'd', 'e', 'f']) {
+      ctx.disk.set(`/repo/${name}.md`, `${name}0\n`);
+      ctx.calls.openFile('s1', { filePath: `/repo/${name}.md`, content: `${name}0\n` });
+    }
+    await flush();
+    assert.deepEqual(ctx.calls.confirms, []);
+    assert.equal(ctx.viewer().filePath, '/repo/f.md');
+    assert.deepEqual(heldBar(ctx), ['a.md', 'b.md']);
+
+    ctx.calls.openFile('s1', { filePath: B, content: 'b0\n' });
+    await flush();
+    assert.equal(content(ctx), 'b0\ntheirs');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('a diff opened over the dirty tab the viewer shows holds it, and it comes back intact once the session closes the diff', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    assert.equal(ctx.window.document.getElementById('file-panel-diff').style.display, 'flex');
+    assert.deepEqual(ctx.calls.confirms, []);
+    assert.equal(ctx.window.document.getElementById('file-panel-held').style.display, 'none', 'no way out of an unanswered diff');
+
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.ok(panelOpen(ctx));
+    assert.equal(ctx.window.document.getElementById('file-panel-viewer').style.display, 'flex');
+    assert.equal(ctx.viewer().filePath, A);
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(noticeOf(ctx), null);
+    await save(ctx);
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a0\nmine', expected: 'a0\n' });
+  } finally { ctx.destroy(); }
+});
+
+test('a diff of the same file, accepted and written by the session, gives back the edits with the change reported', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: A, oldContent: 'a0\n', newContent: 'a1\n', tabName: 'a.md' });
+    await flush();
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.deepEqual(ctx.calls.diffResponses, [{ sessionId: 's1', diffId: 'd1', action: 'accept' }]);
+    ctx.disk.set(A, 'a1\n');
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.match(noticeOf(ctx), /changed on disk/);
+    await save(ctx);
+    assert.equal(ctx.disk.get(A), 'a1\n', "the session's write is not replaced without agreement");
+    assert.equal(ctx.calls.confirms.length, 1, 'the refused save asks, on the user\'s own Save');
+  } finally { ctx.destroy(); }
+});
+
+test('closing all diffs gives back a held tab too', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    ctx.calls.closeAllDiffs('s1');
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('a diff over a clean tab holds nothing: closing the diff closes the panel as before', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.equal(panelOpen(ctx), false);
+  } finally { ctx.destroy(); }
+});
+
+test('a save that fails while a diff holds its tab is reported when the tab comes back', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    const held = holdSaves(ctx);
+    pressSave(ctx);
+    await flush();
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    held.pending[0]({ ok: false, error: 'disk full' });
+    await flush();
+    held.release();
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+  } finally { ctx.destroy(); }
+});
+
+test('a path link to a changed file opens Changes over a dirty tab, which comes back when Changes is closed', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.changed.add(C);
+    await ctx.window.openFileInPanel('s1', C);
+    await flush();
+    assert.equal(ctx.window.document.getElementById('file-panel-changes').style.display, 'flex');
+    assert.deepEqual(ctx.calls.confirms, []);
+
+    ctx.window.toggleChangesTab('s1');
+    await flush();
     assert.equal(ctx.viewer().filePath, A);
     assert.equal(content(ctx), 'a0\nmine');
   } finally { ctx.destroy(); }
 });
 
-test('another file opened over a clean tab replaces it without asking, shown or away', async () => {
+test('the close button on a dirty file tab asks, and a no keeps the tab', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    closeButton(ctx).click();
+    await flush();
+    assert.deepEqual(ctx.calls.confirms, ['This file has unsaved edits. Discard them?']);
+    assert.ok(panelOpen(ctx));
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('closing the shown tab shows the tab held under it', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    closeButton(ctx).click();
+    await flush();
+    assert.deepEqual(ctx.calls.confirms, [], 'the clean c.md closes without asking');
+    assert.equal(ctx.viewer().filePath, A);
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('on Windows the same file spelt with another case or separators is the same tab', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.platform = 'win32';
+    const WIN = 'C:\\repo\\A.md';
+    ctx.disk.set(WIN, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: WIN, content: 'a0\n' });
+    await flush();
+    ctx.editor().type('mine');
+    ctx.calls.openFile('s1', { filePath: 'c:/repo/a.md', content: 'a0\n' });
+    await flush();
+    assert.equal(ctx.viewer().filePath, WIN);
+    assert.equal(content(ctx), 'a0\nmine');
+    assert.equal(heldBar(ctx), null);
+  } finally { ctx.destroy(); }
+});
+
+test('on Linux a path that differs only by case is another file', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.platform = 'linux';
+    await dirtyTabShown(ctx);
+    ctx.calls.openFile('s1', { filePath: '/repo/A.md', content: 'A\n' });
+    await flush();
+    assert.equal(ctx.viewer().filePath, '/repo/A.md');
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('another file opened over a clean tab replaces it without holding it, shown or away', async () => {
   const ctx = setup();
   try {
     ctx.disk.set(A, 'a0\n');
@@ -558,10 +773,11 @@ test('another file opened over a clean tab replaces it without asking, shown or 
     await flush();
     assert.equal(content(ctx), 'a0\n');
     assert.deepEqual(ctx.calls.confirms, []);
+    assert.equal(heldBar(ctx), null);
   } finally { ctx.destroy(); }
 });
 
-test('a tab whose save succeeded while away is not dirty: another file replaces it without asking', async () => {
+test('a tab whose save succeeded while away is not dirty: another file replaces it without holding it', async () => {
   const ctx = setup();
   try {
     ctx.disk.set(A, 'a0\n');
@@ -585,7 +801,7 @@ test('a tab whose save succeeded while away is not dirty: another file replaces 
     ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
     ctx.window.switchPanel('s1');
     await flush();
-    assert.deepEqual(ctx.calls.confirms, []);
+    assert.equal(heldBar(ctx), null);
     assert.equal(content(ctx), 'c0\n');
   } finally { ctx.destroy(); }
 });

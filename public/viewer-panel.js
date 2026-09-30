@@ -498,6 +498,7 @@ class ViewerPanel {
 
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
+    this._token = null;
     this._unwatchFile();
     if (this.editorView) {
       this.editorView.destroy();

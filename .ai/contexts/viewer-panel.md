@@ -141,20 +141,44 @@ Keying by path would hand one tab's result to another: a clean tab in another se
 
 ## An open aimed at a file tab
 
-A session holds one tab. `openFileTab` — reached from the MCP `openFile` tool and from a terminal path link (`openFileInPanel`) — never replaces that session's file tab in a way that drops unsaved edits. The rule applies to a tab that has reached the viewer, the one `fpViewerOwner` points at or one holding a `viewerState`; a tab that never did has no edits, no token and no save record, and is replaced as before.
+**Nothing a session triggers shows a modal, and no route drops unsaved edits without the user saying so.** A session's panel has one tab slot (`state.currentTab`), and three routes replace what is in it: the MCP `openFile` tool and a terminal path link (`openFileTab`, via `openFileInPanel`), the MCP `openDiff` tool (`openDiffTab`), and a path link to a file git reports as changed, which opens the Changes tab (`openChangesTab`). All three go through `destroyCurrentTab`.
 
-| The open names | The tab | What happens |
+### Held tabs
+
+When `destroyCurrentTab` removes a file tab with unsaved edits, it does not drop it: it keeps it in the session's `heldFileTabs`, a `Map` keyed by path. A tab the viewer shows is first snapshotted, as a switch to another session's tab snapshots it, then the viewer is destroyed; a tab away from the viewer already holds its `viewerState`. The tab keeps its token, so a save still in flight is recorded under it (`_detachedSaves`) and applied when the tab is shown again. `destroy()` clears the viewer's token for that reason: without it, a save resolving before the next `open()` would be applied to the destroyed editor and lost.
+
+A tab is dirty when the viewer's own `_isDirty` says so for the tab it shows (`hasUnsavedEdits`), and for a tab away from it when `snapshotHasUnsavedEdits` does: the snapshot's buffer differs from its `agreedBase`, unless a save that finished while the tab was away wrote exactly that buffer. A save that failed while away leaves the buffer different from the base, so the tab is held. A clean tab, or one that never reached the viewer, is dropped as before: it has nothing to lose.
+
+A held tab comes back:
+
+| When | What shows |
+|---|---|
+| the tab in the slot ends: the session closes its diff (`close_tab`, `closeAllDiffTabs`), the user closes the Changes tab or the panel | the tab held last |
+| an open names a held file (`openFileTab`) | that tab |
+| the user clicks its name in the bar above a file tab ("Unsaved edits kept in: …") | that tab |
+
+It is shown with `open(…, restore)` and re-read at once, like any return to the viewer: a write made while it was held — the diff the user just accepted, for instance — raises "changed on disk", and `_agreedBase` has not moved, so a save against that write is refused by main and asks. The bar is not shown over a diff: leaving an unanswered diff would leave the CLI waiting on it.
+
+### Per route
+
+| Route | Over a dirty file tab | Over a clean file tab |
 |---|---|---|
-| the same file | shown in the viewer | The tab is kept, token, queue and notice included, and re-read at once (`rereadFromDisk`). A clean buffer reloads; a dirty one keeps the edits and shows "changed on disk" when the session's content differs from the base. A line, if the open carries one, is revealed. |
-| the same file | away from the viewer | The tab is kept with its `viewerState` and its token; when it is shown again it is restored and re-read like any return, and a save record waiting under its token (`_detachedSaves`) is applied. |
-| another file | clean, shown or away | Replaced without asking. |
-| another file | dirty, shown or away | `confirm('<tab> has unsaved edits. Discard them to open <file>?')`. Yes replaces the tab; no drops the open and leaves the tab, its edits and its token as they were. |
+| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly |
+| `openFile` / path link, same file, tab away | kept with its snapshot and token, restored and re-read on return | the same |
+| `openFile` / path link, another file | tab held, the new file shown, the bar names the held one | replaced |
+| `openDiff` | tab held, restored when the session closes the diff | replaced; closing the diff closes the panel |
+| path link to a changed file (Changes) | tab held, restored when Changes is closed | replaced |
+| the panel's close button (the user's own click) | `confirm('This file has unsaved edits. Discard them?')`; a no keeps the tab; a yes shows the next held tab, if any | closed; the next held tab, if any, is shown |
 
-Dirty is the viewer's own `_isDirty` for the tab it shows (`hasUnsavedEdits`), and for a tab away from it `snapshotHasUnsavedEdits`: the snapshot's buffer differs from its `agreedBase`, unless a save that finished while the tab was away wrote exactly that buffer (a `written` record under its token). A save that failed while away leaves the buffer different from the base, so the tab counts as dirty and the open asks.
+An open only ever reads and replaces the tab of the session it is aimed at: another session's tab, shown in the viewer or away, is not touched.
 
-An open only ever reads and replaces the tab of the session it is aimed at. Another session's tab, shown in the viewer or away, is not touched, whatever file it holds: the viewer is torn down only when the replaced tab is its owner.
+### Paths
 
-The same-file case re-reads the disk rather than taking the content the session sent. `_agreedBase` moves only on the events of "The agreed base", so a save after the open is refused by main if the session wrote the file, and asks.
+Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: separators folded to `/` on `win32`, case folded on `win32` and `darwin`, as the file watch does (`sameFileName`). A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
+
+### The `ok` answer
+
+`openFile` answers `ok` as soon as main has sent the file to the renderer, before the renderer acts. That stays accurate: no open is declined or deferred. The file is shown, in the slot of the session it is aimed at, whatever that slot held.
 
 ## Undo
 
@@ -226,10 +250,10 @@ things about that editor are not `ViewerPanel`'s:
 `ViewerPanel`'s own protections have Changes-panel equivalents rather than
 reuses, for the same reason: watching goes through `git-changes-watch` instead
 of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
-lives on the tab instead of the component. One protection has no `ViewerPanel`
-counterpart at all: an MCP-driven open replaces whatever tab is showing, so a
-dirty Changes buffer is stashed on the session's panel state and restored when
-the tab is reopened.
+lives on the tab instead of the component. An MCP-driven open replaces whatever
+tab is showing, so a dirty Changes buffer is stashed on the session's panel
+state (`changesStash`) and restored when the tab is reopened; a dirty file tab
+is held the same way, in `heldFileTabs` (see "An open aimed at a file tab").
 
 `Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
 the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts
