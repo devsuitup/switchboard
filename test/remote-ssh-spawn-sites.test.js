@@ -21,6 +21,11 @@ const SSH_NAME_RE = /(^|[\\/])(ssh|scp)(\.exe)?$/i;
 
 // Spawners injected through options, invisible to the value analysis.
 const INJECTED_SPAWNERS = { 'remote-attach.js': new Set(['spawnPtyFn']) };
+// Wrappers that take the program as their first argument, called from other modules too.
+const SPAWN_WRAPPERS = new Set(['runToExit', 'spawnPty']);
+
+const HOW_TO_FIX = 'Route the program through resolveSshPath()/resolveScpPath() from remote-ssh-binary.js, '
+  + 'or, when it is not ssh or scp, add its enclosing function to UNRESOLVED_ALLOWED with the reason.';
 
 // Sites whose program is not ssh or scp and cannot be proven so statically — file -> enclosing function.
 const UNRESOLVED_ALLOWED = {
@@ -151,11 +156,14 @@ function evaluate(ctx, node, seen = new Set()) {
     case 'MemberExpression': {
       if (node.computed && !(node.property.type === 'Literal' && typeof node.property.value === 'string')) return [V.unknown('computed')];
       const prop = node.computed ? node.property.value : node.property.name;
+      if (prop === 'execPath' && node.object.type === 'Identifier' && node.object.name === 'process' && !variableOf(ctx, node.object)) {
+        return [V.literal('process.execPath')];
+      }
       return member(evaluate(ctx, node.object, seen), prop);
     }
     case 'CallExpression': {
       if (node.callee.type === 'Identifier' && node.callee.name === 'require' && node.arguments[0] && node.arguments[0].type === 'Literal') {
-        return [V.module(node.arguments[0].value)];
+        return [V.module(String(node.arguments[0].value).replace(/^node:/, ''))];
       }
       if (isPathJoin(ctx, node) && node.arguments.length) return evaluate(ctx, node.arguments[node.arguments.length - 1], seen);
       const callee = evaluate(ctx, node.callee, seen);
@@ -257,6 +265,35 @@ function describeProgram(ctx, arg) {
   return { verdict: 'unresolved', label: values.filter((v) => v.k === 'unknown').map((v) => v.why).join(', ') };
 }
 
+// A call that starts a process, by value (a child_process/node-pty function) or by name (a spawner or a known wrapper).
+function isSpawnCall(ctx, node) {
+  const injected = INJECTED_SPAWNERS[ctx.file] || new Set();
+  const c = node.callee;
+  const name = c.type === 'Identifier' ? c.name
+    : (c.type === 'MemberExpression' && !c.computed && c.property.type === 'Identifier' ? c.property.name : null);
+  // exec/execSync by name alone would match RegExp#exec; those need the value analysis.
+  const byName = injected.has(name) || SPAWN_WRAPPERS.has(name) || (CP_FUNCS.has(name) && name !== 'exec' && name !== 'execSync');
+  return byName || evaluate(ctx, c).some((v) => v.k === 'cpfn');
+}
+
+function programNameOffenders(file, source = fs.readFileSync(path.join(ROOT, file), 'utf8')) {
+  const ctx = analyse(file, source);
+  const offenders = [];
+  (function visit(node) {
+    if (node.type === 'CallExpression' && node.arguments[0] && isSpawnCall(ctx, node)) {
+      const ssh = evaluate(ctx, node.arguments[0]).find((v) => v.k === 'ssh-literal');
+      if (ssh) offenders.push(`  ${file}:${node.loc.start.line} ${JSON.stringify(ssh.value)}`);
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'parent' || key === 'loc' || key === 'range') continue;
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach((c) => c && typeof c.type === 'string' && visit(c));
+      else if (v && typeof v.type === 'string') visit(v);
+    }
+  })(ctx.ast);
+  return offenders;
+}
+
 function spawnSites(file, source = fs.readFileSync(path.join(ROOT, file), 'utf8')) {
   const ctx = analyse(file, source);
   const injected = INJECTED_SPAWNERS[file] || new Set();
@@ -289,27 +326,12 @@ const fmt = (s) => `  ${s.file}:${s.line} in ${s.fn}: ${s.verdict} (${s.label})`
 test('no main-process spawn runs ssh or scp except through the resolver', () => {
   const all = mainProcessFiles().flatMap((f) => spawnSites(f));
   const bad = violations(all);
-  assert.deepEqual(bad.map(fmt), [], `every spawn site:\n${all.map(fmt).join('\n')}`);
+  assert.deepEqual(bad.map(fmt), [], `${HOW_TO_FIX}\nEvery spawn site:\n${all.map(fmt).join('\n')}`);
 });
 
-test('no call in a main-process module passes an ssh or scp program name as its first argument', () => {
-  const offenders = [];
-  for (const file of mainProcessFiles()) {
-    const ctx = analyse(file, fs.readFileSync(path.join(ROOT, file), 'utf8'));
-    (function visit(node) {
-      if (node.type === 'CallExpression' && node.arguments[0]) {
-        const ssh = evaluate(ctx, node.arguments[0]).find((v) => v.k === 'ssh-literal');
-        if (ssh) offenders.push(`${file}:${node.loc.start.line} ${JSON.stringify(ssh.value)}`);
-      }
-      for (const key of Object.keys(node)) {
-        if (key === 'parent' || key === 'loc' || key === 'range') continue;
-        const v = node[key];
-        if (Array.isArray(v)) v.forEach((c) => c && typeof c.type === 'string' && visit(c));
-        else if (v && typeof v.type === 'string') visit(v);
-      }
-    })(ctx.ast);
-  }
-  assert.deepEqual(offenders, []);
+test('no spawning call in a main-process module passes an ssh or scp program name', () => {
+  const offenders = mainProcessFiles().flatMap((f) => programNameOffenders(f));
+  assert.deepEqual(offenders, [], `${HOW_TO_FIX}\nCalls that start ssh or scp by name:\n${offenders.join('\n')}`);
 });
 
 test('the resolver-backed spawn sites are exactly the listed ones', () => {
@@ -318,13 +340,17 @@ test('the resolver-backed spawn sites are exactly the listed ones', () => {
     const sites = spawnSites(file).filter((s) => s.verdict === 'resolver');
     if (sites.length) found[file] = sites.map((s) => s.label);
   }
-  assert.deepEqual(found, EXPECTED_RESOLVER_SITES);
+  assert.deepEqual(found, EXPECTED_RESOLVER_SITES,
+    'A resolver-backed site was added, removed or changed: update EXPECTED_RESOLVER_SITES to match, after checking the change is intended.');
 });
 
 test('each allowed unresolved site still exists, so the list cannot go stale', () => {
   for (const [file, fns] of Object.entries(UNRESOLVED_ALLOWED)) {
     const sites = spawnSites(file).filter((s) => s.verdict === 'unresolved');
-    for (const fn of Object.keys(fns)) assert.ok(sites.some((s) => s.fn === fn), `${file} ${fn}`);
+    for (const fn of Object.keys(fns)) {
+      assert.ok(sites.some((s) => s.fn === fn),
+        `${file} ${fn} no longer has an unresolved spawn: remove it from UNRESOLVED_ALLOWED, or rename the entry if the function was renamed.`);
+    }
   }
 });
 
@@ -337,6 +363,8 @@ const BYPASSES = {
   'an absolute path literal': ["const cp = require('child_process');", "cp.spawn('/usr/bin/ssh', []);"],
   'a program read from elsewhere': ["const cp = require('child_process');", 'cp.spawn(process.env.X, []);'],
   'an alias of the module': ["const cp = require('child_process');", 'const c2 = cp;', 'c2.spawnSync(\'scp\');'],
+  'the node: prefix': ["const { spawn } = require('node:child_process');", "spawn(process.env.SWITCHBOARD_SSH_PATH || '/usr/local/bin/ssh2', []);"],
+  'the node: prefix with an ssh literal': ["const cp = require('node:child_process');", "cp.execFileSync('ssh', []);"],
 };
 
 for (const [name, lines] of Object.entries(BYPASSES)) {
@@ -346,6 +374,28 @@ for (const [name, lines] of Object.entries(BYPASSES)) {
     assert.equal(violations(sites).length, 1, fmt(sites[0]));
   });
 }
+
+test('the scanner reads node:path like path', () => {
+  const src = ["const path = require('node:path');", "const { spawn } = require('node:child_process');", "spawn(path.join('/opt', 'ssh'), []);"].join('\n');
+  assert.deepEqual(spawnSites('fixture.js', src).map((s) => s.verdict), ['bypass']);
+});
+
+test('the scanner accepts process.execPath as a program', () => {
+  const src = ["const { execFile } = require('child_process');", "execFile(process.execPath, ['-e', '']);"].join('\n');
+  const sites = spawnSites('fixture.js', src);
+  assert.deepEqual(sites.map((s) => s.verdict), ['other']);
+  assert.deepEqual(violations(sites), []);
+});
+
+test('the program-name check ignores a call that starts no process', () => {
+  const src = ["const s = 'x';", "String(s).endsWith('ssh');", "console.log('ssh');", "[].includes('scp');"].join('\n');
+  assert.deepEqual(programNameOffenders('fixture.js', src), []);
+});
+
+test('the program-name check flags ssh passed to a known wrapper from another module', () => {
+  const src = ["const { runToExit } = require('./run-to-exit');", "runToExit('ssh', [], {});"].join('\n');
+  assert.equal(programNameOffenders('fixture.js', src).length, 1);
+});
 
 test('the scanner accepts the resolver behind an injectable default', () => {
   const src = [

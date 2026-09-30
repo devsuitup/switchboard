@@ -63,10 +63,24 @@ function createBinaryResolver({ env = process.env, platform = process.platform, 
     return cache.get(key);
   }
 
+  // A path the search found is re-checked on each call, and searched for again once it is gone.
+  function memoSearched(key, fromEnv, search) {
+    const hit = cache.get(key);
+    if (hit && (!hit.searched || probe(hit.value, isExecutable))) return hit.value;
+    const configuredValue = fromEnv();
+    const found = configuredValue ? null : search();
+    const entry = configuredValue ? { value: configuredValue, searched: false }
+      : found ? { value: found, searched: true }
+        : { value: key, searched: false };
+    cache.set(key, entry);
+    return entry.value;
+  }
+
   const sshConfigured = () => memo('ssh-env', () => configured('SWITCHBOARD_SSH_PATH'));
+  const scpConfigured = () => memo('scp-env', () => configured('SWITCHBOARD_SCP_PATH'));
 
   function resolveSshPath() {
-    return memo('ssh', () => sshConfigured() || onPath('ssh') || system('ssh') || 'ssh');
+    return memoSearched('ssh', sshConfigured, () => onPath('ssh') || system('ssh'));
   }
 
   function besideSsh() {
@@ -78,7 +92,7 @@ function createBinaryResolver({ env = process.env, platform = process.platform, 
   }
 
   function resolveScpPath() {
-    return memo('scp', () => configured('SWITCHBOARD_SCP_PATH') || besideSsh() || onPath('scp') || system('scp') || 'scp');
+    return memoSearched('scp', scpConfigured, () => besideSsh() || onPath('scp') || system('scp'));
   }
 
   return { resolveSshPath, resolveScpPath };

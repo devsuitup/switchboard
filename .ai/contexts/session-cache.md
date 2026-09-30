@@ -133,10 +133,15 @@ scp run"). What the code relies on:
 - **scp is given its ssh.** `scp` starts its own ssh from a path compiled into
   it, not from `SWITCHBOARD_SSH_PATH`; `fetchOne` passes `-S <resolved ssh>` so
   the copy uses the same client as everything else.
-- **Resolved once per process.** Each lookup probes the disk (PATH entries,
-  then the system candidates); on Windows a UNC entry can stall the main thread,
-  and `fetchFiles` copies files in the hundreds. The result is memoised in
-  the module; `resetResolvedBinaries()` exists for tests, and
+- **Searched once per process, re-checked with one probe.** A search probes
+  the disk (PATH entries, then the system candidates); on Windows a UNC entry
+  can stall the main thread, and `fetchFiles` copies files in the hundreds. The
+  result is memoised in the module. A path the search found is probed again on
+  each call, one `stat` of a known file, so an `ssh` removed or upgraded away
+  is searched for again instead of failing with `ENOENT` until a restart. A
+  configured value and the bare-name fallback are not re-checked: the first
+  would re-resolve to itself, and the second would redo the whole search on
+  every spawn. `resetResolvedBinaries()` exists for tests, and
   `createBinaryResolver({ env, platform, isExecutable, log })` gives a
   resolver with no process state. `main.js` hands it the app log with
   `setResolverLog`.
@@ -156,13 +161,16 @@ with espree and eslint-scope and follows the values that reach a spawn:
 - **Programs.** Each site's program argument is followed through constants,
   destructuring, defaults, `path.join`'s last segment, and a local wrapper's
   callers (`run` in `remote-transport.js`). The verdicts are: a resolver call,
-  another literal (`git`, `powershell.exe`), an ssh/scp literal (a bypass), or
-  unresolved.
+  another literal (`git`, `powershell.exe`, `process.execPath`), an ssh/scp
+  literal (a bypass), or unresolved. Module names are matched with or without
+  the `node:` prefix.
 - **Failures.** A bypass fails the test, and so does an unresolved site outside
   `UNRESOLVED_ALLOWED`, where each entry names its enclosing function and why its
-  program is not ssh. A second test fails on any call anywhere that passes an
-  ssh/scp name as its first argument; it covers the callers of exported
-  wrappers such as `runToExit`.
+  program is not ssh. A second test fails on a spawning call — a
+  `child_process`/`node-pty` function, or a wrapper in `SPAWN_WRAPPERS` such as
+  `runToExit` — that passes an ssh/scp name as its first argument, in any
+  module; it covers the callers of exported wrappers. Each failure message says
+  what to change.
 - **Enumeration.** The resolver-backed sites are compared to an explicit table,
   so a new one is noticed. The scanner is itself tested on fixtures that
   reproduce each known evasion.

@@ -67,8 +67,11 @@ Both variables:
   `.cmd` or `.bat` file cannot be started (the log says so), so point at an
   `.exe`;
 - are trimmed, and a blank value counts as unset;
-- are read, and the binaries looked up, once per run of Switchboard: after
-  changing them or installing an ssh, restart it.
+- are read once per run of Switchboard: after changing them, restart it.
+
+The search through the `PATH` and the system locations also runs once. An
+`ssh` or `scp` it found that is later removed is searched for again at its
+next use; one installed after nothing was found is seen after a restart.
 
 ## Requirements on the host
 

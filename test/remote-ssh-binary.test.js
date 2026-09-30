@@ -49,9 +49,10 @@ test('ssh: /usr/bin/ssh is the fallback when ssh is not on the PATH', () => {
 });
 
 test('ssh: on Windows the PATH is searched for ssh.exe only, whatever the case of the Path key', () => {
-  const r = make({ platform: 'win32', env: { ...WIN_ENV, Path: 'C:\\Tools;C:\\Program Files\\Git\\usr\\bin' },
-    exists: ['C:\\Tools\\ssh.cmd', 'C:\\Program Files\\Git\\usr\\bin\\ssh.exe'] });
-  assert.equal(r.resolveSshPath(), 'C:\\Program Files\\Git\\usr\\bin\\ssh.exe');
+  const systemOpenSsh = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
+  const r = make({ platform: 'win32', env: { ...WIN_ENV, Path: 'C:\\Tools;D:\\bin' },
+    exists: ['C:\\Tools\\ssh', 'C:\\Tools\\ssh.cmd', 'D:\\bin\\ssh.exe', systemOpenSsh] });
+  assert.equal(r.resolveSshPath(), 'D:\\bin\\ssh.exe');
 });
 
 test('ssh: on Windows the system OpenSSH client comes before Git\'s when ssh is not on the PATH', () => {
@@ -103,13 +104,39 @@ test('ssh: a Windows .cmd or .bat SWITCHBOARD_SSH_PATH is kept, with a warning t
   }
 });
 
-test('ssh: the result is resolved once per resolver, and the warning logged once', () => {
-  const r = make({ env: { SWITCHBOARD_SSH_PATH: 'relative/ssh', PATH: '/usr/bin' }, exists: ['/usr/bin/ssh'] });
+test('ssh: the search runs once per resolver; later calls re-check only the path found, and warn once', () => {
+  const r = make({ env: { SWITCHBOARD_SSH_PATH: 'relative/ssh', PATH: '/nowhere:/usr/local/bin' }, exists: ['/usr/local/bin/ssh'] });
+  r.resolveSshPath();
+  assert.deepEqual(r.probes, ['/nowhere/ssh', '/usr/local/bin/ssh']);
   r.resolveSshPath();
   r.resolveSshPath();
-  r.resolveSshPath();
-  assert.deepEqual(r.probes, ['/usr/bin/ssh']);
+  assert.deepEqual(r.probes, ['/nowhere/ssh', '/usr/local/bin/ssh', '/usr/local/bin/ssh', '/usr/local/bin/ssh']);
   assert.equal(r.log.warnings.length, 1);
+});
+
+test('ssh: a path found by the search that disappears is searched for again', () => {
+  const exists = new Set(['/opt/a/ssh', '/opt/b/ssh']);
+  const r = createBinaryResolver({ env: { PATH: '/opt/a:/opt/b' }, platform: 'linux', isExecutable: (p) => exists.has(p), log: recordingLog() });
+  assert.equal(r.resolveSshPath(), '/opt/a/ssh');
+  exists.delete('/opt/a/ssh');
+  assert.equal(r.resolveSshPath(), '/opt/b/ssh');
+  assert.equal(r.resolveSshPath(), '/opt/b/ssh');
+});
+
+test('ssh: a configured path is never re-checked, even when it does not exist', () => {
+  const r = make({ env: { SWITCHBOARD_SSH_PATH: '/opt/missing/ssh', PATH: '/usr/bin' }, exists: ['/usr/bin/ssh'] });
+  r.resolveSshPath();
+  r.resolveSshPath();
+  assert.equal(r.resolveSshPath(), '/opt/missing/ssh');
+  assert.deepEqual(r.probes, []);
+});
+
+test('ssh: the bare-name fallback is not re-checked on every call', () => {
+  const r = make({ env: { PATH: '/nowhere' } });
+  r.resolveSshPath();
+  const after = r.probes.length;
+  r.resolveSshPath();
+  assert.equal(r.probes.length, after);
 });
 
 // ── scp ──────────────────────────────────────────────────────────────────
@@ -156,11 +183,42 @@ test('scp: a Windows .bat SWITCHBOARD_SCP_PATH is kept, with a warning', () => {
   assert.equal(r.log.warnings.length, 1);
 });
 
-test('scp: the result is resolved once per resolver', () => {
+test('scp: the search runs once per resolver, later calls re-check only the path found', () => {
   const r = make({ env: { PATH: '/a:/b' }, exists: ['/b/scp'] });
   r.resolveScpPath();
   r.resolveScpPath();
-  assert.deepEqual(r.probes, ['/a/scp', '/b/scp']);
+  assert.deepEqual(r.probes, ['/a/scp', '/b/scp', '/b/scp']);
+});
+
+test('scp: a path found by the search that disappears is searched for again', () => {
+  const exists = new Set(['/opt/a/scp', '/usr/bin/scp']);
+  const r = createBinaryResolver({ env: { PATH: '/opt/a' }, platform: 'linux', isExecutable: (p) => exists.has(p), log: recordingLog() });
+  assert.equal(r.resolveScpPath(), '/opt/a/scp');
+  exists.delete('/opt/a/scp');
+  assert.equal(r.resolveScpPath(), '/usr/bin/scp');
+});
+
+// ── the real disk probe ──────────────────────────────────────────────────
+
+test('the default probe skips a directory named ssh and a non-executable ssh file', { skip: process.platform === 'win32' && 'POSIX modes' }, (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-359-probe-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dirEntry = path.join(root, 'dir');
+  const plainEntry = path.join(root, 'plain');
+  const execEntry = path.join(root, 'exec');
+  fs.mkdirSync(path.join(dirEntry, 'ssh'), { recursive: true });
+  fs.mkdirSync(plainEntry);
+  fs.writeFileSync(path.join(plainEntry, 'ssh'), '#!/bin/sh\n', { mode: 0o644 });
+  fs.mkdirSync(execEntry);
+  fs.writeFileSync(path.join(execEntry, 'ssh'), '#!/bin/sh\n', { mode: 0o755 });
+
+  const resolve = (dirs) => createBinaryResolver({ env: { PATH: dirs.join(':') }, platform: process.platform, log: recordingLog() }).resolveSshPath();
+  assert.equal(resolve([dirEntry, execEntry]), path.join(execEntry, 'ssh'), 'a directory named ssh is not ssh');
+  assert.equal(resolve([plainEntry, execEntry]), path.join(execEntry, 'ssh'), 'a file without the execute bit is not ssh');
+  assert.equal(resolve([execEntry]), path.join(execEntry, 'ssh'));
 });
 
 // ── the process-wide resolver ────────────────────────────────────────────
@@ -193,4 +251,22 @@ test('the module-level resolver logs through the log it is given', (t) => {
   process.env.SWITCHBOARD_SSH_PATH = 'relative/ssh';
   binary.resolveSshPath();
   assert.equal(log.warnings.length, 1);
+});
+
+test('setResolverLog takes effect on a resolver that already ran', (t) => {
+  const saved = process.env.SWITCHBOARD_SSH_PATH;
+  t.after(() => {
+    if (saved === undefined) delete process.env.SWITCHBOARD_SSH_PATH; else process.env.SWITCHBOARD_SSH_PATH = saved;
+    binary.setResolverLog(null);
+    binary.resetResolvedBinaries();
+  });
+  process.env.SWITCHBOARD_SSH_PATH = 'relative/ssh';
+  const first = recordingLog();
+  const second = recordingLog();
+  binary.setResolverLog(first);
+  binary.resolveSshPath();
+  binary.setResolverLog(second);
+  binary.resolveSshPath();
+  assert.equal(first.warnings.length, 1);
+  assert.equal(second.warnings.length, 1, 'the new log must receive the warnings of the next resolution');
 });
