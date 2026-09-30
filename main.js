@@ -481,7 +481,7 @@ sessionCache.init({
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
-        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir } = sessionCache;
+        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
@@ -1054,6 +1054,8 @@ ipcMain.handle('rebuild-cache', async () => {
     return { ok: false, error: err.message };
   }
 });
+
+ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
 
 ipcMain.handle('get-projects', async (_event, showArchived) => {
   try {

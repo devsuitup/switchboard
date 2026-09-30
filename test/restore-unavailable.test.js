@@ -70,16 +70,22 @@ test('planner: a wait or a complete restore reports nothing unavailable', () => 
   assert.deepEqual(tick(planner, ['ok', 'ghost'], false).unavailable, []);
 });
 
-function setupTick({ mode, indexed }) {
+function setupTick({ mode, indexed, late = [], preplanned = true, finished = false }) {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
-  dom.window.api = {};
+  dom.window.api = {
+    getSetting: async () => ({ restoreOnStartup: mode, openWorkingSet: SAVED }),
+    getIndexingState: async () => ({ finished }),
+  };
   vm.runInContext(read('utils.js'), ctx);
   vm.runInContext(read('restore-plan.js'), ctx);
   vm.runInContext(`
     var openSessions = new Map();
     var sessionMap = new Map(${JSON.stringify(indexed.map((id) => [id, { sessionId: id, name: 'name-' + id }]))});
-    var restorePlanner = createRestorePlanner({ savedSet: ${JSON.stringify(SAVED)}, askOnce: ${mode === 'ask'} });
+    var restorePlanner = ${preplanned ? `createRestorePlanner({ savedSet: ${JSON.stringify(SAVED)}, askOnce: ${mode === 'ask'} })` : 'null'};
+    var restoreSavedIndex = new Map();
+    var SETTING_DEFAULTS = { restoreOnStartup: 'off' };
+    var loadProjects = async () => { for (const id of ${JSON.stringify(late)}) sessionMap.set(id, { sessionId: id, name: 'name-' + id }); };
     var restoreMode = ${JSON.stringify(mode)};
     var restoreIndexingDone = false;
     var sessionOpenedOutsideRestore = false;
@@ -89,7 +95,7 @@ function setupTick({ mode, indexed }) {
     async function runRestore(list) { restored.push(...list.map((i) => i.sessionId)); }
     function persistWorkingSet() {}
   `, ctx);
-  for (const name of ['tickRestorePlanner', 'showColdCacheNotice', 'showRestoreNotice', 'showNotRestoredNotice']) {
+  for (const name of ['tickRestorePlanner', 'showColdCacheNotice', 'showRestoreNotice', 'showNotRestoredNotice', 'markRestoreIndexingDone', 'restoreWorkingSet']) {
     if (APP_SRC.includes(`function ${name}(`)) vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   return { dom, ctx, doc: dom.window.document };
@@ -131,10 +137,45 @@ test('a saved session that is indexed after all is restored, not reported', asyn
   h.dom.window.close();
 });
 
+test('indexing ends with a session only in the last batch: it is reloaded and restored, not reported', async () => {
+  const h = setupTick({ mode: 'auto', indexed: ['ok'], late: ['ghost'] });
+  await vm.runInContext('markRestoreIndexingDone()', h.ctx);
+  assert.deepEqual([...vm.runInContext('restored', h.ctx)].sort(), ['ghost', 'ok']);
+  assert.equal(h.doc.getElementById('restore-unavailable-toast'), null);
+  h.dom.window.close();
+});
+
+test('indexing already finished when the planner starts (event missed): restore settles without any event', async () => {
+  const h = setupTick({ mode: 'ask', indexed: ['ok'], preplanned: false, finished: true });
+  await vm.runInContext('restoreWorkingSet()', h.ctx);
+  assert.equal(h.doc.getElementById('restore-cold-toast'), null);
+  assert.ok(h.doc.getElementById('restore-toast'));
+  assert.match(h.doc.getElementById('restore-unavailable-toast').textContent, /ghost/);
+  h.dom.window.close();
+});
+
+test('indexing still running when the planner starts: the waiting toast stays', async () => {
+  const h = setupTick({ mode: 'ask', indexed: ['ok'], preplanned: false, finished: false });
+  await vm.runInContext('restoreWorkingSet()', h.ctx);
+  assert.ok(h.doc.getElementById('restore-cold-toast'));
+  h.dom.window.close();
+});
+
+test('notice says the session is not in the index', async () => {
+  const h = setupTick({ mode: 'auto', indexed: ['ok'] });
+  vm.runInContext('restoreIndexingDone = true;', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  assert.match(h.doc.getElementById('restore-unavailable-toast').textContent, /not in the index/);
+  h.dom.window.close();
+});
+
 test('wiring: the renderer listens for the end of every indexing run, not only the first-run one', () => {
   assert.match(APP_SRC, /window\.api\.onIndexingFinished\(/);
   const body = functionSource(APP_SRC, 'markRestoreIndexingDone');
   assert.match(body, /restoreIndexingDone\s*=\s*true/);
+  assert.match(body, /loadProjects\(\)/);
   assert.match(body, /tickRestorePlanner\(\)/);
+  assert.match(APP_SRC, /getIndexingState\(\)/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /ipcMain\.handle\('get-indexing-state'/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), /'indexing-finished'/);
 });

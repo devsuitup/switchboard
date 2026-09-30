@@ -641,7 +641,11 @@ function sendIndexingProgress(payload) {
   }
 }
 
+let indexingFinished = false;
+function isIndexingFinished() { return indexingFinished; }
+
 function sendIndexingFinished() {
+  indexingFinished = true;
   const mw = getMainWindow();
   if (mw && !mw.isDestroyed()) {
     mw.webContents.send('indexing-finished');
@@ -801,6 +805,7 @@ function populateCacheViaWorker() {
   // interruption; it flips true only via setInitialScanComplete() on the
   // worker's final successful done message below.
   const coldStart = !isInitialScanComplete();
+  indexingFinished = false;
   sendStatus('Scanning projects…', 'active');
 
   let scannedFolders = 0;
@@ -926,6 +931,7 @@ module.exports = {
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,
+  isIndexingFinished,
   scanFoldersViaWorker,
   setRemoteRoots,
   getRemoteRoots,

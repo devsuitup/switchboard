@@ -225,6 +225,7 @@ test('warm start (initial scan already completed) never emits indexing-progress'
 
     const finished = db.sentEvents.filter(([channel]) => channel === 'indexing-finished');
     assert.equal(finished.length, 1, 'the restore planner needs the end of a warm-start scan too');
+    assert.equal(sessionCache.isIndexingFinished(), true, 'a listener that came late can pull the state');
 
     // The existing small-status-bar mechanism is untouched by this change.
     const statusEvents = db.sentEvents.filter(([channel]) => channel === 'status-update');
@@ -240,7 +241,10 @@ test('cold start also sends indexing-finished, once, after the last progress eve
     writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
     const db = makeFakeDb({ initialScanComplete: false });
     initCache(projectsDir, db);
-    await sessionCache.populateCacheViaWorker();
+    const run = sessionCache.populateCacheViaWorker();
+    assert.equal(sessionCache.isIndexingFinished(), false, 'a run in flight is not finished');
+    await run;
+    assert.equal(sessionCache.isIndexingFinished(), true);
     const channels = db.sentEvents.map(([channel]) => channel);
     assert.equal(channels.filter((c) => c === 'indexing-finished').length, 1);
     assert.equal(channels.lastIndexOf('indexing-progress') < channels.indexOf('indexing-finished'), true);

@@ -249,7 +249,12 @@ async function restoreWorkingSet() {
     restorePlanner = createRestorePlanner({ savedSet, askOnce: restoreMode === 'ask' });
   }
 
-  await tickRestorePlanner();
+  let finished = false;
+  try {
+    finished = Boolean((await window.api.getIndexingState()).finished);
+  } catch { /* the event still arrives */ }
+  if (finished) await markRestoreIndexingDone();
+  else await tickRestorePlanner();
 }
 
 async function tickRestorePlanner() {
@@ -346,8 +351,8 @@ function showNotRestoredNotice(unavailable) {
     return (s && cleanDisplayName(s.name || s.aiTitle || s.summary)) || item.sessionId;
   };
   const text = unavailable.length === 1
-    ? `Not restored: ${label(unavailable[0])} has no transcript`
-    : `Not restored: ${unavailable.length} sessions have no transcript (${unavailable.map(label).join(', ')})`;
+    ? `Not restored: ${label(unavailable[0])} is not in the index`
+    : `Not restored: ${unavailable.length} sessions are not in the index (${unavailable.map(label).join(', ')})`;
   showRestoreNotice('restore-unavailable-toast', text);
 }
 
@@ -359,9 +364,12 @@ function showLiveElsewhereNotice(skipped) {
   showRestoreNotice('restore-live-elsewhere-toast', text);
 }
 
-function markRestoreIndexingDone() {
+async function markRestoreIndexingDone() {
   restoreIndexingDone = true;
-  tickRestorePlanner();
+  try {
+    await loadProjects();
+  } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
+  await tickRestorePlanner();
 }
 
 async function maybeRetryRestoreWorkingSet() {
