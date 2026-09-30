@@ -121,6 +121,7 @@ function initFilePanel() {
   heldBarEl = document.createElement('div');
   heldBarEl.id = 'file-panel-held';
   heldBarEl.className = 'viewer-panel-notice';
+  heldBarEl.setAttribute('role', 'status');
   heldBarEl.style.display = 'none';
   filePanelContentEl.appendChild(heldBarEl);
 
@@ -134,6 +135,7 @@ function initFilePanel() {
     language: 'auto',
     onSave: (filePath, content, expected) => window.api.saveFileForPanel(filePath, content, expected),
     onClose: handleClose,
+    onDetachedSave: dropSavedHeldTabs,
   });
 
   // ── Diff-specific UI ──
@@ -507,7 +509,13 @@ function openFileTab(sessionId, data) {
 
 function reopenFileTab(sessionId, state, tab, data) {
   if (Number.isInteger(data.line) && data.line > 0) tab.pendingLine = data.line;
-  if (fpViewerOwner === tab) fpViewerPanel.rereadFromDisk();
+  if (fpViewerOwner === tab && !fpViewerPanel.editorView) {
+    tab.content = data.content;
+    fpViewerOwner = null;
+  } else if (fpViewerOwner === tab) {
+    fpViewerPanel.rereadFromDisk();
+  }
+  state.panelVisible = true;
   if (currentPanelSessionId === sessionId) {
     showPanel(state);
     renderPanel(sessionId);
@@ -523,8 +531,7 @@ function fileTabHasUnsavedEdits(tab) {
 function filePathKey(filePath) {
   const platform = window.api && window.api.platform;
   let key = String(filePath);
-  if (platform === 'win32') key = key.replace(/\\/g, '/');
-  if (platform === 'win32' || platform === 'darwin') key = key.toLowerCase();
+  if (platform === 'win32') key = key.replace(/\\/g, '/').toLowerCase();
   return key;
 }
 
@@ -534,6 +541,18 @@ function holdFileTabIfDirty(state, tab) {
   if (!state.heldFileTabs) state.heldFileTabs = new Map();
   const key = filePathKey(tab.filePath);
   state.heldFileTabs.set(key, tab);
+}
+
+function dropSavedHeldTabs() {
+  for (const [sessionId, state] of filePanelState) {
+    if (!state.heldFileTabs) continue;
+    for (const [key, tab] of state.heldFileTabs) {
+      if (!fileTabHasUnsavedEdits(tab)) {
+        state.heldFileTabs.delete(key);
+        if (sessionId === currentPanelSessionId) renderHeldBar(sessionId, state.currentTab);
+      }
+    }
+  }
 }
 
 function takeHeldFileTab(state, filePath) {
@@ -569,10 +588,13 @@ function renderHeldBar(sessionId, tab) {
   text.className = 'viewer-panel-notice-text';
   text.textContent = 'Unsaved edits kept in:';
   heldBarEl.appendChild(text);
-  for (const heldTab of held.values()) {
+  const tabs = [...held.values()];
+  for (const heldTab of tabs) {
     const btn = document.createElement('button');
     btn.className = 'fp-toolbar-btn file-panel-held-btn';
-    btn.textContent = heldTab.label;
+    btn.textContent = tabs.some((other) => other !== heldTab && other.label === heldTab.label)
+      ? `${basename(parentDir(heldTab.filePath))}/${heldTab.label}`
+      : heldTab.label;
     btn.title = `Show ${heldTab.filePath}`;
     btn.addEventListener('click', () => openFileTab(sessionId, { filePath: heldTab.filePath }));
     heldBarEl.appendChild(btn);
@@ -1801,6 +1823,10 @@ function refitActiveTerminal() {
 }
 
 // ── Utility ─────────────────────────────────────────────────────────
+
+function parentDir(filePath) {
+  return String(filePath).replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+}
 
 function basename(filePath) {
   if (!filePath) return 'untitled';

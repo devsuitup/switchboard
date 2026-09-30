@@ -55,3 +55,15 @@ test('openFile sends the renderer the path resolved, dot segments removed, with 
     assert.equal(data.content, 'a0\n');
   } finally { ws.close(); }
 });
+
+test('openFile without a usable filePath is answered with an error and opens nothing', async () => {
+  const sent = [];
+  const { ws, call } = await connect('s-invalid', sent);
+  try {
+    for (const [id, args] of [[1, {}], [2, { filePath: 42 }], [3, { filePath: '' }]]) {
+      const reply = await call(id, 'openFile', args);
+      assert.equal(reply.error && reply.error.code, -32602, JSON.stringify(args));
+    }
+    assert.deepEqual(sent.filter((args) => args[0] === 'mcp-open-file'), []);
+  } finally { ws.close(); }
+});

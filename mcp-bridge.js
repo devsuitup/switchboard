@@ -233,6 +233,9 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 
 async function handleOpenFile(entry, rpcId, args, log) {
   const { preview, startText, endText } = args;
+  if (typeof args.filePath !== 'string' || !args.filePath) {
+    return sendError(entry, rpcId, -32602, 'openFile: filePath must be a non-empty string');
+  }
   const filePath = path.resolve(args.filePath);
 
   let content = '';

@@ -147,7 +147,9 @@ Keying by path would hand one tab's result to another: a clean tab in another se
 
 When `destroyCurrentTab` removes a file tab with unsaved edits, it does not drop it: it keeps it in the session's `heldFileTabs`, a `Map` keyed by path. A tab the viewer shows is first snapshotted, as a switch to another session's tab snapshots it, then the viewer is destroyed; a tab away from the viewer already holds its `viewerState`. The tab keeps its token, so a save still in flight is recorded under it (`_detachedSaves`) and applied when the tab is shown again. `destroy()` clears the viewer's token for that reason: without it, a save resolving before the next `open()` would be applied to the destroyed editor and lost.
 
-A tab is dirty when the viewer's own `_isDirty` says so for the tab it shows (`hasUnsavedEdits`), and for a tab away from it when `snapshotHasUnsavedEdits` does: the snapshot's buffer differs from its `agreedBase`, unless a save that finished while the tab was away wrote exactly that buffer. A save that failed while away leaves the buffer different from the base, so the tab is held. A clean tab, or one that never reached the viewer, is dropped as before: it has nothing to lose.
+A tab is dirty when the viewer's own `_isDirty` says so for the tab it shows (`hasUnsavedEdits`), and for a tab away from it when `snapshotHasUnsavedEdits` does. Both apply the same test — the buffer differs from `agreedBase` and from the disk last seen — so a tab reads the same shown and away; the snapshot test also counts as clean a buffer that a save finished while the tab was away wrote exactly. A save that failed while away leaves the buffer different from both, so the tab is held. A clean tab, or one that never reached the viewer, is dropped as before: it has nothing to lose.
+
+A held tab whose save finishes while it is held and leaves it clean is taken out of `heldFileTabs`: `ViewerPanel` reports every save it records for an away tab (`opts.onDetachedSave`), and the file panel drops each held tab that no longer has unsaved edits and redraws the bar. What it held is on disk.
 
 A held tab comes back:
 
@@ -157,13 +159,15 @@ A held tab comes back:
 | an open names a held file (`openFileTab`) | that tab |
 | the user clicks its name in the bar above a file tab ("Unsaved edits kept in: …") | that tab |
 
+The bar (`#file-panel-held`) has `role="status"`, so a screen reader announces it without taking focus. Each name is set as `textContent`; two held files with the same name are shown with their parent directory (`x/a.md`, `y/a.md`).
+
 It is shown with `open(…, restore)` and re-read at once, like any return to the viewer: a write made while it was held — the diff the user just accepted, for instance — raises "changed on disk", and `_agreedBase` has not moved, so a save against that write is refused by main and asks. The bar is not shown over a diff: leaving an unanswered diff would leave the CLI waiting on it.
 
 ### Per route
 
 | Route | Over a dirty file tab | Over a clean file tab |
 |---|---|---|
-| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly |
+| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly. Before its editor exists (the CodeMirror bundle still loading) it has nothing to re-read: it is opened again with the content sent. |
 | `openFile` / path link, same file, tab away | kept with its snapshot and token, restored and re-read on return | the same |
 | `openFile` / path link, another file | tab held, the new file shown, the bar names the held one | replaced |
 | `openDiff` | tab held, restored when the session closes the diff | replaced; closing the diff closes the panel |
@@ -174,11 +178,11 @@ An open only ever reads and replaces the tab of the session it is aimed at: anot
 
 ### Paths
 
-Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: separators folded to `/` on `win32`, case folded on `win32` and `darwin`, as the file watch does (`sameFileName`). A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
+Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: on `win32`, separators folded to `/` and case folded; elsewhere, exactly. macOS is not folded: APFS can be case-sensitive, where `A.md` and `a.md` are two files, and holding one under the other's key would show the wrong buffer. A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
 
 ### The `ok` answer
 
-`openFile` answers `ok` as soon as main has sent the file to the renderer, before the renderer acts. That stays accurate: no open is declined or deferred. The file is shown, in the slot of the session it is aimed at, whatever that slot held.
+`openFile` without a non-empty string `filePath` is answered with a JSON-RPC error (`-32602`) and opens nothing. Otherwise it answers `ok` as soon as main has sent the file to the renderer, before the renderer acts. That stays accurate: no open is declined or deferred. The file is shown, in the slot of the session it is aimed at, whatever that slot held.
 
 ## Undo
 

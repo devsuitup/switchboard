@@ -490,6 +490,7 @@ class ViewerPanel {
   _recordDetachedSave(token, content, result) {
     if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
     else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
+    if (this.opts.onDetachedSave) this.opts.onDetachedSave(token);
   }
 
   getContent() {
@@ -601,7 +602,8 @@ class ViewerPanel {
 
   snapshotHasUnsavedEdits(state) {
     const detached = this._detachedSaves.get(state.token);
-    return state.content !== state.agreedBase && !(detached && detached.written === asEditorText(state.content));
+    return state.content !== state.agreedBase && state.content !== state.lastSeenDisk
+      && !(detached && detached.written === asEditorText(state.content));
   }
 
   rereadFromDisk() {

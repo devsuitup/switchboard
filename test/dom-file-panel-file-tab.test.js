@@ -43,11 +43,12 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { saves: [], openFile: null, openDiff: null, closeTab: null, closeAllDiffs: null, diffResponses: [], confirms: [], confirmAnswer: false, revealed: [], changed: new Set() };
+  const calls = { saves: [], openFile: null, openDiff: null, closeTab: null, closeAllDiffs: null, diffResponses: [], confirms: [], confirmAnswer: false, revealed: [], changed: new Set(), fileChanged: [] };
   let editor = null;
 
   window.api = new Proxy({
     onMcpOpenFile: (cb) => { calls.openFile = cb; },
+    onFileChanged: (cb) => { calls.fileChanged.push(cb); },
     onMcpOpenDiff: (cb) => { calls.openDiff = cb; },
     onMcpCloseTab: (cb) => { calls.closeTab = cb; },
     onMcpCloseAllDiffs: (cb) => { calls.closeAllDiffs = cb; },
@@ -955,5 +956,204 @@ test("an open in one session leaves another session's dirty tab on the same file
     ctx.window.switchPanel('s2');
     await flush();
     assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+function holdSaveReplies(ctx) {
+  const realSave = ctx.window.api.saveFileForPanel;
+  const pending = [];
+  ctx.window.api.saveFileForPanel = (p, c, e) => {
+    const written = realSave(p, c, e);
+    return new Promise((resolve) => pending.push(() => resolve(written)));
+  };
+  return { pending, release: () => { ctx.window.api.saveFileForPanel = realSave; } };
+}
+
+const fireFileChanged = (ctx, p) => ctx.calls.fileChanged.forEach((cb) => cb(p));
+
+test('on macOS a path that differs only by case is another file', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.platform = 'darwin';
+    await dirtyTabShown(ctx);
+    ctx.calls.openFile('s1', { filePath: '/repo/A.md', content: 'A\n' });
+    await flush();
+    assert.equal(ctx.viewer().filePath, '/repo/A.md');
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('when the tab in the slot ends, the tab held last comes back', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.disk.set(B, 'b0\n');
+    ctx.calls.openFile('s1', { filePath: B, content: 'b0\n' });
+    await flush();
+    ctx.editor().type('theirs');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: C, oldContent: 'c0\n', newContent: 'c1\n', tabName: 'c.md' });
+    await flush();
+    ctx.calls.closeTab('s1', 'd1');
+    await flush();
+    assert.equal(ctx.viewer().filePath, B);
+    assert.equal(content(ctx), 'b0\ntheirs');
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('a held file name is shown as text, never parsed as markup', async () => {
+  const ctx = setup();
+  try {
+    const EVIL = '/repo/<img src=x onerror=alert(1)>.md';
+    ctx.disk.set(EVIL, 'e0\n');
+    ctx.disk.set(C, 'c0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: EVIL, content: 'e0\n' });
+    await flush();
+    ctx.editor().type('mine');
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    const bar = ctx.window.document.getElementById('file-panel-held');
+    assert.equal(bar.querySelector('img'), null);
+    assert.deepEqual(heldBar(ctx), ['<img src=x onerror=alert(1)>.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('the bar announces itself politely and tells apart two held files of the same name', async () => {
+  const ctx = setup();
+  try {
+    const X = '/repo/x/a.md';
+    const Y = '/repo/y/a.md';
+    ctx.disk.set(X, 'x0\n');
+    ctx.disk.set(Y, 'y0\n');
+    ctx.disk.set(C, 'c0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: X, content: 'x0\n' });
+    await flush();
+    ctx.editor().type('mine');
+    ctx.calls.openFile('s1', { filePath: Y, content: 'y0\n' });
+    await flush();
+    ctx.editor().type('mine');
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    assert.equal(ctx.window.document.getElementById('file-panel-held').getAttribute('role'), 'status');
+    assert.deepEqual(heldBar(ctx), ['x/a.md', 'y/a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('a save that succeeds while its tab is held takes the tab out of the bar', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    const held = holdSaves(ctx);
+    pressSave(ctx);
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+    held.pending[0]();
+    await flush();
+    held.release();
+    assert.equal(ctx.disk.get(A), 'a0\nmine');
+    assert.equal(heldBar(ctx), null);
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\nmine' });
+    await flush();
+    assert.equal(content(ctx), 'a0\nmine');
+  } finally { ctx.destroy(); }
+});
+
+test('a save that fails while its tab is held leaves the tab in the bar', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    const held = holdSaves(ctx);
+    pressSave(ctx);
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    held.pending[0]({ ok: false, error: 'disk full' });
+    await flush();
+    held.release();
+    assert.deepEqual(heldBar(ctx), ['a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('an open over the shown tab while its save is in flight and already on disk holds nothing', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    const held = holdSaveReplies(ctx);
+    pressSave(ctx);
+    await flush();
+    fireFileChanged(ctx, A);
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    assert.equal(heldBar(ctx), null);
+    held.pending[0]();
+    await flush();
+    held.release();
+  } finally { ctx.destroy(); }
+});
+
+test('an open over the same tab away while its save is in flight and already on disk holds nothing either', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.disk.set(B, 'b0\n');
+    const held = holdSaveReplies(ctx);
+    pressSave(ctx);
+    await flush();
+    fireFileChanged(ctx, A);
+    await flush();
+    ctx.window.switchPanel('s2');
+    ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(heldBar(ctx), null);
+    held.pending[0]();
+    await flush();
+    held.release();
+  } finally { ctx.destroy(); }
+});
+
+test('the same file opened again before the editor exists shows the content last sent', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.disk.set(A, 'a1\n');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a1\n' });
+    await flush();
+    assert.equal(content(ctx), 'a1\n');
+    ctx.editor().type('Y');
+    await save(ctx);
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a1\nY', expected: 'a1\n' });
+  } finally { ctx.destroy(); }
+});
+
+test('a buffer reverted to its base after a session write is clean while away: another open holds nothing', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.disk.set(A, 'session\n');
+    fireFileChanged(ctx, A);
+    await flush();
+    assert.match(noticeOf(ctx), /changed on disk/);
+    const doc = ctx.editor().state.doc;
+    ctx.editor().dispatch({ changes: { from: 0, to: doc.length, insert: 'a0\n' } });
+
+    ctx.disk.set(B, 'b0\n');
+    ctx.window.switchPanel('s2');
+    ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+    await flush();
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(ctx.viewer().filePath, C);
+    assert.equal(heldBar(ctx), null);
   } finally { ctx.destroy(); }
 });
