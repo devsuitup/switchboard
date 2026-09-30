@@ -73,7 +73,8 @@ class ViewerPanel {
     this._lastSeenDisk = null;
     this._noticeState = null;
     this._noticeSeq = 0;
-    this._detachedSaves = new Map();
+    this._detachedSaves = new WeakMap();
+    this._token = null;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -298,9 +299,10 @@ class ViewerPanel {
     this._pendingSave = null;
     this._saveQueued = false;
     this._setNotice(null);
-    const detached = this._detachedSaves.get(filePath);
-    this._detachedSaves.delete(filePath);
-    if (restore && detached) {
+    this._token = (restore && restore.token) || {};
+    const detached = this._detachedSaves.get(this._token);
+    this._detachedSaves.delete(this._token);
+    if (detached) {
       if (detached.error) this._setNotice('save-failed', detached.error);
       else this._agreedBase = this._lastSeenDisk = detached.written;
     }
@@ -438,7 +440,7 @@ class ViewerPanel {
       return;
     }
     const content = this.getContent();
-    const filePath = this.filePath;
+    const token = this._token;
     const myGen = this._openGen;
     const noticeSeq = this._noticeSeq;
     this._pendingSave = asEditorText(content);
@@ -454,14 +456,14 @@ class ViewerPanel {
         this._agreedBase = this._lastSeenDisk;
         result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       }
-      if (this._openGen !== myGen) {
-        this._recordDetachedSave(filePath, content, result);
+      if (this._token !== token) {
+        this._recordDetachedSave(token, content, result);
         return;
       }
       if (result && result.ok !== false) {
         saved = true;
         this._agreedBase = asEditorText(content);
-        if (this._noticeSeq === noticeSeq) {
+        if (this._noticeSeq === noticeSeq || this._lastSeenDisk === this._agreedBase) {
           this._lastSeenDisk = this._agreedBase;
           this._setNotice(null);
         }
@@ -472,8 +474,8 @@ class ViewerPanel {
         this._setNotice('save-failed', result.error || 'unknown error');
       }
     } catch (err) {
-      if (this._openGen === myGen) this._setNotice('save-failed', (err && err.message) || 'unknown error');
-      else this._recordDetachedSave(filePath, content, { ok: false, error: err && err.message });
+      if (this._token === token) this._setNotice('save-failed', (err && err.message) || 'unknown error');
+      else this._recordDetachedSave(token, content, { ok: false, error: err && err.message });
     } finally {
       if (this._openGen === myGen) {
         this._pendingSave = null;
@@ -485,9 +487,10 @@ class ViewerPanel {
   }
 
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
-  _recordDetachedSave(filePath, content, result) {
-    if (result && result.ok !== false) this._detachedSaves.set(filePath, { written: asEditorText(content) });
-    else this._detachedSaves.set(filePath, { error: (result && result.error) || 'unknown error' });
+  _recordDetachedSave(token, content, result) {
+    if (!token) return;
+    if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
+    else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
   }
 
   getContent() {
@@ -496,6 +499,7 @@ class ViewerPanel {
 
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
+    this._token = null;
     this._unwatchFile();
     if (this.editorView) {
       this.editorView.destroy();
@@ -594,7 +598,7 @@ class ViewerPanel {
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
   snapshot() {
     if (!this.editorView || !this.filePath) return null;
-    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk };
+    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
   }
 
   _replaceContent(newContent) {

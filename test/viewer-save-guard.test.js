@@ -160,3 +160,17 @@ test('both handlers refuse a file that does not exist, and create nothing', (t) 
   assert.deepEqual(h.saveFileForPanel(missing, 'y\n', ''), { ok: false, error: 'File does not exist' });
   assert.equal(fs.existsSync(missing), false);
 });
+
+test("main's save handlers read the known projects on every save, not once", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-save-roots-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const known = new Set();
+  const h = createMainPanelSaves({ getKnownProjectPaths: () => known, invalidateFtsSignature: () => {} });
+  const project = path.join(root, 'later');
+  fs.mkdirSync(project);
+  const note = path.join(project, 'note.md');
+  fs.writeFileSync(note, 'n\n');
+  assert.equal(h.saveMemory(note, 'x\n', 'n\n').error, 'path not allowed');
+  known.add(project);
+  assert.deepEqual(h.saveMemory(note, 'x\n', 'n\n'), { ok: true }, 'a project known after the handlers were built is allowed');
+});

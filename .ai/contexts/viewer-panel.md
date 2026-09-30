@@ -9,7 +9,7 @@
 | `public/viewer-panel.js` | ~415 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
 | `public/viewer-toolbar.js` | ~265 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. |
 | `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
-| `viewer-save-guard.js` | ~80 | Main-side `createPanelSaveHandlers`, the `save-memory` and `save-file-for-panel` handlers, and `refuseIfMoved` — "Saving over a file that moved". |
+| `viewer-save-guard.js` | ~100 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -132,7 +132,14 @@ Everything below is presentation; none of it carries the rule.
 - A tab with a `viewerState` for its path is reopened from it with `open(title, path, buffer, restore)`, then re-read at once, so a write made while it was away is treated like any other: a clean buffer reloads, a dirty one keeps its edits and says so. `tab.content`, the content first read when the tab opened, is used only for the tab's first showing.
 - Destroying a file tab destroys the viewer only if that tab is its owner; a tab that never reached the viewer, or no longer holds it, has nothing in it to tear down.
 
-A save still in flight when another tab takes the viewer resolves against a newer `_openGen`. Its outcome is recorded by path (`_detachedSaves`) and applied when that file is next restored: a success moves the restored base to what was written, so the tab's own write is not reported as a change on disk; a failure shows `Save failed: <reason>` in the notice. The file panel shows no dirty marker of its own, so without it a failed save would go unreported. Opening the path afresh discards the record.
+Each showing of a file in the viewer carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the tab's snapshot, so the token names the tab, not the path — two sessions' tabs on the same file have different tokens. A save captures the token when it starts, and when it resolves:
+
+- if the viewer holds that token — the tab never left, or came back while the save was in flight — the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
+- otherwise the tab is away, and the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`) and applied when that tab is restored.
+
+Keying by path would hand one tab's result to another: a clean tab in another session on the same file would take the saving tab's base while still showing the old content, and its next save would pass main's check and replace the write. The file panel shows no dirty marker of its own, so without the record a failed save would go unreported.
+
+A restore re-reads the disk at once, and that read can see the save's own write before the save's answer arrives; the success then clears the "changed on disk" notice the read raised, because the disk last seen is exactly what was written.
 
 ## Undo
 

@@ -252,3 +252,198 @@ test('a save that succeeds after its tab left the viewer moves that tab\'s base'
     assert.deepEqual(ctx.calls.confirms, []);
   } finally { ctx.destroy(); }
 });
+
+// writeFirst: the write lands on disk at once and only the answer is held.
+function holdSaves(ctx, { writeFirst = false } = {}) {
+  const realSave = ctx.window.api.saveFileForPanel;
+  const pending = [];
+  ctx.window.api.saveFileForPanel = (p, content, expected) => {
+    const early = writeFirst ? realSave(p, content, expected) : null;
+    return new Promise((resolve) => {
+      pending.push((outcome) => resolve(outcome || early || realSave(p, content, expected)));
+    });
+  };
+  return { pending, release: () => { ctx.window.api.saveFileForPanel = realSave; } };
+}
+
+function pressSave(ctx) {
+  ctx.window.document.getElementById('file-panel-viewer').dispatchEvent(new ctx.window.CustomEvent('cm-save'));
+}
+
+async function sameFileInTwoSessions(ctx) {
+  ctx.disk.set(A, 'a0\n');
+  ctx.disk.set(B, 'b0\n');
+  ctx.window.switchPanel('s2');
+  ctx.calls.openFile('s2', { filePath: A, content: 'a0\n' });
+  await flush();
+  ctx.window.switchPanel('s1');
+  ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+  await flush();
+  const held = holdSaves(ctx);
+  ctx.editor().type('X');
+  pressSave(ctx);
+  await flush();
+  ctx.window.switchPanel('s3');
+  ctx.calls.openFile('s3', { filePath: B, content: 'b0\n' });
+  await flush();
+  return held;
+}
+
+test("a save finishing while away belongs to the tab that made it, not to another session's tab on the same file (success)", async () => {
+  const ctx = setup();
+  try {
+    const held = await sameFileInTwoSessions(ctx);
+    held.pending[0]();
+    await flush();
+    held.release();
+    assert.equal(ctx.disk.get(A), 'a0\nX');
+
+    ctx.window.switchPanel('s2');
+    await flush();
+    assert.equal(content(ctx), 'a0\nX', "s2's clean tab reloads s1's write rather than taking s1's base");
+    ctx.editor().type('Q');
+    await save(ctx);
+    assert.equal(ctx.disk.get(A), 'a0\nXQ', "s1's X survives");
+
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(noticeOf(ctx), null);
+  } finally { ctx.destroy(); }
+});
+
+test("a save failing while away is reported to the tab that made it, and to no other (failure)", async () => {
+  const ctx = setup();
+  try {
+    const held = await sameFileInTwoSessions(ctx);
+    held.pending[0]({ ok: false, error: 'disk full' });
+    await flush();
+    held.release();
+
+    ctx.window.switchPanel('s2');
+    await flush();
+    assert.equal(noticeOf(ctx), null, 's2 did not save anything');
+    assert.equal(content(ctx), 'a0\n');
+
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+    assert.equal(content(ctx), 'a0\nX');
+  } finally { ctx.destroy(); }
+});
+
+async function saveAwayAndBack(ctx, holdOptions) {
+  ctx.disk.set(A, 'a0\n');
+  ctx.disk.set(B, 'b0\n');
+  ctx.window.switchPanel('s1');
+  ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+  await flush();
+  const held = holdSaves(ctx, holdOptions);
+  ctx.editor().type('X');
+  pressSave(ctx);
+  await flush();
+  ctx.editor().type('Z');
+  ctx.window.switchPanel('s2');
+  ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+  await flush();
+  ctx.window.switchPanel('s1');
+  await flush();
+  return held;
+}
+
+test('a save that fails after its tab came back shows the failure', async () => {
+  const ctx = setup();
+  try {
+    const held = await saveAwayAndBack(ctx);
+    held.pending[0]({ ok: false, error: 'disk full' });
+    await flush();
+    held.release();
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+  } finally { ctx.destroy(); }
+});
+
+test('a save that succeeds after its tab came back moves the base, with no false change reported', async () => {
+  const ctx = setup();
+  try {
+    const held = await saveAwayAndBack(ctx, { writeFirst: true });
+    assert.equal(ctx.disk.get(A), 'a0\nX', 'the write has landed; only the answer is pending');
+    held.pending[0]();
+    await flush();
+    held.release();
+    assert.equal(noticeOf(ctx), null, 'the re-read on return saw our own write, not a change by someone else');
+    await save(ctx);
+    assert.equal(ctx.calls.saves.at(-1).expected, 'a0\nX');
+    assert.equal(ctx.disk.get(A), 'a0\nXZ');
+    assert.deepEqual(ctx.calls.confirms, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a save whose IPC rejects while its tab is away is reported when the tab returns', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.disk.set(B, 'b0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    const realSave = ctx.window.api.saveFileForPanel;
+    let fail;
+    ctx.window.api.saveFileForPanel = () => new Promise((_resolve, reject) => { fail = () => reject(new Error('the channel is gone')); });
+    ctx.editor().type('X');
+    pressSave(ctx);
+    await flush();
+    ctx.window.switchPanel('s2');
+    ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+    await flush();
+    fail();
+    await flush();
+    ctx.window.api.saveFileForPanel = realSave;
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(noticeOf(ctx), 'Save failed: the channel is gone');
+  } finally { ctx.destroy(); }
+});
+
+test('a save whose IPC rejects after its tab came back shows the failure', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.disk.set(B, 'b0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    const realSave = ctx.window.api.saveFileForPanel;
+    let fail;
+    ctx.window.api.saveFileForPanel = () => new Promise((_resolve, reject) => { fail = () => reject(new Error('the channel is gone')); });
+    ctx.editor().type('X');
+    pressSave(ctx);
+    await flush();
+    ctx.window.switchPanel('s2');
+    ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+    await flush();
+    ctx.window.switchPanel('s1');
+    await flush();
+    fail();
+    await flush();
+    ctx.window.api.saveFileForPanel = realSave;
+    assert.equal(noticeOf(ctx), 'Save failed: the channel is gone');
+  } finally { ctx.destroy(); }
+});
+
+test('re-rendering the shown tab keeps its notice', async () => {
+  const ctx = setup();
+  try {
+    ctx.disk.set(A, 'a0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    const realSave = ctx.window.api.saveFileForPanel;
+    ctx.window.api.saveFileForPanel = () => Promise.resolve({ ok: false, error: 'disk full' });
+    ctx.editor().type('X');
+    await save(ctx);
+    ctx.window.api.saveFileForPanel = realSave;
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+    ctx.window.renderPanel('s1');
+    await flush();
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+  } finally { ctx.destroy(); }
+});
