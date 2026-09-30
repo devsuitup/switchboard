@@ -1473,7 +1473,7 @@ loadProjects().then(async () => {
   }
   // Restore working set (persisted across full restarts via global settings)
   await restoreWorkingSet();
-  if (localStorage.getItem('agentsViewActive') === '1') showAgentsView();
+  restoreAgentsViewAtStartup();
 });
 
 // Live-reload sidebar when filesystem changes are detected

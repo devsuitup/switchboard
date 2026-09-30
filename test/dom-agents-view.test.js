@@ -11,7 +11,9 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const HTML = `<!DOCTYPE html><html><body>
   <div id="placeholder"></div>
   <div id="terminal-area"><div id="terminal-header"></div><div id="grid-viewer"></div><div id="terminals"></div></div>
-  <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="work-files-viewer"></div><div id="settings-viewer"></div><div id="jsonl-viewer"></div>
+  <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="work-files-viewer"></div><div id="jsonl-viewer"></div>
+  <div id="settings-viewer"><div id="settings-viewer-title"></div><div id="settings-viewer-body"></div></div>
+  <div id="memory-content"></div><div id="work-files-content"></div>
   <div id="agents-viewer" style="display:none;">
     <div id="agents-viewer-header"><span id="agents-viewer-title">Agents</span><span id="agents-viewer-count"></span>
       <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
@@ -26,9 +28,10 @@ function evalFile(dom, file) {
   vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
 }
 
-function setup() {
+function setup({ storage = {}, settingsPanel = false } = {}) {
   const dom = new JSDOM(HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
+  for (const [k, v] of Object.entries(storage)) window.localStorage.setItem(k, v);
   const calls = { verbs: [], opened: [], jsonl: [], external: [], stopped: [], shown: [], sidebarRefreshes: 0, fetches: 0 };
   let changedCb = null;
   let snapshot = { roster: [], daemonReachable: true };
@@ -38,6 +41,14 @@ function setup() {
     onBgAgentsChanged: (cb) => { changedCb = cb; },
     openExternal: async (href) => calls.external.push(href),
     stopSession: async (id) => { calls.stopped.push(id); return { ok: true }; },
+    readMemory: async () => 'memory text',
+    readWorkFile: async () => 'work file text',
+    getSetting: async () => ({}),
+    setSetting: async () => ({ ok: true }),
+    getShellProfiles: async () => [],
+    getAppVersion: async () => '0.0.0',
+    onUpdaterEvent: () => {},
+    platform: 'linux',
   };
   const g = {
     placeholder: window.document.getElementById('placeholder'),
@@ -50,6 +61,11 @@ function setup() {
     settingsViewer: window.document.getElementById('settings-viewer'),
     jsonlViewer: window.document.getElementById('jsonl-viewer'),
     resortBtn: window.document.getElementById('resort-btn'),
+    memoryContent: window.document.getElementById('memory-content'),
+    workFilesContent: window.document.getElementById('work-files-content'),
+    CSS: { escape: (s) => String(s).replace(/["\\]/g, '\\$&') },
+    memoryPanel: { open: () => {} },
+    workFilesPanel: { open: () => {} },
     openSessions: new Map(),
     sessionMap: new Map(),
     activeSessionId: null,
@@ -67,6 +83,12 @@ function setup() {
   evalFile(dom, path.join(PUBLIC, 'session-state.js'));
   evalFile(dom, path.join(PUBLIC, 'memory-workfiles-view.js'));
   evalFile(dom, path.join(PUBLIC, 'agents-view.js'));
+  if (settingsPanel) {
+    evalFile(dom, path.join(PUBLIC, 'setting-defaults.js'));
+    evalFile(dom, path.join(PUBLIC, 'shortcuts.js'));
+    evalFile(dom, path.join(PUBLIC, 'terminal-themes.js'));
+    evalFile(dom, path.join(PUBLIC, 'settings-panel.js'));
+  }
   window.initAgentsView();
   const read = (expr) => vm.runInContext(expr, dom.getInternalVMContext());
   return {
@@ -225,4 +247,57 @@ test('a blocked job counts as running, sorts with the live rows and keeps only t
   assert.equal(detail.querySelector('[data-verb="rm"]').disabled, true);
   detail.querySelector('[data-verb="attach"]').click();
   assert.deepEqual({ ...ctx.calls.opened[0][1] }, { type: 'attach', jobId: 'cccccccc', cwd: '/w/em' });
+});
+
+test('hiding a view that is not open leaves the persisted flag untouched', (t) => {
+  const ctx = setup({ storage: { agentsViewActive: '1' } }); t.after(() => ctx.destroy());
+  ctx.window.hideAllViewers();
+  ctx.window.hideAgentsView({ restore: false });
+  ctx.window.hideAgentsView();
+  assert.equal(ctx.window.localStorage.getItem('agentsViewActive'), '1');
+});
+
+test('a view open at the last run is reopened after the startup restore showed a session and the grid', async (t) => {
+  const ctx = setup({ storage: { agentsViewActive: '1' } }); t.after(() => ctx.destroy());
+  ctx.window.hideAgentsView({ restore: false });
+  ctx.window.hideAllViewers();
+  ctx.window.localStorage.setItem('agentsViewActive', '0');
+  await ctx.window.restoreAgentsViewAtStartup();
+  assert.equal(ctx.read('agentsViewActive'), true);
+  assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'flex');
+  assert.equal(ctx.window.localStorage.getItem('agentsViewActive'), '1');
+});
+
+test('a view closed at the last run stays closed after the startup restore', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  await ctx.window.restoreAgentsViewAtStartup();
+  assert.equal(ctx.read('agentsViewActive'), false);
+  assert.equal(ctx.calls.fetches, 0);
+});
+
+test('opening a memory file closes the agents view', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  await ctx.window.showAgentsView();
+  await ctx.window.openMemory({ filePath: '/m/a.md', filename: 'a.md' });
+  assert.equal(ctx.read('agentsViewActive'), false);
+  assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
+  assert.equal(ctx.window.memoryViewer.style.display, 'flex');
+});
+
+test('opening a work file closes the agents view', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  await ctx.window.showAgentsView();
+  await ctx.window.openWorkFile({ filePath: '/w/.work-files/a.md', filename: 'a.md' });
+  assert.equal(ctx.read('agentsViewActive'), false);
+  assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
+  assert.equal(ctx.window.workFilesViewer.style.display, 'flex');
+});
+
+test('opening the settings closes the agents view', async (t) => {
+  const ctx = setup({ settingsPanel: true }); t.after(() => ctx.destroy());
+  await ctx.window.showAgentsView();
+  await ctx.window.openSettingsViewer('global');
+  assert.equal(ctx.read('agentsViewActive'), false);
+  assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
+  assert.equal(ctx.window.settingsViewer.style.display, 'flex');
 });

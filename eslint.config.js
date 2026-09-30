@@ -333,6 +333,7 @@ const rendererCrossFileGlobals = {
   showAgentsView: 'readonly',
   hideAgentsView: 'readonly',
   toggleAgentsView: 'readonly',
+  restoreAgentsViewAtStartup: 'readonly',
   applyAgentsSnapshot: 'readonly',
   refreshAgentsRoster: 'readonly',
   attachBgAgent: 'readonly',

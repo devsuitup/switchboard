@@ -8,6 +8,7 @@ let agentsDaemonReachable = true;
 let agentsSelectedKey = null;
 let agentsShowFinished = true;
 let agentsReconcileTimer = null;
+let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
 const agentsVerbErrors = new Map();
 
@@ -258,7 +259,7 @@ function hideAgentsView({ restore = true } = {}) {
   if (el) el.style.display = 'none';
   const wasActive = agentsViewActive;
   agentsViewActive = false;
-  localStorage.setItem('agentsViewActive', '0');
+  if (wasActive) localStorage.setItem('agentsViewActive', '0');
   if (agentsReconcileTimer) { clearInterval(agentsReconcileTimer); agentsReconcileTimer = null; }
   setAgentsToggleActive(false);
   if (!wasActive || !restore) return;
@@ -280,7 +281,14 @@ function toggleAgentsView() {
   else showAgentsView();
 }
 
+async function restoreAgentsViewAtStartup() {
+  if (!agentsOpenAtStartup) return;
+  agentsOpenAtStartup = false;
+  await showAgentsView();
+}
+
 function initAgentsView() {
+  agentsOpenAtStartup = localStorage.getItem('agentsViewActive') === '1';
   agentsShowFinished = localStorage.getItem('agentsShowFinished') !== '0';
   const box = document.getElementById('agents-show-finished');
   if (box) {

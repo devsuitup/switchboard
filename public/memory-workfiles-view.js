@@ -193,6 +193,7 @@ async function openMemory(file) {
   terminalArea.style.display = 'none';
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);
@@ -345,6 +346,7 @@ async function openWorkFile(file) {
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
+  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   workFilesViewer.style.display = 'flex';
 
   workFilesPanel.open(file.filename, file.filePath, content);
