@@ -74,7 +74,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler } = require('./schedule-runner');
+const { startScheduler, knownProjectPaths, refusedScheduleBinds } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -2557,6 +2557,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
         const bindEnv = sandboxBindEnv(extraBinds);
         if (bindEnv) ptyEnv.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        const transcriptCwd = spawnCwd || projectPath;
+        if (transcriptCwd) ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(transcriptCwd);
       }
 
       ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -3042,8 +3044,16 @@ if (!gotSingleInstanceLock) {
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
+        // see docs/sandbox.md ("Schedules")
+        const refused = refusedScheduleBinds(addDirs, knownProjectPaths(), os.homedir());
+        if (refused.length) {
+          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          if (onDone) onDone();
+          return;
+        }
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
       }
       const args = shellArgs(shell, cmd, profile.args || []);
 

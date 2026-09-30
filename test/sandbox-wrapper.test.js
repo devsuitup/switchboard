@@ -28,6 +28,8 @@ function cleanEnv(extra = {}) {
   return { ...env, ...extra };
 }
 
+const read0 = (p) => fs.readFileSync(p, 'utf8');
+
 /** Run git in a rig directory, with a clean environment and no user config. */
 function git(cwd, ...args) {
   const res = spawnSync('git', args, {
@@ -299,7 +301,7 @@ test('sandbox wrapper: a successful launch creates the state dirs and hides the 
 /** A ~/.claude with the shape the CLI leaves behind: state, config, a script. */
 function seedClaudeDir(home) {
   const dir = path.join(home, '.claude');
-  for (const d of ['projects', 'hooks', 'commands', 'agents', 'skills', 'plugins', 'shell-snapshots']) {
+  for (const d of ['projects', 'hooks', 'commands', 'agents', 'skills', 'plugins', 'shell-snapshots', 'session-env', 'backups', 'state']) {
     fs.mkdirSync(path.join(dir, d), { recursive: true });
   }
   fs.writeFileSync(path.join(dir, 'settings.json'), '{}\n');
@@ -337,10 +339,14 @@ test('sandbox wrapper: ~/.claude is a private tmpfs, its state bound back read-w
         assert.equal(m?.op, '--ro-bind', `${name} must be read-only: only listed state is writable`);
         assert.ok(m.index > tmpfs.index, `${name} must be mounted on top of the tmpfs`);
       }
-      for (const name of ['projects', 'shell-snapshots', 'todos', 'agent-memory', '.credentials.json', 'history.jsonl', 'policy-limits.json']) {
+      for (const name of ['todos', 'agent-memory', '.credentials.json', 'history.jsonl', 'policy-limits.json']) {
         const m = mountAt(ops, path.join(dir, name));
         assert.equal(m?.op, '--bind', `${name} must stay read-write`);
         assert.ok(m.index > tmpfs.index, `${name} must be mounted on top of the tmpfs`);
+      }
+      for (const name of ['shell-snapshots', 'session-env', 'backups', 'state']) {
+        assert.equal(mountAt(ops, path.join(dir, name))?.op, '--tmpfs',
+          `${name} must be private: other sessions source or restore what is in it`);
       }
     } finally {
       rig.cleanup();
@@ -433,20 +439,54 @@ test('sandbox wrapper: a cycle of directory links under a read-only entry is fol
     }
   });
 
-test('sandbox wrapper: a symlinked state entry has its target bound read-write, so the session\'s state still lands',
+/** The CLI's transcript folder name for a working directory. */
+const folderOf = (dir) => dir.replace(/[^a-zA-Z0-9]/g, '-');
+
+test('sandbox wrapper: a symlinked state entry of ~/.claude has its target bound when it is of the same kind and name',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
     try {
       const dir = path.join(rig.home, '.claude');
       fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
       const store = path.join(rig.root, 'store', 'projects');
+      fs.mkdirSync(todos, { recursive: true });
       fs.mkdirSync(store, { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
       fs.symlinkSync(store, path.join(dir, 'projects'));
       const { status, stderr } = rig.run();
       assert.equal(status, 0, stderr);
       const ops = parseMounts(rig.lastBwrapArgs());
-      assert.equal(mountAt(ops, path.join(dir, 'projects'))?.op, '--symlink');
-      assert.deepEqual([mountAt(ops, store)?.op, mountAt(ops, store)?.src], ['--bind', store]);
+      assert.equal(mountAt(ops, path.join(dir, 'todos'))?.op, '--symlink');
+      assert.deepEqual([mountAt(ops, todos)?.op, mountAt(ops, todos)?.src], ['--bind', todos]);
+      assert.equal(mountAt(ops, store)?.op, '--ro-bind', 'a linked projects is read-only like a plain one');
+      assert.equal(mountAt(ops, path.join(store, folderOf(rig.proj)))?.op, '--bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a symlinked state entry of ~/.claude whose target has another name, such as ~/.bashrc',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const bashrc = path.join(rig.home, '.bashrc');
+      fs.writeFileSync(bashrc, '');
+      fs.symlinkSync(bashrc, path.join(dir, 'history.jsonl'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /history\.jsonl links to .*\.bashrc/);
+
+      fs.unlinkSync(path.join(dir, 'history.jsonl'));
+      const fileNamedTodos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(path.dirname(fileNamedTodos), { recursive: true });
+      fs.writeFileSync(fileNamedTodos, '');
+      fs.symlinkSync(fileNamedTodos, path.join(dir, 'todos'));
+      const kind = rig.run();
+      assert.equal(kind.status, 125, 'a directory entry must link to a directory');
+      assert.match(kind.stderr, /todos links to .* a dir of the same name/);
     } finally {
       rig.cleanup();
     }
@@ -458,10 +498,10 @@ test('sandbox wrapper: refuses a symlinked state entry whose target contains $HO
     try {
       const dir = path.join(rig.home, '.claude');
       fs.mkdirSync(dir);
-      fs.symlinkSync(rig.root, path.join(dir, 'projects'));
+      fs.symlinkSync(rig.root, path.join(dir, 'todos'));
       const { status, stderr } = rig.run();
       assert.equal(status, 125, 'must fail closed');
-      assert.match(stderr, /projects links to .* which contains \$HOME/);
+      assert.match(stderr, /todos links to .* which contains \$HOME/);
     } finally {
       rig.cleanup();
     }
@@ -475,15 +515,53 @@ test('sandbox wrapper: the state dirs the CLI writes are created before launch, 
       const { status, stderr } = rig.run();
       assert.equal(status, 0, stderr);
       const ops = parseMounts(rig.lastBwrapArgs());
-      for (const name of ['projects', 'todos', 'shell-snapshots', 'session-env', 'sessions']) {
+      for (const name of ['todos', 'sessions']) {
         const p = path.join(rig.home, '.claude', name);
         assert.ok(fs.statSync(p).isDirectory(), `${name} must exist on the host`);
         assert.equal(mountAt(ops, p)?.op, '--bind', `${name} must be bound read-write`);
       }
+      const own = path.join(rig.home, '.claude', 'projects', folderOf(rig.proj));
+      assert.ok(fs.statSync(own).isDirectory(), 'the session\'s transcript folder must exist on the host');
+      assert.equal(mountAt(ops, own)?.op, '--bind');
       const ide = path.join(rig.home, '.claude', 'ide');
       assert.ok(fs.statSync(ide).isDirectory(), 'ide must exist, so lock files Switchboard writes later are visible');
       assert.equal(mountAt(ops, ide)?.op, '--ro-bind',
         'ide must be read-only: its lock files tell later sessions which port to trust');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: only the session\'s own transcript folder is writable in ~/.claude/projects',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const projects = path.join(rig.home, '.claude', 'projects');
+      fs.mkdirSync(path.join(projects, '-other-project'), { recursive: true });
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, projects)?.op, '--ro-bind',
+        'a new folder there would be read by the scheduler as a project');
+      assert.equal(accessAt(ops, path.join(projects, '-other-project', 'x.jsonl')), '--ro-bind');
+      assert.equal(mountAt(ops, path.join(projects, folderOf(rig.proj)))?.op, '--bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: Switchboard names the transcript folder, and a name that is not one is refused',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const ok = rig.run(['--version'], { SWITCHBOARD_SANDBOX_PROJECT_FOLDER: '-given-folder' });
+      assert.equal(ok.status, 0, ok.stderr);
+      const given = path.join(rig.home, '.claude', 'projects', '-given-folder');
+      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), given)?.op, '--bind');
+      const bad = rig.run(['--version'], { SWITCHBOARD_SANDBOX_PROJECT_FOLDER: '../escape' });
+      assert.equal(bad.status, 125);
+      assert.match(bad.stderr, /not a project folder name/);
     } finally {
       rig.cleanup();
     }
@@ -566,18 +644,35 @@ test('sandbox wrapper: links in the project\'s .claude have their targets protec
     }
   });
 
-test('sandbox wrapper: a symlinked state entry in the project\'s .claude has its target bound read-write',
+test('sandbox wrapper: a symlinked state entry in a project\'s .claude is never followed out of what the sandbox sees',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
     try {
       fs.mkdirSync(path.join(rig.home, '.claude'));
-      fs.mkdirSync(path.join(rig.proj, '.claude'));
-      const elsewhere = path.join(rig.root, 'wts');
-      fs.mkdirSync(elsewhere);
-      fs.symlinkSync(elsewhere, path.join(rig.proj, '.claude', 'worktrees'));
-      const { status, stderr } = rig.run();
-      assert.equal(status, 0, stderr);
-      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), elsewhere)?.op, '--bind');
+      const config = path.join(rig.home, '.config');
+      const bashrc = path.join(rig.home, '.bashrc');
+      fs.mkdirSync(config);
+      fs.writeFileSync(bashrc, '');
+      const dot = path.join(rig.proj, '.claude');
+      fs.mkdirSync(dot);
+      fs.symlinkSync('../../home/.config', path.join(dot, 'agent-memory-local'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+      const wt = path.join(dot, 'worktrees', 'w');
+      fs.mkdirSync(path.dirname(wt), { recursive: true });
+      git(rig.proj, 'worktree', 'add', '-q', wt);
+      fs.mkdirSync(path.join(wt, '.claude'));
+      fs.symlinkSync(bashrc, path.join(wt, '.claude', 'agent-memory'));
+
+      for (const cwd of [rig.proj, wt]) {
+        const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: rig.proj }, cwd);
+        assert.equal(status, 0, stderr);
+        const ops = parseMounts(rig.lastBwrapArgs());
+        assert.equal(ops.find(o => o.dest === config || o.src === config), undefined,
+          `~/.config must not be bound (session in ${cwd})`);
+        assert.equal(ops.find(o => o.dest === bashrc || o.src === bashrc), undefined,
+          `~/.bashrc must not be bound (session in ${cwd})`);
+      }
     } finally {
       rig.cleanup();
     }
@@ -771,6 +866,136 @@ test('sandbox wrapper: refuses a repository whose git paths contain a newline, w
     }
   });
 
+test('sandbox wrapper: every directory on the way to a protected path is pinned, so it cannot be renamed and replaced',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, 'config', 'core.hooksPath', 'tools/ci/hooks');
+      fs.mkdirSync(path.join(rig.proj, 'tools', 'ci', 'hooks'), { recursive: true });
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      const hooks = mountAt(ops, path.join(rig.proj, 'tools', 'ci', 'hooks'));
+      assert.equal(hooks?.op, '--ro-bind');
+      for (const dir of [path.join(rig.proj, 'tools'), path.join(rig.proj, 'tools', 'ci')]) {
+        const pin = mountAt(ops, dir);
+        assert.deepEqual([pin?.op, pin?.src], ['--bind', dir], `${dir} must be a mount point of its own`);
+        assert.ok(pin.index < hooks.index, 'a pin must come before the protection inside it');
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a protected path reached through a symbolic link the session could re-point',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      fs.mkdirSync(path.join(rig.proj, 'tools', 'hooks'), { recursive: true });
+      fs.symlinkSync('tools', path.join(rig.proj, 'linked'));
+      git(rig.proj, 'config', 'core.hooksPath', 'linked/hooks');
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /linked is a symbolic link in a directory the sandbox can write/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: every .claude and repository below a bound directory is protected, worktrees included',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+      const dot = path.join(rig.proj, '.claude');
+      const w = path.join(dot, 'worktrees', 'w');
+      const w2 = path.join(rig.proj, '.work-files', 'worktrees', 'w2');
+      fs.mkdirSync(path.dirname(w), { recursive: true });
+      fs.mkdirSync(path.dirname(w2), { recursive: true });
+      git(rig.proj, 'worktree', 'add', '-q', w);
+      git(rig.proj, 'worktree', 'add', '-q', w2);
+      fs.mkdirSync(path.join(w, '.claude', 'worktrees'), { recursive: true });
+      fs.writeFileSync(path.join(w, '.claude', 'settings.json'), '{}\n');
+      fs.mkdirSync(path.join(rig.proj, 'sub', '.claude'), { recursive: true });
+      const vendored = path.join(dot, 'skills', 'vendored');
+      fs.mkdirSync(vendored, { recursive: true });
+      git(vendored, 'init', '-q');
+
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dot, 'worktrees'))?.op, '--bind', 'worktrees stays writable');
+      assert.equal(mountAt(ops, path.join(w, '.claude'))?.op, '--ro-bind', 'a worktree\'s .claude must be read-only');
+      assert.equal(accessAt(ops, path.join(w, '.claude', 'settings.local.json')), '--ro-bind');
+      assert.equal(mountAt(ops, path.join(w, '.claude', 'worktrees'))?.op, '--bind', 'its listed state stays writable');
+      assert.equal(mountAt(ops, path.join(w, '.git'))?.op, '--ro-bind', 'a worktree\'s .git file must be read-only');
+      assert.equal(mountAt(ops, path.join(w2, '.git'))?.op, '--ro-bind');
+      assert.ok(fs.statSync(path.join(w2, '.claude')).isDirectory(), 'a worktree without .claude gets an empty one');
+      assert.equal(mountAt(ops, path.join(w2, '.claude'))?.op, '--ro-bind');
+      assert.equal(mountAt(ops, path.join(rig.proj, 'sub', '.claude'))?.op, '--ro-bind', 'a nested .claude must be read-only');
+      assert.equal(ops.find(o => o.dest.startsWith(path.join(vendored, '.git'))), undefined,
+        'a repository inside a read-only .claude stays read-only as a whole, with no mount of its own');
+      for (const name of ['w', 'w2']) {
+        for (const f of ['commondir', 'gitdir']) {
+          assert.equal(mountAt(ops, path.join(rig.proj, '.git', 'worktrees', name, f))?.op, '--ro-bind',
+            `.git/worktrees/${name}/${f} must be read-only`);
+        }
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a repository git cannot read, rather than guessing which paths to protect',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.writeFileSync(path.join(rig.proj, '.git'), 'gitdir: /nonexistent/repo\n');
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /git cannot read the repository/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: the podman socket is bound only when SWITCHBOARD_SANDBOX_PODMAN=1',
+  { skip: !LINUX && 'linux only' }, async () => {
+    const rig = makeRig({ recordArgs: true });
+    const net = require('node:net');
+    const run = path.join(rig.root, 'run');
+    const podmanDir = path.join(run, 'podman');
+    fs.mkdirSync(podmanDir, { recursive: true });
+    const server = net.createServer();
+    await new Promise(resolve => server.listen(path.join(podmanDir, 'podman.sock'), resolve));
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.writeFileSync(path.join(rig.root, 'bin', 'podman'), '#!/bin/sh\n', { mode: 0o755 });
+      const off = rig.run(['--version'], { XDG_RUNTIME_DIR: run });
+      assert.equal(off.status, 0, off.stderr);
+      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), podmanDir), undefined,
+        'a podman socket lets the session mount any host path into a container');
+      const on = rig.run(['--version'], { XDG_RUNTIME_DIR: run, SWITCHBOARD_SANDBOX_PODMAN: '1' });
+      assert.equal(on.status, 0, on.stderr);
+      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), podmanDir)?.op, '--ro-bind');
+    } finally {
+      server.close();
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: CI that asks for the real-sandbox tests gets them, not a skip',
+  { skip: !process.env.SWITCHBOARD_REQUIRE_REAL_BWRAP && 'only when SWITCHBOARD_REQUIRE_REAL_BWRAP is set' }, () => {
+    assert.ok(realBwrapWorks, 'bwrap with unprivileged user namespaces must work on this runner');
+  });
+
 test('sandbox wrapper: refuses a project whose .git is a symbolic link',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
@@ -856,7 +1081,13 @@ attempt git-hookspath-dir 'echo evil > .husky/_/pre-commit'
 attempt git-config-hookspath 'git config core.hooksPath evil-hooks'
 attempt git-config-fsmonitor 'git config core.fsmonitor evil'
 attempt git-dir-moved 'mv .git .git-x'
-attempt transcript 'mkdir -p "$C/projects/p" && echo "{}" >> "$C/projects/p/s.jsonl"'
+attempt transcript 'echo "{}" >> "$C/projects/$(pwd | sed "s/[^a-zA-Z0-9]/-/g")/s.jsonl"'
+attempt planted-project-folder 'mkdir -p "$C/projects/-planted" && echo "{}" > "$C/projects/-planted/p.jsonl"'
+attempt shell-snapshot 'echo evil > "$C/shell-snapshots/snapshot-bash-live.sh"'
+attempt session-env-hook 'mkdir -p "$C/session-env/s1" && echo evil > "$C/session-env/s1/sessionstart-hook-0.sh"'
+attempt worktree-settings 'echo evil > .claude/worktrees/w/.claude/settings.json'
+attempt worktree-gitfile 'echo "gitdir: /tmp/evil" > .claude/worktrees/w/.git'
+attempt worktree-commondir 'echo /tmp/evil > .git/worktrees/w/commondir'
 attempt credentials-refresh 'echo refreshed > "$C/.credentials.json"'
 attempt source-file 'echo "export {}" > src.js'
 attempt git-commit 'git add src.js && git -c user.name=t -c user.email=t@t commit -qm src'
@@ -890,6 +1121,17 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       fs.writeFileSync(path.join(rig.proj, '.claude', 'settings.json'), '{}\n');
       git(rig.proj, 'init', '-q');
       git(rig.proj, 'config', 'core.hooksPath', '.husky/_');
+      git(rig.proj, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+      const w = path.join(rig.proj, '.claude', 'worktrees', 'w');
+      fs.mkdirSync(path.dirname(w));
+      git(rig.proj, 'worktree', 'add', '-q', w);
+      fs.mkdirSync(path.join(w, '.claude'));
+      fs.writeFileSync(path.join(w, '.claude', 'settings.json'), '{}\n');
+      const wGitFile = read0(path.join(w, '.git'));
+      const wCommondir = read0(path.join(rig.proj, '.git', 'worktrees', 'w', 'commondir'));
+      fs.mkdirSync(path.join(C, 'shell-snapshots'));
+      fs.writeFileSync(path.join(C, 'shell-snapshots', 'snapshot-bash-live.sh'), 'export A=1\n');
+      fs.mkdirSync(path.join(C, 'session-env'));
 
       const res = rig.run([PERSISTENCE_ATTEMPTS]);
       assert.equal(res.status, 0, res.stderr);
@@ -924,7 +1166,17 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       assert.ok(gone(path.join(rig.proj, '.git-x')) && fs.existsSync(path.join(rig.proj, '.git', 'config')),
         `.git must not be movable\n${said}`);
 
-      assert.equal(read(path.join(store, 'p', 's.jsonl')), '{}\n', `a transcript must land through a symlinked projects\n${said}`);
+      assert.ok(gone(path.join(store, '-planted')), `a new transcript folder must not reach the host\n${said}`);
+      assert.equal(read(path.join(C, 'shell-snapshots', 'snapshot-bash-live.sh')), 'export A=1\n',
+        `another session's shell snapshot must be unchanged\n${said}`);
+      assert.deepEqual(fs.readdirSync(path.join(C, 'session-env')), [], `session-env hooks must not reach the host\n${said}`);
+      assert.equal(read(path.join(w, '.claude', 'settings.json')), '{}\n', `a worktree's settings must be read-only\n${said}`);
+      assert.equal(read(path.join(w, '.git')), wGitFile, `a worktree's .git file must be read-only\n${said}`);
+      assert.equal(read(path.join(rig.proj, '.git', 'worktrees', 'w', 'commondir')), wCommondir,
+        `a worktree's commondir must be read-only\n${said}`);
+
+      assert.equal(read(path.join(store, folderOf(rig.proj), 's.jsonl')), '{}\n',
+        `a transcript must land in the session's folder, through a symlinked projects\n${said}`);
       assert.equal(read(path.join(C, '.credentials.json')), 'refreshed\n', `credentials must be refreshable\n${said}`);
       assert.equal(read(path.join(rig.proj, 'src.js')), 'export {}\n', `a source file must be written\n${said}`);
       assert.equal(git(rig.proj, 'log', '--format=%s', '-1'), 'src', `a commit must land\n${said}`);

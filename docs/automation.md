@@ -93,7 +93,12 @@ runs under its slug; open it to read the result.
   run is still going is skipped (logged at info level).
 - The [sandbox](sandbox.md) setting applies — global, then project. On a
   platform other than Linux a schedule with the sandbox on is skipped and an
-  error logged. With the sandbox on, `add-dirs` entries are bound read-write.
+  error logged. With the sandbox on, `add-dirs` entries are bound read-write,
+  and a run whose `add-dirs` include a directory under your home that is not a
+  project, or inside one, is skipped with an error in the main log — see
+  [Sandbox](sandbox.md#schedules).
+- A schedule runs only in a project whose `~/.claude/projects` folder is named
+  after its path, as the CLI names them.
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
 
 ### Catching up a missed run

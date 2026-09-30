@@ -15,7 +15,9 @@ From `schedule-runner.js`:
 
 - `startScheduler(log, runCommand, { resumeSource, stateDir })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, and `stateDir: <dirname(DB_PATH)>/schedule-state`. Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron. With `SWITCHBOARD_DATA_DIR` set, catch-up is off altogether (see [Catch-up](#catch-up), "Isolated instances").
 - `claimScheduleMinute(stateDir, key, minuteMs, info)` — exclusive-create one record file; `false` when it already exists. Exported for tests.
-- `scanSchedules(log)` — scan all known projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`.
+- `scanSchedules(log)` — scan all known projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`. A project is a `~/.claude/projects` folder whose recorded path (cache, else the first JSONL `cwd`) encodes back to the folder's name; any other folder is skipped with one warning, because a transcript's `cwd` is written by whoever ran claude, a sandboxed session included (see [docs/sandbox.md](../../docs/sandbox.md), "Schedules").
+- `knownProjectPaths()` — the project paths of those folders, as a `Set`.
+- `refusedScheduleBinds(addDirs, knownProjects, home)` — the `add-dirs` under `home` that are neither a known project nor inside one. `main.js` skips a sandboxed run when it is not empty.
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns the session UUID.
 - `buildScheduleCommand(sessionId, schedule)` — assemble the shell command (`claude --resume "<sid>" -p "..." --permission-mode acceptEdits --allowedTools "..."`).
 - `parseFrontmatter(content)`, `cronMatches(cronExpr, now)` — utilities, exported for tests.

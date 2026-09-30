@@ -20,7 +20,7 @@ const { startScheduler, claimScheduleMinute, scanSchedules } = require('../sched
 const STATE_DIR = path.join(ROOT, 'data', 'schedule-state');
 const PROJECT = path.join(ROOT, 'project');
 const COMMANDS = path.join(PROJECT, '.claude', 'commands');
-const FOLDER = path.join(ROOT, '.claude', 'projects', '-project');
+const FOLDER = path.join(ROOT, '.claude', 'projects', require('../encode-project-path').encodeProjectPath(PROJECT));
 
 test.after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 

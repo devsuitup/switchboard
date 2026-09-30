@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { encodeProjectPath } = require('./encode-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -164,27 +165,78 @@ function readProjectPathFromJsonl(folderPath) {
   return null;
 }
 
+const warnedMismatch = new Set();
+
+/**
+ * The project folders of ~/.claude/projects, each with the project path its
+ * transcripts record — kept only when that path is the one the folder is named
+ * after. A transcript is written by whoever runs claude, a sandboxed session
+ * included, so its cwd alone does not make a project.
+ * see docs/sandbox.md ("Schedules")
+ */
+function listProjects(log) {
+  const projects = [];
+  if (!fs.existsSync(PROJECTS_DIR)) return projects;
+  const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory());
+
+  // Prefer the cached folder→projectPath mapping; only read JSONLs for
+  // folders genuinely missing from the cache. This avoids re-reading 4KB of
+  // every JSONL of every project on each 60s tick.
+  const folderMeta = loadFolderMetaMap();
+
+  for (const folder of folders) {
+    const folderPath = path.join(PROJECTS_DIR, folder.name);
+    let projectPath = folderMeta.get(folder.name) || null;
+    if (!projectPath) {
+      projectPath = readProjectPathFromJsonl(folderPath);
+    }
+    if (!projectPath) continue;
+    if (encodeProjectPath(projectPath) !== folder.name) {
+      if (log && !warnedMismatch.has(folder.name)) {
+        warnedMismatch.add(folder.name);
+        log.warn(`[schedule] ignoring ${projectPath}: its transcripts are in ${folder.name}, which is not that path's folder`);
+      }
+      continue;
+    }
+    projects.push({ folder: folder.name, projectPath });
+  }
+  return projects;
+}
+
+/** The project paths schedules may run in. */
+function knownProjectPaths() {
+  try {
+    return new Set(listProjects().map(p => p.projectPath));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * The add-dirs of a sandboxed schedule that lie under $HOME without being a
+ * known project or inside one: binding them read-write would hand the run
+ * whatever they hold.
+ */
+function refusedScheduleBinds(addDirs, knownProjects, home) {
+  const inside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
+  const homeDir = path.resolve(home);
+  return addDirs.filter((dir) => {
+    const p = path.resolve(dir);
+    if (!inside(p, homeDir)) return false;
+    for (const project of knownProjects) {
+      if (inside(p, path.resolve(project))) return false;
+    }
+    return true;
+  });
+}
+
 /** Scan all projects for schedule-*.md files and return parsed schedule objects. */
 function scanSchedules(log) {
   const schedules = [];
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return schedules;
-    const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory());
-
-    // Prefer the cached folder→projectPath mapping; only read JSONLs for
-    // folders genuinely missing from the cache. This avoids re-reading 4KB of
-    // every JSONL of every project on each 60s tick.
-    const folderMeta = loadFolderMetaMap();
-
-    for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder.name);
-      let projectPath = folderMeta.get(folder.name) || null;
-      if (!projectPath) {
-        projectPath = readProjectPathFromJsonl(folderPath);
-      }
-      if (!projectPath) continue;
-
+    for (const { folder: folderName, projectPath } of listProjects(log)) {
+      const folder = { name: folderName };
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       try {
         if (!fs.existsSync(commandsDir)) continue;
@@ -428,4 +480,4 @@ function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, knownProjectPaths, refusedScheduleBinds };
