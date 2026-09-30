@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld('api', {
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
+  whatsNewStartup: () => ipcRenderer.invoke('whats-new-startup'),
+  whatsNewDismissed: () => ipcRenderer.invoke('whats-new-dismissed'),
+  onShowWhatsNew: (callback) => {
+    ipcRenderer.on('show-whats-new', (_event, payload) => callback(payload));
+  },
   remoteHostsApply: () => ipcRenderer.invoke('remote-hosts-apply'),
   remoteHostsRefresh: () => ipcRenderer.invoke('remote-hosts-refresh'),
   remoteHostRefresh: (alias) => ipcRenderer.invoke('remote-host-refresh', alias),

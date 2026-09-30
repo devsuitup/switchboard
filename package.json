@@ -71,6 +71,7 @@
     "productName": "Switchboard",
     "files": [
       "*.js",
+      "CHANGELOG.md",
       "workers/**/*",
       "public/**/*",
       "scripts/claude-sandbox.sh",

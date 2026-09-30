@@ -31,7 +31,7 @@ function windowFrameOptions(platform) {
   };
 }
 
-function applicationMenuTemplate(appName) {
+function applicationMenuTemplate(appName, { onWhatsNew } = {}) {
   return [
     {
       label: appName,
@@ -67,6 +67,12 @@ function applicationMenuTemplate(appName) {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        { label: 'What\'s new', click: onWhatsNew },
       ],
     },
   ];

@@ -28,6 +28,24 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+  changelog:
+    # see docs/changelog.md ("The CI check")
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # the PR merge commit and its base parent
+
+      - name: Require a CHANGELOG.md entry for app changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_LABELS="$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels" --jq '[.[].name]')"
+          export PR_LABELS
+          git diff --name-only HEAD^1 HEAD | node scripts/check-changelog.js
+
   test:
     runs-on: ${{ matrix.os }}
 

@@ -122,6 +122,7 @@ every call, and the absolute path built from it is used and discarded there.
 | `open-external` | Opens https:// URLs in OS browser |
 | `clipboard-write-text` | Main-process clipboard write (Wayland fix, PR #18) |
 | `get-app-version` | From package.json |
+| `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
 | `updater-check` / `updater-download` / `updater-install` | electron-updater |
 
 ### Send (fire-and-forget, renderer → main)
@@ -136,7 +137,7 @@ every call, and the absolute path built from it is used and discarded there.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `session-transcript-activity`
+`terminal-data`, `session-detected`, `process-exited`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`
 
 `session-transcript-activity` and (not listed above; see
 `.ai/contexts/session-cache.md`, "Remote hosts — busy spinner") `remote-activity`

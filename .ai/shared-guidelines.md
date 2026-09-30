@@ -28,6 +28,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
 | Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |
+| Write a `CHANGELOG.md` entry, or change the changelog CI check or the What's new dialog | [docs/changelog.md](../docs/changelog.md) |
 | Drive a live instance that cannot see the user's sessions | [../docs/live-testing.md](../docs/live-testing.md) |
 
 For a guided tour of the codebase architecture, start at [contexts/README.md](contexts/README.md).
@@ -154,11 +155,12 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
    never in the code. What may remain in code: at most a one-line pointer to
    that doc (e.g. `// see .ai/contexts/subagent-observability.md`), and that's
    the ceiling (maintainer rule, PRs #127/#130).
-2. `task check` (lint + test). 0 errors. Pre-existing warnings are fine.
-3. Squash to clear commits. No `Co-Authored-By`. Imperative subject, brief why-body.
-4. `gh pr create` against `devsuitup/switchboard:main` (the fork's main, not upstream's). Title format: `(area): short imperative`.
-5. If the change is a port of an upstream PR, **credit the upstream author** in the body with a link. We want abasiri to see we're not stealing.
-6. **When the PR is ready to merge** (internal review loop converged to zero findings, or an external PR judged mergeable after review), **request the maintainer account `devsuitup` as reviewer**: `gh api -X POST repos/devsuitup/switchboard/pulls/<n>/requested_reviewers -f 'reviewers[]=devsuitup'`. The maintainer's review queue is the single list of what awaits approval — a ready PR that never requests review sits invisible.
+2. **Changelog.** Every PR that changes behaviour adds its entry under `## Unreleased` in `CHANGELOG.md`, written to the rule in [docs/changelog.md](../docs/changelog.md); a PR users see nothing of takes the `no-changelog` label instead.
+3. `task check` (lint + test). 0 errors. Pre-existing warnings are fine.
+4. Squash to clear commits. No `Co-Authored-By`. Imperative subject, brief why-body.
+5. `gh pr create` against `devsuitup/switchboard:main` (the fork's main, not upstream's). Title format: `(area): short imperative`.
+6. If the change is a port of an upstream PR, **credit the upstream author** in the body with a link. We want abasiri to see we're not stealing.
+7. **When the PR is ready to merge** (internal review loop converged to zero findings, or an external PR judged mergeable after review), **request the maintainer account `devsuitup` as reviewer**: `gh api -X POST repos/devsuitup/switchboard/pulls/<n>/requested_reviewers -f 'reviewers[]=devsuitup'`. The maintainer's review queue is the single list of what awaits approval — a ready PR that never requests review sits invisible.
 
 ## Upstreaming work
 

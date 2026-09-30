@@ -11,7 +11,7 @@ the same strip across the rest of the window.
 
 | File | Role |
 |---|---|
-| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName)` (the menu), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
+| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName, { onWhatsNew })` (the menu; Help → What's new calls `onWhatsNew`, see `docs/changelog.md`), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
 | `main.js` | Spreads `windowFrameOptions(process.platform)` into the `BrowserWindow`; `buildMenu()` installs the template; the `popup-app-menu` IPC opens it under the menu button. |
 | `preload.js` | `window.api.popupAppMenu(x, y)`. |
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
@@ -78,7 +78,7 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
   every session-header control (`#terminal-header-controls [data-header-kind]`),
   `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
-  `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`,
+  `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`, `.whats-new-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
   popover, menu or dialog that can reach the top 32 pixels belongs in this list.
 

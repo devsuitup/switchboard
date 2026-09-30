@@ -5,15 +5,23 @@ request first, because `main` is protected.
 
 ## Steps
 
-1. **Bump the version** on a branch and open the PR:
+1. **Bump the version and date the changelog** on a branch, and open the PR.
+   In [`CHANGELOG.md`](../CHANGELOG.md) (see [Changelog](changelog.md)),
+   rename `## Unreleased` to `## v0.1.0 — <today, YYYY-MM-DD>`, and open a new,
+   empty `## Unreleased` above it. Read the section once more: it becomes the
+   release notes as it stands.
 
    ```bash
    git checkout -b release/v0.1.0 origin/main
    npm version --no-git-tag-version 0.1.0   # package.json and package-lock.json
+   # edit CHANGELOG.md as above
    git commit -am v0.1.0
    git push origin release/v0.1.0
    gh pr create --repo devsuitup/switchboard --base main --title v0.1.0 --fill
    ```
+
+   `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
+   version in `package.json`, so a bump without its section does not pass CI.
 
    The `main-protection` ruleset requires the checks `lint`,
    `test (20, ubuntu-latest)`, `test (20, windows-2022)`, `test (22, ubuntu-latest)`
@@ -43,9 +51,12 @@ request first, because `main` is protected.
      assets for a full build (dmg, zip and their blockmaps for arm64 and x64; the
      Windows installer and its blockmap; two AppImages, two debs, one pacman
      package; four `latest*.yml` update manifests);
-   - writes the release notes from the commit subjects between the previous tag
-     and this one, leaving out the version-bump commit, and fails rather than
-     publish an empty body.
+   - writes the release notes: the text of the tag's `CHANGELOG.md` section,
+     without its heading (`scripts/changelog-section.js`), then a **Full
+     changelog** link comparing the previous tag with this one. It fails
+     rather than publish an empty body when the section is missing or empty.
+     The fix is then in `CHANGELOG.md`, through a PR; `gh release edit
+     --notes-file` can fill in the draft by hand meanwhile.
 
 5. **Publish the draft**, after checking its assets:
 
@@ -55,7 +66,9 @@ request first, because `main` is protected.
    ```
 
    Installed copies with automatic updates on pick the release up from its
-   `latest*.yml` manifests; a draft is invisible to them.
+   `latest*.yml` manifests; a draft is invisible to them. On their first start
+   after the update, the What's new dialog shows this section, and those of
+   any version they skipped.
 
 `npm run release` builds for the local platform only and publishes through
 electron-builder; it needs `GH_TOKEN` (a token with `repo` scope).

@@ -38,6 +38,7 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
+const { whatsNewOnStartup, whatsNewForVersion } = require('./changelog');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -430,8 +431,43 @@ function createWindow() {
 }
 
 function buildMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name)));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name, { onWhatsNew: showWhatsNewFromMenu })));
 }
+
+// --- What's new (see docs/changelog.md) ---
+
+const CHANGELOG_PATH = path.join(__dirname, 'CHANGELOG.md');
+const readChangelog = () => fs.readFileSync(CHANGELOG_PATH, 'utf8');
+
+function recordLastSeenVersion(version) {
+  const global = getSetting('global') || {};
+  global.lastSeenVersion = version;
+  setSetting('global', global);
+}
+
+function showWhatsNewFromMenu() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const currentVersion = app.getVersion();
+  const { sections, error } = whatsNewForVersion({ currentVersion, readChangelog });
+  if (error) {
+    log.warn(`[whats-new] ${error}`);
+    return;
+  }
+  mainWindow.webContents.send('show-whats-new', { version: currentVersion, sections });
+}
+
+ipcMain.handle('whats-new-startup', () => {
+  const currentVersion = app.getVersion();
+  const lastSeenVersion = (getSetting('global') || {}).lastSeenVersion ?? SETTING_DEFAULTS.lastSeenVersion;
+  const { sections, record, error } = whatsNewOnStartup({ currentVersion, lastSeenVersion, readChangelog });
+  if (error) log.warn(`[whats-new] ${error}`);
+  if (record) recordLastSeenVersion(record);
+  return sections ? { version: currentVersion, sections } : null;
+});
+
+ipcMain.handle('whats-new-dismissed', () => {
+  recordLastSeenVersion(app.getVersion());
+});
 
 // --- Session cache helpers ---
 

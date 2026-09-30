@@ -53,10 +53,21 @@ test('the keyboard roles are the ones the frame used to carry', () => {
   ].sort());
 });
 
+test('Help → What\'s new, last in the menu, calls the handler it is given', () => {
+  let called = 0;
+  const template = applicationMenuTemplate('Switchboard', { onWhatsNew: () => { called++; } });
+  const help = template.at(-1);
+  assert.equal(help.label, 'Help');
+  const entry = help.submenu.find((i) => i.label === 'What\'s new');
+  assert.ok(entry, 'the Help menu must carry "What\'s new"');
+  entry.click();
+  assert.equal(called, 1);
+});
+
 test('main.js installs the menu as the application menu and never removes it', () => {
   assert.match(
     MAIN_SRC,
-    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*\)\s*\)\s*\)/,
+    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*,\s*\{\s*onWhatsNew:\s*showWhatsNewFromMenu\s*\}\s*\)\s*\)\s*\)/,
     'buildMenu must set the template as the application menu: its accelerators live there',
   );
   assert.doesNotMatch(MAIN_SRC, /setApplicationMenu\(\s*null\s*\)/, 'setApplicationMenu(null) unregisters every accelerator');
