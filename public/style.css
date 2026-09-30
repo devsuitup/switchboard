@@ -4037,6 +4037,11 @@ body { display: flex; flex-direction: column; }
   overflow-y: auto;
 }
 
+.new-session-dialog .new-session-body::-webkit-scrollbar { width: 5px; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-track { background: transparent; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+.new-session-dialog .new-session-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+
 .new-session-dialog h3 {
   font-size: 15px;
   color: #d0d0e8;
