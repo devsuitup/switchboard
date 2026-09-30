@@ -68,6 +68,7 @@ class ViewerPanel {
     this.wrapMode = false;
     this._watchedPath = null;
     this._pendingSave = null;
+    this._saveQueued = false;
     this._diskContent = null;
     this._diskGen = 0;
     this._noticeState = null;
@@ -425,16 +426,22 @@ class ViewerPanel {
 
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save({ overwrite = false } = {}) {
-    if (!this.opts.onSave || !this.filePath || this._pendingSave !== null) return;
+    if (!this.opts.onSave || !this.filePath) return;
+    if (this._pendingSave !== null) {
+      this._saveQueued = true;
+      return;
+    }
     const content = this.getContent();
     const expected = overwrite ? null : this._diskContent;
     const myGen = this._openGen;
     const diskGen = this._diskGen;
     this._pendingSave = asEditorText(content);
+    let saved = false;
     try {
       const result = await this.opts.onSave(this.filePath, content, expected);
       if (this._openGen !== myGen) return;
       if (result && result.ok !== false) {
+        saved = true;
         if (this._diskGen === diskGen) {
           this._diskContent = asEditorText(content);
           this._setNotice(null);
@@ -449,6 +456,9 @@ class ViewerPanel {
       if (this._openGen === myGen) this._setNotice('save-failed', (err && err.message) || 'unknown error');
     } finally {
       this._pendingSave = null;
+      const queued = this._saveQueued;
+      this._saveQueued = false;
+      if (queued && saved && this._openGen === myGen) this._save();
     }
   }
 
@@ -475,11 +485,17 @@ class ViewerPanel {
 
   _watchFile(filePath) {
     if (!filePath || !window.api.watchFile) return;
-    this._watchedPath = filePath;
-    window.api.watchFile(filePath);
+    const token = {};
+    this._watchToken = token;
+    Promise.resolve(window.api.watchFile(filePath)).then((result) => {
+      if (!result || result.ok === false) return;
+      if (this._watchToken === token) this._watchedPath = filePath;
+      else if (window.api.unwatchFile) window.api.unwatchFile(filePath);
+    }).catch(() => {});
   }
 
   _unwatchFile() {
+    this._watchToken = null;
     if (this._watchedPath && window.api.unwatchFile) {
       window.api.unwatchFile(this._watchedPath);
       this._watchedPath = null;
@@ -542,6 +558,7 @@ class ViewerPanel {
   }
 
   _setDiskContent(text) {
+    if (text === this._diskContent) return;
     this._diskContent = text;
     this._diskGen += 1;
   }

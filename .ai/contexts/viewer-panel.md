@@ -86,9 +86,11 @@ A save sends the disk baseline with the content: `onSave(filePath, content, expe
 
 This is the Changes panel's version token (`git-changes-file.js`) with the baseline text as the token. The viewer's callers open it with content they read themselves (`readMemory`, `readFileForPanel`) and no token beside it; comparing against the text the panel actually holds as its baseline needs no second read that could race the first.
 
-On a stale refusal the buffer is kept and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** (the same confirm as above) and **Overwrite**, which asks `window.confirm('Overwrite the file on disk with your edits?')` and saves with `expected: null` — the one save that skips the check. Any other refusal shows `Save failed: <reason>`. One save is in flight at a time (`_pendingSave`); a second request while it is pending is ignored.
+On a stale refusal the buffer is kept and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** (the same confirm as above) and **Overwrite**, which asks `window.confirm('Overwrite the file on disk with your edits?')` and saves with `expected: null` — the one save that skips the check. Any other refusal, and a save whose IPC rejects, shows `Save failed: <reason>`.
 
-The MCP diff tab's save in `file-panel.js` (`handleDiffSave`) sends no baseline and is not checked.
+One save is in flight at a time (`_pendingSave`). A save requested while one is pending is **queued**, and sent once the first returns ok, against the baseline that save left — sending it at once would carry the baseline from before the first save and be refused as stale although nothing else wrote the file. A queued save is dropped when the first one fails; the notice already says why. The save's own success sets the baseline only if no re-read moved it meanwhile (`_diskGen`), so a later external write read back during the save is not hidden by the save resolving. A re-read that finds the baseline unchanged does not count as moving it.
+
+The MCP diff tab's save in `file-panel.js` (`handleDiffSave`) uses the same check: its baseline is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened, and moves to what it wrote after each save. A stale refusal asks `confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')` and overwrites only on yes; any other refusal is reported with `window.alert`, the same channel `ViewerPanel`'s Delete uses.
 
 ## Watching the file
 
@@ -99,6 +101,8 @@ The MCP diff tab's save in `file-panel.js` (`handleDiffSave`) sends no baseline 
 - Events for other files in the directory are dropped by name — compared case-insensitively on `win32` and `darwin` (`sameFileName`), exactly elsewhere. An event with no filename is reported, since the renderer re-reads and compares anyway.
 - Events are debounced (300 ms) into one `file-changed`.
 - An `error` from the watcher (its directory removed) is swallowed; the watch is then dead, which is the one case not recovered.
+
+The renderer records a watch (`_watchedPath`) only once `watch-file` answers `ok`, so a failed watch is never released by a later `unwatch-file` that would take another panel's reference. A watch acknowledged after the panel has moved to another file is released at once.
 
 `createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a file tab showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
 

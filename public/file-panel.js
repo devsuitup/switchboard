@@ -296,10 +296,18 @@ async function handleDiffSave() {
   }
   if (content == null) return;
 
-  const result = await window.api.saveFileForPanel(tab.filePath, content);
-  if (result.ok) {
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+  let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
+  if (result && result.reason === 'stale' && typeof window.confirm === 'function'
+    && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
+    result = await window.api.saveFileForPanel(tab.filePath, content, null);
+  }
+  if (result && result.ok) {
+    tab.diskBaseline = content.replace(/\r\n?/g, '\n');
     const btn = diffToolbarEl.querySelector('.fp-save-btn');
     if (btn) flashButtonText(btn, 'Saved!');
+  } else if (result && result.reason !== 'stale' && typeof window.alert === 'function') {
+    window.alert(`Save failed: ${result.error || 'unknown error'}`);
   }
 }
 
@@ -388,6 +396,7 @@ function openDiffTab(sessionId, diffId, data) {
     diffId,
     oldContent: data.oldContent,
     newContent: data.newContent,
+    diskBaseline: typeof data.oldContent === 'string' ? data.oldContent.replace(/\r\n?/g, '\n') : null,
     resolved: false,
     editorView: null,
   };

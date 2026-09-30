@@ -40,12 +40,12 @@ function setup({ disk }) {
     pretendToBeVisual: true,
   });
   const { window } = dom;
-  const state = { disk, fileChanged: null, confirms: [], confirmAnswer: true, saves: [], saveImpl: null, readImpl: null };
+  const state = { disk, fileChanged: null, confirms: [], confirmAnswer: true, saves: [], saveImpl: null, readImpl: null, watchImpl: null, watchCalls: [], unwatchCalls: [] };
 
   window.api = {
     onFileChanged: (cb) => { state.fileChanged = cb; },
-    watchFile: () => {},
-    unwatchFile: () => {},
+    watchFile: (p) => { state.watchCalls.push(p); return Promise.resolve(state.watchImpl ? state.watchImpl(p) : { ok: true }); },
+    unwatchFile: (p) => { state.unwatchCalls.push(p); return Promise.resolve({ ok: true }); },
     readFileForPanel: async (p) => (state.readImpl ? state.readImpl(p) : state.disk === null
       ? { ok: false, error: 'ENOENT: no such file or directory', code: 'ENOENT' }
       : { ok: true, content: state.disk }),
@@ -347,5 +347,111 @@ test('the watch event that follows a stale refusal leaves the "not saved" notice
     assert.match(noticeText(t), /your edits were not saved/);
     assert.equal(visible(button(t, 'overwrite')), true);
     assert.equal(t.panel.getContent(), 'one\nmine');
+  } finally { t.destroy(); }
+});
+
+test('an unchanged re-read that resolves during a save does not keep the saved buffer dirty', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    let resolveRead;
+    t.state.readImpl = () => new Promise((resolve) => { resolveRead = resolve; });
+    t.state.fileChanged(FILE);
+    await tick();
+    t.editor().type('mine');
+    let finishSave;
+    t.state.saveImpl = (fp, content) => new Promise((resolve) => { finishSave = () => { t.state.disk = content; resolve({ ok: true }); }; });
+    const saving = t.panel._save();
+    resolveRead({ ok: true, content: 'one\n' });
+    await tick();
+    finishSave();
+    await saving;
+    assert.equal(t.panel._isDirty(), false, 'a successful save leaves the buffer clean');
+
+    t.state.readImpl = null;
+    t.state.saveImpl = null;
+    t.editor().type('!');
+    await t.panel._save();
+    assert.equal(t.state.saves[1].expected, 'one\nmine', 'the next save is checked against what was saved');
+  } finally { t.destroy(); }
+});
+
+test('a second save while the first is in flight is queued, then sent against the first one\'s content', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    let finishFirst;
+    t.state.saveImpl = (fp, content) => new Promise((resolve) => { finishFirst = () => { t.state.disk = content; resolve({ ok: true }); }; });
+    const first = t.panel._save();
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    assert.equal(t.state.saves.length, 1, 'the second save waits for the first');
+
+    t.state.saveImpl = null;
+    finishFirst();
+    await first;
+    await tick();
+    assert.equal(t.state.saves.length, 2, 'the queued save is sent once the first returns');
+    assert.equal(t.state.saves[1].content, 'one\nAB');
+    assert.equal(t.state.saves[1].expected, 'one\nA', 'not the baseline from before the first save');
+    assert.equal(visible(t.notice()), false, 'no false "not saved"');
+    assert.equal(t.panel._isDirty(), false);
+  } finally { t.destroy(); }
+});
+
+test('a rejected save shows the failure in the notice', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    t.state.saveImpl = () => Promise.reject(new Error('the channel is gone'));
+    await t.panel._save();
+    assert.equal(noticeText(t), 'Save failed: the channel is gone');
+  } finally { t.destroy(); }
+});
+
+test('a watch that failed is not released on close, so it cannot drop another panel\'s reference', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    t.state.watchImpl = () => ({ ok: false, error: 'could not watch this file' });
+    await t.open('one\n');
+    t.panel.destroy();
+    assert.deepEqual(t.state.unwatchCalls, []);
+  } finally { t.destroy(); }
+});
+
+test('a watch acknowledged after the panel moved on is released, not leaked', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    let ackFirst;
+    t.state.watchImpl = () => new Promise((resolve) => { ackFirst = () => resolve({ ok: true }); });
+    t.panel.open('note', FILE, 'one\n');
+    t.state.watchImpl = null;
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    await t.open('other\n', other);
+    ackFirst();
+    await tick();
+    assert.deepEqual(t.state.unwatchCalls, [FILE], 'the superseded watch is given back');
+    t.panel.destroy();
+    assert.deepEqual(t.state.unwatchCalls, [FILE, other]);
+  } finally { t.destroy(); }
+});
+
+test('an external write read back while our save is in flight is not hidden by the save resolving', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    let finishSave;
+    t.state.saveImpl = () => new Promise((resolve) => { finishSave = () => resolve({ ok: true }); });
+    const saving = t.panel._save();
+    await t.externalWrite('the session wrote after us\n');
+    assert.match(noticeText(t), /changed on disk/);
+    finishSave();
+    await saving;
+    assert.equal(visible(t.notice()), true, 'the notice about the later write stays');
+    assert.equal(t.panel._isDirty(), true, 'the baseline is the later write, not our save');
   } finally { t.destroy(); }
 });
