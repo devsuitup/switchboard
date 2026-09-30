@@ -64,6 +64,7 @@ const DEFAULT_CONCURRENCY = 8;
 
 // see .ai/contexts/terminal-path-links.md ("Bounds")
 async function resolveTerminalPaths(texts, cwd, deps, { concurrency = DEFAULT_CONCURRENCY } = {}) {
+  const limit = Math.max(1, Math.floor(concurrency) || DEFAULT_CONCURRENCY);
   const results = new Array(texts.length);
   let next = 0;
   async function worker() {
@@ -73,7 +74,7 @@ async function resolveTerminalPaths(texts, cwd, deps, { concurrency = DEFAULT_CO
     }
   }
   const workers = [];
-  for (let i = 0; i < Math.min(concurrency, texts.length); i++) workers.push(worker());
+  for (let i = 0; i < Math.min(limit, texts.length); i++) workers.push(worker());
   await Promise.all(workers);
   return results;
 }

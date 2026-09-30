@@ -5,6 +5,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require('util');
+
+const realpathJs = promisify((p, cb) => fs.realpath(p, cb));
 
 /**
  * Resolve `filePath` to its real, symlink-free location on disk.
@@ -48,7 +51,7 @@ function resolveOnDisk(filePath) {
 
 async function resolveOnDiskAsync(filePath) {
   try {
-    return await fs.promises.realpath(path.resolve(filePath));
+    return await realpathJs(path.resolve(filePath));
   } catch {
     return null;
   }

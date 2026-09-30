@@ -254,6 +254,17 @@ test('the event loop keeps turning while a slow batch is out', async () => {
   assert.ok(ticks >= 3, `only ${ticks} ticks ran during the batch`);
 });
 
+for (const bad of [0, -3, NaN, undefined, 1.5, Infinity]) {
+  test(`a concurrency of ${bad} still answers every path, at least one at a time`, async () => {
+    const fake = instrumentedFs(1);
+    const texts = ['public/app.js', 'public/nope.js', 'my file.txt'];
+    const out = await resolveTerminalPaths(texts, fixture.cwd, batchDeps(fixture.home, fake), { concurrency: bad });
+    assert.strictEqual(out.length, 3);
+    assert.ok(out.every((r) => r && typeof r.ok === 'boolean'), JSON.stringify(out));
+    assert.ok(fake.state.peak >= 1 && fake.state.peak <= 8);
+  });
+}
+
 test('an empty batch is an empty answer', async () => {
   assert.deepStrictEqual(await resolveTerminalPaths([], fixture.cwd, deps(fixture.home)), []);
 });

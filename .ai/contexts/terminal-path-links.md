@@ -178,7 +178,9 @@ on.
   `fs.promises` with at most 8 in flight, answers in the order asked, and never
   holds the main process for a batch. The guards and their order are those of
   `resolveTerminalPathTarget`, unchanged; `isSensitivePathAsync` is the same
-  denylist on the same disk-resolved path. The cost of a path is one `stat` of
+  denylist on the same disk-resolved path, walked by the same JS `fs.realpath`
+  as the sync guard (not `fs.promises.realpath`, the native call, which
+  disagrees with it on some paths); the concurrency is clamped to at least 1. The cost of a path is one `stat` of
   latency, which on a network cwd (sshfs, NFS) is 5-50 ms, so a 64-path batch
   takes roughly 8 round-trips instead of freezing the process for 64. No cwd is
   treated as slow or skipped: there is no reliable local test for it.
