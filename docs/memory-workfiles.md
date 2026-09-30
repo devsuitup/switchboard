@@ -1,29 +1,58 @@
-# Memory and Work Files
+# Agent Files and Work Files
 
-Two sidebar tabs give you access to the markdown and structured files that Claude Code reads and writes as part of its workflow. Both open in an embedded CodeMirror editor panel.
+Two sidebar tabs list files that Claude Code reads or that sessions leave
+behind, and open them in a CodeMirror editor in the main area. Each tab's list
+is read when the tab is clicked.
 
-## Memory (CLAUDE.md)
+## Agent Files
 
-The **Memory** tab shows your `CLAUDE.md` files — the global one at `~/.claude/CLAUDE.md` and any per-project ones found in your indexed projects. These files contain persistent instructions Claude reads at the start of every session.
+The **Agent Files** tab (brain icon) lists Markdown files, grouped by where
+they live:
 
-Click a memory file to open it in the editor panel. The editor supports:
+- **Global**: every `.md` file directly in `~/.claude/` — `CLAUDE.md` among
+  them.
+- **Per project**, for each project in `~/.claude/projects/`:
+  - the `.md` files directly in `~/.claude/projects/<folder>/` and in its
+    `memory/` directory (Claude Code's auto-memory, `MEMORY.md` and the files
+    it indexes);
+  - `CLAUDE.md`, `GEMINI.md` and `agents.md` at the project root;
+  - the `.md` files directly in `<project>/.claude/` and
+    `<project>/.claude/commands/`.
 
-- Syntax highlighting for Markdown
-- A markdown preview toggle (render the document as formatted HTML)
-- Copy path and copy content buttons
-- `Cmd+S` / `Ctrl+S` to save
-- Word-wrap toggle
+No directory is scanned recursively. Hidden projects are left out.
 
-## Work Files (`.work-files/`)
+Files named `schedule-*.md` carry a clock icon and a **Run now** button — see
+[Automation](automation.md#schedules).
 
-The **Work Files** tab shows files under each project's `.work-files/` directory. This is a gitignored scratch space for session notes, proposals, agent reports, and any other ephemeral artifacts that should stay with the project but not be committed.
+The editor offers:
 
-Each project appears as a collapsible section listing its work files. Click a file to open it in the editor panel. The Work Files panel adds:
+- Markdown highlighting, and a preview toggle that renders the document (the
+  choice is remembered);
+- **Copy path** and **Copy content**;
+- a word-wrap toggle;
+- `Ctrl+F` / `Cmd+F` to find, `Ctrl+G` / `Cmd+G` to go to a line;
+- **Save**, or `Ctrl+S` / `Cmd+S`;
+- a reload when the file changes on disk.
 
-- **Format** button (for `.json` and `.jsonl` files) — pretty-prints the file for reading. This modifies the editor content only; it does not write to disk.
-- **Delete** button — deletes the file from disk (with a confirmation prompt)
-- **Close** button — closes the panel without saving
+## Work Files
 
-Files appear automatically in the tab as soon as they are written to `.work-files/` — no manual refresh needed.
+The **Work Files** tab (folder icon) lists, per project, the files under
+`<project>/.work-files/`, recursively, most recent first, at most 200 per
+project. `.work-files/` is a scratch directory for session notes, plans and
+agent reports that belong with a project without being committed; add it to
+the project's `.gitignore`.
 
-> **Note:** `.work-files/` directories are gitignored by convention. Files in this directory do not appear in git status.
+The Work Files editor has no save; it offers:
+
+- **Format**, for `.json` and `.jsonl` files: pretty-prints the content in the
+  editor, without writing to disk;
+- **Copy path** and **Copy content**;
+- **Delete**, which removes the file from disk after the confirmation
+  *Delete "&lt;name&gt;"? This cannot be undone.*;
+- **Close**.
+
+## Search
+
+The search field searches the tab that is open: Agent Files searches the listed
+agent files, Work Files the work files — see
+[Session browser](session-browser.md#search).

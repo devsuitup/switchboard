@@ -36,7 +36,7 @@ without re-reading `main.js`, now ~2600 LOC.
 - **MCP / IDE emulation** — file diff panel, OSC 8 hyperlinks, etc. Lives in `public/file-panel.js` and `main.js` MCP bridge handlers. Not yet documented; in-flight upstream work.
 - **Settings UI** — per-project + global, lives in `public/settings-panel.js`. Mostly self-contained, low coupling.
 - **Sidebar rendering details** — covered piecemeal in subagent-observability + session-cache; the full sidebar is `public/sidebar.js`. If you're doing UI work there, expect to read the file.
-- **Build / electron-builder** — covered in [README.md](../../README.md). Not a code area an agent typically modifies.
+- **Build / electron-builder** — covered in [docs/development.md](../../docs/development.md). Not a code area an agent typically modifies.
 
 ## Updating these docs
 

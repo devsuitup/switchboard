@@ -1,21 +1,29 @@
-# Activity Stats
+# Stats
 
-The **Stats** tab shows a heatmap of your Claude Code activity across all projects, similar to a GitHub contributions graph.
+The **Stats** tab summarises the activity recorded in every indexed
+transcript. It is computed when the tab is opened.
 
-## What the heatmap shows
+## What it shows
 
-Each cell represents one day. The intensity of the color reflects how many assistant messages were recorded that day across all indexed sessions. This gives you a visual record of when you were most active.
+- **Rate Limits**: the Claude plan's usage — the 5-hour window, the week, and
+  any per-model limit — with percentages and reset times. It is fetched from
+  Anthropic's usage endpoint with the CLI's OAuth credentials (the macOS
+  Keychain, or `~/.claude/.credentials.json`). **Refresh usage** fetches it
+  again. The same figures are the gauges in the [status bar](notifications.md#status-bar).
+- **Cards**: Total Sessions, Total Messages, Total Tokens, Tool Calls, Current
+  Streak and Longest Streak (in days), and one token count per model.
+- **Last 30 days**: a bar per day; hovering one shows its tokens, messages and
+  tool calls.
+- **Heatmap**: 52 weeks, one cell per day, shaded by the number of messages that
+  day.
 
-Below the heatmap, the stats panel shows summary numbers:
-
-- Total messages across all sessions
-- Total sessions indexed
-- Date of first and most recent session
+A day's messages are the user and assistant messages whose own timestamps fall
+on it (UTC date); a user entry that only carries a tool result is not counted.
 
 ## Data source
 
-The heatmap is sourced directly from the SQLite session cache — the same database that powers the sidebar. It counts assistant messages grouped by day using the `modified` timestamp on each session. No external service or `~/.claude/stats-cache.json` file is involved.
-
-## Refreshing
-
-Stats update automatically as new sessions are indexed. You can also force a refresh from the stats panel using the **Refresh** button, which re-reads the cache and fetches the latest usage data.
+Everything but the rate limits comes from Switchboard's own SQLite database,
+filled by indexing the transcripts under `~/.claude/projects` — and the mirrored
+transcripts of [remote hosts](remote-hosts.md). Claude Code's
+`~/.claude/stats-cache.json` is not read. The footer says when the figures were
+last computed.

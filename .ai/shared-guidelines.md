@@ -8,7 +8,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 
 | You want to… | Read first |
 |---|---|
-| Run / build the app | [README.md "Tooling"](../README.md) (task commands) |
+| Run / build the app | [docs/development.md](../docs/development.md) (task commands) |
 | Change Electron main / IPC | [contexts/ipc-bridge.md](contexts/ipc-bridge.md), then `main.js`, `preload.js` |
 | Change SQLite, indexing, watcher, FTS, heatmap | [contexts/session-cache.md](contexts/session-cache.md) |
 | Change schedule cron / `.md` files / schedule spawn | [contexts/schedule-runner.md](contexts/schedule-runner.md) |
@@ -26,7 +26,8 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
-| Cut a release | [README.md "Releasing"](../README.md) — and its fork gotchas, which are not optional |
+| Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |
+| Drive a live instance that cannot see the user's sessions | [../docs/live-testing.md](../docs/live-testing.md) |
 
 For a guided tour of the codebase architecture, start at [contexts/README.md](contexts/README.md).
 
@@ -58,7 +59,7 @@ task dev   # Taskfile already sets SWITCHBOARD_DATA_DIR=~/.switchboard-dev by de
 
 The AppImage uses `~/.switchboard/switchboard.db`. The dev electron uses `~/.switchboard-dev/switchboard.db`. They cannot collide.
 
-To test a specific PR live, alongside the running AppImage, use `task test-pr PR=<number>` — it isolates the DB, the automation triggers dir, and warns about the schedule-runner duplicate-fire risk. See [docs/testing-a-pr.md](docs/testing-a-pr.md) for the full procedure; do not improvise the isolation env vars by hand.
+To test a specific PR live, alongside the running AppImage, use `task test-pr PR=<number>` — it isolates the DB and the automation triggers dir; enabled schedules still fire in both instances. See [docs/testing-a-pr.md](../docs/testing-a-pr.md) for the full procedure; do not improvise the isolation env vars by hand.
 
 ### 2. Running `npm run build:linux` CAN kill the running instance — and so can the `cp` to ~/Applications (Linux-specific example — see note above)
 
@@ -120,6 +121,11 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Clickable paths in the terminal** — a link provider over filesystem paths and bare filenames, checked main-side against the panel's own guards; see [contexts/terminal-path-links.md](contexts/terminal-path-links.md)
 - **Activity reporting to ActivityWatch** — opt-in; the focused session and every running session as two separate buckets; see [contexts/activitywatch.md](contexts/activitywatch.md)
 - **Grid "Group by project" toggle** — the grid header switches between the project-grouped layout (default) and a flat card grid; the choice persists in `localStorage.gridGroupByProject`
+- **Remote hosts over SSH** — sessions of declared hosts mirrored, attached through tmux, stopped on the host; see [docs/remote-hosts.md](../docs/remote-hosts.md)
+- **Sandboxed sessions** (Linux) — `claude` under bubblewrap via `scripts/claude-sandbox.sh`; see [docs/sandbox.md](../docs/sandbox.md)
+- **Frameless window** — the app-drawn strip, the ☰ menu, the zoom keys; see [contexts/window-frame.md](contexts/window-frame.md)
+- **Terminal right-click modes** — the press is kept from the application outside Native mode; see [contexts/terminal-right-click.md](contexts/terminal-right-click.md)
+- **No automatic resume of a session live elsewhere** — restore and reload skip it, a click asks; see [contexts/cli-session-state.md](contexts/cli-session-state.md), "Live elsewhere"
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)
 

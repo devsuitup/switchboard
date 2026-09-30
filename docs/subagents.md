@@ -1,54 +1,68 @@
 # Subagents
 
-When a Claude session uses the `Agent` tool to spawn sub-tasks, Switchboard indexes those child sessions and surfaces them in the sidebar alongside their parent. This gives you visibility into parallel agent work without digging through raw JSONL files.
+A subagent is a child Claude that a session starts with its `Agent` tool. It
+has its own transcript, runs to completion, and cannot be resumed. Switchboard
+indexes subagent transcripts and shows them under the session that started
+them.
 
-## What is a subagent?
+## In the sidebar
 
-A subagent is a child Claude process spawned by a parent session via the `Agent` tool. Each sub-agent has its own JSONL transcript. Subagents are ephemeral — they run to completion and cannot be resumed.
+A session with subagents has a **▶ N subagents** caret; the choice to expand it
+is remembered per session. Under it, each subagent row shows:
 
-## Sidebar nesting
+- a pill with the subagent's type (`sub` when the type is unknown), and a left
+  border in the type's colour (`explore` green, `plan` indigo, `implement`
+  orange, `review` light blue, `test` red, any other type grey — the type name
+  is compared case-insensitively);
+- its status icon ([below](#live-status));
+- its description, or its summary;
+- its message count.
 
-Subagents appear nested under their parent session in the sidebar. Each entry shows:
+The first 10 subagents of a session are listed, then `+ N more`.
 
-- The subagent type (e.g. `implementer`, `researcher`, `reviewer`)
-- A live status badge (running / completed)
-- The time it was spawned
+Subagents whose parent session cannot be found — its transcript was deleted,
+say — are listed in an **Orphan subagents** group at the bottom of the project,
+collapsed by default.
 
-If the parent session cannot be found in the index (e.g. the parent JSONL was deleted), the subagent appears in a collapsible **Orphan subagents** group at the bottom of its project section. This group is collapsed by default.
+Subagent rows have no pin, rename, stop, fork, archive or delete buttons.
+Deleting a session deletes its subagent transcripts with it — see
+[Session browser](session-browser.md#delete).
 
-## Searching subagents
+## Search
 
-The full-text search bar covers subagent transcripts. Select **Subagents** in the type selector to restrict results to subagent content only.
+The Sessions tab's [search](session-browser.md#search) covers subagent
+transcripts. A session whose only match is in one of its subagents is listed,
+with that subagent.
 
-## Read-only transcript viewer
+## Transcript viewer
 
-Click a subagent entry in the sidebar to open its transcript in a read-only viewer. The viewer renders the full conversation — tool calls, results, and assistant messages — in the same style as the session JSONL viewer.
-
-Because subagents are ephemeral, clicking one does **not** launch `claude --resume`. A **Resume in terminal anyway** button is available at the top of the viewer for the rare case where you genuinely need to re-enter the session context.
+Clicking a subagent row opens its transcript, read-only, in the transcript
+viewer: messages, tool calls and results. It does not run `claude --resume`. A
+**Resume in terminal anyway** button at the top resumes it for the rare case
+where that is wanted.
 
 ## Live status
 
-The sidebar status dot has three shapes for a session that is doing something, and they differ only in movement and hue:
+The session's own status icon has three shapes for "something is running",
+distinguished by movement and hue:
 
-| Dot | Meaning |
+| Icon | Meaning |
 |---|---|
-| Light-blue braille spinner | The session itself is working, no subagent running under it. |
-| Violet braille spinner (same glyph, same cadence) | The session is working **and** at least one subagent is running under it. |
-| Static violet ⠿ | The session is at the prompt; subagents are still running under it. |
+| Light-blue braille spinner | The session is working; no subagent runs under it |
+| The same spinner, violet | The session is working, and at least one subagent runs under it |
+| Static violet ⠿ | The session is at its prompt; subagents still run under it |
 
-The violet spinner says the session is busy while agents are running. It does **not** say the session is *waiting* for them: the CLI reports one undifferentiated busy state on its terminal title and never signals "waiting for background agents" to the outside, so nothing here can tell generating apart from waiting. Reading it as "waiting" would be inventing information — see `.ai/contexts/ipc-bridge.md`, "The OSC 0 title is the primary busy channel".
+The violet spinner says the session is busy while agents run. It does not say
+the session is waiting for them: the CLI reports one busy state on its terminal
+title and never signals "waiting for background agents", so the two cannot be
+told apart. The session's higher-priority states — needs attention, response
+ready — replace the icon (see [Status indicators](notifications.md)). The three
+shapes show whether the subagent list is expanded or not.
 
-The violet tint reuses the existing spinner rather than adding an animation of its own (`docs/decisions/0002-discrete-steps-sidebar-animations.md`: nothing new that moves in steady state). The session's own higher-priority states still win — `needs-attention` and `response-ready` replace the dot entirely. All three shapes show whether the subagent group is expanded or collapsed.
+Subagent activity is detected from the subagent transcripts on disk — for local
+sessions, for sessions started outside Switchboard, and for sessions on remote
+hosts. A subagent whose transcript stops growing is marked finished after a
+stability window; one that grows again is shown running again.
 
-The grid view shows active subagents as colored pills on the parent session's card. Each pill represents one running sub-agent, color-coded by type:
-
-| Type | Color |
-|------|-------|
-| explore | green |
-| plan | purple |
-| implement | orange |
-| review | blue |
-| test | red |
-| other | grey |
-
-Pills disappear when the sub-agent completes.
+The [grid](grid-overview.md) shows running subagents as coloured pills on the
+parent's card.
