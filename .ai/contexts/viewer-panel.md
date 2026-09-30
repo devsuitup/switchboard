@@ -135,11 +135,9 @@ Everything below is presentation; none of it carries the rule.
 Each showing of a file in the viewer carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the tab's snapshot, so the token names the tab, not the path — two sessions' tabs on the same file have different tokens. A save captures the token when it starts, and when it resolves:
 
 - if the viewer holds that token — the tab never left, or came back while the save was in flight — the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
-- otherwise the tab is away, and the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`) and applied when that tab is restored.
+- otherwise the tab is away, and the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`) and applied — once, then deleted — when that tab is restored.
 
 Keying by path would hand one tab's result to another: a clean tab in another session on the same file would take the saving tab's base while still showing the old content, and its next save would pass main's check and replace the write. The file panel shows no dirty marker of its own, so without the record a failed save would go unreported.
-
-A restore re-reads the disk at once, and that read can see the save's own write before the save's answer arrives; the success then clears the "changed on disk" notice the read raised, because the disk last seen is exactly what was written.
 
 ## Undo
 

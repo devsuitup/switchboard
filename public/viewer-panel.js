@@ -463,7 +463,7 @@ class ViewerPanel {
       if (result && result.ok !== false) {
         saved = true;
         this._agreedBase = asEditorText(content);
-        if (this._noticeSeq === noticeSeq || this._lastSeenDisk === this._agreedBase) {
+        if (this._noticeSeq === noticeSeq) {
           this._lastSeenDisk = this._agreedBase;
           this._setNotice(null);
         }
@@ -488,7 +488,6 @@ class ViewerPanel {
 
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
   _recordDetachedSave(token, content, result) {
-    if (!token) return;
     if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
     else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
   }
@@ -499,7 +498,6 @@ class ViewerPanel {
 
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
-    this._token = null;
     this._unwatchFile();
     if (this.editorView) {
       this.editorView.destroy();

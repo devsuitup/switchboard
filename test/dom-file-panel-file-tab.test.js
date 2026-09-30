@@ -253,16 +253,12 @@ test('a save that succeeds after its tab left the viewer moves that tab\'s base'
   } finally { ctx.destroy(); }
 });
 
-// writeFirst: the write lands on disk at once and only the answer is held.
-function holdSaves(ctx, { writeFirst = false } = {}) {
+function holdSaves(ctx) {
   const realSave = ctx.window.api.saveFileForPanel;
   const pending = [];
-  ctx.window.api.saveFileForPanel = (p, content, expected) => {
-    const early = writeFirst ? realSave(p, content, expected) : null;
-    return new Promise((resolve) => {
-      pending.push((outcome) => resolve(outcome || early || realSave(p, content, expected)));
-    });
-  };
+  ctx.window.api.saveFileForPanel = (p, content, expected) => new Promise((resolve) => {
+    pending.push((outcome) => resolve(outcome || realSave(p, content, expected)));
+  });
   return { pending, release: () => { ctx.window.api.saveFileForPanel = realSave; } };
 }
 
@@ -331,13 +327,13 @@ test("a save failing while away is reported to the tab that made it, and to no o
   } finally { ctx.destroy(); }
 });
 
-async function saveAwayAndBack(ctx, holdOptions) {
+async function saveAwayAndBack(ctx) {
   ctx.disk.set(A, 'a0\n');
   ctx.disk.set(B, 'b0\n');
   ctx.window.switchPanel('s1');
   ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
   await flush();
-  const held = holdSaves(ctx, holdOptions);
+  const held = holdSaves(ctx);
   ctx.editor().type('X');
   pressSave(ctx);
   await flush();
@@ -364,12 +360,12 @@ test('a save that fails after its tab came back shows the failure', async () => 
 test('a save that succeeds after its tab came back moves the base, with no false change reported', async () => {
   const ctx = setup();
   try {
-    const held = await saveAwayAndBack(ctx, { writeFirst: true });
-    assert.equal(ctx.disk.get(A), 'a0\nX', 'the write has landed; only the answer is pending');
+    const held = await saveAwayAndBack(ctx);
     held.pending[0]();
     await flush();
     held.release();
-    assert.equal(noticeOf(ctx), null, 'the re-read on return saw our own write, not a change by someone else');
+    assert.equal(ctx.disk.get(A), 'a0\nX');
+    assert.equal(noticeOf(ctx), null);
     await save(ctx);
     assert.equal(ctx.calls.saves.at(-1).expected, 'a0\nX');
     assert.equal(ctx.disk.get(A), 'a0\nXZ');
@@ -445,5 +441,27 @@ test('re-rendering the shown tab keeps its notice', async () => {
     ctx.window.renderPanel('s1');
     await flush();
     assert.equal(noticeOf(ctx), 'Save failed: disk full');
+  } finally { ctx.destroy(); }
+});
+
+test('a late save result is applied once: a second trip away and back does not re-apply it', async () => {
+  const ctx = setup();
+  try {
+    await saveThenSwitchAway(ctx, null);
+    assert.equal(ctx.disk.get(A), 'a0\nX');
+    ctx.editor().type('Y');
+    await save(ctx);
+    assert.equal(ctx.disk.get(A), 'a0\nXY');
+
+    ctx.editor().type('Z');
+    ctx.window.switchPanel('s2');
+    await flush();
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(noticeOf(ctx), null, 'no false change on disk');
+    await save(ctx);
+    assert.equal(ctx.calls.saves.at(-1).expected, 'a0\nXY', 'the base is the last save, not the consumed record');
+    assert.equal(ctx.disk.get(A), 'a0\nXYZ');
+    assert.deepEqual(ctx.calls.confirms, []);
   } finally { ctx.destroy(); }
 });
