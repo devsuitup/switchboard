@@ -336,3 +336,18 @@ test('save-file-for-panel invalidates "memory" for a .md path, and nothing when 
     assert.deepEqual(h.invalidated, ['memory'], 'a refused save wrote nothing to reindex');
   } finally { h.cleanup(); }
 });
+
+test('save-file-for-panel recognises a .work-files directory whatever the path separator', () => {
+  const { createPanelSaveHandlers } = require('../viewer-save-guard');
+  const invalidated = [];
+  const h = createPanelSaveHandlers({
+    isSensitivePath: () => false,
+    resolveAllowedMemoryPath: (p) => p,
+    invalidateFtsSignature: (kind) => invalidated.push(kind),
+    existsSync: () => true,
+    readFile: () => 'old\n',
+    writeFile: () => {},
+  });
+  assert.deepEqual(h.saveFileForPanel('C:\\repo\\.work-files\\notes.txt', 'new\n', 'old\n'), { ok: true });
+  assert.deepEqual(invalidated, ['work-file'], 'a Windows path under .work-files is a work file too');
+});

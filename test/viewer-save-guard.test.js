@@ -119,7 +119,7 @@ test("main's save handlers: a sensitive path is refused, a memory path outside t
 
 test('main builds its save handlers with createMainPanelSaves and hands it only its own state', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
-  assert.match(src, /const panelSaves = createMainPanelSaves\(\{\n  getKnownProjectPaths,\n  invalidateFtsSignature,\n  onError: /);
+  assert.match(src, /const panelSaves = createMainPanelSaves\(\{\r?\n  getKnownProjectPaths,\r?\n  invalidateFtsSignature,\r?\n  onError: /);
   assert.doesNotMatch(src, /createPanelSaveHandlers/, 'the policies are not assembled in main.js');
 });
 
