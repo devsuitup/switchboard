@@ -14,8 +14,9 @@ green dot and the word, among the indicators on the right. Its tooltip:
 *Running in a bubblewrap sandbox: only this project directory and Claude's own
 state are visible. What Claude and git run later outside the sandbox is
 protected: in ~/.claude and every .claude only session state (transcripts,
-todos, credentials) is writable, each repository's config and hooks are
-read-only, and changes to ~/.claude.json (MCP servers) are dropped. NOT
+todos, credentials) is writable, each repository's config and hooks directory
+are read-only (tracked hook scripts such as husky's .husky/pre-commit are
+project files and stay writable), and changes to ~/.claude.json (MCP servers) are dropped. NOT
 isolated: network, environment, the project's own files and build scripts, the
 project's CLAUDE.md and memory files, a new .git/commondir or repository or
 worktree the session creates (git follows their config and hooks), the claude
@@ -226,17 +227,29 @@ directory in between is not detected.
 
 ### Schedules
 
-The [scheduler](automation.md#schedules) finds projects in
-`~/.claude/projects`, and each folder's project path in the `cwd` its
-transcripts record. It runs a schedule only for a folder whose name is that
-path's encoding, so a transcript that names another directory — a
-subdirectory holding a `.claude/commands/schedule-*.md` of its own — makes no
-project. A sandboxed session can write no other folder there than its own,
-whose name is fixed by its working directory.
+The [scheduler](automation.md#schedules) runs the schedules of the projects in
+its registry, the `scheduleProjects` setting in Switchboard's database, and of
+no other directory. Switchboard adds a project there when it launches a Claude
+session in it or when you add it (**Add project**), and removes it when you
+remove the project. Nothing a session writes — a transcript, the `cwd` it
+records, the folder name derived from it — adds one. The registry is seeded
+once, when Switchboard first starts with it and before any session can run,
+with the projects whose transcript folder matches their path and that already
+hold a schedule.
 
-With the sandbox on, a schedule's `add-dirs` under `$HOME` must be one of
-those projects or lie inside one; otherwise the run is skipped and the reason
-logged, because binding them read-write would hand an unattended run
+A sandboxed session can still create a `.claude` below a bound directory
+after launch: the mount plan is fixed when the sandbox starts, and a new
+directory is not in it. The registry is what keeps a
+`.claude/commands/schedule-*.md` planted there from running: it runs only if
+that directory is itself a registered project. `claude` started there by hand,
+outside the sandbox, would still load such a `.claude` (see
+[What is not isolated](#what-is-not-isolated)).
+
+A run is sandboxed according to the `project:` setting of its directory or,
+failing that, of the nearest directory above it that has one, then the global
+setting. With the sandbox on, a schedule's `add-dirs` under `$HOME` must be a
+registered project or lie inside one; otherwise the run is skipped and the
+reason logged, because binding them read-write would hand an unattended run
 whatever they hold.
 
 ## What is not isolated

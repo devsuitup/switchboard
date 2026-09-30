@@ -165,52 +165,77 @@ function readProjectPathFromJsonl(folderPath) {
   return null;
 }
 
-const warnedMismatch = new Set();
-
 /**
- * The project folders of ~/.claude/projects, each with the project path its
- * transcripts record — kept only when that path is the one the folder is named
- * after. A transcript is written by whoever runs claude, a sandboxed session
- * included, so its cwd alone does not make a project.
+ * The projects to seed the schedule registry with, the first time it is
+ * read: the ~/.claude/projects folders whose recorded path encodes back to the
+ * folder's name and holds a schedule. After that seeding, a project enters the
+ * registry only from main-side actions, never from a transcript.
  * see docs/sandbox.md ("Schedules")
  */
-function listProjects(log) {
-  const projects = [];
-  if (!fs.existsSync(PROJECTS_DIR)) return projects;
-  const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory());
-
-  // Prefer the cached folder→projectPath mapping; only read JSONLs for
-  // folders genuinely missing from the cache. This avoids re-reading 4KB of
-  // every JSONL of every project on each 60s tick.
+function initialScheduleProjects() {
+  const found = [];
+  if (!fs.existsSync(PROJECTS_DIR)) return found;
   const folderMeta = loadFolderMetaMap();
-
-  for (const folder of folders) {
-    const folderPath = path.join(PROJECTS_DIR, folder.name);
-    let projectPath = folderMeta.get(folder.name) || null;
-    if (!projectPath) {
-      projectPath = readProjectPathFromJsonl(folderPath);
-    }
-    if (!projectPath) continue;
-    if (encodeProjectPath(projectPath) !== folder.name) {
-      if (log && !warnedMismatch.has(folder.name)) {
-        warnedMismatch.add(folder.name);
-        log.warn(`[schedule] ignoring ${projectPath}: its transcripts are in ${folder.name}, which is not that path's folder`);
+  for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+    if (!folder.isDirectory()) continue;
+    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    try {
+      const commandsDir = path.join(projectPath, '.claude', 'commands');
+      if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
+        found.push(projectPath);
       }
-      continue;
-    }
-    projects.push({ folder: folder.name, projectPath });
+    } catch {}
   }
-  return projects;
+  return found;
 }
 
-/** The project paths schedules may run in. */
-function knownProjectPaths() {
-  try {
-    return new Set(listProjects().map(p => p.projectPath));
-  } catch {
-    return new Set();
+/**
+ * The schedule registry, kept in the `scheduleProjects` setting: the projects
+ * Switchboard opened a session in or the user added, seeded once by
+ * `seed()` when the setting has never been written.
+ */
+function scheduleRegistry(getSetting, setSetting, seed = initialScheduleProjects) {
+  const read = () => {
+    const stored = getSetting('scheduleProjects');
+    if (Array.isArray(stored)) return stored;
+    const seeded = [...new Set(seed().map(p => path.resolve(p)))];
+    setSetting('scheduleProjects', seeded);
+    return seeded;
+  };
+  return {
+    list: read,
+    add(projectPath) {
+      if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return;
+      const p = path.resolve(projectPath);
+      const current = read();
+      if (!current.includes(p)) setSetting('scheduleProjects', [...current, p]);
+    },
+    remove(projectPath) {
+      const p = path.resolve(projectPath);
+      const current = read();
+      if (current.includes(p)) setSetting('scheduleProjects', current.filter(x => x !== p));
+    },
+  };
+}
+
+/**
+ * Whether a schedule running in `cwd` is sandboxed: the `project:` setting of
+ * `cwd` or, failing that, of the nearest directory above it that has one, then
+ * the global setting, then the default.
+ */
+function resolveScheduleSandbox(cwd, getSetting, defaultValue) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const project = getSetting('project:' + dir);
+    if (project && project.sandbox !== undefined) return !!project.sandbox;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
+  const global = getSetting('global');
+  if (global && global.sandbox !== undefined) return !!global.sandbox;
+  return !!defaultValue;
 }
 
 /**
@@ -231,12 +256,15 @@ function refusedScheduleBinds(addDirs, knownProjects, home) {
   });
 }
 
-/** Scan all projects for schedule-*.md files and return parsed schedule objects. */
-function scanSchedules(log) {
+/**
+ * Scan the registered projects for schedule-*.md files and return parsed
+ * schedule objects. Without a registry, nothing is scanned.
+ */
+function scanSchedules(log, projectPaths = []) {
   const schedules = [];
   try {
-    for (const { folder: folderName, projectPath } of listProjects(log)) {
-      const folder = { name: folderName };
+    for (const projectPath of projectPaths) {
+      const folder = { name: encodeProjectPath(projectPath) };
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       try {
         if (!fs.existsSync(commandsDir)) continue;
@@ -377,7 +405,7 @@ function buildScheduleCommand(sessionId, schedule) {
  * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
+function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
   let running = true;
   const runningTasks = new Set();
   // see .ai/contexts/schedule-runner.md ("Isolated instances")
@@ -437,7 +465,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   function check(onTick) {
     if (!running) return;
     const now = new Date();
-    const schedules = scanSchedules(log);
+    const schedules = scanSchedules(log, projects ? projects() : []);
     let state = null;
     if (catchUpOn && schedules.some(s => s.catchUp)) {
       try {
@@ -480,4 +508,4 @@ function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, knownProjectPaths, refusedScheduleBinds };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry };

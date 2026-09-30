@@ -61,7 +61,7 @@ function rig(schedule) {
     runs, lines, resume,
     holdRuns() { hold = true; },
     finishRuns() { hold = false; pending.splice(0).forEach((done) => done()); },
-    start: (stateDir = STATE_DIR) => startScheduler(log, run, { resumeSource: resume, stateDir }),
+    start: (stateDir = STATE_DIR) => startScheduler(log, run, { resumeSource: resume, stateDir, projects: () => [PROJECT] }),
     firstMessages: () => fs.readdirSync(FOLDER)
       .filter((f) => f !== 'seed.jsonl')
       .map((f) => JSON.parse(fs.readFileSync(path.join(FOLDER, f), 'utf8').split('\n')[0]).message.content),
@@ -265,7 +265,7 @@ test('catch-up: a minute claimed by another scheduler after the record was read 
     onDone();
   };
   t.mock.timers.setTime(at(8, 9, 0, 30));
-  startScheduler(log, run, { stateDir: STATE_DIR })();
+  startScheduler(log, run, { stateDir: STATE_DIR, projects: () => [PROJECT] })();
 
   assert.equal(runs.length, 1, 'the second schedule finds its minute taken');
   assert.ok(lines.some((l) => l.includes('already triggered for that minute')));
@@ -401,7 +401,7 @@ for (const [line, expected] of [
   test(`catch-up: front matter ${line === null ? 'without the key' : `\`${line}\``} ${expected ? 'opts in' : 'does not opt in'}`, () => {
     rig();
     writeSchedule({ cron: '0 20 * * *', catchUpLine: line === null ? '' : line });
-    const [schedule] = scanSchedules();
+    const [schedule] = scanSchedules(undefined, [PROJECT]);
     assert.equal(schedule.catchUp, expected);
   });
 }

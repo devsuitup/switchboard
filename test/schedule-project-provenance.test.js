@@ -1,6 +1,6 @@
-// test/schedule-project-provenance.test.js — a schedule runs only for a project
-// whose path is the one its ~/.claude/projects folder is named after, and a
-// sandboxed run binds no directory under $HOME that is not such a project.
+// test/schedule-project-provenance.test.js — schedules run only in projects
+// Switchboard itself recorded, never in a path taken from a transcript, and a
+// sandboxed schedule is sandboxed by the nearest project that contains it.
 // see docs/sandbox.md ("Schedules")
 'use strict';
 
@@ -15,17 +15,22 @@ process.env.HOME = ROOT;
 process.env.USERPROFILE = ROOT;
 delete process.env.SWITCHBOARD_DATA_DIR;
 
-const { scanSchedules, knownProjectPaths, refusedScheduleBinds } = require('../schedule-runner');
+const {
+  scanSchedules, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry,
+} = require('../schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 
 const PROJECTS = path.join(ROOT, '.claude', 'projects');
 
 test.after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 
-function project(dir, { folder = encodeProjectPath(dir), cwd = dir } = {}) {
+function withSchedule(dir) {
   fs.mkdirSync(path.join(dir, '.claude', 'commands'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.claude', 'commands', 'schedule-x.md'),
     '---\nname: X\ncron: * * * * *\n---\n\nDo it.\n');
+}
+
+function transcript(folder, cwd) {
   fs.mkdirSync(path.join(PROJECTS, folder), { recursive: true });
   fs.writeFileSync(path.join(PROJECTS, folder, 'seed.jsonl'), JSON.stringify({ type: 'user', cwd }) + '\n');
 }
@@ -35,31 +40,81 @@ function reset() {
   fs.rmSync(path.join(ROOT, 'work'), { recursive: true, force: true });
 }
 
-test('schedules: a project whose path matches its transcript folder is scanned', () => {
+test('schedules: only projects in the registry are scanned', () => {
   reset();
-  const p = path.join(ROOT, 'work', 'app');
-  project(p);
-  const found = scanSchedules();
-  assert.deepEqual(found.map(s => s.projectPath), [p]);
-  assert.deepEqual([...knownProjectPaths()], [p]);
+  const app = path.join(ROOT, 'work', 'app');
+  const other = path.join(ROOT, 'work', 'other');
+  withSchedule(app);
+  withSchedule(other);
+  transcript(encodeProjectPath(other), other);
+  assert.deepEqual(scanSchedules(undefined, [app]).map(s => s.projectPath), [app]);
+  assert.deepEqual(scanSchedules(undefined, []), [], 'a transcript does not make a project');
+  assert.deepEqual(scanSchedules(), [], 'no registry, no schedule');
 });
 
-test('schedules: a transcript whose cwd is not the path its folder is named after is not a project', () => {
+test('schedules: a path whose encoding collides with a registered project\'s folder is not scanned', () => {
   reset();
-  const p = path.join(ROOT, 'work', 'app');
-  const planted = path.join(p, 'sub');
-  fs.mkdirSync(p, { recursive: true });
-  project(planted, { folder: encodeProjectPath(p), cwd: planted });
-  const lines = [];
-  const found = scanSchedules({ warn: (...a) => lines.push(a.join(' ')), error: () => {}, info: () => {} });
-  assert.deepEqual(found, [], 'a schedule planted below the project must not run');
-  assert.deepEqual([...knownProjectPaths()], []);
-  assert.ok(lines.some(l => l.includes(planted)), 'the refusal must be logged');
+  const apiClient = path.join(ROOT, 'api-client');
+  const colliding = path.join(ROOT, 'api', 'client');
+  withSchedule(colliding);
+  fs.mkdirSync(apiClient, { recursive: true });
+  assert.equal(encodeProjectPath(colliding), encodeProjectPath(apiClient), 'the rig must reproduce the collision');
+  transcript(encodeProjectPath(apiClient), colliding);
+  assert.deepEqual(scanSchedules(undefined, [apiClient]), []);
 });
 
-test('schedules: sandboxed add-dirs under $HOME must be a known project or inside one', () => {
+test('schedules: the registry is seeded once from the projects that already carry a schedule', () => {
+  reset();
+  const app = path.join(ROOT, 'work', 'app');
+  const plain = path.join(ROOT, 'work', 'plain');
+  const planted = path.join(ROOT, 'work', 'planted');
+  withSchedule(app);
+  withSchedule(planted);
+  fs.mkdirSync(path.join(plain, '.claude', 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(plain, '.claude', 'commands', 'review.md'), 'Review.\n');
+  transcript(encodeProjectPath(app), app);
+  transcript(encodeProjectPath(plain), plain);
+  transcript('-some-other-folder', planted);
+  assert.deepEqual(initialScheduleProjects(), [app],
+    'neither a project without a schedule nor a transcript naming a path its folder is not named after');
+});
+
+test('schedules: a schedule is sandboxed by the nearest project setting that contains it', () => {
+  const settings = {
+    global: { sandbox: false },
+    'project:/home/u/proj': { sandbox: true },
+    'project:/home/u/proj/sub/open': { sandbox: false },
+  };
+  const get = (key) => settings[key];
+  assert.equal(resolveScheduleSandbox('/home/u/proj', get, false), true);
+  assert.equal(resolveScheduleSandbox('/home/u/proj/sub', get, false), true, 'a subdirectory inherits its project');
+  assert.equal(resolveScheduleSandbox('/home/u/proj/sub/open', get, false), false, 'an explicit setting below wins');
+  assert.equal(resolveScheduleSandbox('/home/u/projection', get, false), false, 'a sibling with a common prefix does not');
+  assert.equal(resolveScheduleSandbox('/elsewhere', get, false), false, 'the global setting applies otherwise');
+  assert.equal(resolveScheduleSandbox('/elsewhere', () => undefined, true), true, 'then the default');
+});
+
+test('schedules: the registry is seeded only while it was never written, then changes only by add and remove', () => {
+  const store = {};
+  const get = (k) => store[k];
+  const set = (k, v) => { store[k] = v; };
+  let seeds = 0;
+  const registry = scheduleRegistry(get, set, () => { seeds++; return ['/p/seeded']; });
+  assert.deepEqual(registry.list(), ['/p/seeded']);
+  registry.add('/p/opened');
+  registry.add('/p/opened');
+  registry.add('relative/path');
+  assert.deepEqual(registry.list(), ['/p/seeded', '/p/opened'], 'no duplicate, no relative path');
+  registry.remove('/p/seeded');
+  assert.deepEqual(registry.list(), ['/p/opened']);
+  registry.remove('/p/opened');
+  assert.deepEqual(registry.list(), [], 'an emptied registry is not seeded again');
+  assert.equal(seeds, 1);
+});
+
+test('schedules: sandboxed add-dirs under $HOME must be a registered project or inside one', () => {
   const home = '/home/u';
-  const known = new Set(['/home/u/work/app', '/home/u/work/lib']);
+  const known = ['/home/u/work/app', '/home/u/work/lib'];
   assert.deepEqual(refusedScheduleBinds(['/home/u/work/lib', '/home/u/work/app/docs', '/opt/data'], known, home), []);
   assert.deepEqual(
     refusedScheduleBinds(['/home/u/.local/bin', '/home/u/work', '/home/u/work/application'], known, home),
