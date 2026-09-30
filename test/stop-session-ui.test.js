@@ -11,12 +11,12 @@ const { resolveSessionStop, isRemoteSessionAlive } = require('../public/stop-ses
 
 test('a local session (no remoteAlias) resolves to the plain stop dialog and the local IPC', () => {
   const plan = resolveSessionStop({ sessionId: 's1' });
-  assert.deepEqual(plan, { remote: false, alias: null, confirmText: 'Stop this session?' });
+  assert.deepEqual(plan, { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' });
 });
 
 test('an undefined session (row not found) still resolves to the local stop, never throws', () => {
   const plan = resolveSessionStop(undefined);
-  assert.deepEqual(plan, { remote: false, alias: null, confirmText: 'Stop this session?' });
+  assert.deepEqual(plan, { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' });
 });
 
 test('a remote session resolves to the remote IPC with the host alias named in the dialog text', () => {

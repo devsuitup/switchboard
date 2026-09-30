@@ -1,12 +1,15 @@
 // Dual-mode helper — see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 
 // session: the sessionMap entry for the row being stopped, or undefined.
-function resolveSessionStop(session) {
+function resolveSessionStop(session, { attach = false } = {}) {
   const alias = session && session.remoteAlias;
   if (alias) {
-    return { remote: true, alias, confirmText: `Stop this session on ${alias}?` };
+    return { remote: true, alias, attach: false, confirmText: `Stop this session on ${alias}?` };
   }
-  return { remote: false, alias: null, confirmText: 'Stop this session?' };
+  if (attach) {
+    return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session? It keeps running; the Agents view can stop it.' };
+  }
+  return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
 // Is this remote session's process still running? See .ai/contexts/session-state.md ("stopBeforeArchive").

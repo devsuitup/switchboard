@@ -175,6 +175,7 @@ function persistWorkingSet() {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
+      if (entry.attach) continue; // attach tabs are not restored
       if (entry.closed) continue;
       set.push({
         sessionId,
@@ -820,7 +821,8 @@ async function triggerRebuildAndSearch() {
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 // btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
 async function confirmAndStopSession(sessionId, btn) {
-  const plan = resolveSessionStop(sessionMap.get(sessionId));
+  const openEntry = openSessions.get(sessionId);
+  const plan = resolveSessionStop(sessionMap.get(sessionId), { attach: !!(openEntry && openEntry.attach) });
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
@@ -1145,6 +1147,9 @@ async function showTerminalHeader(session) {
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeaderSandbox.style.display = sandboxedSessions.get(session.sessionId) ? '' : 'none';
+  const headerEntry = openSessions.get(session.sessionId);
+  terminalStopBtn.title = headerEntry && headerEntry.attach ? 'Detach (the session keeps running)' : 'Stop process';
+  terminalStopBtn.setAttribute('aria-label', terminalStopBtn.title);
   terminalHeader.style.display = '';
   updateTerminalHeader();
 
@@ -1182,8 +1187,12 @@ async function openSession(session, customOptions, { automatic = false, live } =
     }
   }
 
-  // see .ai/contexts/cli-session-state.md ("Live elsewhere")
-  if (!(await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
+  // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) });
+  if (verdict === false) return false;
+  if (verdict && typeof verdict === 'object' && verdict.attach) {
+    customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
+  }
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
@@ -1191,6 +1200,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  entry.attach = resumeOptions.type === 'attach';
   forgetSessionExit(sessionId);
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
   if (!result.ok) {
