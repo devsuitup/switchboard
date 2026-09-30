@@ -575,7 +575,7 @@ function refreshSidebar({ resort = false } = {}) {
       if (!hasMatchingSessions && !projectMatched) return null;
       return {
         ...p,
-        sessions: hasMatchingSessions ? p.sessions.filter(s => searchMatchIds.has(s.sessionId)) : [],
+        sessions: hasMatchingSessions ? narrowSessionsToSearch(p.sessions, searchMatchIds) : [],
         _projectMatchedOnly: projectMatched && !hasMatchingSessions,
       };
     }).filter(Boolean);

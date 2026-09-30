@@ -123,6 +123,7 @@ const rendererCrossFileGlobals = {
   showResumeSessionDialog: 'readonly',
   showJsonlViewer: 'readonly',
   showSubagentTranscript: 'readonly',
+  narrowSessionsToSearch: 'readonly',
   forkSession: 'readonly',
   openSession: 'readonly',
   loadProjects: 'readonly',

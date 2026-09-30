@@ -520,9 +520,8 @@ DOM, which was not available.
   `item.element.dataset.sessionId` — never counted the sessions grouped
   inside it as accounted-for. Their subagents were treated as parentless and
   duplicated into the project's "Orphan subagents" bucket even after the fix
-  above attached them correctly inside the group. `collectTopLevelSessionIds(el)`
-  fixes this by walking into `el` for nested `[data-session-id]` session-items
-  (excluding subagent ones) when `el` itself isn't a session item.
+  above attached them correctly inside the group. the orphan pass now reads the parents from `project.sessions`, not from the
+  rendered elements (see "A hidden parent is not a missing parent").
 - **Coverage**: `test/dom-slug-group-subagent-nesting.test.js` seeds two
   schedule-rerun-shaped sessions sharing a slug plus a subagent parented to
   one of them, and pins both the caret-attachment fix and the
@@ -593,6 +592,24 @@ state for a presentation concern and would re-open the archive-all rule above.
 
 Covered by `test/dom-archived-parent-subagents.test.js`, which feeds the real
 `buildProjectsFromCache` output into `renderProjects`.
+
+### A hidden parent is not a missing parent
+
+The orphan pass of `buildSessionsList` takes its parent ids from
+`project.sessions` (`topLevelIds`, built in `processProjectSessions`), not from
+the elements rendered. The starred, running and today filters drop top-level
+sessions from what is rendered but not from `project.sessions`, so the
+subagents of a parent they hide are hidden with it, and only a subagent whose
+parent is absent from the payload lands in "Orphan subagents".
+
+Search cannot rely on that alone: `refreshSidebar` reduces `project.sessions`
+to the matches, so a matching subagent arrives without its parent.
+`narrowSessionsToSearch(sessions, matchIds)` keeps the matches plus the parents
+of matching subagents, so the hit renders nested under its parent, which is
+shown although it does not match itself. A subagent whose parent is not in the
+project's sessions at all stays an orphan.
+
+Covered by `test/dom-sidebar-filtered-parent-subagents.test.js`.
 
 ### The project-survival guard
 
@@ -692,6 +709,7 @@ invariant enforced anywhere.
 - `test/dom-sidebar.test.js` — covers orphan group rendering
 - `test/dom-project-archive-all.test.js` — pins the project archive-all filter
 - `test/dom-archived-parent-subagents.test.js` — pins archived-parent vs missing-parent, from the cache payload to the orphan group
+- `test/dom-sidebar-filtered-parent-subagents.test.js` — pins filter and search: a hidden parent is not a missing one
 - `test/dom-sidebar-search-subagent-hits.test.js` — pins the search-only-hits-a-subagent case and the showStarredOnly regression, one test per guard clause
 - `test/session-transitions.test.js` — spawn/complete/heartbeat lifecycle plus
   the resurrection guards above
