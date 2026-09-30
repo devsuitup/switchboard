@@ -30,7 +30,7 @@ A file link in the terminal opens here too, when it points at one of this sessio
 ## What it shows
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
-- One row per changed file: a state badge (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked — hover it for the word), its path, and its own `+added −deleted` line counts.
+- One row per changed file: a state badge (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `U` unmerged, `?` untracked — hover it for the word), its path, and its own `+added −deleted` line counts.
 - Clicking a row opens that file below the list, which stays on screen — the current row is highlighted, and clicking another row swaps the file without going back anywhere. An untracked file opens too, as an all-additions diff. A binary file shows a one-line note instead of its bytes.
 - Drag the divider between the list and the file to give either one more room; the position is remembered.
 - A brand-new directory is listed file by file, not as a single folder row.
