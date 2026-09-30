@@ -12,6 +12,10 @@ let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
 const agentsVerbErrors = new Map();
 
+function agentsEscapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function agentsEntryKey(entry) {
   return entry.kind === 'background' ? 'bg:' + entry.id : 'int:' + entry.sessionId;
 }
@@ -115,12 +119,12 @@ function renderAgentRow(entry) {
   const classes = ['agents-row'];
   if (key === agentsSelectedKey) classes.push('selected');
   if (agentsPendingVerbs.has(key)) classes.push('pending');
-  return `<div class="${classes.join(' ')}" data-key="${escapeHtml(key)}">
-    <span class="session-icon ${icon.slotClass}" title="${escapeHtml(icon.title)}"></span>
+  return `<div class="${classes.join(' ')}" data-key="${agentsEscapeAttr(key)}">
+    <span class="session-icon ${icon.slotClass}" title="${agentsEscapeAttr(icon.title)}"></span>
     <span class="agents-row-name">${escapeHtml(entry.name || entry.sessionId || entry.id || '')}</span>
     <span class="agents-row-agent">${escapeHtml(entry.agent || '—')}</span>
     <span class="agents-row-state">${escapeHtml(state + status)}</span>
-    <span class="agents-row-cwd" title="${escapeHtml(entry.cwd || '')}">${escapeHtml(entry.cwd ? shortProjectPath(entry.cwd) : '')}</span>
+    <span class="agents-row-cwd" title="${agentsEscapeAttr(entry.cwd || '')}">${escapeHtml(entry.cwd ? shortProjectPath(entry.cwd) : '')}</span>
     <span class="agents-row-age">${escapeHtml(formatAgentAge(entry.startedAt))}</span>
   </div>`;
 }
@@ -142,7 +146,7 @@ function renderAgentDetail(entry) {
     return `<li>${escapeHtml(f.label || f.id || '')}${escapeHtml(tail)}</li>`;
   }).join('');
   const children = (entry.children || []).filter(c => c.href)
-    .map(c => `<a href="#" class="agents-link" data-href="${escapeHtml(c.href)}">${escapeHtml(c.id || c.href)}</a>`)
+    .map(c => `<a href="#" class="agents-link" data-href="${agentsEscapeAttr(c.href)}">${escapeHtml(c.id || c.href)}</a>`)
     .join(' · ');
   const error = agentsVerbErrors.get(key);
   return `

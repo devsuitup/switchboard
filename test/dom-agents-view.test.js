@@ -301,3 +301,35 @@ test('opening the settings closes the agents view', async (t) => {
   assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
   assert.equal(ctx.window.settingsViewer.style.display, 'flex');
 });
+
+test('quotes in a name, cwd or href cannot inject attributes into the rows or the detail', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const payload = 'x" class="agents-verb-btn" data-verb="stop" y=\'z';
+  const evil = { ...ROSTER[1], id: 'cccccccc', name: payload, cwd: '/w/' + payload, children: [{ id: 'c', href: 'https://e.example/' + payload, kind: 'mr' }] };
+  ctx.setSnapshot({ roster: [evil], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const row = ctx.document.querySelector('.agents-row[data-key="bg:cccccccc"]');
+  assert.ok(row);
+  const cwdEl = row.querySelector('.agents-row-cwd');
+  assert.equal(cwdEl.getAttribute('title'), '/w/' + payload);
+  assert.equal(cwdEl.hasAttribute('data-verb'), false);
+  assert.equal(cwdEl.className, 'agents-row-cwd');
+  row.click();
+  const detail = ctx.document.getElementById('agents-detail');
+  const link = detail.querySelector('.agents-link');
+  assert.equal(link.getAttribute('data-href'), 'https://e.example/' + payload);
+  assert.equal(link.hasAttribute('data-verb'), false);
+  assert.equal(link.className, 'agents-link');
+  assert.equal(ctx.document.querySelectorAll('[data-verb="stop"]').length, 1);
+  assert.equal(ctx.document.querySelectorAll('.agents-verb-btn').length, 5);
+});
+
+test('a quote in a session id round-trips through the row key without injecting an attribute', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const sid = 'a" data-verb="stop';
+  ctx.setSnapshot({ roster: [{ ...ROSTER[2], sessionId: sid }], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const row = ctx.document.querySelector('.agents-row');
+  assert.equal(row.getAttribute('data-key'), 'int:' + sid);
+  assert.equal(row.hasAttribute('data-verb'), false);
+});
