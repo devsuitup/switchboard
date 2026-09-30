@@ -1169,6 +1169,7 @@ body { display: flex; flex-direction: column; }
 .session-launch-config-btn,
 .session-fork-btn,
 .session-jsonl-btn,
+.session-bridge-btn,
 .session-delete-btn,
 .session-archive-btn {
   cursor: pointer;
@@ -3068,6 +3069,15 @@ body { display: flex; flex-direction: column; }
 .session-jsonl-btn:hover {
   color: #40c8c8;
   background: rgba(64,200,200,0.1);
+}
+
+.session-bridge-btn {
+  color: #8a7ab8;
+}
+
+.session-bridge-btn:hover {
+  color: #b8a4f0;
+  background: rgba(184,164,240,0.1);
 }
 
 /* Memory sidebar content */

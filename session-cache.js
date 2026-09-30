@@ -463,6 +463,7 @@ function buildProjectsFromCache(showArchived) {
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
       remoteAlias: alias,
+      bridgeSessionId: row.bridgeSessionId || null,
     };
     if (!showArchived && s.archived) continue;
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")
