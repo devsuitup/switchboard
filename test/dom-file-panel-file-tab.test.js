@@ -1261,12 +1261,13 @@ test('after the editor bundle fails to load, opening the file again shows it', a
     assert.equal(ctx.viewer().editorView, null);
 
     ctx.calls.holdBundle = false;
-    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.disk.set(A, 'a1\n');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a1\n' });
     await flush();
-    assert.equal(content(ctx), 'a0\n');
+    assert.equal(content(ctx), 'a1\n', 'the reopened panel re-reads the file');
     ctx.editor().type('Y');
     await save(ctx);
-    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a0\nY', expected: 'a0\n' });
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a1\nY', expected: 'a1\n' });
   } finally { ctx.destroy(); }
 });
 

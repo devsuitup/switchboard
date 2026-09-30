@@ -236,7 +236,7 @@ class ViewerPanel {
 
     if (toolbar.copyContentBtn) {
       toolbar.copyContentBtn.addEventListener('click', () => {
-        const content = this.getContent();
+        const content = this._buffer();
         navigator.clipboard.writeText(content);
         toolbar.flashCopyContent();
       });
@@ -355,6 +355,7 @@ class ViewerPanel {
     this._openPending = true;
     this._rereadQueued = false;
     this._pendingContent = asEditorText(content);
+    if (this.toolbar.saveBtn) this.toolbar.saveBtn.disabled = true;
 
     // Defer all CodeMirror work until the bundle is available.
     loadCodeMirrorBundle().then(() => {
@@ -390,6 +391,7 @@ class ViewerPanel {
       }
       this._openPending = false;
       this._pendingContent = null;
+      if (this.toolbar.saveBtn) this.toolbar.saveBtn.disabled = false;
       if (restore || this._rereadQueued) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
@@ -451,7 +453,7 @@ class ViewerPanel {
 
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save() {
-    if (!this.opts.onSave || !this.filePath) return;
+    if (!this.opts.onSave || !this.filePath || this._pendingContent !== null) return;
     if (this._pendingSave !== null) {
       this._saveQueued = true;
       return;
