@@ -470,3 +470,27 @@ test('composer-state: an over-long unterminated DCS resolves towards busy', () =
   assert.equal(state.partial, '', 'the buffer must not grow without bound');
   assert.ok(state.pending > 0);
 });
+
+test('composer-state: Alt+Shift+P (a bare ESC P) stays a keystroke, chunk by chunk', () => {
+  const state = createComposerState();
+  for (const [k, t] of [['\x1bP', 1000], ['h', 1001], ['i', 1002]]) noteUserInput(state, k, t);
+  assert.equal(state.text, 'hi');
+  assert.equal(state.partial, '');
+  noteUserInput(state, '\r', 1003);
+  assert.equal(state.text, '');
+  assert.equal(state.pending, 0);
+});
+
+test('composer-state: Alt+Shift+P followed by text and Enter in one chunk behaves the same', () => {
+  const state = feed(['\x1bPhi']);
+  assert.equal(state.text, 'hi');
+  noteUserInput(state, '\r', 2000);
+  assert.equal(state.text, '');
+});
+
+test('composer-state: an ESC that does not open a string terminator cancels the DCS', () => {
+  const state = feed(['x\x1bP1+rab\x1bOD']);
+  assert.equal(state.partial, '');
+  assert.equal(state.text, 'x');
+  assert.equal(state.cursor, 0, 'the SS3 left-arrow after the cancelled DCS is applied');
+});

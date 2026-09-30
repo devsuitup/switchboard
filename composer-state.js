@@ -144,12 +144,12 @@ function matchEscape(buf, i) {
     return null;
   }
 
-  if (next === 'P') {
+  if (next === 'P' && i + 2 < buf.length && buf[i + 2] >= '\x20' && buf[i + 2] <= '\x3f') {
     for (let j = i + 2; j < buf.length; j++) {
-      if (buf[j] === '\x1b') {
-        if (j + 1 >= buf.length) return null;
-        if (buf[j + 1] === '\\') return { len: j - i + 2, kind: 'dcs' };
-      }
+      if (buf[j] !== '\x1b') continue;
+      if (j + 1 >= buf.length) return null;
+      if (buf[j + 1] === '\\') return { len: j - i + 2, kind: 'dcs' };
+      return { len: j - i, kind: 'dcs' };
     }
     return null;
   }
