@@ -1209,6 +1209,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
     showSession(sessionId);
     return;
   }
+  if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
   syncPtySizeAfterOpen(entry);
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);

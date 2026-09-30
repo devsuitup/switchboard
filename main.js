@@ -2337,7 +2337,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       mainWindow.webContents.send('terminal-data', sessionId, '\x1b[?25l');
     }
 
-    return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
+    return { ok: true, reattached: true, attach: !!session.isAttach, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")

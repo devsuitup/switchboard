@@ -17,6 +17,16 @@ test('open-terminal builds `claude attach <id>` for an attach session and never 
   assert.match(MAIN, /isAttach, attachJobId,/, 'the session record must carry both fields');
 });
 
+test('a reattach reports whether the live session is an attach, and the renderer keeps it on the tab', () => {
+  assert.match(MAIN, /return \{ ok: true, reattached: true, attach: !!session\.isAttach,/);
+  const APP = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  const start = APP.indexOf('async function openSession(');
+  const body = APP.slice(start, APP.indexOf('\nasync function ', start + 10));
+  const openIdx = body.indexOf('await window.api.openTerminal(sessionId');
+  assert.ok(openIdx > 0);
+  assert.match(body.slice(openIdx), /if \(result\.reattached\) entry\.attach = !!result\.attach;/);
+});
+
 test('an attach job id is validated against the eight-hex shape before anything is spawned', () => {
   assert.match(MAIN, /JOB_ID_RE\.test\(String\(sessionOptions\.jobId\)\)/);
 });
