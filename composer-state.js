@@ -113,7 +113,7 @@ function isTruncatedPrefixOf(buf, i, seq) {
 /**
  * Match one escape sequence starting at `i`.
  * Returns { len, kind, params, final } or null when the sequence is not yet
- * complete. kind: 'csi' | 'ss3' | 'osc' | 'esc'
+ * complete. kind: 'csi' | 'ss3' | 'osc' | 'dcs' | 'esc'
  */
 function matchEscape(buf, i) {
   const next = buf[i + 1];
@@ -140,6 +140,16 @@ function matchEscape(buf, i) {
       if (buf[j] === '\x07') return { len: j - i + 1, kind: 'osc' };
       if (buf[j] === '\x1b' && buf[j + 1] === '\\') return { len: j - i + 2, kind: 'osc' };
       if (buf[j] === '\x1b' && j + 1 >= buf.length) return null;
+    }
+    return null;
+  }
+
+  if (next === 'P') {
+    for (let j = i + 2; j < buf.length; j++) {
+      if (buf[j] === '\x1b') {
+        if (j + 1 >= buf.length) return null;
+        if (buf[j + 1] === '\\') return { len: j - i + 2, kind: 'dcs' };
+      }
     }
     return null;
   }
