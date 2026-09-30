@@ -509,13 +509,7 @@ function openFileTab(sessionId, data) {
 
 function reopenFileTab(sessionId, state, tab, data) {
   if (Number.isInteger(data.line) && data.line > 0) tab.pendingLine = data.line;
-  if (fpViewerOwner === tab && !fpViewerPanel.editorView) {
-    tab.content = data.content;
-    fpViewerOwner = null;
-  } else if (fpViewerOwner === tab) {
-    fpViewerPanel.rereadFromDisk();
-  }
-  state.panelVisible = true;
+  if (fpViewerOwner === tab) fpViewerPanel.rereadFromDisk();
   if (currentPanelSessionId === sessionId) {
     showPanel(state);
     renderPanel(sessionId);
@@ -589,16 +583,15 @@ function renderHeldBar(sessionId, tab) {
   text.textContent = 'Unsaved edits kept in:';
   heldBarEl.appendChild(text);
   const tabs = [...held.values()];
-  for (const heldTab of tabs) {
+  const labels = heldTabLabels(tabs);
+  tabs.forEach((heldTab, i) => {
     const btn = document.createElement('button');
     btn.className = 'fp-toolbar-btn file-panel-held-btn';
-    btn.textContent = tabs.some((other) => other !== heldTab && other.label === heldTab.label)
-      ? `${basename(parentDir(heldTab.filePath))}/${heldTab.label}`
-      : heldTab.label;
+    btn.textContent = labels[i];
     btn.title = `Show ${heldTab.filePath}`;
     btn.addEventListener('click', () => openFileTab(sessionId, { filePath: heldTab.filePath }));
     heldBarEl.appendChild(btn);
-  }
+  });
   heldBarEl.style.display = '';
 }
 
@@ -1824,8 +1817,18 @@ function refitActiveTerminal() {
 
 // ── Utility ─────────────────────────────────────────────────────────
 
-function parentDir(filePath) {
-  return String(filePath).replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+function heldTabLabels(tabs) {
+  const parts = tabs.map((tab) => String(tab.filePath).replace(/\\/g, '/').split('/'));
+  const depth = tabs.map(() => 1);
+  const longest = Math.max(...parts.map((p) => p.length));
+  let labels = [];
+  for (let round = 0; round < longest; round++) {
+    labels = parts.map((p, i) => p.slice(-depth[i]).join('/'));
+    const clashes = labels.map((label, i) => labels.some((other, j) => j !== i && other === label));
+    if (!clashes.includes(true)) break;
+    clashes.forEach((clash, i) => { if (clash) depth[i] += 1; });
+  }
+  return labels;
 }
 
 function basename(filePath) {

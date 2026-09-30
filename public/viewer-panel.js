@@ -341,6 +341,8 @@ class ViewerPanel {
     this._openGen = (this._openGen || 0) + 1;
     const myGen = this._openGen;
     const pending = { content, filePath, isMd };
+    this._openPending = true;
+    this._rereadQueued = false;
 
     // Defer all CodeMirror work until the bundle is available.
     loadCodeMirrorBundle().then(() => {
@@ -374,7 +376,8 @@ class ViewerPanel {
       if (wantPreview) {
         this._setPreview(true);
       }
-      if (restore) this._reloadFromDisk();
+      this._openPending = false;
+      if (restore || this._rereadQueued) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
     });
@@ -607,7 +610,11 @@ class ViewerPanel {
   }
 
   rereadFromDisk() {
-    return this._reloadFromDisk();
+    if (this._openPending) {
+      this._rereadQueued = true;
+      return;
+    }
+    this._reloadFromDisk();
   }
 
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")

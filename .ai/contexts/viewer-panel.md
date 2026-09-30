@@ -159,7 +159,7 @@ A held tab comes back:
 | an open names a held file (`openFileTab`) | that tab |
 | the user clicks its name in the bar above a file tab ("Unsaved edits kept in: …") | that tab |
 
-The bar (`#file-panel-held`) has `role="status"`, so a screen reader announces it without taking focus. Each name is set as `textContent`; two held files with the same name are shown with their parent directory (`x/a.md`, `y/a.md`).
+The bar (`#file-panel-held`) has `role="status"`, so a screen reader announces it without taking focus. Each name is set as `textContent`; names that collide are lengthened, one directory at a time, until each is distinct (`/a/x/a.md` and `/b/x/a.md` show as `a/x/a.md` and `b/x/a.md`), and a file at the root shows as `/a.md`.
 
 It is shown with `open(…, restore)` and re-read at once, like any return to the viewer: a write made while it was held — the diff the user just accepted, for instance — raises "changed on disk", and `_agreedBase` has not moved, so a save against that write is refused by main and asks. The bar is not shown over a diff: leaving an unanswered diff would leave the CLI waiting on it.
 
@@ -167,7 +167,8 @@ It is shown with `open(…, restore)` and re-read at once, like any return to th
 
 | Route | Over a dirty file tab | Over a clean file tab |
 |---|---|---|
-| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly. Before its editor exists (the CodeMirror bundle still loading) it has nothing to re-read: it is opened again with the content sent. |
+| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly |
+| `openFile` / path link, same file, tab shown, its `open()` not yet applied (the CodeMirror bundle loading, or a restore still pending) | the re-read is queued (`_rereadQueued`) and runs once `open()` has put its document in the editor, so a restored snapshot is re-read, never replaced; a new `open()` clears the queue | the same |
 | `openFile` / path link, same file, tab away | kept with its snapshot and token, restored and re-read on return | the same |
 | `openFile` / path link, another file | tab held, the new file shown, the bar names the held one | replaced |
 | `openDiff` | tab held, restored when the session closes the diff | replaced; closing the diff closes the panel |

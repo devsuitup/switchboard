@@ -1157,3 +1157,56 @@ test('a buffer reverted to its base after a session write is clean while away: a
     assert.equal(heldBar(ctx), null);
   } finally { ctx.destroy(); }
 });
+
+test('a held tab restored by an open, then opened again before its editor exists, keeps its edits', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTabShown(ctx);
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.equal(ctx.viewer().filePath, A);
+    assert.equal(content(ctx), 'a0\nmine');
+    await save(ctx);
+    assert.deepEqual(ctx.calls.saves.at(-1), { path: A, content: 'a0\nmine', expected: 'a0\n' });
+  } finally { ctx.destroy(); }
+});
+
+test('held files whose names collide get the shortest distinct path, and a file at the root starts with /', async () => {
+  const ctx = setup();
+  try {
+    const paths = ['/a/x/a.md', '/b/x/a.md', '/a.md'];
+    ctx.disk.set(C, 'c0\n');
+    ctx.window.switchPanel('s1');
+    for (const p of paths) {
+      ctx.disk.set(p, 'p0\n');
+      ctx.calls.openFile('s1', { filePath: p, content: 'p0\n' });
+      await flush();
+      ctx.editor().type('mine');
+    }
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    assert.deepEqual(heldBar(ctx), ['a/x/a.md', 'b/x/a.md', '/a.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('a re-read queued for one open is not carried into the next one', async () => {
+  const ctx = setup();
+  try {
+    const reads = [];
+    const realRead = ctx.window.api.readFileForPanel;
+    ctx.window.api.readFileForPanel = (p) => { reads.push(p); return realRead(p); };
+    ctx.disk.set(A, 'a0\n');
+    ctx.disk.set(C, 'c0\n');
+    ctx.window.switchPanel('s1');
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+    await flush();
+    assert.deepEqual(reads, [A], 'the second open re-reads once the editor exists');
+    ctx.calls.openFile('s1', { filePath: C, content: 'c0\n' });
+    await flush();
+    assert.deepEqual(reads, [A], 'a plain open of another file does not re-read');
+  } finally { ctx.destroy(); }
+});
