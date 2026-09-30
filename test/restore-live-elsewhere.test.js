@@ -91,6 +91,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {
+    vm.runInContext(functionSource(APP_SRC, 'showRestoreNotice'), ctx);
     vm.runInContext(functionSource(APP_SRC, 'showLiveElsewhereNotice'), ctx);
   }
   if (/^let restoreSavedIndex /m.test(APP_SRC)) {

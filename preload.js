@@ -138,6 +138,9 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingProgress: (callback) => {
     ipcRenderer.on('indexing-progress', (_event, payload) => callback(payload));
   },
+  onIndexingFinished: (callback) => {
+    ipcRenderer.on('indexing-finished', () => callback());
+  },
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));
   },

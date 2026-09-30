@@ -31,6 +31,9 @@ its previous launch. Sessions reopen one after another, half a second apart.
 
 - A session that is no longer in the index (transcript deleted, worktree
   removed) is skipped.
+  Once indexing is over, a saved session that is still missing is dropped from
+  the restore, the bar goes away, and a notice names it: *Not restored:
+  &lt;name&gt; has no transcript*.
 - A session live in another process — another Switchboard, or `claude` in a
   terminal — is skipped, and a notice names it for 15 seconds:
   *Not reopened: &lt;name&gt; is live in pid N*. It stays in the saved set, so a

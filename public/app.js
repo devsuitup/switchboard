@@ -268,6 +268,7 @@ async function tickRestorePlanner() {
   }
 
   document.getElementById('restore-cold-toast')?.remove();
+  if (plan.unavailable.length) showNotRestoredNotice(plan.unavailable);
 
   if (plan.action === 'nothing') return;
 
@@ -322,14 +323,10 @@ function showColdCacheNotice(count) {
   });
 }
 
-function showLiveElsewhereNotice(skipped) {
-  document.getElementById('restore-live-elsewhere-toast')?.remove();
-  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
-  const text = skipped.length === 1
-    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
-    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
+function showRestoreNotice(id, text) {
+  document.getElementById(id)?.remove();
   const toast = document.createElement('div');
-  toast.id = 'restore-live-elsewhere-toast';
+  toast.id = id;
   toast.className = 'restore-toast';
   const msg = document.createElement('span');
   msg.className = 'restore-toast-msg';
@@ -341,6 +338,30 @@ function showLiveElsewhereNotice(skipped) {
   toast.append(msg, dismiss);
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), LIVE_ELSEWHERE_NOTICE_MS);
+}
+
+function showNotRestoredNotice(unavailable) {
+  const label = (item) => {
+    const s = sessionMap.get(item.sessionId);
+    return (s && cleanDisplayName(s.name || s.aiTitle || s.summary)) || item.sessionId;
+  };
+  const text = unavailable.length === 1
+    ? `Not restored: ${label(unavailable[0])} has no transcript`
+    : `Not restored: ${unavailable.length} sessions have no transcript (${unavailable.map(label).join(', ')})`;
+  showRestoreNotice('restore-unavailable-toast', text);
+}
+
+function showLiveElsewhereNotice(skipped) {
+  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
+  const text = skipped.length === 1
+    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
+    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
+  showRestoreNotice('restore-live-elsewhere-toast', text);
+}
+
+function markRestoreIndexingDone() {
+  restoreIndexingDone = true;
+  tickRestorePlanner();
 }
 
 async function maybeRetryRestoreWorkingSet() {
@@ -1511,9 +1532,6 @@ let indexingBannerDismissed = false;
 function updateIndexingBanner(payload) {
   if (!payload || !payload.coldStart) return;
   if (payload.done) {
-    // indexing over: the planner's other stop condition — see .ai/contexts/session-cache.md
-    restoreIndexingDone = true;
-    tickRestorePlanner();
     if (payload.error) {
       // A failed scan used to just hide the banner, leaving the tiny status
       // text as the only trace of the failure. Show it where the user was
@@ -1537,6 +1555,7 @@ function dismissIndexingBanner() {
   indexingBannerDismissed = true;
 }
 window.api.onIndexingProgress(updateIndexingBanner);
+window.api.onIndexingFinished(markRestoreIndexingDone);
 document.getElementById('indexing-banner-dismiss').addEventListener('click', dismissIndexingBanner);
 
 // Refocus the active terminal after a fullscreen transition (F11, menu, IPC).
