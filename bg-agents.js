@@ -194,7 +194,7 @@ async function runVerb(verb, id) {
   if (verb !== 'stop' && live && (live.state === 'working' || live.state === 'blocked')) {
     return { ok: false, error: `cannot ${verb} a ${live.state} session; stop it first` };
   }
-  const result = await run([verb, id], { cwd: cwdFor(id), timeout: VERB_TIMEOUT_MS });
+  const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;
   const error = ok ? null : (stripShellNoise(result.stderr) || `claude ${verb} exited with ${result.code}`);
   await reconcile();

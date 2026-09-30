@@ -57,9 +57,9 @@ function fakeSessionState(descriptors = []) {
   };
 }
 
-function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false } = {}) {
+function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir } = {}) {
   bgAgents.init({
-    jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState,
+    jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
     makeIsOwnPid: () => () => false, isAttachedHere: attached,
   });
   return { cli, sessionState };
@@ -170,6 +170,25 @@ test('runVerb spawns `claude <verb> <id>` in the session cwd when it exists, the
     assert.equal(verbCall.opts.timeout, bgAgents.VERB_TIMEOUT_MS);
     assert.equal(cli.calls[cli.calls.length - 1].argv[0], 'agents', 'a verb is followed by a reconcile');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('runVerb runs rm from the home directory, never from the job cwd it may delete; respawn keeps the job cwd', async () => {
+  const dir = mkTmp();
+  const home = mkTmp();
+  try {
+    const list = [{ ...CLI_LIST[1], cwd: dir }];
+    const cli = fakeCli({ list });
+    boot(dir, { cli, homeDir: home });
+    bgAgents.start();
+    await bgAgents.reconcile();
+    assert.deepEqual(await bgAgents.runVerb('rm', 'bbbbbbbb'), { ok: true });
+    assert.equal(cli.calls.find(c => c.argv[0] === 'rm').opts.cwd, home);
+    assert.deepEqual(await bgAgents.runVerb('respawn', 'bbbbbbbb'), { ok: true });
+    assert.equal(cli.calls.find(c => c.argv[0] === 'respawn').opts.cwd, dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('runVerb refuses an unknown verb or a malformed id before spawning anything', async () => {
