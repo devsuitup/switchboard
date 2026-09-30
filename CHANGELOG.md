@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- A schedule with `catch-up: true` in its front matter runs once, as soon as Switchboard starts or the machine wakes up, when it fell due while Switchboard was closed or the machine asleep, however many runs were missed in the last seven days. Without it, a missed run is still skipped. (#334)
 ### Fixed
 - A sandboxed session can no longer leave behind something that runs outside the sandbox later: in `~/.claude` and in the project's `.claude` only the session's own state (transcripts, todos, credentials) stays writable, the repository's git config and hooks are read-only, and its changes to `~/.claude.json`, where the MCP servers are, are dropped when it ends. Change settings, permissions, plugins and MCP servers outside the sandbox; the Sandbox indicator's tooltip lists what stays writable. (#358)
 - A sandboxed session reaches the API when `/etc/resolv.conf` links into `/run`, as with systemd-resolved on Ubuntu. (#367)

@@ -83,6 +83,7 @@ Default permission-mode is \`auto\` (Claude classifies each action, allowing rou
 - The slug must be kebab-case, short, and descriptive
 - The prompt in the body must be fully self-contained — it runs without any conversation history
 - If the \`.claude/commands/\` directory doesn't exist, create it
+- Add \`catch-up: true\` only if the user wants a run that fell due while Switchboard was closed or the machine asleep to happen once, late, when it is back; leave it out for a task that is useless late (a reminder)
 - After saving, tell the user: "Your scheduled task is saved! It will appear in Switchboard's brain tab with a schedule icon. You can enable/disable it or edit the schedule from there."
 - If the user wants to see existing schedules, list any \`schedule-*.md\` files in \`.claude/commands/\`
 `;
