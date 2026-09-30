@@ -8,7 +8,8 @@ Two mechanisms run Claude without you at the keyboard:
   requested by dropping a JSON file in a directory. Meant for scripts and
   harnesses.
 
-Both live in the running app: when Switchboard is not running, nothing fires.
+Both live in the running app: when Switchboard is not running, nothing fires. A
+schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
 
 ## Schedules
 
@@ -21,6 +22,7 @@ name: Morning audit
 cron: 0 9 * * 1-5
 enabled: true
 slug: morning-audit
+catch-up: true
 cli:
   permission-mode: auto
   allowed-tools: Bash,Read,Glob,Grep
@@ -39,6 +41,7 @@ The full, self-contained prompt Claude runs each time.
 | `cron` | When to run — see below | required |
 | `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
+| `catch-up` | Exactly `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
 | `cli.allowed-tools` | `--allowedTools` | `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` |
 | `cli.model` | `--model` | none |
@@ -68,8 +71,8 @@ ranges), or a step over the whole range `*/n`.
 Not supported: a step on a range or a start (`0-30/5`, `5/15`), names (`MON`,
 `JAN`), `7` for Sunday (Sunday is `0`), and aliases such as `@daily`. An
 expression that does not parse never matches, and no error is reported. There
-is no daylight-saving handling, and runs missed while the app was closed are not
-caught up.
+is no daylight-saving handling. A run missed while the app was closed or the
+machine asleep is skipped, unless the schedule has `catch-up: true`.
 
 ### A run
 
@@ -92,6 +95,39 @@ runs under its slug; open it to read the result.
   platform other than Linux a schedule with the sandbox on is skipped and an
   error logged. With the sandbox on, `add-dirs` entries are bound read-write.
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
+
+### Catching up a missed run
+
+A minute that passes while Switchboard is closed, or while the machine is
+suspended, is not seen by the scheduler, and a schedule due in that minute does
+not run. With `catch-up: true`, Switchboard records when the schedule last ran,
+and checks at startup, after the machine wakes up, and every minute: if the
+cron expression matched at least one minute since that run, the task runs
+**once**, however many runs were missed. Three missed days of a daily task give
+one run.
+
+- A schedule seen for the first time does not catch up: its record starts at
+  that moment.
+- Only the last seven days are looked at. A run due longer ago is not caught up.
+- A catch-up run is logged as `[schedule] Catching up: <name> (<cron>), due <time>`,
+  and the first message of its session reads
+  `Scheduled Task (catch-up: due <time>, started <time>): <prompt>`, both times
+  in UTC (ISO 8601). A run in its own minute is logged as `Triggering:` as usual.
+- While the previous run is still going, a catch-up is skipped like a tick, and
+  that minute counts as handled: it does not run when the previous run ends.
+- The record lives in `~/.switchboard/schedule-state/`, one small file per
+  schedule, never in the schedule file, so a schedule kept under version control
+  does not change when it runs. The directory is the same for every Switchboard
+  instance, whatever `SWITCHBOARD_DATA_DIR` says: two instances do not both run
+  the same missed minute, nor the same on-time minute of a schedule with
+  `catch-up`.
+- A schedule is known by its file path. Renaming or moving the file makes it a
+  new schedule, which does not catch up until it has run once.
+- A schedule turned off with `enabled: false` is not looked at; turned back on,
+  it catches up a run it missed in the meantime, within the seven days.
+- **Run now** does not count as a run for the record.
+- If the record cannot be read or written, the schedule runs on its cron minute
+  as if it had no `catch-up`, and a warning is logged.
 
 ### Creating a schedule
 
