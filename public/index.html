@@ -85,7 +85,7 @@
           <span id="terminal-header-shell" style="display:none;"></span>
         </div>
         <div id="terminal-header-controls">
-          <span id="terminal-header-sandbox" data-header-kind="indicator" style="display:none;" title="Running in a bubblewrap sandbox: only this project directory and Claude's own state are visible. Network and environment are NOT isolated.">Sandbox</span>
+          <span id="terminal-header-sandbox" data-header-kind="indicator" style="display:none;" title="Running in a bubblewrap sandbox: only this project directory and Claude's own state are visible. What Claude and git run later outside the sandbox is protected: in ~/.claude and every .claude only session state (transcripts, todos, credentials) is writable, each repository's config and hooks directory are read-only (tracked hook scripts such as husky's .husky/pre-commit are project files and stay writable), and changes to ~/.claude.json (MCP servers) are dropped. NOT isolated: network, environment, the project's own files and build scripts, the project's CLAUDE.md and memory files, a new .git/commondir or repository or worktree the session creates (git follows their config and hooks), the claude binary of the native installer.">Sandbox</span>
           <button id="terminal-stop-btn" data-header-kind="action" title="Stop process" aria-label="Stop process"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg></button>
         </div>
       </div>
@@ -150,6 +150,7 @@
   <script src="dialogs.js"></script>
   <!-- stop-session-ui.js: stop-vs-detach decision (app.js) and the stop-then-archive/delete helper (sidebar.js, issue #271). -->
   <script src="stop-session-ui.js"></script>
+  <script src="bridge-url.js"></script>
   <script src="sidebar.js"></script>
   <script src="remote-activity-ui.js"></script>
   <script src="local-transcript-adapter.js"></script>

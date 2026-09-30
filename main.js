@@ -39,20 +39,13 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createWhatsNew } = require('./changelog');
+const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction.
-const cleanPtyEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) =>
-    !k.startsWith('ELECTRON_') &&
-    !k.startsWith('GOOGLE_API_KEY') &&
-    k !== 'NODE_OPTIONS' &&
-    k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-    k !== 'WT_SESSION'
-  )
-);
+const cleanPtyEnv = cleanEnv(process.env);
 
 // Windows: prefer node-pty's bundled ConPTY (conpty.dll + OpenConsole.exe)
 // over the OS inbox one. The inbox ConPTY re-renders TUI frames itself and is a
@@ -74,7 +67,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler } = require('./schedule-runner');
+const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -669,6 +662,11 @@ ipcMain.handle('browse-folder', async () => {
   return result.filePaths[0];
 });
 
+// Projects whose schedules may run; see docs/sandbox.md ("Schedules").
+function scheduleProjects() {
+  return scheduleRegistry(getSetting, setSetting);
+}
+
 // --- IPC: add-project ---
 ipcMain.handle('add-project', (_event, projectPath) => {
   try {
@@ -702,6 +700,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     // Immediately index the new folder so it's in cache before frontend renders
     refreshFolder(folder);
     notifyRendererProjectsChanged();
+    scheduleProjects().add(projectPath);
 
     return { ok: true, folder, projectPath };
   } catch (err) {
@@ -726,6 +725,7 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);
+    scheduleProjects().remove(projectPath);
 
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -2549,6 +2549,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
+      // see docs/sandbox.md ("Schedules")
+      if (projectPath) scheduleProjects().add(projectPath);
       if (sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
@@ -2558,6 +2560,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
         const bindEnv = sandboxBindEnv(extraBinds);
         if (bindEnv) ptyEnv.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        const transcriptCwd = spawnCwd || projectPath;
+        if (transcriptCwd) ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(transcriptCwd);
       }
 
       ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -3021,10 +3025,7 @@ if (!gotSingleInstanceLock) {
       // sessions do — an unattended headless run is exactly where the
       // isolation matters most. Same global → project override chain as
       // get-effective-settings.
-      const projectSettings = getSetting('project:' + cwd) || {};
-      let sandbox = SETTING_DEFAULTS.sandbox;
-      if (globalSettings.sandbox !== undefined) sandbox = globalSettings.sandbox;
-      if (projectSettings.sandbox !== undefined) sandbox = projectSettings.sandbox;
+      const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
       if (sandbox && process.platform !== 'linux') {
         // Fail closed, exactly like the interactive path: the whole point of
         // asking for a sandbox is not running unconfined. Silently downgrading
@@ -3043,8 +3044,16 @@ if (!gotSingleInstanceLock) {
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
+        // see docs/sandbox.md ("Schedules")
+        const refused = refusedScheduleBinds(addDirs, scheduleProjects().list(), os.homedir());
+        if (refused.length) {
+          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          if (onDone) onDone();
+          return;
+        }
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
       }
       const args = shellArgs(shell, cmd, profile.args || []);
 
@@ -3076,7 +3085,13 @@ if (!gotSingleInstanceLock) {
     }
 
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath);
-    startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state') });
+    // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
+    scheduleProjects().list();
+    startScheduler(log, runScheduleCommand, {
+      resumeSource: powerMonitor,
+      stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+      projects: () => scheduleProjects().list(),
+    });
 
     // File-trigger watcher — allows harness scripts to inject input into open
     // PTY sessions by dropping a JSON file in ~/.switchboard/triggers/.

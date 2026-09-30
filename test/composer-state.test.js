@@ -430,3 +430,67 @@ test('composer-state: a Buffer chunk is accepted like a string', () => {
   noteUserInput(state, Buffer.from('abc'), 1000);
   assert.equal(state.pending, 3);
 });
+
+test('composer-state: a DCS reply is consumed whole and nothing of it reaches the composer', () => {
+  const replies = [
+    '\x1bP1+r544e=787465726d2d323536636f6c6f72\x1b\\',
+    '\x1bP0+r\x1b\\',
+    '\x1bP1$r0m\x1b\\',
+    '\x1bP0$r\x1b\\',
+  ];
+  for (const reply of replies) {
+    const state = feed([reply]);
+    assert.equal(state.pending, 0, JSON.stringify(reply));
+    assert.equal(state.text, '', JSON.stringify(reply));
+    assert.equal(state.partial, '', JSON.stringify(reply));
+  }
+});
+
+test('composer-state: text typed after a DCS reply is still seen', () => {
+  const state = feed(['\x1bP1$r0m\x1b\\hi']);
+  assert.equal(state.text, 'hi');
+  assert.equal(state.pending, 2);
+});
+
+test('composer-state: a DCS reply split across chunks is held back, then dropped', () => {
+  const state = createComposerState();
+  noteUserInput(state, '\x1bP1$r0', 1000);
+  assert.equal(state.text, '', 'the payload is not typed text');
+  assert.equal(state.partial, '\x1bP1$r0');
+  noteUserInput(state, 'm\x1b', 1001);
+  assert.equal(state.text, '');
+  noteUserInput(state, '\\ok', 1002);
+  assert.equal(state.partial, '');
+  assert.equal(state.text, 'ok');
+});
+
+test('composer-state: an over-long unterminated DCS resolves towards busy', () => {
+  const state = createComposerState();
+  noteUserInput(state, '\x1bP1+r' + 'a'.repeat(64), 1000);
+  assert.equal(state.partial, '', 'the buffer must not grow without bound');
+  assert.ok(state.pending > 0);
+});
+
+test('composer-state: Alt+Shift+P (a bare ESC P) stays a keystroke, chunk by chunk', () => {
+  const state = createComposerState();
+  for (const [k, t] of [['\x1bP', 1000], ['h', 1001], ['i', 1002]]) noteUserInput(state, k, t);
+  assert.equal(state.text, 'hi');
+  assert.equal(state.partial, '');
+  noteUserInput(state, '\r', 1003);
+  assert.equal(state.text, '');
+  assert.equal(state.pending, 0);
+});
+
+test('composer-state: Alt+Shift+P followed by text and Enter in one chunk behaves the same', () => {
+  const state = feed(['\x1bPhi']);
+  assert.equal(state.text, 'hi');
+  noteUserInput(state, '\r', 2000);
+  assert.equal(state.text, '');
+});
+
+test('composer-state: an ESC that does not open a string terminator cancels the DCS', () => {
+  const state = feed(['x\x1bP1+rab\x1bOD']);
+  assert.equal(state.partial, '');
+  assert.equal(state.text, 'x');
+  assert.equal(state.cursor, 0, 'the SS3 left-arrow after the cancelled DCS is applied');
+});

@@ -177,7 +177,7 @@ test('real bash: the documented use-case shape still executes normally once past
   assert.equal(validatePreLaunchCmd(pre).ok, true);
 
   const claudeCmd = pre + ' echo AFTER_CLAUDE';
-  const res = spawnSync(bash, ['-l', '-i', '-c', claudeCmd], { encoding: 'utf8' });
+  const res = spawnSync(bash, ['-l', '-c', claudeCmd], { encoding: 'utf8' });
   assert.equal(res.status, 0, `signal ${res.signal}, error ${res.error}, stderr: ${res.stderr}`);
   assert.match(res.stdout, /AFTER_CLAUDE/);
 });
