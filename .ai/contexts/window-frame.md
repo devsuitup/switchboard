@@ -17,6 +17,7 @@ the same strip across the rest of the window.
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
 | `public/style.css` | The "WINDOW STRIP" section: drag regions, the insets that keep content out from under the controls, the `no-drag` exemptions. |
 | `test/window-frame.test.js` | Pins the menu roles, the menu installation, the frame options and the CSS contract. |
+| `public/header-controls.js` | `HEADER_CONTROLS` (the session header's row, in order), `placeHeaderControl()`, `createHeaderToggle()`, `setHeaderToggle()`. Dual-mode, `require()`-d by `test/header-controls.test.js`. |
 
 ## The frame options, per platform
 
@@ -74,7 +75,8 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 - every interactive element: `button, input, select, textarea, a, [role="button"], [contenteditable]`;
 - the text a user copies from a header, or whose `title` tooltip must show (the
   renderer gets no hover inside a drag region): `#terminal-header-id`,
-  `#terminal-header-sandbox`, `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
+  every session-header control (`#terminal-header-controls [data-header-kind]`),
+  `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
   `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
@@ -82,6 +84,36 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 
 A clickable element that is none of these (a `div` or `span` with a click
 listener) placed in a drag region needs `no-drag` of its own.
+
+## The session header's controls
+
+The right-hand side of `#terminal-header` is one row, `#terminal-header-controls`,
+whose order is declared once in `HEADER_CONTROLS` (`public/header-controls.js`)
+and pinned by `test/header-controls.test.js`:
+
+| Kind | Controls, left to right | Look |
+|---|---|---|
+| `indicator` | `#terminal-header-status` (Running / Stopped), `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
+| `toggle` | `#panel-terminal-toggle-btn` (Shell), `#changes-toggle-btn` (Changes) | `.icon-btn`: the sidebar filter row's square outlined button (`#running-toggle` and its siblings share the rule), a 14 px icon, the name in `title` and `aria-label`, and the filter buttons' accent `.active` state with `aria-pressed`. |
+| `action` | `#terminal-stop-btn` | A borderless red icon, last, set apart from the toggles by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
+
+Each element carries its kind as `data-header-kind`. The static ones (status,
+sandbox, Stop) are written in `index.html` in the declared order. The modules
+that build the others (`addMcpToggle` and `addChangesToggle` in `file-panel.js`,
+`addPanelTerminalToggle` in `panel-terminal.js`) hand their element to
+`placeHeaderControl()`, which inserts it before the next declared control
+already in the row, so the order does not depend on which module starts
+first. `createHeaderToggle()` builds a toggle and `setHeaderToggle()` sets its
+on state. A new control is added to `HEADER_CONTROLS` first: `placeHeaderControl`
+throws for an id the list does not declare.
+
+The Changes toggle is on while the panel shows the Changes tab of the session
+in the header: `renderTabContent` sets it from the tab it renders, and
+`hidePanel` clears it when the panel closes.
+
+The header's vertical padding is 5 px around the 26 px buttons. The terminal
+container starts at the header's bottom, so a change to that padding changes
+every terminal's row count.
 
 ## What the platform does with the drag region
 

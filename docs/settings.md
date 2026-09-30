@@ -37,7 +37,7 @@ Deliberately **not** isolated — know these before relying on it:
 - **Claude's state is shared across projects.** `~/.claude` holds credentials and *every* project's transcripts and memory; a sandboxed session can read all of it. The boundary protects the rest of `$HOME`, not one project from another.
 - **The `claude` binary is not always read-only.** With the native installer the versioned binary lives under `~/.local/share/claude`, which has to be read-write for Claude's own updates — so on that layout the binary's directory is writable inside the sandbox. On npm/nvm layouts it is read-only. The wrapper detects which case applies and drops the misleading read-only bind rather than pretending it holds.
 
-A session running inside the sandbox shows a **🔒 Sandbox** badge in the terminal header, so you can tell at a glance whether the isolation is on; hovering it summarises what is and isn't confined.
+A session running inside the sandbox shows a **Sandbox** indicator (a green dot and the word) among the state indicators on the right of the terminal header, so you can tell at a glance whether the isolation is on; hovering it summarises what is and isn't confined.
 
 Prerequisites and known blockers:
 

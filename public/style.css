@@ -317,7 +317,7 @@ body { display: flex; flex-direction: column; }
   animation: loading-pulse 1.2s ease-in-out infinite;
 }
 
-#star-toggle, #archive-toggle, #running-toggle, #today-toggle {
+#star-toggle, #archive-toggle, #running-toggle, #today-toggle, .icon-btn {
   background: transparent;
   border: 1px solid var(--control-border);
   color: #7a7a90;
@@ -336,7 +336,7 @@ body { display: flex; flex-direction: column; }
   justify-content: center;
 }
 
-#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover {
+#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover, .icon-btn:hover {
   background: var(--control-surface);
   border-color: rgba(255,255,255,0.12);
   color: #888;
@@ -348,7 +348,7 @@ body { display: flex; flex-direction: column; }
   color: #f5be3c;
 }
 
-#archive-toggle.active {
+#archive-toggle.active, .icon-btn.active {
   background: rgba(120,130,255,0.1);
   border-color: rgba(120,130,255,0.25);
   color: var(--accent);
@@ -1378,7 +1378,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 5px 16px;
   background: var(--surface-chrome);
   border-bottom: 1px solid var(--hairline);
   flex-shrink: 0;
@@ -1435,21 +1435,6 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
-/* Sandboxed sessions carry a lock badge — the isolation is invisible otherwise,
-   and a user who cannot tell whether it is on cannot rely on it. Styled like
-   the shell badge but tinted, so it reads as a state rather than a label. */
-#terminal-header-sandbox {
-  font-size: 10px;
-  color: #7fd7a4;
-  background: rgba(127, 215, 164, 0.12);
-  border: 1px solid rgba(127, 215, 164, 0.25);
-  padding: 0 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  cursor: help;
-}
-
 #terminal-header-controls {
   display: flex;
   align-items: center;
@@ -1457,51 +1442,79 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
-#terminal-header-status {
+#terminal-header-controls [data-header-kind="indicator"] {
   font-size: 11px;
+  font-weight: 500;
   display: flex;
   align-items: center;
   gap: 5px;
-  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
 }
 
-#terminal-header-status::before {
+#terminal-header-controls [data-header-kind="indicator"]::before {
   content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
   display: inline-block;
+  background: currentColor;
 }
 
-#terminal-header-status.running {
+#terminal-header-controls [data-header-kind="indicator"] + [data-header-kind="toggle"] {
+  margin-left: 8px;
+}
+
+#terminal-header-controls #terminal-header-status.running {
   color: #3ecf5a;
 }
 
-#terminal-header-status.running::before {
-  background: #3ecf5a;
+#terminal-header-controls #terminal-header-status.running::before {
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
 
-#terminal-header-status.stopped {
+#terminal-header-controls #terminal-header-status.stopped {
   color: #7a7a90;
 }
 
-#terminal-header-status.stopped::before {
+#terminal-header-controls #terminal-header-status.stopped::before {
   background: #6a6a80;
 }
 
+#terminal-header-controls #terminal-header-sandbox {
+  color: #7fd7a4;
+}
+
+#terminal-header-controls #ide-emulation-indicator {
+  color: var(--accent);
+}
+
 #terminal-stop-btn {
+  position: relative;
+  margin-left: 17px;
   cursor: pointer;
   background: none;
   border: none;
-  padding: 4px;
+  padding: 0;
+  width: 26px;
+  height: 26px;
   line-height: 1;
   color: #9b4058;
-  border-radius: 5px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+}
+
+#terminal-stop-btn::before {
+  content: '';
+  position: absolute;
+  left: -13px;
+  top: 5px;
+  bottom: 5px;
+  border-left: 1px solid var(--control-border);
+  pointer-events: none;
 }
 
 #terminal-stop-btn:hover {
@@ -4543,28 +4556,6 @@ body { display: flex; flex-direction: column; }
   background: rgba(224,80,112,0.1);
 }
 
-/* MCP toggle in terminal header */
-.mcp-toggle {
-  font-size: 10px;
-  color: #7a7a90;
-  margin-right: 8px;
-}
-
-.mcp-toggle.enabled {
-  color: var(--accent);
-}
-
-.mcp-toggle.enabled::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  margin-right: 5px;
-  vertical-align: middle;
-}
-
 /* --- Changes mode (issue #251) --- */
 #file-panel-changes {
   flex: 1;
@@ -4903,7 +4894,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-id, #terminal-header-sandbox, #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(#terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }

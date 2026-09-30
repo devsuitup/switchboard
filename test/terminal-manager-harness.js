@@ -225,8 +225,8 @@ function setupTerminalDom(opts = {}) {
 
   const ctx = dom.getInternalVMContext();
   const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
-  // Same order as index.html: file-panel.js first, the panel-shell pair last.
-  if (opts.filePanel) files.unshift('file-panel.js');
+  // Same order as index.html: header-controls.js and file-panel.js first, the panel-shell pair last.
+  if (opts.filePanel) files.unshift('header-controls.js', 'file-panel.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
   for (const file of files) {
     const fullPath = path.join(PUBLIC_DIR, file);

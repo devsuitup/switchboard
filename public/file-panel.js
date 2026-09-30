@@ -547,6 +547,7 @@ function hidePanel() {
     showPanel(getSessionState(currentPanelSessionId));
     return;
   }
+  setHeaderToggle(changesToggleBtn, false);
   filePanelEl.classList.remove('open');
   filePanelEl.style.width = '0';
   filePanelResizeHandle.style.display = 'none';
@@ -599,6 +600,8 @@ function renderTabContent(sessionId, tab) {
   const diffContainer = document.getElementById('file-panel-diff');
   // see .ai/contexts/panel-terminal.md ("Layout")
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
+
+  setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes');
 
   if (!tab) {
     vpContainer.style.display = 'none';
@@ -1509,43 +1512,25 @@ function classifyDiffLine(line) {
 let mcpIndicatorEl = null;
 
 function addMcpToggle() {
-  const controls = document.getElementById('terminal-header-controls');
-  if (!controls) return;
-
   mcpIndicatorEl = document.createElement('span');
-  mcpIndicatorEl.className = 'mcp-toggle enabled';
+  mcpIndicatorEl.id = 'ide-emulation-indicator';
   mcpIndicatorEl.title = 'IDE Emulation is active. Go to Global Settings to disable.';
   mcpIndicatorEl.textContent = 'IDE Emulation';
   mcpIndicatorEl.style.display = 'none';
-
-  const stopBtn = document.getElementById('terminal-stop-btn');
-  if (stopBtn) {
-    controls.insertBefore(mcpIndicatorEl, stopBtn);
-  } else {
-    controls.appendChild(mcpIndicatorEl);
-  }
+  placeHeaderControl(mcpIndicatorEl);
 }
 
 // Terminal header entry point for Changes mode — see .ai/contexts/changes-view.md
 function addChangesToggle() {
-  const controls = document.getElementById('terminal-header-controls');
-  if (!controls) return;
-
-  changesToggleBtn = document.createElement('button');
-  changesToggleBtn.id = 'changes-toggle-btn';
-  changesToggleBtn.className = 'fp-toolbar-btn';
-  changesToggleBtn.textContent = 'Changes';
-  changesToggleBtn.title = 'Show working tree changes for this session';
-  changesToggleBtn.addEventListener('click', () => {
-    if (currentPanelSessionId) toggleChangesTab(currentPanelSessionId);
+  changesToggleBtn = createHeaderToggle({
+    id: 'changes-toggle-btn',
+    label: 'Changes',
+    title: 'Show working tree changes for this session',
+    icon: 'changes',
+    onClick: () => {
+      if (currentPanelSessionId) toggleChangesTab(currentPanelSessionId);
+    },
   });
-
-  const stopBtn = document.getElementById('terminal-stop-btn');
-  if (stopBtn) {
-    controls.insertBefore(changesToggleBtn, stopBtn);
-  } else {
-    controls.appendChild(changesToggleBtn);
-  }
 }
 
 // ── Resize Handle ───────────────────────────────────────────────────

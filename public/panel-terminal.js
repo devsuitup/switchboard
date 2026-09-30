@@ -102,29 +102,19 @@ function reclampPanelTerminalHeight() {
 }
 
 function addPanelTerminalToggle() {
-  const controls = document.getElementById('terminal-header-controls');
-  if (!controls) return;
-
-  panelTerminalToggleBtn = document.createElement('button');
-  panelTerminalToggleBtn.id = 'panel-terminal-toggle-btn';
-  panelTerminalToggleBtn.className = 'fp-toolbar-btn';
-  panelTerminalToggleBtn.textContent = 'Shell';
-  panelTerminalToggleBtn.title = 'Open a shell in this session\'s working directory';
-  panelTerminalToggleBtn.addEventListener('click', () => {
-    if (panelTerminalOwnerId) togglePanelTerminal(panelTerminalOwnerId);
+  panelTerminalToggleBtn = createHeaderToggle({
+    id: 'panel-terminal-toggle-btn',
+    label: 'Shell',
+    title: 'Open a shell in this session\'s working directory',
+    icon: 'shell',
+    onClick: () => {
+      if (panelTerminalOwnerId) togglePanelTerminal(panelTerminalOwnerId);
+    },
   });
-
-  const stopBtn = document.getElementById('terminal-stop-btn');
-  if (stopBtn) {
-    controls.insertBefore(panelTerminalToggleBtn, stopBtn);
-  } else {
-    controls.appendChild(panelTerminalToggleBtn);
-  }
 }
 
 function updatePanelTerminalToggle() {
-  if (!panelTerminalToggleBtn) return;
-  panelTerminalToggleBtn.classList.toggle('active', panelTerminalIsOpen(panelTerminalOwnerId));
+  setHeaderToggle(panelTerminalToggleBtn, panelTerminalIsOpen(panelTerminalOwnerId));
 }
 
 // ── Height ──────────────────────────────────────────────────────────
