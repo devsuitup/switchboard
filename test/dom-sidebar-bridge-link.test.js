@@ -36,3 +36,18 @@ test('a session without a bridge id shows no bridge button', () => {
     assert.equal(item2.querySelector('.session-bridge-btn'), null);
   } finally { ctx.destroy(); }
 });
+
+test('clicking the bridge button does not also open the session row', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const opened = [];
+    ctx.window.openSession = (s) => { opened.push(s.sessionId); };
+    ctx.window.api.openExternal = () => {};
+    const item = render(ctx, { sessionId: 'row-click', bridgeSessionId: 'cse_0189wicjnQ3j6mppaWVWuntM' });
+    item.click();
+    assert.deepEqual(opened, ['row-click'], 'a click on the row opens the session');
+    opened.length = 0;
+    item.querySelector('.session-bridge-btn').click();
+    assert.deepEqual(opened, [], 'a click on the bridge button leaves the row alone');
+  } finally { ctx.destroy(); }
+});
