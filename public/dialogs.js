@@ -197,6 +197,7 @@ async function showNewSessionDialog(project) {
 
   dialog.innerHTML = `
     <h3>New Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
+    <div class="new-session-body">
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>
@@ -246,6 +247,7 @@ async function showNewSessionDialog(project) {
       <div class="settings-field-control">
         <input type="text" class="settings-input" id="nsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
       </div>
+    </div>
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
@@ -341,6 +343,7 @@ async function showResumeSessionDialog(session) {
 
   dialog.innerHTML = `
     <h3>Resume Session — ${escapeHtml(sessionName)}</h3>
+    <div class="new-session-body">
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="rsd-mode-grid">${renderModeGrid()}</div>
@@ -380,6 +383,7 @@ async function showResumeSessionDialog(session) {
       <div class="settings-field-control">
         <input type="text" class="settings-input" id="rsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
       </div>
+    </div>
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
