@@ -423,6 +423,26 @@ file instead of being invisible.
 attribution (which caller asked for the write) and is inert when the trace is
 off.
 
+## Clean child environment
+
+`cleanEnv()` (`clean-env.js`) builds `cleanPtyEnv` in `main.js`, the base of the environment of every PTY and child Switchboard spawns. It drops Electron internals (`ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`, `ORIGINAL_XDG_CURRENT_DESKTOP`, `WT_SESSION`) and the Claude CLI's own session markers, which a Switchboard started from inside a Claude Code session (`task dev`, a test instance an agent launched) would otherwise hand to every session it opens: a session started from Switchboard is a top-level session.
+
+The marker list is explicit, not a `CLAUDE_*` prefix: the prefix would also remove user configuration the session needs.
+
+| Stripped | Why |
+|---|---|
+| `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` | say "running inside a Claude Code session" and how it was started |
+| `CLAUDE_CODE_SSE_PORT` | the parent's IDE link; Switchboard sets its own after cleaning when IDE Emulation is on |
+| `CLAUDE_CODE_CHILD_SESSION` | makes the CLI save no transcript |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID` | identify the parent session |
+| `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` | the parent's messaging channel |
+| `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED` | the parent's bridge session and attended state |
+| `CLAUDE_CODE_EXECPATH` | the parent CLI's own executable path |
+
+Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_EFFORT` (may be user configuration) and every other variable the user set.
+
+What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1` (`open-terminal`, `isPlainTerminal` branch, present since the project's first commit, not tied to the `claude` shim) and `CLAUDE_CODE_SSE_PORT` of a session with IDE Emulation. A new marker the CLI starts setting is added to `SESSION_MARKERS`; `test/clean-pty-env.test.js` lists them one by one.
+
 ## If you change this, also check
 
 - **Three places per new IPC**: handler in `main.js`, bridge entry in `preload.js`, caller in `public/*.js` (and maybe `eslint.config.js` if you expose a new global).

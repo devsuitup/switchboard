@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Without `SWITCHBOARD_SSH_PATH`, the terminal attached to a remote session now runs the `ssh` found on your `PATH` before `/usr/bin/ssh` or the Windows system client, like every other remote operation. `SWITCHBOARD_SSH_PATH` must be an absolute path: a relative one is ignored, with a warning in the log. (#359)
 
 ### Fixed
+- A session started from a Switchboard that was itself launched inside a Claude Code session is now a top-level session: it saves its transcript and no longer inherits the parent session's id, socket or IDE link. `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` and provider switches are kept. (#378)
 - A file with unsaved edits in the panel is no longer discarded when the session opens another file, proposes an edit, or a link opens Changes. It is kept aside, named above the file shown, and comes back when the diff or Changes closes, with a notice if the file changed on disk. (#364)
 - Saving a file in the panel before its editor has finished loading no longer empties the file on disk; Save stays disabled until the file is shown. (#369)
 - `SWITCHBOARD_SSH_PATH` now applies to every connection to a remote host, not only the attached terminal: the pulls, the copy of transcripts, the watch connection, stop and the Changes view use it too. Transcripts are copied with the `scp` beside it, or with `SWITCHBOARD_SCP_PATH` when set. (#359)
