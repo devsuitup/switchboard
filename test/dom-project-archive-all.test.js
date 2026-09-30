@@ -70,7 +70,7 @@ test('project archive-all: subagents are neither archived nor stopped', async ()
   }
 });
 
-test('project archive-all: project survives the re-render with only subagents left', async () => {
+test('project archive-all: project survives the re-render with only orphan subagents left', async () => {
   const ctx = setupSidebarDom();
   try {
     const project = makeSampleProject();
@@ -80,9 +80,11 @@ test('project archive-all: project survives the re-render with only subagents le
     ctx.sidebar.renderProjects([project], true);
     await archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
 
-    const surviving = project.sessions.filter(s => !s.archived);
-    assert.ok(surviving.length > 0 && surviving.every(s => s.parentSessionId),
-      'precondition: only unarchived subagents remain after the click');
+    // What buildProjectsFromCache(false) sends back: archived rows and the subagents of archived parents are gone.
+    const archivedIds = new Set(project.sessions.filter(s => s.archived).map(s => s.sessionId));
+    const surviving = project.sessions.filter(s => !s.archived && !archivedIds.has(s.parentSessionId));
+    assert.deepEqual(surviving.map(s => s.sessionId), ['s-sub-orphan'],
+      'precondition: only the orphan subagent remains after the click');
 
     const reloaded = { ...project, sessions: surviving };
     ctx.sidebar.renderProjects([reloaded], true);

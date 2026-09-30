@@ -425,6 +425,9 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
+  const cachedIds = new Set(cachedRows.map(r => r.sessionId));
+  const isArchivedParent = (id) => cachedIds.has(id) && !!metaMap.get(id)?.archived;
+
   // Keyed on alias + projectPath: two hosts can hold the same absolute path.
   const projectMap = new Map();
   // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
@@ -462,6 +465,8 @@ function buildProjectsFromCache(showArchived) {
       remoteAlias: alias,
     };
     if (!showArchived && s.archived) continue;
+    // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")
+    if (!showArchived && s.parentSessionId && isArchivedParent(s.parentSessionId)) continue;
     const key = groupKey(alias, row.projectPath);
     if (!projectMap.has(key)) {
       projectMap.set(key, {
