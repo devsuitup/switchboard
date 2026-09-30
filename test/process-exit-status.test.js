@@ -26,8 +26,12 @@ const { setupTerminalDom } = require('./terminal-manager-harness');
 function sliceBlock(marker, tail = '') {
   const start = APP_SRC.indexOf(marker);
   assert.notEqual(start, -1, `app.js must contain ${marker}`);
+  const lineEndingBrace = /\{\r?\n/g;
+  lineEndingBrace.lastIndex = start;
+  const open = lineEndingBrace.exec(APP_SRC);
+  assert.ok(open, `a block must open after ${marker}`);
   let depth = 0;
-  for (let i = APP_SRC.indexOf('{\n', start); i < APP_SRC.length; i++) {
+  for (let i = open.index; i < APP_SRC.length; i++) {
     if (APP_SRC[i] === '{') depth++;
     else if (APP_SRC[i] === '}' && --depth === 0) return APP_SRC.slice(start, i + 1) + tail;
   }
