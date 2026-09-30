@@ -201,6 +201,10 @@ function untrackedCountSlotsInUse() {
   return countSlotsInUse;
 }
 
+function untrackedCountSlotWaiters() {
+  return countSlotWaiters.length;
+}
+
 // A pass with no free slot queues for one — see .ai/contexts/changes-view.md ("Untracked line counts")
 function acquireCountSlot(capacity) {
   if (countSlotsInUse < capacity) {
@@ -262,26 +266,31 @@ async function measureUntrackedLocal(root, paths, fsOps = ASYNC_FS_OPS, limits =
   let open = true;
   const deadline = Date.now() + limits.timeBudgetMs;
 
-  const slots = [];
+  const pending = new Set();
+  const hasWork = () => open && next < candidates.length && Date.now() < deadline;
+
+  // One slot per file, so passes queued together interleave — see .ai/contexts/changes-view.md ("Untracked line counts")
   async function worker() {
-    const slot = acquireCountSlot(limits.concurrency);
-    slots.push(slot);
-    if (!(await slot.granted)) return;
-    try {
-      while (open && next < candidates.length && Date.now() < deadline) {
-        const p = candidates[next++];
-        let outcome;
-        try {
-          outcome = await measureOneUntracked(root, p, ctx);
-        } catch {
-          outcome = { countStatus: COUNT_STATUS.UNAVAILABLE };
-        }
-        if (!open) break;
-        if (outcome.operand !== undefined) measured.push({ path: p, ...outcome });
-        else results.set(p, outcome);
+    while (hasWork()) {
+      const slot = acquireCountSlot(limits.concurrency);
+      pending.add(slot);
+      const granted = await slot.granted;
+      pending.delete(slot);
+      if (!granted) return;
+      let p;
+      let outcome;
+      try {
+        if (!hasWork()) return;
+        p = candidates[next++];
+        outcome = await measureOneUntracked(root, p, ctx);
+      } catch {
+        outcome = { countStatus: COUNT_STATUS.UNAVAILABLE };
+      } finally {
+        releaseCountSlot();
       }
-    } finally {
-      releaseCountSlot();
+      if (!open) return;
+      if (outcome.operand !== undefined) measured.push({ path: p, ...outcome });
+      else results.set(p, outcome);
     }
   }
 
@@ -291,8 +300,8 @@ async function measureUntrackedLocal(root, paths, fsOps = ASYNC_FS_OPS, limits =
   await Promise.race([Promise.all(Array.from({ length: workers }, worker)), expired]);
   clearTimeout(timer);
   open = false;
-  for (const slot of slots) slot.cancel();
-  return { results: new Map(results), measured: measured.slice() };
+  for (const slot of pending) slot.cancel();
+  return { results, measured };
 }
 
 // A `diff` attribute overrides the content sniff, as it does for git's own diff — see .ai/contexts/changes-view.md ("Untracked line counts")
@@ -418,8 +427,13 @@ function boundErrorMessage(text) {
   return dropped ? out + '…' : out;
 }
 
+// A transport failure often says nothing on stderr — see .ai/contexts/changes-view.md ("Paths are relative to the repository root")
 function firstError(result) {
-  return boundErrorMessage(result.stderr) || `git exited with code ${result.code}`;
+  const said = boundErrorMessage(result.stderr);
+  if (said) return said;
+  if (result.code === EXEC_FAILED_CODE) return 'git timed out or could not be run';
+  if (result.code === SSH_FAILED_CODE) return 'the ssh connection failed';
+  return `git exited with code ${result.code}`;
 }
 
 // The two stdout-cap overruns: the remote transport's own, and execFile's maxBuffer — see .ai/contexts/changes-view.md ("Untracked files")
@@ -692,6 +706,7 @@ module.exports = {
   measureUntrackedLocal,
   readRegularFileUpTo,
   untrackedCountSlotsInUse,
+  untrackedCountSlotWaiters,
   parseBinaryDrivers,
   UNTRACKED_COUNT_LIMITS,
   gitEntryAtOrAbove,

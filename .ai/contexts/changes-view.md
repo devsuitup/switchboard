@@ -63,6 +63,9 @@ transport — ssh's own exit code 255, or a spawn that failed or timed out (code
 cwd would pay a second full timeout on an unreachable host (20 s becoming
 40 s), and would bring back the empty diff a subdirectory cwd gives. A lookup
 that git itself refuses (any other non-zero exit) leaves the diff at the cwd.
+A transport failure often leaves stderr empty (a killed ssh, a timeout), so
+`firstError` names it — "git timed out or could not be run" for -1, "the ssh
+connection failed" for 255 — instead of "git exited with code -1".
 Without a root, the count pass marks every untracked row `unavailable`. Cost:
 one more git call before each diff (a local spawn, or one sequential ssh round
 trip on a remote session), and one per local `status()` that has untracked
@@ -365,10 +368,11 @@ order, which is the order rows are shown:
 **Bounded, whatever the filesystem does.** A pass runs at most
 `UNTRACKED_COUNT_LIMITS.concurrency` (2) workers, and the slots are
 process-wide: `countSlotsInUse` counts workers of every pass, a worker takes a
-slot before its first file (`acquireCountSlot`), and gives it back only once
-its current call has returned. A worker with no free slot queues for one:
-two sessions going idle together, or an idle refresh overlapping a Refresh
-click, measure one after the other, both in full. A call that never returns —
+slot for each file (`acquireCountSlot`), and gives it back once that file's
+calls have returned. A worker with no free slot queues for one, first come
+first served: two sessions going idle together, or an idle refresh overlapping
+a Refresh click, interleave file by file, so a one-file pass queued behind a
+long one waits one file, not the whole pass. A call that never returns —
 an offline NFS or SMB mount behind a symlink, where `stat` hangs — holds its
 slot, so later passes wait in that queue instead of starting new calls: at
 most two threadpool threads (of libuv's default four) can ever be stuck on

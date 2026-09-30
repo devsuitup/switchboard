@@ -22,6 +22,7 @@ const {
   measureUntrackedLocal,
   readRegularFileUpTo,
   untrackedCountSlotsInUse,
+  untrackedCountSlotWaiters,
   parseBinaryDrivers,
   UNTRACKED_COUNT_LIMITS,
   gitEntryAtOrAbove,
@@ -1383,6 +1384,7 @@ test('measureUntrackedLocal: a call that never returns keeps its slot, so later 
     assert.equal(untrackedCountSlotsInUse(), before + 2, 'both hung workers still hold their slot');
     const third = await measureUntrackedLocal(REPO, ['ok.txt'], fsOps, limits);
     assert.equal(third.measured.length, 0, 'no slot comes free within the budget: nothing is started, nothing more can hang');
+    assert.equal(untrackedCountSlotWaiters(), 0, 'a pass that gives up withdraws its queued requests, so refreshes cannot grow the queue (mutation target: the withdrawal loop)');
   } finally {
     release();
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1415,6 +1417,85 @@ test('measureUntrackedLocal: two passes started together are both fully measured
     assert.equal(untrackedCountSlotsInUse(), before, 'every slot is given back');
   } finally {
     fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('measureUntrackedLocal: a pass queued behind a long one still gets its turn — slots are taken per file, so passes interleave (mutation target: holding a slot for the whole pass)', async () => {
+  const slowA = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${i}.txt`, 'l\n']));
+  const aFs = countingFsOps(slowA, { lstatDelayMs: Object.fromEntries(Object.keys(slowA).map((p) => [p, 20])) });
+  const bFs = countingFsOps({ 'b.txt': 'x\ny\n' });
+  const [outA, outB] = await Promise.all([
+    measureUntrackedLocal(REPO, Object.keys(slowA), aFs, { ...TEST_LIMITS, timeBudgetMs: 60_000, concurrency: 2 }),
+    measureUntrackedLocal(REPO, ['b.txt'], bFs, { ...TEST_LIMITS, timeBudgetMs: 150, concurrency: 2 }),
+  ]);
+  assert.deepEqual(outB.measured.map((m) => m.path), ['b.txt'], 'B waits one file of A, not all of A');
+  assert.equal(outA.measured.length, 40);
+});
+
+test('measureUntrackedLocal: queued passes are served in the order they asked (mutation target: a LIFO queue)', async () => {
+  let release;
+  const hung = new Promise((resolve) => { release = resolve; });
+  const order = [];
+  const blocker = {
+    realpath: (p) => p,
+    lstat: async () => { await hung; return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const recording = (name) => ({
+    realpath: (p) => p,
+    lstat: () => { order.push(name); return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  });
+  const one = { ...TEST_LIMITS, concurrency: 1 };
+  const before = untrackedCountSlotsInUse();
+  const blocked = measureUntrackedLocal(REPO, ['hold.txt'], blocker, { ...one, timeBudgetMs: 60_000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  const passes = ['first', 'second', 'third'].map((name) => measureUntrackedLocal(REPO, [`${name}.txt`], recording(name), { ...one, timeBudgetMs: 60_000 }));
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await Promise.all([blocked, ...passes]);
+  assert.deepEqual(order, ['first', 'second', 'third']);
+  assert.equal(untrackedCountSlotsInUse(), before);
+  assert.equal(untrackedCountSlotWaiters(), 0);
+});
+
+test('measureUntrackedLocal: a late outcome that is not a count does not land in results either (the results side of the closed-pass guard)', async () => {
+  const fsOps = countingFsOps(
+    { 'slow.bin': 'x', 'gone.txt': 'y' },
+    { sizes: { 'slow.bin': TEST_LIMITS.maxFileBytes + 1 }, lstatDelayMs: { 'slow.bin': 200 } },
+  );
+  const out = await measureUntrackedLocal(REPO, ['gone.txt', 'slow.bin'], fsOps, { ...TEST_LIMITS, timeBudgetMs: 60, concurrency: 2 });
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  assert.equal(out.results.has('slow.bin'), false, 'the too-large verdict arrived after the deadline');
+  assert.equal(out.measured.length, 1);
+});
+
+test('remote runner .diff(): a root lookup whose exec throws is the diff\'s answer, not a fallback to the cwd (mutation target: lookUpRoot\'s catch)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) throw new Error('spawn ssh ENOENT');
+    return Promise.resolve({ code: 0, stdout: 'diff text\n', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+  for (const opts of [{}, { untracked: true }]) {
+    commands.length = 0;
+    const result = await runner.diff('top.txt', opts);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'spawn ssh ENOENT');
+    assert.equal(sent(commands).length, 0, 'nothing is sent at the cwd');
+  }
+});
+
+test('remote runner .diff(): a transport failure with nothing on stderr still says what happened', async () => {
+  for (const [code, message] of [[-1, /timed out or could not be run/], [255, /ssh connection failed/]]) {
+    const exec = () => Promise.resolve({ code, stdout: '', stderr: '' });
+    const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
+    assert.equal(result.ok, false);
+    assert.match(result.error, message);
+    assert.doesNotMatch(result.error, /exited with code/);
   }
 });
 
