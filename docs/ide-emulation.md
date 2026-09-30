@@ -1,55 +1,70 @@
 # IDE Emulation
 
-When IDE Emulation is enabled, Switchboard registers itself as an IDE for Claude CLI. File opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
+With IDE Emulation on, Switchboard presents itself to each Claude session as
+its IDE. The files Claude opens and the edits it proposes then appear in a side
+panel next to the terminal, instead of in an external editor.
 
 ![IDE Emulation](../build/screenshot-ide.png)
 
+## Turning it on
+
+IDE Emulation is **off by default**. Turn it on in **Global Settings →
+Application → IDE Emulation** and save. It applies to sessions launched or
+resumed afterwards; running sessions keep what they started with, and the
+settings page says so when the value changes. It is a global setting only.
+
+While a session is connected, its terminal header shows an **IDE Emulation**
+label.
+
+With it off, Switchboard does not register, and `claude` finds your own IDE
+(VS Code, Cursor, …) the way it does outside Switchboard.
+
 ## How it works
 
-Claude CLI discovers connected IDEs via the MCP protocol. When Switchboard is running with IDE Emulation on, Claude finds Switchboard and routes file-open and diff requests to it. The result is that every file Claude wants to show you appears inside Switchboard rather than popping open VS Code or another editor.
+For each Claude session it launches, Switchboard:
 
-## File viewer
+1. starts a WebSocket MCP server on `127.0.0.1`, on a free port;
+2. writes `~/.claude/ide/<port>.lock` (mode 0600), naming Switchboard as the
+   IDE, the session's directory as its workspace, and an authentication token;
+3. starts `claude` with `--ide` and `CLAUDE_CODE_SSE_PORT=<port>`.
 
-Clicking an OSC 8 `file://` hyperlink in the terminal output opens the file in the side panel with syntax highlighting. You can also right-click any file link in the terminal and choose **Open in panel**.
+The CLI connects with the token and calls the IDE tools Switchboard implements:
+`openFile`, `openDiff`, `close_tab`, `closeAllDiffTabs` and `getDiagnostics`.
+The lock file is removed when the session stops. At startup, Switchboard also
+removes any lock file in `~/.claude/ide/` that names Switchboard and whose pid is
+its own process's — a lock left by an earlier instance that crashed and whose
+pid the new process happens to reuse. Locks carrying any other pid are left in
+place.
 
-### Windows drive letters
-
-A `file://` URI is turned into a disk path with the WHATWG `URL` parser, which
-does not special-case a Windows drive letter the way Node's
-`url.fileURLToPath` does: `file:///C:/a/b.js` parses to a pathname of
-`/C:/a/b.js`, leading slash kept. Passed on unchanged, `path.resolve()` in the
-main process turns that into `C:\C:.js`, which never exists;
-`read-file-for-panel` answers `{ ok: false }` and the panel silently does not
-open. `fileUriToPath` strips that leading slash, and it is the single
-conversion point for both the left-click and the context-menu paths.
-
-Known limit: a UNC URI (`file://server/share/x`) still loses its host, because
-the host lives in `URL.hostname` and only the pathname is read.
+Remote sessions and scheduled runs never get the bridge.
 
 ## Diff review
 
-When Claude proposes a file change, the side panel shows a diff — the old version on one side and the proposed edit on the other (or as a unified patch in inline mode).
+When Claude proposes an edit, the panel shows the diff, and Claude waits for
+the answer:
 
-You can:
-- **Accept** the entire change
-- **Reject** the entire change
-- **Accept individual chunks** (inline mode only) — review each hunk separately and submit the partial result
+- **Accept** applies the edit. If you changed the proposed text in the panel
+  first, your version is what Claude receives.
+- **Reject** refuses it.
 
-## Inline and side-by-side views
+Two views, switched by the button in the panel's toolbar; the choice is
+remembered (`localStorage.filePanelDiffMode`):
 
-Toggle between views using the button in the side panel toolbar. Your preference is persisted across sessions.
+- **Side-by-side** (the default): the current file on the left, read-only, the
+  proposed version on the right, editable.
+- **Inline**: one column with the changes marked, and accept/reject buttons on
+  each change, so part of an edit can be kept.
 
-- **Inline (unified)** — additions and deletions shown in a single pane. Supports partial accept.
-- **Side-by-side** — original file on the left, proposed change on the right.
+## File viewer
 
-## Disabling IDE Emulation
+Files Claude opens, files you open from a terminal link (see
+[Terminal](terminal.md#clickable-paths)), and files opened with **Open in
+panel** show in the same panel with syntax highlighting, whether or not IDE
+Emulation is on. The panel refuses credential paths and files over 2 MB.
 
-To disable IDE Emulation (for example, if you want Claude to use VS Code or Cursor):
+### Windows drive letters
 
-1. Open **Global Settings**
-2. Uncheck **IDE Emulation**
-3. Save
-
-This stops Switchboard from registering as an IDE. Claude CLI will then discover and connect to your real editor instead. The change takes effect for new sessions — sessions already running are not affected.
-
-> **Note:** IDE Emulation is a global-only setting. It cannot be overridden per project.
+A `file:///C:/a/b.js` URI parses to the path `/C:/a/b.js`. `fileUriToPath`
+strips that leading slash, for left clicks and for the context menu alike, so
+the file opens at `C:\a\b.js`. A UNC URI (`file://server/share/x`) still loses
+its host, since only the URI's path is read.

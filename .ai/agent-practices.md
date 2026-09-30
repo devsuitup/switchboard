@@ -1,7 +1,7 @@
 # Working practices for AI agents
 
 Distilled, portable practices for any AI agent (Claude Code or otherwise) working in this
-repo. Cross-references [shared-guidelines.md](../shared-guidelines.md) rather than repeating
+repo. Cross-references [shared-guidelines.md](shared-guidelines.md) rather than repeating
 it — see that file for worktree isolation (§3), no `Co-Authored-By` (§5), and not touching the
 live app while a session is mid-run (§1, §2, §6).
 

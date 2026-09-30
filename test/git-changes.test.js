@@ -143,6 +143,17 @@ test('unmerged entry: staged and unstaged both true, state carries a letter', ()
   assert.equal(f.state, 'U');
 });
 
+test('every unmerged shape is state U, whatever its first letter (mutation target: taking X of AA / DU)', () => {
+  for (const xy of ['AA', 'DU', 'UD', 'UU', 'AU', 'UA', 'DD']) {
+    const f = parseStatusPorcelainV2(
+      `u ${xy} N... 100644 100644 100644 100644 abc1 def2 ghi3 conflict.js`
+    ).files[0];
+    assert.equal(f.state, 'U', xy);
+    assert.equal(f.staged, true, xy);
+    assert.equal(f.unstaged, true, xy);
+  }
+});
+
 test('unknown/future record types are skipped without throwing', () => {
   assert.doesNotThrow(() => {
     const { files } = parseStatusPorcelainV2(['x SOMETHING new-record-type', '? real.js'].join('\0'));

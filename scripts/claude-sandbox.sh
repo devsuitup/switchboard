@@ -21,7 +21,7 @@
 # the sandbox. This is a FILESYSTEM boundary only: environment variables are
 # inherited (no --clearenv) and the network namespace is the host's. Note
 # that ~/.claude itself carries credentials and all projects' transcripts.
-# See docs/settings.md for the full isolation contract.
+# See docs/sandbox.md for the full isolation contract.
 #
 # Host side effects: none until the sandbox is known to be constructible. The
 # bwrap pre-flight runs against the binds that already exist, and only after it
@@ -133,7 +133,7 @@ RO_DIRS=()
 # The native installer keeps versioned binaries under ~/.local/share/claude,
 # which is bound read-write for claude's own updates — a read-only bind of the
 # binary's directory would be overridden by it. Skip the bind rather than
-# imply a guarantee we cannot keep (see docs/settings.md).
+# imply a guarantee we cannot keep (see docs/sandbox.md).
 if under_rw_state "$CLAUDE_BIN_DIR"; then
   debug "claude binary dir $CLAUDE_BIN_DIR lives under Claude's state dirs — writable inside the sandbox"
 else
@@ -182,7 +182,7 @@ fi
 
 # Podman: only when installed and its API socket is live. Read-only is enough —
 # connect(2) on a unix socket works across a read-only bind mount. Docker's
-# socket is deliberately not bound; see docs/settings.md.
+# socket is deliberately not bound; see docs/sandbox.md.
 PODMAN_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman"
 if command -v podman >/dev/null 2>&1 && [ -S "$PODMAN_DIR/podman.sock" ]; then
   RO_DIRS+=("$PODMAN_DIR")

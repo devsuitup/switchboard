@@ -1,20 +1,41 @@
-Perform a release for this project. Steps:
+Perform a release for this project, following [docs/releasing.md](../../docs/releasing.md). Always push with an explicit remote (`git push origin …`): a clone whose `main` tracks `upstream` would send a bare `git push` to `doctly/switchboard`. Steps:
 
-1. Find the most recent version tag with `git describe --tags --abbrev=0` and collect all commits between it and HEAD using `git log {prev_tag}..HEAD --format="%B---"`
-2. Bump the version with `npm version patch --no-git-tag-version`
-3. Commit the version bump with message: `v{version}: {short summary of changes}`
-4. Create a git tag `v{version}`
-5. Push commits and tag: `git push origin` and `git push origin --tags` (never a bare `git push` — `main` tracks `upstream`, not `origin`, and a bare push targets `doctly/switchboard`). Note `main` is branch-protected: the version-bump commit must land via a PR (admin-merge is fine), and the tag must be created on the merged `main` commit, not the pre-merge local commit — see [README.md § Fork release-flow gotchas](../../README.md#fork-release-flow-gotchas).
-6. Wait for the GitHub Actions build to complete using `gh run watch` on the latest run
-7. Once the build finishes and creates a draft release, publish it with release notes using `gh release edit v{version} --draft=false --notes "..."`
-8. Release notes format:
+1. Find the most recent version tag with `git fetch origin --tags && git describe --tags --abbrev=0 origin/main`, and read the commits since it: `git log {prev_tag}..origin/main --format="%B---"`.
+2. Bump the version on a release branch, never on `main` (the ruleset rejects direct pushes):
+   ```bash
+   git checkout -b release/v{version} origin/main
+   npm version patch --no-git-tag-version      # or the version asked for
+   git commit -am "v{version}"
+   git push origin release/v{version}
    ```
-   ## What's Changed
-
-   ### {Category}
-   - {change description}
-
-   ### {Category}
-   - {change description}
+   Do **not** tag this commit: a squash merge replaces it, and a tag on it would not be on `main`.
+3. Open the PR and merge it once the required checks pass:
+   ```bash
+   gh pr create --repo devsuitup/switchboard --base main --head release/v{version} --title "v{version}" --fill
+   gh pr merge --repo devsuitup/switchboard --squash --auto release/v{version}
    ```
-   Group changes by category (e.g. "Features", "Bug Fixes", "Performance Improvements", etc.) based on the commit messages. The release notes must cover ALL commits between the previous tag and the new tag — don't skip any.
+   Wait until `gh pr view --repo devsuitup/switchboard release/v{version} --json state` reports `MERGED`.
+4. Update the local `main` to the merged commit:
+   ```bash
+   git checkout main
+   git fetch origin
+   git reset --hard origin/main
+   ```
+5. **Run the app before tagging.** The tag is what publishes. Launch the merged `main` in an isolated instance and ask the user to use it — see [docs/testing-a-pr.md](../../docs/testing-a-pr.md) and [docs/live-testing.md](../../docs/live-testing.md). Tag only once they confirm.
+6. Tag the merged commit and push the tag alone (never `--tags`, which would push every local tag):
+   ```bash
+   git tag v{version} origin/main
+   git push origin v{version}
+   ```
+   Pushing the tag starts `.github/workflows/build.yml`.
+7. Watch the build: `gh run list --repo devsuitup/switchboard --workflow build.yml --limit 1`, then `gh run watch <id> --repo devsuitup/switchboard`. Its publish job creates a draft release, uploads the assets, and writes the release notes from the commit subjects since the previous tag.
+8. Check that all 19 assets are on the draft (`gh release view v{version} --repo devsuitup/switchboard --json assets --jq '.assets | length'`); upload any missing one with `gh release upload v{version} <file> --clobber --repo devsuitup/switchboard`.
+9. Keep the notes the workflow wrote. To add a summary on top, read them first and write the result back with both:
+   ```bash
+   gh release view v{version} --repo devsuitup/switchboard --json body --jq .body > notes.md
+   # prepend a grouped summary (Features, Bug Fixes, …) covering every commit, keep the generated list below it
+   gh release edit v{version} --repo devsuitup/switchboard --notes-file notes.md
+   ```
+10. Publish the draft: `gh release edit v{version} --repo devsuitup/switchboard --draft=false --latest`.
+
+If a build started from a wrong tag, cancel it (`gh run cancel <id>`), delete the tag locally and on `origin`, and tag the merged commit.

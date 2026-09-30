@@ -1,29 +1,45 @@
 # Session Restore
 
-Switchboard can remember which sessions were open when you closed it and reopen them automatically on the next launch.
+Switchboard can reopen, at launch, the sessions that were open when it last
+closed.
 
-## How it works
+## The setting
 
-Whenever you open or close a session, Switchboard saves the current "working set" — the list of open sessions, their project paths, and which one was active — to global settings. On startup, this list is used to restore your previous state.
+**Global Settings → Application → Restore Sessions on Startup**:
 
-Each session is resumed using the project's current session-launch settings (permission mode, worktrees, pre-launch command). Options from the previous launch are not frozen — the session starts fresh with the current project defaults.
+| Option | Behaviour |
+|---|---|
+| **Don't restore** | Nothing is reopened |
+| **Ask on startup** (default) | A bar asks *Restore N session(s) from last time?*, with **Restore** and **Dismiss** |
+| **Restore automatically** | The sessions are reopened without asking |
 
-Sessions that no longer exist in the index (deleted JSONL files, removed worktrees) are silently skipped during restore.
+The setting is read at launch; a change applies from the next start.
 
-> **Technical note (for contributors):** "restore" is a **respawn**, not a reattach. The underlying terminal process (PTY) is a child of the Electron main process and is killed when Switchboard quits — nothing survives the process boundary. On restart, Switchboard spawns a brand-new PTY per restored session (using `claude --resume <sessionId>` for Claude sessions), it does not reconnect to anything left running. True reattach — replaying buffered terminal output onto an existing, still-running PTY — only happens *within* a single app run (e.g. the renderer reloads, or you click back into a session tab), gated on the session still being present in the in-memory `activeSessions` map. Once the app has fully quit, that map is empty, so restore always takes the "spawn new PTY" path.
+## What is saved
 
-## Restore on Startup setting
+Each time a session is opened or closed, Switchboard saves the open set — each
+session's id and project, and which one was active — in its global settings
+(`openWorkingSet`).
 
-Open **Global Settings** and look for **Restore Sessions on Startup**:
+## What restore does
 
-| Option | Behavior |
-|--------|----------|
-| **Don't restore** | Sessions are not restored; Switchboard opens to the empty state |
-| **Ask on startup** (default) | A non-modal toast bar appears asking "Restore N sessions from last time?" with Restore / Dismiss buttons |
-| **Restore automatically** | Sessions are reopened silently on every launch, no prompt |
+Restore is a respawn, not a reattach: a session's process is a child of the
+app and ends when the app quits. Each restored Claude session is started again
+with `claude --resume <id>` and the project's **current** effective settings —
+permission mode, sandbox, pre-launch command and the rest — not the options of
+its previous launch. Sessions reopen one after another, half a second apart.
 
-> **Note:** This setting is read at launch. Changing it takes effect the next time you start Switchboard.
+- A session that is no longer in the index (transcript deleted, worktree
+  removed) is skipped.
+- A session live in another process — another Switchboard, or `claude` in a
+  terminal — is skipped, and a notice names it for 15 seconds:
+  *Not reopened: &lt;name&gt; is live in pid N*. It stays in the saved set, so a
+  later start can reopen it. See
+  [Launching sessions](launching-sessions.md#sessions-live-in-another-process).
+- On a first launch, while the index is still being built, restore waits for
+  indexing to finish; in **Ask** mode the bar says *Finishing indexing before
+  restoring N session(s) from last time…*.
+- Opening a session yourself while restore is running cancels the rest of it.
 
-## Settings
-
-**Restore Sessions on Startup** is a global-only setting. See [Settings Reference](settings.md).
+Within one run of the app, going back to a session whose process still runs is
+a reattach: the terminal replays its buffered output onto the same process.

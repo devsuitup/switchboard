@@ -1,47 +1,124 @@
 # Automation
 
-Switchboard can run Claude tasks without you at the keyboard, through two complementary mechanisms:
+Two mechanisms run Claude without you at the keyboard:
 
-- **Schedules** — cron-style recurring tasks defined as Markdown files, fired by an in-process scheduler.
-- **Triggers** — one-shot command injection into an already-open session, driven by dropping a JSON file. Meant for external scripts and harnesses.
+- **Schedules** — recurring headless runs, defined as Markdown files and fired
+  by a scheduler inside the app.
+- **Triggers** — one-shot text typed into a session that is already open,
+  requested by dropping a JSON file in a directory. Meant for scripts and
+  harnesses.
+
+Both live in the running app: when Switchboard is not running, nothing fires.
 
 ## Schedules
 
-A schedule is a Markdown file at `<project>/.claude/commands/schedule-*.md` with YAML frontmatter:
+A schedule is a file named `schedule-<something>.md` in a project's
+`.claude/commands/` directory, with front matter:
 
 ```markdown
 ---
-name: My morning audit
+name: Morning audit
 cron: 0 9 * * 1-5
 enabled: true
 slug: morning-audit
 cli:
-  permission-mode: acceptEdits
-  allowed-tools: Bash,Read,Write
+  permission-mode: auto
+  allowed-tools: Bash,Read,Glob,Grep
+  model: sonnet
+  max-budget-usd: 2
+  append-system-prompt: Keep the report under 50 lines.
+  add-dirs: /srv/data, /srv/logs
 ---
 
-<Full self-contained prompt that Claude will execute>
+The full, self-contained prompt Claude runs each time.
 ```
 
-When the cron expression matches, Switchboard pre-seeds a new session with the prompt and spawns `claude --resume <sid> -p "..."` headlessly. The run appears as a regular session in the sidebar — open it there to see the result.
+| Field | Meaning | Default |
+|---|---|---|
+| `name` | Display name, in logs and in [ActivityWatch](activitywatch.md) | the file name |
+| `cron` | When to run — see below | required |
+| `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on | on |
+| `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
+| `cli.permission-mode` | `--permission-mode` | `auto` |
+| `cli.allowed-tools` | `--allowedTools` | `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` |
+| `cli.model` | `--model` | none |
+| `cli.max-budget-usd` | `--max-budget-usd`; must be a number | none |
+| `cli.append-system-prompt` | `--append-system-prompt` | none |
+| `cli.add-dirs` | one `--add-dir` per comma-separated entry | none |
+
+The body after the front matter is the prompt; a file with an empty body or no
+`cron` is skipped. The front matter is read as flat `key: value` lines with one
+level of nesting under `cli:`, not as full YAML. The file must use LF line
+endings: with CRLF the front matter is not recognised and the file is skipped.
+A value containing a control character makes the run fail.
+
+### Which files are scheduled
+
+Every minute, on the minute, the scheduler rereads the `schedule-*.md` files
+directly in `<project>/.claude/commands/` for every project Switchboard knows
+from `~/.claude/projects/`. Edits apply within a minute, without a restart. A
+`schedule-*.md` in the global `~/.claude/commands/` is not scheduled.
+
+### Cron syntax
+
+Five fields — minute, hour, day of month, month, day of week — in local time.
+Each field accepts `*`, a number, a range `a-b`, a list `a,b,c` (of numbers or
+ranges), or a step over the whole range `*/n`.
+
+Not supported: a step on a range or a start (`0-30/5`, `5/15`), names (`MON`,
+`JAN`), `7` for Sunday (Sunday is `0`), and aliases such as `@daily`. An
+expression that does not parse never matches, and no error is reported. There
+is no daylight-saving handling, and runs missed while the app was closed are not
+caught up.
+
+### A run
+
+When the expression matches, Switchboard:
+
+1. writes a new transcript in the project's `~/.claude/projects/` folder whose
+   first message is `Scheduled Task: <prompt>`, with the schedule's slug;
+2. runs `claude --resume <that id> -p "Run the scheduled task" --permission-mode … --allowedTools …`
+   and the other `cli.*` flags, through the **Shell Profile** shell, in the
+   project directory, with `FORCE_COLOR=0`;
+3. discards the output, and writes the exit code and any stderr to the main log
+   (`[schedule]` lines). No notification is shown.
+
+The run appears as a session in the project, grouped with the schedule's other
+runs under its slug; open it to read the result.
+
+- One run at a time per slug and project: a tick that matches while the previous
+  run is still going is skipped (logged at info level).
+- The [sandbox](sandbox.md) setting applies — global, then project. On a
+  platform other than Linux a schedule with the sandbox on is skipped and an
+  error logged. With the sandbox on, `add-dirs` entries are bound read-write.
+- The Pre-launch Command and IDE emulation do not apply to scheduled runs.
 
 ### Creating a schedule
 
-Click the **clock icon** on a project in the sidebar. This opens an interactive Claude session pre-loaded with a schedule-creator command: describe what you want scheduled, and Claude writes the `schedule-*.md` file for you. You can also write the file by hand — the scheduler rescans every minute, so changes take effect within 60 seconds, no restart needed.
+**Create scheduled task** (the clock) on a project header opens an interactive
+Claude session primed to write a schedule file: describe the task and when it
+should run, and it writes `.claude/commands/schedule-<slug>.md`. Its
+instructions come from `~/.claude/commands/create-switchboard-schedule.md`,
+which Switchboard writes at startup when the file is missing and never
+overwrites afterwards — edit it to change how schedules are created, delete it
+to get the current template back.
 
-Existing schedules are listed in the project's brain tab (Memory panel), each with a **run now** button that fires it immediately, bypassing the cron match.
+Writing the file by hand works the same. Being in `.claude/commands/`, a
+schedule is also a slash command: `/schedule-<name>` runs its prompt in any
+session.
 
-### Behavior and limits
+### Run now
 
-- `enabled: false` disables a schedule without deleting it.
-- `cron` is standard 5-field syntax (minute, hour, day-of-month, month, day-of-week) with `*`, lists, ranges, and steps. No `@daily` aliases, no DST awareness (times are local).
-- `permission-mode: acceptEdits` (or `auto`) is the practical default — headless `-p` runs hang on any permission prompt otherwise.
-- One run at a time per schedule: if a run is still going when the next tick matches, that tick is silently skipped.
-- The scheduler lives in-process: **if Switchboard isn't running, the schedule doesn't fire.** It's a personal tool, not a daemon.
+The **Agent Files** tab lists the schedule files with a clock icon and a **Run
+now** button, which starts a run at once. **Run now** ignores `cron` and
+`enabled`, and does not wait for a run of the same schedule that is still going.
+The button shows a check mark once the run is launched; a launch failure is only
+logged.
 
 ## Triggers
 
-The trigger watcher lets any external script type into an open session's terminal — no Electron IPC required. Drop a JSON file into `~/.switchboard/triggers/` (override with `SWITCHBOARD_TRIGGERS_DIR`):
+The trigger watcher lets a script type into an open session's terminal. Drop a
+JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
 
 ```json
 {
@@ -52,125 +129,112 @@ The trigger watcher lets any external script type into an open session's termina
 }
 ```
 
-- `sessionId` — the target session (must be open in Switchboard).
-- `command` — written to the PTY, followed by a discrete Enter keypress.
-- `wait` — `"none"` (default) does not wait for the session to stop being busy; `"idle"` does. Neither sends into a composer with unsubmitted input: see "Politeness" — `"none"` can still wait, up to `timeout_ms`. Use `"idle"` for anything that must not interrupt a mid-response stream.
-- `timeout_ms` — optional cap on the waiting, idle **and politeness** (≤ 600 000 ms; default 300 000). See "Politeness" below: with `wait: "none"` this is the only bound on how long a trigger sits waiting for a free composer. On a `chain` it is the deadline for the **whole chain**, not for each step — see "A chain's deadline is one budget for every step".
-- `expectedCwd` — optional. See "Target guard" below.
+- `sessionId` — the target; it must be open in Switchboard, with a live process.
+  Any open session qualifies, plain terminals included.
+- `command` — written to the terminal, followed by a separate Enter keypress. At
+  most 4 KB, and no CR, LF, NUL or ESC.
+- `wait` — `"none"` (the default) does not wait for the session to stop being
+  busy; `"idle"` does. Neither writes into a prompt that holds unsubmitted
+  input — see [Politeness](#politeness-switchboard-never-types-over-you) — so
+  `"none"` can still wait, up to `timeout_ms`. Use `"idle"` for anything that
+  must not interrupt a response being written.
+- `timeout_ms` — optional bound on all the waiting: idle **and** politeness. A
+  positive integer up to 600 000; default 300 000. On a `chain` it is the
+  deadline for the **whole chain** — see below.
+- `expectedCwd` — optional; see [Target guard](#target-guard).
 
-Environment overrides: `SWITCHBOARD_TRIGGERS_DIR` (watched directory), `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` (default idle wait), `SWITCHBOARD_TRIGGER_QUIET_MS` (the politeness quiet window, default 3000 ms), `SWITCHBOARD_TRIGGER_MAX_AGE_MS` (the staleness limit, default 300 000 ms).
+The directory is created at startup. Only names ending in `.json` are read, and
+a file is picked up when its name appears in the directory; rewriting an
+existing file in place does not fire it again. Write the trigger under another
+name (`abc.tmp`) and rename it to `abc.json`, so the watcher never reads a
+half-written file. A trigger must be a regular file (not a symbolic link) of at
+most 64 KB; one that fails to parse is retried once 50 ms later. Triggers
+already in the directory when the app starts are processed at startup.
 
-**A trigger file older than the staleness limit is refused unread.** Age is the
-file's own `mtime` against the moment the watcher inspects it, so a trigger that
-ages out while queued is refused exactly like one that was already stale when the
-watcher found it: a `/compact` written six hours ago no longer targets the same
-session state. The refusal is an ordinary result — `{"ok": false, "submitted":
-"no", "error": "not sent"}` with the age in `reason`. A trigger written while
-Switchboard was closed is not lost: a startup scan picks it up at the next
-launch, and the limit is what decides — it runs if it is still inside the
-window, and is refused if it has aged past it.
+`wait` accepts `idle` and `none` and nothing else. A missing field means `none`;
+any other value — an empty string, `null`, `"idel"` — is refused before anything
+is written, with a `reason` naming the value received. Sending at once on a typo
+would type into a session that asked to be waited for.
 
-Instead of a single `command`, you can send a `chain` — a sequence of up to 20 steps injected one after another, each submitted and verified before the next:
+**A trigger file older than the staleness limit is refused unread.** Its age is
+its `mtime` against the moment the watcher picks it up, including after waiting
+in the watcher's queue: a `/compact` written six hours ago no longer targets the
+same session state. The refusal is an ordinary result — `{"ok": false,
+"submitted": "no", "error": "not sent"}`, with the age in `reason`. A trigger
+written while Switchboard was closed runs at the next launch if it is still
+inside the limit.
+
+### Chains
+
+Instead of `command`, a `chain` of up to 20 steps is typed one after the other,
+each submitted and verified before the next:
 
 ```json
 {
   "sessionId": "abc-123-def",
-  "chain": [{ "command": "/compact" }],
-  "wait": "none"
+  "chain": [{ "command": "/compact" }, { "command": "Continue with the plan." }],
+  "timeout_ms": 600000
 }
 ```
 
-`command` and `chain` are mutually exclusive.
+`command` and `chain` are mutually exclusive, and an empty chain is refused.
 
-**A chain's deadline is one budget for every step.** `timeout_ms` — or its
-300 000 ms default — is a single deadline taken at the start and shared by the
-initial wait, every step's politeness wait, every submit verification, and the
-busy-fall wait that separates one step from the next. It is not restarted per
-step. A step may narrow its own share with its own `timeout_ms`; it can never
-extend it past the chain's deadline — and a per-step value above the 600 000 cap
-is refused outright, not clamped, taking the whole trigger with it.
+**A chain's deadline is one budget for every step.** `timeout_ms`, or its
+300 000 ms default, is one deadline taken at the start and shared by the initial
+idle wait, every step's politeness wait, every submit verification, and the wait
+for the session to finish between steps. It is not restarted per step. A step
+may narrow its share with its own `timeout_ms` but never extend it past the
+chain's deadline; a per-step value above 600 000 is refused, taking the whole
+trigger with it.
 
-The cap is enforced on the `timeout_ms` field only. When the field is absent the
-budget comes from `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS`, which is not capped: an
-env var set above 600 000 gives every chain on that machine a larger budget than
-any trigger may ask for.
+The 600 000 cap applies to the `timeout_ms` field only. Without the field, the
+budget is `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS`, which is not capped.
 
-Size it against what the steps actually do, not against how many there are. A
-chain that compacts and then resumes spends most of its budget waiting for the
-session to go idle after `/compact`, and the default leaves little room for the
-resume step: `{"chain": [{"command": "/compact"}, {"command": "…"}],
-"timeout_ms": 600000}` is the shape that fits, 600 000 being the cap.
+Size the budget by what the steps do, not by how many there are. A chain that
+compacts and then resumes spends most of it waiting for the session to go idle
+after `/compact`: `{"chain": [{"command": "/compact"}, {"command": "…"}],
+"timeout_ms": 600000}` is the shape that fits. A session busy for another reason
+spends the same budget.
 
-A session that is busy for another reason spends the budget just as fast —
-anything typed into it while a chain is in flight competes with the chain's own
-steps for the same deadline.
+### Environment overrides
 
-**`waited_ms` / `total_waited_ms`.** Both fields mean the same thing — every
-wait this trigger spent — scoped differently: a single `command` result
-carries `waited_ms` for the whole trigger; a `chain` result carries
-`total_waited_ms` for the whole chain, plus a per-step `waited_ms` inside each
-`steps[]` entry.
+| Variable | Meaning | Default |
+|---|---|---|
+| `SWITCHBOARD_TRIGGERS_DIR` | The watched directory | `~/.switchboard/triggers` |
+| `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` | Budget when a trigger has no `timeout_ms` | 300 000 |
+| `SWITCHBOARD_TRIGGER_QUIET_MS` | The politeness quiet window | 3 000 |
+| `SWITCHBOARD_TRIGGER_MAX_AGE_MS` | The staleness limit | 300 000 |
+| `SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` | Delay between the text and its Enter | 50 |
+| `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
+| `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
 
-- **`command`'s `waited_ms`** is the `wait:"idle"` wait (0 if `wait` is
-  `"none"` or the session was already idle), plus the politeness wait, plus
-  the submit-verification poll and its retry, if one fired.
-- **`chain`'s `total_waited_ms`** is the initial `wait:"idle"` wait (same rule)
-  plus, for every step the chain attempted, that step's own politeness wait,
-  its submit-verification poll(s), and — for every step but the last — its
-  busy-fall wait. `steps[i].waited_ms` is the same sum scoped to step `i`
-  alone, so `total_waited_ms` equals the initial wait plus the sum of every
-  entry in `steps[]`, **except** when the last attempted step is abandoned
-  before it ever writes anything because the session exits or the global
-  deadline fires: that step's partial wait still counts toward
-  `total_waited_ms`, but it has no entry in `steps[]` to be attributed to. A
-  step refused for a composer that never frees is **not** this exception
-  (narrowed 2026-09-05, was previously grouped with the other two): it now
-  gets its own `steps[]` entry too — `submitted: "no"`, `submit_retries: 0` —
-  so its politeness wait is attributed exactly like a step that did write.
-  The remaining exception (session exit, global deadline, both checked before
-  a step's own politeness wait even starts) was left alone: unlike the
-  composer case, neither has a `stepSentAt`-scoped wait of its own worth
-  attributing to a step that was never even reached.
+The triggers directory does not move with `SWITCHBOARD_DATA_DIR`: an instance
+run from source watches the same directory as an installed one unless
+`SWITCHBOARD_TRIGGERS_DIR` is set — see [Testing a PR live](testing-a-pr.md).
 
-A measured gap of roughly 158 s between `total_waited_ms` and the sum of
-`steps[*].waited_ms` on 2026-09-03 was this: each step's own politeness wait
-was folded into `total_waited_ms` but left out of that step's own
-`waited_ms` — fixed so the identity above holds exactly on every chain that
-completes. The `command` path had the matching gap on its own smaller scale —
-its `waited_ms` left out the submit-verification poll entirely — fixed the
-same way, so a reader comparing the two paths finds them consistent.
-
-`wait` accepts **`idle` and `none`, and nothing else.** An absent field still
-means `none`, because existing triggers rely on that default, but any other
-value — an empty string, `null`, `"idel"` — is refused before anything is
-written, with a `reason` naming the value received. Falling back to `none` on a
-typo would send immediately into a session that asked to be waited for, which is
-the more dangerous of the two behaviours.
+`fs.watch` on a directory whose path contains a Windows 8.3 short name
+(`JEAN-B~1`) makes the process abort; use the long path.
 
 ### Politeness: Switchboard never types over you
 
-**Nothing is written into a session that has input typed and not submitted.**
-A trigger arriving while you are mid-sentence waits, and if it never gets a free
-composer before its deadline it renounces rather than splice its payload into
-your words.
+**Nothing is written into a session whose prompt holds input typed and not
+submitted.** A trigger arriving while you are mid-sentence waits; if the prompt
+is never free before its deadline, it gives up rather than splice its text into
+yours.
 
-This is not only courtesy. A slash command injected into a **non-empty**
-composer never submits at all: Claude Code submits `/compact` through the
-completion menu, which opens only when the `/` is the first character of an
-empty box. A session once slept nine hours with an inert `/compact` sitting in
-its composer. Politeness is the condition under which the channel works.
+This is also what makes slash commands work: Claude Code submits `/compact`
+through its completion menu, which opens only when the `/` is the first
+character of an empty prompt. Typed into a non-empty prompt, a slash command
+stays there, unsubmitted.
 
-**How Switchboard knows.** It models the box. Every keystroke the renderer sends
-reaches the main process through one IPC channel, and `composer-state.js` keeps
-a running copy of the text it believes is sitting there, plus a cursor into it.
-`pending` is that text's length in **code points**, so an emoji weighs one and
-one backspace removes it.
-
-A counter could only add and subtract; a model can be edited. What is applied:
+**How Switchboard knows.** Every keystroke the renderer sends to a terminal goes
+through one IPC channel, and `composer-state.js` keeps a copy of the text it
+believes is in the prompt, with a cursor. `pending` is that text's length in
+code points.
 
 | Input | Effect on the model |
 |---|---|
-| printable bytes, pasted bytes, `ESC [ 200 ~` … `ESC [ 201 ~` content | inserted at the cursor — a paste's embedded carriage returns are text, and do **not** clear the box |
+| printable bytes, pasted bytes, `ESC [ 200 ~` … `ESC [ 201 ~` content | inserted at the cursor — a paste's carriage returns are text, and do **not** clear the prompt |
 | Enter, newline, Ctrl+U, Ctrl+C | clears |
 | Backspace / DEL, `ESC [ 3 ~` (Delete) | removes one code point behind / ahead of the cursor |
 | Ctrl+W, Alt+Backspace | removes the word before the cursor |
@@ -179,317 +243,208 @@ A counter could only add and subtract; a model can be edited. What is applied:
 | bare Up (`ESC [ A`, `ESC O A`), Ctrl+V, an unparseable escape | insert one opaque placeholder — the content is unknown, so it counts as one |
 | kitty Enter **with** a modifier (`ESC [ 13;2 u`, `ESC [ 13;5 u`) | inserts a line break |
 | kitty Enter **without** one (`ESC [ 13 u`), modified Up, OSC, other escapes | nothing |
-| SGR mouse reports (`ESC [ < b ; x ; y M`/`m`), focus reports (`ESC [ I`, `ESC [ O`) | nothing — **and the quiet clock does not move**; these two forms are the terminal talking, not the user |
+| SGR mouse reports (`ESC [ < b ; x ; y M`/`m`), focus reports (`ESC [ I`, `ESC [ O`) | nothing, **and the quiet clock does not move**: these are the terminal talking, not the user |
 
-An escape sequence cut across two IPC chunks is buffered and re-joined, so half
-a sequence is never counted as text — including a lone `ESC` that turns out to
-be the first byte of the next chunk's bracketed paste. A sequence that cannot be
-parsed at all counts as input: **doubt resolves to busy**, always.
+An escape sequence split across two IPC chunks is joined before it is read, so
+half a sequence never counts as text. A sequence that cannot be parsed counts
+as input: **doubt resolves to busy**.
 
-The composer is called free only when `pending` is zero **and** nothing has
-arrived on that channel for `SWITCHBOARD_TRIGGER_QUIET_MS` (default 3000). The
-freshness window covers the one case the model cannot: an Enter that validates a
-slash-command completion empties the box while the CLI refills it.
+The prompt is free only when `pending` is zero **and** nothing has arrived on
+that channel for `SWITCHBOARD_TRIGGER_QUIET_MS` (3 000 ms). The quiet window
+covers the case the model cannot: an Enter that validates a completion empties
+the model while the CLI refills the prompt.
 
-**Where this is blind — stated, not papered over:**
+**Where the model is blind:**
 
-- Only bytes coming from the renderer are seen. Input reaching the PTY by any
-  other route is invisible to the model.
-- The model is a **line editor's** model, not the CLI's. It knows nothing of
-  wrapping, of multi-line navigation, or of any binding Claude Code adds beyond
-  the table above; an unmodelled editing key leaves the text longer than the box
-  really is. That over-count is the safe direction — the trigger renounces —
-  but it stays until the next Enter, Ctrl+U or Ctrl+C, and until then every
-  trigger for that session renounces.
-- Ctrl+U is treated as clearing the whole box, which is right when the cursor is
-  at the end. Used mid-line it would be an under-count if the CLI binds it to
-  "kill to start of line" — unmeasured.
-- Any chunk carrying something other than a recognised terminal report restarts
-  the quiet clock, whether or not it changes the text. Mouse and focus reports
-  are the exception, and they had to be: a TUI with mouse reporting on
-  (`CSI ?1003h`) emits one report per pointer motion, on the same IPC channel as
-  keystrokes, and until 2026-09-02 each of them pushed the clock. **Measured that
-  day on the real CLI**, composer emptied with Ctrl+U, no key touched: pointer
-  resting *over* the terminal, a trigger waited its full 30 s and was then
-  refused — `{"ok":false,"reason":"the last keystroke landed 47 ms ago, inside
-  the 3000 ms quiet window","waited_ms":30046}`; pointer moved *off* the
-  terminal, the same trigger took `waited_ms":15504` to find 3 s of silence. The
-  earlier claim here — "at most ~3 s each time, never a refusal on its own" —
-  was wrong: with the user simply present at the machine, triggers were
-  unusable. Reports now count as neither text nor activity, so a chunk holding
-  only reports changes nothing at all, clock included. The exemption is
-  deliberately narrow: SGR reports (`CSI < b ; x ; y M|m`) and focus reports
-  (`CSI I`, `CSI O`) with no parameter — those two forms and nothing else. A
-  near-miss — a parameter too few or too many, a non-numeric one, another final
-  byte, a report cut short by the end of a chunk — is *not* recognised and still
-  counts as input. Doubt resolves to busy here too: a wrong exemption would be a
-  false "free", and a false "free" types over the user's sentence.
-- The exemption covers those two forms only, and xterm.js writes more than
-  reports on that channel. Its own replies still count as input and still push
-  the quiet clock (measured: `lastInputAt` stamped, `pending` unchanged) — the
-  OSC colour reply `ESC ] 11 ; rgb:… ST`, the XTWINOPS size replies
-  `CSI 4 ; h ; w t` and `CSI 6 ; ch ; cw t`, DA1 (`CSI ?1;2c`) and CPR
-  (`CSI r ; c R`). Each costs a trigger up to one quiet window. **Their
-  periodicity has not been verified**: they answer a query, so they are
-  presumably one-off rather than repeating — that is a reserve, not a
-  guarantee.
-- In the alternate screen buffer with mouse tracking *off*, xterm translates the
-  wheel into arrow keys and sends them as ordinary input. A bare `ESC [ A` is a
-  history recall to this model, so it inserts one opaque placeholder: **three
-  wheel notches put `pending` at 3** (measured) and every trigger for that
-  session renounces until the next Enter, Ctrl+U or Ctrl+C. The direction is the
-  safe one — the trigger gives up rather than typing over something — but this
-  is the next "the trigger never fires", and it is not fixed here: deciding what
-  a wheel-driven arrow key means to the composer is a change of its own.
-- Escape does **not** clear the composer on Claude Code v2.1.258 (measured), so
-  treating it as neutral is correct *today*. A CLI change would turn it into a
-  false "free".
-- An Enter that validates a completion menu empties the model although the box
-  is still full. Only the quiet window covers that.
-- A composer filled by the CLI itself — a prompt, a queued message, a resumed
-  draft — was never typed and is not counted.
-- **Modified Up arrows are not counted, and on Claude Code v2.1.258 that is
-  correct — as a dated measurement, not a guarantee.** Measured on an isolated
-  PTY with a screen dump: plain `ESC [ A` and `ESC O A` do recall history (the
-  screen shows `─── History 2/2 ───` and the previous command lands back in the
-  box), which is why the model inserts one placeholder for them. `ESC [ 1;2 A` (Shift+Up),
-  `ESC [ 1;3 A` (Alt+Up) and `ESC [ 1;5 A` (Ctrl+Up) leave the box empty, so not
-  counting them is not an undercount on this version. A CLI release that gave
-  those chords a meaning would reopen an undercount — and undercounting is the
-  dangerous direction: it reads a full composer as free.
-- A triggers directory whose path contains an 8.3 short name (`JEAN-B~1`) kills
-  the process outright: `fs.watch`/libuv asserts. Use the long path.
+- It sees only bytes coming from the renderer. Input reaching the PTY another
+  way is invisible to it.
+- It is a line editor's model, not the CLI's: it knows nothing of wrapping,
+  multi-line navigation, or bindings beyond the table. An unmodelled editing
+  key leaves `pending` too high — the safe direction, the trigger gives up — and
+  it stays so until the next Enter, Ctrl+U or Ctrl+C.
+- Ctrl+U is taken to clear the whole prompt, which holds with the cursor at the
+  end. Used mid-line, where the CLI may clear only up to the cursor, it would
+  under-count.
+- Only SGR mouse reports and parameterless focus reports are exempt from the
+  quiet clock. A near-miss — a parameter too many or too few, another final
+  byte, a report cut by a chunk boundary — counts as input. xterm.js's own
+  replies (OSC colour replies, XTWINOPS size replies, DA1, CPR) count as input
+  too, and each can cost a trigger up to one quiet window.
+- In the alternate screen with mouse tracking off, xterm.js turns the wheel into
+  arrow keys: each notch up is a bare Up, one placeholder. Three notches put
+  `pending` at 3, and every trigger for that session gives up until the next
+  Enter, Ctrl+U or Ctrl+C.
+- On Claude Code 2.1.258, Escape does not clear the prompt, and Shift+Up,
+  Alt+Up and Ctrl+Up leave it unchanged, so the model treats them as neutral. A
+  CLI release that gave them a meaning would make the model under-count, which
+  reads a full prompt as free.
+- A prompt filled by the CLI itself — a queued message, a restored draft — was
+  never typed and is not counted.
 
 The guard applies to every write, including the bare recovery Enter the watcher
-sends when it saw no turn start — on a half-typed sentence that Enter would
-submit the sentence. When politeness never allows a write, the result is
-`{ "ok": false, "submitted": "no", "error": "not sent", "reason": "…" }`.
+sends when no turn started — on a half-typed sentence, that Enter would submit
+it. When politeness never allows a write, the result is `{ "ok": false,
+"submitted": "no", "error": "not sent", "reason": "…" }`.
 
-**What this costs `wait: "none"`.** It no longer means "write now": against a
-non-empty composer it waits, and the only bound is `timeout_ms` — 300 000 ms by
-default. For all of that time the trigger holds one of the 8 concurrent slots
-(`MAX_INFLIGHT`), so a handful of triggers aimed at sessions whose users walked
-away mid-sentence can stall the queue for every other session. Set a short
-`timeout_ms` on triggers that would rather renounce than wait.
+**What this costs `wait: "none"`.** It does not mean "write now": against a
+non-empty prompt it waits, bounded only by `timeout_ms`. All that time the
+trigger holds one of the watcher's 8 concurrent slots (`MAX_INFLIGHT`), so a few
+triggers aimed at sessions whose user walked away mid-sentence can stall the
+queue for everyone. Give triggers that would rather give up a short
+`timeout_ms`.
 
-**Two triggers naming the same session never run at once.** `MAX_INFLIGHT`
-bounds how many trigger *files* the watcher processes in parallel; it says
-nothing about which sessions they target. Two triggers aimed at the same
-`sessionId` are serialized independently of that cap — the second waits for
-the first's result to be written before it so much as samples that session's
-`busy` state — so their writes can never land in the same composer
-interleaved. Triggers aimed at different sessions are unaffected and keep
-running in parallel, still bounded only by `MAX_INFLIGHT`. A trigger's own
-`timeout_ms` / idle-wait deadline is what still bounds how long a second
-trigger for the same session can end up waiting — nothing here waits longer
-than that.
-
-### Reading a result
-
-Every path that decides a trigger's fate — success, validation refusal, timeout,
-missing session, refused `wait` — writes the result to
-`~/.switchboard/triggers/processed/<name>.result.json` and then deletes the
-trigger file. For a chain that happens once the whole chain has ended, not step
-by step — so a trigger file still sitting in `~/.switchboard/triggers/` with no
-result yet is normally **in flight, not failed**. Normally, and not always: a
-watcher whose `fs.watch` or directory setup failed at startup leaves the same
-picture, and so does a name the watcher could not read — both are logged and
-neither produces a result. A caller that polls for one needs a bound of its own.
-The triggers directory therefore holds the triggers still waiting to be
-processed, or being processed right now:
-
-```json
-{ "ok": true,  "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320 }
-{ "ok": false, "submitted": "no", "error": "not sent", "reason": "4 byte(s) of input are sitting unsubmitted in the composer" }
-```
-
-**`submitted` is the field to read, not `ok`.** A payload written into a
-composer is not a message received. Four values, compared by strict equality,
-in this order (`no` < `assumed` < `activity` < `confirmed`):
-
-| Value | Meaning |
-|---|---|
-| `confirmed` | the composer was read back empty right after our own Enter, the session was **not** already busy the instant we wrote, and a turn was independently observed in the same window — checked on the first attempt only, never after a retry |
-| `activity` | the session was seen busy after our write, but the composer readback could not rule out interference, or the session was already mid-turn when we wrote |
-| `assumed` | written, no failure seen, nothing observed afterwards |
-| `no` | nothing was written, or it was written and not submitted |
-
-A `chain` reports the **weakest** value any of its steps reached — this is the
-field's meaning unchanged from before per-step values existed, kept for
-compatibility with readers written against it. Since 2026-09-05, every entry
-in `steps[]` also carries its own `submitted`, classified the same way and
-compared on the same four-value order. Read it when you need to know whether
-one specific step — most often the *last* one, e.g. a resume prompt at the end
-of a `/compact` chain — was itself confirmed, rather than whether the chain as
-a whole cleared some bar: a chain reporting `"assumed"` overall says nothing
-about which step dragged it down; `steps[i].submitted` does. A step refused
-before it ever reached a write (composer never free) still gets an entry, with
-`submitted: "no"` — see the `steps[]` exception below, narrowed the same day.
-
-**What `activity` refuses to claim, and what a bare composer reading cannot
-prove on its own.** Busy is sampled, not compared against a baseline taken
-before the write, and nothing ties it to that write: a session already
-mid-turn when the trigger fires reads busy on the very first sample. Reading
-the composer back does not close that gap by itself either — the composer
-model only ever sees bytes the renderer sends (see "Politeness" above); this
-transport's own writes go straight to the PTY and are invisible to it. So "the
-composer reads empty after our write" only proves no *human's* unsubmitted
-sentence is visible at that instant; it says nothing about whether the CLI
-consumed what we ourselves just wrote, since the model never knew that text
-existed. `confirmed` is only granted when that reading is paired with two more
-things: the session was **not** already busy when we wrote (a session mid-turn
-can swallow or queue injected text with the composer model none the wiser),
-and a turn was still independently observed. Even then, a turn starting says
-nothing about *what* the CLI made of the text — a slash command that misses
-the CLI's completion menu is submitted as an ordinary message whose text
-merely starts with `/`, and that message produces a turn too. Only reading
-back the effect you asked for distinguishes those, and no transport in this
-repository does that.
-
-So a caller that must not act twice on the same intent still has to check the
-effect itself — a smaller context window, a new transcript, a file on disk —
-even when `submitted` reads `confirmed`; treat `confirmed` as "the handoff to
-the session went through cleanly", and `activity` as "something happened,
-unattributed".
-
-**What `confirmed` proves, stated exactly, and the one thing it does not.**
-`confirmed` means three checked facts and nothing more: the session was idle
-the instant before we wrote, a turn was observed within the verify window
-after that write, and this was the first attempt (no retry). **It does not
-prove that the turn it observed is the one our write started.**
-`pollForBusyObserved` is a level probe over the whole window, not an edge
-tied to our write — any `busy` transition inside that window satisfies it,
-regardless of what caused it. A second trigger on the same session, a human
-resuming, or any other actor going busy inside the same window produces
-`confirmed` exactly as our own write would. Serializing triggers per session
-(above) closes the same-session case at the source — the second trigger
-cannot even attempt a write until the first has fully finished — but an
-actor outside this transport's own admission queue (a human, another
-process) is not something a PTY byte stream can distinguish from our own
-effect. **A false `confirmed` remains reachable in that case: it is narrowed
-by construction, never eliminated.**
-
-> **Changed — read this if you parse `submitted`.**
-> `confirmed` used to be emitted whenever the session was seen busy after a
-> write, which asserted more than the transport could know (a session already
-> mid-turn satisfied it in milliseconds, with a turn the write did not cause).
-> That case reported `activity` for a time, and `confirmed` was reserved and
-> never emitted. `confirmed` is back, gated as described above, so a reader
-> testing `submitted === 'confirmed'` matches again — on a narrower, verified
-> case than before. A reader testing `submitted === 'no'` or
-> `submitted !== 'no'` is unaffected by any of this.
-
-**`error` is compared by strict equality too**, so explanations go in `reason`
-and never into `error`: `not sent: input pending` is not `not sent`. `reason`
-carries the detail alone, and carries it for every failure — a reader that wants
-to know *why* reads `reason`, never a substring of `error`.
-
-| `error` | What it promises the reader | What the emitter does with it |
-|---|---|---|
-| `not sent` | **not one byte reached the session.** No idle ever came, politeness never allowed a write, or the trigger was refused before any write | nothing to assume about: the harness **voids** the pending guard, and the next turn forces again on its own |
-| `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | the effect is only assumed, so the harness **keeps blocking** the next compaction |
-| anything else | free text: `session not found`, `pty write failed: …`, a validation refusal | read `submitted` to know whether anything landed |
-
-The two reserved values are easy to confuse and mean opposite things, so:
-
-- A chain whose first step landed and whose second was held back by politeness
-  reports `chain timeout`, never `not sent`.
-- A `wait: "idle"` that expires without the session ever going idle reports
-  `not sent` with `reason: "timeout waiting for idle; nothing was written"`,
-  and `partial: false` — never `chain timeout`. This is the commonest failure
-  in service: a session reports itself busy for as long as any delegated agent
-  runs, so `idle` is regularly unsatisfiable, and answering `chain timeout`
-  there would block every later compaction over a payload that never left.
-- The same holds when the session exits during that initial wait: the `error`
-  stays the free-text `session exited during wait`, but `submitted` is `no`,
-  `partial` is `false`, and `reason` says nothing was written.
-
-**A truncated chain: reading which steps went out.** `steps_completed` counts
-steps whose wait *completed*. A step that was written and whose wait then hit
-the deadline gets an entry in `steps[]` and is **not** counted — so a chain that
-sent `/compact` and timed out waiting for the session to come back reports
-`steps_completed: 0` with one entry in `steps[]`. Read as "nothing went out",
-that sends `/compact` a second time.
-
-Read the array, not the count. `steps[]` holds the steps the chain **reached**,
-which is not the same as the steps it wrote: a step whose politeness wait never
-found a free composer is recorded too, and nothing was written for it. That
-entry is recognisable — **`submitted: "no"` on a step means it was never
-written**, and it is the only way a step entry carries that value.
-
-So, with `steps_total` the chain's length, carried on every chain result:
-
-- the last entry, when its `submitted` is `"no"`, was **not** sent: the unsent
-  tail starts at that entry's own `idx`;
-- otherwise the last entry was sent, and the tail starts at `max(steps[].idx) + 1`;
-- either way the tail runs to `steps_total - 1`;
-- with no entry at all, the whole chain is the tail.
-
-Taking `max(steps[].idx) + 1` unconditionally is the mistake that loses a resume
-prompt held back by politeness — the case `steps_total` exists to make visible.
-
-An empty `steps: []` and a missing `steps` key both mean nothing went out; they
-distinguish a refusal inside the chain loop from one that never reached it, and
-the same `error` value can appear in either. Read it as
-`(result.steps || []).length === 0`, not as `result.steps.length === 0`.
-
-**An exception anywhere while deciding a trigger's fate** — not just the
-anticipated validation refusals above — still ends in a result file and a
-deletion. A trigger body that parses as valid JSON but isn't a usable shape
-(the bare value `null`, a `chain` step that isn't an object) is caught and
-reported as `{ "ok": false, "error": "internal error: <message>", "internal":
-true }`, rather than left on disk with no result at all. `internal: true` is
-set on this path only — a validation refusal never carries it — so a reader
-can tell "our code broke" apart from "the trigger was refused" without
-parsing `error`, which stays reserved for the strict-equality checks above.
-
-**When the deletion itself fails** (permissions, a locked file, an entry that is
-not a regular file), the trigger stays on disk. The result file is still
-written, the failure is logged at error level, and that name is remembered for
-the lifetime of the process so a later filesystem event on it can never run the
-command a second time — the leftover file is inert, not pending. A trigger whose
-name sits in `processed/` has been processed, whatever the trigger directory
-still shows. This is the only case that leaves a name non-replayable; an
-internal exception on its own does not — once the result is written and the
-trigger deleted, a later trigger dropped under the same name is a fresh
-attempt.
-
-**`processed/` has no retention policy**: result files accumulate there for as
-long as the directory lives, and nothing in the app ever removes them. Callers
-that write many triggers should prune it themselves.
-
-The primary use case is context-management harnesses — e.g. an agent hook that detects a full context window and injects `/compact` into its own session. Write the trigger file atomically (write to a temp name, then rename) so the watcher never reads a half-written file.
+**Two triggers naming the same session never run at once.** The second waits
+until the first's result is written before it looks at the session — while
+still holding one of the 8 slots. Triggers aimed at different sessions run in
+parallel.
 
 ### Target guard
 
-`sessionId` alone is not proof the trigger is aimed where the writer thinks:
-a valid id naming an open session looks identical whether it was chosen
-correctly or picked up a race (two sessions writing their transcript at the
-same instant, one trigger addressing the wrong one — a real incident). The
-optional `expectedCwd` field lets the writer state what it believes the
-target session's working directory is, checked before anything is written:
+A valid `sessionId` naming an open session looks the same whether the writer
+chose it correctly or picked up the wrong one — two sessions writing their
+transcripts at the same instant, for instance. The optional `expectedCwd`
+states the working directory the writer believes the target has, and is checked
+before anything is written:
 
 ```json
 { "sessionId": "abc-123-def", "command": "/compact", "expectedCwd": "C:\\Projects\\my-worktree" }
 ```
 
-- **Absent** — no change from today: nobody declared an expectation, so
-  nothing is checked.
-- **Present and it matches** the session's actual cwd (case, `/` vs `\`, a
-  trailing slash and the Windows long-path prefix are all normalized first)
-  — the trigger proceeds exactly as it would without the field.
-- **Present and it disagrees** — refused before any write:
+- **Absent** — nothing is checked.
+- **Matches** the session's working directory — the trigger proceeds.
+- **Differs** — refused before any write:
   `{ "ok": false, "submitted": "no", "error": "not sent", "targetMismatch": true, "expectedCwd": "...", "observedCwd": "..." }`.
-- **Present but the session's cwd cannot be determined** — refused the same
-  way, `targetCwdUnknown: true` instead of `targetMismatch`, so a reader can
-  tell "disagreement" from "couldn't check" without parsing `reason`. This is
-  deliberate: a check that silently lets the trigger through when it cannot
-  verify would reopen the exact hole it exists to close.
+- **The session's directory is unknown** — refused the same way, with
+  `targetCwdUnknown: true` instead of `targetMismatch`. A check that let the
+  trigger through when it cannot verify would defeat itself.
+- **Not a non-empty string** — refused with `not sent`.
 
-**What this does not protect against.** The comparison is by folder. Two
-sessions open in the *same* directory are not distinguished by it — the guard
-narrows the incident it was built for (two different worktrees), it does not
-generally solve "which of several sessions in one folder did the writer
-mean". It also does not resolve 8.3 short names, `subst` drives, or
-junctions/symlinks to their real target — two spellings of the same real
-folder in any of those forms are treated as a mismatch, not folded together.
+Both sides are compared after `path.normalize` and the removal of one trailing
+separator. On Windows, case is also folded and the `\\?\` prefix removed; on
+macOS and Linux the comparison is case-sensitive and `\` is not a separator.
+
+The comparison is by directory: two sessions in the same directory are not told
+apart. 8.3 short names, `subst` drives, junctions and symbolic links are not
+resolved; two spellings of one directory count as a mismatch.
+
+### Reading a result
+
+Every outcome — success, refusal, timeout, missing session — writes
+`<triggers dir>/processed/<trigger name without .json>.result.json` (through a
+temporary file and a rename) and then deletes the trigger file. A chain writes
+its result once, when it ends. A trigger file still in the directory without a
+result is therefore normally **in flight**. Not always: if the watcher failed to
+start, or could not read a name, both logged, no result ever comes. A caller
+that polls for a result needs a bound of its own.
+
+```json
+{ "ok": true,  "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320, "submit_retries": 0, "steps_total": 1 }
+{ "ok": false, "submitted": "no", "error": "not sent", "reason": "4 byte(s) of input are sitting unsubmitted in the composer" }
+```
+
+**`submitted` is the field to read, not `ok`.** Text written into a prompt is
+not a message received. Four values, compared by strict equality, ordered
+`no` < `assumed` < `activity` < `confirmed`:
+
+| Value | Meaning |
+|---|---|
+| `confirmed` | on the first attempt: the session was **not** busy when the text was written, the prompt read back empty after the Enter, and a turn was observed in the verification window |
+| `activity` | the session was seen busy after the write, but either the prompt read-back could not rule out interference, or the session was already busy when the text was written |
+| `assumed` | written, no failure seen, nothing observed afterwards |
+| `no` | nothing was written, or it was written and not submitted |
+
+A chain's top-level `submitted` is the **weakest** value any step reached; each
+entry of `steps[]` carries its own `submitted` on the same scale. Read the last
+entry to know whether the final step — a resume prompt after `/compact`, say —
+was itself confirmed.
+
+**What `confirmed` proves, and what it does not.** It means the three checked
+facts in the table, nothing more. The turn check is a level probe over the
+verification window, not an edge tied to this write: any busy transition in the
+window satisfies it — a human typing, another process. Triggers aimed at the
+same session are serialized, so a second trigger cannot cause it, but an actor
+outside the watcher can. A caller that must not act twice on one intent still
+checks the effect itself — a smaller context, a new transcript, a file on disk.
+Take `confirmed` as "the hand-off went through cleanly", `activity` as
+"something happened, unattributed". A slash command that misses the completion
+menu is sent as an ordinary message starting with `/`, and produces a turn too.
+
+**`error` is compared by strict equality**, so explanations are in `reason`,
+never in `error`: `not sent: input pending` is not `not sent`.
+
+| `error` | What it promises | What to do |
+|---|---|---|
+| `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
+| `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
+| anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
+
+The two reserved values mean opposite things:
+
+- A chain whose first step landed and whose second was held back by politeness
+  reports `chain timeout`, never `not sent`.
+- A `wait: "idle"` that expires before the session goes idle reports `not sent`,
+  with `reason` *timeout waiting for idle; nothing was written* for a `command`,
+  and *timed out waiting for the session to go idle; nothing was written* plus
+  `partial: false` for a `chain`. A session reports itself busy for as long as
+  any subagent runs, so `idle` is often unreachable; `not sent` there tells the
+  caller the payload never left.
+- A session that exits during that initial wait reports `submitted: "no"` and a
+  `reason` saying nothing was written (`partial: false` on a chain).
+
+### `waited_ms` / `total_waited_ms`
+
+Both count every wait the trigger spent, at different scopes:
+
+- A `command` result carries `waited_ms`: the `wait: "idle"` wait (0 with
+  `wait: "none"` or an idle session), plus the politeness wait, plus the
+  submission verification and its retry, if any.
+- A `chain` result carries `total_waited_ms` for the whole chain, and a
+  `waited_ms` in each `steps[]` entry: that step's politeness wait, its
+  verification, and — for every step but the last — the wait for the session to
+  finish before the next step. `total_waited_ms` is the initial idle wait plus
+  the sum of the entries, **except** when the chain stops before a step starts
+  because the session exited or the deadline passed: that last partial wait
+  counts in `total_waited_ms` but belongs to no entry.
+
+### A truncated chain
+
+`steps_completed` counts steps whose wait **completed**. A step that was written
+and then timed out waiting has an entry in `steps[]` but is not counted: a chain
+that sent `/compact` and timed out waiting for the session reports
+`steps_completed: 0` with one entry. Read as "nothing went out", that would send
+`/compact` twice.
+
+Read `steps[]`, not the count. It holds the steps the chain **reached**. A step
+whose politeness wait never found a free prompt has an entry too, with
+`submitted: "no"` — the only way a step entry carries that value, and the mark
+of a step that was never written. With `steps_total` (on every result):
+
+- when the last entry's `submitted` is `"no"`, that step was **not** sent, and
+  the unsent tail starts at its `idx`;
+- otherwise the last entry was sent, and the tail starts at `max(steps[].idx) + 1`;
+- the tail runs to `steps_total - 1`;
+- with no entry at all, the whole chain is the tail.
+
+Taking `max(steps[].idx) + 1` in every case loses a resume prompt that
+politeness held back. An empty `steps: []` and a missing `steps` both mean
+nothing went out; read them as `(result.steps || []).length === 0`.
+
+### Failures in the watcher itself
+
+**An exception while deciding a trigger's fate** — a body that is valid JSON but
+not a usable shape, such as `null` or a non-object chain step — still ends in a
+result and a deletion: `{ "ok": false, "error": "internal error: <message>",
+"internal": true }`. Only this path sets `internal: true`, so "the watcher
+broke" can be told from "the trigger was refused" without parsing `error`.
+
+**When deleting the trigger fails** (permissions, a locked file, a non-regular
+entry), the file stays, the result is still written, the failure is logged, and
+the name is remembered for the life of the process, so a later event on it never
+runs the command twice. A name that has a result in `processed/` has been
+processed, whatever the directory still shows.
+
+**`processed/` is never pruned.** Callers that write many triggers clean it
+themselves.
+
+The main use is context-management harnesses: a hook that sees a full context
+window and injects `/compact`, then a resume prompt, into its own session.

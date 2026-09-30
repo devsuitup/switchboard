@@ -1,93 +1,147 @@
 # Terminal
 
-Switchboard includes a full built-in terminal powered by xterm.js. You can launch new Claude Code sessions or attach to existing ones without leaving the app.
+Each session runs in an xterm.js terminal attached to the session's PTY. How a
+session is started is on [Launching sessions](launching-sessions.md); the
+shortcuts are all on [Keyboard shortcuts](keyboard-shortcuts.md).
 
-## Launching and attaching
+## Header
 
-- Click a session in the sidebar to open it in the terminal. If the session has an active process, you attach to its running PTY. If not, a new Claude CLI process is launched.
-- Click **New Session** (the `+` button next to a project) to start a fresh Claude Code session for that project.
-- A **Terminal** row (the `+` button's Terminal entry) is a plain shell, not a Claude session. Clicking it after its shell has exited gives that same row a new shell — one row, the one you clicked, not a second one beside it.
+On the left, the header above the terminal shows:
 
-## Panel shell
+- a **status dot**, before the name: green with a glow while the process runs,
+  grey otherwise. Its tooltip says the state in words: `Running`; `Stopped`
+  after a Stop you asked for, or when no exit is known; `Killed (SIGKILL)` (or
+  another signal) when a signal ended it without a Stop; `Exited (code N)` when
+  it exited on its own;
+- the session's name, the title the program sets on the terminal (or Claude's
+  latest notification), the session id, and the shell profile's name when it is
+  not **Auto**.
 
-Click **Shell** in the terminal header to open a shell in the right-hand panel,
-under whatever the panel is showing — the [Changes](changes-view.md) list, a
-file, or a diff. Both stay visible; drag the horizontal handle between them to
-give one more room. The height is remembered.
+On the right, one row, always in this order:
 
-With nothing open above it, the shell takes the whole panel and there is no
-handle to drag. Open a list or a file again and the shell goes back to the
-height you last dragged it to.
+1. **Indicators** — a coloured dot and a word, with a tooltip and no action:
+   **Sandbox** for a [sandboxed](sandbox.md) session, and **IDE Emulation**
+   while the session is connected to Switchboard as its IDE
+   ([IDE emulation](ide-emulation.md)).
+2. **Toggles** — square icon buttons, highlighted while on: **Shell**
+   ([below](#panel-shell)) and **Changes** ([Changes view](changes-view.md)).
+   Changes is on while the panel shows this session's Changes tab.
+3. **Stop** — a red icon, set apart by a divider.
 
-The shell starts in the session's own working directory, worktree included —
-the same directory the Changes panel reads and a `claude --resume` targets. You
-never pick the path, and it cannot drift from the one the session really runs
-in.
+When the process ends, the terminal prints a banner in the same words —
+`session stopped`, `session killed (SIGKILL)`, `session exited (code 1)` — dim
+for a Stop or an exit with code 0, yellow otherwise. The panel shell's banner
+reads the same way (`shell exited (code 1)`).
 
-One shell per session. Switching to another session leaves it running and puts
-it back, with whatever it printed meanwhile, when you come back. Click **Shell**
-again to close it, which stops it. It also stops when the session's terminal
-goes away (relaunching a session, stopping it, quitting the app). If the shell
-exits by itself — `exit`, or a command that kills it — the region keeps its
-output so you can read it, and says so; toggle **Shell** off and on for a new
-one.
+## Right-click
 
-A panel shell is not a session: it never appears in the sidebar, never counts
-towards "N running" in the status bar, and is never restored at startup.
+**Global Settings → Terminal Right-Click** sets what the right mouse button
+does:
 
-Remote sessions get no panel shell — Switchboard attaches to an existing remote
-tmux session but has no way to start a new remote one. The panel says so
-instead of showing a terminal.
+| Option | Behaviour |
+|---|---|
+| **Context menu** (default) | Opens Switchboard's context menu, below |
+| **Paste clipboard** | Pastes the clipboard at once |
+| **Native (xterm)** | Leaves the click to xterm.js and to the program running in the terminal |
+| **Do nothing** | Nothing |
 
-## Right-click behavior
+In every mode but **Native (xterm)**, the right-button press is kept from the
+program: a program that tracks the mouse — Claude Code's fullscreen view, for
+one — never sees it. Left and middle clicks still reach the program in every
+mode. The setting applies from the next right-click after **Save Settings**.
 
-Right-click behavior in the terminal is configurable. Open **Global Settings** and look for **Terminal Right-Click**:
+### Context menu
 
-| Setting | Behavior |
-|---------|----------|
-| **Context menu** (default) | Shows a context menu with file-link actions, copy, paste, and select all |
-| **Paste clipboard** | Right-click pastes the clipboard directly (PuTTY-style) |
-| **Native (xterm)** | Passes the click through to xterm's built-in handler |
-| **Do nothing** | Right-click has no effect |
+The first group depends on what is under the pointer:
 
-Only **Native (xterm)** lets a program that tracks the mouse — Claude Code's fullscreen view, for one — see the right button. In the other three modes the right button does what the setting says and nothing else; left and middle clicks still reach the program.
+- **A file link** — an OSC 8 `file://` hyperlink, a `file://` URL, or a
+  [path link](#clickable-paths): **Open in panel**, **Open in system editor**
+  (the operating system's default application), **Copy path**. **Open in
+  panel** from the menu opens the file at its top, without the line number.
+- **An `http://` or `https://` URL**: **Open in browser**, **Copy link**.
 
-The setting takes effect immediately on the next right-click — no restart required.
+Then, always: **Copy** (only with a selection), **Paste**, **Select all**. Esc
+or a click elsewhere closes the menu.
 
-### Context menu actions
+## Clickable paths
 
-When **Context menu** is selected, right-clicking opens a menu. The items shown depend on what the cursor is over:
+A filesystem path printed in a local session's terminal is a link. That covers
+absolute and relative paths, `~/…`, Windows `C:\…` paths, bare file names
+(`README.md`, `Makefile`), quoted paths containing spaces, and a trailing
+`:line` or `:line:column`. Trailing punctuation is not part of the path. URLs
+are left to the URL links.
 
-**Over a file link (OSC 8 `file://` hyperlink):**
-- Open in panel — open the file in the IDE side panel
-- Open in system editor — open with the OS default application
-- Copy path — copy the absolute file path to the clipboard
+A candidate becomes a link only after the main process has checked that it can
+open it: resolved against the session's working directory, it must be an
+existing regular file of at most 2 MB, with no NUL byte in its first 4 KB, and
+outside the credential paths the side panel refuses (`~/.ssh/`, `~/.gnupg/`,
+`~/.aws/credentials`, `.env` files, `.netrc`, `~/.kube/config`,
+`~/.docker/config.json`, `~/.claude/.credentials.json`, `.git-credentials`,
+`~/.config/gh/hosts.yml`, `~/.config/gcloud/`, `.npmrc`, `.pypirc`, `.pgpass`,
+`.my.cnf`). Text that fails a check is not underlined. The answer for a path is
+cached for 30 seconds.
 
-**Over a URL (`http://` or `https://`):**
-- Open in browser — open in the system browser
-- Copy link — copy the URL to the clipboard
+A plain left click opens the file in the side panel, scrolled to the line:
+in the [Changes view](changes-view.md) when it is one of the session's changed
+files, in the file viewer otherwise. OSC 8 file links and `file://` URLs open
+the same way, without a line. `file:///C:/…` URIs resolve to the Windows drive
+path.
 
-**Always present:**
-- Copy — copy the current selection (only shown when text is selected)
-- Paste — paste the clipboard
-- Select all — select all terminal output
+Remote sessions have no path links: their files are on another machine.
+
+## Copy and paste
+
+- **Copy**: select text and use **Copy** in the context menu, or `Ctrl+C` on
+  Windows and Linux (with nothing selected, `Ctrl+C` is the usual interrupt).
+  Copies go through the main process's clipboard, which works on Wayland.
+- **Programs can set the clipboard** with OSC 52 (Claude Code copies this way).
+  Read-back requests are not answered.
+- **Paste**: `Ctrl+V` on Windows and Linux, `Cmd+V` on macOS, or `Shift+Insert`.
+- **Images**: when the clipboard holds an image, the paste shortcut sends
+  `Ctrl+V` to the program, and Claude Code reads the image from the system
+  clipboard itself, as in a stand-alone terminal.
+- **Middle click** is xterm.js's and the platform's own; on Linux it pastes the
+  primary selection.
 
 ## Drag and drop
 
-Drag one or more files from your file manager (or macOS Finder) into the terminal. Switchboard inserts the shell-escaped absolute path(s) at the cursor, separated by spaces — exactly as if you had typed them.
+Dropping files from a file manager into the terminal types their absolute
+paths at the cursor, shell-escaped and separated by spaces.
 
-## In-terminal find
+## Find
 
-Press `Ctrl+F` (or `Cmd+F` on macOS) to open xterm's built-in search bar inside the terminal. This searches through the terminal scrollback buffer, not the session transcript. In the search bar, press `Enter` to jump to the next match and `Shift+Enter` for the previous one; `Esc` closes it.
+`Ctrl+F` (`Cmd+F` on macOS) opens a search bar over the terminal's scrollback,
+pre-filled with the selection. Enter goes to the next match, Shift+Enter to the
+previous one, Esc closes the bar. It searches what the terminal holds, not the
+transcript; the sidebar's [search](session-browser.md#search) covers
+transcripts.
 
 ## Multi-line input
 
-Press `Shift+Enter` to insert a literal newline in the terminal input without submitting. This lets you compose multi-line prompts before sending.
+`Shift+Enter` — and `Ctrl+Enter` on Windows and Linux — inserts a new line in
+Claude's prompt instead of submitting it.
 
-## Keyboard shortcuts
+## Panel shell
 
-The default session-navigation shortcuts (`Ctrl+Shift+Arrows`, `Ctrl+Shift+[/]`) are captured before they reach the terminal, so they never interfere with terminal editing. See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full list and how to rebind them.
+**Shell** in the terminal header opens a shell in the right-hand panel, under
+whatever the panel shows — the Changes list, a file, a diff. Both stay visible;
+drag the handle between them to share the height, which is remembered. With
+nothing open above it, the shell takes the whole panel.
 
-## Settings
+The shell starts in the session's own working directory, worktree included —
+the directory the Changes panel reads and a `claude --resume` runs in.
 
-Open **Global Settings** to change the terminal theme (`Terminal Theme`) and right-click behavior (`Terminal Right-Click`). Both are global-only settings. Shell selection (`Shell Profile`) is also global — changes take effect for new sessions only. See [Settings Reference](settings.md).
+There is one shell per session. Switching to another session leaves it running,
+and it is back, with what it printed meanwhile, when you return. **Shell** again
+closes and stops it; it also stops when the session's terminal goes away
+(relaunch, stop, quit). If the shell exits on its own, its output stays in the
+panel with a note; toggle **Shell** off and on for a new one.
+
+A panel shell is not a session: it is never listed in the sidebar, never counted
+in "N running", never restored at startup, and never
+[sandboxed](sandbox.md). Remote sessions have none — the panel says so.
+
+## Theme
+
+**Global Settings → Terminal Theme**: Switchboard (default), Ghostty, Tokyo
+Night, Catppuccin Mocha, Dracula, Nord, Solarized Dark. It applies on save.

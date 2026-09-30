@@ -26,7 +26,7 @@ const DELETE_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" vie
  * For icon buttons: flashes green. For text buttons: replaces text temporarily.
  */
 function flashButtonText(btn, text, duration = 1200) {
-  if (btn.classList.contains('fp-icon-btn')) {
+  if (btn.classList.contains('icon-btn')) {
     // Icon button — flash color instead of replacing content
     btn.style.color = '#3ecf5a';
     btn.style.borderColor = 'rgba(62,207,90,0.4)';
@@ -131,7 +131,7 @@ function createViewerToolbar(opts = {}) {
   let previewBtn = null;
   if (opts.preview) {
     previewBtn = document.createElement('button');
-    previewBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    previewBtn.className = 'icon-btn';
     previewBtn.innerHTML = PREVIEW_ICON;
     previewBtn.title = 'Toggle markdown preview';
     controlsEl.appendChild(previewBtn);
@@ -140,7 +140,7 @@ function createViewerToolbar(opts = {}) {
   let copyContentBtn = null;
   if (opts.copyContent) {
     copyContentBtn = document.createElement('button');
-    copyContentBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    copyContentBtn.className = 'icon-btn';
     copyContentBtn.innerHTML = COPY_ICON;
     copyContentBtn.title = 'Copy raw content';
     controlsEl.appendChild(copyContentBtn);
@@ -149,7 +149,7 @@ function createViewerToolbar(opts = {}) {
   let wrapBtn = null;
   if (opts.wrap) {
     wrapBtn = document.createElement('button');
-    wrapBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    wrapBtn.className = 'icon-btn';
     wrapBtn.title = 'Toggle line wrapping';
     wrapBtn.innerHTML = WRAP_ICON;
     controlsEl.appendChild(wrapBtn);
@@ -158,7 +158,7 @@ function createViewerToolbar(opts = {}) {
   let gotoLineBtn = null;
   if (opts.gotoLine) {
     gotoLineBtn = document.createElement('button');
-    gotoLineBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    gotoLineBtn.className = 'icon-btn';
     gotoLineBtn.title = 'Go to line (Cmd+G)';
     gotoLineBtn.innerHTML = GOTO_LINE_ICON;
     controlsEl.appendChild(gotoLineBtn);
@@ -167,7 +167,7 @@ function createViewerToolbar(opts = {}) {
   let formatBtn = null;
   if (opts.format) {
     formatBtn = document.createElement('button');
-    formatBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    formatBtn.className = 'icon-btn';
     formatBtn.title = 'Pretty-print JSON / JSONL';
     formatBtn.innerHTML = FORMAT_ICON;
     formatBtn.style.display = 'none'; // Shown by ViewerPanel only when content is parseable
@@ -177,7 +177,7 @@ function createViewerToolbar(opts = {}) {
   let deleteBtn = null;
   if (opts.delete) {
     deleteBtn = document.createElement('button');
-    deleteBtn.className = 'fp-toolbar-btn fp-icon-btn fp-delete-btn';
+    deleteBtn.className = 'icon-btn fp-delete-btn';
     deleteBtn.title = 'Delete file';
     deleteBtn.innerHTML = DELETE_ICON;
     controlsEl.appendChild(deleteBtn);
@@ -186,7 +186,7 @@ function createViewerToolbar(opts = {}) {
   let saveBtn = null;
   if (opts.save) {
     saveBtn = document.createElement('button');
-    saveBtn.className = 'fp-toolbar-btn fp-save-btn fp-icon-btn';
+    saveBtn.className = 'icon-btn fp-save-btn';
     saveBtn.title = 'Save changes';
     saveBtn.innerHTML = SAVE_ICON;
     controlsEl.appendChild(saveBtn);
@@ -195,7 +195,7 @@ function createViewerToolbar(opts = {}) {
   let closeBtn = null;
   if (opts.close) {
     closeBtn = document.createElement('button');
-    closeBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
+    closeBtn.className = 'icon-btn fp-close-btn';
     closeBtn.innerHTML = CLOSE_ICON;
     closeBtn.title = 'Close panel';
     controlsEl.appendChild(closeBtn);
