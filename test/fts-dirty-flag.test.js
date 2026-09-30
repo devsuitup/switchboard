@@ -221,16 +221,32 @@ test('main.js get-work-files handler uses shouldReindex("work-file", ...)', () =
   );
 });
 
-test('main.js save-memory handler calls invalidateFtsSignature("memory")', () => {
-  const smStart = mainSrc.indexOf("ipcMain.handle('save-memory'");
-  assert.ok(smStart !== -1, "save-memory handler not found in main.js");
-  const nextHandler = mainSrc.indexOf('ipcMain.handle(', smStart + 1);
-  const handlerBody = mainSrc.slice(smStart, nextHandler !== -1 ? nextHandler : smStart + 2000);
-  assert.match(
-    handlerBody,
-    /invalidateFtsSignature\s*\(\s*['"]memory['"]/,
-    "save-memory must call invalidateFtsSignature('memory') after writing"
-  );
+function panelSaveHarness() {
+  const { createPanelSaveHandlers } = require('../viewer-save-guard');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fts-save-'));
+  const invalidated = [];
+  const handlers = createPanelSaveHandlers({
+    isSensitivePath: () => false,
+    resolveAllowedMemoryPath: (p) => p,
+    invalidateFtsSignature: (kind) => invalidated.push(kind),
+  });
+  const file = (rel) => {
+    const f = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, 'old\n');
+    return f;
+  };
+  return { handlers, invalidated, file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('save-memory invalidates the "memory" signature after writing', () => {
+  const h = panelSaveHarness();
+  try {
+    const f = h.file('note.md');
+    assert.deepEqual(h.handlers.saveMemory(f, 'new\n', 'old\n'), { ok: true });
+    assert.deepEqual(h.invalidated, ['memory']);
+  } finally { h.cleanup(); }
 });
 
 test('main.js delete-work-file handler calls invalidateFtsSignature("work-file")', () => {
@@ -301,26 +317,22 @@ test('computeIndexSignature: NUL delimiter prevents collision from paths contain
 //    both tracked types (MAJOR-1 fix)
 // ---------------------------------------------------------------------------
 
-test('main.js save-file-for-panel calls invalidateFtsSignature("work-file") for .work-files/ paths', () => {
-  const sfpStart = mainSrc.indexOf("ipcMain.handle('save-file-for-panel'");
-  assert.ok(sfpStart !== -1, "save-file-for-panel handler not found in main.js");
-  const nextHandler = mainSrc.indexOf('ipcMain.handle(', sfpStart + 1);
-  const handlerBody = mainSrc.slice(sfpStart, nextHandler !== -1 ? nextHandler : sfpStart + 2000);
-  assert.match(
-    handlerBody,
-    /invalidateFtsSignature\s*\(\s*['"]work-file['"]/,
-    "save-file-for-panel must call invalidateFtsSignature('work-file') for .work-files/ paths"
-  );
+test('save-file-for-panel invalidates "work-file" for a .work-files/ path', () => {
+  const h = panelSaveHarness();
+  try {
+    const f = h.file('.work-files/notes.txt');
+    assert.deepEqual(h.handlers.saveFileForPanel(f, 'new\n', 'old\n'), { ok: true });
+    assert.deepEqual(h.invalidated, ['work-file']);
+  } finally { h.cleanup(); }
 });
 
-test('main.js save-file-for-panel calls invalidateFtsSignature("memory") for .md paths', () => {
-  const sfpStart = mainSrc.indexOf("ipcMain.handle('save-file-for-panel'");
-  assert.ok(sfpStart !== -1, "save-file-for-panel handler not found in main.js");
-  const nextHandler = mainSrc.indexOf('ipcMain.handle(', sfpStart + 1);
-  const handlerBody = mainSrc.slice(sfpStart, nextHandler !== -1 ? nextHandler : sfpStart + 2000);
-  assert.match(
-    handlerBody,
-    /invalidateFtsSignature\s*\(\s*['"]memory['"]/,
-    "save-file-for-panel must call invalidateFtsSignature('memory') for .md paths"
-  );
+test('save-file-for-panel invalidates "memory" for a .md path, and nothing when the write is refused', () => {
+  const h = panelSaveHarness();
+  try {
+    const f = h.file('doc.md');
+    assert.deepEqual(h.handlers.saveFileForPanel(f, 'new\n', 'old\n'), { ok: true });
+    assert.deepEqual(h.invalidated, ['memory']);
+    assert.equal(h.handlers.saveFileForPanel(f, 'again\n', 'old\n').reason, 'stale');
+    assert.deepEqual(h.invalidated, ['memory'], 'a refused save wrote nothing to reindex');
+  } finally { h.cleanup(); }
 });

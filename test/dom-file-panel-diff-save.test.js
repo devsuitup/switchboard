@@ -31,7 +31,7 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
     onMcpOpenDiff: (cb) => { calls.openDiff = cb; },
     saveFileForPanel: (filePath, content, expected) => {
       calls.saves.push({ filePath, content, expected });
-      return Promise.resolve(saveImpl ? saveImpl(expected, calls.saves.length) : { ok: true });
+      return Promise.resolve(saveImpl ? saveImpl(expected, calls.saves.length, content) : { ok: true });
     },
   }, {
     get(target, prop) {
@@ -92,22 +92,6 @@ test('the diff tab saves against the content it was opened with', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('a stale refusal asks, and overwrites only on yes', async () => {
-  const stale = (expected) => (expected === null ? { ok: true } : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
-  const no = setup({ saveImpl: stale, confirmAnswer: false });
-  try {
-    await openDiffAndSave(no);
-    assert.equal(no.calls.confirms.length, 1);
-    assert.equal(no.calls.saves.length, 1, 'a refused confirm writes nothing');
-  } finally { no.destroy(); }
-
-  const yes = setup({ saveImpl: stale, confirmAnswer: true });
-  try {
-    await openDiffAndSave(yes);
-    assert.equal(yes.calls.saves.length, 2);
-    assert.equal(yes.calls.saves[1].expected, null);
-  } finally { yes.destroy(); }
-});
 
 test('any other refusal is reported', async () => {
   const ctx = setup({ saveImpl: () => ({ ok: false, error: 'File does not exist' }) });
@@ -117,14 +101,6 @@ test('any other refusal is reported', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('a declined overwrite is not followed by a "Save failed" alert', async () => {
-  const ctx = setup({ saveImpl: () => ({ ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' }), confirmAnswer: false });
-  try {
-    await openDiffAndSave(ctx);
-    assert.equal(ctx.calls.confirms.length, 1);
-    assert.deepEqual(ctx.calls.alerts, []);
-  } finally { ctx.destroy(); }
-});
 
 test('two quick Save clicks do not raise a false "changed on disk" confirm', async () => {
   const finishers = [];
@@ -239,5 +215,55 @@ test('a diff opened after an answered one has its Save enabled again', async () 
     await flush();
     assert.equal(ctx.calls.saves.length, 1);
     assert.equal(ctx.calls.saves[0].filePath, '/repo/b.js');
+  } finally { ctx.destroy(); }
+});
+
+// What main does, over one file: write only over the agreed content.
+function fakeDisk(initial) {
+  const disk = { text: initial };
+  disk.save = (expected, _n, content) => {
+    if (typeof expected !== 'string') return { ok: false, reason: 'invalid-expected', error: 'missing expected content' };
+    if (expected !== disk.text) return { ok: false, reason: 'stale', error: 'stale', disk: disk.text };
+    disk.text = content;
+    return { ok: true };
+  };
+  return disk;
+}
+
+test('a stale refusal asks; on yes the retry carries the disk the user agreed to, on no nothing is written', async () => {
+  const noDisk = fakeDisk('session\n');
+  const no = setup({ saveImpl: noDisk.save, confirmAnswer: false });
+  try {
+    await openDiffAndSave(no);
+    assert.equal(no.calls.confirms.length, 1);
+    assert.equal(no.calls.saves.length, 1, 'a refused confirm writes nothing');
+    assert.equal(noDisk.text, 'session\n');
+    assert.deepEqual(no.calls.alerts, [], 'a declined overwrite is not followed by a "Save failed" alert');
+  } finally { no.destroy(); }
+
+  const yesDisk = fakeDisk('session\n');
+  const yes = setup({ saveImpl: yesDisk.save, confirmAnswer: true });
+  try {
+    await openDiffAndSave(yes);
+    assert.deepEqual(yes.calls.saves.map((x) => x.expected), ['old\n', 'session\n']);
+    assert.equal(yesDisk.text, 'proposed\n');
+  } finally { yes.destroy(); }
+});
+
+test('the diff tab asks again when the disk moves during its confirm, and never writes blind', async () => {
+  const disk = fakeDisk('session\n');
+  const ctx = setup({ saveImpl: disk.save });
+  let asked = 0;
+  ctx.window.confirm = (msg) => {
+    ctx.calls.confirms.push(msg);
+    asked += 1;
+    if (asked === 1) { disk.text = 'second session write\n'; return true; }
+    return false;
+  };
+  try {
+    await openDiffAndSave(ctx);
+    assert.equal(ctx.calls.confirms.length, 2);
+    assert.equal(disk.text, 'second session write\n');
+    assert.ok(ctx.calls.saves.every((x) => typeof x.expected === 'string'), 'never an expected of null');
   } finally { ctx.destroy(); }
 });

@@ -9,7 +9,7 @@
 | `public/viewer-panel.js` | ~415 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
 | `public/viewer-toolbar.js` | ~265 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. |
 | `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
-| `viewer-save-guard.js` | ~25 | Main-side `refuseIfMoved` used by `save-memory` and `save-file-for-panel` — "Saving over a file that moved". |
+| `viewer-save-guard.js` | ~80 | Main-side `createPanelSaveHandlers`, the `save-memory` and `save-file-for-panel` handlers, and `refuseIfMoved` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -21,7 +21,7 @@ const panel = new ViewerPanel(container, {
   language: 'markdown' | 'auto',  // editor mode
   storageKey: string,     // localStorage key for preview-mode persistence
   format: bool,           // show JSON/JSONL prettify button (auto-hidden for non-json files)
-  onSave: async (filePath, content, expected) => result,  // shows Save button; see "Saving over a file that moved"
+  onSave: async (filePath, content, expected) => result,  // shows Save button; expected is required, see "Saving over a file that moved"
   onDelete: async (filePath) => result,         // shows Delete button (with window.confirm)
   onClose: () => void,    // shows Close button
 });
@@ -58,45 +58,69 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 - **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
 - **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Three sinks share this rule: `viewer-panel.js:397`, `viewer-toolbar.js:47`, and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
 
-## A dirty buffer is never replaced
-
-The panel keeps `_diskContent`: the file's content as last read from disk (set by `open()`, by a successful save, and by every re-read). The buffer is **dirty** when the editor's document differs from it. Both sides are compared with line endings folded to `\n` (`asEditorText`, mirrored main-side in `viewer-save-guard.js`), because CodeMirror splits on `\r\n` and `\r` and hands its document back joined with `\n` — without that, every CRLF file would count as dirty from the moment it opens.
-
-Every `file-changed` event re-reads the file; none is dropped, including one that arrives during or just after a save. What happens depends on the answer:
-
-| On disk | Buffer | Result |
-|---|---|---|
-| Same as the save in flight (`_pendingSave`) | any | Our own write's echo: the baseline moves, nothing else. |
-| Same as `_diskContent` | any | Nothing (a `touch`, a same-content write). A stale "gone" or "cannot be read" notice is cleared. |
-| Same as the buffer | any | Baseline moves; notice cleared. |
-| Changed | clean | Buffer replaced quietly (and the preview re-rendered). |
-| Changed | dirty | Buffer untouched. The notice says the file changed on disk and offers **Reload** and **Keep my edits** — unless it already says a save was refused as stale, which it keeps, with its **Overwrite**. |
-| Missing (`ENOENT`) | any | Buffer untouched. The notice says the file no longer exists, and that the edits are kept when there are any. |
-| Unreadable | any | Buffer untouched. The notice says the file can no longer be read, with the reason. |
-
-This is the Changes panel's rule ("A dirty buffer is never overwritten, and never lied to", `.ai/contexts/changes-view.md`) applied to the viewer: the same notice line under the header, the same `changes-error` colour, the same wording where the situation is the same, and **Reload** asks the same `window.confirm('This file has unsaved edits. Discard them?')` before discarding anything. **Keep my edits** only hides the notice; the baseline has already moved to the new disk content, so the buffer stays dirty, the next external change raises the notice again, and a save writes the kept edits over the change the notice named.
-
-`read-file-for-panel` returns the error's `code` beside its message, which is how the renderer tells a deleted file (`ENOENT`) from any other refusal.
-
-A re-read or a save that resolves after `open()` has moved to another file is dropped (the `_openGen` token), so an answer for the previous file never lands in the current buffer.
-
 ## Saving over a file that moved
 
-A save sends the disk baseline with the content: `onSave(filePath, content, expected)`, where `expected` is `_diskContent`. Both handlers behind it, `save-memory` and `save-file-for-panel`, call `refuseIfMoved` (`viewer-save-guard.js`) right before writing: when the file on disk, with its line endings folded, is no longer `expected`, the write is refused with `reason: 'stale'`. This covers every write the panel has not re-read yet — one that landed between the last `file-changed` and the click, or while the debounce was still pending.
+**One rule, enforced by main: every save carries, as `expected`, the exact disk content the user agreed to replace, and main refuses anything else.** The renderer's job is to know what the user agreed to; main's compare is what keeps a write the user did not agree to from being replaced. No path in the viewer or the MCP diff tab sends a save without `expected`, and main refuses one that does.
 
-This is the Changes panel's version token (`git-changes-file.js`) with the baseline text as the token. The viewer's callers open it with content they read themselves (`readMemory`, `readFileForPanel`) and no token beside it; comparing against the text the panel actually holds as its baseline needs no second read that could race the first.
+### Main
 
-A write the panel has reported but the user has not agreed to overwrite is recorded in `_unagreedWrite`, apart from the notice that is showing. It is set whenever the notice becomes "changed on disk" or "not saved", and cleared only by **Keep my edits**, **Reload**, a save that succeeded without a re-read moving the baseline meanwhile, a re-read that finds the disk equal to the buffer or reloads a clean buffer, and `open()`. The displayed notice is not the record, because another notice can replace it: a transient "cannot be read", or a delete followed by an identical recreate ("no longer exists"), and the re-read that clears those. While a reported write is unagreed, clearing such a notice shows "changed on disk" again rather than nothing.
+`save-file-for-panel` and `save-memory` are `createPanelSaveHandlers` in `viewer-save-guard.js`, registered by `main.js` with its path policies injected (`isSensitivePath`, `resolveAllowedMemoryPath`, `invalidateFtsSignature`). Each validates the path, then `writeIfUnmoved`, which runs `refuseIfMoved`:
 
-While a write is unagreed, a plain save (Save, Ctrl+S) asks the same `confirm('Overwrite the file on disk with your edits?')` as **Overwrite**, and a declined confirm writes nothing and keeps the notice. The re-read that raised the notice has already moved the baseline to the other write, so without the confirm the save would pass main's check and replace a write the user was told about but did not agree to overwrite. **Keep my edits** is that agreement, and so is a confirmed save that succeeded; a confirmed save that failed overwrote nothing, and the next one asks again. **Overwrite** asks its own confirm once and skips this one. A confirmed plain save still sends the baseline, so a further write nobody has read yet is still refused.
+- `expected` not a string → refused, `reason: 'invalid-expected'`. There is no blind write.
+- The file on disk, line endings folded to `\n`, differs from `expected` → refused, `reason: 'stale'`, with **`disk`: the text it compared**, folded the same way.
+- Otherwise the content is written and the FTS signature invalidated.
 
-On a stale refusal the buffer is kept and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** (the same confirm as above) and **Overwrite**, which asks `window.confirm('Overwrite the file on disk with your edits?')` and saves with `expected: null` — the one save that skips the check. Any other refusal, and a save whose IPC rejects, shows `Save failed: <reason>`.
+The compare and the write are not atomic: a write landing between the read and `writeFileSync` is still replaced, the same window the Changes panel's version token has.
 
-One save is in flight at a time (`_pendingSave`). A save requested while one is pending is **queued**, and sent once the first returns ok, against the baseline that save left — sending it at once would carry the baseline from before the first save and be refused as stale although nothing else wrote the file. A queued save is dropped when the first one fails, and when a re-read moved the baseline during the first save: that re-read is a write someone else made, the notice has just reported it, and sending the queued save would pass main's check against it and overwrite it. In both cases the notice says why.
+### The agreed base
 
-The save state belongs to the file: `open()` resets `_pendingSave` and the queue, so a save of the newly opened file goes out on its own instead of waiting behind the previous file's, and the previous file's save, when it resolves, touches neither. The save's own success sets the baseline only if no re-read moved it meanwhile (`_diskGen`), so a later external write read back during the save is not hidden by the save resolving. A re-read that finds the baseline unchanged does not count as moving it.
+`ViewerPanel` keeps `_agreedBase`, sent as `expected`, and `_lastSeenDisk`, the disk as last read. Both are held with line endings folded (`asEditorText`), because CodeMirror splits on `\r\n` and `\r` and hands its document back joined with `\n`.
 
-The MCP diff tab's save in `file-panel.js` (`handleDiffSave`) uses the same check: its baseline is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened, and moves to what it wrote after each save. A stale refusal asks `confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')` and overwrites only on yes; a declined confirm is the end of it. Any other refusal, or a rejected IPC, is reported with `window.alert`, the same channel `ViewerPanel`'s Delete uses. One save per tab is in flight (`tab.saving`); a click during it is queued the way the viewer queues a save, and dropped if the first save fails, so two quick clicks never send the pre-save baseline twice. A queued click is also dropped once the tab has lost its editor — every path that replaces or closes the tab destroys it. Once the diff is answered (Accept or Reject, `tab.resolved`) the session writes the file itself and the baseline no longer describes the disk, so Save is refused and the button is disabled, with a title saying why, until the session closes the tab. The button is shared by every diff tab, so its state is set on each render of a diff tab as well as on Accept/Reject: a diff opened after an answered one has Save enabled again.
+`_agreedBase` moves only when the user has nothing to lose or has agreed:
+
+| Event | `_agreedBase` becomes |
+|---|---|
+| `open()` | the content opened |
+| a re-read while the buffer is clean (then reloaded) | the new disk |
+| a re-read that finds the disk equal to the buffer | the new disk |
+| a save that succeeded | what was written |
+| **Keep my edits** | `_lastSeenDisk`, the disk the notice described |
+| **Reload** | the disk re-read |
+| a confirm after a stale refusal | the `disk` main returned |
+
+A re-read while the buffer is **dirty never moves it**; it only updates `_lastSeenDisk` and raises the notice. The buffer is clean when it equals `_agreedBase` or the disk last seen before this read.
+
+### A stale refusal
+
+Main returns the disk text it compared. The panel asks `confirm('Overwrite the file on disk with your edits?')`:
+- On yes, that text becomes `_agreedBase` and the save is retried with it. If the retry is refused too, the disk moved while the confirm was open: the panel asks again with the new text, and never writes without a compare.
+- On no, nothing is written and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** and **Overwrite**. **Overwrite** is a plain save that goes through the same check and confirm.
+
+A plain save while the "changed on disk" notice is up is refused the same way, because the dirty re-read did not move the base, and asks the same confirm. **Keep my edits** is the agreement given ahead of time: the next save carries the disk the notice described and goes out without asking, and a further write nobody has read is still refused.
+
+The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')`; a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `window.alert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
+
+### What the rest is for
+
+Everything below is presentation; none of it carries the rule.
+
+- **Re-reads.** Every `file-changed` event re-reads the file.
+
+  | On disk | Result |
+  |---|---|
+  | the save in flight (`_pendingSave`) | our own echo: nothing |
+  | equal to the buffer | base moves, notice cleared |
+  | equal to `_agreedBase` | a "gone", "cannot be read" or "changed" notice is cleared (a `touch`, an undone write, an identical recreate) |
+  | changed, buffer clean | reloaded quietly |
+  | changed, buffer dirty | buffer untouched; "This file changed on disk since you opened it…" with **Reload** and **Keep my edits** — unless the notice already says a save was not saved, which it keeps with its **Overwrite** |
+  | missing (`ENOENT`) | buffer untouched; "This file no longer exists on disk", and that the edits are kept when there are any |
+  | unreadable | buffer untouched; the reason |
+
+  **Reload** asks `window.confirm('This file has unsaved edits. Discard them?')` when the buffer is dirty, as the Changes panel does. `read-file-for-panel` returns the error's `code`, which is how the renderer tells `ENOENT` apart. A re-read that resolves after `open()` has moved to another file is dropped (`_openGen`).
+- **Notice after a save.** A successful save clears the notice unless a re-read raised "changed on disk" while it was in flight (`_noticeSeq`); the base has moved to what was written, so the next save against that later write is refused and asks.
+- **The queue.** One save is in flight at a time (`_pendingSave`). A save requested meanwhile is queued, and sent once the first returns ok, carrying the base that save left; if the session wrote in between, main refuses it and the panel asks. It is dropped if the first save fails. `open()` resets the pending save and the queue, so a save of the newly opened file goes out on its own, and the previous file's save touches neither when it resolves. The MCP diff tab queues a click during a save the same way (`tab.saving`), and drops it once the tab has lost its editor.
+- **An answered diff.** Once a diff is answered (Accept or Reject, `tab.resolved`), the session writes the file itself and the base no longer describes the disk. Save is refused, and the shared diff Save button is disabled with a title saying why, until the session closes the tab. The button's state is set on each render of a diff tab, so a diff opened after an answered one has Save enabled again.
+- **Other failures.** A save refused for any other reason, or whose IPC rejects, shows `Save failed: <reason>` in the notice.
 
 ## Watching the file
 

@@ -41,7 +41,7 @@ function loadCodeMirrorBundle() {
 
 window.loadCodeMirrorBundle = loadCodeMirrorBundle;
 
-// see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
 function asEditorText(text) {
   return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
 }
@@ -69,10 +69,10 @@ class ViewerPanel {
     this._watchedPath = null;
     this._pendingSave = null;
     this._saveQueued = false;
-    this._diskContent = null;
-    this._diskGen = 0;
+    this._agreedBase = null;
+    this._lastSeenDisk = null;
     this._noticeState = null;
-    this._unagreedWrite = false;
+    this._noticeSeq = 0;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -121,7 +121,7 @@ class ViewerPanel {
     }
   }
 
-  // see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   _buildNotice() {
     this.noticeEl = document.createElement('div');
     this.noticeEl.className = 'viewer-panel-notice';
@@ -143,7 +143,7 @@ class ViewerPanel {
     this.noticeKeepBtn.textContent = 'Keep my edits';
     this.noticeKeepBtn.title = 'Keep your edits in the editor; saving writes them over the file';
     this.noticeKeepBtn.addEventListener('click', () => {
-      this._unagreedWrite = false;
+      this._agreedBase = this._lastSeenDisk;
       this._setNotice(null);
     });
     this.noticeEl.appendChild(this.noticeKeepBtn);
@@ -152,11 +152,7 @@ class ViewerPanel {
     this.noticeOverwriteBtn.className = 'fp-toolbar-btn viewer-panel-notice-overwrite';
     this.noticeOverwriteBtn.textContent = 'Overwrite';
     this.noticeOverwriteBtn.title = 'Write your edits over the file on disk';
-    this.noticeOverwriteBtn.addEventListener('click', () => {
-      if (typeof window.confirm === 'function'
-        && !window.confirm('Overwrite the file on disk with your edits?')) return;
-      this._save({ overwrite: true });
-    });
+    this.noticeOverwriteBtn.addEventListener('click', () => this._save());
     this.noticeEl.appendChild(this.noticeOverwriteBtn);
 
     this.container.insertBefore(this.noticeEl, this.toolbar.el.nextSibling);
@@ -164,7 +160,6 @@ class ViewerPanel {
 
   _setNotice(state, detail) {
     this._noticeState = state;
-    if (state === 'changed' || state === 'stale') this._unagreedWrite = true;
     let text = '';
     if (state === 'changed') {
       text = 'This file changed on disk since you opened it. Reload to discard your unsaved edits, or keep them and save over the file.';
@@ -187,9 +182,10 @@ class ViewerPanel {
     this.noticeOverwriteBtn.style.display = state === 'stale' ? '' : 'none';
   }
 
-  _isDirty() {
-    if (!this.editorView || this._diskContent === null) return false;
-    return this.getContent() !== this._diskContent;
+  _isDirty(seenDisk = this._lastSeenDisk) {
+    if (!this.editorView || this._agreedBase === null) return false;
+    const buffer = this.getContent();
+    return buffer !== this._agreedBase && buffer !== seenDisk;
   }
 
   _wireEvents() {
@@ -296,10 +292,10 @@ class ViewerPanel {
    */
   open(title, filePath, content) {
     this._unwatchFile();
-    this._diskContent = asEditorText(content);
+    this._agreedBase = asEditorText(content);
+    this._lastSeenDisk = this._agreedBase;
     this._pendingSave = null;
     this._saveQueued = false;
-    this._unagreedWrite = false;
     this._setNotice(null);
 
     this.filePath = filePath;
@@ -433,30 +429,32 @@ class ViewerPanel {
   }
 
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
-  async _save({ overwrite = false } = {}) {
+  async _save() {
     if (!this.opts.onSave || !this.filePath) return;
     if (this._pendingSave !== null) {
       this._saveQueued = true;
       return;
     }
-    if (!overwrite && this._unagreedWrite) {
-      if (typeof window.confirm === 'function'
-        && !window.confirm('Overwrite the file on disk with your edits?')) return;
-    }
     const content = this.getContent();
-    const expected = overwrite ? null : this._diskContent;
     const myGen = this._openGen;
-    const diskGen = this._diskGen;
+    const noticeSeq = this._noticeSeq;
     this._pendingSave = asEditorText(content);
     let saved = false;
     try {
-      const result = await this.opts.onSave(this.filePath, content, expected);
+      let result = await this.opts.onSave(this.filePath, content, this._agreedBase);
+      while (this._openGen === myGen && result && result.reason === 'stale' && typeof result.disk === 'string') {
+        this._lastSeenDisk = asEditorText(result.disk);
+        if (typeof window.confirm !== 'function'
+          || !window.confirm('Overwrite the file on disk with your edits?')) break;
+        this._agreedBase = this._lastSeenDisk;
+        result = await this.opts.onSave(this.filePath, content, this._agreedBase);
+      }
       if (this._openGen !== myGen) return;
       if (result && result.ok !== false) {
         saved = true;
-        if (this._diskGen === diskGen) {
-          this._diskContent = asEditorText(content);
-          this._unagreedWrite = false;
+        this._agreedBase = asEditorText(content);
+        if (this._noticeSeq === noticeSeq) {
+          this._lastSeenDisk = this._agreedBase;
           this._setNotice(null);
         }
         this.toolbar.flashSave();
@@ -472,7 +470,7 @@ class ViewerPanel {
         this._pendingSave = null;
         const queued = this._saveQueued;
         this._saveQueued = false;
-        if (queued && saved && this._diskGen === diskGen) this._save();
+        if (queued && saved) this._save();
       }
     }
   }
@@ -517,7 +515,7 @@ class ViewerPanel {
     }
   }
 
-  // see .ai/contexts/viewer-panel.md ("A dirty buffer is never replaced")
+  // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _reloadFromDisk() {
     if (!this.filePath || !window.api.readFileForPanel || !this.editorView) return;
     const myGen = this._openGen;
@@ -531,32 +529,27 @@ class ViewerPanel {
     }
 
     const newContent = asEditorText(result.content);
-    if (this._pendingSave !== null && newContent === this._pendingSave) {
-      this._diskContent = newContent;
-      return;
-    }
-    const wasDirty = this._isDirty();
-    const diskMoved = newContent !== this._diskContent;
-    this._setDiskContent(newContent);
+    const previouslySeen = this._lastSeenDisk;
+    this._lastSeenDisk = newContent;
+    if (this._pendingSave !== null && newContent === this._pendingSave) return;
 
     if (newContent === this.getContent()) {
-      this._unagreedWrite = false;
+      this._agreedBase = newContent;
       this._setNotice(null);
       return;
     }
-    if (!diskMoved) {
-      if (this._noticeState === 'gone' || this._noticeState === 'unreadable') {
-        this._setNotice(this._unagreedWrite ? 'changed' : null);
-      }
+    if (newContent === this._agreedBase) {
+      if (['gone', 'unreadable', 'changed'].includes(this._noticeState)) this._setNotice(null);
       return;
     }
-    if (wasDirty) {
-      if (this._noticeState !== 'stale') this._setNotice('changed');
+    if (!this._isDirty(previouslySeen)) {
+      this._agreedBase = newContent;
+      this._replaceContent(newContent);
+      this._setNotice(null);
       return;
     }
-    this._replaceContent(newContent);
-    this._unagreedWrite = false;
-    this._setNotice(null);
+    if (this._noticeState !== 'stale') this._setNotice('changed');
+    this._noticeSeq += 1;
   }
 
   async _reloadDiscardingEdits() {
@@ -571,16 +564,10 @@ class ViewerPanel {
       else this._setNotice('unreadable', result.error || 'unknown error');
       return;
     }
-    this._setDiskContent(asEditorText(result.content));
-    this._replaceContent(this._diskContent);
-    this._unagreedWrite = false;
+    this._agreedBase = asEditorText(result.content);
+    this._lastSeenDisk = this._agreedBase;
+    this._replaceContent(this._agreedBase);
     this._setNotice(null);
-  }
-
-  _setDiskContent(text) {
-    if (text === this._diskContent) return;
-    this._diskContent = text;
-    this._diskGen += 1;
   }
 
   _replaceContent(newContent) {

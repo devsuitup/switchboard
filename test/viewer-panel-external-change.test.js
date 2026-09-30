@@ -33,6 +33,16 @@ function fakeEditor() {
   return view;
 }
 
+// What main does: write only over the content the save says it agreed to replace.
+function mainSave(state, content, expected) {
+  const onDisk = state.disk === null ? null : state.disk.replace(/\r\n?/g, '\n');
+  if (onDisk === null) return { ok: false, error: 'file does not exist' };
+  if (typeof expected !== 'string') return { ok: false, reason: 'invalid-expected', error: 'missing expected content' };
+  if (onDisk !== expected) return { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened', disk: onDisk };
+  state.disk = content;
+  return { ok: true };
+}
+
 function setup({ disk }) {
   const dom = new JSDOM('<!DOCTYPE html><html><head></head><body><div id="c"></div></body></html>', {
     url: 'http://localhost/',
@@ -73,8 +83,7 @@ function setup({ disk }) {
     onSave: async (filePath, content, expected) => {
       state.saves.push({ filePath, content, expected });
       if (state.saveImpl) return state.saveImpl(filePath, content, expected);
-      state.disk = content;
-      return { ok: true };
+      return mainSave(state, content, expected);
     },
   });
 
@@ -261,36 +270,6 @@ test('a save sends the disk baseline, so main can refuse a stale write', async (
   } finally { t.destroy(); }
 });
 
-test('a stale refusal keeps the edits and offers Reload and Overwrite; Overwrite saves without a baseline', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    t.state.saveImpl = (fp, content, expected) => (expected === null
-      ? (t.state.disk = content, { ok: true })
-      : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
-    await t.panel._save();
-    assert.equal(t.panel.getContent(), 'one\nmine');
-    assert.equal(visible(t.notice()), true);
-    assert.match(noticeText(t), /changed on disk since you opened it — your edits were not saved/);
-    assert.equal(visible(button(t, 'reload')), true);
-    assert.equal(visible(button(t, 'overwrite')), true);
-    assert.equal(visible(button(t, 'keep')), false);
-
-    t.state.confirmAnswer = false;
-    button(t, 'overwrite').click();
-    await tick();
-    assert.equal(t.state.saves.length, 1, 'a refused confirm writes nothing');
-
-    t.state.confirmAnswer = true;
-    button(t, 'overwrite').click();
-    await tick();
-    assert.equal(t.state.saves.length, 2);
-    assert.equal(t.state.saves[1].expected, null);
-    assert.equal(t.state.confirms.at(-1), 'Overwrite the file on disk with your edits?');
-    assert.equal(visible(t.notice()), false);
-  } finally { t.destroy(); }
-});
 
 test('a failed save says so in the notice', async () => {
   const t = setup({ disk: 'one\n' });
@@ -439,22 +418,6 @@ test('a watch acknowledged after the panel moved on is released, not leaked', as
   } finally { t.destroy(); }
 });
 
-test('an external write read back while our save is in flight is not hidden by the save resolving', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    let finishSave;
-    t.state.saveImpl = () => new Promise((resolve) => { finishSave = () => resolve({ ok: true }); });
-    const saving = t.panel._save();
-    await t.externalWrite('the session wrote after us\n');
-    assert.match(noticeText(t), /changed on disk/);
-    finishSave();
-    await saving;
-    assert.equal(visible(t.notice()), true, 'the notice about the later write stays');
-    assert.equal(t.panel._isDirty(), true, 'the baseline is the later write, not our save');
-  } finally { t.destroy(); }
-});
 
 function pendingSaves(t) {
   const finishers = [];
@@ -464,25 +427,6 @@ function pendingSaves(t) {
   return finishers;
 }
 
-test('a queued save is dropped when the session wrote the file during the first save', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('A');
-    const finish = pendingSaves(t);
-    const first = t.panel._save();
-    t.editor().type('B');
-    t.panel._save();
-    await tick();
-    await t.externalWrite('session\n');
-    assert.match(noticeText(t), /changed on disk/);
-    finish[0]();
-    await first;
-    await tick();
-    assert.equal(t.state.saves.length, 1, 'the queued save must not overwrite the reported write');
-    assert.match(noticeText(t), /changed on disk/, 'the notice stays');
-  } finally { t.destroy(); }
-});
 
 test('a queued save is dropped when the first save fails', async () => {
   const t = setup({ disk: 'one\n' });
@@ -564,48 +508,7 @@ test('a panel destroyed before its watch is acknowledged gives the watch back', 
   } finally { t.destroy(); }
 });
 
-test('while the "changed on disk" notice is up, a plain save asks before writing over the session', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    await t.externalWrite('session\n');
-    assert.match(noticeText(t), /changed on disk/);
 
-    t.state.confirmAnswer = false;
-    await t.panel._save();
-    assert.deepEqual(t.state.confirms, ['Overwrite the file on disk with your edits?']);
-    assert.equal(t.state.saves.length, 0, 'a declined confirm writes nothing');
-    assert.match(noticeText(t), /changed on disk/, 'and keeps the notice');
-
-    t.state.confirmAnswer = true;
-    await t.panel._save();
-    assert.equal(t.state.saves.length, 1);
-    assert.equal(t.state.saves[0].expected, 'session\n', 'still checked, against the write the notice named');
-    assert.equal(visible(t.notice()), false);
-  } finally { t.destroy(); }
-});
-
-test('while the "not saved" notice is up, a plain save asks too, even after the re-read moved the baseline', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    t.state.disk = 'session\n';
-    t.state.saveImpl = (fp, content, expected) => (expected === t.state.disk
-      ? (t.state.disk = content, { ok: true })
-      : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
-    await t.panel._save();
-    t.state.fileChanged(FILE);
-    await tick();
-    assert.match(noticeText(t), /your edits were not saved/);
-
-    t.state.confirmAnswer = false;
-    await t.panel._save();
-    assert.equal(t.state.saves.length, 1, 'no second write without the confirm');
-    assert.equal(t.state.disk, 'session\n');
-  } finally { t.destroy(); }
-});
 
 test("a save queued on the previous file does not re-send the new file's first save", async () => {
   const t = setup({ disk: 'one\n' });
@@ -634,44 +537,7 @@ async function fire(t) {
   await tick();
 }
 
-test('an unagreed write still needs the confirm after an "unreadable" notice came and went', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    await t.externalWrite('session\n');
-    t.state.readImpl = () => ({ ok: false, error: 'EACCES: permission denied', code: 'EACCES' });
-    await fire(t);
-    assert.match(noticeText(t), /can no longer be read/);
-    t.state.readImpl = null;
-    await fire(t);
-    assert.match(noticeText(t), /changed on disk/, 'the notice about the session write comes back');
 
-    t.state.confirmAnswer = false;
-    await t.panel._save();
-    assert.deepEqual(t.state.confirms, ['Overwrite the file on disk with your edits?']);
-    assert.equal(t.state.saves.length, 0);
-    assert.equal(t.state.disk, 'session\n');
-  } finally { t.destroy(); }
-});
-
-test('an unagreed write still needs the confirm after the file was deleted and recreated identically', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    await t.externalWrite('session\n');
-    await t.externalWrite(null);
-    assert.match(noticeText(t), /no longer exists/);
-    await t.externalWrite('session\n');
-    assert.match(noticeText(t), /changed on disk/);
-
-    t.state.confirmAnswer = false;
-    await t.panel._save();
-    assert.deepEqual(t.state.confirms, ['Overwrite the file on disk with your edits?']);
-    assert.equal(t.state.saves.length, 0);
-  } finally { t.destroy(); }
-});
 
 test('after Keep my edits, a save goes out without asking', async () => {
   const t = setup({ disk: 'one\n' });
@@ -687,24 +553,6 @@ test('after Keep my edits, a save goes out without asking', async () => {
   } finally { t.destroy(); }
 });
 
-test('Overwrite asks its confirm exactly once', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await t.open('one\n');
-    t.editor().type('mine');
-    t.state.disk = 'session\n';
-    t.state.saveImpl = (fp, content, expected) => (expected === null
-      ? (t.state.disk = content, { ok: true })
-      : { ok: false, reason: 'stale', error: 'stale' });
-    await t.panel._save();
-    assert.match(noticeText(t), /your edits were not saved/);
-    button(t, 'overwrite').click();
-    await tick();
-    assert.deepEqual(t.state.confirms, ['Overwrite the file on disk with your edits?']);
-    assert.equal(t.state.saves.length, 2);
-    assert.equal(t.state.saves[1].expected, null);
-  } finally { t.destroy(); }
-});
 
 async function unagreed(t) {
   await t.open('one\n');
@@ -713,18 +561,6 @@ async function unagreed(t) {
   assert.match(noticeText(t), /changed on disk/);
 }
 
-test('after a confirmed save, the next save goes out without asking', async () => {
-  const t = setup({ disk: 'one\n' });
-  try {
-    await unagreed(t);
-    await t.panel._save();
-    assert.equal(t.state.confirms.length, 1);
-    t.editor().type('!');
-    await t.panel._save();
-    assert.equal(t.state.confirms.length, 1, 'agreed once, not asked again');
-    assert.equal(t.state.saves.length, 2);
-  } finally { t.destroy(); }
-});
 
 test('after Reload, a save goes out without asking', async () => {
   const t = setup({ disk: 'one\n' });
@@ -765,26 +601,197 @@ test('once a clean buffer has been reloaded quietly, a save goes out without ask
   } finally { t.destroy(); }
 });
 
-test('a newly opened file does not inherit the previous file\'s unagreed write', async () => {
+
+
+const OVERWRITE = 'Overwrite the file on disk with your edits?';
+
+test('a dirty re-read does not move the baseline: a plain save is refused by main, then confirmed, then written with the agreed text', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    t.state.confirmAnswer = true;
+    await t.panel._save();
+    assert.deepEqual(t.state.saves.map((x) => x.expected), ['one\n', 'session\n'],
+      'the first save carries the base the user agreed to, the retry the disk they then agreed to');
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+    assert.equal(t.state.disk, 'one\nmine');
+    assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+test('a declined confirm writes nothing and says the edits were not saved', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.equal(t.state.disk, 'session\n');
+    assert.match(noticeText(t), /your edits were not saved/);
+    assert.equal(visible(button(t, 'overwrite')), true);
+    assert.equal(visible(button(t, 'reload')), true);
+  } finally { t.destroy(); }
+});
+
+test('Overwrite while the disk moves during its confirm asks again and never writes blind', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    let asked = 0;
+    t.window.confirm = (msg) => {
+      t.state.confirms.push(msg);
+      asked += 1;
+      if (asked === 1) { t.state.disk = 'second session write\n'; return true; }
+      return false;
+    };
+    await t.panel._save();
+    assert.equal(t.state.confirms.length, 2, 'asked again once the retry was refused');
+    assert.equal(t.state.disk, 'second session write\n', 'the write that landed during the confirm survives');
+    assert.ok(t.state.saves.every((x) => typeof x.expected === 'string'), 'never an expected of null');
+    assert.match(noticeText(t), /your edits were not saved/);
+  } finally { t.destroy(); }
+});
+
+test('the Overwrite button saves through the same check, and asks exactly once', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.equal(t.state.confirms.length, 1);
+    t.state.confirmAnswer = true;
+    button(t, 'overwrite').click();
+    await tick();
+    await tick();
+    assert.equal(t.state.confirms.length, 2, 'one confirm for the Overwrite');
+    assert.equal(t.state.disk, 'one\nmine');
+    assert.equal(t.state.saves.at(-1).expected, 'session\n');
+  } finally { t.destroy(); }
+});
+
+test('after an agreed save, the next save goes out without asking', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    await t.panel._save();
+    t.editor().type('!');
+    await t.panel._save();
+    assert.equal(t.state.confirms.length, 1);
+    assert.equal(t.state.disk, 'one\nmine!');
+  } finally { t.destroy(); }
+});
+
+test('an unagreed write stays protected after an "unreadable" notice came and went', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    t.state.readImpl = () => ({ ok: false, error: 'EACCES: permission denied', code: 'EACCES' });
+    await fire(t);
+    assert.match(noticeText(t), /can no longer be read/);
+    t.state.readImpl = null;
+    await fire(t);
+    assert.match(noticeText(t), /changed on disk/);
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+    assert.equal(t.state.disk, 'session\n');
+  } finally { t.destroy(); }
+});
+
+test('an unagreed write stays protected after the file was deleted and recreated identically', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await unagreed(t);
+    await t.externalWrite(null);
+    assert.match(noticeText(t), /no longer exists/);
+    await t.externalWrite('session\n');
+    assert.match(noticeText(t), /changed on disk/);
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+    assert.equal(t.state.disk, 'session\n');
+  } finally { t.destroy(); }
+});
+
+test('a queued save after a session write during the first save is refused by main and asks', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('A');
+    const finish = [];
+    t.state.saveImpl = (fp, content, expected) => {
+      const outcome = mainSave(t.state, content, expected);
+      return new Promise((resolve) => finish.push(() => resolve(outcome)));
+    };
+    const first = t.panel._save();
+    t.editor().type('B');
+    t.panel._save();
+    await tick();
+    await t.externalWrite('session\n');
+    assert.match(noticeText(t), /changed on disk/);
+    t.state.confirmAnswer = false;
+    finish[0]();
+    await first;
+    await tick();
+    await tick();
+    finish[1]();
+    await tick();
+    await tick();
+    assert.equal(t.state.saves.length, 2, 'the queued save is sent');
+    assert.equal(t.state.saves[1].expected, 'one\nA', 'against what the first save wrote');
+    assert.equal(t.state.disk, 'session\n', 'and refused, so the reported write survives');
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+  } finally { t.destroy(); }
+});
+
+test('a session write read back while our save is in flight keeps its notice, and the next save asks', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    let finishSave;
+    t.state.saveImpl = (fp, content, expected) => new Promise((resolve) => {
+      const outcome = mainSave(t.state, content, expected);
+      finishSave = () => resolve(outcome);
+    });
+    const saving = t.panel._save();
+    await t.externalWrite('the session wrote after us\n');
+    finishSave();
+    await saving;
+    t.state.saveImpl = null;
+    assert.match(noticeText(t), /changed on disk/, 'the notice about the later write stays');
+    t.state.confirmAnswer = false;
+    await t.panel._save();
+    assert.deepEqual(t.state.confirms, [OVERWRITE]);
+    assert.equal(t.state.disk, 'the session wrote after us\n');
+  } finally { t.destroy(); }
+});
+
+test('a newly opened file starts from its own base, with nothing to agree to', async () => {
   const t = setup({ disk: 'one\n' });
   try {
     await unagreed(t);
     await t.open('other\n', '/home/u/.claude/projects/p/memory/other.md');
+    t.state.disk = 'other\n';
     t.editor().type('!');
     await t.panel._save();
     assert.deepEqual(t.state.confirms, []);
+    assert.equal(t.state.saves.at(-1).expected, 'other\n');
   } finally { t.destroy(); }
 });
 
-test('a confirmed save that failed leaves the write unagreed, so the next save asks again', async () => {
+test('a notice clears once the disk is back to the agreed base, and the edits stay', async () => {
   const t = setup({ disk: 'one\n' });
   try {
     await unagreed(t);
-    t.state.saveImpl = () => ({ ok: false, error: 'disk full' });
+    await t.externalWrite('one\n');
+    assert.equal(visible(t.notice()), false, 'the reported write was undone');
+    await t.externalWrite(null);
+    assert.match(noticeText(t), /no longer exists/);
+    await t.externalWrite('one\n');
+    assert.equal(visible(t.notice()), false, 'recreated as it was');
+    assert.equal(t.panel.getContent(), 'one\nmine');
     await t.panel._save();
-    assert.equal(noticeText(t), 'Save failed: disk full');
-    t.state.saveImpl = null;
-    await t.panel._save();
-    assert.equal(t.state.confirms.length, 2, 'the failed save did not overwrite anything, so nothing was agreed');
+    assert.deepEqual(t.state.confirms, [], 'nothing to agree to');
+    assert.equal(t.state.disk, 'one\nmine');
   } finally { t.destroy(); }
 });

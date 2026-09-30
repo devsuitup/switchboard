@@ -317,9 +317,11 @@ async function saveDiffTab(tab) {
   let saved = false;
   try {
     let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
-    if (result && result.reason === 'stale' && typeof window.confirm === 'function'
+    while (result && result.reason === 'stale' && typeof result.disk === 'string'
+      && typeof window.confirm === 'function'
       && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
-      result = await window.api.saveFileForPanel(tab.filePath, content, null);
+      tab.diskBaseline = result.disk;
+      result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     }
     if (result && result.ok) {
       saved = true;
