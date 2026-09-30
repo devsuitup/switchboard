@@ -879,7 +879,9 @@ test('the mode toggle cycles side-by-side → inline → plain, persists under i
     ctx.editors[0].box.text = 'edited\n';
 
     const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
-    assert.equal(modeBtn.textContent, 'Inline');
+    assert.equal(modeBtn.dataset.mode, 'inline');
+    assert.equal(modeBtn.textContent, '', 'an icon, not a word');
+    assert.match(modeBtn.title, /^Inline diff — click for plain editor/);
 
     modeBtn.click();
     await flush();
@@ -1888,6 +1890,59 @@ test('the Refresh control is the icon this app already uses, not a word (mutatio
   } finally { ctx.destroy(); }
 });
 
+test('the list and the editor toolbars carry icon buttons with a tooltip and an accessible name, never a word', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    const buttons = [...ctx.document.querySelectorAll('#file-panel-changes .viewer-toolbar button')];
+    assert.ok(buttons.length >= 6, 'refresh, close panel, close editor, mode, reload, save');
+    for (const btn of buttons) {
+      const name = btn.id || btn.title;
+      assert.ok(btn.querySelector('svg'), `${name}: an icon`);
+      assert.equal(btn.textContent.trim(), '', `${name}: no word`);
+      assert.ok(btn.classList.contains('fp-icon-btn'), `${name}: the panel's icon button`);
+      assert.ok(btn.title, `${name}: a tooltip`);
+    }
+    const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
+    modeBtn.click();
+    await flush();
+    assert.equal(modeBtn.dataset.mode, 'plain');
+    assert.equal(modeBtn.getAttribute('aria-label'), modeBtn.title);
+    assert.equal(modeBtn.title, 'Plain editor, no diff — click for side-by-side diff');
+  } finally { ctx.destroy(); }
+});
+
+test('the MCP diff tab\'s mode toggle is an icon button that names the current mode and the next one', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
+    await flush();
+    const btn = ctx.document.getElementById('diff-mode-btn');
+    assert.ok(btn.querySelector('svg'));
+    assert.equal(btn.textContent.trim(), '');
+    assert.equal(btn.dataset.mode, 'side-by-side');
+    assert.equal(btn.title, 'Side-by-side diff — click for inline diff');
+    btn.click();
+    await flush();
+    assert.equal(btn.dataset.mode, 'inline');
+    assert.equal(btn.title, 'Inline diff — click for side-by-side diff');
+    assert.equal(ctx.window.localStorage.getItem('filePanelDiffMode'), 'inline');
+  } finally { ctx.destroy(); }
+});
+
+test('a row\'s state is a badge whose tooltip names the state', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openChangesTab('s1');
+    await flush();
+    const badges = [...ctx.document.querySelectorAll('.changes-file-row .changes-file-state')];
+    assert.ok(badges.length > 0);
+    for (const badge of badges) assert.ok(badge.title && badge.title !== badge.textContent, `${badge.textContent}: a word for the letter`);
+  } finally { ctx.destroy(); }
+});
+
 test('Save follows the buffer in every mode, plain included (mutation target: the onChange wiring per mode)', async () => {
   const ctx = setupFilePanelDom();
   try {
@@ -1900,9 +1955,11 @@ test('Save follows the buffer in every mode, plain included (mutation target: th
       const editor = ctx.editors[ctx.editors.length - 1];
       assert.equal(editor.box.mode, expected);
       assert.equal(saveBtn.disabled, true, `${expected}: nothing typed yet`);
+      assert.equal(saveBtn.classList.contains('active'), false, `${expected}: a clean buffer is not lit`);
 
       editor.box.text = 'typed in ' + expected + '\n';
       assert.equal(saveBtn.disabled, false, `${expected}: typing must reach the button`);
+      assert.equal(saveBtn.classList.contains('active'), true, `${expected}: a dirty buffer lights Save the way a toggle shows it is on`);
 
       modeBtn.click();
       await flush();

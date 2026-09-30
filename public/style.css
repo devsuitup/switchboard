@@ -2080,6 +2080,27 @@ body { display: flex; flex-direction: column; }
   height: 100%;
 }
 
+/* see .ai/contexts/changes-view.md ("Look and feel") */
+.viewer-panel-editor .cm-editor,
+.viewer-panel-editor .cm-editor .cm-gutters,
+.viewer-panel-editor .cm-editor .cm-activeLineGutter,
+#file-panel-body,
+#file-panel-body .cm-editor,
+#file-panel-body .cm-gutters,
+#file-panel-body .cm-activeLineGutter,
+#changes-diff-host,
+#changes-diff-host .cm-editor,
+#changes-diff-host .cm-gutters,
+#changes-diff-host .cm-activeLineGutter {
+  background-color: var(--surface-sunken);
+}
+
+.viewer-panel-editor .cm-editor .cm-gutters,
+#file-panel-body .cm-gutters,
+#changes-diff-host .cm-gutters {
+  border-right: 1px solid var(--hairline);
+}
+
 /* ========== STATS VIEWER ========== */
 #stats-viewer {
   position: absolute;
@@ -4459,34 +4480,53 @@ body { display: flex; flex-direction: column; }
   height: 100%;
 }
 
-#file-panel-body .cm-merge-view,
-#changes-diff-host .cm-merge-view {
+#file-panel-body .cm-mergeView,
+#changes-diff-host .cm-mergeView {
   height: 100%;
   overflow: auto;
   font-size: 12.5px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) transparent;
 }
 
-/* Diff line backgrounds */
+/* see .ai/contexts/changes-view.md ("Look and feel") */
 #file-panel-body .cm-merge-a .cm-changedLine,
 #file-panel-body .cm-deletedChunk,
 #changes-diff-host .cm-merge-a .cm-changedLine,
 #changes-diff-host .cm-deletedChunk {
-  background-color: rgba(248, 81, 73, 0.12) !important;
+  background-color: rgba(224,80,112,0.06) !important;
 }
 #file-panel-body .cm-merge-b .cm-changedLine,
 #changes-diff-host .cm-merge-b .cm-changedLine {
-  background-color: rgba(63, 185, 80, 0.12) !important;
+  background-color: rgba(62,207,90,0.06) !important;
 }
-/* Inner word-level change highlighting (replace underlines with backgrounds) */
 #file-panel-body .cm-merge-a .cm-changedText,
 #file-panel-body .cm-deletedChunk .cm-deletedText,
 #changes-diff-host .cm-merge-a .cm-changedText,
 #changes-diff-host .cm-deletedChunk .cm-deletedText {
-  background: rgba(248, 81, 73, 0.35) !important;
+  background: rgba(224,80,112,0.12) !important;
 }
 #file-panel-body .cm-merge-b .cm-changedText,
 #changes-diff-host .cm-merge-b .cm-changedText {
-  background: rgba(63, 185, 80, 0.35) !important;
+  background: rgba(62,207,90,0.12) !important;
+}
+#file-panel-body .cm-deletedChunk,
+#changes-diff-host .cm-deletedChunk {
+  box-shadow: inset 2px 0 0 #e05070;
+}
+#file-panel-body .cm-merge-b .cm-changedLineGutter,
+#changes-diff-host .cm-merge-b .cm-changedLineGutter {
+  background: #3ecf5a;
+}
+#file-panel-body .cm-merge-a .cm-changedLineGutter,
+#file-panel-body .cm-deletedLineGutter,
+#changes-diff-host .cm-merge-a .cm-changedLineGutter,
+#changes-diff-host .cm-deletedLineGutter {
+  background: #e05070;
+}
+#file-panel-body .cm-inlineChangedLineGutter,
+#changes-diff-host .cm-inlineChangedLineGutter {
+  background: var(--accent);
 }
 
 #file-panel-actions {
@@ -4573,39 +4613,70 @@ body { display: flex; flex-direction: column; }
   min-height: 0;
 }
 
+/* see .ai/contexts/changes-view.md ("Look and feel") */
 #changes-summary {
+  margin: 8px 8px 0;
   padding: 8px 12px;
-  font-size: 12px;
-  color: #c0c0d0;
-  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--hairline);
+  border-radius: 10px 10px 0 0;
+}
+
+#changes-summary:empty {
+  padding: 4px 0 0;
 }
 
 #changes-list {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  margin: 0 8px 8px;
+  padding: 4px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--hairline);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
 }
+
+#changes-list::-webkit-scrollbar { width: 5px; }
+#changes-list::-webkit-scrollbar-track { background: transparent; }
+#changes-list::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+#changes-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
 
 .changes-file-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
+  transition: background 0.12s;
 }
 
 .changes-file-row:hover {
-  background: var(--accent-wash);
+  background: var(--hairline);
 }
 
 .changes-file-state {
   flex-shrink: 0;
-  width: 14px;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
+  font-size: 10px;
   font-weight: 700;
-  font-family: monospace;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  line-height: 1;
   color: var(--text-muted);
 }
 
@@ -4629,12 +4700,11 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
   display: flex;
   gap: 6px;
-  font-family: monospace;
-  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
-
-.changes-added { color: #3ecf5a; }
-.changes-deleted { color: #e05070; }
 
 .changes-error {
   padding: 12px;
@@ -4650,6 +4720,9 @@ body { display: flex; flex-direction: column; }
 
 .changes-degraded-note {
   margin-top: 4px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
   font-size: 11px;
   color: #c8a24a;
 }
@@ -4681,11 +4754,17 @@ body { display: flex; flex-direction: column; }
 }
 
 .changes-file-row.selected {
-  background: rgba(120,130,255,0.16);
+  background: rgba(120,130,255,0.14);
 }
 
 .changes-file-row.selected .changes-file-path {
-  color: #fff;
+  color: #d0d0e8;
+}
+
+#file-panel-changes .fp-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 #changes-diff-view {
@@ -4711,12 +4790,14 @@ body { display: flex; flex-direction: column; }
 }
 
 .changes-diff-add {
-  background: rgba(63, 185, 80, 0.12);
+  background: rgba(62,207,90,0.06);
+  box-shadow: inset 2px 0 0 #3ecf5a;
   color: #3ecf5a;
 }
 
 .changes-diff-del {
-  background: rgba(248, 81, 73, 0.12);
+  background: rgba(224,80,112,0.06);
+  box-shadow: inset 2px 0 0 #e05070;
   color: #e05070;
 }
 

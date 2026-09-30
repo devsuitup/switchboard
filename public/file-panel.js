@@ -68,14 +68,26 @@ const MIN_PANEL_WIDTH = 280;
 const DIFF_MODE_KEY = 'filePanelDiffMode';
 let diffMode = localStorage.getItem(DIFF_MODE_KEY) || 'side-by-side';
 
+const CHANGES_STATE_NAMES = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed', U: 'Unmerged', '?': 'Untracked' };
 const CHANGES_DIFF_MODE_KEY = 'changesDiffMode';
 const CHANGES_DIFF_MODES = ['side-by-side', 'inline', 'plain'];
-const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side', inline: 'Inline', plain: 'Plain' };
+const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side diff', inline: 'Inline diff', plain: 'Plain editor, no diff' };
 // see .ai/contexts/changes-view.md ("The list and the editor")
 let changesDiffMode = CHANGES_DIFF_MODES.includes(localStorage.getItem(CHANGES_DIFF_MODE_KEY))
   ? localStorage.getItem(CHANGES_DIFF_MODE_KEY)
   : 'inline';
 
+// see .ai/contexts/changes-view.md ("Look and feel")
+const FP_STROKE_ICON = (paths) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+const FP_ICONS = {
+  save: '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 448 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z"></path></svg>',
+  close: '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>',
+  refresh: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>',
+  reload: FP_STROKE_ICON('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'),
+  'side-by-side': FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>'),
+  inline: FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>'),
+  plain: FP_STROKE_ICON('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/>'),
+};
 // ── Initialization ──────────────────────────────────────────────────
 
 function initFilePanel() {
@@ -135,22 +147,22 @@ function initFilePanel() {
   diffControls.className = 'viewer-toolbar-controls';
 
   diffToggleBtn = document.createElement('button');
-  diffToggleBtn.className = 'fp-toolbar-btn';
-  diffToggleBtn.textContent = diffMode === 'inline' ? 'Side-by-Side' : 'Inline';
-  diffToggleBtn.title = diffMode === 'inline' ? 'Switch to side-by-side diff' : 'Switch to inline diff';
+  diffToggleBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  diffToggleBtn.id = 'diff-mode-btn';
+  updateDiffModeButton();
   diffToggleBtn.addEventListener('click', handleDiffModeToggle);
   diffControls.appendChild(diffToggleBtn);
 
   const diffSaveBtn = document.createElement('button');
   diffSaveBtn.className = 'fp-toolbar-btn fp-save-btn fp-icon-btn';
   diffSaveBtn.title = 'Save changes';
-  diffSaveBtn.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 448 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M433.941 129.941l-83.882-83.882A48 48 0 0 0 316.118 32H48C21.49 32 0 53.49 0 80v352c0 26.51 21.49 48 48 48h352c26.51 0 48-21.49 48-48V163.882a48 48 0 0 0-14.059-33.941zM272 80v80H144V80h128zm122 352H54a6 6 0 0 1-6-6V86a6 6 0 0 1 6-6h42v104c0 13.255 10.745 24 24 24h176c13.255 0 24-10.745 24-24V83.882l78.243 78.243a6 6 0 0 1 1.757 4.243V426a6 6 0 0 1-6 6zM224 232c-48.523 0-88 39.477-88 88s39.477 88 88 88 88-39.477 88-88-39.477-88-88-88zm0 128c-22.056 0-40-17.944-40-40s17.944-40 40-40 40 17.944 40 40-17.944 40-40 40z"></path></svg>';
+  diffSaveBtn.innerHTML = FP_ICONS.save;
   diffSaveBtn.addEventListener('click', handleDiffSave);
   diffControls.appendChild(diffSaveBtn);
 
   const diffCloseBtn = document.createElement('button');
   diffCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
-  diffCloseBtn.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
+  diffCloseBtn.innerHTML = FP_ICONS.close;
   diffCloseBtn.title = 'Close panel';
   diffCloseBtn.addEventListener('click', handleClose);
   diffControls.appendChild(diffCloseBtn);
@@ -195,7 +207,8 @@ function initFilePanel() {
   changesRefreshBtn.className = 'fp-toolbar-btn fp-icon-btn';
   changesRefreshBtn.id = 'changes-refresh-btn';
   changesRefreshBtn.title = 'Refresh the file list';
-  changesRefreshBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
+  changesRefreshBtn.setAttribute('aria-label', changesRefreshBtn.title);
+  changesRefreshBtn.innerHTML = FP_ICONS.refresh;
   changesRefreshBtn.addEventListener('click', () => {
     if (currentPanelSessionId) refreshChanges(currentPanelSessionId);
   });
@@ -203,7 +216,7 @@ function initFilePanel() {
 
   const changesCloseBtn = document.createElement('button');
   changesCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
-  changesCloseBtn.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
+  changesCloseBtn.innerHTML = FP_ICONS.close;
   changesCloseBtn.title = 'Close panel';
   changesCloseBtn.addEventListener('click', handleClose);
   changesControls.appendChild(changesCloseBtn);
@@ -303,11 +316,24 @@ async function handleDiffSave() {
   }
 }
 
+function updateDiffModeButton() {
+  const next = diffMode === 'inline' ? 'side-by-side' : 'inline';
+  setModeButton(diffToggleBtn, diffMode, next);
+}
+
+// see .ai/contexts/changes-view.md ("Look and feel")
+function setModeButton(btn, mode, next) {
+  if (btn.dataset.mode !== mode) btn.innerHTML = FP_ICONS[mode];
+  btn.dataset.mode = mode;
+  const label = `${CHANGES_DIFF_MODE_LABELS[mode]} — click for ${CHANGES_DIFF_MODE_LABELS[next].toLowerCase()}`;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+
 function handleDiffModeToggle() {
   diffMode = diffMode === 'inline' ? 'side-by-side' : 'inline';
   localStorage.setItem(DIFF_MODE_KEY, diffMode);
-  diffToggleBtn.textContent = diffMode === 'inline' ? 'Side-by-Side' : 'Inline';
-  diffToggleBtn.title = diffMode === 'inline' ? 'Switch to side-by-side diff' : 'Switch to inline diff';
+  updateDiffModeButton();
 
   if (currentPanelSessionId) {
     const state = getSessionState(currentPanelSessionId);
@@ -1093,6 +1119,7 @@ function buildChangesFileRow(sessionId, tab, file) {
   const state = document.createElement('span');
   state.className = 'changes-file-state changes-state-' + (file.state || '?').toLowerCase();
   state.textContent = file.state || '?';
+  state.title = CHANGES_STATE_NAMES[file.state] || 'Changed';
   row.appendChild(state);
 
   const pathEl = document.createElement('span');
@@ -1173,36 +1200,39 @@ function buildChangesDiffChrome() {
   controls.className = 'viewer-toolbar-controls';
 
   const closeEditorBtn = document.createElement('button');
-  closeEditorBtn.className = 'fp-toolbar-btn';
+  closeEditorBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
   closeEditorBtn.id = 'changes-diff-close-btn';
-  closeEditorBtn.textContent = 'Close';
+  closeEditorBtn.innerHTML = FP_ICONS.close;
   closeEditorBtn.title = 'Close the editor and keep the file list';
+  closeEditorBtn.setAttribute('aria-label', closeEditorBtn.title);
   closeEditorBtn.addEventListener('click', () => {
     if (currentPanelSessionId) closeChangesDiff(currentPanelSessionId);
   });
   controls.appendChild(closeEditorBtn);
 
   changesDiffModeBtn = document.createElement('button');
-  changesDiffModeBtn.className = 'fp-toolbar-btn';
+  changesDiffModeBtn.className = 'fp-toolbar-btn fp-icon-btn';
   changesDiffModeBtn.id = 'changes-diff-mode-btn';
   changesDiffModeBtn.addEventListener('click', handleChangesDiffModeToggle);
   controls.appendChild(changesDiffModeBtn);
 
   changesDiffReloadBtn = document.createElement('button');
-  changesDiffReloadBtn.className = 'fp-toolbar-btn';
+  changesDiffReloadBtn.className = 'fp-toolbar-btn fp-icon-btn';
   changesDiffReloadBtn.id = 'changes-diff-reload-btn';
-  changesDiffReloadBtn.textContent = 'Reload';
+  changesDiffReloadBtn.innerHTML = FP_ICONS.reload;
   changesDiffReloadBtn.title = 'Re-read this file from disk';
+  changesDiffReloadBtn.setAttribute('aria-label', changesDiffReloadBtn.title);
   changesDiffReloadBtn.addEventListener('click', () => {
     if (currentPanelSessionId) reloadChangesFile(currentPanelSessionId);
   });
   controls.appendChild(changesDiffReloadBtn);
 
   changesDiffSaveBtn = document.createElement('button');
-  changesDiffSaveBtn.className = 'fp-toolbar-btn fp-save-btn';
+  changesDiffSaveBtn.className = 'fp-toolbar-btn fp-save-btn fp-icon-btn';
   changesDiffSaveBtn.id = 'changes-diff-save-btn';
-  changesDiffSaveBtn.textContent = 'Save';
+  changesDiffSaveBtn.innerHTML = FP_ICONS.save;
   changesDiffSaveBtn.title = 'Save this file (Ctrl/Cmd+S)';
+  changesDiffSaveBtn.setAttribute('aria-label', changesDiffSaveBtn.title);
   changesDiffSaveBtn.addEventListener('click', () => {
     if (currentPanelSessionId) handleChangesSave(currentPanelSessionId);
   });
@@ -1229,8 +1259,8 @@ function renderChangesDiff(sessionId, tab) {
   changesDiffTitleEl.textContent = tab.selectedFile.path;
 
   changesDiffModeBtn.style.display = tab.editable ? '' : 'none';
-  changesDiffModeBtn.textContent = CHANGES_DIFF_MODE_LABELS[changesDiffMode];
-  changesDiffModeBtn.title = 'Diff view mode — click to cycle';
+  const nextMode = CHANGES_DIFF_MODES[(CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length];
+  setModeButton(changesDiffModeBtn, changesDiffMode, nextMode);
   changesDiffSaveBtn.style.display = tab.editable ? '' : 'none';
   updateChangesSaveButton(sessionId, tab);
   changesDiffReloadBtn.style.display = tab.editable ? '' : 'none';
@@ -1266,6 +1296,7 @@ function updateChangesSaveButton(sessionId, tab) {
   const state = filePanelState.get(sessionId);
   if (!state || state.currentTab !== tab) return;
   changesDiffSaveBtn.disabled = !!tab.saving || !isChangesBufferDirty(tab);
+  changesDiffSaveBtn.classList.toggle('active', !changesDiffSaveBtn.disabled);
 }
 
 function renderChangesNotice(tab) {

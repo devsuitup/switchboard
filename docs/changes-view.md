@@ -30,11 +30,11 @@ A file link in the terminal opens here too, when it points at one of this sessio
 ## What it shows
 
 - A header line: `N files changed +A −B`, plus the current branch and how far it is ahead/behind its upstream.
-- One row per changed file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked), its path, and its own `+added −deleted` line counts.
+- One row per changed file: a state badge (`M` modified, `A` added, `D` deleted, `R`/`C` renamed/copied, `?` untracked — hover it for the word), its path, and its own `+added −deleted` line counts.
 - Clicking a row opens that file below the list, which stays on screen — the current row is highlighted, and clicking another row swaps the file without going back anywhere. An untracked file opens too, as an all-additions diff. A binary file shows a one-line note instead of its bytes.
 - Drag the divider between the list and the file to give either one more room; the position is remembered.
 - A brand-new directory is listed file by file, not as a single folder row.
-- A **Refresh** button for a manual pull.
+- A **Refresh** button (the circular arrow) for a manual pull.
 
 ### Very large working trees
 
@@ -65,8 +65,10 @@ refresh triggered by the session finishing a turn, reset them as before.
 
 On a local session, the open file is a live editor, not a picture of a diff. Type on the right-hand side and the diff recomputes as you go.
 
-- **Save** with the Save button or `Ctrl/Cmd+S`. The button is inactive until you change something. The file list refreshes on save, so the row's counts follow what you wrote.
-- The button next to **Close** cycles three views: **Inline** (one column, changes marked in place — the default, because the panel is a narrow column and side-by-side halves it), **Plain** (just the file, no diff decoration) and **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right). The choice is remembered.
+The file's toolbar holds four icon buttons, each named by its tooltip: **Close** (the cross), the view mode, **Reload** (the counter-clockwise arrow) and **Save** (the disk).
+
+- **Save** with the Save button or `Ctrl/Cmd+S`. The button is dimmed and inactive until you change something, and lit once there is something to save. The file list refreshes on save, so the row's counts follow what you wrote.
+- The button next to **Close** cycles three views, and its icon shows the one you are in (its tooltip names the next): **Inline** (one column, changes marked in place — the default, because the panel is a narrow column and side-by-side halves it), **Plain** (just the file, no diff decoration) and **Side-by-side** (the committed or staged version on the left, read-only; your working copy on the right). The choice is remembered.
 - The left-hand side is what `git diff` compares against: the staged version for a row you opened staged, the last commit otherwise. What you see marked as changed is what git would report.
 - These stay read-only, and the panel says which case it is: a remote session, a binary file, a file that is not UTF-8 text, a file that mixes line endings (no editor can keep them line by line), a symbolic link, a hard link (two names for the same bytes, and only one of them is in this repository), and a file over 2 MB.
 
