@@ -80,34 +80,38 @@ test('schedules: the registry is seeded once from the projects that already carr
 });
 
 test('schedules: a schedule is sandboxed by the nearest project setting that contains it', () => {
+  const proj = path.resolve('/home/u/proj');
   const settings = {
     global: { sandbox: false },
-    'project:/home/u/proj': { sandbox: true },
-    'project:/home/u/proj/sub/open': { sandbox: false },
+    ['project:' + proj]: { sandbox: true },
+    ['project:' + path.join(proj, 'sub', 'open')]: { sandbox: false },
   };
   const get = (key) => settings[key];
-  assert.equal(resolveScheduleSandbox('/home/u/proj', get, false), true);
-  assert.equal(resolveScheduleSandbox('/home/u/proj/sub', get, false), true, 'a subdirectory inherits its project');
-  assert.equal(resolveScheduleSandbox('/home/u/proj/sub/open', get, false), false, 'an explicit setting below wins');
-  assert.equal(resolveScheduleSandbox('/home/u/projection', get, false), false, 'a sibling with a common prefix does not');
-  assert.equal(resolveScheduleSandbox('/elsewhere', get, false), false, 'the global setting applies otherwise');
-  assert.equal(resolveScheduleSandbox('/elsewhere', () => undefined, true), true, 'then the default');
+  assert.equal(resolveScheduleSandbox(proj, get, false), true);
+  assert.equal(resolveScheduleSandbox(path.join(proj, 'sub'), get, false), true, 'a subdirectory inherits its project');
+  assert.equal(resolveScheduleSandbox(path.join(proj, 'sub', 'open'), get, false), false, 'an explicit setting below wins');
+  assert.equal(resolveScheduleSandbox(path.resolve('/home/u/projection'), get, false), false, 'a sibling with a common prefix does not');
+  assert.equal(resolveScheduleSandbox(path.resolve('/elsewhere'), get, false), false, 'the global setting applies otherwise');
+  assert.equal(resolveScheduleSandbox(path.resolve('/elsewhere'), () => undefined, true), true, 'then the default');
 });
 
 test('schedules: the registry is seeded only while it was never written, then changes only by add and remove', () => {
   const store = {};
   const get = (k) => store[k];
   const set = (k, v) => { store[k] = v; };
+  const seeded = path.resolve('/p/seeded');
+  const opened = path.resolve('/p/opened');
   let seeds = 0;
-  const registry = scheduleRegistry(get, set, () => { seeds++; return ['/p/seeded']; });
-  assert.deepEqual(registry.list(), ['/p/seeded']);
-  registry.add('/p/opened');
-  registry.add('/p/opened');
+  const registry = scheduleRegistry(get, set, () => { seeds++; return [seeded]; });
+  assert.deepEqual(registry.list(), [seeded]);
+  registry.add(opened);
+  registry.add(opened);
+  registry.add(opened + path.sep + 'x' + path.sep + '..');
   registry.add('relative/path');
-  assert.deepEqual(registry.list(), ['/p/seeded', '/p/opened'], 'no duplicate, no relative path');
-  registry.remove('/p/seeded');
-  assert.deepEqual(registry.list(), ['/p/opened']);
-  registry.remove('/p/opened');
+  assert.deepEqual(registry.list(), [seeded, opened], 'no duplicate (even unnormalised), no relative path');
+  registry.remove(seeded);
+  assert.deepEqual(registry.list(), [opened]);
+  registry.remove(opened);
   assert.deepEqual(registry.list(), [], 'an emptied registry is not seeded again');
   assert.equal(seeds, 1);
 });
