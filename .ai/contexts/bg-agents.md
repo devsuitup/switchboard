@@ -56,8 +56,8 @@ the single live predicate in the renderer.
 
 | Verb | Live job | Not live |
 |---|---|---|
-| Attach | allowed | not offered (a finished session resumes like any other) |
-| Stop | allowed | not offered |
+| Attach | allowed | disabled (a finished session resumes like any other) |
+| Stop | allowed | disabled |
 | Respawn | refused | allowed |
 | Delete (`rm`) | refused | allowed |
 
@@ -106,10 +106,23 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   view is shown once the restored sessions are open.
   `agentsShowFinished` persists under `localStorage.agentsShowFinished`
   (`'0'` hides finished sessions).
-- `claude --bg` prints its id in a format nobody measured (2026-09-30);
-  `parseDispatchOutput` takes the first standalone eight-hex token and
-  `dispatch` reports `ok: true, id: null` otherwise — the row arrives through
-  the files. Task 11 of the plan is to measure it.
+- `claude --bg` prints its id wrapped in ANSI colour codes (see "Measured
+  facts"); `parseDispatchOutput` takes the first standalone eight-hex token,
+  which the colour codes do not hide, and `dispatch` reports
+  `ok: true, id: null` when there is none — the row then arrives through the
+  files.
+- `claude agents --json --all` runs through an interactive login shell
+  (`runClaudeCommand`), so rc files may print to stdout around the JSON.
+  `parseCliList` first tries a strict parse, then the candidate arrays that
+  start with `[` at the start of a line and end with `]` at the end of a line
+  (at most 32 of each), and returns `null` when none parses. A verb's error
+  text goes through `stripShellNoise`, which drops only the leading
+  `bash: no job control in this shell` / `cannot set terminal process group`
+  lines; the CLI's own stderr is kept verbatim.
+- `claude rm` runs from the home directory, never from the job's cwd: that
+  directory may be the worktree `rm` deletes, and Windows refuses to remove a
+  live process's cwd. `stop` and `respawn` run in the job cwd (respawn's brief
+  needs it), falling back to home when it no longer exists.
 - An attach tab's `cli-session-state` status comes from the daemon worker's
   descriptor (same `sessionId`), so busy/idle needs no special path.
 - When a row is attached here and the user runs Stop or Delete on it, the
@@ -118,18 +131,18 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 
 ## The sidebar
 
-`bgAgentSessionIds` (a `Set` of the `sessionId` of every `kind: 'background'`
-roster entry) is rebuilt by `applyAgentsSnapshot`, which refreshes the sidebar
-only when the set changed. `sidebar.js` prefixes a `bg` badge to a session row
-whose id is in it. Two consequences:
+`bgAgentSessionIds` (a `Set` of the `sessionId` of every live background job,
+`agentJobIsLive`: `working` or `blocked`) is rebuilt by `applyAgentsSnapshot`,
+which refreshes the sidebar only when the set changed. `sidebar.js` prefixes a
+`bg` badge ("click to attach") to a session row whose id is in it. Two
+consequences:
 
 - The set is empty until the first `get-bg-agents` — the badge needs the view
   to have been opened once in this window (`refreshAgentsRoster()` runs at
   open; the push keeps it current afterwards).
-- The set holds finished jobs too, so the badge also shows on the row of a
-  finished background session. Clicking such a row resumes normally: the
-  attach decision is made by `guardResume` from a live descriptor, not from
-  the badge.
+- A finished job loses its badge at the next snapshot. Clicking its row
+  resumes normally: the attach decision is made by `guardResume` from a live
+  descriptor, not from the badge.
 
 ## Attach
 
@@ -150,7 +163,14 @@ takes `cwd` from the options, runs `claude attach <jobId>` and skips sandbox,
 pre-launch command and MCP emulation. The session is flagged `isAttach` with
 `attachJobId`, which `isAttachedHere` (passed to `bgAgents.init`) reads to set
 `attachedHere` on the roster entry. Attach tabs are excluded from the working
-set (`entry.attach`).
+set (`entry.attach`). After a renderer reload the tab is reopened through the
+reattach branch of `open-terminal`, which returns `attach: !!session.isAttach`;
+`openSession` sets `entry.attach` from it, so the flag survives the reload.
+
+The view's HTML puts CLI- and file-sourced values (name, cwd, href, session
+id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
+`escapeHtml` does not, and a quote would otherwise let a value add a
+`data-verb` that a click runs.
 
 ## Detach
 
@@ -175,11 +195,20 @@ Agents view.
 - Window close and app quit kill attach ptys without `\x1a` first (the
   `closed` handler calls `killPty`). The session survives; the client just
   does not leave politely.
-- `parseDispatchOutput`'s id format is unmeasured until Task 11 measures it.
+- `parseDispatchOutput` was checked against one measured output (see
+  "Measured facts"); a CLI that changes that line may make `dispatch` return
+  `id: null`, which only costs the row selection.
 - Liveness of interactive descriptors is pid-only (`isProcessAlive`): a
   reused pid shows an external session that is gone.
-- The sidebar `bg` badge also shows for finished background jobs (see "The
-  sidebar").
+- A login shell whose rc files print to stdout is tolerated by the tolerant
+  list parse, as long as the JSON array stays on its own lines; other noise
+  (text on the same line as the JSON, a stray line that happens to parse as
+  a JSON array before it) is not, and the view then reports the daemon
+  unreachable.
+- Whether the CLI itself refuses `claude rm` or `claude respawn` on a live job
+  is NOT verified. The UI disables both on a live row and `runVerb` refuses
+  them when the roster knows the job is live; outside that (see the first
+  item) nothing guards it.
 
 ## Measured facts (CLI 2.1.285, Linux, 2026-09-30)
 
@@ -190,6 +219,17 @@ Agents view.
 - `claude attach <id>` in a pty: Ctrl+Z detaches, client exits 0, session
   stays `working`.
 - `claude logs <id>` prints screen ANSI, unusable without xterm — not used.
+- `claude --bg --name plan-check "say hello and stop"` prints
+  `backgrounded · <id> · <name>`, then dim hint lines
+  `claude agents`, `claude attach <id>`, `claude logs <id>`,
+  `claude stop <id>`. The id is 8 hex chars wrapped in ANSI colour codes
+  (`ESC[36m` … `ESC[39m`) even when stdout is piped. `parseDispatchOutput`
+  returns the id for that text and `null` for a line without an id
+  (`test/bg-agents-roster.test.js`).
+- In a cwd that is not a trusted workspace the CLI refuses: `Workspace not
+  trusted. Run \`claude\` in <dir> once and accept the trust prompt, then
+  retry.` A dispatch from a never-trusted project therefore shows that
+  message as its error.
 
 ## If you change this, also check
 

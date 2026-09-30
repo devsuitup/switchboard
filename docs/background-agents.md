@@ -55,8 +55,8 @@ running.
 
 A click in the sidebar on a session the daemon is running attaches to it
 instead of asking to resume it. Once the Agents view has been opened, such a
-row carries a `bg` badge; the badge stays on the row after the job has
-finished, and a finished background session resumes like any other.
+row carries a `bg` badge while the job is live; the badge goes when the job
+finishes, and a finished background session resumes like any other.
 
 ## New agent
 
@@ -74,4 +74,5 @@ comes from the files alone, and every verb but Transcript is disabled.
 Neither file is a documented interface; a CLI upgrade may change them, and
 `test/canary-bg-agents-files.test.js` says so when it happens.
 
-The view shows at most 200 jobs in that file-only mode.
+At most 200 job directories are watched; in that file-only mode the list
+shows only the jobs among them.

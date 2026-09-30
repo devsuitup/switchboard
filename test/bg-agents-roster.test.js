@@ -154,6 +154,13 @@ test('parseDispatchOutput finds an eight-hex id anywhere in the output, or retur
   assert.ok(!JOB_ID_RE.test('DE3DFD18'));
 });
 
+test('parseDispatchOutput reads the id from the output measured on CLI 2.1.285, ANSI colour included', () => {
+  const measured = 'backgrounded · \x1b[36m3f9a0c1e\x1b[39m · plan-check\n'
+    + '\x1b[2m  claude agents\n  claude attach 3f9a0c1e\n  claude logs 3f9a0c1e\n  claude stop 3f9a0c1e\x1b[22m\n';
+  assert.equal(parseDispatchOutput(measured), '3f9a0c1e');
+  assert.equal(parseDispatchOutput('backgrounded · plan-check\n'), null);
+});
+
 test('parseJobState and parseCliList keep the blocked state a job reports while it waits', () => {
   assert.equal(parseJobState('{"state":"blocked","detail":"awaiting developer MR"}').state, 'blocked');
   const [s] = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId: 's1', kind: 'background', state: 'blocked' }]));
