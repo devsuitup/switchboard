@@ -17,6 +17,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Saving from the file panel, the Memory panel or the MCP diff tab no longer overwrites a file that changed on disk since you opened it. You are told, and asked before your edits replace it. (#355)
 - When an open file changes on disk, the panel reloads it if you have no unsaved edits, and otherwise keeps them and offers Reload or Keep my edits. It keeps noticing changes after the file is replaced, deleted or recreated. (#355)
 - Switching tabs or sessions no longer drops a file tab's unsaved edits. (#355)
+- A save that fails says "Save failed" instead of failing silently, including one that finishes after you switched to another tab. (#355)
+- Once an MCP diff has been accepted or rejected, its tab's Save button is disabled, and its tooltip says why. (#355)
 - Undo no longer brings back an edit made in another file, or before the file was reloaded. (#355)
 - The Changes panel works when a session's directory is below the repository root; tracked files' diffs came back empty there. (#350)
 - A file with a merge conflict is badged `U` (Unmerged) in the Changes list, instead of Added or Deleted. (#351)

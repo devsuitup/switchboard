@@ -102,7 +102,8 @@ function makeRepo(t) {
     git('commit', '-qm', message);
     return git('rev-parse', 'HEAD');
   };
-  git('init', '-q', '-b', 'main');
+  git('init', '-q');
+  git('symbolic-ref', 'HEAD', 'refs/heads/main');
   const base = commit({ 'main.js': 'a\n', 'docs/a.md': 'a\n', 'CHANGELOG.md': '# Changelog\n' }, 'base');
   git('checkout', '-q', '-b', 'pr');
   return { dir, env, git, commit, base };
@@ -131,6 +132,21 @@ test('end to end: an app change with the no-changelog label passes', (t) => {
   const repo = makeRepo(t);
   const head = repo.commit({ 'main.js': 'b\n' }, 'app');
   assert.equal(check(repo, ['--base', repo.base, '--head', head, '--labels', '["no-changelog"]']).status, 0);
+});
+
+test('end to end: moving an app file out of the app is an app change, not a rename to hide', (t) => {
+  const repo = makeRepo(t);
+  repo.commit({ 'public/foo.js': 'const foo = 1;\n'.repeat(20) }, 'add foo');
+  repo.git('checkout', '-q', 'main');
+  repo.git('merge', '-q', '--ff-only', 'pr');
+  const base = repo.git('rev-parse', 'HEAD');
+  repo.git('checkout', '-q', 'pr');
+  repo.git('mv', 'public/foo.js', 'docs/foo.js');
+  repo.git('commit', '-qm', 'move');
+  const head = repo.git('rev-parse', 'HEAD');
+  const r = check(repo, ['--base', base, '--head', head, '--labels', '[]']);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /public\/foo\.js/);
 });
 
 test('end to end: a docs-only change passes', (t) => {

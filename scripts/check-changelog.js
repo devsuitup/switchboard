@@ -52,7 +52,7 @@ function parseArgs(argv) {
 }
 
 function changedFiles(base, head) {
-  return execFileSync('git', ['diff', '--name-only', `${base}...${head}`], { encoding: 'utf8' })
+  return execFileSync('git', ['diff', '--name-only', '--no-renames', `${base}...${head}`], { encoding: 'utf8' })
     .split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
