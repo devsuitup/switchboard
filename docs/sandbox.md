@@ -6,7 +6,8 @@ shows it the project directory and Claude's own state, and hides the rest of
 the filesystem — the rest of `$HOME` in particular. It is a **filesystem**
 boundary: the network and the environment are the host's.
 
-The terminal header of a sandboxed session shows **🔒 Sandbox**. Its tooltip:
+The terminal header of a sandboxed session shows a **Sandbox** indicator, a
+green dot and the word, among the indicators on the right. Its tooltip:
 *Running in a bubblewrap sandbox: only this project directory and Claude's own
 state are visible. Network and environment are NOT isolated.* The badge is
 also shown when Switchboard reattaches to a running sandboxed session.

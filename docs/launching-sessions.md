@@ -98,10 +98,26 @@ writes the forked transcript.
 
 ## Plain terminals
 
-**Terminal** in the `+` menu opens the login shell in the project directory, as
-a row with a terminal badge. Inside it, `claude` is a shell function that prints
-*To start a Claude session, use the + button in the sidebar.*: Claude sessions
-are started from the sidebar, where Switchboard can track them.
+**Terminal** in the `+` menu opens your shell in the project directory, as a row
+with a terminal badge. Inside it, `claude` is a shell function that prints
+*To start a Claude session, use the + button in the sidebar.* and returns 1:
+Claude sessions are started from the sidebar, where Switchboard can track them.
+The panel shell gets the same function.
+
+For bash, zsh and fish on Linux and macOS, the function is defined without
+being typed into the shell, so it appears neither after the prompt nor in the
+shell's history:
+
+| Shell | How |
+|---|---|
+| bash (Linux, macOS) | `bash --rcfile <data dir>/shell-init/bashrc -i`: a non-login shell whose rcfile reads what a login shell would (`/etc/profile`, then the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`), then defines the function. Being non-login, `logout` refuses (use `exit`) and `~/.bash_logout` does not run |
+| zsh (Linux, macOS) | `ZDOTDIR=<data dir>/shell-init/zsh`; the generated files source yours, then define the function |
+| fish | `--init-command` |
+| sh, dash, ksh and other POSIX shells, WSL, bash on Windows (Git Bash, MSYS2) | the definition is typed into the shell 300 ms after it starts, led by a space and followed by `clear`. It stays out of the history only where the shell ignores space-led lines (bash's `HISTCONTROL=ignorespace`/`ignoreboth`, Ubuntu's default; zsh's `HIST_IGNORE_SPACE`) |
+| PowerShell, cmd, nushell | no function |
+
+The generated files live in `shell-init/` in the data directory, next to
+`switchboard.db`; nothing under `$HOME` is written.
 
 Clicking a terminal row whose shell has exited starts a new shell in that same
 row.

@@ -20,9 +20,14 @@ is remembered per session. Under it, each subagent row shows:
 
 The first 10 subagents of a session are listed, then `+ N more`.
 
+A subagent follows its parent's archive state without being archived itself:
+while the parent is archived its subagents are hidden with it, **Show archived
+sessions** shows them nested under the archived parent, and unarchiving the
+parent brings them back.
+
 Subagents whose parent session cannot be found — its transcript was deleted,
 say — are listed in an **Orphan subagents** group at the bottom of the project,
-collapsed by default.
+collapsed by default. A subagent of an archived parent is never an orphan.
 
 Subagent rows have no pin, rename, stop, fork, archive or delete buttons.
 Deleting a session deletes its subagent transcripts with it — see

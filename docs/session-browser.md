@@ -128,7 +128,8 @@ in [Global Settings](settings.md#application).
   [schedule](automation.md#schedules) share the schedule's slug.
 - Subagents sit under their parent session — see [Subagents](subagents.md).
   Subagents whose parent cannot be found are listed in an **Orphan subagents**
-  group at the bottom of the project, collapsed by default.
+  group at the bottom of the project, collapsed by default; those of an
+  archived parent are hidden and shown with it instead.
 
 ## Search
 

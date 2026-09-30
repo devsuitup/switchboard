@@ -33,21 +33,44 @@ the plain file viewer.
 - A header: `N files changed +A −B`, the branch, and how far it is ahead of or
   behind its upstream.
 - One row per file: a state letter (`M` modified, `A` added, `D` deleted, `R`/`C`
-  renamed/copied, `?` untracked), the path, and its `+added −deleted` counts. A
-  new directory is listed file by file.
+  renamed/copied, `?` untracked), the path, and its `+added −deleted` counts —
+  or a marker saying why it has none (see [Counts for new files](#counts-for-new-files)).
+  A new directory is listed file by file.
 - At most 500 rows, then `+N more files not shown`; the header still counts
   every file. Tracked changes come first, so what is cut is untracked files.
   When a working tree holds tens of thousands of untracked files, the untracked
   part is listed by directory instead, as `git status` does by default, and the
   panel says so.
-- An untracked file's row has no counts until it is opened, and the header's
-  totals leave it out until then.
 - **Refresh** reloads the list.
 
 Clicking a row opens the file under the list, which stays visible with the row
 highlighted. An untracked file opens as an all-additions diff; a binary file as
 a one-line note. Drag the divider between list and file to share the space; the
 position is remembered. Diffs are cut at 512 KB, with a note.
+
+### Counts for new files
+
+On a local session, an untracked file's row shows its `+added −0` as soon as
+the list is shown, like a tracked file's, and the header total includes it.
+The count is the number git's own diff of that file reports.
+
+A row that has no count says why, in place of the numbers:
+
+| Marker | Meaning |
+|---|---|
+| `binary` | A binary file, tracked or not — git gives it no line count. A `.gitattributes` `binary` or `-diff` setting, or a diff driver configured with `binary = true`, counts as binary, as it does for git. |
+| `too large` | An untracked file over 1 MiB: too large to count. |
+| `not counted` | Past the first 500 untracked files, past 8 MiB read in one refresh, or not reached within the refresh's one-second counting limit (a slow or network drive). Opening it counts it. |
+| `count on open` | A remote session: untracked files are counted when you open them. |
+| `directory` | The untracked listing is collapsed to directories (see above): the row stands for a whole directory. |
+| `no count` | The file could not be read, or is a link to a directory. |
+
+When some rows have no count, the header says how many it leaves out:
+`12 files changed +340 −20 (2 files not counted)`.
+
+Opening a row that has a marker fills in its count once the diff is fetched,
+and the header total grows by the same amount. A refresh measures again, since
+the file may have changed.
 
 ## Editing a file
 

@@ -1,8 +1,8 @@
 // Tests for the session working-set persist/restore feature.
 //
 // Strategy: app.js is a monolithic renderer file that cannot be loaded via
-// vm.runInContext without massive DOM scaffolding. We mirror the same pattern
-// used by exit-banner.test.js — a hand-wired mock harness that reproduces the
+// vm.runInContext without massive DOM scaffolding. We use a hand-wired mock
+// harness that reproduces the
 // relevant logic shapes from app.js and exercises the invariants under test.
 //
 // We test the three public window bridges exposed in app.js:

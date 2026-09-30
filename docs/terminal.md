@@ -6,13 +6,32 @@ shortcuts are all on [Keyboard shortcuts](keyboard-shortcuts.md).
 
 ## Header
 
-The header above the terminal shows the session's name, the title the program
-sets on the terminal (or Claude's latest notification), the session id, the
-shell profile's name when it is not **Auto**, and **🔒 Sandbox** for a
-[sandboxed](sandbox.md) session. On the right: the status (Running / Stopped),
-**Changes** ([Changes view](changes-view.md)), **Shell** ([below](#panel-shell)),
-an **IDE Emulation** label while the session is connected to Switchboard as its
-IDE ([IDE emulation](ide-emulation.md)), and the stop button.
+On the left, the header above the terminal shows:
+
+- a **status dot**, before the name: green with a glow while the process runs,
+  grey otherwise. Its tooltip says the state in words: `Running`; `Stopped`
+  after a Stop you asked for, or when no exit is known; `Killed (SIGKILL)` (or
+  another signal) when a signal ended it without a Stop; `Exited (code N)` when
+  it exited on its own;
+- the session's name, the title the program sets on the terminal (or Claude's
+  latest notification), the session id, and the shell profile's name when it is
+  not **Auto**.
+
+On the right, one row, always in this order:
+
+1. **Indicators** — a coloured dot and a word, with a tooltip and no action:
+   **Sandbox** for a [sandboxed](sandbox.md) session, and **IDE Emulation**
+   while the session is connected to Switchboard as its IDE
+   ([IDE emulation](ide-emulation.md)).
+2. **Toggles** — square icon buttons, highlighted while on: **Shell**
+   ([below](#panel-shell)) and **Changes** ([Changes view](changes-view.md)).
+   Changes is on while the panel shows this session's Changes tab.
+3. **Stop** — a red icon, set apart by a divider.
+
+When the process ends, the terminal prints a banner in the same words —
+`session stopped`, `session killed (SIGKILL)`, `session exited (code 1)` — dim
+for a Stop or an exit with code 0, yellow otherwise. The panel shell's banner
+reads the same way (`shell exited (code 1)`).
 
 ## Right-click
 
