@@ -130,7 +130,7 @@ test('composer-state: isComposerEmpty tracks the counter', () => {
 // ── Terminal reports ─────────────────────────────────────────────────────────
 // Regression cover for the 2026-09-02 measurement: a resting pointer over a
 // mouse-tracking session pushed the quiet clock and got a trigger refused.
-// See docs/automation.md ("Politeness") for the numbers.
+// See docs/automation.md ("Politeness") for the rules.
 
 const SGR_PRESS   = '\x1b[<0;42;13M';
 const SGR_RELEASE = '\x1b[<0;42;13m';

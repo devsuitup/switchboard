@@ -1,64 +1,182 @@
 # Session Browser
 
-The session browser is the left sidebar. It lists every Claude Code session Switchboard has indexed, organized by project, and gives you fast access to search, filter, archive, and star sessions.
+The left sidebar lists every Claude Code session Switchboard has indexed from
+`~/.claude/projects`, grouped by project.
 
 ![Switchboard](../build/screenshot.png)
 
-## Project grouping
+## Tabs and buttons
 
-Sessions are grouped by the project they belong to. Each project has its own collapsible section in the sidebar. Worktrees are collapsed back to their parent repository so related sessions stay together regardless of which branch they ran on.
+The sidebar's top row is also the window's title strip (see [Window](window.md)).
+From left to right:
 
-Sessions that Switchboard cannot map to a known project path appear in a **Missing project** group with a remap option to reassign them.
+- **☰** — the application menu (Windows and Linux; on macOS the menu is in the
+  system menu bar).
+- **Sessions** — the session list described on this page.
+- **Agent Files** and **Work Files** — see [Agent Files and Work Files](memory-workfiles.md).
+- **Stats** — see [Stats](activity-stats.md).
+- **Global settings** (gear) — see [Settings reference](settings.md).
+- **Hide sidebar** — collapses the sidebar to a narrow column; the same button
+  there brings it back.
 
-## Session names
+Drag the sidebar's right edge to resize it. The width is remembered.
 
-Session titles come from two sources:
+Below the tabs, on the Sessions tab, a row of buttons:
 
-- **AI-generated titles** — Switchboard automatically picks up the AI-generated summary Claude Code writes at the start of every session.
-- **`/rename` command** — if you run Claude's `/rename` command inside a session, Switchboard picks up the name automatically the next time it indexes that session.
+| Button (tooltip) | Effect |
+|---|---|
+| Show running only | Only sessions with a live process |
+| Show pinned only | Only pinned sessions |
+| Show today's sessions only | Only sessions modified today |
+| Show archived sessions | Includes archived sessions in the list |
+| Session overview | Toggles the [grid](grid-overview.md) |
+| Re-sort sessions | Sorts the list again; between re-sorts, rows keep their place as they update |
+| Add project | Opens the Add Project dialog |
 
-## Filters
+"Running" and "pinned" exclude each other: turning one on turns the other off.
+"Today" combines with either.
 
-The filter bar above the session list offers four toggles:
+## Projects
 
-- **Running** — show only sessions with an active PTY process
-- **Today** — show only sessions modified today
-- **Starred** — show only starred sessions
-- **Archived** — show archived sessions (hidden by default)
+Each project is a collapsible group headed by its last two path segments. A
+project whose most recent session is older than **Session Max Age** starts
+collapsed.
 
-Filters combine: enabling "Running" and "Today" together shows only sessions that are both running and modified today.
+Buttons on a project header:
 
-## Full-text search
+| Button (tooltip) | Effect |
+|---|---|
+| Create scheduled task | Opens a Claude session that writes a schedule file — see [Automation](automation.md#creating-a-schedule) |
+| Project settings | Per-project overrides — see [Settings reference](settings.md#project-settings) |
+| Archive all sessions | Archives every session of the project, stopping running ones first |
+| New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
 
-The search bar at the top searches across session content — not just titles. Switchboard uses an FTS5 full-text index over session transcripts, memory files, and work files. Results update as you type (minimum 3 characters).
+A project on a [remote host](remote-hosts.md) carries a host status dot and a
+**Reconnect** button instead, and its `+` is disabled.
 
-To scope a search to a specific content type, use the type selector next to the search bar (Sessions, Subagents, Memory, Work Files).
+**Add Project** takes a folder path (typed or picked with **Browse**). It creates
+`~/.claude/projects/<encoded path>/` and, if that folder holds no transcript, a
+one-line placeholder transcript whose `cwd` is the folder, so the project is
+listed before any session has run in it.
 
-## Delete a session
+**Hide Project**, in Project Settings, removes a project from the sidebar
+without deleting any file. Adding the same folder again with **Add Project**
+shows it again.
 
-The trash button on a session card **permanently removes that session's transcript from disk**, along with any subagent transcripts belonging to it. There is no trash to recover it from, so the action asks for confirmation naming the session first.
+Sessions run in a git worktree are listed in their repository's project — see
+[Worktree sessions](worktrees.md).
 
-Use **archive** instead if you only want the session out of the way — archiving hides it from the sidebar but keeps the file.
+### Missing projects
 
-The confirmation dialog states what will be removed: the project, how many files are on disk, and how many subagent transcripts belong to the session. Subagent transcripts are removed with their parent, and their search/index entries with them.
+A project whose directory no longer exists is shown with a warning icon and
+starts collapsed. Its sessions cannot be opened (tooltip: *Project path no
+longer exists — use "Change path" to fix*). **Change project path** on its
+header picks the directory's new location and rewrites the `cwd` recorded in
+every transcript of that project, subagent transcripts included, so the
+sessions resume there — from Switchboard and from the `claude` CLI. Each file
+is rewritten through a temporary copy and a rename. The rewrite is refused
+while a session of that project is running.
 
-If a local session is still running it is stopped first; otherwise the deletion is refused with a reason rather than pulling a transcript out from under a running process. A session on a declared remote host is never stopped for a delete — Switchboard only observes remote sessions, so deleting one is refused outright regardless of whether it is still running; use the stop button first if you also want the process on the host ended. Anything that resolves outside `~/.claude/projects` — a symlinked transcript, for instance — is refused and logged. A session that never started has no transcript to remove, so deleting it just clears the leftover card.
+## Session rows
 
-## Stop a running session
+A row shows, from left to right:
 
-The stop button on a running session's card ends its process — for a local session and for a session on a declared remote host alike, with the same confirmation dialog. For a remote host session the dialog names the host, and stopping kills the process on that host, not just Switchboard's view of it.
+- the **pin**;
+- the status icon — see [Status indicators](notifications.md);
+- the session's name, then its age, message count, the first segment of its
+  id, and, while the `claude` CLI reports one, its status (`busy`, `idle`,
+  `waiting`) and how long ago it changed;
+- a host badge for a remote session, a terminal badge for a plain terminal.
 
-A remote session you are not currently viewing keeps running on the host even though Switchboard is not attached to it; opening it again reattaches to the same process instead of starting a new one. Only the stop button ends it.
+Hovering a row shows its buttons:
 
-## Star and archive
+| Button (tooltip) | Effect |
+|---|---|
+| Stop session | Ends the session's process, after a confirmation |
+| Archive / Unarchive | Hides the session from the normal list (stopping it first if it runs), or brings it back |
+| Fork session | Starts a new session branched from this one — see [Launching sessions](launching-sessions.md#fork) |
+| View messages | Opens the transcript in the read-only viewer |
+| Delete session | Removes the transcript from disk, after a confirmation |
+| Resume with config | Opens the Resume dialog — see [Launching sessions](launching-sessions.md#resume-dialog) |
 
-- **Star** — right-click a session and choose Star, or use the star icon in the session header. Starred sessions appear at the top of their project group.
-- **Archive** — right-click and choose Archive to hide a session from the default view. Archived sessions reappear when you enable the Archived filter. Archiving a running session stops it first — on its declared remote host, not just Switchboard's local view of it — the same as the stop button; the "archive all" buttons on a project or a same-slug group do this for every session they archive, and skip (and flag) any one that fails to stop rather than leaving it silently unarchived.
+Clicking a row opens the session in the terminal: it attaches to the running
+process, or resumes the session with `claude --resume`. A subagent row opens its
+transcript instead — see [Subagents](subagents.md).
 
-## Session count limits
+### Names
 
-By default the sidebar shows the 10 most recent sessions per project and hides older ones behind a "+N older" link. Both the count limit and a maximum age (in days) are configurable in **Global Settings** — see [Settings Reference](settings.md).
+The name shown is, in order of preference: a name given in Switchboard, the
+title Claude Code generated for the session, or the session's summary.
+Double-click a name to rename the session; the name is stored in Switchboard's
+database, not in the transcript. A name set with Claude's `/rename` command is
+picked up the next time the session is indexed.
 
-## Subagents
+### Order and limits
 
-Sessions that Claude spawned as sub-agents appear nested under their parent session. Orphan subagents (those whose parent cannot be found) appear in a collapsible **Orphan subagents** group at the bottom of each project section. See [Subagents](subagents.md) for details.
+Within a project, running pinned sessions come first, then running sessions,
+then pinned ones, then the rest by modification time.
+
+Each project shows at most **Max Visible Sessions** (default 10) sessions
+modified within **Session Max Age** (default 3 days); the others sit behind a
+`+ N older` link. Running and pinned sessions are always shown. Both limits are
+in [Global Settings](settings.md#application).
+
+### Groups inside a project
+
+- Sessions whose transcripts carry the same `slug` are grouped under one row,
+  with a count and an **Archive all sessions in group** button. The runs of one
+  [schedule](automation.md#schedules) share the schedule's slug.
+- Subagents sit under their parent session — see [Subagents](subagents.md).
+  Subagents whose parent cannot be found are listed in an **Orphan subagents**
+  group at the bottom of the project, collapsed by default; those of an
+  archived parent are hidden and shown with it instead.
+
+## Search
+
+The search field filters the current tab by content, through an FTS5 full-text
+index held in Switchboard's database:
+
+- on **Sessions**, session and subagent transcripts;
+- on **Agent Files**, the listed memory and command files;
+- on **Work Files**, the files under `.work-files/`.
+
+Search starts at 3 characters, 350 ms after the last keystroke. Only the first
+48 characters of a query are used. **Tt** restricts the search to titles. The
+reindex button rereads every session for the index; pressing Enter in the field
+does the same. The search runs in a worker thread, so a long query does not
+freeze the window.
+
+## Pin and archive
+
+- **Pin**: click the pin at the left of a row. Pinned sessions sort before
+  unpinned ones and are never hidden behind `+ N older`.
+- **Archive**: the archive button on a row, **Archive all sessions** on a
+  project header, or **Archive all sessions in group** on a slug group.
+  Archiving a running session stops it first — on its host, for a remote
+  session. The bulk buttons skip and report any session that fails to stop,
+  and leave it unarchived; **Archive all sessions** leaves subagents alone.
+  Archived sessions are listed with the **Show archived sessions** filter.
+
+## Stop
+
+The stop button (on a row, in the terminal header, or on a grid card) ends the
+session's process after a confirmation. For a session on a remote host the
+dialog names the host, and the process on that host is ended — see
+[Remote hosts](remote-hosts.md#stop-archive-delete).
+
+## Delete
+
+The delete button **permanently removes the session's transcript from disk**,
+with every subagent transcript belonging to it and their index entries. There is
+no trash. The confirmation dialog names the project, the number of files on
+disk and the number of subagent transcripts.
+
+- A running local session is stopped first. If it cannot be stopped, the delete
+  is refused with the reason.
+- A session on a remote host is never deleted: its transcript is a mirrored
+  copy that the next refresh would fetch again.
+- A transcript that resolves outside `~/.claude/projects` (through a symbolic
+  link, for instance) is refused and logged.
+- A session that never started has no transcript; deleting it removes the row.
+
+Archive a session instead to keep its file.

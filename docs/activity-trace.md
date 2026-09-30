@@ -1,114 +1,83 @@
 # Activity Trace
 
-A diagnostic trace for the sidebar's activity indicators — the blue braille
-spinner, the blue "response ready" dot, the orange attention LED, the purple
-subagent glyph, and the green running dot.
+**Debug mode** records a diagnostic trace of the sidebar's activity indicators —
+the light-blue working spinner, the blue "response ready" dot, the orange
+attention LED, the violet subagent states and the green running dot (see
+[Status indicators](notifications.md)).
 
 Those indicators are driven by two processes with two clocks: the main process
-parses OSC sequences off the PTY and watches the filesystem, the renderer keeps
-four independent state stores and paints classes. When one of them is wrong,
+parses OSC sequences off the PTY and watches the filesystem, and the renderer
+keeps several state stores and paints classes. When an indicator is wrong,
 `main.log` cannot say why — most of the OSC handling logs at `debug`, which a
-packaged build never writes, and nothing at all records the renderer side.
+packaged build does not write, and nothing records the renderer side. The trace
+records **both processes into one ordered file**, so "what did the CLI put in
+the title, and what did the UI do about it" has one answer.
 
-The activity trace records **both processes into one ordered file**, so the
-question "what did the CLI actually put in the title, and what did the UI do
-about it" has a single answer you can read.
-
-**It is off by default and costs nothing when off.** Turn it on only while
+**It is off by default, and costs nothing when off.** Turn it on while
 investigating.
 
 ## Turning it on
 
-Settings → **Diagnostics** → **Debug Mode**. The switch takes effect the moment
-it is flipped: no restart, no relaunch, no session lost. That is the point of
-it — the symptoms this trace exists to catch correlate with session activity,
-and restarting the app to arm a diagnostic destroys the state you wanted to
-observe. The panel also lists the trace files, with their size and date, and
-can open or delete one.
+**Global Settings → Diagnostics → Debug Mode.**
 
-The choice is remembered across launches: it is stored as `activityTrace` in
-the `global` settings row, the same object every other app-wide preference
-lives in.
+### Toggling it at runtime
 
-At startup, from a shell:
+The switch takes effect as it is flipped: no restart, no session lost. The
+symptoms it exists to catch depend on live session state, which a restart would
+destroy. The choice is remembered across launches, as `activityTrace` in the
+global settings. The Diagnostics section also lists the trace files with their
+size and date, and opens or deletes them; the file being written cannot be
+deleted.
+
+### From the environment
 
 ```bash
 SWITCHBOARD_ACTIVITY_TRACE=1 task dev
 ```
 
-Accepted values: `1`, `true`, `yes`, `on` (case-insensitive); `0`, `no`, `off`
-and anything else unrecognised mean off. The variable remains the **startup**
-path, for scripts and CI: when it is set at all it decides the state the app
-boots with, in either direction, and the stored preference is ignored for that
-launch. When it is unset or blank, the stored preference decides. Neither locks
-the switch — the panel can toggle the trace either way once the app is running.
-
-The variable is read **once**, by the main process (`activity-trace.js`); the
-renderer never parses it, it is told the startup answer through a launch
-argument and every later change over the `activity-trace-state` event, so the
-two halves cannot disagree.
+`1`, `true`, `yes` and `on` (any case) mean on; any other non-blank value means
+off. When the variable is set, it decides the state the app starts with, and the
+stored preference is ignored for that launch; when it is unset or blank, the
+stored preference decides. Either way the switch still works once the app runs.
+The main process reads the variable once (`activity-trace.js`) and tells the
+renderer, through a launch argument and then the `activity-trace-state` event,
+so the two halves cannot disagree.
 
 ### Turning it off, and on again
 
-Turning the trace off closes the file properly: the write stream is `end()`ed,
-which flushes everything already handed to it before the descriptor closes, so
-the last lines written are not lost. Probes stop at the same instant — the
-state is read before any payload is built, so nothing is constructed for a
-line that will not be written.
+Turning the trace off ends the write stream, which flushes what was already
+handed to it, and stops every probe at once.
 
-Turning it back on **opens a new segment** rather than appending to the closed
-one. Two reasons: the file name is stamped with the moment the observation
-window opened, and appending would put two disjoint windows with an unexplained
-gap between them into one file whose name describes only the first; and the
-rotation bookkeeping is per-file. `seq` does not restart — it is process-wide,
-and it is what orders the two halves of a session.
+Turning it back on **opens a new file** rather than appending to the closed
+one: the name is stamped with the second the observation window opened, and a
+file holding two windows would be named after the first only. `seq` does not
+restart — it is process-wide, and orders the two windows. An off/on within the
+same second resolves to the same name, and resumes that window's latest file.
 
-The stamp has one-second resolution, so an off/on inside the same second
-resolves to the same name and **resumes that window** instead of creating a
-second one indistinguishable from it: it reopens the segment the window was
-last writing to, not its first. That is the correct reading of the name — the
-window is the second it is stamped with.
+The byte counter is read back from the file when it is reopened, so the
+rotation threshold measures the file, not the window, and a file already at the
+cap rotates at once. A path reopened is queued once, not twice, so the
+retention count stays right.
 
-The byte counter is re-read from the file on open, so the rotation threshold
-measures the file rather than the last window. That detail is load-bearing, not
-housekeeping: starting the counter at zero on each activation lets one segment
-grow past the cap once per toggle, and once past it the threshold is met on
-every write, so rotation never fires again and the 64 MB ceiling stops
-applying. A segment that is already at the cap when it is reopened rotates
-immediately rather than taking one more line first.
+### Where the file goes
 
-That case is not hypothetical — it is a double-click on the switch, and it used
-to be destructive: the same path went into the retained-segment list twice, the
-ceiling counted one file as two, and the queue eventually unlinked the segment
-the trace was still writing to. The queue now re-queues a returning path
-instead of duplicating it.
-
-The disk ceiling is not per-window: the retained-segment list spans the whole
-process, so four short observation windows leave the same four segments a
-single long one would. Rotation works identically whether the trace was armed
-at launch or an hour later.
-
-The file lands in the app's data directory, next to `switchboard.db`:
+Next to `switchboard.db`, in the data directory:
 
 | Run | Directory |
 |---|---|
-| `task dev` / any dev run | `~/.switchboard-dev/` |
+| `task dev`, or any run from source | `~/.switchboard-dev/` |
 | `task test-pr PR=<n>` | `~/.switchboard-dev-pr<n>/` |
-| Explicit `SWITCHBOARD_DATA_DIR=...` | that directory |
-| Packaged app, no env var | `~/.switchboard/` |
+| `SWITCHBOARD_DATA_DIR=…` | that directory |
+| Installed app | `~/.switchboard/` |
 
-The directory is not re-derived: it is `path.dirname(DB_PATH)`, the single
-resolution `db.js` performs, so the trace always lands beside the database it
-belongs to. The name is stamped with the launch time — `activity-trace-20260822-141530.jsonl` —
-so a new run never overwrites the previous investigation. The main log prints
-the full path at startup (`[activity-trace] enabled → ...`).
-
-Nothing is written into the repository.
+The name carries the start time: `activity-trace-20260822-141530.jsonl`. The
+main log prints the path (`[activity-trace] enabled → …`). Nothing is written
+into the repository.
 
 ## Reading a line
 
-One JSON object per line. The first six fields are the envelope, always in this
-order, always present; the rest is the probe's payload.
+One JSON object per line. The first six fields are the envelope, always
+present, in this order; the rest is the probe's payload.
 
 ```json
 {"seq":417,"t":38214.912,"wall":"2026-08-22T14:20:09.118Z","src":"main","cat":"osc.title","sid":"6f1c…","cp":"U+25D0 U+0020 U+0043","title":"◐ Claude","busy":true,"idle":false,"rule":"glyph","was":false,"decision":"emit:busy"}
@@ -116,32 +85,26 @@ order, always present; the rest is the probe's payload.
 
 | Field | Meaning |
 |---|---|
-| `seq` | Monotonic sequence number. **The only reliable ordering.** |
-| `t` | Milliseconds since the trace opened, from the main process's monotonic clock. |
-| `wall` | Wall-clock ISO timestamp, for correlating with `main.log` and screenshots. |
-| `src` | `main` or `renderer` — where the event was observed. |
-| `cat` | Probe category (table below). |
-| `sid` | The session id the entry is about, or `null`. |
+| `seq` | Sequence number. **The only reliable order.** |
+| `t` | Milliseconds since the trace opened, on the main process's monotonic clock |
+| `wall` | Wall-clock time, to line up with `main.log` and screenshots |
+| `src` | `main` or `renderer` |
+| `cat` | Probe category (below) |
+| `sid` | The session the line is about, or `null` |
 
 **The main process is the only writer.** The renderer sends its probes over a
-fire-and-forget IPC (`activity-trace`) and the main process stamps `seq`, `t`
-and `wall` on arrival. That is deliberate: two files with two clocks cannot be
-interleaved after the fact, and the ordering is the whole point. The cost is
-that a renderer entry's timestamp is its *arrival* time in main, not its
-emission time — sub-millisecond in practice, but do not read `t` as renderer
-latency.
+fire-and-forget IPC (`activity-trace`), and main stamps `seq`, `t` and `wall` on
+arrival. A renderer line's time is therefore its arrival in main — sub-millisecond
+later in practice; do not read `t` as renderer latency.
 
-If a payload field collides with an envelope name, it is stored with a leading
-underscore (`_seq`), so `seq` always means the sequence number.
+A payload field whose name collides with the envelope is stored with a leading
+underscore (`_seq`).
 
-Any probe that names an emission carries **`sent`**: every `webContents.send`
-in the app is guarded by `mainWindow && !mainWindow.isDestroyed()`, so a line
-saying an event was produced would otherwise be claiming a delivery it never
-checked. `sent:false` means the state changed but the renderer was already
-gone — normal during shutdown, a real finding at any other time. Probes that
-only record an observation (`osc.title`, `osc.progress`, `pty.exit`,
-`poll.snapshot`, `subagent.assumed-finished`) make no delivery claim and carry
-no `sent`.
+A probe that reports an emission carries **`sent`**: every `webContents.send` is
+guarded by "the window still exists", and `sent: false` means the state changed
+but the renderer was gone — normal during shutdown, a finding at any other time.
+Probes that only record an observation (`osc.title`, `osc.progress`,
+`pty.exit`, `poll.snapshot`, `subagent.assumed-finished`) carry no `sent`.
 
 ## Probe categories
 
@@ -151,16 +114,17 @@ no `sent`.
 |---|---|---|
 | `osc.title` | Every OSC 0 title with a payload | `cp`, `title`, `busy`, `idle`, `rule` (`glyph` / `idle-glyph` / `fallback` / `null`), `was`, `decision` |
 | `osc.progress` | Every OSC 9;4 progress level (except `4;0`) | `level`, `payload`, `was`, `decision` |
-| `osc.notify` | Every non-progress OSC 9 | `message`, `sent` |
+| `osc.notify` | Every other OSC 9 | `message`, `sent` |
 | `busy.emit` | A `cli-busy-state` event leaves main | `busy`, `via` (`osc0` / `osc9.4`), `sent` |
 | `subagent.spawned` | `subagent-spawned` is sent | `agentId`, `kind` (`spawn` / `heartbeat`), `subagentType`, `ageMs`, `sent` |
-| `subagent.assumed-finished` | An unknown transcript is recorded as already finished, **silently** — no IPC | `agentId`, `ageMs`, `bootstrap`, `recheck` |
-| `subagent.rehabilitated` | An assumed-finished entry grew inside its recheck window: the withheld spawn is released | `agentId`, `withheldForMs`, `subagentType`, `sent` |
+| `subagent.assumed-finished` | An unknown transcript is recorded as already finished, without any IPC | `agentId`, `ageMs`, `bootstrap`, `recheck` |
+| `subagent.rehabilitated` | An assumed-finished subagent grew within its recheck window: the withheld spawn is released | `agentId`, `withheldForMs`, `subagentType`, `sent` |
 | `subagent.completed` | `subagent-completed` is sent | `agentId`, `stableForMs`, `reason`, `sent` |
 | `session.forked` | A fork re-keys a live session | `newId`, `wasBusy`, `sent` |
-| `pty.input` | Every `terminal-input` IPC chunk, before the composer model sees it | `len` always; `at` and `cp` only when the chunk holds a control character |
+| `pty.input` | Every `terminal-input` IPC chunk, before the prompt model sees it | `len` always; `at` and `cp` only when the chunk holds a control character |
 | `pty.exit` | The PTY exits | `exitCode`, `alsoUnder`, `wasBusy` |
 | `poll.snapshot` | `get-active-sessions` answers | `count`, `entries` |
+| `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
 | `app.quit` | Last line of a clean shutdown | — |
 
 ### Renderer
@@ -168,349 +132,219 @@ no `sent`.
 | `cat` | Fires when | Key fields |
 |---|---|---|
 | `recv.*` | An IPC event arrives (`cli-busy-state`, `terminal-notification`, `session-forked`, `session-detected`, `process-exited`, `subagent-spawned`, `subagent-completed`) | per event |
-| `recv.subagent-spawned` | `noteSubagentActivity()` recorded a sighting — the single write path into `activeSubagentsByParent`, whichever of the three sources called it. `applied` tells whether it changed anything; `applied:false` + `reason:"heartbeat-for-untracked-agent"` is a heartbeat deliberately dropped **before** reaching `noteSubagentActivity` (still traced, from `onSubagentSpawned`, so it never gets a `source`) | `agentId`, `applied`, `source` (`local-ipc` / `remote-watch` / `local-transcript`), `bootstrap`, `heartbeat` (both `local-ipc`-only), `from` |
-| `recv.subagent-completed` | An agent left `activeSubagentsByParent`, however that was discovered — `via` says how: `ipc` (the real `subagent-completed` event, local-ipc only), `ttl` (`pruneStaleSubagents`'s 60s sweep — the only "completed" `remote-watch`/`local-transcript` ever get, since neither source has a completed IPC of its own), or `parent-cleared` (`clearActiveSubagentsFor`, on a parent PTY exit or a remote session marked stopped) | `agentId`, `from`, `via` |
+| `recv.subagent-spawned` | `noteSubagentActivity()` recorded a sighting — the single write path into `activeSubagentsByParent`. `applied` says whether it changed anything. `applied:false` with `reason:"heartbeat-for-untracked-agent"` is a heartbeat dropped before that function (traced from `onSubagentSpawned`, so without `source`) | `agentId`, `applied`, `source` (`local-ipc` / `remote-watch` / `local-transcript`), `bootstrap`, `heartbeat` (both `local-ipc` only), `from` |
+| `recv.subagent-completed` | A subagent left `activeSubagentsByParent`; `via` says how: `ipc` (the `subagent-completed` event, `local-ipc` only), `ttl` (the 60 s sweep — the only completion `remote-watch` and `local-transcript` get), or `parent-cleared` (the parent's PTY exited, or its remote session was marked stopped) | `agentId`, `from`, `via` |
 | `store.mutate` | A state store changes | `map`, `op`, `from`, `to`, `fn`, `via` |
 | `store.skip` | A write was **refused** by a guard | `map`, `reason`, `fn` |
 | `store.purge` | State dropped because the PTY is gone | `reason`, `busy`, `ready`, `attention` |
 | `store.rekey` | Activity state carried across a fork | `from`, `busy`, `ready`, `attention` |
-| `subagents.prune` | The 60 s TTL sweep ran | `parents`, `agents` |
-| `class.apply` | `needs-attention` / `cli-busy` / `response-ready` / `has-busy-agents` / `is-alive` written (`applyStateClasses`, all three session kinds) | `el`, `needs-attention`, `cli-busy`, `response-ready`, `has-busy-agents`, `is-alive`, `kind` |
+| `subagents.prune` | The 60 s sweep ran | `parents`, `agents` |
+| `class.apply` | `needs-attention` / `cli-busy` / `response-ready` / `has-busy-agents` / `is-alive` written, for every kind of session | `el`, `needs-attention`, `cli-busy`, `response-ready`, `has-busy-agents`, `is-alive`, `kind` |
 | `class.toggle` | `has-running-pty` written | `el`, `cls`, `on` |
-| `class.subagent` | Subagent `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
-| `class.render` | A full sidebar render reconstructed an item's classes from the stores | `el`, `cls` |
+| `class.subagent` | A subagent's `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
+| `class.render` | A full sidebar render rebuilt an item's classes from the stores | `el`, `cls` |
 | `poll.recv` | The poll reply reaches the renderer | `sinceSeq`, `entries` |
 | `reconcile.apply` / `reconcile.skip` / `reconcile.noop` | Per session in the poll reply | `backend`, `local`, `reason`, `sinceSeq`, `sessionSeq` |
 
-`store.mutate` carries `fn` (the function that wrote) and, for `setActivity`,
-`via` (the caller that asked). `setActivity`'s third argument exists only for
-this — it is inert when the trace is off.
+`store.mutate` carries `fn`, the function that wrote, and for `setActivity`,
+`via`, the caller that asked.
 
-## What the trace is for
+## What to look for
 
-Three questions it answers that nothing else can:
-
-**Does the CLI's title still match the busy test?** This is the question the
-trace was built for, and the first run of it (2026-08-22) found the test broken:
-over the first ten minutes of that trace, 623 of 628 OSC 0 titles started with
-`U+25D0` / `U+25D1` and were marked `ignored:no-match`, and every busy transition
-was attributed to `via:"osc9.4"` — the title could only turn the spinner *off*.
-Quote a window, not a total, if you cite your own run: the file grows for as long
-as the variable is set. Recheck after a
-CLI upgrade, because the glyphs are the CLI's private business and it has
-changed them before:
+**Does the CLI's title still match the busy test?** The spinner glyphs are the
+CLI's private business and can change with a release. After a CLI upgrade:
 
 ```bash
 # Leading code points, and what the detector made of them
 jq -r 'select(.cat=="osc.title") | "\(.cp | split(" ")[0])\t\(.rule)\t\(.decision)"' $TRACE | sort | uniq -c
 
-# Where busy transitions actually came from — `osc0` must appear
+# Where busy transitions came from — `osc0` must appear
 jq -r 'select(.cat=="busy.emit" and .busy==true) | .via' $TRACE | sort | uniq -c
 ```
 
-Spinner frames reading `rule:"fallback"` mean the CLI moved to glyphs the range
-table in `classify-title-activity.js` does not list yet — still detected, worth
-adding. `ignored:no-match` on a title that visibly carries a prefix means the
-fallback itself regressed. No `osc0` in the second count means the title channel
-is dead again and the indicator is riding on the progress-bar setting alone. The
-full argument is in [`.ai/contexts/ipc-bridge.md`](../.ai/contexts/ipc-bridge.md),
-"The OSC 0 title is the primary busy channel".
+Spinner frames reading `rule:"fallback"` are glyphs the range table in
+`classify-title-activity.js` does not list yet: still detected, worth adding.
+`ignored:no-match` on a title that visibly carries a spinner means the fallback
+itself no longer matches. No `osc0` in the second count means the title channel
+is dead and the indicator rides on the progress reports alone. See
+[`.ai/contexts/ipc-bridge.md`](../.ai/contexts/ipc-bridge.md), "The OSC 0 title
+is the primary busy channel". Quote a time window, not a file total: the file
+grows for as long as the trace is on.
 
 **Was an event suppressed, or never sent?** `osc.title` records the verdict
-(`emit:*` vs `suppressed:*`) and `busy.emit` records the actual send. A
-`decision` of `emit:busy` with no `busy.emit` right after it is a bug in the
-emitting branch; `suppressed:already-busy` is working as intended.
+(`emit:*` or `suppressed:*`), `busy.emit` the send. `emit:busy` without a
+`busy.emit` right after it is a bug in the emitting branch;
+`suppressed:already-busy` is the rule working.
 
-> **Expect a burst at startup.** The first scan of a session emits one
-> `subagent.assumed-finished` line per historical transcript — a project with a
-> thousand of them produces a thousand lines in a single pass, before anything
-> interesting has happened. They all carry `bootstrap:true`, and later scans
-> produce none (the directory-mtime cache skips known files), so filter them
-> out when you are reading a startup problem:
-> `jq -c 'select(.bootstrap != true)' $TRACE`.
+> **Expect a burst at startup.** The first scan writes one
+> `subagent.assumed-finished` line per historical subagent transcript, all with
+> `bootstrap:true`; later scans write none. Filter them out when reading a
+> startup problem: `jq -c 'select(.bootstrap != true)' $TRACE`.
 
 **Is a subagent's state the truth or an assumption?** A transcript first seen
-already stale is recorded as finished without any event — `subagent.assumed-finished`
-is the only record that it happened. When `recheck` is `true` that verdict is a
-guess (the sighting may simply have been late), and a later
-`subagent.rehabilitated` line is the guess being retracted, with `withheldForMs`
-saying how long the spawn was suppressed. A parent whose indicator is wrong
-usually has one of these two lines behind it.
+already stale is recorded as finished without any event;
+`subagent.assumed-finished` is the only record of it. With `recheck: true` that
+verdict is a guess, and a later `subagent.rehabilitated` retracts it, with
+`withheldForMs` saying how long the spawn was held back.
 
-**Did the UI receive it and act?** Follow the `seq` numbers: `busy.emit` →
-`recv.cli-busy-state` → `store.mutate` → `class.apply`. A chain that stops
-early localises the fault to one process. `store.skip` and `reconcile.skip`
-name the guard that dropped the value.
+**Did the UI receive it and act?** Follow `seq`: `busy.emit` →
+`recv.cli-busy-state` → `store.mutate` → `class.apply`. Where the chain stops
+names the process at fault. `store.skip` and `reconcile.skip` name the guard
+that dropped the value.
 
 ### Useful filters
 
 ```bash
 TRACE=~/.switchboard-dev/activity-trace-*.jsonl
 
-# Which code points does the CLI actually send, and what did the detector decide?
+# Which code points does the CLI send, and what did the detector decide?
 jq -r 'select(.cat=="osc.title") | "\(.cp)\t\(.rule)\t\(.decision)"' $TRACE | sort | uniq -c
 
 # Everything about one session, in order
 jq -c 'select(.sid=="6f1c…")' $TRACE
 
-# Every state write that was refused, and by which guard
+# Every state write refused, and by which guard
 jq -c 'select(.cat=="store.skip" or .cat=="reconcile.skip")' $TRACE
 
-# Everything the subagent detector decided, in order, minus the startup burst
+# The subagent detector's decisions, without the startup burst
 jq -c 'select((.cat | startswith("subagent.")) and .bootstrap != true)' $TRACE
 
-# Events the app produced but never delivered (renderer already gone)
+# Events produced but never delivered (renderer gone)
 jq -c 'select(.sent == false)' $TRACE
 
-# Subagent events the renderer received but deliberately dropped
+# Subagent events the renderer received and dropped
 jq -c 'select(.cat=="recv.subagent-spawned" and .applied==false)' $TRACE
 
-# Emission vs reception, side by side
+# Emission and reception, side by side
 jq -c 'select(.cat=="busy.emit" or .cat=="recv.cli-busy-state")' $TRACE
 ```
 
-## Cost when disabled
+## What `pty.input` records
 
-Nothing is built, sent, or written.
+`pty.input` records every chunk's length, and code points **only from the
+chunk's first control character** (C0 or DEL) onwards, with `at` giving its
+offset. A chunk of printable text has no control character, so it contributes a
+length and no `cp` field at all.
 
-- **Main process** — `TRACE` is the trace module's state object, `{ on }`.
-  Every probe is `if (TRACE.on) trace(...)`: one property load on a plain
-  object, no allocation, and the payload literal is never evaluated with the
-  trace off. The object rather than a boolean is what makes the switch work at
-  all — a `const TRACE = activityTrace.enabled` would freeze the value at
-  require time, and every probe would be pinned to whatever the environment
-  said at launch. The `activity-trace` IPC handler *is* registered
-  unconditionally, so that arming the trace needs no new listener; the renderer
-  does not send to it while off, and `trace()` drops the line if anything does.
-- **Renderer** — `preload.js` resolves the startup flag and exposes it as
-  `window.api.activityTraceEnabled`; `public/activity-trace.js` reduces it to
-  `window.ATRACE` and keeps that flag following main's state pushes. Probes are
-  `if (window.ATRACE) window.atrace(...)`: one property load, no allocation, no
-  IPC. `window.atrace` is the real forwarder whenever the preload bridge exists
-  — gating the function itself on the startup flag would leave the renderer
-  permanently mute whatever main said later.
-- The trace function also short-circuits on its own first line, so a stray
-  call from anywhere is inert.
+That rule keeps the probe from being a keylogger. xterm.js sends about one chunk
+per keystroke, and a typed chunk's code points *are* the text; a trace left on
+for an evening would otherwise hold everything typed into every session. The
+chunks the probe is for — those that push the prompt model's quiet clock while
+leaving `pending` at 0 (see [Automation](automation.md#politeness-switchboard-never-types-over-you))
+— are escape sequences and control characters, which is what is kept.
 
-`test/activity-trace.test.js` and `test/activity-trace-renderer.test.js` pin
-this: a disabled trace never advances its sequence counter, never opens a file,
-and never reads a payload property (the tests hand it an object with a
-throwing/counting getter).
-
-`test/activity-trace-probe-guards.test.js` pins it at the call sites, and does
-so by reading the source rather than by running it. Running a guarded statement
-in a sandbox of exploding stubs only demonstrates that `if (false) X` does not
-evaluate `X` — a property of the language. What actually goes wrong is a helper
-called on the line *above* the guard, which such a rig never loads. So the
-checks are scans: every call to `trace`, `codePoints`, `controlOffset`,
-`busyDecision` or `progressDecision` in `main.js` must sit under `if (TRACE.on)`,
-and the probe categories are named so a probe deleted in a refactor fails the
-suite instead of quietly reducing a count.
-
-One call is exempt from that guard and pinned by its exact text: the OSC 0
-`log.debug` line renders a code point into a template literal, and it carries
-the debug-log guard `if (LOG_DEBUG_ON)` rather than `if (TRACE.on)` — a
-packaged build logs at `info`, so the line and its code point are inert there.
-`test/osc-debug-log-guards.test.js` pins that guard, and every other debug line
-on the PTY data path with it. The exemption above exists so that this stays the
-only one.
-
-This matters because of
-[ADR 0002](decisions/0002-discrete-steps-sidebar-animations.md) — the
-indicators were rebuilt to stop burning CPU at idle, and a diagnostic that
-allocated on every render would undo that. Even when the trace is **on**, no
-probe sits on the terminal render path: `osc.title` fires only for chunks
-carrying an OSC introducer, and `pty.input` only for chunks the renderer sends
-*to* the PTY — a channel a person can only drive at typing speed, and whose
-unexplained traffic is the thing that probe exists to expose.
-
-`pty.input` always records the chunk's length, and records code points **only
-from the chunk's first control character** (C0 or DEL) onwards, with `at` saying
-where that was. A chunk of printable text has no control character, so it
-contributes a length and nothing else — no `cp` field at all.
-
-That rule is what stops the probe from being a keylogger. xterm sends roughly
-one chunk per keystroke, and the leading code points of a typed chunk *are* the
-text, hex-encoded and trivially reversible; a trace left on for an evening would
-otherwise hold everything typed into every session, on disk, for anything that
-reads the file afterwards. Nothing is lost for the question being asked: the
-chunks under suspicion push the composer's quiet clock while leaving `pending`
-at 0, which makes them escape sequences and control characters by construction —
-exactly what is kept — and a typed chunk announces itself through `pending > 0`,
-where its length is all the trace needs to add.
-
-Ten code points is more than `osc.title`'s three because the question here is
-which escape sequence arrived, and a CPR reply (`ESC [ 24 ; 80 R`) is eight.
-Those ten start at the control character, so a chunk whose sequence is followed
-by text — a bracketed paste, `ESC [ 200 ~` then the pasted content — can still
-carry a few characters of it. That is the bound of the guarantee: no chunk of
-plain text is ever rendered, and no rendering ever starts before a control
-character.
+Ten code points are kept from the control character (a cursor-position report,
+`ESC [ 24 ; 80 R`, is eight). So a chunk whose sequence is followed by text — a
+bracketed paste, `ESC [ 200 ~` then the pasted content — can carry a few
+characters of that text. That is the bound of the guarantee: no chunk of plain
+text is ever rendered, and no rendering starts before a control character.
 
 ## Disk use
 
-Bounded. The trace writes to at most 4 rotating segments of 16 MB each — a
-64 MB ceiling by default, so it can be left on overnight. When the cap is
-reached the oldest segment is deleted; the tail is what you read.
-
-If that deletion fails — most plausibly because you have a `tail` or an editor
-open on the segment, which is exactly what an investigation looks like — the
-file stays queued and is retried at the next rotation, and a
-`trace.prune-failed` line records it. So the ceiling can be temporarily
-exceeded, but never silently: grep the trace for `prune-failed` if disk use
-surprises you.
-
-A segment that is simply **gone** is the one failure that is not retried: it is
-dropped from the queue and the ceiling moves on. Deleting an old segment from
-the Diagnostics panel, or by hand in the directory, would otherwise wedge the
-queue head on a file that can never be unlinked again, and the 64 MB ceiling
-would stop applying for the rest of the run. The panel refuses to delete the
-segment currently being written; every other one is fair game.
+At most 4 rotating segments of 16 MB each: a 64 MB ceiling by default, so the
+trace can stay on overnight. At the cap the oldest segment is deleted.
 
 ```bash
 # 256 MB ceiling instead of 64
 SWITCHBOARD_ACTIVITY_TRACE=1 SWITCHBOARD_ACTIVITY_TRACE_MAX_MB=256 task dev
 ```
 
+If the deletion fails — a `tail` or an editor holding the file open, typically —
+the file stays queued and is retried at the next rotation, and a
+`trace.prune-failed` line records it: the ceiling can be exceeded for a while,
+never silently. A file that is simply gone (deleted from the Diagnostics panel
+or by hand) is dropped from the queue.
+
 Writes go through an append-only stream and are never read back. The stream
-buffers, so a slow disk delays the trace instead of blocking the main thread —
-the trade is that the last few lines may be lost on a hard crash. A clean quit
-flushes and closes (`app.quit` is the last line).
+buffers, so a slow disk delays the trace without blocking the main thread; the
+last few lines can be lost on a hard crash. A clean quit flushes and closes the
+file (`app.quit` is its last line).
+
+## Cost when off
+
+Nothing is built, sent or written.
+
+- **Main process**: every probe is `if (TRACE.on) trace(...)` — one property
+  load, and the payload is never evaluated. `TRACE` is an object rather than a
+  boolean so that the runtime switch reaches every probe. The `activity-trace`
+  IPC handler is registered at all times, so arming the trace needs no new
+  listener; the renderer does not send to it while the trace is off, and
+  `trace()` drops anything that arrives.
+- **Renderer**: `preload.js` exposes the startup state as
+  `window.api.activityTraceEnabled`; `public/activity-trace.js` keeps
+  `window.ATRACE` in step with main. Probes are `if (window.ATRACE) window.atrace(...)`.
+- `trace()` also returns on its first line when off.
+
+`test/activity-trace.test.js` and `test/activity-trace-renderer.test.js` check
+that a disabled trace never advances its sequence, never opens a file and never
+reads a payload property. `test/activity-trace-probe-guards.test.js` scans
+`main.js`: every call to `trace`, `codePoints`, `controlOffset`, `busyDecision`
+or `progressDecision` must sit under `if (TRACE.on)`, and the probe categories
+are listed so a probe deleted in a refactor fails the suite. The one exemption
+is the OSC 0 `log.debug` line, guarded by `if (LOG_DEBUG_ON)` instead and pinned
+by `test/osc-debug-log-guards.test.js`: a packaged build logs at `info`, so it
+is inert there.
+
+Even with the trace on, no probe sits on the terminal render path: `osc.title`
+fires only for chunks carrying an OSC introducer, and `pty.input` only for
+chunks sent *to* the PTY. This matters because of
+[decision 0002](decisions/0002-discrete-steps-sidebar-animations.md): the
+indicators are built not to burn CPU at idle.
+
+## Implementation notes
 
 ### A segment is pruned only once its stream has closed
 
-`fs.createWriteStream` opens its file asynchronously, on the libuv thread
-pool, and with `flags: 'a'` that open creates the file if it is missing. A
-rotation retires a stream that may not have opened yet; if the prune unlinks
-that segment first, the open lands afterwards and recreates it. The queue has
-already dropped the path, so the recreated file is never pruned again: each
-one it happens to leaves the directory a segment further above the ceiling for
-good, with no `trace.prune-failed` line, since the unlink itself succeeded.
+`fs.createWriteStream` opens its file asynchronously, and with `flags: 'a'` the
+open creates the file if it is missing. A rotation retires a stream whose open
+may not have happened yet; unlinking that file first would let the late open
+recreate it, outside the queue and never pruned again.
 
-`pruneSegments()` therefore stops at the first stale segment whose stream has
-not emitted `close` (the `unsettled` map in `activity-trace.js`, a count per
-path, since a same-second reactivation can reopen a path before its previous
-stream has closed). Every
-rotated stream prunes again on its own `close`, so the segment is removed as
-soon as its handle is released. The order occurs on the Windows CI runners,
-whose thread-pool opens can lag behind a burst of rotations; it has not been
-seen on the Linux runners. The test "a retired segment
-whose open lands late is not recreated behind the prune" holds one stream's
-open back to reproduce the order deterministically on any platform.
+`pruneSegments()` therefore stops at the first old file whose stream has not
+emitted `close` (the `unsettled` map in `activity-trace.js`, a count per path,
+since a same-second reopen can reuse a path before its previous stream closed).
+Every retired stream prunes again on its own `close`. The late-open order occurs
+on the Windows CI runners; the test "a retired segment whose open lands late is
+not recreated behind the prune" holds one open back to reproduce it on any
+platform. A test counting retries of a locked file rotates again after the first
+attempt, since the first attempt waits for that file's own `close`.
 
-The first unlink attempt on a segment therefore waits for that segment's own
-`close`, which can be the last of a burst to land. A test that counts retries
-of a locked segment rotates again after the first attempt, since before it
-there may be none left to count.
+A stream whose `close` never fires (see the fallback below) keeps its file, and
+every file queued after it, on disk until the process exits.
 
-A stream whose `close` never fires (the fallback in "Testing the async prune
-path" below) keeps its segment, and every segment queued after it, on disk
-until the process exits.
+### Testing the async prune path
 
-## Testing the async prune path
+`rotate()` opens the new file synchronously and runs the retired stream's
+cleanup on that stream's `close` event — not on `.end()`'s callback, which fires
+on `finish`, before the descriptor is released. `close()` and
+`setEnabled(false, …)` wait for their own stream's `close` **and** for every
+rotation close still in flight (`pendingRotationCloses`), so a directory can be
+removed right after they return, on Windows too.
 
-`rotate()` runs `openSegment()` synchronously but hands the retired stream's
-cleanup (`pruneSegments`) to its `close()` — "A segment is pruned only once
-its stream has closed" above says why pruning cannot run earlier. `close()`,
-`setEnabled(false, ...)` and the module's own `close()` used to pass that
-continuation straight to `.end()` instead: `.end(callback)`'s callback fires
-on the stream's `finish` event,
-which only means the data was handed off — `autoClose`'s own internal
-`fs.close()` runs after that, and only the stream's separate `close` event
-means the fd is actually released. That gap was invisible on Linux/macOS
-(POSIX lets you unlink or remove a directory entry with an open handle on
-it) and surfaced as Windows-only CI failures (`ENOTEMPTY` on the test
-temp-dir cleanup right after `close()`) once the Windows leg of the test
-matrix existed to see it. Fixed by listening for `close` before running the
-continuation, instead of relying on `.end()`'s own callback.
+The tests intercept the `.once('close', …)` registration the code makes
+(`interceptOnceClose`), hold it, assert the callback under test has not resolved,
+release it, and assert that it has. Code that waited on `finish` instead would
+never register, and the callback would resolve at once. The tests that wait for
+an asynchronous outcome poll for it (`waitUntil`, capped at 10 s) rather than
+sleeping a fixed time, and the prune-failure test waits for its warning to be on
+disk before calling `close()`.
 
-Under `node --test`'s default concurrency (one process per test file, dozens
-running at once), that `close` event can still take far longer than it does
-in isolation: CPU and disk contention from the sibling processes delays the
-event loop turn it needs.
+**The wait is bounded.** A `close` may never come — an antivirus or backup lock
+on Windows can hold a handle indefinitely. `close()` and `setEnabled(false, …)`
+call `done()` anyway after `closeTimeoutMs` (default 5 s, overridable for tests),
+with a `process.emitWarning` of code `SWITCHBOARD_TRACE_CLOSE_TIMEOUT`. The
+Diagnostics toggle's handler (`set-activity-trace-enabled` in `main.js`) adds its
+own 8 s bound around the call. Both functions are tested separately: they build
+the same guard independently.
 
-That first fix waits for the stream `close()`/`setEnabled(false, ...)`
-retires *itself* — not for streams retired by earlier `rotate()` calls
-still in flight. A run with several rapid rotations can have more than one
-old stream mid-close at once; `close()` returning as soon as its own
-stream is done left those still open, the same `ENOTEMPTY` on the
-directory. `pendingRotationCloses` tracks every in-flight rotation close;
-`close()`/`setEnabled(false, ...)` wait for that count to reach zero too,
-not just for their own stream.
-
-Both fixes are covered directly, not just by absence-of-flake: the tests
-intercept the exact `.once('close', ...)` registration production code
-makes (`interceptOnceClose` in the test file) and hold it back deliberately,
-then assert the callback under test has *not* resolved yet, release it, and
-assert it now has. A regression back to `.end(callback)` (waiting on
-`finish`) skips that registration entirely, so the held callback is never
-even captured — the callback under test resolves immediately instead of
-waiting, and the assertion catches it. This is deliberately not a race
-against real OS timing in either direction: unlike the `ENOTEMPTY` failure
-itself (genuinely intermittent, load-dependent, unreproducible on demand),
-whether the code *asks* to wait for `close` at all is a fact about the
-code, checkable without needing the underlying stream to misbehave.
-
-**The wait is bounded.** `fs.WriteStream`'s `close` is not guaranteed to
-fire in bounded time — an AV/backup lock on Windows can hold the handle
-indefinitely, which is the same class of behavior this whole page is about.
-`close()`/`setEnabled(false, ...)` fall back to calling `done()` anyway
-after `closeTimeoutMs` (default 5 s, overridable via `options.closeTimeoutMs`
-for tests) if the real completion never lands, via `process.emitWarning`
-with `code: 'SWITCHBOARD_TRACE_CLOSE_TIMEOUT'`. `main.js`'s Diagnostics
-toggle handler (`set-activity-trace-enabled`) adds its own outer 8 s bound
-around the whole call, independent of the library's — degraded (a stray
-directory entry, one possibly-missed prune) beats the toggle hanging for
-the rest of the session with no recovery short of a restart. Covered for
-both `close()` and `setEnabled(false, ...)` separately — they build the
-same guardedDone/finish shape independently, and only `setEnabled` is ever
-called with a callback in production (`set-activity-trace-enabled`);
-`main.js`'s shutdown path calls `close()` with none. A fallback proven only
-on one does not prove anything about the other.
-
-Two things worth knowing about this fallback, neither changed here:
-
-- During the degraded window (fallback fired, real `close` not landed yet),
-  `currentFile()` still reports the old path even though `state.on` already
-  flipped — `activityTraceState()` hands the renderer a momentarily
-  inconsistent snapshot. Left as-is on purpose: `currentPath` only clears
-  once the real `close` confirms the fd is released, which is exactly what
-  stops the panel's delete button from removing a file that might still be
-  open. Clearing it early would trade a few seconds of stale UI for
-  reintroducing the premature-delete risk `currentPath`'s lifetime exists to
-  prevent — the wrong side of that trade.
-- `guardedDone`'s timer is `unref()`'d, so it does not keep the process
-  alive on its own. In a bare Node process with no other active handle,
-  the process can exit before the timeout fires and the fallback never
-  runs. Not a concern in the Electron main process, which always has other
-  handles open (windows, IPC) — but worth stating as the implicit
-  assumption it is, for any future caller in a shorter-lived process.
-
-Two tests in `test/activity-trace.test.js` used to bridge that async gap with
-a fixed `setTimeout(60)`. That is a duration bet, not a correctness check, and
-it hides a real ordering hazard rather than just being slow: `close()` sets
-`stream = null` synchronously. If a `pruneSegments` callback from an earlier
-rotation is still queued when `close()` runs, it later calls `trace()` to
-record the `trace.prune-failed` warning, finds `stream` already null, and
-`trace()`'s own `if (!stream && !write) return;` guard drops the line with no
-error — a silent no-op, not a crash. On a quiet machine 60 ms is enough for
-the callback to run before `close()` is reached; under the full suite's
-parallel load it sometimes is not, and the warning that the test asserts on
-never gets written. This is a test-ordering bug, not a production one: at
-real quit time losing one diagnostic warning about pruning (never the trace
-data itself) is an acceptable trade, not a defect worth guarding against.
-
-All three of these tests now poll the actual condition (`waitUntil`, capped at
-10 s) instead of sleeping a fixed duration — bounded by an outcome, not a
-clock — and, in the prune-failure test, wait for the warning to land on disk
-*before* calling `close()`, so the shutdown never races the pending callback.
-The segment-count test above them flaked the same way once under full-suite
-load even with a 1 s poll budget, purely from Windows filesystem-metadata
-contention across dozens of concurrent `node --test` processes — not a logic
-bug, just headroom that needed to be more generous.
+During the window between that fallback and the real `close`, `currentFile()`
+still reports the old path although the trace is off, so the panel's delete
+button keeps refusing a file that may still be open. The fallback's timer is
+`unref()`'d: in a bare Node process with nothing else alive, the process can exit
+before it fires, which the Electron main process never does.
 
 ## Related
 
-- [Notifications](notifications.md) — what each indicator means to a user
+- [Status indicators](notifications.md) — what each indicator means
 - [`.ai/contexts/ipc-bridge.md`](../.ai/contexts/ipc-bridge.md) — busy-state reconciliation
-- [`.ai/contexts/subagent-observability.md`](../.ai/contexts/subagent-observability.md) — subagent spawn/complete detection
+- [`.ai/contexts/subagent-observability.md`](../.ai/contexts/subagent-observability.md) — subagent spawn and completion detection
