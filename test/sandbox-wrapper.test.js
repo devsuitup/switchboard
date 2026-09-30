@@ -130,6 +130,13 @@ function parseMounts(argv) {
   return ops;
 }
 
+/** The last mount covering `p` (at `p` or at an ancestor): what decides its access. */
+function accessAt(ops, p) {
+  const covering = ops.filter(o => ['--bind', '--ro-bind', '--tmpfs', '--symlink'].includes(o.op)
+    && (o.dest === p || p.startsWith(o.dest + '/')));
+  return covering.length ? covering[covering.length - 1].op : undefined;
+}
+
 /** The last mount whose destination is exactly `dest` — the one the sandbox sees. */
 function mountAt(ops, dest) {
   const at = ops.filter(o => o.dest === dest && o.op !== '--chdir' && o.op !== '--setenv');
@@ -498,7 +505,7 @@ test('sandbox wrapper: ~/.claude.json, which holds the MCP servers, is a private
     }
   });
 
-test('sandbox wrapper: the project\'s .claude gets the same treatment as ~/.claude, on top of the project bind',
+test('sandbox wrapper: the project\'s .claude is read-only on top of the project bind, its listed state bound back read-write',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
     try {
@@ -514,14 +521,63 @@ test('sandbox wrapper: the project\'s .claude gets the same treatment as ~/.clau
       assert.equal(status, 0, stderr);
       const ops = parseMounts(rig.lastBwrapArgs());
       const projBind = mountAt(ops, rig.proj);
-      const tmpfs = mountAt(ops, dot);
-      assert.equal(tmpfs?.op, '--tmpfs');
-      assert.ok(tmpfs.index > projBind.index, 'the tmpfs must cover the project bind');
-      assert.equal(mountAt(ops, path.join(dot, 'settings.json'))?.op, '--ro-bind');
-      assert.equal(mountAt(ops, path.join(dot, 'commands'))?.op, '--ro-bind');
+      const dotMount = mountAt(ops, dot);
+      assert.deepEqual([dotMount?.op, dotMount?.src], ['--ro-bind', dot],
+        'the directory itself must be read-only, so a new entry fails instead of vanishing');
+      assert.ok(dotMount.index > projBind.index, 'it must cover the project bind');
+      assert.equal(accessAt(ops, path.join(dot, 'settings.json')), '--ro-bind');
+      assert.equal(accessAt(ops, path.join(dot, 'commands', 'x.md')), '--ro-bind');
+      assert.equal(accessAt(ops, path.join(dot, 'settings.local.json')), '--ro-bind', 'a new entry must be refused');
+      assert.equal(accessAt(ops, path.join(dot, 'statusline')), '--ro-bind', 'an unlisted entry must be read-only');
       assert.equal(mountAt(ops, path.join(dot, 'worktrees'))?.op, '--bind');
       assert.equal(mountAt(ops, path.join(dot, 'agent-memory'))?.op, '--bind');
-      assert.equal(mountAt(ops, path.join(dot, 'statusline'))?.op, '--ro-bind', 'an unlisted entry must be read-only');
+      assert.ok(mountAt(ops, path.join(dot, 'worktrees')).index > dotMount.index);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: links in the project\'s .claude have their targets protected, except inside its state',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const dot = path.join(rig.proj, '.claude');
+      fs.mkdirSync(path.join(dot, 'commands', 'sub'), { recursive: true });
+      fs.mkdirSync(path.join(dot, 'worktrees', 'wt'), { recursive: true });
+      const cmd = path.join(rig.proj, 'cmd.md');
+      const hook = path.join(rig.proj, 'hook.sh');
+      const lib = path.join(rig.proj, 'lib');
+      fs.writeFileSync(cmd, '');
+      fs.writeFileSync(hook, '');
+      fs.mkdirSync(lib);
+      fs.symlinkSync(cmd, path.join(dot, 'commands', 'sub', 'x.md'));
+      fs.symlinkSync(hook, path.join(dot, 'statusline'));
+      fs.symlinkSync(lib, path.join(dot, 'worktrees', 'wt', 'lib'));
+
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, cmd)?.op, '--ro-bind', 'a nested link\'s target must be read-only');
+      assert.equal(mountAt(ops, hook)?.op, '--ro-bind', 'a top-level link\'s target must be read-only');
+      assert.equal(mountAt(ops, lib), undefined, 'links inside worktrees are project source, left alone');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a symlinked state entry in the project\'s .claude has its target bound read-write',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.mkdirSync(path.join(rig.proj, '.claude'));
+      const elsewhere = path.join(rig.root, 'wts');
+      fs.mkdirSync(elsewhere);
+      fs.symlinkSync(elsewhere, path.join(rig.proj, '.claude', 'worktrees'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), elsewhere)?.op, '--bind');
     } finally {
       rig.cleanup();
     }
@@ -536,7 +592,7 @@ test('sandbox wrapper: a project without .claude gets an empty one, so the sandb
       assert.equal(status, 0, stderr);
       const dot = path.join(rig.proj, '.claude');
       assert.deepEqual(fs.readdirSync(dot), [], 'the placeholder must be an empty directory');
-      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), dot)?.op, '--tmpfs');
+      assert.equal(mountAt(parseMounts(rig.lastBwrapArgs()), dot)?.op, '--ro-bind');
     } finally {
       rig.cleanup();
     }
@@ -613,14 +669,14 @@ test('sandbox wrapper: a working directory below another bind\'s .claude is moun
       const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: rig.proj }, wt);
       assert.equal(status, 0, stderr);
       const ops = parseMounts(rig.lastBwrapArgs());
-      const rootTmpfs = mountAt(ops, path.join(rig.proj, '.claude'));
+      const rootDot = mountAt(ops, path.join(rig.proj, '.claude'));
       const wtBind = mountAt(ops, wt);
-      const wtTmpfs = mountAt(ops, path.join(wt, '.claude'));
-      assert.equal(rootTmpfs?.op, '--tmpfs');
+      const wtDot = mountAt(ops, path.join(wt, '.claude'));
+      assert.equal(rootDot?.op, '--ro-bind');
       assert.equal(wtBind?.op, '--bind');
-      assert.ok(wtBind.index > rootTmpfs.index, 'the worktree must not be hidden under the root\'s tmpfs');
-      assert.equal(wtTmpfs?.op, '--tmpfs');
-      assert.ok(wtTmpfs.index > wtBind.index, 'the worktree\'s own .claude must be protected on top of its bind');
+      assert.ok(wtBind.index > rootDot.index, 'the worktree must not be hidden under the root\'s read-only .claude');
+      assert.equal(wtDot?.op, '--ro-bind');
+      assert.ok(wtDot.index > wtBind.index, 'the worktree\'s own .claude must be protected on top of its bind');
     } finally {
       rig.cleanup();
     }
@@ -793,6 +849,7 @@ attempt skill-deep-link 'echo evil > "$C/skills/a/b/x"'
 attempt mcp-servers 'echo "{\"mcpServers\":{\"evil\":{\"command\":\"evil\"}}}" > "$HOME/.claude.json"'
 attempt project-settings 'echo evil > .claude/settings.json'
 attempt project-settings-local-created 'echo evil > .claude/settings.local.json'
+attempt project-new-entry 'echo x > .claude/newdir-probe.txt'
 attempt project-claude-moved 'mv .claude .claude-x && mkdir .claude && echo evil > .claude/settings.json'
 attempt git-hook 'echo evil > .git/hooks/pre-commit'
 attempt git-hookspath-dir 'echo evil > .husky/_/pre-commit'
@@ -855,6 +912,9 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       assert.equal(read(path.join(rig.home, '.claude.json')), '{"mcpServers":{}}\n', `MCP servers must not reach the host\n${said}`);
       assert.equal(read(path.join(rig.proj, '.claude', 'settings.json')), '{}\n', `project settings must be read-only\n${said}`);
       assert.ok(gone(path.join(rig.proj, '.claude', 'settings.local.json')), `new project settings must not reach the host\n${said}`);
+      for (const name of ['project-settings', 'project-settings-local-created', 'project-new-entry']) {
+        assert.match(said, new RegExp(`^${name}: refused$`, 'm'), `${name} must fail inside the sandbox, not vanish silently`);
+      }
       assert.ok(gone(path.join(rig.proj, '.claude-x')), `the project's .claude must not be movable\n${said}`);
       assert.ok(gone(path.join(rig.proj, '.git', 'hooks', 'pre-commit')), `.git/hooks must be read-only\n${said}`);
       assert.ok(gone(path.join(rig.proj, '.husky', '_', 'pre-commit')), `the core.hooksPath directory must be read-only\n${said}`);

@@ -354,6 +354,34 @@ protect_git() {
   fi
 }
 
+# A project's .claude is read-only as a whole, so that a write to anything not
+# listed fails instead of landing in a tmpfs; the listed state is bound back
+# read-write. ~/.claude cannot work this way: the CLI saves its top-level state
+# files through a temporary file created next to them.
+bind_project_claude_dir() {
+  local dir="$1" e name restore_glob
+  BIND_ARGS+=(--ro-bind "$dir" "$dir")
+  debug "ro-bind $dir"
+  restore_glob="$(shopt -p nullglob dotglob)"
+  shopt -s nullglob dotglob
+  for e in "$dir"/*; do
+    name="${e##*/}"
+    if in_list "$name" "${PROJECT_STATE_ENTRIES[@]}"; then
+      if [ -L "$e" ]; then
+        bind_state_link_target "$e"
+      else
+        BIND_ARGS+=(--bind "$e" "$e")
+        debug "rw-bind $e"
+      fi
+    elif [ -L "$e" ]; then
+      protect_link_target "$e"
+    elif [ -d "$e" ]; then
+      protect_links_below "$e"
+    fi
+  done
+  eval "$restore_glob"
+}
+
 bind_project_dir() {
   local d="$1"
   BIND_ARGS+=(--bind "$d" "$d")
@@ -373,7 +401,7 @@ bind_project_dir() {
   if [ -L "$d/.claude" ]; then
     fail "refusing to launch: $d/.claude is a symbolic link. The sandbox protects it with read-only mounts, which cannot stop the link itself from being replaced. Replace the link with the directory it points to, or turn Sandbox off for this session."
   elif [ -d "$d/.claude" ]; then
-    bind_claude_dir "$d/.claude" PROJECT_STATE_ENTRIES
+    bind_project_claude_dir "$d/.claude"
   elif [ -e "$d/.claude" ]; then
     BIND_ARGS+=(--ro-bind "$d/.claude" "$d/.claude")
     debug "ro-bind $d/.claude"

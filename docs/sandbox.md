@@ -125,8 +125,9 @@ the same repository. Inside the sandbox, these are read-only or discarded.
 
 ### `~/.claude` and each bound directory's `.claude`
 
-The directory itself is a private tmpfs, and each entry that exists at launch
-is mounted back onto it:
+`~/.claude` is a private tmpfs, and each entry that exists at launch is
+mounted back onto it. A project's `.claude` is mounted read-only as a whole,
+with its listed state mounted back read-write on top.
 
 Only the state the CLI writes during a session is read-write; every other
 entry is read-only, whatever it is — settings, hooks, commands, agents,
@@ -138,21 +139,25 @@ status-line script with no extension, a directory a future CLI version adds.
 | In `~/.claude`: `projects`, `todos`, `shell-snapshots`, `session-env`, `statsig`, `file-history`, `sessions`, `plans`, `tasks`, `backups`, `cache`, `paste-cache`, `image-cache`, `downloads`, `feedback`, `debug`, `telemetry`, `state`, `jobs`, `usage-data`, `agent-memory`, `.credentials.json`, `history.jsonl`, `.last-cleanup`, `.last-update-result.json`, `mcp-needs-auth-cache.json`, `policy-limits.json`, `policy-limits.json.stamp.json`, `stats-cache.json` | read-write |
 | In a project's `.claude`: `worktrees`, `agent-memory`, `agent-memory-local` | read-write |
 | Any other file or directory | read-only |
-| A symbolic link to one of the read-write entries (`projects` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves. A target that is `$HOME` or contains it is refused |
-| Any other symbolic link | recreated as the same link on the tmpfs. When its target lies in a directory the sandbox can write (the project, say), the target is mounted read-only too; a target the sandbox cannot see stays invisible |
+| A symbolic link to one of the read-write entries (`projects` kept on another disk, say) | kept as the same link (in `~/.claude`, recreated on the tmpfs), and its target bound read-write at its own path so the link resolves. A target that is `$HOME` or contains it is refused |
+| Any other symbolic link | kept as the same link (in `~/.claude`, recreated on the tmpfs). When its target lies in a directory the sandbox can write (the project, say), the target is mounted read-only too; a target the sandbox cannot see stays invisible |
 | A symbolic link at any depth inside a read-only directory, or inside a linked directory mounted read-only (`skills/<name>/…` linked from elsewhere, say) | its target is mounted read-only when the sandbox could otherwise write it, and the links below that target are followed in turn |
 
 `ide` is read-only: it holds the lock files that tell a later session which
 local port is its IDE. Switchboard writes them from outside the sandbox when
 IDE Emulation is on, and the sandboxed session reads them.
 
-Anything the session creates directly in the directory — a new
-`settings.local.json`, a new `hooks` directory, a replaced link — lives in the
-tmpfs and is gone when the session ends. So that the session's own state is not
-lost that way, `projects`, `todos`, `shell-snapshots`, `session-env`,
+A new entry fails in a project's `.claude` with *Read-only file system*, while
+in `~/.claude` — whose top level must stay writable, because the CLI saves
+`.credentials.json` and its other state files through a temporary file created
+next to them — it is accepted and dropped with the tmpfs when the session ends
+(a new `settings.local.json`, a new `hooks` directory, a replaced link). So
+that the session's own state is not lost that way, `projects`, `todos`, `shell-snapshots`, `session-env`,
 `statsig`, `file-history`, `sessions`, `plans`, `tasks` and `ide` are created
 in `~/.claude` before launch when missing, and a bound directory without a
-`.claude` gets an empty one (skipped when the directory is not writable).
+`.claude` gets an empty one (skipped when the directory is not writable). Links
+inside a project's `worktrees` and agent memory are project content and are
+not followed.
 
 A read-only file is a mount point: writing it fails with *Read-only file
 system*, and replacing it by a rename — how the CLI saves its files — fails
@@ -241,7 +246,11 @@ directory instead of linking `.git/hooks` to it.
 - Nothing that writes Claude's configuration persists from a sandboxed
   session: changing a setting, answering "always allow" to a permission
   prompt (both fail to save), installing or updating a plugin, or adding an
-  MCP server (dropped at the end). Do these outside the sandbox. The same goes
+  MCP server (dropped at the end). Do these outside the sandbox. That includes
+  accepting the Bypass Permissions disclaimer, which the CLI records as
+  `skipDangerousModePermissionPrompt` in `~/.claude/settings.json`; a
+  `permissions.disableBypassPermissionsMode` in managed settings turns bypass
+  off in and out of the sandbox alike. The same goes
   for a first login: a `~/.claude/.credentials.json` created inside the
   sandbox is dropped with it, while an existing one is refreshed in place.
 - Nothing can write the repository's config: `git config` and
