@@ -15,9 +15,9 @@ process.env.HOME = ROOT;
 process.env.USERPROFILE = ROOT;
 process.env.SWITCHBOARD_DATA_DIR = path.join(ROOT, 'data');
 
-const { startScheduler, claimScheduleMinute } = require('../schedule-runner');
+const { startScheduler, claimScheduleMinute, scanSchedules } = require('../schedule-runner');
 
-const STATE_DIR = path.join(ROOT, '.switchboard', 'schedule-state');
+const STATE_DIR = path.join(ROOT, 'data', 'schedule-state');
 const PROJECT = path.join(ROOT, 'project');
 const COMMANDS = path.join(PROJECT, '.claude', 'commands');
 const FOLDER = path.join(ROOT, '.claude', 'projects', '-project');
@@ -26,15 +26,16 @@ test.after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 
 const at = (day, hour, minute, second = 0) => new Date(2026, 0, day, hour, minute, second).getTime();
 
-function writeSchedule({ cron, catchUp = true, file = 'schedule-report.md' }) {
+function writeSchedule({ cron, catchUp = true, file = 'schedule-report.md', catchUpLine }) {
   const lines = ['---', 'name: Report', `cron: ${cron}`];
-  if (catchUp) lines.push('catch-up: true');
+  if (catchUpLine !== undefined) lines.push(catchUpLine);
+  else if (catchUp) lines.push('catch-up: true');
   lines.push('---', '', 'Write the report.', '');
   fs.writeFileSync(path.join(COMMANDS, file), lines.join('\n'));
 }
 
 function rig(schedule) {
-  for (const dir of [path.join(ROOT, '.switchboard'), path.join(ROOT, '.claude'), PROJECT]) {
+  for (const dir of [path.join(ROOT, 'data'), path.join(ROOT, '.claude'), PROJECT]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   fs.mkdirSync(COMMANDS, { recursive: true });
@@ -60,7 +61,7 @@ function rig(schedule) {
     runs, lines, resume,
     holdRuns() { hold = true; },
     finishRuns() { hold = false; pending.splice(0).forEach((done) => done()); },
-    start: () => startScheduler(log, run, { resumeSource: resume }),
+    start: (stateDir = STATE_DIR) => startScheduler(log, run, { resumeSource: resume, stateDir }),
     firstMessages: () => fs.readdirSync(FOLDER)
       .filter((f) => f !== 'seed.jsonl')
       .map((f) => JSON.parse(fs.readFileSync(path.join(FOLDER, f), 'utf8').split('\n')[0]).message.content),
@@ -83,7 +84,7 @@ test('catch-up: three missed daily runs while Switchboard was closed give one ru
   stop();
 
   assert.equal(r.runs.length, 1, 'no further run for the other missed days');
-  assert.ok(!r.lines.some((l) => l.includes('another instance')), 'the minute already run is not reconsidered');
+  assert.ok(!r.lines.some((l) => l.includes('already triggered')), 'the minute already run is not reconsidered');
   assert.ok(r.lines.some((l) => l.includes('[schedule] Catching up: Report') && l.includes(new Date(at(7, 20, 0)).toISOString())),
     'the log line names the catch-up and the minute it was due');
   const [first] = r.firstMessages();
@@ -229,7 +230,7 @@ test('catch-up: a catch-up while the previous run is still going is skipped, not
   assert.equal(r.runs.length, 1, 'the skipped minute is not run once the previous run ends');
 });
 
-test('catch-up: two instances sharing the record run a due minute once', (t) => {
+test('catch-up: two schedulers on one record run a due minute once', (t) => {
   const r = rig({ cron: '0 20 * * *' });
   fakeClock(t, at(5, 19, 59, 30));
   const stopA = r.start();
@@ -245,7 +246,7 @@ test('catch-up: two instances sharing the record run a due minute once', (t) => 
   assert.equal(r.runs.length, 2, 'one catch-up for the two launches');
 });
 
-test('catch-up: a minute claimed by another instance after the record was read is not run', (t) => {
+test('catch-up: a minute claimed by another scheduler after the record was read is not run', (t) => {
   const r = rig({ cron: '0 20 * * *', file: 'schedule-a.md' });
   writeSchedule({ cron: '0 20 * * *', file: 'schedule-b.md' });
   fakeClock(t, at(5, 12, 0, 30));
@@ -264,19 +265,19 @@ test('catch-up: a minute claimed by another instance after the record was read i
     onDone();
   };
   t.mock.timers.setTime(at(8, 9, 0, 30));
-  startScheduler(log, run)();
+  startScheduler(log, run, { stateDir: STATE_DIR })();
 
   assert.equal(runs.length, 1, 'the second schedule finds its minute taken');
-  assert.ok(lines.some((l) => l.includes('already triggered by another instance')));
+  assert.ok(lines.some((l) => l.includes('already triggered for that minute')));
 });
 
 test('claimScheduleMinute: the first claim of a minute wins, a second one is refused', () => {
   rig();
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const minute = at(5, 20, 0);
-  assert.equal(claimScheduleMinute('0123456789abcdef', minute, {}), true);
-  assert.equal(claimScheduleMinute('0123456789abcdef', minute, {}), false);
-  assert.equal(claimScheduleMinute('0123456789abcdef', minute + 60_000, {}), true);
+  assert.equal(claimScheduleMinute(STATE_DIR, '0123456789abcdef', minute, {}), true);
+  assert.equal(claimScheduleMinute(STATE_DIR, '0123456789abcdef', minute, {}), false);
+  assert.equal(claimScheduleMinute(STATE_DIR, '0123456789abcdef', minute + 60_000, {}), true);
 });
 
 test('catch-up: a renamed schedule file is a new schedule and does not catch up', (t) => {
@@ -316,3 +317,91 @@ test('catch-up: when the record cannot be written the schedule still runs on its
   assert.equal(r.runs.length, 1);
   assert.ok(r.lines.some((l) => l.includes('Cannot keep the catch-up record of Report')));
 });
+
+test('catch-up: a schedule first seen in its own minute still runs on time', (t) => {
+  const r = rig();
+  fakeClock(t, at(5, 19, 59, 30));
+  const stop = r.start();
+  t.mock.timers.tick(10_000);
+  writeSchedule({ cron: '0 20 * * *' });
+  t.mock.timers.tick(60_000);
+  stop();
+
+  assert.equal(r.runs.length, 1, 'the 20:00 tick is the first to see the file');
+  assert.ok(r.lines.some((l) => l.includes('[schedule] Triggering: Report')));
+});
+
+test('catch-up: after the clock is set back, the schedule runs at its minute again', (t) => {
+  const r = rig({ cron: '0 20 * * *' });
+  fakeClock(t, at(5, 19, 59, 30));
+  let stop = r.start();
+  t.mock.timers.tick(60_000);
+  stop();
+  assert.equal(r.runs.length, 1, 'Jan 5 20:00, recorded');
+
+  t.mock.timers.setTime(at(4, 19, 59, 30));
+  stop = r.start();
+  t.mock.timers.tick(60_000);
+  stop();
+  assert.equal(r.runs.length, 2, 'Jan 4 20:00 after the clock went back a day');
+  assert.ok(r.lines.some((l) => l.includes('ahead of the clock')), 'the reset is logged');
+});
+
+test('catch-up: a clock booted fast that catches up early does not silence the real due minute', (t) => {
+  const r = rig({ cron: '0 20 * * *' });
+  fakeClock(t, at(5, 12, 0, 30));
+  r.start()();
+
+  t.mock.timers.setTime(at(5, 20, 30, 30));
+  let stop = r.start();
+  assert.equal(r.runs.length, 1, 'caught up early on a clock two hours fast');
+  stop();
+
+  t.mock.timers.setTime(at(5, 18, 30, 30));
+  stop = r.start();
+  t.mock.timers.tick(90 * 60_000);
+  stop();
+  assert.equal(r.runs.length, 2, 'the real 20:00 runs after the clock is corrected');
+});
+
+test('catch-up: each instance keeps its own record, so a second instance does not take the first one\'s minute', (t) => {
+  const r = rig({ cron: '0 20 * * *' });
+  const otherStateDir = path.join(ROOT, 'data-other', 'schedule-state');
+  t.after(() => fs.rmSync(path.dirname(otherStateDir), { recursive: true, force: true }));
+  fakeClock(t, at(5, 19, 59, 30));
+  const stopA = r.start();
+  const stopB = r.start(otherStateDir);
+  t.mock.timers.tick(60_000);
+  stopA(); stopB();
+
+  assert.equal(r.runs.length, 2, 'each instance runs its minute, like a schedule without catch-up');
+  assert.equal(fs.readdirSync(STATE_DIR).length, 1);
+  assert.equal(fs.readdirSync(otherStateDir).length, 1);
+});
+
+test('catch-up: a schedule without catch-up does not run at startup, even in its own minute', (t) => {
+  const r = rig({ cron: '0 20 * * *', catchUp: false });
+  fakeClock(t, at(5, 20, 0, 10));
+  const stop = r.start();
+  assert.equal(r.runs.length, 0);
+  stop();
+});
+
+for (const [line, expected] of [
+  [null, false],
+  ['catch-up: false', false],
+  ['catch-up: no', false],
+  ['catch-up: not true', false],
+  ['catch-up: true', true],
+  ['catch-up: True', true],
+  ['catch-up: TRUE', true],
+  ['catch-up: "true"', true],
+  ["catch-up: 'true'", true],
+]) {
+  test(`catch-up: front matter ${line === null ? 'without the key' : `\`${line}\``} ${expected ? 'opts in' : 'does not opt in'}`, () => {
+    rig();
+    writeSchedule({ cron: '0 20 * * *', catchUpLine: line === null ? '' : line });
+    const [schedule] = scanSchedules();
+    assert.equal(schedule.catchUp, expected);
+  });
+}

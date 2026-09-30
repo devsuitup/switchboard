@@ -13,8 +13,8 @@
 
 From `schedule-runner.js`:
 
-- `startScheduler(log, runCommand, { resumeSource })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check.
-- `claimScheduleMinute(key, minuteMs, info)` — exclusive-create one record file; `false` when another instance has it. Exported for tests.
+- `startScheduler(log, runCommand, { resumeSource, stateDir })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, and `stateDir: <dirname(DB_PATH)>/schedule-state`. Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron.
+- `claimScheduleMinute(stateDir, key, minuteMs, info)` — exclusive-create one record file; `false` when it already exists. Exported for tests.
 - `scanSchedules(log)` — scan all known projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`.
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns the session UUID.
 - `buildScheduleCommand(sessionId, schedule)` — assemble the shell command (`claude --resume "<sid>" -p "..." --permission-mode acceptEdits --allowedTools "..."`).
@@ -42,7 +42,7 @@ cli:
 <Full self-contained prompt that Claude will execute>
 ```
 
-`enabled: false` disables without deleting. `catch-up: true` (exactly that string) opts in to [catch-up](#catch-up). `cron` is standard 5-field (minute, hour, day-of-month, month, day-of-week).
+`enabled: false` disables without deleting. `catch-up: true` (`true` in any case, optionally quoted; the key spelled exactly so) opts in to [catch-up](#catch-up). `cron` is standard 5-field (minute, hour, day-of-month, month, day-of-week).
 
 ## Invariants
 
@@ -69,7 +69,7 @@ cli:
 - `scan-md-files.js` — what that brain tab list is actually built from (`get-memories` in `main.js`); it decides whether a schedule file is visible at all, and takes the memory allowlist so the list carries nothing the readers behind it would refuse to open
 - `public/sidebar.js` — `.project-schedule-btn` clock icon wiring per project
 - `schedule-ipc.js` `SCHEDULE_CREATOR_TEMPLATE` — if you change the schedule file format, update the template's instructions
-- `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor })` is invoked at app boot — checked 2026-09, it moves as main.js grows)
+- `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir })` is invoked at app boot — checked 2026-09, it moves as main.js grows)
 - The `runScheduleCommand` factory in `main.js` — uses `child_process.spawn`, `cleanPtyEnv`, and the global shell profile. Schedules don't get their own shell selector.
 
 ## Limitations worth knowing
@@ -86,7 +86,7 @@ cli:
 A schedule with `catch-up: true` runs once, late, when at least one
 minute its cron matched went by with no check looking at it.
 
-**The record.** `~/.switchboard/schedule-state/<key>-<minuteMs>.json`, where
+**The record.** `<data dir>/schedule-state/<key>-<minuteMs>.json`, where
 `<key>` is the first 16 hex characters of the SHA-256 of the listed
 `filePath` (the path in `.claude/commands/`, not a symlink's target) and
 `<minuteMs>` is the epoch of the latest minute *handled*: run, skipped as still
@@ -106,17 +106,34 @@ is only ever run by a tick whose minute matches.
 
 **No double run.** Because a run records its minute and the window starts
 after it, a tick landing in the same minute as a start or resume check finds an
-empty window. Across instances, `~/.switchboard/schedule-state/` deliberately
-does **not** follow `SWITCHBOARD_DATA_DIR`: the installed app and a
-`task test-pr` instance read one record. Two instances that decide on the same
-minute at the same time (their ticks are both aligned to the minute boundary)
-both try `writeFileSync(..., { flag: 'wx' })` on the same name; `EEXIST` makes
-the loser log `already triggered by another instance` and skip. Schedules
-without `catch-up` keep firing in every instance.
+empty window. The record is created with `writeFileSync(..., { flag: 'wx' })`:
+a second claim of the same minute gets `EEXIST`, logs `already triggered for
+that minute` and skips.
 
-**First sight.** No file for the key → write the baseline at the current minute
-and run nothing. A renamed or moved file is a new key, so it starts from a
+**Per instance, on purpose.** The directory is derived from `DB_PATH`, so it
+follows `SWITCHBOARD_DATA_DIR`. A shared record would let a `task dev` or
+`task test-pr` instance scanning the same `~/.claude/projects` win the claim of
+an on-time minute or a startup catch-up, and run the task with its own isolated
+settings (sandbox, shell profile) while the installed app skipped it: a run with
+the wrong settings, or no run when `claude` is only on the right profile's PATH.
+Per instance, a test instance duplicates a run, as it already does for a
+schedule without `catch-up` (`docs/testing-a-pr.md`), and never takes one away.
+
+**First sight.** No file for the key → write the baseline at the minute before
+the current one, and carry on: nothing missed is caught up, but a file first
+seen by the tick of its own due minute (saved at 19:59:40 for `0 20 * * *`)
+still runs on time. A renamed or moved file is a new key, so it starts from a
 baseline; the old key's file stays behind (a few bytes, never read again).
+
+**Clock behind the record.** `handled > now` (the clock set back, or booted fast
+and a catch-up taken early, then corrected by NTP) would leave the window empty
+until the clock passed `handled` again, and an opted-in schedule never falls
+back to `cronMatches`. So the record is dropped with a warning (`ahead of the
+clock`) and re-seeded like a first sight.
+
+**Claim before spawn.** The minute is recorded before `runCommand`. A spawn that
+fails asynchronously, or a Switchboard exit mid-run, loses that run: it is not
+caught up again.
 
 **Failure.** If the directory cannot be read or a record cannot be written, the
 schedule falls back to plain cron matching on ticks and a warning is logged.
@@ -124,8 +141,7 @@ schedule falls back to plain cron matching on ticks and a warning is logged.
 **Not covered.** A disabled schedule is dropped by `scanSchedules` before the
 check, so re-enabling one catches up a run missed while disabled (within seven
 days). `run-schedule-now` goes through `schedule-ipc.js` and does not touch the
-record. A wall clock set back leaves `handled` in the future, and the schedule
-does not run until the clock passes it again.
+record.
 
 Tests: `test/schedule-catch-up.test.js` (fake `Date`/timers, `HOME` pointed at a
 temporary directory).

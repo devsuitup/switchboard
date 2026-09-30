@@ -6,8 +6,6 @@ const crypto = require('crypto');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
-// see .ai/contexts/schedule-runner.md ("Catch-up")
-const SCHEDULE_STATE_DIR = path.join(os.homedir(), '.switchboard', 'schedule-state');
 const MINUTE_MS = 60 * 1000;
 const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
 
@@ -94,10 +92,10 @@ function scheduleStateKey(schedule) {
  * Read the catch-up record: Map<key, { handled, files }>, where `handled` is
  * the latest minute (epoch ms) already run or deliberately passed over.
  */
-function readScheduleState() {
-  fs.mkdirSync(SCHEDULE_STATE_DIR, { recursive: true });
+function readScheduleState(stateDir) {
+  fs.mkdirSync(stateDir, { recursive: true });
   const state = new Map();
-  for (const name of fs.readdirSync(SCHEDULE_STATE_DIR)) {
+  for (const name of fs.readdirSync(stateDir)) {
     const m = name.match(/^([0-9a-f]{16})-(\d+)\.json$/);
     if (!m) continue;
     const entry = state.get(m[1]) || { handled: -Infinity, files: [] };
@@ -112,9 +110,9 @@ function readScheduleState() {
  * Mark a minute of a schedule as handled. The exclusive create is the claim:
  * of two instances deciding on the same minute, only one gets `true`.
  */
-function claimScheduleMinute(key, minuteMs, info) {
+function claimScheduleMinute(stateDir, key, minuteMs, info) {
   try {
-    fs.writeFileSync(path.join(SCHEDULE_STATE_DIR, `${key}-${minuteMs}.json`), JSON.stringify(info) + '\n', { flag: 'wx' });
+    fs.writeFileSync(path.join(stateDir, `${key}-${minuteMs}.json`), JSON.stringify(info) + '\n', { flag: 'wx' });
     return true;
   } catch (err) {
     if (err.code === 'EEXIST') return false;
@@ -122,9 +120,9 @@ function claimScheduleMinute(key, minuteMs, info) {
   }
 }
 
-function pruneScheduleState(entry) {
+function pruneScheduleState(stateDir, entry) {
   for (const name of entry.files) {
-    try { fs.unlinkSync(path.join(SCHEDULE_STATE_DIR, name)); } catch {}
+    try { fs.unlinkSync(path.join(stateDir, name)); } catch {}
   }
 }
 
@@ -201,7 +199,7 @@ function scanSchedules(log) {
               file, filePath: path.join(commandsDir, file),
               projectPath, folder: folder.name,
               name: meta.name || file, cron: meta.cron,
-              catchUp: meta['catch-up'] === 'true',
+              catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
               cli: meta.cli || {}, prompt: body,
             });
@@ -324,9 +322,10 @@ function buildScheduleCommand(sessionId, schedule) {
  * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
  * @param {object} [opts]
  * @param {EventEmitter} [opts.resumeSource] - Emits `resume` after a system suspend (Electron's powerMonitor)
+ * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand, { resumeSource } = {}) {
+function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   let running = true;
   const runningTasks = new Set();
 
@@ -358,19 +357,25 @@ function startScheduler(log, runCommand, { resumeSource } = {}) {
   function checkCatchUp(schedule, state, nowMs) {
     const key = scheduleStateKey(schedule);
     const nowMinute = Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
-    const entry = state.get(key);
     const info = { file: schedule.filePath, name: schedule.name };
+    let entry = state.get(key);
+    if (entry && entry.handled > nowMinute) {
+      log.warn(`[schedule] ${schedule.name}: recorded minute ${new Date(entry.handled).toISOString()} is ahead of the clock, restarting its record from now`);
+      pruneScheduleState(stateDir, entry);
+      entry = null;
+    }
     if (!entry) {
-      claimScheduleMinute(key, nowMinute, info);
-      return;
+      const baseline = nowMinute - MINUTE_MS;
+      claimScheduleMinute(stateDir, key, baseline, info);
+      entry = { handled: baseline, files: [`${key}-${baseline}.json`] };
     }
     const due = latestCronMatch(schedule.cron, Math.max(entry.handled, nowMinute - CATCH_UP_WINDOW_MS), nowMinute);
     if (due === null) return;
-    if (!claimScheduleMinute(key, due, info)) {
-      log.info(`[schedule] Skipping ${schedule.name} — already triggered by another instance`);
+    if (!claimScheduleMinute(stateDir, key, due, info)) {
+      log.info(`[schedule] Skipping ${schedule.name} — already triggered for that minute`);
       return;
     }
-    pruneScheduleState(entry);
+    pruneScheduleState(stateDir, entry);
     launch(schedule, due < nowMinute ? due : null);
   }
 
@@ -381,9 +386,9 @@ function startScheduler(log, runCommand, { resumeSource } = {}) {
     let state = null;
     if (schedules.some(s => s.catchUp)) {
       try {
-        state = readScheduleState();
+        state = readScheduleState(stateDir);
       } catch (err) {
-        log.warn(`[schedule] Cannot read the catch-up record in ${SCHEDULE_STATE_DIR}, running on cron only:`, err.message);
+        log.warn(`[schedule] Cannot read the catch-up record in ${stateDir}, running on cron only:`, err.message);
       }
     }
 

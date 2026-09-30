@@ -3075,7 +3075,7 @@ if (!gotSingleInstanceLock) {
     }
 
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath);
-    startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor });
+    startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state') });
 
     // File-trigger watcher — allows harness scripts to inject input into open
     // PTY sessions by dropping a JSON file in ~/.switchboard/triggers/.

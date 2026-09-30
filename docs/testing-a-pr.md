@@ -64,9 +64,10 @@ grep -L 'enabled: false' ~/path/to/projects/*/.claude/commands/schedule-*.md
 [Automation](automation.md#schedules).) Disable the ones due during the test, or
 accept the duplicate run.
 
-A schedule with `catch-up: true` is the exception: its record of runs in
-`~/.switchboard/schedule-state/` is shared by every instance, so it runs once
-between the two, on time or caught up (see
+A schedule with `catch-up: true` is no exception. Each instance keeps its own
+record of runs in its data directory, so the test instance runs it on time like
+any other, and when it is launched again later it catches up the runs due since
+it last ran, even those the installed app has already run (see
 [Automation](automation.md#catching-up-a-missed-run)).
 
 ### 4. Sessions — the transcripts are shared
