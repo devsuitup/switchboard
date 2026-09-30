@@ -79,6 +79,19 @@ test('Enter inside the prompt does not start; Escape closes', async (t) => {
   assert.equal(d.querySelector('.new-session-overlay'), null);
 });
 
+test('Enter on a focused button is left to the button: Enter on Cancel never starts; Enter elsewhere does', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const d = ctx.document;
+  d.querySelector('#dad-prompt').value = 'go';
+  d.querySelector('.new-session-cancel-btn').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(); await tick();
+  assert.equal(ctx.calls.dispatched.length, 0);
+  d.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(); await tick();
+  assert.equal(ctx.calls.dispatched.length, 1);
+});
+
 test('main refusing a prompt that starts with "-" is shown inline, the dialog stays open', async (t) => {
   const ctx = setup({ dispatchResult: { ok: false, error: 'a prompt starting with "-" would be read as a flag' } }); t.after(ctx.destroy);
   await ctx.window.showDispatchAgentDialog(null);

@@ -673,7 +673,7 @@ async function showDispatchAgentDialog(project) {
 
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input, textarea, select')) start();
+    if (e.key === 'Enter' && !e.target.matches('input, textarea, select, button')) start();
   }
   document.addEventListener('keydown', onKey);
   dialog.querySelector('#dad-prompt').focus();
