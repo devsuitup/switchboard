@@ -4635,6 +4635,7 @@ body { display: flex; flex-direction: column; }
 
 .changes-added { color: #3ecf5a; }
 .changes-deleted { color: #e05070; }
+.changes-count-note { color: var(--text-muted); }
 
 .changes-error {
   padding: 12px;

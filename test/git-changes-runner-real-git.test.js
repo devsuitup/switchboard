@@ -24,7 +24,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError } = require('../git-changes-runner');
+const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError, UNTRACKED_COUNT_LIMITS } = require('../git-changes-runner');
 
 // git translates its diagnostics; the assertions below match its English text.
 // Set on this process so both the scratch-repo helper and the runner's own
@@ -602,4 +602,166 @@ test('real git: missingCwdError says nothing about a directory that is simply th
   try {
     assert.equal(missingCwdError(tmp), null);
   } finally { cleanup(tmp); }
+});
+
+// --- untracked line counts at status time ---------------------------------
+// see .ai/contexts/changes-view.md ("Untracked line counts")
+
+function writeUntrackedCountFixture(repoDir) {
+  fs.writeFileSync(path.join(repoDir, 'three.txt'), 'a\nb\nc\n');
+  fs.writeFileSync(path.join(repoDir, 'no-final-newline.txt'), 'x\ny');
+  fs.writeFileSync(path.join(repoDir, 'empty.txt'), '');
+  fs.writeFileSync(path.join(repoDir, 'crlf.txt'), 'one\r\ntwo\r\n');
+  fs.mkdirSync(path.join(repoDir, 'nested', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'nested', 'deep', 'n.txt'), 'n1\nn2\nn3\nn4\n');
+  fs.writeFileSync(path.join(repoDir, 'bin.dat'), Buffer.from([0x61, 0x00, 0x0a, 0x62, 0x0a]));
+}
+
+test('real git: status counts every untracked text file, with no diff call, and each count is the one git\'s own --no-index diff reports', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    writeUntrackedCountFixture(repoDir);
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const status = await runner.status();
+    assert.equal(status.ok, true);
+    const byPath = new Map(status.files.map((f) => [f.path, f]));
+
+    const expected = { 'three.txt': 3, 'no-final-newline.txt': 2, 'empty.txt': 0, 'crlf.txt': 2, 'nested/deep/n.txt': 4 };
+    for (const [p, lines] of Object.entries(expected)) {
+      const row = byPath.get(p);
+      assert.equal(row.added, lines, `${p}: status count`);
+      assert.equal(row.deleted, 0);
+      assert.equal(row.countStatus, null);
+      const opened = await runner.diff(p, { untracked: true });
+      assert.equal(opened.added, row.added, `${p}: the count shown before opening is the count opening reports`);
+    }
+
+    assert.equal(byPath.get('bin.dat').added, null);
+    assert.equal(byPath.get('bin.dat').countStatus, 'binary');
+    assert.equal((await runner.diff('bin.dat', { untracked: true })).added, null, 'git agrees the file is binary');
+
+    assert.equal(byPath.get('tracked.txt').added, 1, 'a tracked row still takes numstat\'s count');
+    assert.equal(status.totals.added, 1 + 3 + 2 + 0 + 2 + 4);
+    assert.equal(status.totals.uncounted, 1, 'the header total says it leaves the binary file out');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: a .gitattributes diff setting overrides the content sniff, as it does for git\'s own diff (mutation target: sniffing NULs only)', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, '.gitattributes'), '*.dat binary\nforced.bin diff\n');
+    git(repoDir, ['add', '.gitattributes']);
+    git(repoDir, ['commit', '-q', '-m', 'attrs']);
+    fs.writeFileSync(path.join(repoDir, 'text.dat'), 'plain\ntext\n');
+    fs.writeFileSync(path.join(repoDir, 'forced.bin'), Buffer.from('a\0b\nc\n'));
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const status = await runner.status();
+    const byPath = new Map(status.files.map((f) => [f.path, f]));
+
+    assert.equal(byPath.get('text.dat').countStatus, 'binary', 'text content, but git renders it as binary');
+    assert.equal((await runner.diff('text.dat', { untracked: true })).added, null);
+
+    const forced = await runner.diff('forced.bin', { untracked: true });
+    assert.equal(byPath.get('forced.bin').added, forced.added, 'a NUL byte, but git diffs it as text');
+    assert.equal(byPath.get('forced.bin').added, 2);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: an untracked file over the per-file byte cap is marked too large, not read and not blank', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.writeFileSync(path.join(repoDir, 'huge.log'), Buffer.alloc(UNTRACKED_COUNT_LIMITS.maxFileBytes + 1, 0x0a));
+    fs.writeFileSync(path.join(repoDir, 'at-cap.log'), Buffer.alloc(UNTRACKED_COUNT_LIMITS.maxFileBytes, 0x0a));
+
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const byPath = new Map(status.files.map((f) => [f.path, f]));
+    assert.equal(byPath.get('huge.log').added, null);
+    assert.equal(byPath.get('huge.log').countStatus, 'too-large');
+    assert.equal(byPath.get('at-cap.log').added, UNTRACKED_COUNT_LIMITS.maxFileBytes, 'a file exactly at the cap is still counted');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: past the file-count cap the remaining untracked rows are marked not counted, and the header says how many', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    fs.mkdirSync(path.join(repoDir, 'many'));
+    const n = UNTRACKED_COUNT_LIMITS.maxFiles + 5;
+    for (let i = 0; i < n; i++) fs.writeFileSync(path.join(repoDir, 'many', `f${String(i).padStart(5, '0')}.txt`), 'l\n');
+
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const untracked = status.files.filter((f) => f.untracked);
+    assert.equal(untracked.length, n);
+    assert.equal(untracked.filter((f) => f.added === 1).length, UNTRACKED_COUNT_LIMITS.maxFiles);
+    const over = untracked.filter((f) => f.countStatus === 'over-cap');
+    assert.equal(over.length, 5);
+    assert.deepEqual(over.map((f) => f.path), untracked.slice(-5).map((f) => f.path), 'the cap keeps the rows the list shows first');
+    assert.equal(status.totals.uncounted, 5);
+    assert.equal(status.totals.added, 1 + UNTRACKED_COUNT_LIMITS.maxFiles);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: past the total byte budget the remaining untracked rows are marked not counted', async () => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const perFile = UNTRACKED_COUNT_LIMITS.maxFileBytes - 1;
+    const fit = Math.floor(UNTRACKED_COUNT_LIMITS.maxTotalBytes / perFile);
+    for (let i = 0; i <= fit; i++) fs.writeFileSync(path.join(repoDir, `chunk${String(i).padStart(2, '0')}.log`), Buffer.alloc(perFile, 0x0a));
+
+    const status = await createGitChangesRunner({ kind: 'local', cwd: repoDir }).status();
+    const untracked = status.files.filter((f) => f.untracked);
+    assert.equal(untracked.filter((f) => f.added === perFile).length, fit);
+    assert.deepEqual(untracked.filter((f) => f.countStatus === 'over-cap').map((f) => f.path), [untracked[untracked.length - 1].path]);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('real git: a leaf symlink counts as the one line git renders for it; a symlink to a directory is marked, never followed', async (t) => {
+  const tmp = mkTmp();
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    initRepo(repoDir);
+    const outsideFile = path.join(tmp, 'outside.txt');
+    fs.writeFileSync(outsideFile, 'o1\no2\no3\no4\no5\n');
+    const outsideDir = path.join(tmp, 'outside-dir');
+    fs.mkdirSync(outsideDir);
+    try {
+      fs.symlinkSync(outsideFile, path.join(repoDir, 'link-to-file'));
+      fs.symlinkSync(outsideDir, path.join(repoDir, 'link-to-dir'));
+    } catch {
+      t.skip('this platform does not allow creating a symlink unprivileged');
+      return;
+    }
+
+    const runner = createGitChangesRunner({ kind: 'local', cwd: repoDir });
+    const status = await runner.status();
+    const byPath = new Map(status.files.map((f) => [f.path, f]));
+    const opened = await runner.diff('link-to-file', { untracked: true });
+    assert.equal(byPath.get('link-to-file').added, 1, 'the target string, not the five lines of the target');
+    assert.equal(byPath.get('link-to-file').added, opened.added);
+    assert.equal(byPath.get('link-to-dir').added, null);
+    assert.equal(byPath.get('link-to-dir').countStatus, 'unavailable');
+  } finally {
+    cleanup(tmp);
+  }
 });

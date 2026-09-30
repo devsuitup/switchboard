@@ -938,7 +938,7 @@ async function openChangesDiff(sessionId, file, line = null) {
   } else {
     tab.diffContent = result.content;
     tab.diffTruncated = !!result.truncated;
-    if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted);
+    if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted, result.countStatus);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
@@ -961,23 +961,30 @@ function countAddedLines(content) {
   return lines.length;
 }
 
-// Untracked counts arrive with the diff, not with status — see .ai/contexts/changes-view.md
-function applyUntrackedCounts(tab, expectedData, filePath, added, deleted) {
-  if (typeof added !== 'number') return;
+// An opened untracked file refines the count status gave it — see .ai/contexts/changes-view.md ("Untracked line counts")
+function applyUntrackedCounts(tab, expectedData, filePath, added, deleted, countStatus) {
+  if (typeof added !== 'number' && typeof countStatus !== 'string') return;
   if (!tab.data || tab.data !== expectedData || !Array.isArray(tab.data.files)) return;
   const record = tab.data.files.find((f) => f.path === filePath);
-  if (!record) return;
+  if (!record || !record.untracked) return;
 
-  record.added = added;
-  record.deleted = typeof deleted === 'number' ? deleted : 0;
+  if (typeof added === 'number') {
+    record.added = added;
+    record.deleted = typeof deleted === 'number' ? deleted : 0;
+    record.countStatus = null;
+  } else if (typeof record.added !== 'number') {
+    record.countStatus = countStatus;
+  }
 
   let totalAdded = 0;
   let totalDeleted = 0;
+  let uncounted = 0;
   for (const f of tab.data.files) {
     if (typeof f.added === 'number') totalAdded += f.added;
     if (typeof f.deleted === 'number') totalDeleted += f.deleted;
+    if (typeof f.added !== 'number') uncounted += 1;
   }
-  tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted };
+  tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted, uncounted };
 }
 
 function closeChangesDiff(sessionId) {
@@ -1055,7 +1062,7 @@ function renderChangesList(sessionId, tab) {
 
   changesSummaryEl.textContent = totals.files === 0
     ? 'No changes'
-    : `${totals.files} file${totals.files === 1 ? '' : 's'} changed +${totals.added} −${totals.deleted}`;
+    : `${totals.files} file${totals.files === 1 ? '' : 's'} changed +${totals.added} −${totals.deleted}` + describeUncounted(totals.uncounted);
 
   if (branchInfoEl) {
     const parts = [];
@@ -1085,6 +1092,20 @@ function renderChangesList(sessionId, tab) {
   }
 }
 
+// A row with no count says why — see .ai/contexts/changes-view.md ("Untracked line counts")
+const COUNT_STATUS_MARKERS = {
+  binary: { label: 'binary', title: 'Binary file: no line count' },
+  'too-large': { label: 'too large', title: 'Too large to count up front; opening the file counts it when it can' },
+  'over-cap': { label: 'not counted', title: 'Past the number of new files counted up front; opening the file counts it' },
+  'on-open': { label: 'count on open', title: 'Remote session: the line count comes when the file is opened' },
+  unavailable: { label: 'no count', title: 'This file could not be read for a line count' },
+};
+
+function describeUncounted(uncounted) {
+  if (!uncounted) return '';
+  return ` (${uncounted} file${uncounted === 1 ? '' : 's'} not counted)`;
+}
+
 function buildChangesFileRow(sessionId, tab, file) {
   const row = document.createElement('div');
   row.className = 'changes-file-row';
@@ -1100,9 +1121,9 @@ function buildChangesFileRow(sessionId, tab, file) {
   pathEl.textContent = (file.renamed && file.origPath) ? `${file.origPath} → ${file.path}` : file.path;
   row.appendChild(pathEl);
 
+  const counts = document.createElement('span');
+  counts.className = 'changes-file-counts';
   if (typeof file.added === 'number' || typeof file.deleted === 'number') {
-    const counts = document.createElement('span');
-    counts.className = 'changes-file-counts';
     const added = document.createElement('span');
     added.className = 'changes-added';
     added.textContent = '+' + (file.added || 0);
@@ -1111,8 +1132,16 @@ function buildChangesFileRow(sessionId, tab, file) {
     deleted.textContent = '−' + (file.deleted || 0);
     counts.appendChild(added);
     counts.appendChild(deleted);
-    row.appendChild(counts);
+  } else {
+    const marker = COUNT_STATUS_MARKERS[file.countStatus] || COUNT_STATUS_MARKERS.unavailable;
+    const note = document.createElement('span');
+    note.className = 'changes-count-note';
+    note.dataset.countStatus = file.countStatus || 'unavailable';
+    note.textContent = marker.label;
+    note.title = marker.title;
+    counts.appendChild(note);
   }
+  row.appendChild(counts);
 
   if (isSelectedChangesRow(tab, file)) row.classList.add('selected');
 

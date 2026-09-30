@@ -19,6 +19,9 @@ const {
   isSafeGitPath,
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
+  measureUntrackedLocal,
+  readRegularFileUpTo,
+  UNTRACKED_COUNT_LIMITS,
   gitEntryAtOrAbove,
   missingCwdError,
   MAX_DIFF_BYTES,
@@ -1161,4 +1164,141 @@ test('missingCwdError still treats an unexpected stat failure as "cannot tell", 
   const fsOps = { stat: () => { const e = new Error('nope'); e.code = 'EACCES'; throw e; } };
   assert.equal(missingCwdError('/repo', fsOps), null,
     'only ENOENT/ENOTDIR name the directory; anything else leaves the 128 corroboration to decide');
+});
+
+// --- untracked line counts at status time -----------------------------------
+// see .ai/contexts/changes-view.md ("Untracked line counts")
+
+const UNTRACKED_STATUS = '# branch.head main\x00? a.txt\x00? b.dat\x00? sub/c.txt\x00';
+
+function countingFsOps(contents, { sizes = {}, readErrors = {} } = {}) {
+  const reads = [];
+  return {
+    reads,
+    realpath: (p) => p,
+    lstat: (p) => {
+      const rel = path.relative(REPO, p).split(path.sep).join('/');
+      if (!Object.prototype.hasOwnProperty.call(contents, rel)) throw new Error('ENOENT');
+      const size = Object.prototype.hasOwnProperty.call(sizes, rel) ? sizes[rel] : Buffer.byteLength(contents[rel]);
+      return { isFile: () => true, isSymbolicLink: () => false, size };
+    },
+    stat: () => ({ isFile: () => true, isDirectory: () => false }),
+    readUpTo: (p) => {
+      const rel = path.relative(REPO, p).split(path.sep).join('/');
+      reads.push(rel);
+      if (readErrors[rel]) throw new Error(readErrors[rel]);
+      return Buffer.from(contents[rel]);
+    },
+  };
+}
+
+test('remote runner .status(): untracked rows are marked "on open" and no extra ssh call is made for them (mutation target: counting remotely)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'status'")) return Promise.resolve({ code: 0, stdout: UNTRACKED_STATUS, stderr: '' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.status();
+
+  assert.equal(commands.length, 3, 'status stays three round trips on a remote session');
+  assert.deepEqual(result.files.map((f) => f.countStatus), ['on-open', 'on-open', 'on-open']);
+  assert.equal(result.totals.uncounted, 3);
+});
+
+test('local runner .status(): untracked files are counted from disk, and one check-attr call gets their operands on stdin', async () => {
+  const calls = [];
+  const exec = (args, opts) => {
+    calls.push({ args, opts });
+    if (args[1] === 'status') return Promise.resolve({ code: 0, stdout: UNTRACKED_STATUS, stderr: '' });
+    if (args[1] === 'check-attr') return Promise.resolve({ code: 0, stdout: 'a.txt\0diff\0unspecified\0b.dat\0diff\0unset\0sub/c.txt\0diff\0unspecified\0', stderr: '' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fsOps = countingFsOps({ 'a.txt': 'x\ny\n', 'b.dat': 'text\n', 'sub/c.txt': 'z' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
+  const result = await runner.status();
+
+  const attr = calls.filter((c) => c.args[1] === 'check-attr');
+  assert.equal(attr.length, 1);
+  assert.deepEqual(attr[0].args, ['--literal-pathspecs', 'check-attr', '-z', '--stdin', 'diff']);
+  assert.equal(attr[0].opts.input, 'a.txt\0b.dat\0sub/c.txt\0', 'paths travel on stdin, NUL-separated, never on the command line');
+
+  const byPath = new Map(result.files.map((f) => [f.path, f]));
+  assert.equal(byPath.get('a.txt').added, 2);
+  assert.equal(byPath.get('sub/c.txt').added, 1);
+  assert.equal(byPath.get('b.dat').countStatus, 'binary', 'the attribute wins over text content');
+  assert.equal(result.totals.uncounted, 1);
+});
+
+test('local runner .status(): a failed check-attr falls back to the content sniff instead of failing status', async () => {
+  const exec = (args) => {
+    if (args[1] === 'status') return Promise.resolve({ code: 0, stdout: UNTRACKED_STATUS, stderr: '' });
+    if (args[1] === 'check-attr') return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: boom' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fsOps = countingFsOps({ 'a.txt': 'x\n', 'b.dat': 'a\0b', 'sub/c.txt': '' });
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.files.map((f) => f.added), [1, null, 0]);
+  assert.equal(result.files[1].countStatus, 'binary');
+});
+
+test('local runner .status(): a file over the per-file cap is never read, and a read that fails is marked, not thrown', async () => {
+  const exec = (args) => Promise.resolve(args[1] === 'status'
+    ? { code: 0, stdout: UNTRACKED_STATUS, stderr: '' }
+    : { code: 0, stdout: '', stderr: '' });
+  const fsOps = countingFsOps(
+    { 'a.txt': 'x\n', 'b.dat': 'irrelevant', 'sub/c.txt': 'y\n' },
+    { sizes: { 'b.dat': UNTRACKED_COUNT_LIMITS.maxFileBytes + 1 }, readErrors: { 'sub/c.txt': 'EACCES' } },
+  );
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.deepEqual(result.files.map((f) => f.countStatus), [null, 'too-large', 'unavailable']);
+  assert.ok(!fsOps.reads.includes('b.dat'), 'the size check comes before any read');
+});
+
+test('local runner .status(): a collapsed listing marks its directory rows not counted, and reads nothing', async () => {
+  let statusCalls = 0;
+  const exec = (args) => {
+    if (args[1] === 'status') {
+      statusCalls += 1;
+      return Promise.resolve(statusCalls === 1
+        ? { code: -1, stdout: '', stderr: 'stdout maxBuffer length exceeded' }
+        : { code: 0, stdout: '# branch.head main\x00? vendor/\x00', stderr: '' });
+    }
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fsOps = countingFsOps({});
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.equal(result.untrackedCollapsed, true);
+  assert.equal(result.files[0].countStatus, 'over-cap');
+  assert.deepEqual(fsOps.reads, []);
+});
+
+test('measureUntrackedLocal: the file-count cap and the byte budget each stop the pass where they say', () => {
+  const contents = { 'a.txt': '1\n', 'b.txt': '22\n', 'c.txt': '333\n', 'd.txt': '4\n' };
+  const fsOps = countingFsOps(contents);
+  const byCount = measureUntrackedLocal(REPO, Object.keys(contents), fsOps, { maxFiles: 2, maxFileBytes: 100, maxTotalBytes: 100 });
+  assert.deepEqual(byCount.measured.map((m) => m.path), ['a.txt', 'b.txt']);
+  assert.equal(byCount.results.size, 0, 'a path past the count cap is not even looked at; the merge marks it over-cap');
+  assert.deepEqual(fsOps.reads, ['a.txt', 'b.txt']);
+
+  const byBytes = measureUntrackedLocal(REPO, Object.keys(contents), countingFsOps(contents), { maxFiles: 10, maxFileBytes: 100, maxTotalBytes: 7 });
+  assert.deepEqual(byBytes.measured.map((m) => m.path), ['a.txt', 'b.txt', 'd.txt'], '2 + 3 bytes fit in 7; the 4-byte c.txt does not, the 2-byte d.txt after it still does');
+  assert.equal(byBytes.results.get('c.txt').countStatus, 'over-cap');
+});
+
+test('readRegularFileUpTo: reads at most max + 1 bytes, so an over-cap file is detected without being read whole', () => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-read-cap-'));
+  try {
+    const p = path.join(dir, 'f.bin');
+    fsMod.writeFileSync(p, Buffer.alloc(100, 0x61));
+    assert.equal(readRegularFileUpTo(p, 10).length, 11);
+    assert.equal(readRegularFileUpTo(p, 1000).length, 100);
+    assert.equal(readRegularFileUpTo(dir, 10), null, 'a directory is not a regular file');
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
 });

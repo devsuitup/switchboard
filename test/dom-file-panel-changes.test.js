@@ -44,9 +44,9 @@ function makeStatusResult(overrides = {}) {
     branch: { head: 'main', upstream: 'origin/main', ahead: 1, behind: 0 },
     files: [
       { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
-      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
     ],
-    totals: { files: 2, added: 3, deleted: 1 },
+    totals: { files: 2, added: 3, deleted: 1, uncounted: 1 },
     ...overrides,
   };
 }
@@ -332,7 +332,8 @@ test('an untracked file\'s counts and the header totals pick up the additions it
     await flush();
 
     const before = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
-    assert.equal(before, null, 'status alone cannot know an untracked file\'s line count');
+    assert.equal(before.textContent, 'count on open', 'a remote untracked row says its count is pending, never blank');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+3 −1 \(1 file not counted\)/);
 
     ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
       .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
@@ -345,13 +346,13 @@ test('an untracked file\'s counts and the header totals pick up the additions it
     assert.equal(counts.textContent, '+2−0');
 
     const summary = ctx.document.getElementById('changes-summary');
-    assert.match(summary.textContent, /2 files changed \+5 −1/, 'the untracked additions (2) join the tracked ones (3) in the header total');
+    assert.equal(summary.textContent, '2 files changed +5 −1', 'the untracked additions (2) join the tracked ones (3), and nothing is left out any more');
     assert.equal(ctx.calls.status.length, 1, 'no extra status fetch — the counts came with the diff');
   } finally { ctx.destroy(); }
 });
 
-test('an untracked binary file keeps null counts — the row stays countless and the totals do not move', async () => {
-  const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null };
+test('an untracked binary file keeps null counts — the row says binary and the totals do not move', async () => {
+  const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null, countStatus: 'binary' };
   const ctx = setupFilePanelDom({
     fileImpl: () => ({ ok: false, error: 'binary file', reason: 'binary' }),
     diffImpl: () => binary,
@@ -370,8 +371,41 @@ test('an untracked binary file keeps null counts — the row stays countless and
 
     closeEditorBtn(ctx).click();
 
-    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
-    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1/, 'unknown counts must not be folded in as zero');
+    const cell = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(cell.textContent, 'binary', 'the marker moves from pending to what the diff found');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1 \(1 file not counted\)/, 'unknown counts must not be folded in as zero, and the header says so');
+  } finally { ctx.destroy(); }
+});
+
+test('every count status renders its own marker, never a blank cell, and a tracked binary row is marked too', async () => {
+  const status = {
+    ok: true,
+    kind: 'local',
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'img.png', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: null, deleted: null, countStatus: 'binary' },
+      { path: 'a.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: 4, deleted: 0, countStatus: null },
+      { path: 'big.log', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'too-large' },
+      { path: 'late.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'over-cap' },
+      { path: 'far.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
+      { path: 'gone.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'unavailable' },
+    ],
+    totals: { files: 6, added: 4, deleted: 0, uncounted: 5 },
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => status });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const cell = (p) => ctx.document.querySelector(`.changes-file-row[data-path="${p}"] .changes-file-counts`).textContent;
+    assert.equal(cell('img.png'), 'binary');
+    assert.equal(cell('a.txt'), '+4−0');
+    assert.equal(cell('big.log'), 'too large');
+    assert.equal(cell('late.txt'), 'not counted');
+    assert.equal(cell('far.txt'), 'count on open');
+    assert.equal(cell('gone.txt'), 'no count');
+    assert.equal(ctx.document.getElementById('changes-summary').textContent, '6 files changed +4 −0 (5 files not counted)');
   } finally { ctx.destroy(); }
 });
 
@@ -488,7 +522,7 @@ test('a failed untracked diff surfaces the error and leaves the counts alone', a
     assert.match(body.textContent, /fatal: bad thing/);
 
     closeEditorBtn(ctx).click();
-    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts').textContent, 'count on open');
   } finally { ctx.destroy(); }
 });
 

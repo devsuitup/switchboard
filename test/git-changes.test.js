@@ -10,7 +10,17 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions, diffHeaderNamesPath } = require('../git-changes');
+const {
+  parseStatusPorcelainV2,
+  parseNumstat,
+  mergeChanges,
+  countNewFileDiffAdditions,
+  countBufferLines,
+  parseCheckAttr,
+  diffHeaderNamesPath,
+  COUNT_STATUS,
+  BINARY_SNIFF_BYTES,
+} = require('../git-changes');
 
 // --- parseStatusPorcelainV2 --------------------------------------------
 
@@ -191,8 +201,8 @@ test('mergeChanges: a staged-only file gets its counts from the staged numstat m
     { path: 'a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M' },
   ] };
   const merged = mergeChanges(status, { 'a.js': { added: 5, deleted: 2 } }, {});
-  assert.deepEqual(merged.files[0], { path: 'a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 5, deleted: 2 });
-  assert.deepEqual(merged.totals, { files: 1, added: 5, deleted: 2 });
+  assert.deepEqual(merged.files[0], { path: 'a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 5, deleted: 2, countStatus: null });
+  assert.deepEqual(merged.totals, { files: 1, added: 5, deleted: 2, uncounted: 0 });
 });
 
 test('mergeChanges: a file modified in both index and worktree sums both numstat entries (mutation target: only reading one map)', () => {
@@ -204,23 +214,74 @@ test('mergeChanges: a file modified in both index and worktree sums both numstat
   assert.equal(merged.files[0].deleted, 5, 'staged (1) + unstaged (4) deleted lines');
 });
 
-test('mergeChanges: an untracked file carries null counts, not zero — its counts only exist once its diff is fetched', () => {
+test('mergeChanges: an untracked file with no count supplied carries null counts and says they come on open — never zero, never blank', () => {
   const status = { branch: { head: 'main', upstream: null, ahead: 0, behind: 0 }, files: [
     { path: 'new.js', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?' },
   ] };
   const merged = mergeChanges(status, {}, {});
   assert.equal(merged.files[0].added, null);
   assert.equal(merged.files[0].deleted, null);
-  assert.deepEqual(merged.totals, { files: 1, added: 0, deleted: 0 }, 'totals only sum known counts');
+  assert.equal(merged.files[0].countStatus, COUNT_STATUS.ON_OPEN);
+  assert.deepEqual(merged.totals, { files: 1, added: 0, deleted: 0, uncounted: 1 }, 'totals only sum known counts, and say how many they leave out');
 });
 
-test('mergeChanges: a binary file (null in both maps) stays null after combining, not coerced to 0', () => {
+test('mergeChanges: an untracked count supplied by the runner lands on the row and in the totals (mutation target: ignoring the fourth argument)', () => {
+  const status = { branch: { head: 'main', upstream: null, ahead: 0, behind: 0 }, files: [
+    { path: 'a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M' },
+    { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?' },
+    { path: 'blob.bin', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?' },
+  ] };
+  const counts = new Map([
+    ['new.txt', { added: 4, deleted: 0 }],
+    ['blob.bin', { countStatus: COUNT_STATUS.BINARY }],
+  ]);
+  const merged = mergeChanges(status, { 'a.js': { added: 1, deleted: 2 } }, {}, counts);
+  assert.equal(merged.files[1].added, 4);
+  assert.equal(merged.files[1].deleted, 0);
+  assert.equal(merged.files[1].countStatus, null);
+  assert.equal(merged.files[2].added, null);
+  assert.equal(merged.files[2].countStatus, COUNT_STATUS.BINARY);
+  assert.deepEqual(merged.totals, { files: 3, added: 5, deleted: 2, uncounted: 1 });
+});
+
+test('mergeChanges: a binary file (null in both maps) stays null after combining, not coerced to 0, and is marked binary', () => {
   const status = { branch: { head: 'main', upstream: null, ahead: 0, behind: 0 }, files: [
     { path: 'img.png', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M' },
   ] };
   const merged = mergeChanges(status, {}, { 'img.png': { added: null, deleted: null } });
   assert.equal(merged.files[0].added, null);
   assert.equal(merged.files[0].deleted, null);
+  assert.equal(merged.files[0].countStatus, COUNT_STATUS.BINARY);
+  assert.equal(merged.totals.uncounted, 1);
+});
+
+// --- countBufferLines / parseCheckAttr ----------------------------------
+
+test('countBufferLines: counts lines the way git counts a new file\'s additions — a final line without a newline still counts', () => {
+  assert.deepEqual(countBufferLines(Buffer.from('a\nb\n')), { lines: 2, hasNul: false });
+  assert.deepEqual(countBufferLines(Buffer.from('a\nb')), { lines: 2, hasNul: false });
+  assert.deepEqual(countBufferLines(Buffer.from('')), { lines: 0, hasNul: false });
+  assert.deepEqual(countBufferLines(Buffer.from('\n')), { lines: 1, hasNul: false });
+  assert.deepEqual(countBufferLines(Buffer.from('a\r\nb\r\n')), { lines: 2, hasNul: false });
+});
+
+test('countBufferLines: a NUL within git\'s 8000-byte sniff window is binary; one past it is not (git\'s buffer_is_binary rule)', () => {
+  assert.equal(countBufferLines(Buffer.from([0x61, 0x00, 0x0a])).hasNul, true);
+  const late = Buffer.alloc(BINARY_SNIFF_BYTES + 10, 0x61);
+  late[BINARY_SNIFF_BYTES + 1] = 0;
+  assert.equal(countBufferLines(late).hasNul, false);
+  const edge = Buffer.alloc(BINARY_SNIFF_BYTES + 10, 0x61);
+  edge[BINARY_SNIFF_BYTES - 1] = 0;
+  assert.equal(countBufferLines(edge).hasNul, true);
+});
+
+test('parseCheckAttr: reads -z triples into path → value', () => {
+  const out = 'a.dat\0diff\0unset\0b.txt\0diff\0unspecified\0c.txt\0diff\0set\0';
+  const parsed = parseCheckAttr(out);
+  assert.equal(parsed.get('a.dat'), 'unset');
+  assert.equal(parsed.get('b.txt'), 'unspecified');
+  assert.equal(parsed.get('c.txt'), 'set');
+  assert.equal(parseCheckAttr('').size, 0);
 });
 
 test('mergeChanges: totals sum added/deleted across all files and count files', () => {
@@ -229,7 +290,7 @@ test('mergeChanges: totals sum added/deleted across all files and count files', 
     { path: 'b.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M' },
   ] };
   const merged = mergeChanges(status, { 'a.js': { added: 1, deleted: 1 } }, { 'b.js': { added: 4, deleted: 0 } });
-  assert.deepEqual(merged.totals, { files: 2, added: 5, deleted: 1 });
+  assert.deepEqual(merged.totals, { files: 2, added: 5, deleted: 1, uncounted: 0 });
 });
 
 // --- countNewFileDiffAdditions -----------------------------------------
@@ -328,5 +389,5 @@ test('mergeChanges: branch pass-through defaults when status is missing', () => 
   const merged = mergeChanges(null, {}, {});
   assert.deepEqual(merged.branch, { head: null, upstream: null, ahead: 0, behind: 0 });
   assert.deepEqual(merged.files, []);
-  assert.deepEqual(merged.totals, { files: 0, added: 0, deleted: 0 });
+  assert.deepEqual(merged.totals, { files: 0, added: 0, deleted: 0, uncounted: 0 });
 });
