@@ -1,6 +1,8 @@
 // pty-ops.js — see .ai/contexts/ipc-bridge.md ("PTY operations race the exit")
 'use strict';
 
+const os = require('os');
+
 let logger = null;
 
 /** Install the sink used to report swallowed PTY errors. `null` disables it. */
@@ -44,4 +46,10 @@ function writePty(session, data, sessionId) {
   return withPty(session, 'write', (pty) => pty.write(data), sessionId);
 }
 
-module.exports = { setPtyOpLogger, withPty, resizePty, killPty, writePty };
+/** The name of the signal node-pty reports on exit (`SIGKILL`), or null when none killed it. */
+function ptyExitSignalName(signal, signals = os.constants.signals) {
+  if (!signal) return null;
+  return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
+}
+
+module.exports = { setPtyOpLogger, withPty, resizePty, killPty, writePty, ptyExitSignalName };

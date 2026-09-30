@@ -3,7 +3,7 @@
 const { spawn } = require('child_process');
 
 // see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
-function runToExit(file, args, { cwd, env, timeoutMs, maxBuffer }, spawnFn = spawn) {
+function runToExit(file, args, { cwd, env, timeoutMs, maxBuffer, input }, spawnFn = spawn) {
   return new Promise((resolve) => {
     const command = [file, ...args].join(' ');
     const stdoutChunks = [];
@@ -70,6 +70,10 @@ function runToExit(file, args, { cwd, env, timeoutMs, maxBuffer }, spawnFn = spa
       finish(null);
     });
     child.on('close', (exitCode) => finish(exitCode));
+    if (input !== undefined && child.stdin) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
   });
 }
 

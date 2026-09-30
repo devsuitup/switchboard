@@ -19,6 +19,12 @@ const {
   isSafeGitPath,
   isSafeNoIndexPath,
   resolveLocalNoIndexOperand,
+  measureUntrackedLocal,
+  readRegularFileUpTo,
+  untrackedCountSlotsInUse,
+  untrackedCountSlotWaiters,
+  parseBinaryDrivers,
+  UNTRACKED_COUNT_LIMITS,
   gitEntryAtOrAbove,
   missingCwdError,
   MAX_DIFF_BYTES,
@@ -34,6 +40,10 @@ const {
 // Windows, which the guard rightly refuses. REPO is "/repo" on POSIX and
 // "<drive>:\repo" on Windows.
 const REPO = path.resolve('/repo');
+
+// The runner asks git for the repository root before any path-taking command — see .ai/contexts/changes-view.md
+const isRootLookup = (c) => (Array.isArray(c) ? c.includes('--show-toplevel') : String(c).includes("'--show-toplevel'"));
+const sent = (calls) => calls.filter((c) => !isRootLookup(c));
 const REAL_REPO = path.resolve('/real/repo');
 const OUTSIDE = path.resolve('/elsewhere');
 const SIBLING = path.resolve('/repository-evil');
@@ -274,7 +284,7 @@ test('local runner .diff(): unstaged diff args carry --literal-pathspecs, refuse
 
   const good = await runner.diff('src/x.js');
   assert.equal(good.ok, true);
-  assert.deepEqual(calls[0], ['--literal-pathspecs', 'diff', '--', 'src/x.js']);
+  assert.deepEqual(sent(calls)[0], ['--literal-pathspecs', 'diff', '--', 'src/x.js']);
 });
 
 test('local runner .diff({staged:true}): includes --cached', async () => {
@@ -282,7 +292,7 @@ test('local runner .diff({staged:true}): includes --cached', async () => {
   const exec = (args) => { calls.push(args); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
   await runner.diff('src/x.js', { staged: true });
-  assert.deepEqual(calls[0], ['--literal-pathspecs', 'diff', '--cached', '--', 'src/x.js']);
+  assert.deepEqual(sent(calls)[0], ['--literal-pathspecs', 'diff', '--cached', '--', 'src/x.js']);
 });
 
 test('local runner .diff(): truncates content past 512 KB, on a line boundary, measured in bytes', async () => {
@@ -372,8 +382,8 @@ test('local runner .diff({untracked:true}): builds a --no-index invocation again
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
   await runner.diff('new.txt', { untracked: true });
 
-  assert.deepEqual(calls[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'new.txt']);
-  assert.ok(!calls[0].includes('--cached'), 'an untracked file has nothing in the index');
+  assert.deepEqual(sent(calls)[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'new.txt']);
+  assert.ok(!sent(calls)[0].includes('--cached'), 'an untracked file has nothing in the index');
 });
 
 test('local runner .diff({untracked:true}): returns the added-line count the status pass could not know, with deleted 0', async () => {
@@ -428,7 +438,7 @@ test('local runner .diff({untracked:true}): exit 1 with NO stdout and a message 
 
 test('local runner .diff({untracked:true}): an operand outside the working directory never reaches exec — --no-index would happily read it', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: 'SECRET', stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 1, stdout: 'SECRET', stderr: '' }); };
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps: fakeFsOps() });
 
   for (const bad of ['/etc/passwd', '../../etc/passwd', 'C:/Users/dev/.ssh/id_rsa', '--output=/tmp/pwn']) {
@@ -441,7 +451,7 @@ test('local runner .diff({untracked:true}): an operand outside the working direc
 
 test('local runner .diff({untracked:true}): a symlinked directory inside the repo cannot be used to read outside it (mutation target: a syntax-only guard)', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: 'SUPER_SECRET_OUTSIDE_THE_REPO', stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 1, stdout: 'SUPER_SECRET_OUTSIDE_THE_REPO', stderr: '' }); };
   // repo/link-to-dir is a symlink to /elsewhere: the operand has no "..", is not
   // absolute, and every syntactic check passes.
   const fsOps = fakeFsOps({ links: { [inRepo('link-to-dir')]: OUTSIDE } });
@@ -465,7 +475,7 @@ test('local runner .diff({untracked:true}): git receives the guard\'s resolved o
 
   const result = await runner.diff('sub/new.txt', { untracked: true });
   assert.equal(result.ok, true);
-  assert.deepEqual(calls[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'sub/new.txt']);
+  assert.deepEqual(sent(calls)[0], ['--literal-pathspecs', '-c', 'core.quotepath=false', 'diff', '--no-index', '--', '/dev/null', 'sub/new.txt']);
 });
 
 test('local runner .diff({untracked:true}): a leaf symlink to a FILE is still diffable (git lstats that one — the link target string, never the target\'s content)', async () => {
@@ -480,7 +490,7 @@ test('local runner .diff({untracked:true}): a leaf symlink to a FILE is still di
 
 test('local runner .diff({untracked:true}): a leaf symlink to a DIRECTORY never reaches git — it follows that one and pairs the operands by basename (mutation target: lstat alone)', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: untrackedDiffFor('dirlink/null'), stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 1, stdout: untrackedDiffFor('dirlink/null'), stderr: '' }); };
   const fsOps = fakeFsOps({ type: 'symlink', target: 'dir' });
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
 
@@ -560,7 +570,7 @@ test('.diff({untracked:true}): a binary diff has no "+++" line at all and is sti
 
 test('local runner .diff({untracked:true}): an operand that is neither a file nor a symlink (fifo, device, directory) never reaches git', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
   const fsOps = fakeFsOps({ type: 'fifo' });
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps });
 
@@ -571,7 +581,7 @@ test('local runner .diff({untracked:true}): an operand that is neither a file no
 
 test('local runner .diff({untracked:true}): a vanished operand is refused before git runs', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 1, stdout: '', stderr: '' }); };
   const fsOps = {
     realpath: (p) => p,
     lstat: () => { throw new Error('ENOENT: no such file or directory'); },
@@ -597,63 +607,63 @@ const PATH_FLAVOURS = [
 for (const flavour of PATH_FLAVOURS) {
   const { name, pathOps, root, sep, outside, sibling } = flavour;
 
-  test(`resolveLocalNoIndexOperand [${name}]: a legitimate path resolves to a git-spelled operand, always forward-slashed (mutation target: returning the native separator)`, () => {
-    assert.equal(resolveLocalNoIndexOperand(root, 'a.txt', fakeFsOps(), pathOps), 'a.txt');
-    assert.equal(resolveLocalNoIndexOperand(root, 'newdir/a.txt', fakeFsOps(), pathOps), 'newdir/a.txt');
-    assert.equal(resolveLocalNoIndexOperand(root, 'deep/sub/dir/a.txt', fakeFsOps(), pathOps), 'deep/sub/dir/a.txt');
-    assert.equal(resolveLocalNoIndexOperand(root, 'has..dots.txt', fakeFsOps(), pathOps), 'has..dots.txt');
+  test(`resolveLocalNoIndexOperand [${name}]: a legitimate path resolves to a git-spelled operand, always forward-slashed (mutation target: returning the native separator)`, async () => {
+    assert.equal(await resolveLocalNoIndexOperand(root, 'a.txt', fakeFsOps(), pathOps), 'a.txt');
+    assert.equal(await resolveLocalNoIndexOperand(root, 'newdir/a.txt', fakeFsOps(), pathOps), 'newdir/a.txt');
+    assert.equal(await resolveLocalNoIndexOperand(root, 'deep/sub/dir/a.txt', fakeFsOps(), pathOps), 'deep/sub/dir/a.txt');
+    assert.equal(await resolveLocalNoIndexOperand(root, 'has..dots.txt', fakeFsOps(), pathOps), 'has..dots.txt');
   });
 
-  test(`resolveLocalNoIndexOperand [${name}]: traversal and escapes are refused`, () => {
-    assert.equal(resolveLocalNoIndexOperand(root, '../x.txt', fakeFsOps(), pathOps), null);
-    assert.equal(resolveLocalNoIndexOperand(root, 'sub/../../x.txt', fakeFsOps(), pathOps), null);
-    assert.equal(resolveLocalNoIndexOperand(root, '/etc/passwd', fakeFsOps(), pathOps), null);
+  test(`resolveLocalNoIndexOperand [${name}]: traversal and escapes are refused`, async () => {
+    assert.equal(await resolveLocalNoIndexOperand(root, '../x.txt', fakeFsOps(), pathOps), null);
+    assert.equal(await resolveLocalNoIndexOperand(root, 'sub/../../x.txt', fakeFsOps(), pathOps), null);
+    assert.equal(await resolveLocalNoIndexOperand(root, '/etc/passwd', fakeFsOps(), pathOps), null);
 
     const escaping = fakeFsOps({ links: { [root + sep + 'link']: outside } });
-    assert.equal(resolveLocalNoIndexOperand(root, 'link/secret.txt', escaping, pathOps), null,
+    assert.equal(await resolveLocalNoIndexOperand(root, 'link/secret.txt', escaping, pathOps), null,
       'a symlinked directory pointing out of the tree (another drive, on Windows) must not resolve inside it');
 
     const nextDoor = fakeFsOps({ links: { [root + sep + 'link']: sibling } });
-    assert.equal(resolveLocalNoIndexOperand(root, 'link/x.txt', nextDoor, pathOps), null,
+    assert.equal(await resolveLocalNoIndexOperand(root, 'link/x.txt', nextDoor, pathOps), null,
       'a sibling sharing the root as a string prefix is not inside it');
   });
 
-  test(`resolveLocalNoIndexOperand [${name}]: a root that realpath spells differently from the cwd still resolves`, () => {
+  test(`resolveLocalNoIndexOperand [${name}]: a root that realpath spells differently from the cwd still resolves`, async () => {
     // The leaf's parent IS the root, reached by another spelling — path.relative
     // returns '' for that, which is "the same directory", not "outside".
     const spelled = fakeFsOps({ links: { [root]: root + sep + '.' } });
-    assert.equal(resolveLocalNoIndexOperand(root, 'a.txt', spelled, pathOps), 'a.txt');
+    assert.equal(await resolveLocalNoIndexOperand(root, 'a.txt', spelled, pathOps), 'a.txt');
   });
 
-  test(`resolveLocalNoIndexOperand [${name}]: the leaf type rules hold whatever the separator`, () => {
-    assert.equal(resolveLocalNoIndexOperand(root, 'link', fakeFsOps({ type: 'symlink', target: 'file' }), pathOps), 'link');
-    assert.equal(resolveLocalNoIndexOperand(root, 'dirlink', fakeFsOps({ type: 'symlink', target: 'dir' }), pathOps), null);
-    assert.equal(resolveLocalNoIndexOperand(root, 'afifo', fakeFsOps({ type: 'fifo' }), pathOps), null);
+  test(`resolveLocalNoIndexOperand [${name}]: the leaf type rules hold whatever the separator`, async () => {
+    assert.equal(await resolveLocalNoIndexOperand(root, 'link', fakeFsOps({ type: 'symlink', target: 'file' }), pathOps), 'link');
+    assert.equal(await resolveLocalNoIndexOperand(root, 'dirlink', fakeFsOps({ type: 'symlink', target: 'dir' }), pathOps), null);
+    assert.equal(await resolveLocalNoIndexOperand(root, 'afifo', fakeFsOps({ type: 'fifo' }), pathOps), null);
   });
 }
 
-test('resolveLocalNoIndexOperand [win32]: the same directory spelled two ways is inside itself, not outside (mutation target: treating an empty path.relative as "not inside")', () => {
+test('resolveLocalNoIndexOperand [win32]: the same directory spelled two ways is inside itself, not outside (mutation target: treating an empty path.relative as "not inside")', async () => {
   // The Windows CI failure in one line: "/repo" and the parent of its own
   // resolved child are the same directory under two spellings, and
   // path.relative says so by returning the empty string.
   const parentOfChild = path.win32.dirname(path.win32.resolve('/repo', 'new.txt'));
   assert.notEqual(parentOfChild, '/repo', 'win32 resolves a drive-less root to a different spelling');
   assert.equal(path.win32.relative('/repo', parentOfChild), '');
-  assert.equal(resolveLocalNoIndexOperand('/repo', 'new.txt', fakeFsOps(), path.win32), 'new.txt');
+  assert.equal(await resolveLocalNoIndexOperand('/repo', 'new.txt', fakeFsOps(), path.win32), 'new.txt');
 });
 
-test('resolveLocalNoIndexOperand: returns the operand relative to the resolved root, or null when it escapes', () => {
+test('resolveLocalNoIndexOperand: returns the operand relative to the resolved root, or null when it escapes', async () => {
   const plain = fakeFsOps();
-  assert.equal(resolveLocalNoIndexOperand(REPO, 'newdir/a.txt', plain), 'newdir/a.txt');
-  assert.equal(resolveLocalNoIndexOperand(REPO, 'a.txt', plain), 'a.txt');
-  assert.equal(resolveLocalNoIndexOperand(REPO, '../a.txt', plain), null);
-  assert.equal(resolveLocalNoIndexOperand(REPO, '/etc/passwd', plain), null);
+  assert.equal(await resolveLocalNoIndexOperand(REPO, 'newdir/a.txt', plain), 'newdir/a.txt');
+  assert.equal(await resolveLocalNoIndexOperand(REPO, 'a.txt', plain), 'a.txt');
+  assert.equal(await resolveLocalNoIndexOperand(REPO, '../a.txt', plain), null);
+  assert.equal(await resolveLocalNoIndexOperand(REPO, '/etc/passwd', plain), null);
 
   const escaping = fakeFsOps({ links: { [inRepo('link')]: OUTSIDE } });
-  assert.equal(resolveLocalNoIndexOperand(REPO, 'link/secret.txt', escaping), null);
+  assert.equal(await resolveLocalNoIndexOperand(REPO, 'link/secret.txt', escaping), null);
 
   const sibling = fakeFsOps({ links: { [inRepo('link')]: SIBLING } });
-  assert.equal(resolveLocalNoIndexOperand(REPO, 'link/x.txt', sibling), null, 'a sibling sharing the root as a string prefix is not inside it');
+  assert.equal(await resolveLocalNoIndexOperand(REPO, 'link/x.txt', sibling), null, 'a sibling sharing the root as a string prefix is not inside it');
 });
 
 test('local runner .diff({untracked:true}): a thrown exec rejects gracefully', async () => {
@@ -694,8 +704,8 @@ test('remote runner .diff(): the built command carries --literal-pathspecs, quot
   const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
   await runner.diff('src/weird file.js', { staged: true });
 
-  assert.equal(commands.length, 1);
-  assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--cached' '--' 'src/weird file.js'");
+  assert.equal(sent(commands).length, 1);
+  assert.equal(sent(commands)[0], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--cached' '--' 'src/weird file.js'");
 });
 
 test('remote runner .diff({untracked:true}): every token of the --no-index command is individually quoted, and no backtick is ever emitted', async () => {
@@ -712,13 +722,13 @@ test('remote runner .diff({untracked:true}): every token of the --no-index comma
   const result = await runner.diff(hostilePath, { untracked: true });
 
   assert.equal(result.ok, true);
-  assert.equal(commands.length, 2);
-  assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'weird `name`$(x).txt'");
-  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' '-c' 'core.quotepath=false' 'diff' '--no-index' '--' '/dev/null' 'weird `name`$(x).txt'");
+  assert.equal(sent(commands).length, 2);
+  assert.equal(sent(commands)[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'weird `name`$(x).txt'");
+  assert.equal(sent(commands)[1], "git -C '/srv/app' '--literal-pathspecs' '-c' 'core.quotepath=false' 'diff' '--no-index' '--' '/dev/null' 'weird `name`$(x).txt'");
   for (const cmd of commands) {
     assert.match(cmd, /^git -C '[^']*' ('[^']*' )*'[^']*'$/s, 'the backtick never sits outside a quoted token');
   }
-  assert.equal(seenOpts[1].maxStdoutBytes, DIFF_MAX_STDOUT_BYTES);
+  assert.equal(seenOpts[seenOpts.length - 1].maxStdoutBytes, DIFF_MAX_STDOUT_BYTES);
 });
 
 test('remote runner .diff({untracked:true}): git itself must list the path as untracked before any diff runs — no local filesystem to resolve against', async () => {
@@ -732,9 +742,9 @@ test('remote runner .diff({untracked:true}): git itself must list the path as un
   const result = await runner.diff('new.txt', { untracked: true });
 
   assert.equal(result.ok, true);
-  assert.equal(commands.length, 2, 'the listing check runs before the diff, not alongside it');
-  assert.equal(commands[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'new.txt'");
-  assert.ok(commands[1].includes("'--no-index'"));
+  assert.equal(sent(commands).length, 2, 'the listing check runs before the diff, not alongside it');
+  assert.equal(sent(commands)[0], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'new.txt'");
+  assert.ok(sent(commands)[1].includes("'--no-index'"));
 });
 
 test('remote runner .diff({untracked:true}): a path git does not list as untracked never reaches the diff (mutation target: skipping the listing check)', async () => {
@@ -751,7 +761,7 @@ test('remote runner .diff({untracked:true}): a path git does not list as untrack
 
   assert.equal(result.ok, false);
   assert.equal(result.error, 'invalid path');
-  assert.equal(commands.length, 1, 'no diff command may be sent for an unlisted path');
+  assert.equal(sent(commands).length, 1, 'no diff command may be sent for an unlisted path');
 });
 
 test('remote runner .diff({untracked:true}): a prefix match is not a match — the listed path must be the requested one', async () => {
@@ -866,8 +876,8 @@ test('remote runner .diff(): passes MAX_DIFF_BYTES-plus-slack as the transport s
   const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
   await runner.diff('x.js');
 
-  assert.equal(seenOpts.length, 1);
-  assert.equal(seenOpts[0].maxStdoutBytes, DIFF_MAX_STDOUT_BYTES);
+  assert.equal(seenOpts.length, 2, 'the root lookup, then the diff');
+  assert.equal(seenOpts[1].maxStdoutBytes, DIFF_MAX_STDOUT_BYTES);
   assert.ok(DIFF_MAX_STDOUT_BYTES > MAX_DIFF_BYTES, 'the transport cap must have slack above the display cap');
 });
 
@@ -881,7 +891,7 @@ test('remote runner: a transport-level stdout-cap failure surfaces as ok:false w
 
 test('remote runner: an unsafe path is refused before any ssh call', async () => {
   let calls = 0;
-  const exec = () => { calls++; return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
+  const exec = (c) => { if (!isRootLookup(c)) calls++; return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
   const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
   const result = await runner.diff('../../etc/passwd');
   assert.equal(result.ok, false);
@@ -1161,4 +1171,497 @@ test('missingCwdError still treats an unexpected stat failure as "cannot tell", 
   const fsOps = { stat: () => { const e = new Error('nope'); e.code = 'EACCES'; throw e; } };
   assert.equal(missingCwdError('/repo', fsOps), null,
     'only ENOENT/ENOTDIR name the directory; anything else leaves the 128 corroboration to decide');
+});
+
+// --- untracked line counts at status time -----------------------------------
+// see .ai/contexts/changes-view.md ("Untracked line counts")
+
+const UNTRACKED_STATUS = '# branch.head main\x00? a.txt\x00? b.dat\x00? sub/c.txt\x00';
+
+function countingFsOps(contents, { sizes = {}, readErrors = {}, reads: readOverride = {}, lstatDelayMs = {} } = {}) {
+  const reads = [];
+  const rel = (p) => path.relative(REPO, p).split(path.sep).join('/');
+  return {
+    reads,
+    realpath: (p) => p,
+    lstat: async (p) => {
+      const r = rel(p);
+      if (lstatDelayMs[r]) await new Promise((resolve) => setTimeout(resolve, lstatDelayMs[r]));
+      if (!Object.prototype.hasOwnProperty.call(contents, r)) throw new Error('ENOENT');
+      const size = Object.prototype.hasOwnProperty.call(sizes, r) ? sizes[r] : Buffer.byteLength(contents[r]);
+      return { isFile: () => true, isSymbolicLink: () => false, size };
+    },
+    stat: () => ({ isFile: () => true, isDirectory: () => false }),
+    readUpTo: (p) => {
+      const r = rel(p);
+      reads.push(r);
+      if (readErrors[r]) throw new Error(readErrors[r]);
+      return Buffer.from(Object.prototype.hasOwnProperty.call(readOverride, r) ? readOverride[r] : contents[r]);
+    },
+  };
+}
+
+// A local exec whose rev-parse names REPO as the repository root.
+function countingExec(responses, calls = []) {
+  return (args, opts) => {
+    calls.push({ args, opts });
+    if (args.includes('--show-toplevel')) return Promise.resolve({ code: 0, stdout: REPO + '\n', stderr: '' });
+    const key = args[1];
+    return Promise.resolve(responses[key] || { code: 0, stdout: '', stderr: '' });
+  };
+}
+
+const TEST_LIMITS = { maxFiles: 500, maxFileBytes: 100, maxTotalBytes: 100, timeBudgetMs: 1000, concurrency: 2 };
+
+test('remote runner .status(): untracked rows are marked "on open" and no extra ssh call is made for them (mutation target: counting remotely)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'status'")) return Promise.resolve({ code: 0, stdout: UNTRACKED_STATUS, stderr: '' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec });
+  const result = await runner.status();
+
+  assert.equal(commands.length, 3, 'status stays three round trips on a remote session');
+  assert.deepEqual(result.files.map((f) => f.countStatus), ['on-open', 'on-open', 'on-open']);
+  assert.equal(result.totals.uncounted, 3);
+});
+
+test('local runner .status(): untracked files are counted at the repository root, and one check-attr call there gets their operands on stdin', async () => {
+  const calls = [];
+  const exec = countingExec({
+    status: { code: 0, stdout: UNTRACKED_STATUS, stderr: '' },
+    'check-attr': { code: 0, stdout: 'a.txt\0diff\0unspecified\0b.dat\0diff\0unset\0sub/c.txt\0diff\0unspecified\0', stderr: '' },
+  }, calls);
+  const fsOps = countingFsOps({ 'a.txt': 'x\ny\n', 'b.dat': 'text\n', 'sub/c.txt': 'z' });
+  const runner = createGitChangesRunner({ kind: 'local', cwd: path.join(REPO, 'sub'), exec, fsOps });
+  const result = await runner.status();
+
+  const attr = calls.filter((c) => c.args[1] === 'check-attr');
+  assert.equal(attr.length, 1);
+  assert.deepEqual(attr[0].args, ['--literal-pathspecs', 'check-attr', '-z', '--stdin', 'diff']);
+  assert.equal(attr[0].opts.input, 'a.txt\0b.dat\0sub/c.txt\0', 'paths travel on stdin, NUL-separated, never on the command line');
+  assert.equal(attr[0].opts.cwd, REPO, 'root-relative paths are looked up at the root, not the session cwd');
+
+  const byPath = new Map(result.files.map((f) => [f.path, f]));
+  assert.equal(byPath.get('a.txt').added, 2);
+  assert.equal(byPath.get('sub/c.txt').added, 1);
+  assert.equal(byPath.get('b.dat').countStatus, 'binary', 'the attribute wins over text content');
+  assert.deepEqual(fsOps.reads, ['a.txt', 'b.dat', 'sub/c.txt'], 'every read is resolved against the root');
+  assert.equal(result.totals.uncounted, 1);
+});
+
+test('local runner .status(): a named diff driver with diff.<name>.binary=true makes the file binary; one without it does not', async () => {
+  const calls = [];
+  const exec = countingExec({
+    status: { code: 0, stdout: '# branch.head main\x00? a.txt\x00? b.dat\x00', stderr: '' },
+    'check-attr': { code: 0, stdout: 'a.txt\0diff\0plain\0b.dat\0diff\0Blob\0', stderr: '' },
+    config: { code: 0, stdout: 'diff.Blob.binary\ntrue\0diff.plain.binary\nfalse\0', stderr: '' },
+  }, calls);
+  const fsOps = countingFsOps({ 'a.txt': 'x\n', 'b.dat': 'text\n' });
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.deepEqual(result.files.map((f) => f.countStatus), [null, 'binary']);
+  assert.equal(calls.filter((c) => c.args[1] === 'config').length, 1);
+});
+
+test('local runner .status(): no driver name among the attributes means no config lookup at all', async () => {
+  const calls = [];
+  const exec = countingExec({ status: { code: 0, stdout: UNTRACKED_STATUS, stderr: '' } }, calls);
+  const fsOps = countingFsOps({ 'a.txt': 'x\n', 'b.dat': 'y\n', 'sub/c.txt': '' });
+  await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.equal(calls.filter((c) => c.args[1] === 'config').length, 0);
+});
+
+test('parseBinaryDrivers: reads -z key/value records, and only true-ish values count', () => {
+  const drivers = parseBinaryDrivers('diff.a.binary\ntrue\0diff.b.binary\nno\0diff.c.d.binary\nYes\0diff.e.textconv\ncat\0');
+  assert.deepEqual([...drivers].sort(), ['a', 'c.d']);
+});
+
+test('local runner .status(): a failed check-attr falls back to the content sniff instead of failing status', async () => {
+  const exec = countingExec({
+    status: { code: 0, stdout: UNTRACKED_STATUS, stderr: '' },
+    'check-attr': { code: 128, stdout: '', stderr: 'fatal: boom' },
+  });
+  const fsOps = countingFsOps({ 'a.txt': 'x\n', 'b.dat': 'a\0b', 'sub/c.txt': '' });
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.files.map((f) => f.added), [1, null, 0]);
+  assert.equal(result.files[1].countStatus, 'binary');
+});
+
+test('local runner .status(): no repository root means no count, marked, not a guess from the session cwd', async () => {
+  const exec = (args) => Promise.resolve(args[1] === 'status'
+    ? { code: 0, stdout: UNTRACKED_STATUS, stderr: '' }
+    : { code: args.includes('--show-toplevel') ? 128 : 0, stdout: '', stderr: '' });
+  const fsOps = countingFsOps({ 'a.txt': 'x\n', 'b.dat': 'y\n', 'sub/c.txt': 'z\n' });
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.deepEqual(result.files.map((f) => f.countStatus), ['unavailable', 'unavailable', 'unavailable']);
+  assert.deepEqual(fsOps.reads, []);
+});
+
+test('local runner .status(): a file over the per-file cap is never read, and a read that fails is marked, not thrown', async () => {
+  const exec = countingExec({ status: { code: 0, stdout: UNTRACKED_STATUS, stderr: '' } });
+  const fsOps = countingFsOps(
+    { 'a.txt': 'x\n', 'b.dat': 'irrelevant', 'sub/c.txt': 'y\n' },
+    { sizes: { 'b.dat': UNTRACKED_COUNT_LIMITS.maxFileBytes + 1 }, readErrors: { 'sub/c.txt': 'EACCES' } },
+  );
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.deepEqual(result.files.map((f) => f.countStatus), [null, 'too-large', 'unavailable']);
+  assert.ok(!fsOps.reads.includes('b.dat'), 'the size check comes before any read');
+});
+
+test('local runner .status(): a collapsed listing gets its own marker, and reads nothing', async () => {
+  let statusCalls = 0;
+  const exec = (args) => {
+    if (args[1] === 'status') {
+      statusCalls += 1;
+      return Promise.resolve(statusCalls === 1
+        ? { code: -1, stdout: '', stderr: 'stdout maxBuffer length exceeded' }
+        : { code: 0, stdout: '# branch.head main\x00? vendor/\x00', stderr: '' });
+    }
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fsOps = countingFsOps({});
+  const result = await createGitChangesRunner({ kind: 'local', cwd: REPO, exec, fsOps }).status();
+  assert.equal(result.untrackedCollapsed, true);
+  assert.equal(result.files[0].countStatus, 'collapsed');
+  assert.deepEqual(fsOps.reads, []);
+});
+
+test('measureUntrackedLocal: the file-count cap and the byte budget each stop the pass where they say', async () => {
+  const contents = { 'a.txt': '1\n', 'b.txt': '22\n', 'c.txt': '333\n', 'd.txt': '4\n' };
+  const fsOps = countingFsOps(contents);
+  const byCount = await measureUntrackedLocal(REPO, Object.keys(contents), fsOps, { ...TEST_LIMITS, maxFiles: 2, concurrency: 1 });
+  assert.deepEqual(byCount.measured.map((m) => m.path), ['a.txt', 'b.txt']);
+  assert.equal(byCount.results.size, 0, 'a path past the count cap is not even looked at; the merge marks it over-cap');
+  assert.deepEqual(fsOps.reads, ['a.txt', 'b.txt']);
+
+  const byBytes = await measureUntrackedLocal(REPO, Object.keys(contents), countingFsOps(contents), { ...TEST_LIMITS, maxTotalBytes: 7, concurrency: 1 });
+  assert.deepEqual(byBytes.measured.map((m) => m.path), ['a.txt', 'b.txt', 'd.txt'], '2 + 3 bytes fit in 7; the 4-byte c.txt does not, the 2-byte d.txt after it still does');
+  assert.equal(byBytes.results.get('c.txt').countStatus, 'over-cap');
+});
+
+test('measureUntrackedLocal: a file that grew past the cap between lstat and read is marked too large, not counted (mutation target: trusting the lstat size)', async () => {
+  const fsOps = countingFsOps({ 'grew.txt': 'x\n' }, { reads: { 'grew.txt': '\n'.repeat(TEST_LIMITS.maxFileBytes + 1) } });
+  const out = await measureUntrackedLocal(REPO, ['grew.txt'], fsOps, TEST_LIMITS);
+  assert.equal(out.measured.length, 0);
+  assert.equal(out.results.get('grew.txt').countStatus, 'too-large');
+});
+
+test('measureUntrackedLocal: past its time budget the pass returns, and the files it did not reach are left for the merge to mark (mutation target: awaiting every file)', async () => {
+  const contents = { 'fast.txt': 'x\n', 'slow.txt': 'y\n', 'late.txt': 'z\n' };
+  const fsOps = countingFsOps(contents, { lstatDelayMs: { 'slow.txt': 300 } });
+  const t0 = Date.now();
+  const out = await measureUntrackedLocal(REPO, Object.keys(contents), fsOps, { ...TEST_LIMITS, timeBudgetMs: 60, concurrency: 1 });
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 250, `the pass must return near its budget, took ${elapsed} ms`);
+  assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt']);
+  assert.equal(out.results.has('slow.txt'), false, 'a straggler that settles after the deadline writes nothing');
+  assert.equal(out.results.has('late.txt'), false);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(out.results.has('slow.txt'), false, 'and nothing lands later either');
+  assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt'], 'a late text file does not land in measured either (mutation target: the closed-pass guard and the returned copies)');
+});
+
+test('measureUntrackedLocal: a call that never returns keeps its slot, so later passes wait for one instead of stacking more blocked calls (mutation target: releasing the slot at the deadline)', async () => {
+  let release;
+  const hung = new Promise((resolve) => { release = resolve; });
+  const fsOps = {
+    realpath: (p) => p,
+    lstat: async (p) => {
+      if (p.endsWith('hang.txt')) await hung;
+      return { isFile: () => true, isSymbolicLink: () => false, size: 2 };
+    },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const limits = { ...TEST_LIMITS, timeBudgetMs: 30, concurrency: 2 };
+  const before = untrackedCountSlotsInUse();
+  try {
+    await measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 1 });
+    await measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 2 });
+    assert.equal(untrackedCountSlotsInUse(), before + 2, 'both hung workers still hold their slot');
+    const third = await measureUntrackedLocal(REPO, ['ok.txt'], fsOps, limits);
+    assert.equal(third.measured.length, 0, 'no slot comes free within the budget: nothing is started, nothing more can hang');
+    assert.equal(untrackedCountSlotWaiters(), 0, 'a pass that gives up withdraws its queued requests, so refreshes cannot grow the queue (mutation target: the withdrawal loop)');
+  } finally {
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(untrackedCountSlotsInUse(), before, 'the slots come back once the calls return');
+});
+
+test('measureUntrackedLocal: two passes started together are both fully measured — the second queues for a slot instead of starting with none (mutation target: workers = capacity minus slots in use)', async () => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.realpathSync.native(fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-two-passes-')));
+  try {
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    fsMod.mkdirSync(a);
+    fsMod.mkdirSync(b);
+    const aPaths = Array.from({ length: 50 }, (_, i) => `f${i}.txt`);
+    const bPaths = ['x.txt', 'y.txt', 'z.txt'];
+    for (const p of aPaths) fsMod.writeFileSync(path.join(a, p), 'l\n');
+    for (const p of bPaths) fsMod.writeFileSync(path.join(b, p), 'l\nm\n');
+    const limits = { ...UNTRACKED_COUNT_LIMITS, timeBudgetMs: 60_000 };
+    const before = untrackedCountSlotsInUse();
+    const [outA, outB] = await Promise.all([
+      measureUntrackedLocal(a, aPaths, undefined, limits),
+      measureUntrackedLocal(b, bPaths, undefined, limits),
+    ]);
+    assert.equal(outA.measured.length, 50);
+    assert.equal(outB.measured.length, 3, 'the second pass waited for a slot and counted every file');
+    assert.ok(outB.measured.every((m) => m.lines === 2));
+    assert.equal(untrackedCountSlotsInUse(), before, 'every slot is given back');
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('measureUntrackedLocal: a pass queued behind a long one still gets its turn — slots are taken per file, so passes interleave (mutation target: holding a slot for the whole pass)', async () => {
+  const slowA = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${i}.txt`, 'l\n']));
+  const aFs = countingFsOps(slowA, { lstatDelayMs: Object.fromEntries(Object.keys(slowA).map((p) => [p, 20])) });
+  const bFs = countingFsOps({ 'b.txt': 'x\ny\n' });
+  const [outA, outB] = await Promise.all([
+    measureUntrackedLocal(REPO, Object.keys(slowA), aFs, { ...TEST_LIMITS, timeBudgetMs: 60_000, concurrency: 2 }),
+    measureUntrackedLocal(REPO, ['b.txt'], bFs, { ...TEST_LIMITS, timeBudgetMs: 150, concurrency: 2 }),
+  ]);
+  assert.deepEqual(outB.measured.map((m) => m.path), ['b.txt'], 'B waits one file of A, not all of A');
+  assert.equal(outA.measured.length, 40);
+});
+
+test('measureUntrackedLocal: a worker granted a slot after the last file was taken measures nothing (mutation target: the work check after the grant)', async () => {
+  let release;
+  const hung = new Promise((resolve) => { release = resolve; });
+  const blocker = {
+    realpath: (p) => p,
+    lstat: async () => { await hung; return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const lstats = [];
+  const fsOps = {
+    realpath: (p) => p,
+    lstat: (p) => { lstats.push(p); return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const limits = { ...TEST_LIMITS, concurrency: 2, timeBudgetMs: 60_000 };
+  const before = untrackedCountSlotsInUse();
+  const blocked = measureUntrackedLocal(REPO, ['hold.txt'], blocker, limits);
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    const out = await measureUntrackedLocal(REPO, ['a.txt', 'b.txt'], fsOps, limits);
+    assert.deepEqual(out.measured.map((m) => m.path).sort(), ['a.txt', 'b.txt']);
+    assert.equal(out.results.has(undefined), false, 'no outcome is recorded for a file that does not exist');
+    assert.equal(out.results.size, 0);
+    assert.equal(lstats.length, 2, 'exactly one lstat per file');
+  } finally {
+    release();
+    await blocked;
+  }
+  assert.equal(untrackedCountSlotsInUse(), before);
+  assert.equal(untrackedCountSlotWaiters(), 0);
+});
+
+test('measureUntrackedLocal: queued passes are served in the order they asked (mutation target: a LIFO queue)', async () => {
+  let release;
+  const hung = new Promise((resolve) => { release = resolve; });
+  const order = [];
+  const blocker = {
+    realpath: (p) => p,
+    lstat: async () => { await hung; return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  };
+  const recording = (name) => ({
+    realpath: (p) => p,
+    lstat: () => { order.push(name); return { isFile: () => true, isSymbolicLink: () => false, size: 2 }; },
+    stat: () => ({ isFile: () => true }),
+    readUpTo: () => Buffer.from('x\n'),
+  });
+  const one = { ...TEST_LIMITS, concurrency: 1 };
+  const before = untrackedCountSlotsInUse();
+  const blocked = measureUntrackedLocal(REPO, ['hold.txt'], blocker, { ...one, timeBudgetMs: 60_000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  const passes = ['first', 'second', 'third'].map((name) => measureUntrackedLocal(REPO, [`${name}.txt`], recording(name), { ...one, timeBudgetMs: 60_000 }));
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await Promise.all([blocked, ...passes]);
+  assert.deepEqual(order, ['first', 'second', 'third']);
+  assert.equal(untrackedCountSlotsInUse(), before);
+  assert.equal(untrackedCountSlotWaiters(), 0);
+});
+
+test('measureUntrackedLocal: a late outcome that is not a count does not land in results either (the results side of the closed-pass guard)', async () => {
+  const fsOps = countingFsOps(
+    { 'slow.bin': 'x', 'gone.txt': 'y' },
+    { sizes: { 'slow.bin': TEST_LIMITS.maxFileBytes + 1 }, lstatDelayMs: { 'slow.bin': 200 } },
+  );
+  const out = await measureUntrackedLocal(REPO, ['gone.txt', 'slow.bin'], fsOps, { ...TEST_LIMITS, timeBudgetMs: 60, concurrency: 2 });
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  assert.equal(out.results.has('slow.bin'), false, 'the too-large verdict arrived after the deadline');
+  assert.equal(out.measured.length, 1);
+});
+
+test('remote runner .diff(): a root lookup whose exec throws is the diff\'s answer, not a fallback to the cwd (mutation target: lookUpRoot\'s catch)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) throw new Error('spawn ssh ENOENT');
+    return Promise.resolve({ code: 0, stdout: 'diff text\n', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+  for (const opts of [{}, { untracked: true }]) {
+    commands.length = 0;
+    const result = await runner.diff('top.txt', opts);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'spawn ssh ENOENT');
+    assert.equal(sent(commands).length, 0, 'nothing is sent at the cwd');
+  }
+});
+
+test('remote runner .diff(): a transport failure with nothing on stderr still says what happened', async () => {
+  for (const [code, message] of [[-1, /timed out or could not be run/], [255, /ssh connection failed/]]) {
+    const exec = () => Promise.resolve({ code, stdout: '', stderr: '' });
+    const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
+    assert.equal(result.ok, false);
+    assert.match(result.error, message);
+    assert.doesNotMatch(result.error, /exited with code/);
+  }
+});
+
+test('measureUntrackedLocal: a file that grew between lstat and read is charged to the byte budget at its real size (mutation target: charging the lstat size only)', async () => {
+  const fsOps = countingFsOps({ 'grew.txt': 'x\n', 'next.txt': 'y'.repeat(19) + '\n' }, { reads: { 'grew.txt': '\n'.repeat(50) } });
+  const out = await measureUntrackedLocal(REPO, ['grew.txt', 'next.txt'], fsOps, { ...TEST_LIMITS, maxTotalBytes: 60, concurrency: 1 });
+  assert.deepEqual(out.measured.map((m) => m.path), ['grew.txt'], 'grew.txt read 50 bytes, not the 2 lstat reported');
+  assert.equal(out.results.get('next.txt').countStatus, 'over-cap', '60 − 50 leaves 10 bytes: the 20-byte next.txt does not fit');
+});
+
+test('remote runner .diff({untracked:true}): a session cwd below the root sends the ls-files check to the root, where the path is relative to (mutation target: ls-files at the cwd)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 0, stdout: '/srv/app\n', stderr: '' });
+    if (command.includes("'ls-files'")) return Promise.resolve({ code: 0, stdout: command.startsWith("git -C '/srv/app' ") ? 'top.txt\0' : '', stderr: '' });
+    return Promise.resolve({ code: 1, stdout: untrackedDiffFor('top.txt'), stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+  const result = await runner.diff('top.txt', { untracked: true });
+  assert.equal(result.ok, true, `a root-level untracked file opens from a subdirectory cwd: ${result.error}`);
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'top.txt'");
+  assert.equal(commands[2], "git -C '/srv/app' '--literal-pathspecs' '-c' 'core.quotepath=false' 'diff' '--no-index' '--' '/dev/null' 'top.txt'");
+});
+
+for (const [label, failure] of [
+  ['ssh exits 255', { code: 255, stdout: '', stderr: 'ssh: connect to host vps port 22: Connection timed out' }],
+  ['the transport times out', { code: -1, stdout: '', stderr: 'timed out' }],
+]) {
+  test(`remote runner .diff(): when ${label} on the root lookup, that error is the answer — no second call at the cwd, no second timeout (mutation target: falling back to the cwd)`, async () => {
+    for (const opts of [{}, { untracked: true }]) {
+      const commands = [];
+      const exec = (command) => { commands.push(command); return Promise.resolve(failure); };
+      const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+      const result = await runner.diff('top.txt', opts);
+      assert.equal(result.ok, false);
+      assert.equal(result.error, failure.stderr);
+      assert.equal(commands.length, 1, `one round trip, not two (${JSON.stringify(opts)})`);
+    }
+  });
+}
+
+test('remote runner .diff(): a root lookup that git itself refuses (not a transport failure) still falls back to the cwd', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: something' });
+    return Promise.resolve({ code: 0, stdout: 'diff text\n', stderr: '' });
+  };
+  const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
+  assert.equal(result.ok, true);
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'x.txt'");
+});
+
+test('readRegularFileUpTo: reads at most max + 1 bytes, so an over-cap file is detected without being read whole', async () => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.realpathSync.native(fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-read-cap-')));
+  try {
+    const p = path.join(dir, 'f.bin');
+    fsMod.writeFileSync(p, Buffer.alloc(100, 0x61));
+    const expected = fsMod.lstatSync(p, { bigint: true });
+    assert.equal((await readRegularFileUpTo(p, 10, expected)).length, 11);
+    assert.equal((await readRegularFileUpTo(p, 1000, expected)).length, 100);
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readRegularFileUpTo: a file that is not the one lstat saw is refused (mutation target: dropping the dev/ino check)', async () => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.realpathSync.native(fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-read-ino-')));
+  try {
+    const a = path.join(dir, 'a.txt');
+    const b = path.join(dir, 'b.txt');
+    fsMod.writeFileSync(a, 'a\n');
+    fsMod.writeFileSync(b, 'b\n');
+    assert.equal(await readRegularFileUpTo(a, 100, fsMod.lstatSync(b, { bigint: true })), null);
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readRegularFileUpTo: a parent swapped for a symlink after containment ran is refused, even though the file behind it is a regular file (the swapped-parent race)', async (t) => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.realpathSync.native(fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-read-swap-')));
+  try {
+    const inside = path.join(dir, 'repo', 'sub');
+    const outside = path.join(dir, 'outside');
+    fsMod.mkdirSync(inside, { recursive: true });
+    fsMod.mkdirSync(outside);
+    fsMod.writeFileSync(path.join(inside, 'f.txt'), 'in\n');
+    fsMod.writeFileSync(path.join(outside, 'f.txt'), 'SECRET\n');
+    const resolved = path.join(inside, 'f.txt');
+    const outsideStat = fsMod.lstatSync(path.join(outside, 'f.txt'), { bigint: true });
+    fsMod.rmSync(inside, { recursive: true });
+    try {
+      fsMod.symlinkSync(outside, inside);
+    } catch {
+      t.skip('this platform does not allow creating a symlink unprivileged');
+      return;
+    }
+    // The strongest case for the attacker: the expected identity is the outside file's own.
+    const read = await readRegularFileUpTo(resolved, 100, outsideStat);
+    assert.equal(read, null, 'the opened file does not sit at the path containment resolved');
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('remote runner .diff(): a session cwd below the repository root diffs at the root, where status paths are relative to', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 0, stdout: '/srv/app\n', stderr: '' });
+    return Promise.resolve({ code: 0, stdout: 'diff text\n', stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+  await runner.diff('top.txt');
+  assert.equal(commands[0], "git -C '/srv/app/sub' '--literal-pathspecs' 'rev-parse' '--show-toplevel'");
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'top.txt'");
+});
+
+test('runner: a root lookup that prints something other than an absolute path is ignored, never used as a directory', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 0, stdout: 'relative/dir\n', stderr: '' });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'x.txt'");
 });

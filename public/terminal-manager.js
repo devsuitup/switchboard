@@ -1082,6 +1082,7 @@ function destroySession(sessionId) {
   if (!entry) return;
   // see .ai/contexts/panel-terminal.md
   if (typeof destroyPanelTerminalFor === 'function') destroyPanelTerminalFor(sessionId);
+  if (typeof forgetSessionExit === 'function') forgetSessionExit(sessionId);
   // Tear down any open right-click menu for this session before disposing the
   // terminal — its action closures hold the (about-to-be-disposed) xterm.
   if (typeof closeTerminalContextMenuForSession === 'function') closeTerminalContextMenuForSession(sessionId);

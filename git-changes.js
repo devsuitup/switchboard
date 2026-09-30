@@ -159,28 +159,82 @@ function combineCounts(a, b) {
   return { added, deleted };
 }
 
-// Combine status + both numstat maps into the panel's model — see .ai/contexts/changes-view.md
-function mergeChanges(status, numstatStaged, numstatUnstaged) {
+// Why a row has no count — see .ai/contexts/changes-view.md ("Untracked line counts")
+const COUNT_STATUS = Object.freeze({
+  BINARY: 'binary',
+  TOO_LARGE: 'too-large',
+  OVER_CAP: 'over-cap',
+  ON_OPEN: 'on-open',
+  COLLAPSED: 'collapsed',
+  UNAVAILABLE: 'unavailable',
+});
+
+const BINARY_SNIFF_BYTES = 8000;
+
+// git's own line count and binary sniff, from bytes — see .ai/contexts/changes-view.md ("Untracked line counts")
+function countBufferLines(buf) {
+  const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || '');
+  const hasNul = bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0);
+  let lines = 0;
+  for (let i = bytes.indexOf(10); i !== -1; i = bytes.indexOf(10, i + 1)) lines += 1;
+  if (bytes.length > 0 && bytes[bytes.length - 1] !== 10) lines += 1;
+  return { lines, hasNul };
+}
+
+function parseCheckAttr(text) {
+  const result = new Map();
+  const tokens = String(text || '').split('\0');
+  for (let i = 0; i + 2 < tokens.length; i += 3) {
+    if (tokens[i]) result.set(tokens[i], tokens[i + 2]);
+  }
+  return result;
+}
+
+function computeTotals(files) {
+  let added = 0;
+  let deleted = 0;
+  let uncounted = 0;
+  for (const f of files) {
+    if (typeof f.added === 'number') added += f.added;
+    if (typeof f.deleted === 'number') deleted += f.deleted;
+    if (typeof f.added !== 'number') uncounted += 1;
+  }
+  return { files: files.length, added, deleted, uncounted };
+}
+
+function untrackedRecord(f, untrackedCounts, uncountedStatus) {
+  const counted = untrackedCounts && untrackedCounts.get(f.path);
+  if (counted && typeof counted.added === 'number') {
+    return { ...f, added: counted.added, deleted: counted.deleted || 0, countStatus: null };
+  }
+  return { ...f, added: null, deleted: null, countStatus: (counted && counted.countStatus) || uncountedStatus };
+}
+
+// Combine status + both numstat maps + the untracked counts into the panel's model — see .ai/contexts/changes-view.md
+function mergeChanges(status, numstatStaged, numstatUnstaged, untrackedCounts = null, uncountedStatus = COUNT_STATUS.ON_OPEN) {
   const staged = numstatStaged || {};
   const unstaged = numstatUnstaged || {};
   const files = (status && status.files ? status.files : []).map((f) => {
-    if (f.untracked) return { ...f, added: null, deleted: null };
+    if (f.untracked) return untrackedRecord(f, untrackedCounts, uncountedStatus);
     const counts = combineCounts(staged[f.path], unstaged[f.path]);
-    return { ...f, added: counts.added, deleted: counts.deleted };
+    return { ...f, added: counts.added, deleted: counts.deleted, countStatus: counts.added === null ? COUNT_STATUS.BINARY : null };
   });
-
-  let totalAdded = 0;
-  let totalDeleted = 0;
-  for (const f of files) {
-    if (typeof f.added === 'number') totalAdded += f.added;
-    if (typeof f.deleted === 'number') totalDeleted += f.deleted;
-  }
 
   return {
     branch: (status && status.branch) || { head: null, upstream: null, ahead: 0, behind: 0 },
     files,
-    totals: { files: files.length, added: totalAdded, deleted: totalDeleted },
+    totals: computeTotals(files),
   };
 }
 
-module.exports = { parseStatusPorcelainV2, parseNumstat, mergeChanges, countNewFileDiffAdditions, diffHeaderNamesPath };
+module.exports = {
+  parseStatusPorcelainV2,
+  parseNumstat,
+  mergeChanges,
+  countNewFileDiffAdditions,
+  countBufferLines,
+  parseCheckAttr,
+  diffHeaderNamesPath,
+  COUNT_STATUS,
+  BINARY_SNIFF_BYTES,
+};

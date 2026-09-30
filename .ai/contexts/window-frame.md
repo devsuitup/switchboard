@@ -17,6 +17,7 @@ the same strip across the rest of the window.
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
 | `public/style.css` | The "WINDOW STRIP" section: drag regions, the insets that keep content out from under the controls, the `no-drag` exemptions. |
 | `test/window-frame.test.js` | Pins the menu roles, the menu installation, the frame options and the CSS contract. |
+| `public/header-controls.js` | `HEADER_CONTROLS` (the session header's row, in order), `placeHeaderControl()`, `createHeaderToggle()`, `setHeaderToggle()`. Dual-mode, `require()`-d by `test/header-controls.test.js`. |
 
 ## The frame options, per platform
 
@@ -74,7 +75,8 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 - every interactive element: `button, input, select, textarea, a, [role="button"], [contenteditable]`;
 - the text a user copies from a header, or whose `title` tooltip must show (the
   renderer gets no hover inside a drag region): `#terminal-header-id`,
-  `#terminal-header-sandbox`, `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
+  every session-header control (`#terminal-header-controls [data-header-kind]`),
+  `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
   `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
@@ -82,6 +84,81 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 
 A clickable element that is none of these (a `div` or `span` with a click
 listener) placed in a drag region needs `no-drag` of its own.
+
+## The session header's controls
+
+The right-hand side of `#terminal-header` is one row, `#terminal-header-controls`,
+whose order is declared once in `HEADER_CONTROLS` (`public/header-controls.js`)
+and pinned by `test/header-controls.test.js`:
+
+| Kind | Controls, left to right | Look |
+|---|---|---|
+| `indicator` | `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
+| `toggle` | `#panel-terminal-toggle-btn` (Shell), `#changes-toggle-btn` (Changes) | `.icon-btn`: the sidebar filter row's square outlined button (`#running-toggle` and its siblings share the rule), a 14 px icon, the name in `title` and `aria-label`, and the filter buttons' accent `.active` state with `aria-pressed`. |
+| `action` | `#terminal-stop-btn` | A borderless red icon, last, set apart from the toggles by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
+
+Each element carries its kind as `data-header-kind`. The static ones (sandbox,
+Stop) are written in `index.html` in the declared order. The modules
+that build the others (`addMcpToggle` and `addChangesToggle` in `file-panel.js`,
+`addPanelTerminalToggle` in `panel-terminal.js`) hand their element to
+`placeHeaderControl()`, which inserts it before the next declared control
+already in the row, so the order does not depend on which module starts
+first. `createHeaderToggle()` builds a toggle and `setHeaderToggle()` sets its
+on state. A new control is added to `HEADER_CONTROLS` first: `placeHeaderControl`
+throws for an id the list does not declare.
+
+The Changes toggle is on while the panel shows the Changes tab of the session
+in the header: `renderTabContent` sets it from the tab it renders, and
+`hidePanel` clears it when the panel closes.
+
+The session process's state is not in that row: `#terminal-header-status` is
+an 8 px dot right before `#terminal-header-name`, with no text, green with a
+glow while running and grey otherwise. `#terminal-header-info` clips its
+children (the name's ellipsis), so the dot's 6 px margin on the left, top and
+bottom is the room its 6 px glow needs. It is in the no-drag list so its
+tooltip shows.
+
+`updateTerminalHeader` (`app.js`) puts the state in words in the dot's `title`
+and `aria-label` (`role="img"`), through `terminalStatusLabel()` in
+`public/process-exit.js`:
+
+- `Running` while the poll reports the process;
+- `Stopped` when the process ended after the user asked for a Stop (the Stop
+  itself sends SIGHUP, so it would otherwise read as killed);
+- `Killed (SIGKILL)` when a signal ended the process with no Stop asked for;
+- `Exited (code N)` when it exited on its own;
+- `Stopped` when no exit is known.
+
+`process-exited` carries the exit code, the signal's name and whether a Stop
+was asked for: main turns node-pty's signal number into a name with
+`ptyExitSignalName()` (`pty-ops.js`), and the `stop-session` and
+`remote-stop-session` handlers set `session.stopRequested` before they signal
+the process. `openSession` forgets the previous exit before it awaits
+`openTerminal`'s answer, so an exit that arrives while the relaunch is still
+opening (a pre-launch command that fails at once) is kept.
+The renderer records the last exit per session (`noteSessionExit`) and forgets
+it when the poll sees the process running again, before `openSession`
+relaunches the session, and in `destroySession`, so a relaunch never shows the
+exit of the process before it. The session's and the panel shell's exit banners
+use the same wording (`exitBannerPhrase`): `session stopped`,
+`session killed (SIGKILL)`, `shell exited (code 1)`, dim for a Stop or an exit
+with 0 and yellow otherwise.
+
+The header's vertical padding is 2 px around the 26 px buttons, so its content
+(31 px with the border) stays under `--strip-min-height` and the header is
+exactly as tall as the sidebar's strip. `test/header-controls.test.js` pins
+that arithmetic.
+
+The terminal container starts at the header's bottom, so the header's height
+decides how many rows fit. When the file panel opens or closes,
+`refitActiveTerminal` (`file-panel.js`) refits the session terminal with
+`safeFit`, the same clamped fit the container's ResizeObserver applies (see
+`clampRowsToContentBox` in `terminal-manager.js`). A raw `FitAddon.fit()` there
+counts the container's vertical padding as drawable space: whenever the
+container's height modulo the cell height is under that padding, the terminal
+is resized to N+1 rows, then back to N by the observer, and a resize while the
+panel shell's WebGL context comes up leaves the session terminal painted blank
+until its next refresh.
 
 ## What the platform does with the drag region
 

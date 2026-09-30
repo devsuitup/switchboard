@@ -996,3 +996,27 @@ test('the shell IS in the grid-eligible set — only the missing row keeps it ou
       'given a row, grid mode lays the shell out like any session — which is why the row must not exist');
   } finally { ctx.destroy(); }
 });
+
+// --- 11. The session terminal's refit when the panel opens --------------
+
+test('opening the panel refits the session terminal through the content-box clamp, not a raw fit', async () => {
+  const ctx = setupPanel({ proposeDimensions: () => ({ cols: 100, rows: 41 }) });
+  try {
+    const { window, spies } = ctx;
+    const entry = window.createTerminalEntry({ sessionId: 'owner' });
+    entry.terminal._core = { _renderService: { dimensions: { css: { cell: { height: 10 } } } } };
+    Object.defineProperty(entry.element, 'clientHeight', { value: 411, configurable: true });
+    entry.element.style.paddingTop = '3px';
+    entry.element.style.paddingBottom = '8px';
+    window.switchPanel('owner');
+    const fitsBefore = spies.fitCalls;
+    spies.resize.length = 0;
+
+    window.openFileTab('owner', { filePath: '/proj/a.js', content: 'a' });
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    await microtasks();
+
+    assert.equal(spies.fitCalls, fitsBefore, 'the raw FitAddon.fit() counts the container padding as rows');
+    assert.deepEqual({ ...spies.resize.at(-1) }, { cols: 100, rows: 40 }, 'floor((411 - 11) / 10) rows, not the 41 proposed');
+  } finally { ctx.destroy(); }
+});

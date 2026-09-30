@@ -567,20 +567,43 @@ Two consumers had missed it and were fixed together:
 
 Covered by `test/dom-project-archive-all.test.js`.
 
-### The knock-on: the project vanished instead
+### A subagent follows its archived parent
 
-Not archiving the children exposed a latent hole in `processProjectSessions`'s
-skip guard. After an archive-all, `buildProjectsFromCache(false)` drops the
-now-archived parent rows but keeps the unarchived subagent rows, so
-`project.sessions.length > 0` while `filtered` (top-level only) is empty — the
-guard returned `null`, the render loop hit `continue`, and the project vanished
-from the default view entirely: no header, and no orphan bucket either, because
-that bucket lives inside `buildSessionsList`, past the `continue`. No data was
-lost (Show Archived brought it back), but the old behaviour hid this by
-accident: archiving the children too really did empty `project.sessions`, so
-the disappearance was legitimate.
+Archiving writes `archived = 1` on the parent's `session_meta` row only — the
+per-session button and both archive-all buttons alike — so a subagent row
+never carries the archived flag of its parent. Hiding it is a display rule in
+`buildProjectsFromCache(false)`: a subagent row is dropped when its
+`parentSessionId` has a row in `session_cache` **and** that row's meta is
+archived. `buildProjectsFromCache(true)` keeps both, so "Show archived
+sessions" renders the archived parent with its children nested under it, and
+unarchiving the parent brings the children back with it, since nothing about
+them was ever stored.
 
-The guard now carries `keepForOrphanSubagents = subagentIndex.size > 0 &&
+The row-existence check is what keeps the orphan group meaningful. The
+renderer's orphan pass (`buildSessionsList`) can only see which parents it
+rendered; a parent absent from the payload because it is archived and a
+parent absent because its transcript is gone look identical there. The cache
+is the one place that can tell them apart, so the distinction is made there:
+a subagent whose parent has no `session_cache` row — even when a stale
+`session_meta` entry for that id says archived — stays in the payload and
+lands in "Orphan subagents".
+
+No DB write accompanies this: archiving the children too would change stored
+state for a presentation concern and would re-open the archive-all rule above.
+
+Covered by `test/dom-archived-parent-subagents.test.js`, which feeds the real
+`buildProjectsFromCache` output into `renderProjects`.
+
+### The project-survival guard
+
+After an archive-all, `project.sessions` can hold true orphan subagents and no
+top-level session: `filtered` (top-level only) is empty while the array is not.
+`processProjectSessions`'s skip guard would then return `null`, the render loop
+would `continue`, and the project would vanish from the default view — header
+and orphan bucket alike, since that bucket lives inside `buildSessionsList`,
+past the `continue`.
+
+The guard therefore carries `keepForOrphanSubagents = subagentIndex.size > 0 &&
 !showStarredOnly && !showRunningOnly && !showTodayOnly`. When `filtered` is
 empty, every indexed subagent is by definition an orphan (`allTopLevelIds` is
 built from the rendered items, which are none), so the existing orphan bucket
@@ -668,6 +691,7 @@ invariant enforced anywhere.
 - `test/dom-subagent-transcript.test.js` — 4 tests covering the routing branch + transcript render
 - `test/dom-sidebar.test.js` — covers orphan group rendering
 - `test/dom-project-archive-all.test.js` — pins the project archive-all filter
+- `test/dom-archived-parent-subagents.test.js` — pins archived-parent vs missing-parent, from the cache payload to the orphan group
 - `test/dom-sidebar-search-subagent-hits.test.js` — pins the search-only-hits-a-subagent case and the showStarredOnly regression, one test per guard clause
 - `test/session-transitions.test.js` — spawn/complete/heartbeat lifecycle plus
   the resurrection guards above

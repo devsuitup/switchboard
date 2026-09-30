@@ -334,7 +334,7 @@ test('sandbox badge: main.js reports the sandbox state on both open-terminal ret
 test('sandbox badge: the renderer renders it from the reported state', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
   assert.match(html, /id="terminal-header-sandbox"/, 'header must carry the badge element');
-  assert.match(html, /style="display:none;"[^>]*>🔒/, 'badge must start hidden');
+  assert.match(html, /id="terminal-header-sandbox"[^>]*style="display:none;"/, 'badge must start hidden');
 
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   assert.match(app, /sandboxedSessions/, 'renderer must track which sessions are sandboxed');

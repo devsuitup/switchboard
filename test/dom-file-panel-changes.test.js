@@ -44,9 +44,9 @@ function makeStatusResult(overrides = {}) {
     branch: { head: 'main', upstream: 'origin/main', ahead: 1, behind: 0 },
     files: [
       { path: 'src/a.js', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'M', added: 3, deleted: 1 },
-      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
     ],
-    totals: { files: 2, added: 3, deleted: 1 },
+    totals: { files: 2, added: 3, deleted: 1, uncounted: 1 },
     ...overrides,
   };
 }
@@ -173,6 +173,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'header-controls.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'file-panel.js'));
 
   window.initFilePanel();
@@ -340,7 +341,8 @@ test('an untracked file\'s counts and the header totals pick up the additions it
     await flush();
 
     const before = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
-    assert.equal(before, null, 'status alone cannot know an untracked file\'s line count');
+    assert.equal(before.textContent, 'count on open', 'a remote untracked row says its count is pending, never blank');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+3 −1 \(1 file not counted\)/);
 
     ctx.document.querySelector('.changes-file-row[data-path="new.txt"]')
       .dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
@@ -353,13 +355,13 @@ test('an untracked file\'s counts and the header totals pick up the additions it
     assert.equal(counts.textContent, '+2−0');
 
     const summary = ctx.document.getElementById('changes-summary');
-    assert.match(summary.textContent, /2 files changed \+5 −1/, 'the untracked additions (2) join the tracked ones (3) in the header total');
+    assert.equal(summary.textContent, '2 files changed +5 −1', 'the untracked additions (2) join the tracked ones (3), and nothing is left out any more');
     assert.equal(ctx.calls.status.length, 1, 'no extra status fetch — the counts came with the diff');
   } finally { ctx.destroy(); }
 });
 
-test('an untracked binary file keeps null counts — the row stays countless and the totals do not move', async () => {
-  const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null };
+test('an untracked binary file keeps null counts — the row says binary and the totals do not move', async () => {
+  const binary = { ok: true, content: 'diff --git a/new.txt b/new.txt\nBinary files /dev/null and b/new.txt differ\n', truncated: false, added: null, deleted: null, countStatus: 'binary' };
   const ctx = setupFilePanelDom({
     fileImpl: () => ({ ok: false, error: 'binary file', reason: 'binary' }),
     diffImpl: () => binary,
@@ -378,8 +380,74 @@ test('an untracked binary file keeps null counts — the row stays countless and
 
     closeEditorBtn(ctx).click();
 
-    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
-    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1/, 'unknown counts must not be folded in as zero');
+    const cell = ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts');
+    assert.equal(cell.textContent, 'binary', 'the marker moves from pending to what the diff found');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /\+3 −1 \(1 file not counted\)/, 'unknown counts must not be folded in as zero, and the header says so');
+  } finally { ctx.destroy(); }
+});
+
+test('every count status renders its own marker, never a blank cell, and a tracked binary row is marked too', async () => {
+  const status = {
+    ok: true,
+    kind: 'local',
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'img.png', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: null, deleted: null, countStatus: 'binary' },
+      { path: 'a.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: 4, deleted: 0, countStatus: null },
+      { path: 'big.log', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'too-large' },
+      { path: 'late.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'over-cap' },
+      { path: 'far.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
+      { path: 'gone.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'unavailable' },
+      { path: 'vendor/', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'collapsed' },
+    ],
+    totals: { files: 7, added: 4, deleted: 0, uncounted: 6 },
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => status });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const cell = (p) => ctx.document.querySelector(`.changes-file-row[data-path="${p}"] .changes-file-counts`).textContent;
+    assert.equal(cell('img.png'), 'binary');
+    assert.equal(cell('a.txt'), '+4−0');
+    assert.equal(cell('big.log'), 'too large');
+    assert.equal(cell('late.txt'), 'not counted');
+    assert.equal(cell('far.txt'), 'count on open');
+    assert.equal(cell('gone.txt'), 'no count');
+    assert.equal(cell('vendor/'), 'directory', 'a collapsed directory entry is not promised a count on open');
+    const title = (p) => ctx.document.querySelector(`.changes-file-row[data-path="${p}"] .changes-count-note`).title;
+    assert.doesNotMatch(title('vendor/'), /open/i);
+    assert.doesNotMatch(title('big.log'), /open/i, 'a file over the count limit is not promised a count on open');
+    assert.equal(ctx.document.getElementById('changes-summary').textContent, '7 files changed +4 −0 (6 files not counted)');
+  } finally { ctx.destroy(); }
+});
+
+test('an untracked count lands on the untracked record, never on a tracked row with the same path (mutation target: matching on path alone)', async () => {
+  // `git rm --cached new.txt` leaves both a staged deletion and an untracked file at one path.
+  const status = {
+    ok: true,
+    kind: 'remote',
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'new.txt', origPath: null, staged: true, unstaged: false, untracked: false, renamed: false, state: 'D', added: 0, deleted: 9, countStatus: null },
+      { path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' },
+    ],
+    totals: { files: 2, added: 0, deleted: 9, uncounted: 1 },
+  };
+  const ctx = setupFilePanelDom({ statusImpl: () => status, diffImpl: () => UNTRACKED_DIFF_RESULT });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelectorAll('.changes-file-row')[1].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+    closeEditorBtn(ctx).click();
+
+    const cells = [...ctx.document.querySelectorAll('.changes-file-row .changes-file-counts')].map((c) => c.textContent);
+    assert.deepEqual(cells, ['+0−9', '+2−0'], 'the deletion keeps its own counts; the untracked file gets its count');
+    assert.equal(ctx.document.getElementById('changes-summary').textContent, '2 files changed +2 −9');
   } finally { ctx.destroy(); }
 });
 
@@ -496,7 +564,7 @@ test('a failed untracked diff surfaces the error and leaves the counts alone', a
     assert.match(body.textContent, /fatal: bad thing/);
 
     closeEditorBtn(ctx).click();
-    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts'), null);
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"] .changes-file-counts').textContent, 'count on open');
   } finally { ctx.destroy(); }
 });
 
@@ -683,10 +751,54 @@ test('the Changes header button opens and closes the tab for the active session'
     await flush();
     assert.equal(ctx.calls.status.length, 1);
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+    assert.equal(btn.classList.contains('active'), true, 'the toggle shows the tab is open');
+    assert.equal(btn.getAttribute('aria-pressed'), 'true');
 
     btn.click();
     assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+    assert.equal(btn.classList.contains('active'), false, 'the toggle shows the tab is closed');
+    assert.equal(btn.getAttribute('aria-pressed'), 'false');
   } finally { ctx.destroy(); }
+});
+
+test('the Changes toggle follows the session the header shows', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    const btn = ctx.document.getElementById('changes-toggle-btn');
+    btn.click();
+    await flush();
+    assert.equal(btn.classList.contains('active'), true);
+
+    ctx.window.switchPanel('s2');
+    assert.equal(btn.classList.contains('active'), false, 's2 has no Changes tab open');
+
+    ctx.window.switchPanel('s1');
+    assert.equal(btn.classList.contains('active'), true, 's1 still has its Changes tab');
+  } finally { ctx.destroy(); }
+});
+
+test('the Changes toggle stays off while the panel shows a file or an MCP diff', async () => {
+  for (const takeover of ['file', 'diff']) {
+    const ctx = setupFilePanelDom();
+    try {
+      ctx.window.switchPanel('s1');
+      const btn = ctx.document.getElementById('changes-toggle-btn');
+      btn.click();
+      await flush();
+      assert.equal(btn.classList.contains('active'), true);
+
+      if (takeover === 'file') {
+        ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      } else {
+        ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
+      }
+      await flush();
+      assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true, `the ${takeover} tab is shown`);
+      assert.equal(btn.classList.contains('active'), false, `a ${takeover} tab is not the Changes tab`);
+      assert.equal(btn.getAttribute('aria-pressed'), 'false');
+    } finally { ctx.destroy(); }
+  }
 });
 
 // --- Editing in place ----------------------------------------------------

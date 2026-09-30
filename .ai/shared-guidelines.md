@@ -18,6 +18,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change Memory/.work-files panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
 | Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
 | Change the shell inside the file panel (mount point, hidden-write exemption, splitter) | [contexts/panel-terminal.md](contexts/panel-terminal.md) |
+| Change how a plain terminal's shell starts (the `claude` shim, generated rcfile / `ZDOTDIR`, the typed fallback) | [contexts/plain-terminal.md](contexts/plain-terminal.md) |
 | Change what a path in terminal output links to (matcher, openability check, `path:line`) | [contexts/terminal-path-links.md](contexts/terminal-path-links.md) |
 | Change what is reported to ActivityWatch (the two buckets, focus, the Settings section) | [contexts/activitywatch.md](contexts/activitywatch.md) |
 | Change what a right-click does in the terminal (context menu, paste, mouse reports to the application) | [contexts/terminal-right-click.md](contexts/terminal-right-click.md) |
