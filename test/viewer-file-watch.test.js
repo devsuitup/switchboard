@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { watchFileForViewer } = require('../viewer-file-watch');
+const { watchFileForViewer, createViewerWatchRegistry, sameFileName, watchTargets } = require('../viewer-file-watch');
 
 const ROOT = path.join(__dirname, '..');
 const DEBOUNCE_MS = 40;
@@ -144,11 +144,149 @@ test('a symlinked file is watched in the directory of its target', async (t) => 
   assert.notEqual(outcome, 'timeout', 'a write to the target must reach a watch set on the link');
 });
 
-test('main.js arms the viewer watch through watchFileForViewer', () => {
+test('a symlink replaced by a regular file is still heard, and so is the next write', async (t) => {
+  const h = harness(t);
+  const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-watch-link-'));
+  t.after(() => fs.rmSync(linkDir, { recursive: true, force: true }));
+  const link = path.join(linkDir, 'CLAUDE.md');
+  fs.symlinkSync(h.file, link);
+  let sent = 0;
+  let wake = null;
+  const w = watchFileForViewer(link, { debounceMs: DEBOUNCE_MS, send: () => { sent += 1; if (wake) wake(); } });
+  t.after(() => w.close());
+  const next = () => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no report')), 2000);
+    wake = () => { clearTimeout(timer); wake = null; resolve(); };
+  });
+
+  let report = next();
+  const tmp = path.join(linkDir, '.CLAUDE.md.tmp');
+  fs.writeFileSync(tmp, 'a regular file now\n');
+  fs.renameSync(tmp, link);
+  await report;
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), false);
+  await settle();
+
+  report = next();
+  fs.writeFileSync(link, 'written after the replace\n');
+  await report;
+  assert.ok(sent >= 2);
+});
+
+// Deterministic: events and timers driven by the test, as git-changes-watch.test.js does.
+function fakeWatch({ platform = 'linux', realpath = (p) => p, symlink = false } = {}) {
+  const watches = [];
+  const timers = [];
+  let sent = 0;
+  const deps = {
+    watchFn: (dir, handler) => {
+      const entry = { dir, handler, closed: false };
+      watches.push(entry);
+      return { close() { entry.closed = true; } };
+    },
+    send: () => { sent += 1; },
+    scheduler: {
+      setTimeout: (fn) => { timers.push(fn); return timers.length; },
+      clearTimeout: (id) => { if (id) timers[id - 1] = null; },
+    },
+    platform,
+    realpath,
+    lstat: () => ({ isSymbolicLink: () => symlink }),
+  };
+  return {
+    deps,
+    watches,
+    sent: () => sent,
+    fire: (filename, index = 0) => watches[index].handler('change', filename),
+    settle: () => { const pending = timers.slice(); timers.length = 0; for (const fn of pending) if (fn) fn(); },
+  };
+}
+
+test('a burst of events is debounced into one report (driven timers)', () => {
+  const f = fakeWatch();
+  watchFileForViewer('/d/note.md', f.deps);
+  f.fire('note.md');
+  f.fire('note.md');
+  f.fire('note.md');
+  f.settle();
+  assert.equal(f.sent(), 1, 'each event must cancel the timer the previous one armed');
+});
+
+test('an event for another name is dropped, an event with no name is reported', () => {
+  const f = fakeWatch();
+  watchFileForViewer('/d/note.md', f.deps);
+  f.fire('other.md');
+  f.settle();
+  assert.equal(f.sent(), 0);
+  f.fire(null);
+  f.settle();
+  assert.equal(f.sent(), 1);
+});
+
+test('sameFileName folds case on win32 and darwin only', () => {
+  assert.equal(sameFileName('CLAUDE.md', 'claude.md', 'win32'), true);
+  assert.equal(sameFileName('CLAUDE.md', 'claude.md', 'darwin'), true);
+  assert.equal(sameFileName('CLAUDE.md', 'claude.md', 'linux'), false);
+  assert.equal(sameFileName('CLAUDE.md', 'CLAUDE.md', 'linux'), true);
+});
+
+test('on win32 an event whose name differs only in case is reported; on linux it is not', () => {
+  const f = fakeWatch({ platform: 'win32' });
+  watchFileForViewer('/u/.claude/claude.md', f.deps);
+  f.fire('CLAUDE.md');
+  f.settle();
+  assert.equal(f.sent(), 1);
+
+  const linux = fakeWatch({ platform: 'linux' });
+  watchFileForViewer('/u/.claude/claude.md', linux.deps);
+  linux.fire('CLAUDE.md');
+  linux.settle();
+  assert.equal(linux.sent(), 0, 'a case-sensitive filesystem has two different files');
+});
+
+test('the watched name comes from the real path, so it carries the on-disk case', () => {
+  const targets = watchTargets('/d/claude.md', { realpath: () => '/d/CLAUDE.md', lstat: () => ({ isSymbolicLink: () => false }) });
+  assert.deepEqual(targets, [{ dir: '/d', name: 'CLAUDE.md' }]);
+});
+
+test('a symlink is watched at its target and at the link itself', () => {
+  const f = fakeWatch({ realpath: () => '/repo/claude/CLAUDE.md', symlink: true });
+  watchFileForViewer('/home/u/.claude/CLAUDE.md', f.deps);
+  assert.deepEqual(f.watches.map((w) => w.dir), ['/repo/claude', '/home/u/.claude']);
+  f.fire('CLAUDE.md', 1);
+  f.settle();
+  assert.equal(f.sent(), 1, 'an event on the link entry is reported');
+});
+
+test('two panels on one file share one watch, and closing one does not deafen the other', () => {
+  const f = fakeWatch();
+  const sentPaths = [];
+  const registry = createViewerWatchRegistry({ ...f.deps, send: (p) => sentPaths.push(p) });
+  registry.watch('/d/CLAUDE.md');
+  registry.watch('/d/CLAUDE.md');
+  assert.equal(f.watches.length, 1, 'one directory watch for both panels');
+
+  registry.unwatch('/d/CLAUDE.md');
+  assert.equal(f.watches[0].closed, false, 'the other panel still watches');
+  f.fire('CLAUDE.md');
+  f.settle();
+  assert.deepEqual(sentPaths, ['/d/CLAUDE.md']);
+
+  registry.unwatch('/d/CLAUDE.md');
+  assert.equal(f.watches[0].closed, true, 'the last unwatch closes it');
+  assert.equal(registry.size(), 0);
+  registry.unwatch('/d/CLAUDE.md');
+  assert.equal(registry.size(), 0, 'an extra unwatch is harmless');
+});
+
+test('main.js routes watch-file and unwatch-file through the ref-counted registry', () => {
   const src = sourceOf('main.js');
   const start = src.indexOf("ipcMain.handle('watch-file'");
   assert.notEqual(start, -1);
-  const body = src.slice(start, src.indexOf("ipcMain.handle('unwatch-file'", start));
-  assert.match(body, /watchFileForViewer\(resolved/);
+  const end = src.indexOf('\n});', src.indexOf("ipcMain.handle('unwatch-file'", start));
+  const body = src.slice(start, end);
+  assert.match(body, /fileWatchers\.watch\(resolved\)/);
+  assert.match(body, /fileWatchers\.unwatch\(path\.resolve\(filePath\)\)/);
   assert.doesNotMatch(body, /eventType !== 'change'/, 'a rename must not be discarded');
+  assert.match(src, /const fileWatchers = createViewerWatchRegistry\(/);
 });

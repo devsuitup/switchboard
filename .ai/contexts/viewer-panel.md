@@ -8,7 +8,8 @@
 |---|---|---|
 | `public/viewer-panel.js` | ~415 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
 | `public/viewer-toolbar.js` | ~265 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. |
-| `viewer-file-watch.js` | ~55 | Main-side `watchFileForViewer(path, deps)` behind the `watch-file` IPC — the directory watch described in "Watching the file". |
+| `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
+| `viewer-save-guard.js` | ~25 | Main-side `refuseIfMoved` used by `save-memory` and `save-file-for-panel` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -20,7 +21,7 @@ const panel = new ViewerPanel(container, {
   language: 'markdown' | 'auto',  // editor mode
   storageKey: string,     // localStorage key for preview-mode persistence
   format: bool,           // show JSON/JSONL prettify button (auto-hidden for non-json files)
-  onSave: async (filePath, content) => result,  // shows Save button
+  onSave: async (filePath, content, expected) => result,  // shows Save button; see "Saving over a file that moved"
   onDelete: async (filePath) => result,         // shows Delete button (with window.confirm)
   onClose: () => void,    // shows Close button
 });
@@ -53,42 +54,55 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 
 - **`open()` is the entry point — not the constructor**. Constructor creates an empty editor; `open()` swaps in content. Calling `open()` again on the same instance reuses the CodeMirror state via `editorView.dispatch({changes})`.
 - **File watch lifecycle**: each `open()` unwatches the previous path, then watches the new one. `destroy()` unwatches but is rarely called. **If you spawn a new ViewerPanel without destroying the old one, both will keep watchers alive.**
-- **The `_saving` flag debounces external-change reloads**: while a save is in flight, incoming `file-changed` events for the same path are ignored for 500 ms (avoids reload-loop after our own save). The event that follows the window finds the disk equal to the saved content and does nothing, because the save moved the disk baseline (below).
+- **`format` is a renderer-only transform** — it modifies the editor's document, doesn't write to disk. Use `save` separately if you want to persist.
+- **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
+- **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Three sinks share this rule: `viewer-panel.js:397`, `viewer-toolbar.js:47`, and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
 
 ## A dirty buffer is never replaced
 
-The panel keeps `_diskContent`: the file's content as last read from disk (set by `open()`, by a successful save, and by every re-read). The buffer is **dirty** when the editor's document differs from it. Both sides are compared with line endings folded to `\n` (`asEditorText`), because CodeMirror splits on `\r\n` and `\r` and hands its document back joined with `\n` — without that, every CRLF file would count as dirty from the moment it opens.
+The panel keeps `_diskContent`: the file's content as last read from disk (set by `open()`, by a successful save, and by every re-read). The buffer is **dirty** when the editor's document differs from it. Both sides are compared with line endings folded to `\n` (`asEditorText`, mirrored main-side in `viewer-save-guard.js`), because CodeMirror splits on `\r\n` and `\r` and hands its document back joined with `\n` — without that, every CRLF file would count as dirty from the moment it opens.
 
-A `file-changed` event re-reads the file, and what happens depends on the answer:
+Every `file-changed` event re-reads the file; none is dropped, including one that arrives during or just after a save. What happens depends on the answer:
 
 | On disk | Buffer | Result |
 |---|---|---|
-| Same as `_diskContent` | any | Nothing. A stale "gone" or "cannot be read" notice is cleared. |
+| Same as the save in flight (`_pendingSave`) | any | Our own write's echo: the baseline moves, nothing else. |
+| Same as `_diskContent` | any | Nothing (a `touch`, a same-content write). A stale "gone" or "cannot be read" notice is cleared. |
 | Same as the buffer | any | Baseline moves; notice cleared. |
 | Changed | clean | Buffer replaced quietly (and the preview re-rendered). |
-| Changed | dirty | Buffer untouched. The notice says the file changed on disk and offers **Reload** and **Keep my edits**. |
+| Changed | dirty | Buffer untouched. The notice says the file changed on disk and offers **Reload** and **Keep my edits** — unless it already says a save was refused as stale, which it keeps, with its **Overwrite**. |
 | Missing (`ENOENT`) | any | Buffer untouched. The notice says the file no longer exists, and that the edits are kept when there are any. |
 | Unreadable | any | Buffer untouched. The notice says the file can no longer be read, with the reason. |
 
-This is the Changes panel's rule ("A dirty buffer is never overwritten, and never lied to", `.ai/contexts/changes-view.md`) applied to the viewer: the same notice line under the header, the same `changes-error` colour, the same wording where the situation is the same, and **Reload** asks the same `window.confirm('This file has unsaved edits. Discard them?')` before discarding anything. **Keep my edits** only hides the notice; the baseline has already moved to the new disk content, so the buffer stays dirty and the next external change raises the notice again. A save writes the buffer over the file, which is the choice the notice describes. There is no version token here — `save-file-for-panel` writes by path — so a kept buffer is not refused at save time the way a stale Changes buffer is.
+This is the Changes panel's rule ("A dirty buffer is never overwritten, and never lied to", `.ai/contexts/changes-view.md`) applied to the viewer: the same notice line under the header, the same `changes-error` colour, the same wording where the situation is the same, and **Reload** asks the same `window.confirm('This file has unsaved edits. Discard them?')` before discarding anything. **Keep my edits** only hides the notice; the baseline has already moved to the new disk content, so the buffer stays dirty, the next external change raises the notice again, and a save writes the kept edits over the change the notice named.
 
-`read-file-for-panel` returns the error's `code` beside its message, which is how the renderer tells a deleted file (`ENOENT`) from any other refusal. A save that returns `ok: false` shows `Save failed: <reason>` in the same notice.
+`read-file-for-panel` returns the error's `code` beside its message, which is how the renderer tells a deleted file (`ENOENT`) from any other refusal.
 
-A re-read that resolves after `open()` has moved to another file is dropped (the `_openGen` token), so an answer for the previous file never lands in the current buffer.
+A re-read or a save that resolves after `open()` has moved to another file is dropped (the `_openGen` token), so an answer for the previous file never lands in the current buffer.
+
+## Saving over a file that moved
+
+A save sends the disk baseline with the content: `onSave(filePath, content, expected)`, where `expected` is `_diskContent`. Both handlers behind it, `save-memory` and `save-file-for-panel`, call `refuseIfMoved` (`viewer-save-guard.js`) right before writing: when the file on disk, with its line endings folded, is no longer `expected`, the write is refused with `reason: 'stale'`. This covers every write the panel has not re-read yet — one that landed between the last `file-changed` and the click, or while the debounce was still pending.
+
+This is the Changes panel's version token (`git-changes-file.js`) with the baseline text as the token. The viewer's callers open it with content they read themselves (`readMemory`, `readFileForPanel`) and no token beside it; comparing against the text the panel actually holds as its baseline needs no second read that could race the first.
+
+On a stale refusal the buffer is kept and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** (the same confirm as above) and **Overwrite**, which asks `window.confirm('Overwrite the file on disk with your edits?')` and saves with `expected: null` — the one save that skips the check. Any other refusal shows `Save failed: <reason>`. One save is in flight at a time (`_pendingSave`); a second request while it is pending is ignored.
+
+The MCP diff tab's save in `file-panel.js` (`handleDiffSave`) sends no baseline and is not checked.
 
 ## Watching the file
 
 `watch-file` watches the **directory** holding the file and reports every event that names the file, whatever its type. A watch on the file itself is armed on its inode, and an atomic replace — `git checkout`, `sed -i`, most editors' save — writes a temporary file and renames it over the target, leaving the watch on an inode nothing writes to any more; a delete ends it outright, so the file's recreation is never seen. The directory entry outlives both, so a rename over the file, a delete, a recreate, and every write after them keep reaching the panel with nothing to re-arm.
 
-- The path is first resolved with `realpathSync`, so a symlinked file (`~/.claude/CLAUDE.md` pointing into a harness repository) is watched in the directory of its target, where its writes happen. A path that does not resolve is watched as given.
-- Events for other files in the directory are dropped by name; an event with no filename is reported, since the renderer re-reads and compares anyway.
+- The path is resolved with `fs.realpathSync.native`, so the watched name carries the on-disk case and a symlinked file is watched in the directory of its target, where its writes happen. A path that does not resolve is watched as given.
+- A symlink is **also** watched in its own directory, under the link's name. GNU `sed -i` without `--follow-symlinks` and rename-over editors replace the link itself with a regular file; the target's directory never hears that, the link's does.
+- Events for other files in the directory are dropped by name — compared case-insensitively on `win32` and `darwin` (`sameFileName`), exactly elsewhere. An event with no filename is reported, since the renderer re-reads and compares anyway.
 - Events are debounced (300 ms) into one `file-changed`.
 - An `error` from the watcher (its directory removed) is swallowed; the watch is then dead, which is the one case not recovered.
 
+`createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a file tab showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
+
 The Changes panel's registry (`git-changes-watch.js`) solves the same problem differently, by re-arming on the file after a `rename`. The two are not merged.
-- **`format` is a renderer-only transform** — it modifies the editor's document, doesn't write to disk. Use `save` separately if you want to persist.
-- **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
-- **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Three sinks share this rule: `viewer-panel.js:397`, `viewer-toolbar.js:47`, and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
 
 ## Non-obvious behaviors
 

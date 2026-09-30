@@ -31,7 +31,7 @@ const memoryViewer = document.getElementById('memory-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
   language: 'markdown', storageKey: 'markdownPreviewMode',
-  onSave: (filePath, content) => window.api.saveMemory(filePath, content),
+  onSave: (filePath, content, expected) => window.api.saveMemory(filePath, content, expected),
 });
 const workFilesContent = document.getElementById('work-files-content');
 const workFilesViewer = document.getElementById('work-files-viewer');

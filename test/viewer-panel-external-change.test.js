@@ -40,13 +40,13 @@ function setup({ disk }) {
     pretendToBeVisual: true,
   });
   const { window } = dom;
-  const state = { disk, fileChanged: null, confirms: [], confirmAnswer: true };
+  const state = { disk, fileChanged: null, confirms: [], confirmAnswer: true, saves: [], saveImpl: null, readImpl: null };
 
   window.api = {
     onFileChanged: (cb) => { state.fileChanged = cb; },
     watchFile: () => {},
     unwatchFile: () => {},
-    readFileForPanel: async () => (state.disk === null
+    readFileForPanel: async (p) => (state.readImpl ? state.readImpl(p) : state.disk === null
       ? { ok: false, error: 'ENOENT: no such file or directory', code: 'ENOENT' }
       : { ok: true, content: state.disk }),
   };
@@ -69,7 +69,14 @@ function setup({ disk }) {
   }
 
   const container = window.document.getElementById('c');
-  const panel = new window.ViewerPanel(container, { onSave: async () => ({ ok: true }) });
+  const panel = new window.ViewerPanel(container, {
+    onSave: async (filePath, content, expected) => {
+      state.saves.push({ filePath, content, expected });
+      if (state.saveImpl) return state.saveImpl(filePath, content, expected);
+      state.disk = content;
+      return { ok: true };
+    },
+  });
 
   return {
     window,
@@ -77,8 +84,8 @@ function setup({ disk }) {
     panel,
     editor: () => editor,
     notice: () => container.querySelector('.viewer-panel-notice'),
-    async open(content) {
-      panel.open('note', FILE, content);
+    async open(content, file = FILE) {
+      panel.open('note', file, content);
       await new Promise((r) => setTimeout(r, 0));
       await new Promise((r) => setTimeout(r, 0));
     },
@@ -193,7 +200,6 @@ test('a saved buffer is clean again, so the next external write reloads it', asy
     t.editor().type('mine');
     await t.panel._save();
     t.state.disk = 'one\nmine';
-    t.panel._saving = false;
     await t.externalWrite('two\n');
     assert.equal(t.panel.getContent(), 'two\n');
     assert.equal(visible(t.notice()), false);
@@ -208,5 +214,138 @@ test('a CRLF file is not dirty just because the editor holds it with LF', async 
     await t.externalWrite('a\r\nc\r\n');
     assert.equal(t.panel.getContent(), 'a\nc\n');
     assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const noticeText = (t) => t.notice().querySelector('.viewer-panel-notice-text').textContent;
+const button = (t, name) => t.notice().querySelector(`.viewer-panel-notice-${name}`);
+
+test('an external write that lands just after our save is reloaded, not dropped', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    await t.panel._save();
+    await t.externalWrite('written by the session\n');
+    assert.equal(t.panel.getContent(), 'written by the session\n');
+    assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+test("our own save's echo, arriving while the save is in flight, raises no notice", async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    let finish;
+    t.state.saveImpl = (fp, content) => new Promise((resolve) => { t.state.disk = content; finish = () => resolve({ ok: true }); });
+    const saving = t.panel._save();
+    t.editor().type(' and more');
+    t.state.fileChanged(FILE);
+    await tick();
+    assert.equal(visible(t.notice()), false, 'the echo of our own write is not an external change');
+    finish();
+    await saving;
+    assert.equal(t.panel.getContent(), 'one\nmine and more');
+  } finally { t.destroy(); }
+});
+
+test('a save sends the disk baseline, so main can refuse a stale write', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    await t.panel._save();
+    assert.deepEqual(t.state.saves.map((x) => x.expected), ['one\n']);
+  } finally { t.destroy(); }
+});
+
+test('a stale refusal keeps the edits and offers Reload and Overwrite; Overwrite saves without a baseline', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    t.state.saveImpl = (fp, content, expected) => (expected === null
+      ? (t.state.disk = content, { ok: true })
+      : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
+    await t.panel._save();
+    assert.equal(t.panel.getContent(), 'one\nmine');
+    assert.equal(visible(t.notice()), true);
+    assert.match(noticeText(t), /changed on disk since you opened it — your edits were not saved/);
+    assert.equal(visible(button(t, 'reload')), true);
+    assert.equal(visible(button(t, 'overwrite')), true);
+    assert.equal(visible(button(t, 'keep')), false);
+
+    t.state.confirmAnswer = false;
+    button(t, 'overwrite').click();
+    await tick();
+    assert.equal(t.state.saves.length, 1, 'a refused confirm writes nothing');
+
+    t.state.confirmAnswer = true;
+    button(t, 'overwrite').click();
+    await tick();
+    assert.equal(t.state.saves.length, 2);
+    assert.equal(t.state.saves[1].expected, null);
+    assert.equal(t.state.confirms.at(-1), 'Overwrite the file on disk with your edits?');
+    assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+test('a failed save says so in the notice', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    t.state.saveImpl = () => ({ ok: false, error: 'file does not exist' });
+    await t.panel._save();
+    assert.equal(visible(t.notice()), true);
+    assert.equal(noticeText(t), 'Save failed: file does not exist');
+  } finally { t.destroy(); }
+});
+
+test('a touch or a same-content write on a dirty buffer raises no notice', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    await t.externalWrite('one\n');
+    assert.equal(visible(t.notice()), false);
+    assert.equal(t.panel.getContent(), 'one\nmine');
+  } finally { t.destroy(); }
+});
+
+test('a re-read of the previous file that resolves after another open leaves the new buffer alone', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    let resolveA;
+    t.state.readImpl = () => new Promise((resolve) => { resolveA = resolve; });
+    t.state.fileChanged(FILE);
+    await tick();
+    const other = '/home/u/.claude/projects/p/memory/other.md';
+    await t.open('other file\n', other);
+    resolveA({ ok: true, content: 'A changed on disk\n' });
+    await tick();
+    assert.equal(t.panel.getContent(), 'other file\n');
+    assert.equal(visible(t.notice()), false);
+  } finally { t.destroy(); }
+});
+
+test('the watch event that follows a stale refusal leaves the "not saved" notice and its Overwrite in place', async () => {
+  const t = setup({ disk: 'one\n' });
+  try {
+    await t.open('one\n');
+    t.editor().type('mine');
+    t.state.disk = 'unseen external write\n';
+    t.state.saveImpl = (fp, content, expected) => (expected === t.state.disk
+      ? { ok: true }
+      : { ok: false, reason: 'stale', error: 'this file changed on disk since it was opened' });
+    await t.panel._save();
+    t.state.fileChanged(FILE);
+    await tick();
+    assert.match(noticeText(t), /your edits were not saved/);
+    assert.equal(visible(button(t, 'overwrite')), true);
+    assert.equal(t.panel.getContent(), 'one\nmine');
   } finally { t.destroy(); }
 });

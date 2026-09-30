@@ -92,7 +92,8 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
-const { watchFileForViewer } = require('./viewer-file-watch');
+const { createViewerWatchRegistry } = require('./viewer-file-watch');
+const { refuseIfMoved } = require('./viewer-save-guard');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
 const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
@@ -972,11 +973,13 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   }
 });
 
-ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
+ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected) => {
   try {
     const resolved = path.resolve(filePath);
     if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
+    const refused = refuseIfMoved(resolved, expected);
+    if (refused) return refused;
     fs.writeFileSync(resolved, content, 'utf8');
     // Close the sub-second window between save and search: if the saved file
     // belongs to a type that the FTS index tracks, invalidate its signature so
@@ -991,42 +994,26 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
 });
 
 // ── File Watching (for viewer panels) ────────────────────────────────
-const fileWatchers = new Map(); // filePath → FSWatcher
+const fileWatchers = createViewerWatchRegistry({
+  send: (resolved) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('file-changed', resolved);
+    }
+  },
+});
 
 function closeAllFileWatchers() {
-  for (const watcher of fileWatchers.values()) {
-    try { watcher.close(); } catch {}
-  }
-  fileWatchers.clear();
+  fileWatchers.closeAll();
 }
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
   if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-  if (fileWatchers.has(resolved)) return { ok: true };
-  try {
-    const watcher = watchFileForViewer(resolved, {
-      send: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('file-changed', resolved);
-        }
-      },
-    });
-    fileWatchers.set(resolved, watcher);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return fileWatchers.watch(resolved);
 });
 
 ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
-  const watcher = fileWatchers.get(resolved);
-  if (watcher) {
-    watcher.close();
-    fileWatchers.delete(resolved);
-  }
-  return { ok: true };
+  return fileWatchers.unwatch(path.resolve(filePath));
 });
 
 // Full re-scan triggered from the UI. Re-reads every jsonl file in the worker
@@ -1383,7 +1370,7 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 });
 
 // --- IPC: save-memory ---
-ipcMain.handle('save-memory', (_event, filePath, content) => {
+ipcMain.handle('save-memory', (_event, filePath, content, expected) => {
   try {
     const literal = path.resolve(filePath);
     if (!literal.endsWith('.md')) return { ok: false, error: 'not a .md file' };
@@ -1392,6 +1379,8 @@ ipcMain.handle('save-memory', (_event, filePath, content) => {
     const resolved = resolveAllowedMemoryPath(literal);
     if (!resolved) return { ok: false, error: 'path not allowed' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
+    const refused = refuseIfMoved(resolved, expected);
+    if (refused) return refused;
     fs.writeFileSync(resolved, content, 'utf8');
     // Invalidate the FTS signature so the next get-memories call reindexes
     // (mtime change is caught by the signature, but an explicit invalidation

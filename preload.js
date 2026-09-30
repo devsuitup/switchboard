@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   getUsage: () => ipcRenderer.invoke('get-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
-  saveMemory: (filePath, content) => ipcRenderer.invoke('save-memory', filePath, content),
+  saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getWorkFiles: () => ipcRenderer.invoke('get-work-files'),
   readWorkFile: (filePath) => ipcRenderer.invoke('read-work-file', filePath),
   deleteWorkFile: (filePath) => ipcRenderer.invoke('delete-work-file', filePath),
@@ -174,7 +174,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   resolveTerminalPaths: (sessionId, texts) => ipcRenderer.invoke('resolve-terminal-paths', sessionId, texts),
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
-  saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
+  saveFileForPanel: (filePath, content, expected) => ipcRenderer.invoke('save-file-for-panel', filePath, content, expected),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
   onFileChanged: (callback) => {
