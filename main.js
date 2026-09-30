@@ -1,6 +1,6 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
-const { execFile } = require('child_process');
+const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -80,7 +80,8 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
-const { setPtyOpLogger, resizePty, killPty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, resizePty, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
+const { JOB_ID_RE } = require('./bg-agents-roster');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
@@ -419,6 +420,7 @@ function createWindow() {
     }
     changesWatchers.closeAll();
     closeAllFileWatchers();
+    bgAgents.stop();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {
@@ -1689,6 +1691,12 @@ ipcMain.handle('get-active-terminals', () => {
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
+  // see .ai/contexts/bg-agents.md ("Detach")
+  if (session.isAttach) {
+    session.stopRequested = true;
+    detachPty(session, sessionId);
+    return { ok: true, detached: true };
+  }
   session.stopRequested = true;
   killPty(session, sessionId);
   return { ok: true };
@@ -2268,6 +2276,41 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   });
 }
 
+// Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md
+function runClaudeCommand(claudeArgv, { cwd, timeout }) {
+  return new Promise((resolve) => {
+    const globalSettings = getSetting('global') || {};
+    const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
+    const shell = profile.path;
+    const args = shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (code, err) => {
+      if (settled) return;
+      settled = true;
+      resolve({ code, stdout, stderr: err ? `${stderr}${err.message}` : stderr });
+    };
+    let child;
+    try {
+      child = spawnChild(shell, args, {
+        cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanPtyEnv, FORCE_COLOR: '0' }, windowsHide: true,
+      });
+    } catch (err) {
+      finish(null, err);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
+    }, timeout);
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => { clearTimeout(timer); finish(null, err); });
+    child.on('exit', (code) => { clearTimeout(timer); finish(code); });
+  });
+}
+
 // --- IPC: open-terminal ---
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
@@ -2344,11 +2387,20 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const resumeSourceId = sessionOptions?.forkFrom
     ? String(sessionOptions.forkFrom)
     : (!isNew ? sessionId : null);
-  if (resumeSourceId && sessionOptions?.type !== 'terminal') {
+  if (resumeSourceId && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
     const realCwd = resolveSessionRealCwd(
       PROJECTS_DIR, resumeSourceId, projectPath ? encodeProjectPath(projectPath) : null
     );
     if (realCwd && fs.existsSync(realCwd)) spawnCwd = realCwd;
+  }
+
+  // see .ai/contexts/bg-agents.md ("Attach")
+  const isAttach = sessionOptions?.type === 'attach';
+  let attachJobId = null;
+  if (isAttach) {
+    if (!JOB_ID_RE.test(String(sessionOptions.jobId))) return { ok: false, error: 'invalid background session id' };
+    attachJobId = String(sessionOptions.jobId);
+    if (typeof sessionOptions.cwd === 'string' && sessionOptions.cwd) spawnCwd = sessionOptions.cwd;
   }
 
   // see .ai/contexts/panel-terminal.md ("Main process")
@@ -2452,61 +2504,65 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     } else {
       // Build claude command, using array to prevent accidental shell injection
       const claudeArgs = [];
-      // A sidebar card is not proof the session exists on disk: launchNewSession
-      // shows one before claude starts, so a launch that fails immediately (bad
-      // flag, missing directory) leaves a card whose transcript was never
-      // written. Resuming that id makes claude exit with "No conversation found
-      // with session ID", and the banner's advice — re-click to relaunch — could
-      // never work because every retry resumed the same missing id. Start it
-      // instead, reusing the id the sidebar already shows.
-      const startsFresh = isNew
-        || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
-      if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
-        log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
-      }
-      if (sessionOptions?.forkFrom) {
-        claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
-      } else if (startsFresh) {
-        claudeArgs.push('--session-id', String(sessionId));
+      if (isAttach) {
+        claudeArgs.push('attach', attachJobId);
       } else {
-        claudeArgs.push('--resume', String(sessionId));
-      }
-
-      if (sessionOptions) {
-        if (sessionOptions.dangerouslySkipPermissions) {
-          claudeArgs.push('--dangerously-skip-permissions');
-        } else if (sessionOptions.permissionMode) {
-          claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
+        // A sidebar card is not proof the session exists on disk: launchNewSession
+        // shows one before claude starts, so a launch that fails immediately (bad
+        // flag, missing directory) leaves a card whose transcript was never
+        // written. Resuming that id makes claude exit with "No conversation found
+        // with session ID", and the banner's advice — re-click to relaunch — could
+        // never work because every retry resumed the same missing id. Start it
+        // instead, reusing the id the sidebar already shows.
+        const startsFresh = isNew
+          || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
+        if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
+          log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }
-        // --worktree only applies when STARTING a session — it creates a fresh
-        // isolated git worktree. Resuming (isNew === false) must reuse the
-        // session's existing directory, so ignore the worktree option on resume
-        // regardless of which call site supplied it (sidebar click, schedule
-        // creator, fork, …). Otherwise a resume tries to spin up a new worktree
-        // and fails to attach.
-        if (startsFresh && sessionOptions.worktree && !isGitRepo(spawnCwd)) {
-          // Worktree is commonly enabled globally, but plenty of projects are
-          // not git repos. Passing --worktree there makes claude refuse to start
-          // at all ("Can only use --worktree in a git repository"), which turns
-          // one global convenience toggle into a broken project. Drop the flag
-          // and run unisolated rather than fail the launch.
-          log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
-        } else if (startsFresh && sessionOptions.worktree) {
-          claudeArgs.push('--worktree');
-          if (sessionOptions.worktreeName) {
-            claudeArgs.push(String(sessionOptions.worktreeName));
+        if (sessionOptions?.forkFrom) {
+          claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
+        } else if (startsFresh) {
+          claudeArgs.push('--session-id', String(sessionId));
+        } else {
+          claudeArgs.push('--resume', String(sessionId));
+        }
+
+        if (sessionOptions) {
+          if (sessionOptions.dangerouslySkipPermissions) {
+            claudeArgs.push('--dangerously-skip-permissions');
+          } else if (sessionOptions.permissionMode) {
+            claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
+          }
+          // --worktree only applies when STARTING a session — it creates a fresh
+          // isolated git worktree. Resuming (isNew === false) must reuse the
+          // session's existing directory, so ignore the worktree option on resume
+          // regardless of which call site supplied it (sidebar click, schedule
+          // creator, fork, …). Otherwise a resume tries to spin up a new worktree
+          // and fails to attach.
+          if (startsFresh && sessionOptions.worktree && !isGitRepo(spawnCwd)) {
+            // Worktree is commonly enabled globally, but plenty of projects are
+            // not git repos. Passing --worktree there makes claude refuse to start
+            // at all ("Can only use --worktree in a git repository"), which turns
+            // one global convenience toggle into a broken project. Drop the flag
+            // and run unisolated rather than fail the launch.
+            log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
+          } else if (startsFresh && sessionOptions.worktree) {
+            claudeArgs.push('--worktree');
+            if (sessionOptions.worktreeName) {
+              claudeArgs.push(String(sessionOptions.worktreeName));
+            }
+          }
+          if (sessionOptions.chrome) {
+            claudeArgs.push('--chrome');
+          }
+          for (const dir of parseAddDirs(sessionOptions.addDirs)) {
+            claudeArgs.push('--add-dir', dir);
           }
         }
-        if (sessionOptions.chrome) {
-          claudeArgs.push('--chrome');
-        }
-        for (const dir of parseAddDirs(sessionOptions.addDirs)) {
-          claudeArgs.push('--add-dir', dir);
-        }
-      }
 
-      if (sessionOptions?.appendSystemPrompt) {
-        claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
+        if (sessionOptions?.appendSystemPrompt) {
+          claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
+        }
       }
 
       let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
@@ -2514,7 +2570,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
       // bwrap has no macOS/Windows equivalent wired up here.
-      if (sessionOptions?.sandbox) {
+      if (!isAttach && sessionOptions?.sandbox) {
         if (process.platform !== 'linux') {
           return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
         }
@@ -2523,7 +2579,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --")
       // — see pre-launch-cmd-guard.js for what is and isn't blocked and why.
-      if (sessionOptions?.preLaunchCmd) {
+      if (!isAttach && sessionOptions?.preLaunchCmd) {
         const pre = String(sessionOptions.preLaunchCmd);
         const preCheck = validatePreLaunchCmd(pre);
         if (!preCheck.ok) {
@@ -2534,7 +2590,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
       // (skip if user disabled IDE emulation in global settings)
-      if (sessionOptions?.mcpEmulation !== false) {
+      if (!isAttach && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           claudeCmd += ' --ide';
@@ -2568,7 +2624,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
-      if (sessionOptions?.sandbox) {
+      if (!isAttach && sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
         // there), and any user-configured Additional Directories.
@@ -2603,6 +2659,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     cwd: spawnCwd,
     projectFolder, knownJsonlFiles,
     isPlainTerminal, panelFor: panelOwnerId, forkFrom: sessionOptions?.forkFrom || null,
+    isAttach, attachJobId,
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
     sandbox: !!sessionOptions?.sandbox,
@@ -2859,6 +2916,22 @@ const localTranscriptTracker = createLocalTranscriptTracker({ hasPty: sessionHas
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 ipcMain.handle('session-live-elsewhere', (_event, sessionId) => cliSessionState.liveElsewhere(sessionId, sessionHasPty, ptyPids));
 ipcMain.handle('sessions-live-elsewhere', (_event, sessionIds) => cliSessionState.liveElsewhereMany(sessionIds, sessionHasPty, ptyPids));
+
+// see .ai/contexts/bg-agents.md
+const bgAgents = require('./bg-agents');
+bgAgents.init({
+  log,
+  runClaude: runClaudeCommand,
+  cliSessionState,
+  makeIsOwnPid: () => cliSessionState.ownProcessFilter(ptyPids),
+  isAttachedHere: (jobId) => {
+    for (const session of activeSessions.values()) {
+      if (session && !session.exited && session.isAttach && session.attachJobId === jobId) return true;
+    }
+    return false;
+  },
+});
+require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log });
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
