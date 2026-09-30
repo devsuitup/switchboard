@@ -23,6 +23,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change what is reported to ActivityWatch (the two buckets, focus, the Settings section) | [contexts/activitywatch.md](contexts/activitywatch.md) |
 | Change what a right-click does in the terminal (context menu, paste, mouse reports to the application) | [contexts/terminal-right-click.md](contexts/terminal-right-click.md) |
 | Change the window frame, the strip that replaces the title bar, its drag regions or the menu's accelerators | [contexts/window-frame.md](contexts/window-frame.md) |
+| Change the Agents view, the daemon's job files, attach/detach, dispatch | [contexts/bg-agents.md](contexts/bg-agents.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
@@ -123,6 +124,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Frameless window** — the app-drawn strip, the ☰ menu, the zoom keys; see [contexts/window-frame.md](contexts/window-frame.md)
 - **Terminal right-click modes** — the press is kept from the application outside Native mode; see [contexts/terminal-right-click.md](contexts/terminal-right-click.md)
 - **No automatic resume of a session live elsewhere** — restore and reload skip it, a click asks; see [contexts/cli-session-state.md](contexts/cli-session-state.md), "Live elsewhere"
+- **Background agents view** — the daemon's `--bg` sessions listed, attached, stopped, dispatched; see [contexts/bg-agents.md](contexts/bg-agents.md)
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)
 

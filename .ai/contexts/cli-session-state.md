@@ -295,6 +295,21 @@ The sidebar has no dedicated marker for such a session. Once the watcher has
 seen its state file, `getStatus()` gives it the same state+age line as any live
 session (see the section above).
 
+## Descriptor hooks for the agents view
+
+The Agents view (`.ai/contexts/bg-agents.md`) reads the same
+`~/.claude/sessions/<pid>.json` files through three additions:
+
+- `onDescriptorsChanged(listener)` fires once per flushed batch of descriptor
+  changes and returns an unsubscribe function. A throwing listener is logged
+  and does not stop the others.
+- `readAllDescriptors()` returns the parsed descriptors whose pid is alive,
+  capped at `MAX_DESCRIPTOR_SCAN` files; `kind` (`'bg'` or `'interactive'`) and
+  `jobId` are part of the parsed shape.
+- The results of `liveElsewhere` / `liveElsewhereMany` carry `kind` and
+  `jobId`, so `guardResume` can answer a `kind: 'bg'` session with an attach
+  instead of a resume confirmation.
+
 ## Canary tests
 
 `test/canary-*.test.js` is a convention this module introduces. A canary
