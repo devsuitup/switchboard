@@ -73,6 +73,7 @@ class ViewerPanel {
     this._lastSeenDisk = null;
     this._noticeState = null;
     this._noticeSeq = 0;
+    this._detachedSaves = new Map();
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -297,6 +298,12 @@ class ViewerPanel {
     this._pendingSave = null;
     this._saveQueued = false;
     this._setNotice(null);
+    const detached = this._detachedSaves.get(filePath);
+    this._detachedSaves.delete(filePath);
+    if (restore && detached) {
+      if (detached.error) this._setNotice('save-failed', detached.error);
+      else this._agreedBase = this._lastSeenDisk = detached.written;
+    }
 
     this.filePath = filePath;
     this.toolbar.setTitle(title);
@@ -431,6 +438,7 @@ class ViewerPanel {
       return;
     }
     const content = this.getContent();
+    const filePath = this.filePath;
     const myGen = this._openGen;
     const noticeSeq = this._noticeSeq;
     this._pendingSave = asEditorText(content);
@@ -446,7 +454,10 @@ class ViewerPanel {
         this._agreedBase = this._lastSeenDisk;
         result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       }
-      if (this._openGen !== myGen) return;
+      if (this._openGen !== myGen) {
+        this._recordDetachedSave(filePath, content, result);
+        return;
+      }
       if (result && result.ok !== false) {
         saved = true;
         this._agreedBase = asEditorText(content);
@@ -462,6 +473,7 @@ class ViewerPanel {
       }
     } catch (err) {
       if (this._openGen === myGen) this._setNotice('save-failed', (err && err.message) || 'unknown error');
+      else this._recordDetachedSave(filePath, content, { ok: false, error: err && err.message });
     } finally {
       if (this._openGen === myGen) {
         this._pendingSave = null;
@@ -470,6 +482,12 @@ class ViewerPanel {
         if (queued && saved) this._save();
       }
     }
+  }
+
+  // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
+  _recordDetachedSave(filePath, content, result) {
+    if (result && result.ok !== false) this._detachedSaves.set(filePath, { written: asEditorText(content) });
+    else this._detachedSaves.set(filePath, { error: (result && result.error) || 'unknown error' });
   }
 
   getContent() {
@@ -569,9 +587,8 @@ class ViewerPanel {
 
   // see .ai/contexts/viewer-panel.md ("Undo")
   _setDocument(text) {
-    const transaction = { changes: { from: 0, to: this.editorView.state.doc.length, insert: text } };
-    if (window.CMTransaction) transaction.annotations = window.CMTransaction.addToHistory.of(false);
-    this.editorView.dispatch(transaction);
+    this.editorView.dispatch({ changes: { from: 0, to: this.editorView.state.doc.length, insert: text } });
+    if (window.cmResetHistory) window.cmResetHistory(this.editorView);
   }
 
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")

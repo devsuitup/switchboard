@@ -77,7 +77,7 @@ function setup() {
     return el;
   };
 
-  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'file-panel.js']) {
+  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
   }
   window.initFilePanel();
@@ -195,6 +195,60 @@ test('re-rendering the tab the viewer already shows leaves a save in flight to f
     ctx.editor().type('Y');
     await save(ctx);
     assert.equal(ctx.calls.saves.at(-1).expected, 'a0\nX', 'the finished save moved the base');
+    assert.deepEqual(ctx.calls.confirms, []);
+  } finally { ctx.destroy(); }
+});
+
+async function saveThenSwitchAway(ctx, outcome, typedDuringSave = '') {
+  ctx.disk.set(A, 'a0\n');
+  ctx.disk.set(B, 'b0\n');
+  ctx.window.switchPanel('s1');
+  ctx.calls.openFile('s1', { filePath: A, content: 'a0\n' });
+  await flush();
+  const realSave = ctx.window.api.saveFileForPanel;
+  let finish;
+  ctx.window.api.saveFileForPanel = (p, content, expected) => new Promise((resolve) => {
+    finish = () => resolve(outcome ? outcome : realSave(p, content, expected));
+  });
+  ctx.editor().type('X');
+  ctx.window.document.getElementById('file-panel-viewer').dispatchEvent(new ctx.window.CustomEvent('cm-save'));
+  await flush();
+  if (typedDuringSave) ctx.editor().type(typedDuringSave);
+  ctx.window.switchPanel('s2');
+  ctx.calls.openFile('s2', { filePath: B, content: 'b0\n' });
+  await flush();
+  finish();
+  await flush();
+  ctx.window.api.saveFileForPanel = realSave;
+  ctx.window.switchPanel('s1');
+  await flush();
+}
+
+const noticeOf = (ctx) => {
+  const el = ctx.window.document.querySelector('#file-panel-viewer .viewer-panel-notice');
+  return el.style.display === 'none' ? null : el.querySelector('.viewer-panel-notice-text').textContent;
+};
+
+test('a save that fails after its tab left the viewer says so when the tab returns', async () => {
+  const ctx = setup();
+  try {
+    await saveThenSwitchAway(ctx, { ok: false, error: 'disk full' });
+    assert.equal(content(ctx), 'a0\nX');
+    assert.equal(noticeOf(ctx), 'Save failed: disk full');
+  } finally { ctx.destroy(); }
+});
+
+test('a save that succeeds after its tab left the viewer moves that tab\'s base', async () => {
+  const ctx = setup();
+  try {
+    await saveThenSwitchAway(ctx, null, 'Z');
+    assert.equal(ctx.disk.get(A), 'a0\nX');
+    assert.equal(content(ctx), 'a0\nXZ');
+    assert.equal(noticeOf(ctx), null, 'our own write is not reported as a change on disk');
+    ctx.editor().type('Y');
+    await save(ctx);
+    assert.equal(ctx.calls.saves.at(-1).expected, 'a0\nX');
+    assert.equal(ctx.disk.get(A), 'a0\nXZY');
     assert.deepEqual(ctx.calls.confirms, []);
   } finally { ctx.destroy(); }
 });

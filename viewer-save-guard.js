@@ -80,4 +80,20 @@ function createPanelSaveHandlers(deps) {
   return { saveFileForPanel, saveMemory };
 }
 
-module.exports = { refuseIfMoved, writeIfUnmoved, createPanelSaveHandlers, asEditorText };
+/**
+ * The handlers main registers, with the path checks taken from
+ * ipc-path-validator here rather than passed in, so a test builds exactly
+ * what main uses. Main supplies only its own state:
+ * {getKnownProjectPaths() -> iterable, invalidateFtsSignature(kind), onError(err)}
+ */
+function createMainPanelSaves({ getKnownProjectPaths, invalidateFtsSignature, onError }) {
+  const validator = require('./ipc-path-validator');
+  return createPanelSaveHandlers({
+    isSensitivePath: validator.isSensitivePath,
+    resolveAllowedMemoryPath: (literal) => validator.resolveAllowedMemoryPath(literal, [...getKnownProjectPaths()]),
+    invalidateFtsSignature,
+    onError,
+  });
+}
+
+module.exports = { refuseIfMoved, writeIfUnmoved, createPanelSaveHandlers, createMainPanelSaves, asEditorText };

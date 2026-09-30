@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { refuseIfMoved, createPanelSaveHandlers } = require('../viewer-save-guard');
+const { refuseIfMoved, createPanelSaveHandlers, createMainPanelSaves } = require('../viewer-save-guard');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -80,7 +80,7 @@ test('refuseIfMoved: unchanged is null, moved is stale with the disk text', (t) 
 
 test('main registers the module handlers for both channels, and writes no panel file itself', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
-  assert.match(src, /const panelSaves = createPanelSaveHandlers\(/);
+  assert.match(src, /const panelSaves = createMainPanelSaves\(/);
   assert.match(src, /ipcMain\.handle\('save-file-for-panel', \(_event, filePath, content, expected\) => panelSaves\.saveFileForPanel\(filePath, content, expected\)\)/);
   assert.match(src, /ipcMain\.handle\('save-memory', \(_event, filePath, content, expected\) => panelSaves\.saveMemory\(filePath, content, expected\)\)/);
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
@@ -88,34 +88,17 @@ test('main registers the module handlers for both channels, and writes no panel 
   assert.match(preload, /ipcRenderer\.invoke\('save-file-for-panel', filePath, content, expected\)/);
 });
 
-// main.js cannot be required from a test, so the policy object it passes is
-// lifted out of its source and evaluated against the real functions it names.
-function mainPolicies({ knownRoots, invalidated }) {
-  const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  const start = src.indexOf('const panelSaves = createPanelSaveHandlers(');
-  assert.notEqual(start, -1);
-  const open = src.indexOf('(', start);
-  const end = src.indexOf('\n});', open);
-  const literal = src.slice(open + 1, end + 2);
-  const validator = require('../ipc-path-validator');
-  const build = new Function('createPanelSaveHandlers', 'isSensitivePath', 'resolveAllowedMemoryPath', 'invalidateFtsSignature',
-    `return createPanelSaveHandlers(${literal});`);
-  return build(
-    createPanelSaveHandlers,
-    validator.isSensitivePath,
-    (literalPath) => validator.resolveAllowedMemoryPath(literalPath, knownRoots),
-    (kind) => invalidated.push(kind),
-  );
-}
-
-test("main's policies: a sensitive path is refused, a memory path outside the allowlist is refused, a save invalidates the FTS signature", (t) => {
+test("main's save handlers: a sensitive path is refused, a memory path outside the allowlist is refused, a save invalidates the FTS signature", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-save-policies-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'project');
   fs.mkdirSync(path.join(root, '.ssh'), { recursive: true });
   fs.mkdirSync(project, { recursive: true });
   const invalidated = [];
-  const h = mainPolicies({ knownRoots: [project], invalidated });
+  const h = createMainPanelSaves({
+    getKnownProjectPaths: () => new Set([project]),
+    invalidateFtsSignature: (kind) => invalidated.push(kind),
+  });
 
   const key = path.join(root, '.ssh', 'id_rsa');
   fs.writeFileSync(key, 'secret\n');
@@ -132,6 +115,12 @@ test("main's policies: a sensitive path is refused, a memory path outside the al
   assert.deepEqual(h.saveMemory(inside, 'x\n', 'i\n'), { ok: true });
   assert.deepEqual(h.saveFileForPanel(inside, 'y\n', 'x\n'), { ok: true });
   assert.deepEqual(invalidated, ['memory', 'memory']);
+});
+
+test('main builds its save handlers with createMainPanelSaves and hands it only its own state', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(src, /const panelSaves = createMainPanelSaves\(\{\n  getKnownProjectPaths,\n  invalidateFtsSignature,\n  onError: /);
+  assert.doesNotMatch(src, /createPanelSaveHandlers/, 'the policies are not assembled in main.js');
 });
 
 function memoryHandlers(resolve) {

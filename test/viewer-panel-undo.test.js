@@ -111,6 +111,41 @@ test("undo still reverts the user's own edit", async () => {
   } finally { panel.destroy(); container.remove(); }
 });
 
+// CodeMirror joins typing and deleting into one undo group within 500 ms.
+const closeGroup = () => new Promise((r) => setTimeout(r, 600));
+
+test('a deletion in one file cannot be undone into the next file the panel opens', async () => {
+  const { window, panel, container } = await openPanel();
+  try {
+    const view = panel.editorView;
+    view.dispatch({ changes: { from: 0, insert: 'SECRET ' }, userEvent: 'input.type' });
+    await closeGroup();
+    view.dispatch({ changes: { from: 0, to: 7 }, userEvent: 'delete.backward' });
+    assert.equal(panel.getContent(), 'A\n');
+    panel.open('other', '/home/u/.claude/projects/p/memory/other.md', 'B\n');
+    await tick();
+    pressUndo(window, panel.editorView);
+    assert.equal(panel.getContent(), 'B\n', 'the deleted text of the previous file must not land here');
+  } finally { panel.destroy(); container.remove(); }
+});
+
+test('a deletion before a save cannot be undone into the content a quiet reload brought', async () => {
+  const { window, state, panel, container } = await openPanel();
+  try {
+    const view = panel.editorView;
+    view.dispatch({ changes: { from: 0, to: 1 }, userEvent: 'delete.backward' });
+    assert.equal(panel.getContent(), '\n');
+    state.disk = '\n';
+    await panel._save();
+    state.disk = 'D\n';
+    state.fileChanged(FILE);
+    await tick();
+    assert.equal(panel.getContent(), 'D\n', 'the clean buffer was reloaded');
+    pressUndo(window, view);
+    assert.equal(panel.getContent(), 'D\n');
+  } finally { panel.destroy(); container.remove(); }
+});
+
 test('undo after opening another file in the same panel does not bring back the previous file', async () => {
   const { window, panel, container } = await openPanel();
   try {

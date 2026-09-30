@@ -1,5 +1,5 @@
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, highlightSpecialChars, ViewPlugin, Decoration } from '@codemirror/view';
-import { EditorState, StateField, StateEffect, Compartment, Transaction } from '@codemirror/state';
+import { EditorState, StateField, StateEffect, Compartment } from '@codemirror/state';
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -311,13 +311,14 @@ const cmSaveDomHandler = ViewPlugin.fromClass(class {
 
 function createPlanEditor(parent) {
   const wrapCompartment = new Compartment();
+  const historyCompartment = new Compartment();
   const state = EditorState.create({
     doc: '',
     extensions: [
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
-      history(),
+      historyCompartment.of(history()),
       foldGutter(),
       drawSelection(),
       indentOnInput(),
@@ -344,6 +345,7 @@ function createPlanEditor(parent) {
 
   const view = new EditorView({ state, parent });
   view._wrapCompartment = wrapCompartment;
+  view._historyCompartment = historyCompartment;
   return view;
 }
 
@@ -426,6 +428,7 @@ function docChangeListener(onChange) {
 function createEditableViewer(parent, content, filename, { wrap = false, onChange } = {}) {
   const langExt = getLanguageExt(filename);
   const wrapCompartment = new Compartment();
+  const historyCompartment = new Compartment();
 
   const state = EditorState.create({
     doc: content,
@@ -433,7 +436,7 @@ function createEditableViewer(parent, content, filename, { wrap = false, onChang
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
-      history(),
+      historyCompartment.of(history()),
       foldGutter(),
       drawSelection(),
       indentOnInput(),
@@ -461,7 +464,15 @@ function createEditableViewer(parent, content, filename, { wrap = false, onChang
 
   const view = new EditorView({ state, parent });
   view._wrapCompartment = wrapCompartment;
+  view._historyCompartment = historyCompartment;
   return view;
+}
+
+// see .ai/contexts/viewer-panel.md ("Undo")
+function resetHistory(view) {
+  if (!view || !view._historyCompartment) return;
+  view.dispatch({ effects: view._historyCompartment.reconfigure([]) });
+  view.dispatch({ effects: view._historyCompartment.reconfigure(history()) });
 }
 
 // ── Diff / Merge Viewer ─────────────────────────────────────────────
@@ -561,7 +572,7 @@ window.createMergeViewer = createMergeViewer;
 window.createUnifiedMergeViewer = createUnifiedMergeViewer;
 window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
-window.CMTransaction = Transaction;
+window.cmResetHistory = resetHistory;
 window.CMMergeView = MergeView;
 // A merge view exposes its editable side as `.b` — see .ai/contexts/terminal-path-links.md
 function revealLine(view, lineNumber) {

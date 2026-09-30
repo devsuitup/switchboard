@@ -94,7 +94,7 @@ const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = r
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
-const { createPanelSaveHandlers } = require('./viewer-save-guard');
+const { createMainPanelSaves } = require('./viewer-save-guard');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
 const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
@@ -976,10 +976,9 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
 });
 
 // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
-const panelSaves = createPanelSaveHandlers({
-  isSensitivePath,
-  resolveAllowedMemoryPath: (literal) => resolveAllowedMemoryPath(literal),
-  invalidateFtsSignature: (kind) => invalidateFtsSignature(kind),
+const panelSaves = createMainPanelSaves({
+  getKnownProjectPaths,
+  invalidateFtsSignature,
   onError: (err) => console.error('Error saving memory file:', err),
 });
 
