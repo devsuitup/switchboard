@@ -217,7 +217,7 @@ function setupTerminalDom(opts = {}) {
   // grid-view.js owns that global. Tests must read grid state via inCtx().
   if (opts.filePanel) {
     Object.defineProperty(window, 'ViewerPanel', {
-      value: function ViewerPanelStub() { return { open() {}, destroy() {} }; },
+      value: function ViewerPanelStub() { return { open() {}, destroy() {}, hasUnsavedEdits: () => false }; },
       writable: true,
       configurable: true,
     });

@@ -27,6 +27,7 @@ let currentPanelSessionId = null;
 // ViewerPanel instance for file-type tabs
 let fpViewerPanel = null;
 let fpViewerOwner = null;
+let heldBarEl = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -117,6 +118,13 @@ function initFilePanel() {
   filePanelContentEl.id = 'file-panel-content';
   filePanelEl.appendChild(filePanelContentEl);
 
+  heldBarEl = document.createElement('div');
+  heldBarEl.id = 'file-panel-held';
+  heldBarEl.className = 'viewer-panel-notice';
+  heldBarEl.setAttribute('role', 'status');
+  heldBarEl.style.display = 'none';
+  filePanelContentEl.appendChild(heldBarEl);
+
   // ── ViewerPanel for file-type tabs ──
   const vpContainer = document.createElement('div');
   vpContainer.id = 'file-panel-viewer';
@@ -127,6 +135,7 @@ function initFilePanel() {
     language: 'auto',
     onSave: (filePath, content, expected) => window.api.saveFileForPanel(filePath, content, expected),
     onClose: handleClose,
+    onDetachedSave: dropSavedHeldTabs,
   });
 
   // ── Diff-specific UI ──
@@ -276,6 +285,8 @@ function handleClose() {
 
   if (tab) {
     if (!confirmDiscardChangesEdits(tab)) return;
+    if (tab.type === 'file' && fileTabHasUnsavedEdits(tab)
+      && !window.confirm('This file has unsaved edits. Discard them?')) return;
     if (tab.type === 'diff' && !tab.resolved) {
       window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
     }
@@ -294,8 +305,7 @@ function handleClose() {
     state.currentTab = null;
   }
 
-  state.panelVisible = false;
-  hidePanel();
+  endCurrentTab(currentPanelSessionId, state);
 }
 
 async function handleDiffSave() {
@@ -467,19 +477,27 @@ function openDiffTab(sessionId, diffId, data) {
   }
 }
 
+// see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
 function openFileTab(sessionId, data) {
   const state = getSessionState(sessionId);
+  const current = state.currentTab;
+  if (current && current.type === 'file' && (fpViewerOwner === current || current.viewerState)
+    && filePathKey(current.filePath) === filePathKey(data.filePath)) {
+    return reopenFileTab(sessionId, state, current, data);
+  }
+  const held = takeHeldFileTab(state, data.filePath);
 
   // Destroy previous
   destroyCurrentTab(state);
 
-  state.currentTab = {
+  state.currentTab = held || {
     type: 'file',
     label: basename(data.filePath),
     filePath: data.filePath,
     content: data.content,
-    pendingLine: Number.isInteger(data.line) && data.line > 0 ? data.line : null,
+    pendingLine: null,
   };
+  if (Number.isInteger(data.line) && data.line > 0) state.currentTab.pendingLine = data.line;
 
   state.panelVisible = true;
 
@@ -487,6 +505,94 @@ function openFileTab(sessionId, data) {
     showPanel(state);
     renderPanel(sessionId);
   }
+}
+
+function reopenFileTab(sessionId, state, tab, data) {
+  if (Number.isInteger(data.line) && data.line > 0) tab.pendingLine = data.line;
+  if (fpViewerOwner === tab) fpViewerPanel.rereadFromDisk();
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
+function fileTabHasUnsavedEdits(tab) {
+  if (fpViewerOwner === tab) return fpViewerPanel.hasUnsavedEdits();
+  return !!tab.viewerState && fpViewerPanel.snapshotHasUnsavedEdits(tab.viewerState);
+}
+
+// see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+function filePathKey(filePath) {
+  const platform = window.api && window.api.platform;
+  let key = String(filePath);
+  if (platform === 'win32') key = key.replace(/\\/g, '/').toLowerCase();
+  return key;
+}
+
+function holdFileTabIfDirty(state, tab) {
+  if (!fileTabHasUnsavedEdits(tab)) return;
+  if (fpViewerOwner === tab) tab.viewerState = fpViewerPanel.snapshot();
+  if (!state.heldFileTabs) state.heldFileTabs = new Map();
+  const key = filePathKey(tab.filePath);
+  state.heldFileTabs.set(key, tab);
+}
+
+function dropSavedHeldTabs() {
+  for (const [sessionId, state] of filePanelState) {
+    if (!state.heldFileTabs) continue;
+    for (const [key, tab] of state.heldFileTabs) {
+      if (!fileTabHasUnsavedEdits(tab)) {
+        state.heldFileTabs.delete(key);
+        if (sessionId === currentPanelSessionId) renderHeldBar(sessionId, state.currentTab);
+      }
+    }
+  }
+}
+
+function takeHeldFileTab(state, filePath) {
+  if (!state.heldFileTabs) return null;
+  const key = filePathKey(filePath);
+  const tab = state.heldFileTabs.get(key) || null;
+  state.heldFileTabs.delete(key);
+  return tab;
+}
+
+function endCurrentTab(sessionId, state) {
+  const held = state.heldFileTabs ? [...state.heldFileTabs.values()].at(-1) : null;
+  if (held) {
+    state.currentTab = takeHeldFileTab(state, held.filePath);
+    if (currentPanelSessionId === sessionId) {
+      showPanel(state);
+      renderPanel(sessionId);
+    }
+    return;
+  }
+  state.panelVisible = false;
+  if (currentPanelSessionId === sessionId) hidePanel();
+}
+
+function renderHeldBar(sessionId, tab) {
+  const held = tab && tab.type === 'file' ? getSessionState(sessionId).heldFileTabs : null;
+  heldBarEl.innerHTML = '';
+  if (!held || !held.size) {
+    heldBarEl.style.display = 'none';
+    return;
+  }
+  const text = document.createElement('span');
+  text.className = 'viewer-panel-notice-text';
+  text.textContent = 'Unsaved edits kept in:';
+  heldBarEl.appendChild(text);
+  const tabs = [...held.values()];
+  const labels = heldTabLabels(tabs);
+  tabs.forEach((heldTab, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'fp-toolbar-btn file-panel-held-btn';
+    btn.textContent = labels[i];
+    btn.title = `Show ${heldTab.filePath}`;
+    btn.addEventListener('click', () => openFileTab(sessionId, { filePath: heldTab.filePath }));
+    heldBarEl.appendChild(btn);
+  });
+  heldBarEl.style.display = '';
 }
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
@@ -537,6 +643,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
+  if (tab.type === 'file') holdFileTabIfDirty(state, tab);
   if (tab.type === 'file' && fpViewerOwner === tab) {
     fpViewerPanel.destroy();
     fpViewerOwner = null;
@@ -580,8 +687,7 @@ function closeAllDiffs(sessionId) {
   if (state.currentTab?.type === 'diff') {
     destroyCurrentTab(state);
     state.currentTab = null;
-    state.panelVisible = false;
-    if (currentPanelSessionId === sessionId) hidePanel();
+    endCurrentTab(sessionId, state);
   }
 }
 
@@ -593,8 +699,7 @@ function closeDiffByDiffId(sessionId, diffId) {
   state.currentTab.resolved = true;
   destroyCurrentTab(state);
   state.currentTab = null;
-  state.panelVisible = false;
-  if (currentPanelSessionId === sessionId) hidePanel();
+  endCurrentTab(sessionId, state);
 }
 
 // ── Panel Show/Hide ─────────────────────────────────────────────────
@@ -683,6 +788,7 @@ function renderTabContent(sessionId, tab) {
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
   setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes');
+  renderHeldBar(sessionId, tab);
 
   if (!tab) {
     vpContainer.style.display = 'none';
@@ -809,8 +915,7 @@ function toggleChangesTab(sessionId) {
     if (!confirmDiscardChangesEdits(state.currentTab)) return;
     destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
-    state.panelVisible = false;
-    if (currentPanelSessionId === sessionId) hidePanel();
+    endCurrentTab(sessionId, state);
     return;
   }
   return openChangesTab(sessionId);
@@ -1711,6 +1816,20 @@ function refitActiveTerminal() {
 }
 
 // ── Utility ─────────────────────────────────────────────────────────
+
+function heldTabLabels(tabs) {
+  const parts = tabs.map((tab) => String(tab.filePath).replace(/\\/g, '/').split('/'));
+  const depth = tabs.map(() => 1);
+  const longest = Math.max(...parts.map((p) => p.length));
+  let labels = [];
+  for (let round = 0; round < longest; round++) {
+    labels = parts.map((p, i) => p.slice(-depth[i]).join('/'));
+    const clashes = labels.map((label, i) => labels.some((other, j) => j !== i && other === label));
+    if (!clashes.includes(true)) break;
+    clashes.forEach((clash, i) => { if (clash) depth[i] += 1; });
+  }
+  return labels;
+}
 
 function basename(filePath) {
   if (!filePath) return 'untitled';

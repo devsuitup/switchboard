@@ -4,10 +4,15 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- A schedule with `catch-up: true` in its front matter runs once, as soon as Switchboard starts or the machine wakes up, when it fell due while Switchboard was closed or the machine asleep, however many runs were missed in the last seven days. Without it, a missed run is still skipped. (#334)
+
 ### Changed
 - Without `SWITCHBOARD_SSH_PATH`, the terminal attached to a remote session now runs the `ssh` found on your `PATH` before `/usr/bin/ssh` or the Windows system client, like every other remote operation. `SWITCHBOARD_SSH_PATH` must be an absolute path: a relative one is ignored, with a warning in the log. (#359)
 
 ### Fixed
+- A file with unsaved edits in the panel is no longer discarded when the session opens another file, proposes an edit, or a link opens Changes. It is kept aside, named above the file shown, and comes back when the diff or Changes closes, with a notice if the file changed on disk. (#364)
+- Saving a file in the panel before its editor has finished loading no longer empties the file on disk; Save stays disabled until the file is shown. (#369)
 - `SWITCHBOARD_SSH_PATH` now applies to every connection to a remote host, not only the attached terminal: the pulls, the copy of transcripts, the watch connection, stop and the Changes view use it too. Transcripts are copied with the `scp` beside it, or with `SWITCHBOARD_SCP_PATH` when set. (#359)
 
 ## v0.0.85 — 2026-09-30

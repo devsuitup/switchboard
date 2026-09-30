@@ -14,6 +14,7 @@ const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () =
 const noPty = () => false;
 const FT_A = '134350561856777853';
 const FT_B = '134351483470939507';
+const COLD_POWERSHELL_TIMEOUT_MS = 30000;
 
 function writeState(dir, pid, fields = {}) {
   fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify({
@@ -124,7 +125,7 @@ test('on Windows, candidates past the probe cap are not asked about and stay liv
 }));
 
 test('on Windows, the default probe reads the real creation time of this process', { skip: process.platform !== 'win32' }, async () => {
-  const got = await cliSessionState.probeProcStartWindows([process.pid]);
+  const got = await cliSessionState.probeProcStartWindows([process.pid], COLD_POWERSHELL_TIMEOUT_MS);
   assert.match(got.get(process.pid), /^\d{17,19}$/);
 });
 
@@ -156,6 +157,13 @@ test('a probe whose PowerShell exits 1 keeps the valid lines it printed', async 
     fakeExec(exitOne, '4242 ' + FT_A + String.fromCharCode(13, 10)));
   assert.equal(got.get(4242), FT_A);
   assert.equal(got.has(999999), false);
+});
+
+test('the timeout given to the probe is the one its PowerShell runs under', async () => {
+  let opts = null;
+  const exec = (_exe, _args, execOpts, cb) => { opts = execOpts; cb(null, '', ''); };
+  await cliSessionState.probeProcStartWindows([4242], COLD_POWERSHELL_TIMEOUT_MS, exec);
+  assert.equal(opts.timeout, COLD_POWERSHELL_TIMEOUT_MS);
 });
 
 test('a probe that timed out or could not spawn rejects', async () => {

@@ -60,9 +60,11 @@ Every PR that changes what a user sees or can do adds its entry under
 ## The CI check
 
 The `changelog` job of `.github/workflows/test.yml` runs on every pull request.
-It fails when the PR changes app code and not `CHANGELOG.md`. App code is what
-electron-builder ships: the `*.js` files at the root (`eslint.config.js`
-excepted), `public/`, `workers/` and `scripts/claude-sandbox.sh`.
+It is a required check of the `main-protection` ruleset, so a PR it fails
+cannot be merged. It fails when the PR changes app code and not
+`CHANGELOG.md`. App code is what electron-builder ships: the `*.js` files at
+the root (`eslint.config.js` excepted), `public/`, `workers/` and
+`scripts/claude-sandbox.sh`.
 
 The PR is judged on its whole diff: `git diff <base>...<head>`, from the PR's
 base SHA to its head SHA through their merge base, so every commit of the PR

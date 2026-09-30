@@ -24,8 +24,8 @@ request first, because `main` is protected.
    version in `package.json`, so a bump without its section does not pass CI.
 
    The `main-protection` ruleset requires the checks `lint`,
-   `test (20, ubuntu-latest)`, `test (20, windows-2022)`, `test (22, ubuntu-latest)`
-   and `test (22, windows-2022)`, and no approving review, so
+   `test (20, ubuntu-latest)`, `test (20, windows-2022)`, `test (22, ubuntu-latest)`,
+   `test (22, windows-2022)` and `changelog`, and no approving review, so
    `gh pr merge --auto --squash` can be armed as soon as the checks run.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing

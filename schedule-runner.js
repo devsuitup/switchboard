@@ -6,6 +6,8 @@ const crypto = require('crypto');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const MINUTE_MS = 60 * 1000;
+const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -72,6 +74,56 @@ function cronMatches(cronExpr, now) {
     cronFieldMatches(month, now.getMonth() + 1) &&
     cronFieldMatches(dow, now.getDay())
   );
+}
+
+/** The latest minute in (afterMs, uptoMs] that the cron expression matches, or null. */
+function latestCronMatch(cronExpr, afterMs, uptoMs) {
+  for (let m = Math.floor(uptoMs / MINUTE_MS) * MINUTE_MS; m > afterMs; m -= MINUTE_MS) {
+    if (cronMatches(cronExpr, new Date(m))) return m;
+  }
+  return null;
+}
+
+function scheduleStateKey(schedule) {
+  return crypto.createHash('sha256').update(schedule.filePath).digest('hex').slice(0, 16);
+}
+
+/**
+ * Read the catch-up record: Map<key, { handled, files }>, where `handled` is
+ * the latest minute (epoch ms) already run or deliberately passed over.
+ */
+function readScheduleState(stateDir) {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const state = new Map();
+  for (const name of fs.readdirSync(stateDir)) {
+    const m = name.match(/^([0-9a-f]{16})-(\d+)\.json$/);
+    if (!m) continue;
+    const entry = state.get(m[1]) || { handled: -Infinity, files: [] };
+    entry.handled = Math.max(entry.handled, Number(m[2]));
+    entry.files.push(name);
+    state.set(m[1], entry);
+  }
+  return state;
+}
+
+/**
+ * Mark a minute of a schedule as handled. The exclusive create is the claim:
+ * of two instances deciding on the same minute, only one gets `true`.
+ */
+function claimScheduleMinute(stateDir, key, minuteMs, info) {
+  try {
+    fs.writeFileSync(path.join(stateDir, `${key}-${minuteMs}.json`), JSON.stringify(info) + '\n', { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if (err.code === 'EEXIST') return false;
+    throw err;
+  }
+}
+
+function pruneScheduleState(stateDir, entry) {
+  for (const name of entry.files) {
+    try { fs.unlinkSync(path.join(stateDir, name)); } catch {}
+  }
 }
 
 /**
@@ -147,6 +199,7 @@ function scanSchedules(log) {
               file, filePath: path.join(commandsDir, file),
               projectPath, folder: folder.name,
               name: meta.name || file, cron: meta.cron,
+              catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
               cli: meta.cli || {}, prompt: body,
             });
@@ -162,10 +215,16 @@ function scanSchedules(log) {
   return schedules;
 }
 
-/** Create a pre-seeded JSONL session file with user message and slug for grouping. */
-function createScheduleSession(schedule) {
+/**
+ * Create a pre-seeded JSONL session file with user message and slug for grouping.
+ * `dueMs` is set for a catch-up run: the minute it was due, named in the message.
+ */
+function createScheduleSession(schedule, dueMs) {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
+  const heading = dueMs == null
+    ? 'Scheduled Task: '
+    : `Scheduled Task (catch-up: due ${new Date(dueMs).toISOString()}, started ${timestamp}): `;
   const claudeProjectDir = path.join(PROJECTS_DIR, schedule.folder);
 
   fs.mkdirSync(claudeProjectDir, { recursive: true });
@@ -173,7 +232,7 @@ function createScheduleSession(schedule) {
 
   const msgId = crypto.randomUUID();
   const lines = [
-    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: 'Scheduled Task: ' + schedule.prompt } }),
+    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: heading + schedule.prompt } }),
   ];
   fs.writeFileSync(jsonlPath, lines.join('\n') + '\n');
   return { sessionId, jsonlPath };
@@ -257,42 +316,103 @@ function buildScheduleCommand(sessionId, schedule) {
 }
 
 /**
- * Start the cron loop. Checks every 60 seconds.
+ * Start the cron loop. Checks every 60 seconds; a schedule with `catch-up: true`
+ * is also checked at start and on `resume`, and runs once for missed minutes.
  * @param {object} log - Logger
  * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
+ * @param {object} [opts]
+ * @param {EventEmitter} [opts.resumeSource] - Emits `resume` after a system suspend (Electron's powerMonitor)
+ * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand) {
+function startScheduler(log, runCommand, { resumeSource, stateDir } = {}) {
   let running = true;
   const runningTasks = new Set();
+  // see .ai/contexts/schedule-runner.md ("Isolated instances")
+  const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
+  if (!catchUpOn) log.info('[schedule] catch-up is off: SWITCHBOARD_DATA_DIR isolates this instance, schedules run on cron only');
 
-  function tick() {
+  function launch(schedule, dueMs) {
+    const taskKey = `${schedule.folder}:${schedule.slug}`;
+    if (runningTasks.has(taskKey)) {
+      log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
+      return;
+    }
+
+    if (dueMs == null) {
+      log.info(`[schedule] Triggering: ${schedule.name} (${schedule.cron})`);
+    } else {
+      log.info(`[schedule] Catching up: ${schedule.name} (${schedule.cron}), due ${new Date(dueMs).toISOString()}`);
+    }
+    try {
+      const { sessionId } = createScheduleSession(schedule, dueMs);
+      const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
+
+      runningTasks.add(taskKey);
+      runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
+        runningTasks.delete(taskKey);
+      });
+    } catch (err) {
+      log.error(`[schedule] Failed to run ${schedule.name}:`, err);
+    }
+  }
+
+  function checkCatchUp(schedule, state, nowMs) {
+    const key = scheduleStateKey(schedule);
+    const nowMinute = Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
+    const info = { file: schedule.filePath, name: schedule.name };
+    let entry = state.get(key);
+    if (entry && entry.handled > nowMinute) {
+      log.warn(`[schedule] ${schedule.name}: recorded minute ${new Date(entry.handled).toISOString()} is ahead of the clock, restarting its record from now`);
+      pruneScheduleState(stateDir, entry);
+      entry = null;
+    }
+    if (!entry) {
+      const baseline = nowMinute - MINUTE_MS;
+      claimScheduleMinute(stateDir, key, baseline, info);
+      entry = { handled: baseline, files: [`${key}-${baseline}.json`] };
+    }
+    const due = latestCronMatch(schedule.cron, Math.max(entry.handled, nowMinute - CATCH_UP_WINDOW_MS), nowMinute);
+    if (due === null) return;
+    if (!claimScheduleMinute(stateDir, key, due, info)) {
+      log.info(`[schedule] Skipping ${schedule.name} — already triggered for that minute`);
+      return;
+    }
+    pruneScheduleState(stateDir, entry);
+    launch(schedule, due < nowMinute ? due : null);
+  }
+
+  function check(onTick) {
     if (!running) return;
     const now = new Date();
     const schedules = scanSchedules(log);
-
-    for (const schedule of schedules) {
-      if (!cronMatches(schedule.cron, now)) continue;
-      const taskKey = `${schedule.folder}:${schedule.slug}`;
-      if (runningTasks.has(taskKey)) {
-        log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
-        continue;
-      }
-
-      log.info(`[schedule] Triggering: ${schedule.name} (${schedule.cron})`);
+    let state = null;
+    if (catchUpOn && schedules.some(s => s.catchUp)) {
       try {
-        const { sessionId } = createScheduleSession(schedule);
-        const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
-
-        runningTasks.add(taskKey);
-        runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
-          runningTasks.delete(taskKey);
-        });
+        state = readScheduleState(stateDir);
       } catch (err) {
-        log.error(`[schedule] Failed to run ${schedule.name}:`, err);
+        log.warn(`[schedule] Cannot read the catch-up record in ${stateDir}, running on cron only:`, err.message);
       }
     }
+
+    for (const schedule of schedules) {
+      if (schedule.catchUp && state) {
+        try {
+          checkCatchUp(schedule, state, now.getTime());
+          continue;
+        } catch (err) {
+          log.warn(`[schedule] Cannot keep the catch-up record of ${schedule.name}, running on cron only:`, err.message);
+        }
+      }
+      if (onTick && cronMatches(schedule.cron, now)) launch(schedule, null);
+    }
   }
+
+  const tick = () => check(true);
+  const onResume = () => check(false);
+
+  check(false);
+  if (resumeSource) resumeSource.on('resume', onResume);
 
   const msUntilNextMinute = (60 - new Date().getSeconds()) * 1000;
   const initialTimer = setTimeout(() => {
@@ -308,4 +428,4 @@ function startScheduler(log, runCommand) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute };

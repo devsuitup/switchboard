@@ -113,7 +113,7 @@ file is deleted; **Add Project** on the same folder shows it again.
 
 | Variable | Effect |
 |---|---|
-| `SWITCHBOARD_DATA_DIR` | Data directory: database, trace files, remote mirrors, and Electron's `userData` (hence its own single-instance lock). Default `~/.switchboard` for an installed build, `~/.switchboard-dev` from source |
+| `SWITCHBOARD_DATA_DIR` | Data directory: database, trace files, remote mirrors, and Electron's `userData` (hence its own single-instance lock). Default `~/.switchboard` for an installed build, `~/.switchboard-dev` from source. Set to any value, even `~/.switchboard`, it turns schedule catch-up off — see [Automation](automation.md#catching-up-a-missed-run) |
 | `SWITCHBOARD_TRIGGERS_DIR` | Triggers directory, default `~/.switchboard/triggers` whatever the data directory — see [Automation](automation.md#environment-overrides) for the other trigger variables |
 | `SWITCHBOARD_ACTIVITY_TRACE`, `SWITCHBOARD_ACTIVITY_TRACE_MAX_MB` | Debug mode at startup, and its disk ceiling — see [Activity trace](activity-trace.md) |
 | `SWITCHBOARD_SSH_PATH` | The `ssh` binary of every remote operation: pulls (scp included, through `scp -S`), watch connection, attached terminal, stop, Changes view. An absolute path to an executable — a relative value is ignored, and a Windows `.cmd`/`.bat` cannot be started. Unset, `ssh` from the `PATH`, then the system's — see [Remote hosts](remote-hosts.md#which-ssh-and-scp-run) |

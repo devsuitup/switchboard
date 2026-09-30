@@ -75,6 +75,7 @@ class ViewerPanel {
     this._noticeSeq = 0;
     this._detachedSaves = new WeakMap();
     this._token = null;
+    this._pendingContent = null;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -115,7 +116,7 @@ class ViewerPanel {
     // Listen for file changes from main process
     this._onFileChanged = (changedPath) => {
       if (changedPath === this._watchedPath) {
-        this._reloadFromDisk();
+        this.rereadFromDisk();
       }
     };
     if (window.api.onFileChanged) {
@@ -185,9 +186,18 @@ class ViewerPanel {
   }
 
   _isDirty(seenDisk = this._lastSeenDisk) {
-    if (!this.editorView || this._agreedBase === null) return false;
-    const buffer = this.getContent();
+    if (!this._hasDocument() || this._agreedBase === null) return false;
+    const buffer = this._buffer();
     return buffer !== this._agreedBase && buffer !== seenDisk;
+  }
+
+  // see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+  _hasDocument() {
+    return this._pendingContent !== null || !!this.editorView;
+  }
+
+  _buffer() {
+    return this._pendingContent !== null ? this._pendingContent : this.getContent();
   }
 
   _wireEvents() {
@@ -226,7 +236,7 @@ class ViewerPanel {
 
     if (toolbar.copyContentBtn) {
       toolbar.copyContentBtn.addEventListener('click', () => {
-        const content = this.getContent();
+        const content = this._buffer();
         navigator.clipboard.writeText(content);
         toolbar.flashCopyContent();
       });
@@ -308,6 +318,7 @@ class ViewerPanel {
     }
 
     this.filePath = filePath;
+    this._title = title;
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
 
@@ -341,6 +352,10 @@ class ViewerPanel {
     this._openGen = (this._openGen || 0) + 1;
     const myGen = this._openGen;
     const pending = { content, filePath, isMd };
+    this._openPending = true;
+    this._rereadQueued = false;
+    this._pendingContent = asEditorText(content);
+    if (this.toolbar.saveBtn) this.toolbar.saveBtn.disabled = true;
 
     // Defer all CodeMirror work until the bundle is available.
     loadCodeMirrorBundle().then(() => {
@@ -374,9 +389,13 @@ class ViewerPanel {
       if (wantPreview) {
         this._setPreview(true);
       }
-      if (restore) this._reloadFromDisk();
+      this._openPending = false;
+      this._pendingContent = null;
+      if (this.toolbar.saveBtn) this.toolbar.saveBtn.disabled = false;
+      if (restore || this._rereadQueued) this._reloadFromDisk();
     }).catch((err) => {
       console.error('[viewer-panel] Failed to load codemirror-bundle:', err);
+      this._openPending = false;
     });
   }
 
@@ -434,7 +453,7 @@ class ViewerPanel {
 
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save() {
-    if (!this.opts.onSave || !this.filePath) return;
+    if (!this.opts.onSave || !this.filePath || this._pendingContent !== null) return;
     if (this._pendingSave !== null) {
       this._saveQueued = true;
       return;
@@ -490,6 +509,7 @@ class ViewerPanel {
   _recordDetachedSave(token, content, result) {
     if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
     else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
+    if (this.opts.onDetachedSave) this.opts.onDetachedSave(token);
   }
 
   getContent() {
@@ -498,6 +518,7 @@ class ViewerPanel {
 
   destroy() {
     this._openGen = (this._openGen || 0) + 1;  // invalidate in-flight open() closure
+    this._token = null;
     this._unwatchFile();
     if (this.editorView) {
       this.editorView.destroy();
@@ -593,10 +614,34 @@ class ViewerPanel {
     if (window.cmResetHistory) window.cmResetHistory(this.editorView);
   }
 
+  // see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+  hasUnsavedEdits() {
+    return this._isDirty();
+  }
+
+  snapshotHasUnsavedEdits(state) {
+    const detached = this._detachedSaves.get(state.token);
+    return state.content !== state.agreedBase && state.content !== state.lastSeenDisk
+      && !(detached && detached.written === asEditorText(state.content));
+  }
+
+  rereadFromDisk() {
+    if (this._openPending) {
+      this._rereadQueued = true;
+      return;
+    }
+    if (this._pendingContent !== null) {
+      const state = this.snapshot();
+      this.open(this._title, this.filePath, state.content, state);
+      return;
+    }
+    this._reloadFromDisk();
+  }
+
   // see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
   snapshot() {
-    if (!this.editorView || !this.filePath) return null;
-    return { filePath: this.filePath, content: this.getContent(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
+    if (!this._hasDocument() || !this.filePath) return null;
+    return { filePath: this.filePath, content: this._buffer(), agreedBase: this._agreedBase, lastSeenDisk: this._lastSeenDisk, token: this._token };
   }
 
   _replaceContent(newContent) {

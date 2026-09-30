@@ -54,7 +54,7 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
   window.createUnifiedMergeViewer = makeView;
   window.createEditableViewer = makeView;
   Object.defineProperty(window, 'ViewerPanel', {
-    value: function ViewerPanelStub() { return { open() {}, revealLine() {}, destroy() {} }; },
+    value: function ViewerPanelStub() { return { open() {}, revealLine() {}, destroy() {}, hasUnsavedEdits: () => false }; },
     writable: true, configurable: true,
   });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
