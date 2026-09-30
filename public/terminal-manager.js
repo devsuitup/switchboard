@@ -91,6 +91,11 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
+    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+      if (e.type === 'keydown') { e._handled = true; toggleAgentsView(); }
+      return false;
+    }
+
     // Toggle grid view (default Cmd/Ctrl+Shift+G)
     if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
       if (e.type === 'keydown') { e._handled = true; toggleGridView(); }

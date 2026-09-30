@@ -326,6 +326,19 @@ const rendererCrossFileGlobals = {
   // Resume guard for sessions live in another process (public/resume-guard.js)
   guardResume: 'readonly',
   liveElsewhereMany: 'readonly',
+  // Agents view (public/agents-view.js) — see .ai/contexts/bg-agents.md
+  agentsViewActive: 'writable',
+  bgAgentSessionIds: 'readonly',
+  initAgentsView: 'readonly',
+  showAgentsView: 'readonly',
+  hideAgentsView: 'readonly',
+  toggleAgentsView: 'readonly',
+  applyAgentsSnapshot: 'readonly',
+  refreshAgentsRoster: 'readonly',
+  attachBgAgent: 'readonly',
+  runAgentVerb: 'readonly',
+  selectAgentsRow: 'readonly',
+  showDispatchAgentDialog: 'readonly',
 };
 
 module.exports = [
@@ -366,7 +379,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js', 'public/agents-view.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',

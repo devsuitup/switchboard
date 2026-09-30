@@ -1291,6 +1291,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       terminalArea.style.display = 'none';
       memoryViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
+      if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
       statsViewer.style.display = 'flex';
       loadStats();
     } else if (tabName === 'memory') {
@@ -1311,6 +1312,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
 initGridGroupToggle();
+initAgentsView();
 
 // JSONL viewer (renderJsonlText, formatDuration, makeCollapsible, renderJsonlEntry, showJsonlViewer) → jsonl-viewer.js
 
@@ -1386,11 +1388,23 @@ initGridGroupToggle();
   // Insert next to the resort button
   resortBtn.parentElement.insertBefore(gridToggleBtn, resortBtn);
 
+  const agentsToggleBtn = document.createElement('button');
+  agentsToggleBtn.id = 'agents-toggle-btn';
+  agentsToggleBtn.title = 'Background agents';
+  agentsToggleBtn.innerHTML = '<svg width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>';
+  agentsToggleBtn.addEventListener('click', toggleAgentsView);
+  resortBtn.parentElement.insertBefore(agentsToggleBtn, resortBtn);
+
   // Global keyboard shortcuts (covers non-terminal focus)
   // When a terminal is focused, xterm's customKeyEventHandler fires first and sets
   // e._handled to prevent the document listener from double-firing the same action.
   document.addEventListener('keydown', (e) => {
     if (e._handled) return;
+    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+      e.preventDefault();
+      toggleAgentsView();
+      return;
+    }
     // Toggle grid view (default Cmd/Ctrl+Shift+G)
     if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
       e.preventDefault();
@@ -1459,6 +1473,7 @@ loadProjects().then(async () => {
   }
   // Restore working set (persisted across full restarts via global settings)
   await restoreWorkingSet();
+  if (localStorage.getItem('agentsViewActive') === '1') showAgentsView();
 });
 
 // Live-reload sidebar when filesystem changes are detected

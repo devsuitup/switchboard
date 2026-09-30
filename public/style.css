@@ -1661,6 +1661,45 @@ body { display: flex; flex-direction: column; }
   margin-right: auto;
 }
 
+/* Agents view — see .ai/contexts/bg-agents.md */
+#agents-viewer { display: none; flex-direction: column; flex: 1; min-height: 0; }
+#agents-viewer-header {
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  background: var(--surface-chrome); border-bottom: 1px solid var(--hairline); flex-shrink: 0;
+}
+#agents-viewer-title { font-size: 13px; color: #b0b0c4; font-weight: 500; }
+#agents-viewer-count { font-size: 11px; color: #7a7a90; margin-right: auto; }
+#agents-finished-toggle { font-size: 11px; color: #7a7a90; display: inline-flex; align-items: center; gap: 4px; }
+#agents-new-btn, .agents-verb-btn {
+  background: transparent; border: 1px solid var(--control-border); color: #b0b0c4;
+  font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+#agents-new-btn:hover, .agents-verb-btn:hover:not([disabled]) { background: var(--control-surface); }
+.agents-verb-btn[disabled] { opacity: 0.4; cursor: default; }
+#agents-viewer-banner { padding: 6px 16px; font-size: 11px; color: #f0a050; background: rgba(240,160,80,0.08); }
+#agents-viewer-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#agents-list { flex: 1; overflow: auto; min-height: 0; }
+.agents-row {
+  display: grid; grid-template-columns: 18px minmax(160px, 2fr) minmax(90px, 1fr) minmax(110px, 1fr) minmax(160px, 2fr) 60px;
+  gap: 8px; align-items: center; padding: 6px 16px; font-size: 12px; color: #c8c8d8; cursor: pointer;
+  border-bottom: 1px solid var(--hairline);
+}
+.agents-row:hover { background: var(--control-surface); }
+.agents-row.selected { background: rgba(128,136,255,0.1); }
+.agents-row.pending { opacity: 0.5; }
+.agents-row-name, .agents-row-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-row-agent, .agents-row-state, .agents-row-age { color: #7a7a90; }
+#agents-detail { border-top: 1px solid var(--hairline); padding: 10px 16px; max-height: 40%; overflow: auto; font-size: 12px; color: #c8c8d8; flex-shrink: 0; }
+.agents-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.agents-detail-name { font-weight: 500; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-detail-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.agents-detail-line { margin: 4px 0; }
+.agents-detail-meta, .agents-detail-empty { color: #7a7a90; margin: 4px 0; }
+.agents-detail-section { margin-top: 8px; }
+.agents-detail-section ul { margin: 4px 0 0 16px; padding: 0; }
+.agents-detail-error { margin-top: 8px; color: #f06060; }
+.agents-link { color: var(--accent); }
+
 #grid-group-toggle-btn {
   background: transparent;
   border: 1px solid var(--control-border);
@@ -3235,6 +3274,7 @@ body { display: flex; flex-direction: column; }
 
 /* ========== ADD PROJECT BUTTON ========== */
 #grid-toggle-btn,
+#agents-toggle-btn,
 #resort-btn,
 #add-project-btn {
   background: transparent;
@@ -3256,10 +3296,12 @@ body { display: flex; flex-direction: column; }
 }
 
 #grid-toggle-btn { margin-left: auto; }
+#agents-toggle-btn { margin-left: 2px; }
 #resort-btn { margin-left: 2px; }
 #add-project-btn { margin-left: 2px; }
 
 #grid-toggle-btn:hover,
+#agents-toggle-btn:hover,
 #resort-btn:hover,
 #add-project-btn:hover {
   background: var(--control-surface);
@@ -3267,7 +3309,8 @@ body { display: flex; flex-direction: column; }
   color: #888;
 }
 
-#grid-toggle-btn.active {
+#grid-toggle-btn.active,
+#agents-toggle-btn.active {
   background: rgba(128,136,255,0.1);
   border-color: rgba(128,136,255,0.3);
   color: var(--accent);
