@@ -46,3 +46,22 @@ test('a roster change is pushed to the window on bg-agents-changed, and skipped 
   bg.fire({ roster: [], daemonReachable: false });
   assert.equal(sent.length, 1);
 });
+
+test('get-bg-agents restores the push after stop() cleared it, without ever doubling it', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const listeners = new Set();
+  const bg = {
+    start: () => true,
+    reconcile: async () => ({ roster: [], daemonReachable: true }),
+    onChange: (l) => { listeners.add(l); return () => listeners.delete(l); },
+    stop: () => listeners.clear(),
+  };
+  const sent = [];
+  const window = { isDestroyed: () => false, webContents: { send: (ch, payload) => sent.push([ch, payload]) } };
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => window, log: { warn() {} } });
+  await handlers.get('get-bg-agents')({});
+  bg.stop();
+  await handlers.get('get-bg-agents')({});
+  for (const l of listeners) l({ roster: [], daemonReachable: true });
+  assert.deepEqual(sent, [['bg-agents-changed', { roster: [], daemonReachable: true }]]);
+});
