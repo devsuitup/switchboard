@@ -147,21 +147,21 @@ function initFilePanel() {
   diffControls.className = 'viewer-toolbar-controls';
 
   diffToggleBtn = document.createElement('button');
-  diffToggleBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  diffToggleBtn.className = 'icon-btn';
   diffToggleBtn.id = 'diff-mode-btn';
   updateDiffModeButton();
   diffToggleBtn.addEventListener('click', handleDiffModeToggle);
   diffControls.appendChild(diffToggleBtn);
 
   const diffSaveBtn = document.createElement('button');
-  diffSaveBtn.className = 'fp-toolbar-btn fp-save-btn fp-icon-btn';
+  diffSaveBtn.className = 'icon-btn fp-save-btn';
   diffSaveBtn.title = 'Save changes';
   diffSaveBtn.innerHTML = FP_ICONS.save;
   diffSaveBtn.addEventListener('click', handleDiffSave);
   diffControls.appendChild(diffSaveBtn);
 
   const diffCloseBtn = document.createElement('button');
-  diffCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
+  diffCloseBtn.className = 'icon-btn fp-close-btn';
   diffCloseBtn.innerHTML = FP_ICONS.close;
   diffCloseBtn.title = 'Close panel';
   diffCloseBtn.addEventListener('click', handleClose);
@@ -204,7 +204,7 @@ function initFilePanel() {
   changesControls.className = 'viewer-toolbar-controls';
 
   const changesRefreshBtn = document.createElement('button');
-  changesRefreshBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  changesRefreshBtn.className = 'icon-btn';
   changesRefreshBtn.id = 'changes-refresh-btn';
   changesRefreshBtn.title = 'Refresh the file list';
   changesRefreshBtn.setAttribute('aria-label', changesRefreshBtn.title);
@@ -215,7 +215,7 @@ function initFilePanel() {
   changesControls.appendChild(changesRefreshBtn);
 
   const changesCloseBtn = document.createElement('button');
-  changesCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
+  changesCloseBtn.className = 'icon-btn fp-close-btn';
   changesCloseBtn.innerHTML = FP_ICONS.close;
   changesCloseBtn.title = 'Close panel';
   changesCloseBtn.addEventListener('click', handleClose);
@@ -1200,7 +1200,7 @@ function buildChangesDiffChrome() {
   controls.className = 'viewer-toolbar-controls';
 
   const closeEditorBtn = document.createElement('button');
-  closeEditorBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
+  closeEditorBtn.className = 'icon-btn fp-close-btn';
   closeEditorBtn.id = 'changes-diff-close-btn';
   closeEditorBtn.innerHTML = FP_ICONS.close;
   closeEditorBtn.title = 'Close the editor and keep the file list';
@@ -1211,13 +1211,13 @@ function buildChangesDiffChrome() {
   controls.appendChild(closeEditorBtn);
 
   changesDiffModeBtn = document.createElement('button');
-  changesDiffModeBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  changesDiffModeBtn.className = 'icon-btn';
   changesDiffModeBtn.id = 'changes-diff-mode-btn';
   changesDiffModeBtn.addEventListener('click', handleChangesDiffModeToggle);
   controls.appendChild(changesDiffModeBtn);
 
   changesDiffReloadBtn = document.createElement('button');
-  changesDiffReloadBtn.className = 'fp-toolbar-btn fp-icon-btn';
+  changesDiffReloadBtn.className = 'icon-btn';
   changesDiffReloadBtn.id = 'changes-diff-reload-btn';
   changesDiffReloadBtn.innerHTML = FP_ICONS.reload;
   changesDiffReloadBtn.title = 'Re-read this file from disk';
@@ -1228,7 +1228,7 @@ function buildChangesDiffChrome() {
   controls.appendChild(changesDiffReloadBtn);
 
   changesDiffSaveBtn = document.createElement('button');
-  changesDiffSaveBtn.className = 'fp-toolbar-btn fp-save-btn fp-icon-btn';
+  changesDiffSaveBtn.className = 'icon-btn fp-save-btn';
   changesDiffSaveBtn.id = 'changes-diff-save-btn';
   changesDiffSaveBtn.innerHTML = FP_ICONS.save;
   changesDiffSaveBtn.title = 'Save this file (Ctrl/Cmd+S)';

@@ -317,7 +317,7 @@ body { display: flex; flex-direction: column; }
   animation: loading-pulse 1.2s ease-in-out infinite;
 }
 
-#star-toggle, #archive-toggle, #running-toggle, #today-toggle {
+#star-toggle, #archive-toggle, #running-toggle, #today-toggle, .icon-btn {
   background: transparent;
   border: 1px solid var(--control-border);
   color: #7a7a90;
@@ -336,7 +336,7 @@ body { display: flex; flex-direction: column; }
   justify-content: center;
 }
 
-#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover {
+#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover, .icon-btn:hover {
   background: var(--control-surface);
   border-color: rgba(255,255,255,0.12);
   color: #888;
@@ -348,7 +348,7 @@ body { display: flex; flex-direction: column; }
   color: #f5be3c;
 }
 
-#archive-toggle.active {
+#archive-toggle.active, .icon-btn.active {
   background: rgba(120,130,255,0.1);
   border-color: rgba(120,130,255,0.25);
   color: var(--accent);
@@ -4362,15 +4362,6 @@ body { display: flex; flex-direction: column; }
   background: var(--accent-wash-strong);
 }
 
-.fp-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-}
-
 .fp-save-btn:hover {
   border-color: rgba(62,207,90,0.3);
   color: #3ecf5a;
@@ -4761,7 +4752,7 @@ body { display: flex; flex-direction: column; }
   color: #d0d0e8;
 }
 
-#file-panel-changes .fp-toolbar-btn:disabled {
+#file-panel-changes .icon-btn:disabled {
   opacity: 0.4;
   cursor: default;
   pointer-events: none;

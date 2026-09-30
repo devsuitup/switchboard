@@ -1881,7 +1881,7 @@ test('the Refresh control is the icon this app already uses, not a word (mutatio
     await flush();
 
     const btn = ctx.document.getElementById('changes-refresh-btn');
-    assert.ok(btn.classList.contains('fp-icon-btn'), 'it uses the toolbar\'s icon-button treatment');
+    assert.ok(btn.classList.contains('icon-btn'), 'it uses the app\'s icon button');
     assert.equal(btn.textContent.trim(), '', 'no word');
     const svg = btn.querySelector('svg');
     assert.ok(svg, 'an icon');
@@ -1900,7 +1900,7 @@ test('the list and the editor toolbars carry icon buttons with a tooltip and an 
       const name = btn.id || btn.title;
       assert.ok(btn.querySelector('svg'), `${name}: an icon`);
       assert.equal(btn.textContent.trim(), '', `${name}: no word`);
-      assert.ok(btn.classList.contains('fp-icon-btn'), `${name}: the panel's icon button`);
+      assert.ok(btn.classList.contains('icon-btn'), `${name}: the app's icon button`);
       assert.ok(btn.title, `${name}: a tooltip`);
     }
     const modeBtn = ctx.document.getElementById('changes-diff-mode-btn');
