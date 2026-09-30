@@ -195,9 +195,41 @@ const UNTRACKED_COUNT_LIMITS = Object.freeze({
 
 // Slots held by count-pass workers, across every pass in the process — see .ai/contexts/changes-view.md ("Untracked line counts")
 let countSlotsInUse = 0;
+const countSlotWaiters = [];
 
 function untrackedCountSlotsInUse() {
   return countSlotsInUse;
+}
+
+// A pass with no free slot queues for one — see .ai/contexts/changes-view.md ("Untracked line counts")
+function acquireCountSlot(capacity) {
+  if (countSlotsInUse < capacity) {
+    countSlotsInUse += 1;
+    return { granted: Promise.resolve(true), cancel() {} };
+  }
+  let entry = null;
+  const granted = new Promise((resolve) => {
+    entry = { resolve, capacity };
+    countSlotWaiters.push(entry);
+  });
+  return {
+    granted,
+    cancel() {
+      const i = countSlotWaiters.indexOf(entry);
+      if (i === -1) return;
+      countSlotWaiters.splice(i, 1);
+      entry.resolve(false);
+    },
+  };
+}
+
+function releaseCountSlot() {
+  countSlotsInUse -= 1;
+  const i = countSlotWaiters.findIndex((w) => countSlotsInUse < w.capacity);
+  if (i === -1) return;
+  const [waiter] = countSlotWaiters.splice(i, 1);
+  countSlotsInUse += 1;
+  waiter.resolve(true);
 }
 
 async function measureOneUntracked(root, p, ctx) {
@@ -230,8 +262,11 @@ async function measureUntrackedLocal(root, paths, fsOps = ASYNC_FS_OPS, limits =
   let open = true;
   const deadline = Date.now() + limits.timeBudgetMs;
 
+  const slots = [];
   async function worker() {
-    countSlotsInUse += 1;
+    const slot = acquireCountSlot(limits.concurrency);
+    slots.push(slot);
+    if (!(await slot.granted)) return;
     try {
       while (open && next < candidates.length && Date.now() < deadline) {
         const p = candidates[next++];
@@ -246,16 +281,17 @@ async function measureUntrackedLocal(root, paths, fsOps = ASYNC_FS_OPS, limits =
         else results.set(p, outcome);
       }
     } finally {
-      countSlotsInUse -= 1;
+      releaseCountSlot();
     }
   }
 
-  const workers = Math.max(0, Math.min(limits.concurrency - countSlotsInUse, candidates.length));
+  const workers = Math.min(limits.concurrency, candidates.length);
   let timer = null;
   const expired = new Promise((resolve) => { timer = setTimeout(resolve, limits.timeBudgetMs); });
   await Promise.race([Promise.all(Array.from({ length: workers }, worker)), expired]);
   clearTimeout(timer);
   open = false;
+  for (const slot of slots) slot.cancel();
   return { results: new Map(results), measured: measured.slice() };
 }
 
@@ -387,6 +423,12 @@ function firstError(result) {
 }
 
 // The two stdout-cap overruns: the remote transport's own, and execFile's maxBuffer — see .ai/contexts/changes-view.md ("Untracked files")
+// ssh's own exit code, or a spawn that failed or timed out: nothing git said
+const SSH_FAILED_CODE = 255;
+function isTransportFailure(result) {
+  return !!result && (result.code === SSH_FAILED_CODE || result.code === EXEC_FAILED_CODE);
+}
+
 function isStdoutCapFailure(result) {
   const stderr = (result && result.stderr) || '';
   return /stdout exceeded \d+ bytes/.test(stderr) || /maxBuffer length exceeded/i.test(stderr);
@@ -430,25 +472,33 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
 
   // Status paths are relative to the repository root, not the session cwd — see .ai/contexts/changes-view.md ("Paths are relative to the repository root")
   let rootLookup = null;
-  function repoRoot() {
+  // {root, failure}: failure is the transport's own result, never retried at the cwd — see .ai/contexts/changes-view.md ("Paths are relative to the repository root")
+  function lookUpRoot() {
     if (!rootLookup) {
       rootLookup = (async () => {
+        let result;
         try {
-          const result = await invoke(['rev-parse', '--show-toplevel']);
-          if (result.code !== 0) return null;
-          const top = String(result.stdout || '').replace(/\r?\n$/, '');
-          const absolute = kind === 'local' ? path.isAbsolute(top) : top.startsWith('/');
-          return isSafeCwd(top) && absolute ? top : null;
-        } catch {
-          return null;
+          result = await invoke(['rev-parse', '--show-toplevel']);
+        } catch (err) {
+          return { root: null, failure: { code: EXEC_FAILED_CODE, stdout: '', stderr: err.message } };
         }
+        if (isTransportFailure(result)) return { root: null, failure: result };
+        if (result.code !== 0) return { root: null, failure: null };
+        const top = String(result.stdout || '').replace(/\r?\n$/, '');
+        const absolute = kind === 'local' ? path.isAbsolute(top) : top.startsWith('/');
+        return { root: isSafeCwd(top) && absolute ? top : null, failure: null };
       })();
     }
     return rootLookup;
   }
 
+  async function repoRoot() {
+    return (await lookUpRoot()).root;
+  }
+
   async function gitAtRoot(args, opts = {}) {
-    const root = await repoRoot();
+    const { root, failure } = await lookUpRoot();
+    if (failure) return failure;
     return invoke(args, { ...opts, at: root || cwd });
   }
 
@@ -582,7 +632,9 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
   // `--no-index` exits 1 on a difference — see .ai/contexts/changes-view.md ("Untracked files")
   async function untrackedDiff(filePath) {
     if (!isSafeNoIndexPath(filePath)) return { ok: false, error: 'invalid path' };
-    const root = (await repoRoot()) || cwd;
+    const lookup = await lookUpRoot();
+    if (lookup.failure) return { ok: false, error: firstError(lookup.failure) };
+    const root = lookup.root || cwd;
     const contained = await resolveUntrackedOperand(filePath, root);
     if (!contained.ok) return { ok: false, error: contained.error };
 

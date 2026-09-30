@@ -1360,9 +1360,10 @@ test('measureUntrackedLocal: past its time budget the pass returns, and the file
   assert.equal(out.results.has('late.txt'), false);
   await new Promise((resolve) => setTimeout(resolve, 350));
   assert.equal(out.results.has('slow.txt'), false, 'and nothing lands later either');
+  assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt'], 'a late text file does not land in measured either (mutation target: the closed-pass guard and the returned copies)');
 });
 
-test('measureUntrackedLocal: a call that never returns keeps its slot, so later passes start fewer workers and never stack more blocked calls (mutation target: releasing the slot at the deadline)', async () => {
+test('measureUntrackedLocal: a call that never returns keeps its slot, so later passes wait for one instead of stacking more blocked calls (mutation target: releasing the slot at the deadline)', async () => {
   let release;
   const hung = new Promise((resolve) => { release = resolve; });
   const fsOps = {
@@ -1381,12 +1382,91 @@ test('measureUntrackedLocal: a call that never returns keeps its slot, so later 
     await measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 2 });
     assert.equal(untrackedCountSlotsInUse(), before + 2, 'both hung workers still hold their slot');
     const third = await measureUntrackedLocal(REPO, ['ok.txt'], fsOps, limits);
-    assert.equal(third.measured.length, 0, 'no slot left: nothing is started, nothing more can hang');
+    assert.equal(third.measured.length, 0, 'no slot comes free within the budget: nothing is started, nothing more can hang');
   } finally {
     release();
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(untrackedCountSlotsInUse(), before, 'the slots come back once the calls return');
+});
+
+test('measureUntrackedLocal: two passes started together are both fully measured — the second queues for a slot instead of starting with none (mutation target: workers = capacity minus slots in use)', async () => {
+  const os = require('os');
+  const fsMod = require('fs');
+  const dir = fsMod.realpathSync.native(fsMod.mkdtempSync(path.join(os.tmpdir(), 'switchboard-two-passes-')));
+  try {
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    fsMod.mkdirSync(a);
+    fsMod.mkdirSync(b);
+    const aPaths = Array.from({ length: 50 }, (_, i) => `f${i}.txt`);
+    const bPaths = ['x.txt', 'y.txt', 'z.txt'];
+    for (const p of aPaths) fsMod.writeFileSync(path.join(a, p), 'l\n');
+    for (const p of bPaths) fsMod.writeFileSync(path.join(b, p), 'l\nm\n');
+    const limits = { ...UNTRACKED_COUNT_LIMITS, timeBudgetMs: 60_000 };
+    const before = untrackedCountSlotsInUse();
+    const [outA, outB] = await Promise.all([
+      measureUntrackedLocal(a, aPaths, undefined, limits),
+      measureUntrackedLocal(b, bPaths, undefined, limits),
+    ]);
+    assert.equal(outA.measured.length, 50);
+    assert.equal(outB.measured.length, 3, 'the second pass waited for a slot and counted every file');
+    assert.ok(outB.measured.every((m) => m.lines === 2));
+    assert.equal(untrackedCountSlotsInUse(), before, 'every slot is given back');
+  } finally {
+    fsMod.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('measureUntrackedLocal: a file that grew between lstat and read is charged to the byte budget at its real size (mutation target: charging the lstat size only)', async () => {
+  const fsOps = countingFsOps({ 'grew.txt': 'x\n', 'next.txt': 'y'.repeat(19) + '\n' }, { reads: { 'grew.txt': '\n'.repeat(50) } });
+  const out = await measureUntrackedLocal(REPO, ['grew.txt', 'next.txt'], fsOps, { ...TEST_LIMITS, maxTotalBytes: 60, concurrency: 1 });
+  assert.deepEqual(out.measured.map((m) => m.path), ['grew.txt'], 'grew.txt read 50 bytes, not the 2 lstat reported');
+  assert.equal(out.results.get('next.txt').countStatus, 'over-cap', '60 − 50 leaves 10 bytes: the 20-byte next.txt does not fit');
+});
+
+test('remote runner .diff({untracked:true}): a session cwd below the root sends the ls-files check to the root, where the path is relative to (mutation target: ls-files at the cwd)', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 0, stdout: '/srv/app\n', stderr: '' });
+    if (command.includes("'ls-files'")) return Promise.resolve({ code: 0, stdout: command.startsWith("git -C '/srv/app' ") ? 'top.txt\0' : '', stderr: '' });
+    return Promise.resolve({ code: 1, stdout: untrackedDiffFor('top.txt'), stderr: '' });
+  };
+  const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+  const result = await runner.diff('top.txt', { untracked: true });
+  assert.equal(result.ok, true, `a root-level untracked file opens from a subdirectory cwd: ${result.error}`);
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'ls-files' '--others' '--exclude-standard' '-z' '--' 'top.txt'");
+  assert.equal(commands[2], "git -C '/srv/app' '--literal-pathspecs' '-c' 'core.quotepath=false' 'diff' '--no-index' '--' '/dev/null' 'top.txt'");
+});
+
+for (const [label, failure] of [
+  ['ssh exits 255', { code: 255, stdout: '', stderr: 'ssh: connect to host vps port 22: Connection timed out' }],
+  ['the transport times out', { code: -1, stdout: '', stderr: 'timed out' }],
+]) {
+  test(`remote runner .diff(): when ${label} on the root lookup, that error is the answer — no second call at the cwd, no second timeout (mutation target: falling back to the cwd)`, async () => {
+    for (const opts of [{}, { untracked: true }]) {
+      const commands = [];
+      const exec = (command) => { commands.push(command); return Promise.resolve(failure); };
+      const runner = createGitChangesRunner({ kind: 'remote', cwd: '/srv/app/sub', alias: 'vps', exec });
+      const result = await runner.diff('top.txt', opts);
+      assert.equal(result.ok, false);
+      assert.equal(result.error, failure.stderr);
+      assert.equal(commands.length, 1, `one round trip, not two (${JSON.stringify(opts)})`);
+    }
+  });
+}
+
+test('remote runner .diff(): a root lookup that git itself refuses (not a transport failure) still falls back to the cwd', async () => {
+  const commands = [];
+  const exec = (command) => {
+    commands.push(command);
+    if (command.includes("'--show-toplevel'")) return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: something' });
+    return Promise.resolve({ code: 0, stdout: 'diff text\n', stderr: '' });
+  };
+  const result = await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
+  assert.equal(result.ok, true);
+  assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'x.txt'");
 });
 
 test('readRegularFileUpTo: reads at most max + 1 bytes, so an over-cap file is detected without being read whole', async () => {

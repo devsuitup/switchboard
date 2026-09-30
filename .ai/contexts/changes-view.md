@@ -57,11 +57,17 @@ count pass and untracked-diff containment, which resolve against that root.
 The three status commands stay at the cwd, whose output does not depend on it.
 
 The lookup's answer is used only if it is an absolute path with no control
-character (`isSafeCwd`); anything else is ignored. Without a root, a diff
-falls back to the cwd and the count pass marks every untracked row
-`unavailable`. Cost: one more git call before each diff (a local spawn, or one
-sequential ssh round trip on a remote session), and one per local `status()`
-that has untracked files.
+character (`isSafeCwd`); anything else is ignored. A lookup that fails at the
+transport — ssh's own exit code 255, or a spawn that failed or timed out (code
+-1) — is the diff's answer as it stands (`isTransportFailure`): retrying at the
+cwd would pay a second full timeout on an unreachable host (20 s becoming
+40 s), and would bring back the empty diff a subdirectory cwd gives. A lookup
+that git itself refuses (any other non-zero exit) leaves the diff at the cwd.
+Without a root, the count pass marks every untracked row `unavailable`. Cost:
+one more git call before each diff (a local spawn, or one sequential ssh round
+trip on a remote session), and one per local `status()` that has untracked
+files; the root is not cached across IPC calls, since main builds one runner
+per call.
 
 ### Quoting rule: literal pathspecs, `-z`, a stdout cap, and single-quote escaping — not an allowlist
 
@@ -357,15 +363,19 @@ order, which is the order rows are shown:
    such a file is counted from its raw bytes.
 
 **Bounded, whatever the filesystem does.** A pass runs at most
-`UNTRACKED_COUNT_LIMITS.concurrency` (2) workers, and the count is
-process-wide: `countSlotsInUse` counts workers of every pass, and a worker
-gives its slot back only once its current call has returned. A call that
-never returns — an offline NFS or SMB mount behind a symlink, where `stat`
-hangs — therefore holds its slot, and later passes start fewer workers, down
-to none: at most two threadpool threads (of libuv's default four) can ever be
-stuck on this pass, never one more per refresh. The pass itself returns after
-`timeBudgetMs` (1 000 ms) whatever is still in flight; what it has not
-finished is `over-cap`, and a straggler that settles later writes nothing.
+`UNTRACKED_COUNT_LIMITS.concurrency` (2) workers, and the slots are
+process-wide: `countSlotsInUse` counts workers of every pass, a worker takes a
+slot before its first file (`acquireCountSlot`), and gives it back only once
+its current call has returned. A worker with no free slot queues for one:
+two sessions going idle together, or an idle refresh overlapping a Refresh
+click, measure one after the other, both in full. A call that never returns —
+an offline NFS or SMB mount behind a symlink, where `stat` hangs — holds its
+slot, so later passes wait in that queue instead of starting new calls: at
+most two threadpool threads (of libuv's default four) can ever be stuck on
+this pass, never one more per refresh. The pass itself returns after
+`timeBudgetMs` (1 000 ms) whatever is still in flight or still queued; what it
+has not finished is `over-cap`, its queued requests are withdrawn, and a
+straggler that settles later writes nothing.
 
 `test/git-changes-runner-real-git.test.js` checks each status count against
 the count `runner.diff(path, {untracked: true})` reports for the same file
