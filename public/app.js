@@ -12,8 +12,6 @@ const terminalHeader = document.getElementById('terminal-header');
 const terminalHeaderName = document.getElementById('terminal-header-name');
 const terminalHeaderId = document.getElementById('terminal-header-id');
 const terminalHeaderStatus = document.getElementById('terminal-header-status');
-// sessionId -> the exit code its process last reported.
-const sessionExitCodes = new Map();
 const terminalHeaderShell = document.getElementById('terminal-header-shell');
 const terminalHeaderSandbox = document.getElementById('terminal-header-sandbox');
 // sessionId -> whether that session's claude runs inside the bwrap sandbox.
@@ -466,17 +464,18 @@ window.api.onSessionForked((oldId, newId) => {
   pollActiveSessions();
 });
 
-window.api.onProcessExited((sessionId, exitCode) => {
-  if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode });
+window.api.onProcessExited((sessionId, exitCode, signal) => {
+  if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal });
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId);
   // see .ai/contexts/panel-terminal.md
   if (typeof isPanelTerminalSession === 'function' && isPanelTerminalSession(sessionId)) {
-    notePanelTerminalExit(sessionId, exitCode);
+    notePanelTerminalExit(sessionId, exitCode, signal);
     pollActiveSessions();
     return;
   }
-  sessionExitCodes.set(sessionId, exitCode);
+  noteSessionExit(sessionId, exitCode, signal);
+  const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
     // Write a visible exit banner so the user can see when the process ended
@@ -484,9 +483,8 @@ window.api.onProcessExited((sessionId, exitCode) => {
     // Without this, a fast-failing pre-launch command would tear down the
     // terminal before the user could read the error.
     try {
-      const colour = exitCode === 0 ? '\x1b[2m' : '\x1b[33m';
       entry.terminal.write(
-        `\r\n${colour}── session exited (code ${exitCode}) — re-click this session in the sidebar to relaunch, or click another to dismiss ──\x1b[0m\r\n`
+        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — re-click this session in the sidebar to relaunch, or click another to dismiss ──\x1b[0m\r\n`
       );
     } catch {}
   }
@@ -965,8 +963,8 @@ function updateRunningIndicators() {
 function updateTerminalHeader() {
   if (!activeSessionId) return;
   const running = activePtyIds.has(activeSessionId);
-  if (running) sessionExitCodes.delete(activeSessionId);
-  const status = terminalStatusLabel(running, sessionExitCodes.get(activeSessionId));
+  if (running) forgetSessionExit(activeSessionId);
+  const status = terminalStatusLabel(running, lastSessionExit(activeSessionId));
   terminalHeaderStatus.className = running ? 'running' : 'stopped';
   terminalHeaderStatus.title = status;
   terminalHeaderStatus.setAttribute('aria-label', status);
@@ -1193,6 +1191,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  forgetSessionExit(sessionId);
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);

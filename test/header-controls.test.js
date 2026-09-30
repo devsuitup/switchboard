@@ -15,8 +15,8 @@ const {
   placeHeaderControl,
   createHeaderToggle,
   setHeaderToggle,
-  terminalStatusLabel,
 } = require('../public/header-controls');
+const { terminalStatusLabel } = require('../public/process-exit');
 const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 
@@ -175,11 +175,12 @@ test('the process status is a dot right before the session name, with its words 
   assert.equal(dot.getAttribute('role'), 'img', 'so that its aria-label is read');
   assert.equal(HEADER_CONTROLS.some((c) => c.id === 'terminal-header-status'), false, 'it is not in the right-hand row');
 
-  assert.equal(terminalStatusLabel(true, undefined), 'Running');
-  assert.equal(terminalStatusLabel(true, 1), 'Running', 'a relaunched session is running whatever its last exit');
-  assert.equal(terminalStatusLabel(false, 0), 'Exited (code 0)');
-  assert.equal(terminalStatusLabel(false, 137), 'Exited (code 137)');
-  assert.equal(terminalStatusLabel(false, undefined), 'Stopped');
+  assert.equal(terminalStatusLabel(true, null), 'Running');
+  assert.equal(terminalStatusLabel(true, { exitCode: 1, signal: null }), 'Running', 'a relaunched session is running whatever its last exit');
+  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: null }), 'Exited (code 0)');
+  assert.equal(terminalStatusLabel(false, { exitCode: 137, signal: null }), 'Exited (code 137)');
+  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: 'SIGKILL' }), 'Killed (SIGKILL)');
+  assert.equal(terminalStatusLabel(false, null), 'Stopped');
 
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   assert.match(app, /terminalHeaderStatus\.title = status;/);
@@ -238,4 +239,16 @@ test('the header is exactly as tall as the strip: its buttons and padding fit in
     'the content stays under --strip-min-height, so the header takes the strip\'s height and not its own');
   assert.ok(buttonHeight + 2 * (Number(m[1]) + 1) + 1 > STRIP_HEIGHT,
     'one more pixel of padding and the header would outgrow the strip');
+});
+
+test('the running dot keeps room for its glow inside the name container, which clips', () => {
+  const info = ruleBodies(/^#terminal-header-info$/)[0].body;
+  assert.match(info, /overflow:\s*hidden/, 'the container clips, for the name\'s ellipsis');
+  const dot = ruleBodies(/^#terminal-header-status$/)[0].body;
+  const running = ruleBodies(/^#terminal-header-status\.running$/)[0].body;
+  const blur = Number(/box-shadow:\s*0 0 (\d+)px/.exec(running)[1]);
+  const [top, , bottom, left] = /margin:\s*(\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)?;/.exec(dot).slice(1).map(Number);
+  for (const [side, room] of [['top', top], ['bottom', bottom], ['left', left]]) {
+    assert.ok(room >= blur, `${side} margin ${room}px must cover the ${blur}px glow`);
+  }
 });

@@ -113,11 +113,28 @@ in the header: `renderTabContent` sets it from the tab it renders, and
 
 The session process's state is not in that row: `#terminal-header-status` is
 an 8 px dot right before `#terminal-header-name`, with no text, green with a
-glow while running and grey otherwise. `updateTerminalHeader` (`app.js`) puts
-the state in words in its `title` and `aria-label` (`role="img"`), through
-`terminalStatusLabel()`: `Running`, `Exited (code N)` once `process-exited`
-reported a code for the session, `Stopped` when none is known. It is in the
-no-drag list so its tooltip shows.
+glow while running and grey otherwise. `#terminal-header-info` clips its
+children (the name's ellipsis), so the dot's 6 px margin on the left, top and
+bottom is the room its 6 px glow needs. It is in the no-drag list so its
+tooltip shows.
+
+`updateTerminalHeader` (`app.js`) puts the state in words in the dot's `title`
+and `aria-label` (`role="img"`), through `terminalStatusLabel()` in
+`public/process-exit.js`:
+
+- `Running` while the poll reports the process;
+- `Killed (SIGKILL)` when a signal ended the process;
+- `Exited (code N)` when it exited on its own;
+- `Stopped` when no exit is known.
+
+`process-exited` carries the exit code and the signal's name: main turns
+node-pty's signal number into a name with `ptyExitSignalName()` (`pty-ops.js`).
+The renderer records the last exit per session (`noteSessionExit`) and forgets
+it when the poll sees the process running again, before `openSession`
+relaunches the session, and in `destroySession`, so a relaunch never shows the
+exit of the process before it. The session's and the panel shell's exit banners
+use the same wording (`exitBannerPhrase`): `session killed (SIGKILL)`,
+`shell exited (code 1)`, yellow unless the process exited with 0.
 
 The header's vertical padding is 2 px around the 26 px buttons, so its content
 (31 px with the border) stays under `--strip-min-height` and the header is

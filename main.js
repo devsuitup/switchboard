@@ -80,7 +80,7 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
-const { setPtyOpLogger, resizePty, killPty } = require('./pty-ops');
+const { setPtyOpLogger, resizePty, killPty, ptyExitSignalName } = require('./pty-ops');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
@@ -2236,7 +2236,8 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     }
   });
 
-  ptyProcess.onExit(({ exitCode }) => {
+  ptyProcess.onExit(({ exitCode, signal }) => {
+    const exitSignal = ptyExitSignalName(signal);
     session.exited = true;
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
@@ -2244,14 +2245,14 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     session.mcpServer = null;
 
     const realId = session.realSessionId || sessionId;
-    if (TRACE.on) trace('pty.exit', realId, { exitCode, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+    if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode);
+      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
       // the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal);
       }
     }
     activeSessions.delete(realId);

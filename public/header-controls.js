@@ -14,12 +14,6 @@ const HEADER_TOGGLE_ICONS = Object.freeze({
   changes: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="M14 9l-3-3l3-3"/><path d="M13 18h-5a2 2 0 0 1-2-2v-8"/><path d="M10 15l3 3l-3 3"/></svg>',
 });
 
-function terminalStatusLabel(running, exitCode) {
-  if (running) return 'Running';
-  if (Number.isInteger(exitCode)) return `Exited (code ${exitCode})`;
-  return 'Stopped';
-}
-
 function headerControlSpec(id) {
   const spec = HEADER_CONTROLS.find((c) => c.id === id);
   if (!spec) throw new Error(`#${id} is not a declared header control`);
@@ -62,5 +56,5 @@ function setHeaderToggle(btn, on) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { HEADER_CONTROLS, HEADER_TOGGLE_ICONS, placeHeaderControl, createHeaderToggle, setHeaderToggle, terminalStatusLabel };
+  module.exports = { HEADER_CONTROLS, HEADER_TOGGLE_ICONS, placeHeaderControl, createHeaderToggle, setHeaderToggle };
 }

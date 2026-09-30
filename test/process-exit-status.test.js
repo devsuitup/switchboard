@@ -1,0 +1,186 @@
+// What the session header's status dot and the exit banners say about a
+// session's process. see .ai/contexts/window-frame.md ("The session header's controls")
+//
+// app.js cannot be evaluated whole in jsdom, so the shipped onProcessExited
+// handler, updateTerminalHeader and openSession are cut out of its source and
+// run against stubs: a change to any of them changes what these tests run.
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { JSDOM } = require('jsdom');
+
+const ROOT = path.join(__dirname, '..');
+const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
+const MAIN_SRC = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+const PRELOAD_SRC = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
+const { ptyExitSignalName } = require('../pty-ops');
+const { processExitLabel, exitBannerPhrase, exitBannerColour } = require('../public/process-exit');
+const { setupTerminalDom } = require('./terminal-manager-harness');
+
+// The source from `marker` to the brace that closes the block opened at the
+// first `{` that ends a line after it, plus `tail` (the `);` of a call).
+function sliceBlock(marker, tail = '') {
+  const start = APP_SRC.indexOf(marker);
+  assert.notEqual(start, -1, `app.js must contain ${marker}`);
+  let depth = 0;
+  for (let i = APP_SRC.indexOf('{\n', start); i < APP_SRC.length; i++) {
+    if (APP_SRC[i] === '{') depth++;
+    else if (APP_SRC[i] === '}' && --depth === 0) return APP_SRC.slice(start, i + 1) + tail;
+  }
+  throw new Error(`unbalanced block after ${marker}`);
+}
+
+const PRELUDE = `
+  let activeSessionId = 's1';
+  let activePtyIds = new Set();
+  let gridViewActive = false;
+  let restoringWorkingSet = false;
+  let sessionOpenedOutsideRestore = false;
+  const openSessions = new Map();
+  const sessionMap = new Map();
+  const pendingSessions = new Map();
+  const skippedWorkingSetEntries = new Set();
+  const cachedProjects = [];
+  const cachedAllProjects = [];
+  const gridCards = new Map();
+  const gridViewerCount = document.createElement('span');
+  const terminalHeader = document.createElement('div');
+  const placeholder = document.createElement('div');
+  const terminalHeaderStatus = document.createElement('span');
+  const terminalStopBtn = document.createElement('button');
+  const calls = { writes: [], opened: [] };
+  let openResult = { ok: true };
+  function updatePtyTitle() {}
+  function isPanelTerminalSession() { return false; }
+  function notePanelTerminalExit() {}
+  function destroySession(id) { openSessions.delete(id); }
+  function setActiveSession() {}
+  function refreshSidebar() {}
+  function schedulePersistWorkingSet() {}
+  function pollActiveSessions() { updateTerminalHeader(); }
+  async function guardResume() { return true; }
+  async function resolveDefaultSessionOptions() { return {}; }
+  function syncPtySizeAfterOpen() {}
+  function setSessionMcpActive() {}
+  function setSessionSandboxed() {}
+  function showSession() { updateTerminalHeader(); }
+  function makeEntry() { return { closed: false, initialSize: null, terminal: { write: (d) => calls.writes.push(d) } }; }
+  function createTerminalEntry(session) { const e = makeEntry(); openSessions.set(session.sessionId, e); return e; }
+`;
+
+function setup() {
+  const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
+  const { window } = dom;
+  let exitHandler = null;
+  window.api = {
+    onProcessExited: (cb) => { exitHandler = cb; },
+    openTerminal: (...args) => vm.runInContext('calls.opened.push(1); openResult', ctx),
+  };
+  const ctx = dom.getInternalVMContext();
+  const run = (src, filename) => vm.runInContext(src, ctx, { filename });
+  run(PRELUDE, 'prelude.js');
+  run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');
+  run(sliceBlock('function updateTerminalHeader() {'), 'app.js#updateTerminalHeader');
+  run(sliceBlock('async function openSession(session'), 'app.js#openSession');
+  run(sliceBlock('window.api.onProcessExited((', ');'), 'app.js#onProcessExited');
+  run(`sessionMap.set('s1', { sessionId: 's1', projectPath: '/p', type: 'claude' }); openSessions.set('s1', makeEntry());`, 'fixture.js');
+  const read = (expr) => run(expr, 'read.js');
+  return {
+    exit: (code, signal) => exitHandler('s1', code, signal),
+    poll: (running) => { read(running ? "activePtyIds.add('s1')" : "activePtyIds.delete('s1')"); read('updateTerminalHeader()'); },
+    title: () => read('terminalHeaderStatus.title'),
+    aria: () => read("terminalHeaderStatus.getAttribute('aria-label')"),
+    lastWrite: () => read('calls.writes.at(-1)'),
+    read,
+  };
+}
+
+test('the dot reports the exit code, then Running once a poll sees the process, then Stopped with no new exit', () => {
+  const h = setup();
+  h.exit(3, null);
+  assert.equal(h.title(), 'Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
+  assert.equal(h.aria(), 'Exited (code 3)');
+  assert.match(h.lastWrite(), /session exited \(code 3\)/);
+
+  h.poll(true);
+  assert.equal(h.title(), 'Running');
+
+  h.poll(false);
+  assert.equal(h.title(), 'Stopped', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
+});
+
+test('a relaunch that fails to open shows no exit code from the process before it', async () => {
+  const h = setup();
+  h.exit(1, null);
+  assert.equal(h.title(), 'Exited (code 1)');
+  h.read("openResult = { ok: false, error: 'boom' }");
+  await h.read("openSession(sessionMap.get('s1'))");
+  assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
+  assert.equal(h.title(), 'Stopped');
+});
+
+test('a relaunch that opens shows no old exit code before its first poll', async () => {
+  const h = setup();
+  h.exit(1, null);
+  await h.read("openSession(sessionMap.get('s1'))");
+  assert.equal(h.read('lastSessionExit("s1")'), null);
+});
+
+test('a process killed by a signal reads Killed, in the dot and in the banner', () => {
+  const h = setup();
+  h.exit(0, 'SIGKILL');
+  assert.equal(h.title(), 'Killed (SIGKILL)', 'not "Exited (code 0)"');
+  assert.match(h.lastWrite(), /session killed \(SIGKILL\)/);
+  assert.ok(h.lastWrite().startsWith('\r\n\x1b[33m'), 'a kill is not a clean exit: the banner is yellow');
+});
+
+test('the exit labels', () => {
+  assert.equal(processExitLabel({ exitCode: 0, signal: null }), 'Exited (code 0)');
+  assert.equal(processExitLabel({ exitCode: 0, signal: 'SIGTERM' }), 'Killed (SIGTERM)');
+  assert.equal(processExitLabel({ exitCode: undefined, signal: null }), 'Exited');
+  assert.equal(exitBannerPhrase({ exitCode: 2, signal: null }), 'exited (code 2)');
+  assert.equal(exitBannerPhrase({ exitCode: 0, signal: 'SIGKILL' }), 'killed (SIGKILL)');
+  assert.equal(exitBannerColour({ exitCode: 0, signal: null }), '\x1b[2m');
+  assert.equal(exitBannerColour({ exitCode: 1, signal: null }), '\x1b[33m');
+});
+
+test('main names the signal node-pty reports and forwards it with the exit code', () => {
+  assert.equal(ptyExitSignalName(9), 'SIGKILL');
+  assert.equal(ptyExitSignalName(15), 'SIGTERM');
+  assert.equal(ptyExitSignalName(0), null);
+  assert.equal(ptyExitSignalName(undefined), null);
+  assert.equal(ptyExitSignalName(999, {}), 'signal 999');
+
+  assert.match(MAIN_SRC, /ptyProcess\.onExit\(\(\{ exitCode, signal \}\) => \{\s*const exitSignal = ptyExitSignalName\(signal\);/);
+  const sends = MAIN_SRC.match(/webContents\.send\('process-exited', [^)]*\)/g);
+  assert.equal(sends.length, 2);
+  for (const send of sends) assert.match(send, /, exitCode, exitSignal\)$/);
+  assert.match(PRELOAD_SRC, /'process-exited', \(_event, sessionId, exitCode, signal\) => callback\(sessionId, exitCode, signal\)/);
+  assert.match(APP_SRC, /notePanelTerminalExit\(sessionId, exitCode, signal\)/);
+});
+
+test('the panel shell\'s banner says killed for a signal, like the session\'s', () => {
+  const ctx = setupTerminalDom({ filePanel: true });
+  try {
+    ctx.window.createTerminalEntry({ sessionId: 'panel:x' });
+    ctx.window.notePanelTerminalExit('panel:x', 0, 'SIGKILL');
+    assert.match(ctx.spies.writes.at(-1), /shell killed \(SIGKILL\)/);
+    ctx.window.createTerminalEntry({ sessionId: 'panel:y' });
+    ctx.window.notePanelTerminalExit('panel:y', 1);
+    assert.match(ctx.spies.writes.at(-1), /shell exited \(code 1\)/);
+  } finally { ctx.destroy(); }
+});
+
+test('destroying a session drops its recorded exit', () => {
+  const ctx = setupTerminalDom({ filePanel: true });
+  try {
+    ctx.window.createTerminalEntry({ sessionId: 's9' });
+    ctx.inCtx("noteSessionExit('s9', 4, null)");
+    ctx.window.destroySession('s9');
+    assert.equal(ctx.inCtx("lastSessionExit('s9')"), null);
+  } finally { ctx.destroy(); }
+});

@@ -250,7 +250,13 @@ const rendererCrossFileGlobals = {
   placeHeaderControl: 'readonly',
   createHeaderToggle: 'readonly',
   setHeaderToggle: 'readonly',
+  // public/process-exit.js — see .ai/contexts/window-frame.md
   terminalStatusLabel: 'readonly',
+  noteSessionExit: 'readonly',
+  forgetSessionExit: 'readonly',
+  lastSessionExit: 'readonly',
+  exitBannerPhrase: 'readonly',
+  exitBannerColour: 'readonly',
   fileUriToPath: 'readonly',
   createTerminalPathResolver: 'readonly',
   registerTerminalPathLinks: 'readonly',
@@ -360,7 +366,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',
