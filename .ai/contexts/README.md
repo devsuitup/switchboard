@@ -18,6 +18,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | Busy/attention/response-ready state, the session-state domain module, the icon-slot projection | [session-state](session-state.md) |
 | The Changes panel: git-status parser, local/remote runner, cwd resolution, no-polling refresh | [changes-view](changes-view.md) |
 | The shell inside the file panel: mount point, hidden-write exemption, shell lifecycle, the splitter | [panel-terminal](panel-terminal.md) |
+| How a plain terminal's shell starts: the `claude` shim per shell, the generated rcfile and `ZDOTDIR`, the typed fallback | [plain-terminal](plain-terminal.md) |
 | Paths in terminal output becoming links: the matcher, the openability check, `path:line` | [terminal-path-links](terminal-path-links.md) |
 | What the right mouse button does in a terminal: the four modes, and keeping the press from the application | [terminal-right-click](terminal-right-click.md) |
 | The frameless window: the strip that replaces the title bar, its drag regions, the window controls, the menu's accelerators | [window-frame](window-frame.md) |

@@ -90,6 +90,7 @@ const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
 const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
+const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
@@ -155,6 +156,7 @@ const {
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
 const TRACE_DIR = path.dirname(DB_PATH);
+const PLAIN_TERMINAL_INIT_DIR = path.join(path.dirname(DB_PATH), 'shell-init');
 activityTrace.init(TRACE_DIR);
 activityTrace.setEnabled(
   activityTrace.initialEnabled(process.env, (getSetting('global') || {}).activityTrace)
@@ -2417,31 +2419,32 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let mcpServer = null;
   try {
     if (isPlainTerminal) {
-      // Plain terminal: interactive login shell, no claude command
-      // Inject a shell function to override `claude` with a helpful message
-      const claudeShim = 'claude() { echo "\\033[33mTo start a Claude session, use the + button in the sidebar.\\033[0m"; return 1; }; export -f claude 2>/dev/null;';
-      ptyProcess = spawnPty(shell, shellArgs(shell, undefined, shellExtraArgs), {
-        name: 'xterm-256color',
-        cols: spawnCols,
-        rows: spawnRows,
-        cwd: isWsl ? os.homedir() : spawnCwd,
+      const launch = plainTerminalLaunch({
+        shell,
+        args: shellArgs(shell, undefined, shellExtraArgs),
         env: {
           ...cleanPtyEnv,
           TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
           CLAUDECODE: '1',
-          // ZDOTDIR trick won't work reliably; instead inject via ENV (sh/bash) or precmd
-          ENV: claudeShim,
-          BASH_ENV: claudeShim,
         },
+        initDir: ensurePlainTerminalInitFiles(PLAIN_TERMINAL_INIT_DIR, log) ? PLAIN_TERMINAL_INIT_DIR : null,
       });
-      // For zsh, ENV/BASH_ENV don't apply — write the function after shell starts
-      setTimeout(() => {
-        if (!ptyProcess._isDisposed) {
-          try {
-            ptyProcess.write(claudeShim + ' clear\n');
-          } catch {}
-        }
-      }, 300);
+      ptyProcess = spawnPty(shell, launch.args, {
+        name: 'xterm-256color',
+        cols: spawnCols,
+        rows: spawnRows,
+        cwd: isWsl ? os.homedir() : spawnCwd,
+        env: launch.env,
+      });
+      if (launch.typed) {
+        setTimeout(() => {
+          if (!ptyProcess._isDisposed) {
+            try {
+              ptyProcess.write(launch.typed);
+            } catch {}
+          }
+        }, 300);
+      }
     } else {
       // Build claude command, using array to prevent accidental shell injection
       const claudeArgs = [];
