@@ -130,3 +130,9 @@ test('parseDispatchOutput finds an eight-hex id anywhere in the output, or retur
   assert.ok(JOB_ID_RE.test('de3dfd18'));
   assert.ok(!JOB_ID_RE.test('DE3DFD18'));
 });
+
+test('parseJobState and parseCliList keep the blocked state a job reports while it waits', () => {
+  assert.equal(parseJobState('{"state":"blocked","detail":"awaiting developer MR"}').state, 'blocked');
+  const [s] = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId: 's1', kind: 'background', state: 'blocked' }]));
+  assert.equal(s.state, 'blocked');
+});
