@@ -4265,6 +4265,12 @@ body { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
+.bg-badge {
+  display: inline-block; margin-right: 5px; padding: 0 5px;
+  border: 1px solid #5a4a7a; border-radius: 3px; color: #b39ddb;
+  font-size: 10px; line-height: 15px; vertical-align: middle;
+}
+
 /* Issue #212/#245 — see .ai/contexts/session-cache.md ("Remote hosts —
    freshness contract") and .ai/contexts/cli-session-state.md; shared by
    remote and local sessions, which carry the same status/statusUpdatedAt pair */
