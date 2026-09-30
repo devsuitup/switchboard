@@ -181,7 +181,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `read-work-file` / `delete-work-file` | `.includes('/.work-files/')` substring | ad hoc string, **not disk-resolved** — a symlinked ancestor defeats it the same way it defeated `isSensitivePath`/`isAllowedMemoryPath` before they were fixed here. Not migrated in this pass; same fix shape (`resolveOnDisk` + a `.work-files` component check instead of a substring test) would close it |
 | `read-activity-trace-file` / `delete-activity-trace-file` | `resolveTraceFilePath` (`activity-trace.js`) | ad hoc string (directory + basename pattern), **not disk-resolved** — narrower surface (one generated file family) lowers the stakes, not migrated |
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
-| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused |
+| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652 |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
 | `git-changes-file` / `git-changes-watch` / `git-changes-unwatch` / `git-changes-locate` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root and git directories come from `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, a symlink at the target is refused before anything follows it, and **every remaining check runs on the disk-resolved path** — containment in the root, no `.git` segment, nothing inside a git directory, `isSensitivePath`, regular file | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
@@ -422,6 +422,26 @@ file instead of being invisible.
 `setActivity(sessionId, active, via)` — the third argument is trace-only
 attribution (which caller asked for the write) and is inert when the trace is
 off.
+
+## Clean child environment
+
+`cleanEnv()` (`clean-env.js`) builds `cleanPtyEnv` in `main.js`, the base of the environment of every PTY and child Switchboard spawns. It drops Electron internals (`ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`, `ORIGINAL_XDG_CURRENT_DESKTOP`, `WT_SESSION`) and the Claude CLI's own session markers, which a Switchboard started from inside a Claude Code session (`task dev`, a test instance an agent launched) would otherwise hand to every session it opens: a session started from Switchboard is a top-level session.
+
+The marker list is explicit, not a `CLAUDE_*` prefix: the prefix would also remove user configuration the session needs.
+
+| Stripped | Why |
+|---|---|
+| `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` | say "running inside a Claude Code session" and how it was started |
+| `CLAUDE_CODE_SSE_PORT` | the parent's IDE link; Switchboard sets its own after cleaning when IDE Emulation is on |
+| `CLAUDE_CODE_CHILD_SESSION` | makes the CLI save no transcript |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID` | identify the parent session |
+| `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` | the parent's messaging channel |
+| `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED` | the parent's bridge session and attended state |
+| `CLAUDE_CODE_EXECPATH` | the parent CLI's own executable path |
+
+Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_EFFORT` (may be user configuration) and every other variable the user set.
+
+What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1` (`open-terminal`, `isPlainTerminal` branch, present since the project's first commit, not tied to the `claude` shim) and `CLAUDE_CODE_SSE_PORT` of a session with IDE Emulation. A new marker the CLI starts setting is added to `SESSION_MARKERS`; `test/clean-pty-env.test.js` lists them one by one.
 
 ## If you change this, also check
 

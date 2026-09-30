@@ -1295,6 +1295,15 @@ function rebindSidebarEvents(projects) {
       };
     }
 
+    const bridgeBtn = item.querySelector('.session-bridge-btn');
+    if (bridgeBtn) {
+      bridgeBtn.onclick = (e) => {
+        e.stopPropagation();
+        const url = bridgeSessionUrl(session.bridgeSessionId);
+        if (url) window.api.openExternal(url);
+      };
+    }
+
     const jsonlBtn = item.querySelector('.session-jsonl-btn');
     if (jsonlBtn) {
       jsonlBtn.onclick = (e) => {
@@ -1482,6 +1491,11 @@ function buildSessionItem(session) {
   jsonlBtn.title = 'View messages';
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
+  const bridgeBtn = document.createElement('button');
+  bridgeBtn.className = 'session-bridge-btn';
+  bridgeBtn.title = 'Open on claude.ai';
+  bridgeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>';
+
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'session-delete-btn';
   deleteBtn.title = 'Delete session (removes the transcript from disk)';
@@ -1497,6 +1511,7 @@ function buildSessionItem(session) {
     actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
     if (!session.placeholder) actions.appendChild(jsonlBtn);
+    if (bridgeSessionUrl(session.bridgeSessionId)) actions.appendChild(bridgeBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);
     actions.appendChild(deleteBtn);
