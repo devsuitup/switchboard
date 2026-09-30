@@ -464,17 +464,17 @@ window.api.onSessionForked((oldId, newId) => {
   pollActiveSessions();
 });
 
-window.api.onProcessExited((sessionId, exitCode, signal) => {
-  if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal });
+window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
+  if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal, stopped });
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId);
   // see .ai/contexts/panel-terminal.md
   if (typeof isPanelTerminalSession === 'function' && isPanelTerminalSession(sessionId)) {
-    notePanelTerminalExit(sessionId, exitCode, signal);
+    notePanelTerminalExit(sessionId, exitCode, signal, stopped);
     pollActiveSessions();
     return;
   }
-  noteSessionExit(sessionId, exitCode, signal);
+  noteSessionExit(sessionId, exitCode, signal, stopped);
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;

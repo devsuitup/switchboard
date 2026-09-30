@@ -3,8 +3,8 @@
 
 const sessionExits = new Map();
 
-function noteSessionExit(sessionId, exitCode, signal) {
-  sessionExits.set(sessionId, { exitCode, signal: signal || null });
+function noteSessionExit(sessionId, exitCode, signal, stopped) {
+  sessionExits.set(sessionId, { exitCode, signal: signal || null, stopped: !!stopped });
 }
 
 function forgetSessionExit(sessionId) {
@@ -16,6 +16,7 @@ function lastSessionExit(sessionId) {
 }
 
 function processExitLabel(exit) {
+  if (exit.stopped) return 'Stopped';
   if (exit.signal) return `Killed (${exit.signal})`;
   if (Number.isInteger(exit.exitCode)) return `Exited (code ${exit.exitCode})`;
   return 'Exited';
@@ -32,7 +33,7 @@ function exitBannerPhrase(exit) {
 }
 
 function exitBannerColour(exit) {
-  return exit.exitCode === 0 && !exit.signal ? '\x1b[2m' : '\x1b[33m';
+  return exit.stopped || (exit.exitCode === 0 && !exit.signal) ? '\x1b[2m' : '\x1b[33m';
 }
 
 if (typeof module !== 'undefined' && module.exports) {

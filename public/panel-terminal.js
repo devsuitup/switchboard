@@ -329,11 +329,11 @@ function resyncPanelFor(sessionId) {
 }
 
 // see .ai/contexts/panel-terminal.md ("Lifecycle")
-function notePanelTerminalExit(panelSessionId, exitCode, signal) {
+function notePanelTerminalExit(panelSessionId, exitCode, signal, stopped) {
   const entry = openSessions.get(panelSessionId);
   if (!entry) return;
   entry.closed = true;
-  const exit = { exitCode, signal: signal || null };
+  const exit = { exitCode, signal: signal || null, stopped: !!stopped };
   try {
     entry.terminal.write(`\r\n${exitBannerColour(exit)}── shell ${exitBannerPhrase(exit)} — toggle Shell off and on for a new one ──\x1b[0m\r\n`);
   } catch {}

@@ -123,18 +123,26 @@ and `aria-label` (`role="img"`), through `terminalStatusLabel()` in
 `public/process-exit.js`:
 
 - `Running` while the poll reports the process;
-- `Killed (SIGKILL)` when a signal ended the process;
+- `Stopped` when the process ended after the user asked for a Stop (the Stop
+  itself sends SIGHUP, so it would otherwise read as killed);
+- `Killed (SIGKILL)` when a signal ended the process with no Stop asked for;
 - `Exited (code N)` when it exited on its own;
 - `Stopped` when no exit is known.
 
-`process-exited` carries the exit code and the signal's name: main turns
-node-pty's signal number into a name with `ptyExitSignalName()` (`pty-ops.js`).
+`process-exited` carries the exit code, the signal's name and whether a Stop
+was asked for: main turns node-pty's signal number into a name with
+`ptyExitSignalName()` (`pty-ops.js`), and the `stop-session` and
+`remote-stop-session` handlers set `session.stopRequested` before they signal
+the process. `openSession` forgets the previous exit before it awaits
+`openTerminal`'s answer, so an exit that arrives while the relaunch is still
+opening (a pre-launch command that fails at once) is kept.
 The renderer records the last exit per session (`noteSessionExit`) and forgets
 it when the poll sees the process running again, before `openSession`
 relaunches the session, and in `destroySession`, so a relaunch never shows the
 exit of the process before it. The session's and the panel shell's exit banners
-use the same wording (`exitBannerPhrase`): `session killed (SIGKILL)`,
-`shell exited (code 1)`, yellow unless the process exited with 0.
+use the same wording (`exitBannerPhrase`): `session stopped`,
+`session killed (SIGKILL)`, `shell exited (code 1)`, dim for a Stop or an exit
+with 0 and yellow otherwise.
 
 The header's vertical padding is 2 px around the 26 px buttons, so its content
 (31 px with the border) stays under `--strip-min-height` and the header is

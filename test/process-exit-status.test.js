@@ -76,9 +76,13 @@ function setup() {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const { window } = dom;
   let exitHandler = null;
+  const h = { whileOpening: null };
   window.api = {
     onProcessExited: (cb) => { exitHandler = cb; },
-    openTerminal: (...args) => vm.runInContext('calls.opened.push(1); openResult', ctx),
+    openTerminal: async () => {
+      if (h.whileOpening) h.whileOpening();
+      return vm.runInContext('calls.opened.push(1); openResult', ctx);
+    },
   };
   const ctx = dom.getInternalVMContext();
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
@@ -89,14 +93,15 @@ function setup() {
   run(sliceBlock('window.api.onProcessExited((', ');'), 'app.js#onProcessExited');
   run(`sessionMap.set('s1', { sessionId: 's1', projectPath: '/p', type: 'claude' }); openSessions.set('s1', makeEntry());`, 'fixture.js');
   const read = (expr) => run(expr, 'read.js');
-  return {
-    exit: (code, signal) => exitHandler('s1', code, signal),
+  return Object.assign(h, {
+    exit: (code, signal, stopped) => exitHandler('s1', code, signal, stopped),
+    exitOf: (id, code) => exitHandler(id, code, null, false),
     poll: (running) => { read(running ? "activePtyIds.add('s1')" : "activePtyIds.delete('s1')"); read('updateTerminalHeader()'); },
     title: () => read('terminalHeaderStatus.title'),
     aria: () => read("terminalHeaderStatus.getAttribute('aria-label')"),
     lastWrite: () => read('calls.writes.at(-1)'),
     read,
-  };
+  });
 }
 
 test('the dot reports the exit code, then Running once a poll sees the process, then Stopped with no new exit', () => {
@@ -130,6 +135,37 @@ test('a relaunch that opens shows no old exit code before its first poll', async
   assert.equal(h.read('lastSessionExit("s1")'), null);
 });
 
+test('an exit that lands while the relaunch is still opening is kept, not forgotten after it', async () => {
+  const h = setup();
+  h.exit(3, null);
+  h.whileOpening = () => h.exit(1, null);
+  h.read("openResult = { ok: false, error: 'pre-launch command failed' }");
+  await h.read("openSession(sessionMap.get('s1'))");
+  assert.equal(h.title(), 'Exited (code 1)', 'the forget runs before openTerminal, so the new process\'s exit survives it');
+  assert.match(h.read('calls.writes.join("")'), /session exited \(code 1\)/);
+});
+
+test('a plain terminal that exits is torn down; a Claude session stays mounted with its banner', () => {
+  const h = setup();
+  h.read("sessionMap.set('t1', { sessionId: 't1', projectPath: '/p', type: 'terminal' }); openSessions.set('t1', makeEntry());");
+  h.exitOf('t1', 0);
+  assert.equal(h.read("openSessions.has('t1')"), false, 'a plain terminal is ephemeral (mutation target: its destroySession)');
+
+  h.exitOf('s1', 0);
+  assert.equal(h.read("openSessions.has('s1')"), true, 'a Claude session keeps its terminal so the banner can be read');
+  assert.equal(h.read("openSessions.get('s1').closed"), true);
+  assert.match(h.lastWrite(), /session exited \(code 0\)/);
+  assert.ok(h.lastWrite().startsWith('\r\n\x1b[2m'), 'a clean exit is dim');
+});
+
+test('a Stop the user asked for reads Stopped, dim, and not Killed by the signal it sends', () => {
+  const h = setup();
+  h.exit(0, 'SIGHUP', true);
+  assert.equal(h.title(), 'Stopped');
+  assert.match(h.lastWrite(), /── session stopped — /);
+  assert.ok(h.lastWrite().startsWith('\r\n\x1b[2m'), 'a requested stop is dim');
+});
+
 test('a process killed by a signal reads Killed, in the dot and in the banner', () => {
   const h = setup();
   h.exit(0, 'SIGKILL');
@@ -146,6 +182,9 @@ test('the exit labels', () => {
   assert.equal(exitBannerPhrase({ exitCode: 0, signal: 'SIGKILL' }), 'killed (SIGKILL)');
   assert.equal(exitBannerColour({ exitCode: 0, signal: null }), '\x1b[2m');
   assert.equal(exitBannerColour({ exitCode: 1, signal: null }), '\x1b[33m');
+  assert.equal(processExitLabel({ exitCode: 0, signal: 'SIGHUP', stopped: true }), 'Stopped', 'a requested stop outranks the signal it sends');
+  assert.equal(exitBannerPhrase({ exitCode: 1, signal: null, stopped: true }), 'stopped');
+  assert.equal(exitBannerColour({ exitCode: 0, signal: 'SIGHUP', stopped: true }), '\x1b[2m');
 });
 
 test('main names the signal node-pty reports and forwards it with the exit code', () => {
@@ -158,9 +197,13 @@ test('main names the signal node-pty reports and forwards it with the exit code'
   assert.match(MAIN_SRC, /ptyProcess\.onExit\(\(\{ exitCode, signal \}\) => \{\s*const exitSignal = ptyExitSignalName\(signal\);/);
   const sends = MAIN_SRC.match(/webContents\.send\('process-exited', [^)]*\)/g);
   assert.equal(sends.length, 2);
-  for (const send of sends) assert.match(send, /, exitCode, exitSignal\)$/);
-  assert.match(PRELOAD_SRC, /'process-exited', \(_event, sessionId, exitCode, signal\) => callback\(sessionId, exitCode, signal\)/);
-  assert.match(APP_SRC, /notePanelTerminalExit\(sessionId, exitCode, signal\)/);
+  for (const send of sends) assert.match(send, /, exitCode, exitSignal, stopped\)$/);
+  assert.match(MAIN_SRC, /const stopped = !!session\.stopRequested;/);
+  const stopHandler = MAIN_SRC.slice(MAIN_SRC.indexOf("ipcMain.handle('stop-session'"), MAIN_SRC.indexOf("ipcMain.handle('remote-stop-session'"));
+  assert.match(stopHandler, /session\.stopRequested = true;\s*killPty\(session, sessionId\);/, 'a Stop is recorded before the signal is sent');
+  assert.match(MAIN_SRC, /attachedSession\.stopRequested = true;\s*killPty\(attachedSession, sessionId\);/);
+  assert.match(PRELOAD_SRC, /'process-exited', \(_event, sessionId, exitCode, signal, stopped\) => callback\(sessionId, exitCode, signal, stopped\)/);
+  assert.match(APP_SRC, /notePanelTerminalExit\(sessionId, exitCode, signal, stopped\)/);
 });
 
 test('the panel shell\'s banner says killed for a signal, like the session\'s', () => {
@@ -172,6 +215,9 @@ test('the panel shell\'s banner says killed for a signal, like the session\'s', 
     ctx.window.createTerminalEntry({ sessionId: 'panel:y' });
     ctx.window.notePanelTerminalExit('panel:y', 1);
     assert.match(ctx.spies.writes.at(-1), /shell exited \(code 1\)/);
+    ctx.window.createTerminalEntry({ sessionId: 'panel:z' });
+    ctx.window.notePanelTerminalExit('panel:z', 0, 'SIGHUP', true);
+    assert.match(ctx.spies.writes.at(-1), /shell stopped — /);
   } finally { ctx.destroy(); }
 });
 

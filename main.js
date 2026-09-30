@@ -1687,6 +1687,7 @@ ipcMain.handle('get-active-terminals', () => {
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
+  session.stopRequested = true;
   killPty(session, sessionId);
   return { ok: true };
 });
@@ -1710,6 +1711,7 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     remoteIndexer.refreshHostNow(alias, { force: true }).catch(() => {});
     const attachedSession = activeSessions.get(sessionId);
     if (attachedSession && attachedSession.kind === 'remote-attach' && !attachedSession.exited) {
+      attachedSession.stopRequested = true;
       killPty(attachedSession, sessionId);
     }
   }
@@ -2238,6 +2240,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
   ptyProcess.onExit(({ exitCode, signal }) => {
     const exitSignal = ptyExitSignalName(signal);
+    const stopped = !!session.stopRequested;
     session.exited = true;
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
@@ -2245,14 +2248,14 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     session.mcpServer = null;
 
     const realId = session.realSessionId || sessionId;
-    if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+    if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal);
+      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
       // the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped);
       }
     }
     activeSessions.delete(realId);
