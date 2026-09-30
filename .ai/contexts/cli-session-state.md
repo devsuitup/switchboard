@@ -236,7 +236,9 @@ ids past the cap are not looked up and resume as before the guard.
   a comparable `procStart`. The timeout is 5 s because the case that matters is
   the post-login restore, where a cold PowerShell runs under login load; a
   timeout fails closed (the sessions stay live, not resumed), so a longer bound
-  costs only a later answer in that rare case. Descriptors are read in name
+  costs only a later answer in that rare case. A cold PowerShell on a
+  windows-2022 CI runner has run past 5 s, so the test that probes a real
+  process passes its own 30 s bound instead. Descriptors are read in name
   order, so when two files name one session the first wins, the same on every
   platform. The IPC
   handlers are `ipcMain.handle`, so they simply return the promise.

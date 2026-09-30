@@ -68,16 +68,10 @@ test('LIST_COMMAND: only a digit-named .json FILE is read — never a .key file,
       // skip only this one assertion below, not the rest of the test.
     }
 
-    // F9 (audit-fable-2026-09-11): LIST_COMMAND now drops a descriptor whose
-    // pid is not alive. The valid descriptor is written by the shell itself,
-    // naming its own $$, so it reads as alive on any host (real Linux /proc
-    // or Git Bash's narrower emulation) -- a hardcoded pid like "1" would
-    // read as dead here and make this test about liveness, not the .key/dir/
-    // symlink exclusion it's actually for.
-    const script = `printf '{"pid":%s,"sessionId":"abc"}' "$$" > ".claude/sessions/$$.json"; ${LIST_COMMAND}`;
-    const result = spawnSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8' });
+    fs.writeFileSync(path.join(sessionsDir, '4242.json'), '{"pid":4242,"sessionId":"abc"}');
+    const result = spawnSync('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
 
-    assert.equal(result.status, 0);
+    assert.equal(result.status, 0, result.stderr);
     assert.ok(!result.stdout.includes('top-secret-key-material-should-never-appear'),
       'the .key content must never reach stdout');
     if (symlinkCreated) {
@@ -85,10 +79,10 @@ test('LIST_COMMAND: only a digit-named .json FILE is read — never a .key file,
         'a symlink named like a valid descriptor must never have its target content reach stdout');
     }
     const { sessionsBlock } = splitListOutput(result.stdout);
-    const { sessions } = parseSessions(sessionsBlock);
-    assert.equal(sessions.length, 1,
-      'exactly one descriptor: the directory, the .key file and any symlink are all excluded');
-    assert.equal(sessions[0].sessionId, 'abc');
+    const markers = sessionsBlock.split('\n').filter((line) => line.startsWith(ALIVE_MARKER_PREFIX));
+    assert.equal(markers.length, 1,
+      'exactly one descriptor read: the directory, the .key file and any symlink are all excluded');
+    assert.ok(sessionsBlock.startsWith('{"pid":4242,"sessionId":"abc"}\n'), 'the one descriptor read is the valid one');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
