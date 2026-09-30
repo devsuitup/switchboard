@@ -60,7 +60,7 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   for (const f of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js']) {
-    vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
+    vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
   window.initFilePanel();
   return { window, calls, destroy: () => window.close() };
@@ -76,7 +76,7 @@ async function openDiffAndSave(ctx) {
   ctx.window.switchPanel('s1');
   ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
   await flush();
-  ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn').click();
+  ctx.window.document.querySelector('#file-panel-diff .fp-save-btn').click();
   await flush();
 }
 
@@ -86,7 +86,7 @@ test('the diff tab saves against the content it was opened with', async () => {
     await openDiffAndSave(ctx);
     assert.deepEqual(ctx.calls.saves.map((s) => s.expected), ['old\n']);
 
-    ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn').click();
+    ctx.window.document.querySelector('#file-panel-diff .fp-save-btn').click();
     await flush();
     assert.equal(ctx.calls.saves[1].expected, 'proposed\n', 'after a save, the next is checked against what was written');
   } finally { ctx.destroy(); }
@@ -111,7 +111,7 @@ test('two quick Save clicks do not raise a false "changed on disk" confirm', asy
     ctx.window.switchPanel('s1');
     ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
     await flush();
-    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
     btn.click();
     btn.click();
     await flush();
@@ -134,7 +134,7 @@ test('a queued click is dropped when the first save fails', async () => {
     ctx.window.switchPanel('s1');
     ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
     await flush();
-    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
     btn.click();
     btn.click();
     await flush();
@@ -159,7 +159,7 @@ test('an answered diff disables Save, and a save request on it writes nothing', 
     ctx.window.switchPanel('s1');
     ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
     await flush();
-    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
     assert.equal(btn.disabled, false);
     ctx.window.document.querySelector('.file-panel-accept-btn').click();
     assert.equal(btn.disabled, true, 'Save says it is off');
@@ -180,7 +180,7 @@ test('a queued click is not sent once its diff has been replaced', async () => {
     ctx.window.switchPanel('s1');
     ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
     await flush();
-    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
     btn.click();
     btn.click();
     await flush();
@@ -204,7 +204,7 @@ test('a diff opened after an answered one has its Save enabled again', async () 
     ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
     await flush();
     ctx.window.document.querySelector('.file-panel-accept-btn').click();
-    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
     assert.equal(btn.disabled, true);
 
     ctx.calls.openDiff('s1', 'd2', { oldFilePath: '/repo/b.js', oldContent: 'b\n', newContent: 'b2\n' });
