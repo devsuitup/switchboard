@@ -220,3 +220,24 @@ test('a queued click is not sent once its diff has been replaced', async () => {
     ctx.destroy();
   }
 });
+
+test('a diff opened after an answered one has its Save enabled again', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    const btn = ctx.window.document.querySelector('.fp-save-btn.fp-icon-btn');
+    assert.equal(btn.disabled, true);
+
+    ctx.calls.openDiff('s1', 'd2', { oldFilePath: '/repo/b.js', oldContent: 'b\n', newContent: 'b2\n' });
+    await flush();
+    assert.equal(btn.disabled, false, 'the new diff is not answered');
+    assert.equal(btn.title, 'Save changes');
+    btn.click();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1);
+    assert.equal(ctx.calls.saves[0].filePath, '/repo/b.js');
+  } finally { ctx.destroy(); }
+});

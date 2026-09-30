@@ -72,6 +72,7 @@ class ViewerPanel {
     this._diskContent = null;
     this._diskGen = 0;
     this._noticeState = null;
+    this._unagreedWrite = false;
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -141,7 +142,10 @@ class ViewerPanel {
     this.noticeKeepBtn.className = 'fp-toolbar-btn viewer-panel-notice-keep';
     this.noticeKeepBtn.textContent = 'Keep my edits';
     this.noticeKeepBtn.title = 'Keep your edits in the editor; saving writes them over the file';
-    this.noticeKeepBtn.addEventListener('click', () => this._setNotice(null));
+    this.noticeKeepBtn.addEventListener('click', () => {
+      this._unagreedWrite = false;
+      this._setNotice(null);
+    });
     this.noticeEl.appendChild(this.noticeKeepBtn);
 
     this.noticeOverwriteBtn = document.createElement('button');
@@ -160,6 +164,7 @@ class ViewerPanel {
 
   _setNotice(state, detail) {
     this._noticeState = state;
+    if (state === 'changed' || state === 'stale') this._unagreedWrite = true;
     let text = '';
     if (state === 'changed') {
       text = 'This file changed on disk since you opened it. Reload to discard your unsaved edits, or keep them and save over the file.';
@@ -294,6 +299,7 @@ class ViewerPanel {
     this._diskContent = asEditorText(content);
     this._pendingSave = null;
     this._saveQueued = false;
+    this._unagreedWrite = false;
     this._setNotice(null);
 
     this.filePath = filePath;
@@ -433,7 +439,7 @@ class ViewerPanel {
       this._saveQueued = true;
       return;
     }
-    if (!overwrite && (this._noticeState === 'changed' || this._noticeState === 'stale')) {
+    if (!overwrite && this._unagreedWrite) {
       if (typeof window.confirm === 'function'
         && !window.confirm('Overwrite the file on disk with your edits?')) return;
     }
@@ -450,6 +456,7 @@ class ViewerPanel {
         saved = true;
         if (this._diskGen === diskGen) {
           this._diskContent = asEditorText(content);
+          this._unagreedWrite = false;
           this._setNotice(null);
         }
         this.toolbar.flashSave();
@@ -533,11 +540,14 @@ class ViewerPanel {
     this._setDiskContent(newContent);
 
     if (newContent === this.getContent()) {
+      this._unagreedWrite = false;
       this._setNotice(null);
       return;
     }
     if (!diskMoved) {
-      if (this._noticeState === 'gone' || this._noticeState === 'unreadable') this._setNotice(null);
+      if (this._noticeState === 'gone' || this._noticeState === 'unreadable') {
+        this._setNotice(this._unagreedWrite ? 'changed' : null);
+      }
       return;
     }
     if (wasDirty) {
@@ -545,6 +555,7 @@ class ViewerPanel {
       return;
     }
     this._replaceContent(newContent);
+    this._unagreedWrite = false;
     this._setNotice(null);
   }
 
@@ -562,6 +573,7 @@ class ViewerPanel {
     }
     this._setDiskContent(asEditorText(result.content));
     this._replaceContent(this._diskContent);
+    this._unagreedWrite = false;
     this._setNotice(null);
   }
 
