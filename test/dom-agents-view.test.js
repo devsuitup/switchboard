@@ -202,13 +202,19 @@ test('hideAllViewers closes the view without restoring the terminal; hideAgentsV
   assert.equal(ctx.window.terminalArea.style.display, '');
 });
 
-test('a roster push updates bgAgentSessionIds and refreshes the sidebar only when the set changes', async (t) => {
+test('a roster push puts only the live jobs in bgAgentSessionIds and refreshes the sidebar only when the set changes', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.emitChanged({ roster: ROSTER, daemonReachable: true });
-  assert.deepEqual([...ctx.read('bgAgentSessionIds')].sort(), ['s-a', 's-b']);
+  assert.deepEqual([...ctx.read('bgAgentSessionIds')].sort(), ['s-a']);
   assert.equal(ctx.calls.sidebarRefreshes, 1);
   ctx.emitChanged({ roster: ROSTER, daemonReachable: true });
   assert.equal(ctx.calls.sidebarRefreshes, 1);
+  ctx.emitChanged({ roster: [ROSTER[0], { ...ROSTER[1], state: 'blocked' }, ROSTER[2]], daemonReachable: true });
+  assert.deepEqual([...ctx.read('bgAgentSessionIds')].sort(), ['s-a', 's-b']);
+  assert.equal(ctx.calls.sidebarRefreshes, 2);
+  ctx.emitChanged({ roster: [{ ...ROSTER[0], state: 'done' }, ROSTER[1], ROSTER[2]], daemonReachable: true });
+  assert.deepEqual([...ctx.read('bgAgentSessionIds')], []);
+  assert.equal(ctx.calls.sidebarRefreshes, 3);
 });
 
 test('no roster fetch before the view is first opened; opening it fetches', async (t) => {

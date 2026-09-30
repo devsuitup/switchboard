@@ -169,6 +169,8 @@ function setupSidebarDom() {
     setActivity: read('setActivity'),
     // remote-activity-ui.js's per-session adapter state (const, not a window property — see .ai/contexts/session-state.md).
     remoteSessionStates: read('remoteSessionStates'),
+    read,
+    evalPublic(name) { evalInWindow(dom, path.join(PUBLIC_DIR, name)); },
     // Simulate the main process emitting subagent-spawned/subagent-completed
     // (session-transitions.js) by invoking the callback sidebar.js registered
     // via window.api.onSubagentSpawned/onSubagentCompleted at eval time.
