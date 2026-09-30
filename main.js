@@ -78,7 +78,7 @@ const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRe
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
-const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
+const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { setPtyOpLogger, resizePty, killPty, ptyExitSignalName } = require('./pty-ops');
@@ -1800,7 +1800,7 @@ const changesWatchers = createChangesWatchRegistry({
 });
 
 // A path from terminal output is untrusted input — see .ai/contexts/terminal-path-links.md
-ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
+ipcMain.handle('resolve-terminal-paths', async (_event, sessionId, texts) => {
   if (!Array.isArray(texts)) return [];
   const wanted = texts.slice(0, TERMINAL_PATH_BATCH_MAX);
   const where = terminalPathTarget.resolveTerminalPathsCwd(sessionId, {
@@ -1810,13 +1810,13 @@ ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
   });
   if (!where.ok) return wanted.map(() => ({ ok: false, reason: where.reason }));
   const deps = {
-    isSensitivePath,
-    statSync: (p) => fs.statSync(p),
+    isSensitivePath: isSensitivePathAsync,
+    stat: (p) => fs.promises.stat(p),
     hasNullByte: terminalPathTarget.fileHasNullByte,
     homedir: () => os.homedir(),
     maxBytes: PANEL_FILE_MAX_BYTES,
   };
-  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, where.cwd, deps));
+  return terminalPathTarget.resolveTerminalPaths(wanted, where.cwd, deps);
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it

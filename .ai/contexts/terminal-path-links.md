@@ -174,13 +174,14 @@ on.
 - The reachable line of a hovered row walks at most 24 wrapped buffer rows.
 - `resolve-terminal-paths` reads bytes but returns none: its answer is a
   yes/no plus the resolved path, and it accepts at most 64 paths per call.
-- The handler is synchronous, so one call occupies the main process for as long
-  as its paths take: 14 µs each, and at most 64 of them — under a millisecond in
-  the worst case, and 50 µs for the 3.65-path average measured over the prose
-  sweep. It stops entirely once a region of the scrollback has been hovered.
-  Those figures are CPU against a local disk; the cost is one `stat` of latency
-  per path, so a session whose cwd is on a network filesystem blocks the main
-  process for the batch's whole round-trip rather than for its CPU.
+- The handler is async: `resolveTerminalPaths` runs the checks through
+  `fs.promises` with at most 8 in flight, answers in the order asked, and never
+  holds the main process for a batch. The guards and their order are those of
+  `resolveTerminalPathTarget`, unchanged; `isSensitivePathAsync` is the same
+  denylist on the same disk-resolved path. The cost of a path is one `stat` of
+  latency, which on a network cwd (sshfs, NFS) is 5-50 ms, so a 64-path batch
+  takes roughly 8 round-trips instead of freezing the process for 64. No cwd is
+  treated as slow or skipped: there is no reliable local test for it.
 
 ## What this does not change
 

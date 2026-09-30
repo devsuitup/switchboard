@@ -19,8 +19,8 @@ const {
   readTerminalLogicalLine,
   registerTerminalPathLinks,
 } = require('../public/terminal-path-links');
-const { resolveTerminalPathTarget, fileHasNullByte } = require('../terminal-path-target');
-const { isSensitivePath } = require('../ipc-path-validator');
+const { resolveTerminalPaths, fileHasNullByte } = require('../terminal-path-target');
+const { isSensitivePathAsync } = require('../ipc-path-validator');
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const COLS = 120;
@@ -52,13 +52,13 @@ function makeLookup(counter) {
   return (_sessionId, texts) => {
     counter.calls++;
     counter.lookups = (counter.lookups || 0) + texts.length;
-    return Promise.resolve(texts.map((text) => resolveTerminalPathTarget(text, fixture.cwd, {
-      isSensitivePath,
-      statSync: (p) => fs.statSync(p),
+    return resolveTerminalPaths(texts, fixture.cwd, {
+      isSensitivePath: isSensitivePathAsync,
+      stat: (p) => fs.promises.stat(p),
       hasNullByte: fileHasNullByte,
       homedir: () => fixture.home,
       maxBytes: MAX_BYTES,
-    })));
+    });
   };
 }
 

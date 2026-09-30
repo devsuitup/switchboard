@@ -13,8 +13,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { resolveTerminalPathTarget, fileHasNullByte } = require('../terminal-path-target');
-const { isSensitivePath } = require('../ipc-path-validator');
+const { resolveTerminalPathTarget, resolveTerminalPaths, fileHasNullByte } = require('../terminal-path-target');
+const { isSensitivePathAsync } = require('../ipc-path-validator');
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -36,8 +36,8 @@ function makeFixture() {
 
 function deps(home) {
   return {
-    isSensitivePath,
-    statSync: (p) => fs.statSync(p),
+    isSensitivePath: isSensitivePathAsync,
+    stat: (p) => fs.promises.stat(p),
     hasNullByte: fileHasNullByte,
     homedir: () => home,
     maxBytes: MAX_BYTES,
@@ -66,54 +66,54 @@ const ROWS = [
 ];
 
 for (const row of ROWS) {
-  test(`openability: ${row.name}`, () => {
-    const result = resolveTerminalPathTarget(row.text(fixture), fixture.cwd, deps(fixture.home));
+  test(`openability: ${row.name}`, async () => {
+    const result = await resolveTerminalPathTarget(row.text(fixture), fixture.cwd, deps(fixture.home));
     assert.strictEqual(result.ok, row.ok, JSON.stringify(result));
     if (row.ok) assert.strictEqual(result.path, row.resolved(fixture));
     else assert.strictEqual(result.reason, row.reason);
   });
 }
 
-test('a relative path with no session cwd is refused, never resolved against the app cwd', () => {
-  const result = resolveTerminalPathTarget('public/app.js', null, deps(fixture.home));
+test('a relative path with no session cwd is refused, never resolved against the app cwd', async () => {
+  const result = await resolveTerminalPathTarget('public/app.js', null, deps(fixture.home));
   assert.deepStrictEqual(result, { ok: false, reason: 'no-cwd' });
 });
 
-test('an absolute path still resolves when the session cwd is unknown', () => {
+test('an absolute path still resolves when the session cwd is unknown', async () => {
   const abs = path.join(fixture.cwd, 'public/app.js');
-  assert.deepStrictEqual(resolveTerminalPathTarget(abs, null, deps(fixture.home)), { ok: true, path: abs });
+  assert.deepStrictEqual(await resolveTerminalPathTarget(abs, null, deps(fixture.home)), { ok: true, path: abs });
 });
 
-test('an existing file in a credential location is refused as sensitive, a missing one as missing', () => {
+test('an existing file in a credential location is refused as sensitive, a missing one as missing', async () => {
   const ssh = path.join(fixture.cwd, '.ssh');
   fs.mkdirSync(ssh);
   fs.writeFileSync(path.join(ssh, 'id_rsa'), 'key\n');
   try {
-    assert.deepStrictEqual(resolveTerminalPathTarget('.ssh/id_rsa', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'sensitive' });
-    assert.deepStrictEqual(resolveTerminalPathTarget('.ssh/absent', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'missing' });
+    assert.deepStrictEqual(await resolveTerminalPathTarget('.ssh/id_rsa', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'sensitive' });
+    assert.deepStrictEqual(await resolveTerminalPathTarget('.ssh/absent', fixture.cwd, deps(fixture.home)), { ok: false, reason: 'missing' });
   } finally {
     fs.rmSync(ssh, { recursive: true, force: true });
   }
 });
 
-test('a symlink into a sensitive location is refused on its resolved target', () => {
+test('a symlink into a sensitive location is refused on its resolved target', async () => {
   const link = path.join(fixture.cwd, 'innocent.txt');
   fs.symlinkSync(path.join(fixture.cwd, '.env'), link);
   try {
-    const result = resolveTerminalPathTarget('innocent.txt', fixture.cwd, deps(fixture.home));
+    const result = await resolveTerminalPathTarget('innocent.txt', fixture.cwd, deps(fixture.home));
     assert.deepStrictEqual(result, { ok: false, reason: 'sensitive' });
   } finally {
     fs.unlinkSync(link);
   }
 });
 
-test('the resolved path is the one the panel is handed, not the text that was matched', () => {
-  const result = resolveTerminalPathTarget('public/../public/app.js', fixture.cwd, deps(fixture.home));
+test('the resolved path is the one the panel is handed, not the text that was matched', async () => {
+  const result = await resolveTerminalPathTarget('public/../public/app.js', fixture.cwd, deps(fixture.home));
   assert.deepStrictEqual(result, { ok: true, path: path.join(fixture.cwd, 'public', 'app.js') });
 });
 
-test('fileHasNullByte reports true for an unreadable path rather than letting it through', () => {
-  assert.strictEqual(fileHasNullByte(path.join(fixture.cwd, 'does-not-exist')), true);
+test('fileHasNullByte reports true for an unreadable path rather than letting it through', async () => {
+  assert.strictEqual(await fileHasNullByte(path.join(fixture.cwd, 'does-not-exist')), true);
 });
 
 // --- Which cwd a session's candidates resolve against ---
@@ -175,11 +175,94 @@ test('a panel shell over a remote session is refused', () => {
 // is what stops the NUL sniff below it from calling openSync on one, and an
 // openSync on a FIFO with no writer never returns. A real FIFO here would turn
 // a broken guard into a CI that hangs instead of a CI that fails.
-test('a path that exists but is not a regular file is refused', () => {
+test('a path that exists but is not a regular file is refused', async () => {
   const notAFile = { isDirectory: () => false, isFile: () => false, size: 0 };
-  const result = resolveTerminalPathTarget('public/app.js', fixture.cwd, {
+  const result = await resolveTerminalPathTarget('public/app.js', fixture.cwd, {
     ...deps(fixture.home),
-    statSync: () => notAFile,
+    stat: async () => notAFile,
   });
   assert.deepStrictEqual(result, { ok: false, reason: 'not-a-regular-file' });
+});
+
+// --- A batch: same answers, same order, bounded, and the event loop stays free ---
+
+function instrumentedFs(delayMs) {
+  const state = { inFlight: 0, peak: 0, calls: 0 };
+  const track = async (fn) => {
+    state.calls++;
+    state.inFlight++;
+    state.peak = Math.max(state.peak, state.inFlight);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return await fn();
+    } finally {
+      state.inFlight--;
+    }
+  };
+  return {
+    state,
+    stat: (p) => track(() => fs.promises.stat(p)),
+    hasNullByte: (p) => track(() => fileHasNullByte(p)),
+  };
+}
+
+function batchDeps(home, over = {}) {
+  return { ...deps(home), ...over };
+}
+
+test('a batch answers exactly what each path answers alone, in the order asked', async () => {
+  const texts = ROWS.map((row) => row.text(fixture));
+  const alone = [];
+  for (const text of texts) alone.push(await resolveTerminalPathTarget(text, fixture.cwd, deps(fixture.home)));
+  const batch = await resolveTerminalPaths(texts, fixture.cwd, deps(fixture.home));
+  assert.deepStrictEqual(batch, alone);
+});
+
+test('a batch never has more checks in flight than the concurrency limit', async () => {
+  const fake = instrumentedFs(3);
+  const texts = Array.from({ length: 40 }, (_, i) => (i % 2 ? 'public/app.js' : `public/missing-${i}.js`));
+  const out = await resolveTerminalPaths(texts, fixture.cwd, batchDeps(fixture.home, fake), { concurrency: 4 });
+  assert.strictEqual(out.length, 40);
+  assert.ok(fake.state.peak <= 4, `peak ${fake.state.peak}`);
+  assert.ok(fake.state.peak > 1, `no overlap at all: peak ${fake.state.peak}`);
+});
+
+test('the default concurrency is 8', async () => {
+  const fake = instrumentedFs(3);
+  const texts = Array.from({ length: 40 }, () => 'public/app.js');
+  await resolveTerminalPaths(texts, fixture.cwd, batchDeps(fixture.home, fake));
+  assert.strictEqual(fake.state.peak, 8);
+});
+
+test('answers keep the order asked when the checks finish out of order', async () => {
+  const delays = { 'a.txt': 30, 'b.txt': 1, 'c.txt': 15 };
+  const stat = async (p) => {
+    await new Promise((resolve) => setTimeout(resolve, delays[path.basename(p)]));
+    return fs.promises.stat(path.join(fixture.cwd, 'my file.txt'));
+  };
+  const out = await resolveTerminalPaths(['a.txt', 'b.txt', 'c.txt'], fixture.cwd, batchDeps(fixture.home, { stat, hasNullByte: async () => false }), { concurrency: 3 });
+  assert.deepStrictEqual(out.map((r) => path.basename(r.path)), ['a.txt', 'b.txt', 'c.txt']);
+});
+
+test('the event loop keeps turning while a slow batch is out', async () => {
+  const fake = instrumentedFs(5);
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 1);
+  const texts = Array.from({ length: 16 }, () => 'public/app.js');
+  await resolveTerminalPaths(texts, fixture.cwd, batchDeps(fixture.home, fake));
+  clearInterval(timer);
+  assert.ok(ticks >= 3, `only ${ticks} ticks ran during the batch`);
+});
+
+test('an empty batch is an empty answer', async () => {
+  assert.deepStrictEqual(await resolveTerminalPaths([], fixture.cwd, deps(fixture.home)), []);
+});
+
+test('the resolve-terminal-paths handler is async and reaches the disk only through the bounded resolver', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const start = source.indexOf("ipcMain.handle('resolve-terminal-paths'");
+  const block = source.slice(start, source.indexOf('\n});', start));
+  assert.match(block, /async \(_event, sessionId, texts\)/);
+  assert.match(block, /terminalPathTarget\.resolveTerminalPaths\(/);
+  assert.doesNotMatch(block, /Sync\b/);
 });
