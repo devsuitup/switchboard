@@ -330,3 +330,19 @@ test('a waiting descriptor does not light attention on a session known dead', ()
   s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
   assert.equal(s.snapshot().attention, false);
 });
+
+test('descriptorStatus attention:false and releaseDescriptorAttention release only descriptor-owned attention', () => {
+  for (const release of [
+    (s) => s.apply({ type: 'descriptorStatus', status: 'waiting', attention: false }),
+    (s) => s.apply({ type: 'releaseDescriptorAttention' }),
+  ]) {
+    const owned = createSessionState('remote-ssh');
+    owned.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+    release(owned);
+    assert.equal(owned.snapshot().attention, false);
+    const explicit = createSessionState('remote-ssh');
+    explicit.apply({ type: 'attention', active: true });
+    release(explicit);
+    assert.equal(explicit.snapshot().attention, true);
+  }
+});

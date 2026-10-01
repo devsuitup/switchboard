@@ -928,3 +928,11 @@ test('the indexer and the placeholder keep a validated waitingFor beside the sta
     assert.equal(ph.get('b').waitingFor, null);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  for (const code of [0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]) {
+    assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
+  }
+  assert.equal(sanitizeWaitingFor('caf\u00e9 \u2014 ok'), 'caf\u00e9 \u2014 ok');
+});

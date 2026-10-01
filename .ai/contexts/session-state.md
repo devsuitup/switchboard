@@ -254,6 +254,22 @@ it and never get attention from the descriptor. The reducer's rule:
   an unattached row whose descriptor disappears loses the attention at the next
   refresh. `applyRemoteStopped` also clears it.
 
+Two more releases keep it from freezing:
+
+- The attached true to false handoff releases descriptor-owned attention. The
+  reducer keeps following the descriptor while a row is attached, so without
+  this a dialog answered in the PTY would repaint a stale orange on detach; the
+  next descriptor re-asserts it if the session still waits.
+- A host in error keeps its last descriptors (freshness contract), so
+  `renderProjects` passes the project's `remoteHostError` and the descriptor
+  event then carries `attention: false`, which releases descriptor-owned
+  attention for the whole outage. A fresh host passes `attention: true`.
+
+The sidebar render replaces row classes from the rebuilt row (morphdom takes the
+new element's classes), so `buildSessionItem` reads the unattached remote
+state's attention for the row class and the icon slot, as it does for
+`agentsBusy`; seeding alone would be wiped at the next render.
+
 Attached rows are untouched: `projectRemoteState` still refuses to paint them,
 and the local-pty path owns their attention. The sidebar's status line appends
 `waitingFor` while the status is `waiting` (`waiting · permission prompt · 3m

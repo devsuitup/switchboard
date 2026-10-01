@@ -73,6 +73,9 @@ function createSessionState(kind) {
         }
         touch(event);
         break;
+      case 'releaseDescriptorAttention':
+        releaseDescriptorAttention();
+        break;
       case 'clearUnread':
         responseReady = false;
         break;
@@ -88,6 +91,7 @@ function createSessionState(kind) {
         break;
       case 'descriptorStatus':
         liveness = event.status === 'alive' || event.status === 'dead' ? event.status : liveness;
+        if (event.attention === false) releaseDescriptorAttention();
         if (event.attention === true) {
           if (event.status === 'waiting' && liveness !== 'dead') {
             clearExclusive();

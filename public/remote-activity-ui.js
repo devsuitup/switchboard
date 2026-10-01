@@ -159,12 +159,12 @@ function onRemoteActivityEvent(payload) {
 }
 
 // descriptor ports; absence stays 'unknown', never 'dead' — see session-state.md ports table
-function applyRemoteDescriptor(session) {
+function applyRemoteDescriptor(session, hostError) {
   if (!session || !session.remoteAlias) return;
   const state = remoteState(session.sessionId);
   if (session.remoteDescriptorSeen) state.apply({ type: 'liveness', value: 'alive' });
   if (session.status !== undefined) {
-    state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt, attention: true });
+    state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt, attention: !hostError });
   }
   projectRemoteState(session.sessionId);
 }
@@ -180,6 +180,7 @@ function setRemoteAttached(sessionId, attached) {
     clearRemoteActivityTimer(sessionId);
     remoteSeedFloors.set(sessionId, Date.now());
     state.apply({ type: 'busy', active: false, armReady: false });
+    state.apply({ type: 'releaseDescriptorAttention' });
     setActivity(sessionId, false, 'remote-attach-handoff', { armReady: false });
     // Drops the shadow local-pty entry setActivity() just touched above — see .ai/contexts/session-state.md ("The local-pty adapter")
     purgeActivityFor(sessionId, 'remote-detach');
@@ -202,9 +203,9 @@ function applyRemoteStopped(sessionId) {
   purgeActivityFor(sessionId, 'remote-stop');
 }
 
-function seedRemoteActivity(session) {
+function seedRemoteActivity(session, hostError) {
   if (!session || !session.remoteAlias) return;
-  applyRemoteDescriptor(session);
+  applyRemoteDescriptor(session, hostError);
 
   if (!Number.isFinite(session.remoteActiveAt)) return;
   const sessionId = session.sessionId;

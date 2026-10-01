@@ -42,6 +42,9 @@ function sanitizeWaitingFor(value) {
   for (let k = 0; k < text.length; k++) {
     const code = text.charCodeAt(k);
     if (code < 32 || code === 127) return null;
+    if (code >= 0x200b && code <= 0x200f) return null;
+    if (code >= 0x202a && code <= 0x202e) return null;
+    if (code >= 0x2066 && code <= 0x2069) return null;
   }
   return text;
 }

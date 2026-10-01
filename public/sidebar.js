@@ -577,7 +577,7 @@ function renderProjects(projects, resort) {
   pendingSubagentRest.clear();
   // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
   for (const project of projects) {
-    for (const session of project.sessions) seedRemoteActivity(session);
+    for (const session of project.sessions) seedRemoteActivity(session, project.remoteHostError);
   }
   const newSidebar = document.createElement('div');
 
@@ -1381,6 +1381,15 @@ function rebindSidebarEvents(projects) {
   }
 }
 
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function remoteAttentionSnapshot(sessionId) {
+  if (typeof remoteSessionStates === 'undefined') return null;
+  const state = remoteSessionStates.get(sessionId);
+  if (!state) return null;
+  const snapshot = state.snapshot();
+  return !snapshot.attached && snapshot.attention ? snapshot : null;
+}
+
 function buildSessionItem(session) {
   const item = document.createElement('div');
   item.className = 'session-item js-stateful';
@@ -1388,7 +1397,8 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
-  setNeedsAttention(item, attentionSessions.has(session.sessionId));
+  const remoteAttention = remoteAttentionSnapshot(session.sessionId);
+  setNeedsAttention(item, attentionSessions.has(session.sessionId) || !!remoteAttention);
   setResponseReady(item, responseReadySessions.has(session.sessionId));
   setCliBusy(item, !!sessionBusyState.get(session.sessionId));
   setHasBusyAgents(item, parentHasActiveSubagent(session.sessionId));
@@ -1416,6 +1426,7 @@ function buildSessionItem(session) {
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (activePtyIds.has(session.sessionId) ? ' running' : '');
   paintSessionIcon(icon, session.sessionId, session);
+  if (remoteAttention) writeIconSlot(icon, renderSessionIcon(remoteAttention));
 
   // Info block
   const info = document.createElement('div');

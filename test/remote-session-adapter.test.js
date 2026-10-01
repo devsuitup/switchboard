@@ -76,7 +76,7 @@ function setup(sessionIds = ['s1']) {
     snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
     applyRemoteDescriptor: (session) => call('applyRemoteDescriptor', session),
     setRemoteAttached: (id, attached) => call('setRemoteAttached', id, attached),
-    seedRemoteActivity: (session) => call('seedRemoteActivity', session),
+    seedRemoteActivity: (session, hostError) => call("seedRemoteActivity", session, hostError === undefined ? null : hostError),
     scheduled,
     pending: () => scheduled.filter(h => !h.cleared),
     destroy: () => window.close(),
@@ -275,7 +275,7 @@ function setupWithClock(sessionIds = ['s1']) {
     now: () => clock,
     emit: (payload) => onRemoteActivityCb(payload),
     snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
-    seedRemoteActivity: (session) => call('seedRemoteActivity', session),
+    seedRemoteActivity: (session, hostError) => call("seedRemoteActivity", session, hostError === undefined ? null : hostError),
     advance(ms) {
       clock += ms;
       for (const t of timers) {
@@ -437,5 +437,38 @@ test('a decayed busy edge does not erase a waiting attention', () => {
   t.seedRemoteActivity(waitingSession());
   t.pending()[0].fn();
   assert.equal(t.snapshot('s1').attention, true);
+  t.destroy();
+});
+
+test('a waiting descriptor while attached paints nothing', () => {
+  const t = setup(['s1']);
+  t.setRemoteAttached('s1', true);
+  t.applyRemoteDescriptor(waitingSession());
+  assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  t.destroy();
+});
+
+test('attach then detach with no new descriptor does not show the stale attention; a later waiting descriptor lights it again', () => {
+  const t = setup(['s1']);
+  t.seedRemoteActivity(waitingSession());
+  t.setRemoteAttached('s1', true);
+  t.applyRemoteDescriptor(waitingSession());
+  t.setRemoteAttached('s1', false);
+  assert.equal(t.snapshot('s1').attention, false);
+  assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  t.seedRemoteActivity(waitingSession());
+  assert.ok(t.item('s1').classList.contains('needs-attention'));
+  t.destroy();
+});
+
+test('a host in error releases the attention its last descriptors raised, and a fresh host restores it', () => {
+  const t = setup(['s1']);
+  t.seedRemoteActivity(waitingSession());
+  assert.ok(t.item('s1').classList.contains('needs-attention'));
+  t.seedRemoteActivity(waitingSession(), 'ssh: connection refused');
+  assert.equal(t.snapshot('s1').attention, false);
+  assert.ok(!t.item('s1').classList.contains('needs-attention'));
+  t.seedRemoteActivity(waitingSession(), null);
+  assert.ok(t.item('s1').classList.contains('needs-attention'));
   t.destroy();
 });
