@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- On Windows, the file panel no longer opens or saves a credential file (such as one under `.ssh`) through its 8.3 short name or a `\\?\` path. (#390)
+
 ## v0.0.86 — 2026-10-01
 
 ### New

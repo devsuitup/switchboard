@@ -187,6 +187,16 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
 | `git-changes-diff` | `isSafeGitPath`, or `isSafeNoIndexPath` + containment when `untracked` (`git-changes-runner.js`) | a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist. The untracked variant is a real filesystem operand of `git diff --no-index`, which has no repository-boundary check of its own: on top of the syntactic guard it is resolved with `realpath`/`stat` against the resolved cwd (local) or checked against `git ls-files --others` (remote), git receives the guard's operand rather than the caller's, and the returned diff must name that same path in its `diff --git` line — see "Untracked files" in the same doc |
 
+### Sensitive-path candidates
+
+`isSensitivePath` and `isSensitivePathAsync` (`ipc-path-validator.js`) share one candidate builder, `sensitiveCandidates` / `sensitiveCandidatesAsync` (`resolve-path-on-disk.js`), and test the denylist against every spelling it returns:
+
+- the literal path, and the same path with a Windows `\\?\` / `\\.\` prefix removed (`\\?\UNC\host\share` becomes `\\host\share`);
+- the JS realpath **and** the native realpath. They diverge on Windows: the JS walker keeps 8.3 short names (`SSH~1` for `.ssh`) and throws `EISDIR` on a `\\?\` path through a junction, while `fs.realpath.native` expands the short name and resolves the junction. Either one alone misses a spelling the other catches, so both are tried and every result is matched;
+- when nothing exists at the path yet (a file about to be saved), the deepest existing ancestor resolved the same two ways, with the missing tail re-attached — otherwise `SSH~1\new-key` would pass because there is nothing to resolve.
+
+A resolution that fails for a reason other than `ENOENT`/`ENOTDIR` (`EACCES`, `EPERM`, `ELOOP`, …) and yields no path at all is treated as sensitive: the path may exist behind a spelling we could not resolve. `resolveOnDisk` / `resolveOnDiskAsync` are unchanged and stay on the JS realpath (the allowlist and containment checks compare against it). The tests are in `test/sensitive-path-windows.test.js`; the 8.3 cases skip, with a stated reason, on a volume that generates no short names.
+
 ### Non-obvious behaviors
 
 - **`preload.js` is the *single* surface the renderer sees**. If you add `ipcMain.handle('xyz', ...)` but forget to add `xyz: () => ipcRenderer.invoke('xyz')` in preload, the renderer can't call it. Symptom: `window.api.xyz is not a function`.
