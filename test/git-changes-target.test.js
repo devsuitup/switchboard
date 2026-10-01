@@ -159,3 +159,110 @@ test('a getCachedFolder throw is swallowed, resolution still proceeds as local',
   const result = resolveGitChangesTarget('s1', deps);
   assert.deepEqual(result, { ok: true, kind: 'local', cwd: '/home/dev/proj' });
 });
+
+// --- a subagent's worktree (issue #303) ------------------------------------
+
+const path = require('node:path');
+
+const SUB_ID = 'sub:parent-1:a219d84ea899';
+const WORKTREE = path.resolve('/repo/.claude/worktrees/agent-a219d84ea899');
+const SUB_OPTS = { allowSubagent: true };
+
+function subDeps(meta, overrides = {}) {
+  const metaReads = [];
+  const deps = baseDeps({
+    getCachedFolder: (id) => (id === SUB_ID || id === 'parent-1' ? '-repo' : null),
+    existsSync: (p) => p === WORKTREE || p === path.resolve('/repo'),
+    resolveSessionRealCwd: (_dir, id) => (id === 'parent-1' ? path.resolve('/repo') : null),
+    readSubagentMeta: (jsonlPath) => { metaReads.push(jsonlPath); return meta; },
+    ...overrides,
+  });
+  deps.metaReads = metaReads;
+  return deps;
+}
+
+test('isValidChangesSessionId: a sub: id stays refused unless the caller opts in, and then only with well-formed parts', () => {
+  assert.equal(isValidChangesSessionId(SUB_ID), false);
+  assert.equal(isValidChangesSessionId(SUB_ID, SUB_OPTS), true);
+  for (const bad of [
+    'sub:', 'sub:a', 'sub:a:', 'sub::b', 'sub:a:b:c', 'sub:../x:b', 'sub:a:../x', 'sub:a:..', 'sub:..:b',
+    'sub:a/b:c', 'sub:a:b/c', 'sub:a:b\\c', 'sub:a b:c', 'sub:a:b\0',
+  ]) {
+    assert.equal(isValidChangesSessionId(bad, SUB_OPTS), false, JSON.stringify(bad));
+  }
+});
+
+test('resolveGitChangesTarget: a sub: id is refused without opt-in, before any dependency runs', () => {
+  const deps = subDeps({ worktreePath: WORKTREE }, { getCachedFolder: () => { throw new Error('touched'); } });
+  const result = resolveGitChangesTarget(SUB_ID, deps);
+  assert.equal(result.ok, false);
+  assert.deepEqual(deps.metaReads, []);
+});
+
+test('resolveGitChangesTarget: a malformed sub: id is refused before any disk access (mutation target: validating after the meta read)', () => {
+  let touched = false;
+  const deps = subDeps({ worktreePath: WORKTREE }, {
+    getCachedFolder: () => { touched = true; return '-repo'; },
+    existsSync: () => { touched = true; return true; },
+    resolveSessionRealCwd: () => { touched = true; return null; },
+    readSubagentMeta: () => { touched = true; return null; },
+  });
+  for (const bad of ['sub:../../x:b', 'sub:a:../../x', 'sub:a:b:c', 'sub:a/b:c']) {
+    const result = resolveGitChangesTarget(bad, deps, SUB_OPTS);
+    assert.equal(result.ok, false, bad);
+  }
+  assert.equal(touched, false);
+});
+
+test('resolveGitChangesTarget: a subagent in a worktree resolves to the worktree path recorded in its sidecar', () => {
+  const deps = subDeps({ worktreePath: WORKTREE, worktreeBranch: 'worktree-agent-a219d84ea899' });
+  const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+  assert.deepEqual(result, { ok: true, kind: 'local', cwd: WORKTREE, subagent: true });
+  assert.deepEqual(deps.metaReads, [
+    path.join('/projects', '-repo', 'parent-1', 'subagents', 'agent-a219d84ea899.jsonl'),
+  ]);
+});
+
+test('resolveGitChangesTarget: a subagent with no worktreePath shares the parent target, with no second row source', () => {
+  const deps = subDeps({ agentType: 'general-purpose' });
+  const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+  assert.deepEqual(result, { ok: true, kind: 'local', cwd: path.resolve('/repo'), subagent: true });
+});
+
+test('resolveGitChangesTarget: a subagent whose sidecar is missing shares the parent target', () => {
+  const result = resolveGitChangesTarget(SUB_ID, subDeps(null), SUB_OPTS);
+  assert.equal(result.ok, true);
+  assert.equal(result.cwd, path.resolve('/repo'));
+});
+
+test('resolveGitChangesTarget: a removed worktree is reported as such, not thrown and not the parent directory (mutation target: falling back to the parent)', () => {
+  const deps = subDeps({ worktreePath: WORKTREE }, { existsSync: (p) => p === path.resolve('/repo') });
+  const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'worktree-removed');
+  assert.match(result.error, /no longer exists/);
+});
+
+test('resolveGitChangesTarget: a sidecar worktreePath that is relative, traversing or carries a control character is refused without a stat', () => {
+  for (const worktreePath of ['rel/worktree', path.resolve('/repo') + '/../etc', WORKTREE + '\nx', 42, '']) {
+    let stat = false;
+    const deps = subDeps({ worktreePath }, { existsSync: () => { stat = true; return true; } });
+    const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+    assert.equal(result.ok, false, JSON.stringify(worktreePath));
+    assert.equal(stat, false, JSON.stringify(worktreePath));
+  }
+});
+
+test('resolveGitChangesTarget: a subagent of a remote folder is refused', () => {
+  const deps = subDeps({ worktreePath: WORKTREE }, { isRemoteFolder: () => true });
+  const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+  assert.equal(result.ok, false);
+  assert.deepEqual(deps.metaReads, []);
+});
+
+test('resolveGitChangesTarget: a subagent absent from the cache is refused', () => {
+  const deps = subDeps({ worktreePath: WORKTREE }, { getCachedFolder: () => null });
+  const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+  assert.equal(result.ok, false);
+  assert.deepEqual(deps.metaReads, []);
+});

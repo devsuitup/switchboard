@@ -475,7 +475,7 @@ sessionCache.init({
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
-const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
+const { resolveJsonlPath, enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
@@ -1704,7 +1704,7 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
 });
 
 // --- IPC: git-changes-status / git-changes-diff — see .ai/contexts/changes-view.md ---
-function resolveGitChangesTarget(sessionId) {
+function resolveGitChangesTarget(sessionId, opts) {
   return gitChangesTarget.resolveGitChangesTarget(sessionId, {
     getCachedFolder,
     isRemoteFolder,
@@ -1714,7 +1714,8 @@ function resolveGitChangesTarget(sessionId) {
     resolveSessionRealCwd,
     existsSync: (p) => fs.existsSync(p),
     projectsDir: PROJECTS_DIR,
-  });
+    readSubagentMeta,
+  }, opts);
 }
 
 function gitChangesRunnerFor(target) {
@@ -1724,7 +1725,7 @@ function gitChangesRunnerFor(target) {
 }
 
 ipcMain.handle('git-changes-status', async (_event, sessionId) => {
-  const target = resolveGitChangesTarget(sessionId);
+  const target = resolveGitChangesTarget(sessionId, { allowSubagent: true });
   if (!target.ok) return target;
   try {
     const result = await gitChangesRunnerFor(target).status();
@@ -1737,7 +1738,7 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
 // filePath is a git pathspec, or an untracked file's --no-index operand — see .ai/contexts/changes-view.md
 ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, untracked) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path' };
-  const target = resolveGitChangesTarget(sessionId);
+  const target = resolveGitChangesTarget(sessionId, { allowSubagent: true });
   if (!target.ok) return target;
   try {
     return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged, untracked: !!untracked });
