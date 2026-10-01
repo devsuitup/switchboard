@@ -59,6 +59,7 @@ async function resolveOnDiskAsync(filePath) {
 
 const EXTENDED_UNC = /^[\\/]{2}[?.][\\/]UNC[\\/]/i;
 const EXTENDED_DRIVE = /^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/;
+const VERBATIM_PREFIX = /^[\\/]{2}\?[\\/]/;
 const MISSING = new Set(['ENOENT', 'ENOTDIR']);
 
 // see .ai/contexts/ipc-bridge.md, "Sensitive-path candidates"
@@ -91,7 +92,7 @@ function stripTrailingDotsAndSpaces(p) {
 function literalsOf(filePath) {
   const literal = path.resolve(stripExtendedPrefix(filePath));
   const out = [literal];
-  if (process.platform === 'win32' && stripExtendedPrefix(filePath) === filePath) {
+  if (process.platform === 'win32' && !VERBATIM_PREFIX.test(filePath)) {
     const trimmed = stripTrailingDotsAndSpaces(literal);
     if (trimmed !== literal) out.push(trimmed);
   }

@@ -177,3 +177,21 @@ test('a missing file is resolved with a bounded number of realpath calls', { ski
   }
   assert.ok(calls <= 6, 'realpath calls: ' + calls);
 });
+
+test('trailing dots on a credential name are refused behind a \\.\ prefix, which Win32 still normalises', { skip: !win && 'win32 only' }, async () => {
+  const drive = realRoot.slice(0, 2);
+  const rest = realRoot.slice(2);
+  const spellings = [
+    DEV + path.join(realRoot, '.ssh.', 'id_rsa'),
+    '//./' + path.join(realRoot, '.git-credentials.').split(BS).join('/'),
+    DEV + 'UNC' + BS + 'localhost' + BS + drive[0] + '$' + path.join(rest, '.ssh.', 'id_rsa'),
+  ];
+  for (const p of spellings) {
+    assert.deepStrictEqual(await bothGuards(p), [true, true], p);
+  }
+});
+
+test('trailing dots are not trimmed behind a \\?\ prefix, which Win32 does not normalise', { skip: !win && 'win32 only' }, async () => {
+  const p = EXT + path.join(realRoot, 'notes.');
+  assert.deepStrictEqual(await bothGuards(p), [false, false]);
+});
