@@ -164,6 +164,65 @@ test('group by project: same last segment and same parent fall back to the full 
   assert.deepEqual(ids(groups), [['/a/p/app', ['a']], ['/b/p/app', ['b']]]);
 });
 
+test('group by project: keyed by projectRoot, so the worktrees of one git project share a group; unrelated repos stay apart', () => {
+  const groups = groupAgentEntries([
+    bg({ id: 'a', state: 'done', cwd: '/w/app', projectRoot: '/w/app', worktreeRoot: '/w/app' }),
+    bg({ id: 'b', state: 'done', cwd: '/w/app/.claude/worktrees/x', projectRoot: '/w/app', worktreeRoot: '/w/app/.claude/worktrees/x' }),
+    bg({ id: 'c', state: 'done', cwd: '/elsewhere/wt-y/src', projectRoot: '/w/app', worktreeRoot: '/elsewhere/wt-y' }),
+    bg({ id: 'd', state: 'done', cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
+    bg({ id: 'e', state: 'done', cwd: '/w/legacy' }),
+    bg({ id: 'n', state: 'done', cwd: null, projectRoot: null }),
+  ], 'project');
+  assert.deepEqual(ids(groups), [['app', ['a', 'b', 'c']], ['legacy', ['e']], ['other', ['d']], ['No project', ['n']]]);
+  assert.equal(groups[0].key, '/w/app');
+  assert.equal(groups[0].title, '/w/app');
+  assert.equal(groups[0].children, undefined, 'no sub-groups without the option');
+});
+
+const wt = (id, worktreeRoot, over) => bg({ id, state: 'done', cwd: worktreeRoot, projectRoot: '/w/app', worktreeRoot, ...over });
+const sub = (groups) => groups.map(g => [g.label, g.entries.length, g.children ? g.children.map(c => [c.label, c.entries.map(e => e.id)]) : null]);
+
+test('worktree sub-groups: one per worktree, main first, live first, then alphabetical; the project keeps its total', () => {
+  const groups = groupAgentEntries([
+    wt('z1', '/w/app/.claude/worktrees/zeta'),
+    wt('m1', '/w/app', { cwd: '/w/app/src' }),
+    wt('a1', '/w/app/.claude/worktrees/alpha', { cwd: '/w/app/.claude/worktrees/alpha/deep/er' }),
+    wt('l1', '/w/app/.claude/worktrees/live', { state: 'working' }),
+    wt('m2', '/w/app'),
+    wt('a2', '/w/app/.claude/worktrees/alpha'),
+  ], 'project', { worktrees: true });
+  assert.deepEqual(sub(groups), [['app', 6, [['live', ['l1']], ['main', ['m1', 'm2']], ['alpha', ['a1', 'a2']], ['zeta', ['z1']]]]]);
+  const kids = groups[0].children;
+  assert.equal(kids[1].key, '/w/app');
+  assert.equal(kids[1].title, '/w/app');
+  assert.equal(kids[2].title, '/w/app/.claude/worktrees/alpha');
+});
+
+test('worktree sub-groups: a project in a single worktree stays flat, even a linked one', () => {
+  const groups = groupAgentEntries([
+    wt('a', '/w/app/.claude/worktrees/x'),
+    wt('b', '/w/app/.claude/worktrees/x', { cwd: '/w/app/.claude/worktrees/x/sub' }),
+    bg({ id: 'o', state: 'done', cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
+  ], 'project', { worktrees: true });
+  assert.deepEqual(sub(groups), [['app', 2, null], ['other', 1, null]]);
+});
+
+test('worktree sub-groups: equal directory names in one project are told apart by their parent, then the full path', () => {
+  const groups = groupAgentEntries([
+    wt('a', '/x/one/feat'),
+    wt('b', '/y/two/feat'),
+    wt('c', '/p/q/same'),
+    wt('d', '/r/q/same'),
+  ], 'project', { worktrees: true });
+  assert.deepEqual(sub(groups)[0][2], [['/p/q/same', ['c']], ['/r/q/same', ['d']], ['feat (one)', ['a']], ['feat (two)', ['b']]]);
+});
+
+test('worktree option is ignored outside project mode', () => {
+  const entries = [wt('a', '/w/app'), wt('b', '/w/app/.claude/worktrees/x')];
+  assert.ok(groupAgentEntries(entries, 'state', { worktrees: true }).every(g => !g.children));
+  assert.ok(groupAgentEntries(entries, 'none', { worktrees: true }).every(g => !g.children));
+});
+
 test('formatting helpers', () => {
   assert.equal(formatTokens(null), '');
   assert.equal(formatTokens(274), '274');

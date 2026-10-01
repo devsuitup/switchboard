@@ -57,10 +57,10 @@ function fakeSessionState(descriptors = []) {
   };
 }
 
-function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir } = {}) {
+function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots } = {}) {
   bgAgents.init({
     jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
-    makeIsOwnPid: () => () => false, isAttachedHere: attached,
+    makeIsOwnPid: () => () => false, isAttachedHere: attached, resolveProjectRoots,
   });
   return { cli, sessionState };
 }
@@ -322,3 +322,61 @@ for (const liveState of ['working', 'blocked']) {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+test('roster entries carry projectRoot and worktreeRoot: the pattern or the cwd at once, the resolved roots after a change event', async () => {
+  const dir = mkTmp();
+  try {
+    const list = [
+      ...CLI_LIST,
+      { id: 'cccccccc', sessionId: 's-c', name: 'c', cwd: '/r/.claude/worktrees/x/src', kind: 'background', startedAt: 3, state: 'done' },
+    ];
+    const resolved = [];
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const resolveProjectRoots = async (cwd) => {
+      resolved.push(cwd);
+      await gate;
+      if (cwd === '/a') return { projectRoot: '/repo', worktreeRoot: '/repo/wt-a' };
+      if (cwd === '/i/sub') return { projectRoot: '/i', worktreeRoot: '/i' };
+      return { projectRoot: cwd, worktreeRoot: cwd };
+    };
+    const sessionState = fakeSessionState([{ pid: 99, sessionId: 's-i', cwd: '/i/sub', kind: 'interactive', status: 'idle', startedAt: 4 }]);
+    boot(dir, { cli: fakeCli({ list }), resolveProjectRoots, sessionState });
+    bgAgents.start();
+    const snap = await bgAgents.reconcile();
+    const by = (s, id) => s.roster.find(e => (e.id || e.sessionId) === id);
+    assert.deepEqual([by(snap, 'aaaaaaaa').projectRoot, by(snap, 'aaaaaaaa').worktreeRoot], ['/a', '/a']);
+    assert.deepEqual([by(snap, 'cccccccc').projectRoot, by(snap, 'cccccccc').worktreeRoot], ['/r', '/r/.claude/worktrees/x']);
+    const seen = [];
+    bgAgents.onChange((s) => seen.push(s));
+    release();
+    await waitFor(() => seen.length > 0);
+    const after = seen[seen.length - 1];
+    assert.deepEqual([by(after, 'aaaaaaaa').projectRoot, by(after, 'aaaaaaaa').worktreeRoot], ['/repo', '/repo/wt-a']);
+    const ext = after.roster.find(e => e.kind === 'interactive');
+    assert.deepEqual([ext.cwd, ext.projectRoot, ext.worktreeRoot], ['/i/sub', '/i', '/i']);
+    const before = resolved.length;
+    await bgAgents.reconcile();
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(resolved.length, before, 'a known cwd is not resolved again');
+    assert.equal(new Set(resolved).size, resolved.length, 'each cwd resolved once');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a resolver that throws or answers nothing leaves the cwd as the root, and is not retried', async () => {
+  const dir = mkTmp();
+  try {
+    let calls = 0;
+    const resolveProjectRoots = async (cwd) => { calls++; if (cwd === '/a') throw new Error('boom'); return null; };
+    boot(dir, { resolveProjectRoots });
+    bgAgents.start();
+    const snap = await bgAgents.reconcile();
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(snap.roster.find(e => e.id === 'aaaaaaaa').projectRoot, '/a');
+    const n = calls;
+    await bgAgents.reconcile();
+    await delay(20);
+    assert.equal(calls, n);
+    assert.equal(bgAgents.getSnapshot().roster.find(e => e.id === 'bbbbbbbb').projectRoot, '/b');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

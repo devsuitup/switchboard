@@ -32,10 +32,23 @@ each (its name and how many rows it holds):
   External for the interactive sessions running outside Switchboard, then
   Unknown. Each header starts with the state's emoji.
 - **None**: one flat list.
-- **Project**: one section per directory, named after its last folder (hover
-  the header for the full path; two projects with the same folder name show
-  their parent folder too). Projects with something running come first, then
-  the rest alphabetically; sessions without a directory go under No project.
+- **Project**: one section per project, named after its folder (hover the
+  header for the full path; two projects with the same folder name show
+  their parent folder too). All the worktrees of one git project — the
+  `.claude/worktrees/<name>` ones as well as any `git worktree add`
+  directory, and any subdirectory of them — fall under the project's main
+  checkout. A directory that is not in a git repository is its own project.
+  Projects with something running come first, then the rest alphabetically;
+  sessions without a directory go under No project.
+
+**Worktrees**, next to Group (checked by default, remembered), adds a second
+level in Project mode: inside a project, one smaller sub-header per worktree
+with its own count — **main** for the main checkout, the worktree's folder
+name for the others (hover for the full path). Sub-headers only appear for a
+project whose sessions run in more than one worktree; a project that lives in
+a single worktree stays a flat list under its header. Worktrees with
+something running come first, then main, then the others alphabetically. The
+box is greyed out in the other modes.
 
 Rows keep their usual order inside a section, the Finished filter applies
 first (a section left empty is not shown), and the choice is remembered.

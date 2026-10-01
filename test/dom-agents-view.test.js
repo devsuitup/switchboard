@@ -18,6 +18,7 @@ const HTML = `<!DOCTYPE html><html><body>
     <div id="agents-viewer-header"><span id="agents-viewer-title">Agents</span><span id="agents-viewer-count"></span>
       <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
       <label id="agents-group-toggle">Group <select id="agents-group-by"><option value="none">None</option><option value="state" selected>State</option><option value="project">Project</option></select></label>
+      <label id="agents-worktrees-toggle" title="Sub-group each project by worktree"><input type="checkbox" id="agents-group-worktrees" checked> Worktrees</label>
       <button id="agents-new-btn" type="button">New agent</button></div>
     <div id="agents-viewer-banner" style="display:none;"></div>
     <div id="agents-viewer-body"><div id="agents-list"></div><div id="agents-detail"></div></div>
@@ -283,7 +284,9 @@ function chooseGroupBy(ctx, mode) {
 
 function listLayout(ctx) {
   return [...ctx.document.getElementById('agents-list').children].map(el =>
-    el.classList.contains('agents-group-header') ? '# ' + el.textContent : el.querySelector('.agents-row-name').textContent);
+    el.classList.contains('agents-group-header') ? '# ' + el.textContent
+      : el.classList.contains('agents-subgroup-header') ? '## ' + el.textContent
+        : el.querySelector('.agents-row-name').textContent);
 }
 
 test('group by state: a header per non-empty group with its count, each row once, no header without the mode', async (t) => {
@@ -446,6 +449,97 @@ test('the group header is styled larger and semi-bold, its count secondary', () 
   assert.match(rule('.agents-group-count'), /font-weight:\s*400/);
   const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
   assert.match(html, /<option value="state" selected>/);
+});
+
+const APP = '/w/app';
+const inApp = (id, name, worktreeRoot, over = {}) => ({ ...ROSTER[1], id, sessionId: 's-' + id, name, cwd: worktreeRoot, projectRoot: APP, worktreeRoot, ...over });
+const APP_ROSTER = [
+  inApp('a1aaaaaa', 'on-main', APP, { startedAt: Date.now() - 1000 }),
+  inApp('a2aaaaaa', 'in-wt', APP + '/.claude/worktrees/x', { cwd: APP + '/.claude/worktrees/x/src', startedAt: Date.now() - 2000 }),
+  { ...ROSTER[1], id: 'o1oooooo', sessionId: 's-o', name: 'other-repo', cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' },
+];
+
+function toggleWorktrees(ctx, on) {
+  const box = ctx.document.getElementById('agents-group-worktrees');
+  box.checked = on;
+  box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+}
+
+test('project mode groups the worktrees of one git project under its root; unrelated repos stay apart', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project', agentsGroupWorktrees: '0' } }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: APP_ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  assert.deepEqual(listLayout(ctx), ['# app · 2', 'on-main', 'in-wt', '# other · 1', 'other-repo']);
+  assert.equal(ctx.document.querySelector('.agents-group-header').getAttribute('title'), APP);
+});
+
+test('the Worktrees option is checked by default, sub-groups a project by worktree, and is remembered', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: APP_ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const box = ctx.document.getElementById('agents-group-worktrees');
+  assert.equal(box.checked, true);
+  assert.equal(box.disabled, false);
+  assert.deepEqual(listLayout(ctx), ['# app · 2', '## main · 1', 'on-main', '## x · 1', 'in-wt', '# other · 1', 'other-repo']);
+  const subs = [...ctx.document.querySelectorAll('.agents-subgroup-header')];
+  assert.deepEqual(subs.map(h => h.getAttribute('title')), [APP, APP + '/.claude/worktrees/x']);
+  assert.equal(ctx.document.querySelectorAll('.agents-row').length, 3);
+  assert.equal(ctx.document.querySelectorAll('.agents-row.agents-row--nested').length, 2);
+  ctx.document.querySelector('.agents-row[data-key="bg:a2aaaaaa"]').click();
+  toggleWorktrees(ctx, false);
+  assert.equal(ctx.window.localStorage.getItem('agentsGroupWorktrees'), '0');
+  assert.deepEqual(listLayout(ctx), ['# app · 2', 'on-main', 'in-wt', '# other · 1', 'other-repo']);
+  assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:a2aaaaaa"]').classList.contains('selected'));
+  toggleWorktrees(ctx, true);
+  assert.equal(ctx.window.localStorage.getItem('agentsGroupWorktrees'), '1');
+  assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:a2aaaaaa"]').classList.contains('selected'));
+  ctx.document.querySelector('.agents-subgroup-header').click();
+  assert.equal(ctx.read('agentsSelectedKey'), 'bg:a2aaaaaa');
+  const off = setup({ storage: { agentsGroupBy: 'project', agentsGroupWorktrees: '0' } }); t.after(() => off.destroy());
+  assert.equal(off.document.getElementById('agents-group-worktrees').checked, false);
+});
+
+test('the Worktrees option is disabled outside project mode and changes nothing there', async (t) => {
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: APP_ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const box = ctx.document.getElementById('agents-group-worktrees');
+  assert.equal(box.checked, true);
+  assert.equal(box.disabled, true);
+  assert.equal(ctx.document.querySelectorAll('.agents-subgroup-header').length, 0);
+  chooseGroupBy(ctx, 'none');
+  assert.equal(box.disabled, true);
+  chooseGroupBy(ctx, 'project');
+  assert.equal(box.disabled, false);
+  assert.equal(ctx.document.querySelectorAll('.agents-subgroup-header').length, 2);
+});
+
+test('quotes and attribute payloads in a worktree path cannot inject attributes into its sub-header', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
+  const payload = 'x" class="agents-verb-btn" data-verb="stop" y=\'z';
+  const evilWt = APP + '/.claude/worktrees/' + payload;
+  ctx.setSnapshot({ roster: [APP_ROSTER[0], inApp('e1eeeeee', 'evil', evilWt)], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const head = [...ctx.document.querySelectorAll('.agents-subgroup-header')].find(h => h.getAttribute('title') === evilWt);
+  assert.ok(head);
+  assert.equal(head.className, 'agents-subgroup-header');
+  assert.equal(head.hasAttribute('data-verb'), false);
+  assert.equal(head.hasAttribute('y'), false);
+  assert.equal(head.textContent, payload + ' · 1');
+  assert.equal(ctx.document.querySelectorAll('[data-verb]').length, 0);
+});
+
+test('the worktree sub-header is smaller than the project header and distinct from rows', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  const m = css.match(/(^|\n)\.agents-subgroup-header\s*\{([^}]*)\}/);
+  assert.ok(m, 'a .agents-subgroup-header rule');
+  const size = m[2].match(/font-size:\s*([\d.]+)em/);
+  assert.ok(size && Number(size[1]) < 1.2 && Number(size[1]) >= 1, 'between the rows and the project header');
+  assert.match(m[2], /font-weight:\s*600/);
+  assert.match(m[2], /padding:[^;]*\d+px/);
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  assert.match(html, /id="agents-group-worktrees" checked/);
+  assert.match(html, /title="Sub-group each project by worktree"/);
 });
 
 test('hiding a view that is not open leaves the persisted flag untouched', (t) => {

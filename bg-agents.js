@@ -7,6 +7,7 @@ const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
 } = require('./bg-agents-roster');
+const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 const FLUSH_MS = 250;
@@ -14,6 +15,8 @@ const MAX_JOBS = 200;
 const LIST_TIMEOUT_MS = 5000;
 const VERB_TIMEOUT_MS = 15000;
 const VERBS = new Set(['stop', 'respawn', 'rm']);
+const ROOT_CACHE_MAX = 500;
+const ROOT_CONCURRENCY = 4;
 
 let jobsDir = DEFAULT_JOBS_DIR;
 let homeDir = os.homedir();
@@ -22,6 +25,11 @@ let runClaude = null;
 let cliSessionState = null;
 let makeIsOwnPid = () => () => false;
 let isAttachedHere = () => false;
+let resolveRoots = resolveProjectRoots;
+const rootCache = new Map();
+const rootPending = new Set();
+const rootQueue = [];
+let rootActive = 0;
 
 let started = false;
 let generation = 0;
@@ -44,6 +52,7 @@ function init(ctx) {
   cliSessionState = ctx.cliSessionState;
   makeIsOwnPid = ctx.makeIsOwnPid || (() => () => false);
   isAttachedHere = ctx.isAttachedHere || (() => false);
+  resolveRoots = ctx.resolveProjectRoots || resolveProjectRoots;
 }
 
 function onChange(listener) {
@@ -62,6 +71,48 @@ function emit() {
   }
 }
 
+function provisionalRoots(cwd) {
+  return { projectRoot: projectRootFromPattern(cwd) || cwd, worktreeRoot: worktreeRootFromPattern(cwd) || cwd };
+}
+
+function rootsFor(cwd) {
+  if (!cwd) return { projectRoot: null, worktreeRoot: null };
+  return rootCache.get(cwd) || provisionalRoots(cwd);
+}
+
+function pumpRoots() {
+  while (rootActive < ROOT_CONCURRENCY && rootQueue.length) {
+    const cwd = rootQueue.shift();
+    const gen = generation;
+    rootActive++;
+    Promise.resolve()
+      .then(() => resolveRoots(cwd))
+      .catch(() => null)
+      .then((roots) => {
+        if (gen !== generation) return;
+        rootActive--;
+        rootPending.delete(cwd);
+        const value = roots && roots.projectRoot
+          ? { projectRoot: roots.projectRoot, worktreeRoot: roots.worktreeRoot || roots.projectRoot }
+          : { projectRoot: cwd, worktreeRoot: cwd };
+        rootCache.set(cwd, value);
+        while (rootCache.size > ROOT_CACHE_MAX) rootCache.delete(rootCache.keys().next().value);
+        const shown = provisionalRoots(cwd);
+        if (value.projectRoot !== shown.projectRoot || value.worktreeRoot !== shown.worktreeRoot) scheduleRebuild();
+        pumpRoots();
+      });
+  }
+}
+
+function resolveMissingRoots(entries) {
+  for (const e of entries) {
+    if (!e.cwd || rootCache.has(e.cwd) || rootPending.has(e.cwd)) continue;
+    rootPending.add(e.cwd);
+    rootQueue.push(e.cwd);
+  }
+  pumpRoots();
+}
+
 function rebuild() {
   let descriptors = [];
   try { descriptors = cliSessionState ? cliSessionState.readAllDescriptors() : []; } catch {}
@@ -71,8 +122,9 @@ function rebuild() {
     descriptors,
     isOwnPid: makeIsOwnPid(),
     isAttachedHere,
-  });
+  }).map(e => ({ ...e, ...rootsFor(e.cwd) }));
   emit();
+  resolveMissingRoots(roster);
 }
 
 function scheduleRebuild() {
@@ -152,6 +204,10 @@ function stop() {
   cliList = null;
   daemonReachable = false;
   roster = [];
+  rootCache.clear();
+  rootPending.clear();
+  rootQueue.length = 0;
+  rootActive = 0;
 }
 
 async function run(argv, opts) {
@@ -216,5 +272,5 @@ async function dispatch(fields) {
 
 module.exports = {
   init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch,
-  DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
+  DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

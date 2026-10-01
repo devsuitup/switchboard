@@ -11,7 +11,8 @@ doc: `docs/background-agents.md`.
 | File | Role |
 |---|---|
 | `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
-| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `onChange` |
+| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
+| `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `bg-agents-ipc.js` | `get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `pty-ops.js` | `detachPty` |
@@ -163,10 +164,11 @@ that throws still lets the choice apply for the session. The `<select>` in
   `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the
   label and the state text stay plain text. Project headers carry no emoji.
   A new job state needs an entry here, or its rows fall into Unknown.
-- Project groups are keyed by the exact `cwd` string (no normalisation: a
-  trailing slash or a different case makes a different group); no `cwd` is
-  the "No project" group. The label is the last path segment (`/` and `\`
-  both split, so Windows paths work). Labels shared by several cwds become
+- Project groups are keyed by `entry.projectRoot || entry.cwd` (see
+  "Project and worktree roots"); the string is used as is (a trailing slash
+  or a different case makes a different group); neither is the "No project"
+  group. The label is the last path segment (`/` and `\` both split, so
+  Windows paths work). Labels shared by several roots become
   `last (parent)`; if still shared, the full path. Order: a group holding any
   `agentIsLive` entry first — interactive sessions count as live, the same
   rank `sortAgentEntries` uses — then by label, case-insensitive
@@ -181,6 +183,71 @@ that throws still lets the choice apply for the session. The `<select>` in
   `1.2em` of the list's 12px (rows are 12px), weight 600, with more padding
   above than below; the count is weight 400, smaller and `--text-muted`.
   Collapsing a group is not implemented.
+- Worktree sub-groups: `#agents-group-worktrees` sets `agentsGroupWorktrees`,
+  persisted under `localStorage.agentsGroupWorktrees` (`'0'` off; unset or
+  anything else on; read and write in try/catch). It is disabled (kept
+  visible, greyed through `:has(input:disabled)`) outside Project mode;
+  `renderAgentsView` refreshes `disabled` on every render.
+  `groupAgentEntries(entries, 'project', { worktrees: true })` adds
+  `children` (`[{ key, label, title, entries }]`) to a project group only
+  when its entries span more than one worktree (`worktreeRoot || cwd`): a
+  project living in one worktree, even a linked one, stays flat — sub-headers
+  there would only repeat the project header. "No project" never gets
+  children. Sub-group label: `main` when `key === projectRoot`, else the
+  worktree directory's last segment, disambiguated like the project labels
+  (`main` excluded). Order: live first, then main, then label. The project
+  header's count is the project total; each `.agents-subgroup-header` (1em,
+  weight 600, muted, indented, not sticky) shows its own count, title via
+  `agentsEscapeAttr`; the rows under it get `.agents-row--nested` (indent
+  only). The option is ignored in the other modes.
+
+## Project and worktree roots
+
+`project-root.js` (main process) resolves, for one cwd,
+`{ projectRoot, worktreeRoot }`: the git project's main working tree and the
+top of the worktree the cwd lives in (the cwd may be a subdirectory).
+`derive-project-path.js`'s `resolveWorktreePath` was not reused: it is
+synchronous, needs the parent to exist, only takes a cwd that is exactly
+`<root>/.claude/worktrees/<name>`, and knows nothing about `git worktree add`
+directories elsewhere.
+
+1. Pattern (pure, no fs): `<root>/.claude/worktrees/<name>[/…]`, either
+   separator → `projectRoot = <root>`, `worktreeRoot =
+   <root>/.claude/worktrees/<name>`; the lazy match takes the outermost
+   `.claude/worktrees`. Works for a directory that no longer exists (a
+   finished job whose worktree was removed). Only `.claude/worktrees` is a
+   pattern; `.worktrees` / `.claude-worktrees` go through git when they exist.
+2. Otherwise, if the cwd is an existing directory: one
+   `git -C <cwd> rev-parse --git-common-dir --show-toplevel` through
+   `execFile` (argv array, no shell, `cwd` option, `GIT_TIMEOUT_MS` = 2 s,
+   `GIT_*` variables stripped from the env so an inherited `GIT_DIR` — e.g.
+   from a git hook — cannot point it at another repo). `worktreeRoot` = the
+   top-level; `projectRoot` = the parent of the common dir when it is named
+   `.git`, else (bare repo, submodule whose common dir is
+   `.git/modules/<sub>`) the top-level.
+3. Anything else — missing directory, not a repository, git missing, timeout,
+   a throw — gives `{ cwd, cwd }`. It never throws.
+
+`bg-agents.js` attaches both fields to every roster entry (background and
+interactive) in `rebuild()`: a cached value, else the pattern result or the
+cwd itself, so the roster renders at once. Then `resolveMissingRoots` queues
+every cwd not cached nor pending (at most `ROOT_CONCURRENCY` = 4 resolutions
+at a time, never awaited by `reconcile`/`get-bg-agents`). A finished
+resolution is cached (`rootCache`, a Map per cwd, `ROOT_CACHE_MAX` = 500,
+oldest evicted first) and calls `scheduleRebuild()` only when it differs from
+the provisional value, so a cwd that resolves to itself costs no change
+event. A failure is cached as the cwd, so git is never re-run for a known
+cwd until `stop()` (which clears the cache, the queue, and — through
+`generation` — drops resolutions still in flight). The resolver is
+injectable (`init({ resolveProjectRoots })`) for tests.
+
+Known limits: the cache is never invalidated while the watchers run — a repo
+moved or deleted, a directory that becomes a git repo later, or a git call
+that timed out once keeps its first answer until the window's `closed`
+handler (or a re-init) calls `stop()`. A submodule is grouped as its own
+project, not under its superproject. Two different spellings of one path
+(symlink, case on Windows) can still make two groups, since the pattern
+branch and the fallback keep the cwd's spelling.
 
 ## The sidebar
 

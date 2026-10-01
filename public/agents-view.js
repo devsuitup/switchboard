@@ -8,6 +8,7 @@ let agentsDaemonReachable = true;
 let agentsSelectedKey = null;
 let agentsShowFinished = true;
 let agentsGroupBy = 'state';
+let agentsGroupWorktrees = true;
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
@@ -69,38 +70,66 @@ function agentPathSegments(cwd) {
   return String(cwd).split(/[\\/]+/).filter(Boolean);
 }
 
-function groupAgentsByProject(entries) {
-  const byCwd = new Map();
+function bucketAgentsByPath(entries, keyOf) {
+  const buckets = new Map();
   for (const entry of entries) {
-    const key = entry.cwd || '';
-    if (!byCwd.has(key)) byCwd.set(key, []);
-    byCwd.get(key).push(entry);
+    const key = keyOf(entry) || '';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(entry);
   }
-  const groups = [...byCwd].map(([key, list]) => {
+  return [...buckets].map(([key, list]) => {
     const segs = agentPathSegments(key);
-    return { key, segs, label: key ? (segs[segs.length - 1] || key) : 'No project', title: key, entries: list };
+    return { key, segs, label: segs[segs.length - 1] || key, title: key, entries: list };
   });
+}
+
+function disambiguatePathLabels(groups, eligible) {
   const relabel = (pick) => {
     const counts = new Map();
-    for (const g of groups) if (g.key) counts.set(g.label, (counts.get(g.label) || 0) + 1);
-    for (const g of groups) if (g.key && counts.get(g.label) > 1) g.label = pick(g);
+    for (const g of groups) if (eligible(g)) counts.set(g.label, (counts.get(g.label) || 0) + 1);
+    for (const g of groups) if (eligible(g) && counts.get(g.label) > 1) g.label = pick(g);
   };
   relabel((g) => (g.segs.length > 1 ? `${g.segs[g.segs.length - 1]} (${g.segs[g.segs.length - 2]})` : g.key));
   relabel((g) => g.key);
-  const rank = (g) => (g.entries.some(agentIsLive) ? 0 : 1);
-  groups.sort((a, b) => {
-    if (rank(a) !== rank(b)) return rank(a) - rank(b);
-    if (!a.key !== !b.key) return a.key ? -1 : 1;
-    return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
-  });
+}
+
+function agentLiveRank(group) {
+  return group.entries.some(agentIsLive) ? 0 : 1;
+}
+
+function agentsByLabel(a, b) {
+  return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+}
+
+function groupAgentsByWorktree(projectKey, entries) {
+  const groups = bucketAgentsByPath(entries, e => e.worktreeRoot || e.cwd);
+  for (const g of groups) g.main = !!projectKey && g.key === projectKey;
+  for (const g of groups) if (g.main) g.label = 'main';
+  disambiguatePathLabels(groups, g => !g.main);
+  groups.sort((a, b) => agentLiveRank(a) - agentLiveRank(b) || Number(b.main) - Number(a.main) || agentsByLabel(a, b));
   return groups.map(({ key, label, title, entries: list }) => ({ key, label, title, entries: list }));
 }
 
-function groupAgentEntries(entries, mode) {
+function groupAgentsByProject(entries, worktrees) {
+  const groups = bucketAgentsByPath(entries, e => e.projectRoot || e.cwd);
+  for (const g of groups) if (!g.key) g.label = 'No project';
+  disambiguatePathLabels(groups, g => !!g.key);
+  groups.sort((a, b) => agentLiveRank(a) - agentLiveRank(b) || Number(!a.key) - Number(!b.key) || agentsByLabel(a, b));
+  return groups.map(({ key, label, title, entries: list }) => {
+    const group = { key, label, title, entries: list };
+    if (worktrees && key) {
+      const children = groupAgentsByWorktree(key, list);
+      if (children.length > 1) group.children = children;
+    }
+    return group;
+  });
+}
+
+function groupAgentEntries(entries, mode, opts = {}) {
   if (!entries.length) return [];
   const m = normalizeAgentsGroupBy(mode);
   if (m === 'none') return [{ key: '', label: '', title: '', entries: entries.slice() }];
-  if (m === 'project') return groupAgentsByProject(entries);
+  if (m === 'project') return groupAgentsByProject(entries, !!opts.worktrees);
   return Object.entries(AGENT_STATE_META)
     .map(([key, meta]) => ({ key, label: meta.label, emoji: meta.emoji, title: '', entries: entries.filter(e => agentStateGroupKey(e) === key) }))
     .filter(g => g.entries.length);
@@ -179,13 +208,14 @@ function selectAgentsRow(id) {
   if (agentsViewActive) renderAgentsView();
 }
 
-function renderAgentRow(entry) {
+function renderAgentRow(entry, nested = false) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
   const state = entry.kind === 'interactive' ? 'external' : (entry.state || '?');
   const stateEmoji = agentStateMeta(entry).emoji;
   const status = entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];
+  if (nested) classes.push('agents-row--nested');
   if (key === agentsSelectedKey) classes.push('selected');
   if (agentsPendingVerbs.has(key)) classes.push('pending');
   return `<div class="${classes.join(' ')}" data-key="${agentsEscapeAttr(key)}">
@@ -204,11 +234,26 @@ function renderAgentGroupHeader(group) {
   return `<div class="agents-group-header" data-group="${agentsEscapeAttr(group.key)}"${title}>${emoji}<span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
 }
 
+function renderAgentSubgroupHeader(group) {
+  const title = group.title ? ` title="${agentsEscapeAttr(group.title)}"` : '';
+  return `<div class="agents-subgroup-header" data-subgroup="${agentsEscapeAttr(group.key)}"${title}><span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+}
+
 function renderAgentList(visible) {
-  if (agentsGroupBy === 'none') return visible.map(renderAgentRow).join('');
-  return groupAgentEntries(visible, agentsGroupBy)
-    .map(g => renderAgentGroupHeader(g) + g.entries.map(renderAgentRow).join(''))
+  if (agentsGroupBy === 'none') return visible.map(e => renderAgentRow(e)).join('');
+  return groupAgentEntries(visible, agentsGroupBy, { worktrees: agentsGroupWorktrees })
+    .map(g => renderAgentGroupHeader(g) + (g.children
+      ? g.children.map(c => renderAgentSubgroupHeader(c) + c.entries.map(e => renderAgentRow(e, true)).join('')).join('')
+      : g.entries.map(e => renderAgentRow(e)).join('')))
     .join('');
+}
+
+function readAgentsGroupWorktrees() {
+  try {
+    return localStorage.getItem('agentsGroupWorktrees') !== '0';
+  } catch {
+    return true;
+  }
 }
 
 function readAgentsGroupBy() {
@@ -265,6 +310,8 @@ function renderAgentsView() {
   const visible = sortAgentEntries(agentsRoster.filter(e => agentsShowFinished || agentIsLive(e)));
   const running = agentsRoster.filter(agentJobIsLive).length;
   const finished = agentsRoster.filter(e => e.kind === 'background' && !agentJobIsLive(e)).length;
+  const worktreesBox = document.getElementById('agents-group-worktrees');
+  if (worktreesBox) worktreesBox.disabled = agentsGroupBy !== 'project';
   if (countEl) countEl.textContent = `${running} running · ${finished} finished`;
   if (bannerEl) {
     bannerEl.textContent = 'The daemon is not answering; state comes from files only.';
@@ -400,6 +447,17 @@ function initAgentsView() {
     groupSel.addEventListener('change', () => {
       agentsGroupBy = normalizeAgentsGroupBy(groupSel.value);
       try { localStorage.setItem('agentsGroupBy', agentsGroupBy); } catch {}
+      renderAgentsView();
+    });
+  }
+  agentsGroupWorktrees = readAgentsGroupWorktrees();
+  const worktreesBox = document.getElementById('agents-group-worktrees');
+  if (worktreesBox) {
+    worktreesBox.checked = agentsGroupWorktrees;
+    worktreesBox.disabled = agentsGroupBy !== 'project';
+    worktreesBox.addEventListener('change', () => {
+      agentsGroupWorktrees = worktreesBox.checked;
+      try { localStorage.setItem('agentsGroupWorktrees', agentsGroupWorktrees ? '1' : '0'); } catch {}
       renderAgentsView();
     });
   }
