@@ -236,8 +236,7 @@ function buildRemoteCommandArgs(alias, command, { input } = {}) {
 // Default stdout cap for a single ssh exec — see .ai/contexts/changes-view.md ("Remote transport stdout cap").
 const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap")
-// `input`: written to the child's stdin, then stdin is closed — see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap"); `input` — .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
 function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn, input, resolveSshPath = defaultResolveSshPath } = {}) {
   const spawn = spawnFn || require('child_process').spawn;
   const stdoutCap = typeof maxStdoutBytes === 'number' ? maxStdoutBytes : DEFAULT_MAX_STDOUT_BYTES;

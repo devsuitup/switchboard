@@ -481,7 +481,6 @@ function showSendPromptDialog(session) {
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
   }
 
   async function send() {
@@ -508,11 +507,10 @@ function showSendPromptDialog(session) {
   sendBtn.onclick = send;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  function onKey(e) {
+  overlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') close();
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
-  }
-  document.addEventListener('keydown', onKey);
+  });
 }
 
 // Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)

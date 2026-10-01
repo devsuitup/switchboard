@@ -17,6 +17,7 @@ const NOT_CLAUDE_EXIT_CODE = 7;
 const NO_SOCKET_EXIT_CODE = 8;
 const NC_MISSING_EXIT_CODE = 127;
 const SOCKET_PATH_RE = /^\/[A-Za-z0-9._/-]+\.sock$/;
+const OPENBSD_NC_USAGE_RE = 'usage: nc \[-[0-9A-Za-z]*N[0-9A-Za-z]*U';
 const WINDOWS_PIPE_PREFIX = '\\\\.\\pipe\\';
 
 function validateSocketPath(value) {
@@ -37,8 +38,8 @@ function buildPromptLine(content, sessionId) {
 
 function buildDeliverSegment(socketPath) {
   const p = shellSingleQuote(socketPath);
-  return `if command -v ncat >/dev/null 2>&1; then exec ncat --send-only -U ${p}; ` +
-    `elif command -v nc >/dev/null 2>&1; then exec nc -N -U ${p}; ` +
+  return `if command -v ncat >/dev/null 2>&1 && ncat --help 2>&1 | grep -q -- --send-only; then exec ncat --send-only -U ${p}; ` +
+    `elif command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -Eq '${OPENBSD_NC_USAGE_RE}'; then exec nc -N -U ${p}; ` +
     `else exit ${NC_MISSING_EXIT_CODE}; fi`;
 }
 
@@ -89,6 +90,7 @@ function createRemoteSendAdapter(opts = {}) {
     if (recent.has(key)) {
       return { ok: false, error: 'the same text was sent to this session less than 30 s ago — the session drops it' };
     }
+    recent.set(key, at);
 
     let result;
     try {
@@ -97,11 +99,16 @@ function createRemoteSendAdapter(opts = {}) {
         input: line,
       });
     } catch (err) {
+      recent.delete(key);
       return { ok: false, error: `send failed: ${err.message}` };
     }
-    if (!result) return { ok: false, error: 'send failed: no response' };
+    if (!result) {
+      recent.delete(key);
+      return { ok: false, error: 'send failed: no response' };
+    }
 
-    if (result.timedOut) return { ok: false, error: 'send failed: no confirmation that the line was written (timed out)' };
+    if (result.timedOut) return { ok: false, error: 'send failed: no confirmation that the line was written — it may have been sent (timed out)' };
+    if (result.code !== 0) recent.delete(key);
     if (result.code === NOT_CLAUDE_EXIT_CODE) {
       return { ok: false, error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
     }
@@ -116,7 +123,6 @@ function createRemoteSendAdapter(opts = {}) {
       return { ok: false, error: `send failed (exit ${result.code}): ${reason}` };
     }
 
-    recent.set(key, at);
     log.info(`[remote-send:${alias}] wrote ${Buffer.byteLength(line)} bytes to pid ${descriptor.pid}`);
     return { ok: true };
   }
@@ -133,6 +139,7 @@ async function handleSendRequest(payload, deps) {
   }
   const descriptor = deps.getDescriptor(alias, sessionId);
   if (!descriptor) return { ok: false, error: 'session not found on that host' };
+  if (text.length > MAX_LINE_BYTES) return { ok: false, error: 'the prompt is over 1 MiB once encoded' };
   if (deps.isAttached(sessionId)) {
     return { ok: false, error: 'the session is attached in a terminal — type the prompt there' };
   }

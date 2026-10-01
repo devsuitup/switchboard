@@ -25,7 +25,8 @@ function setup(sendResult) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
   for (const f of ['setting-defaults.js', 'utils.js', 'dialogs.js']) {
-    vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
+    const file = path.join(PUBLIC_DIR, f);
+    vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }
   return { window, document: window.document, calls, destroy() { window.close(); } };
 }
@@ -85,9 +86,36 @@ test('Cancel and Escape close the dialog without sending', () => {
     ctx.document.querySelector('.new-session-cancel-btn').click();
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
     ctx.window.showSendPromptDialog(SESSION);
-    ctx.document.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape' }));
+    ctx.document.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.notEqual(ctx.document.querySelector('.new-session-overlay'), null, 'an Escape aimed elsewhere does not close it');
+    ctx.document.querySelector('textarea').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
     assert.equal(ctx.calls.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('Ctrl+Enter in the textarea sends', async () => {
+  const ctx = setup({ ok: true });
+  try {
+    ctx.window.showSendPromptDialog(SESSION);
+    const textarea = ctx.document.querySelector('textarea');
+    textarea.value = 'go';
+    textarea.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+    await tick();
+    assert.equal(ctx.calls.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('a rejected send shows its message instead of throwing', async () => {
+  const ctx = setup({ ok: true });
+  try {
+    ctx.window.api.remoteSendPrompt = () => Promise.reject(new Error('ipc down'));
+    ctx.window.showSendPromptDialog(SESSION);
+    const dialog = ctx.document.querySelector('.new-session-dialog');
+    dialog.querySelector('textarea').value = 'x';
+    dialog.querySelector('.send-prompt-send-btn').click();
+    await tick();
+    assert.match(dialog.querySelector('.send-prompt-status').textContent, /ipc down/);
   } finally { ctx.destroy(); }
 });
 
