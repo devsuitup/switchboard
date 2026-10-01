@@ -477,7 +477,9 @@ function showSendPromptDialog(session) {
   dialog.append(title, textarea, status, actions);
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
+  overlay.tabIndex = -1;
   textarea.focus();
+  dialog.addEventListener('click', (e) => { if (e.target !== textarea) textarea.focus(); });
 
   function close() {
     overlay.remove();

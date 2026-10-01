@@ -15,7 +15,9 @@ const { spawnSync } = require('child_process');
 const {
   buildPromptLine,
   buildSendCommand,
+  buildSendScript,
   buildDeliverSegment,
+  OPENBSD_NC_USAGE_RE,
   validateSocketPath,
   createRemoteSendAdapter,
   handleSendRequest,
@@ -90,8 +92,17 @@ test('validateSocketPath: hostile, relative, dot-dot, odd-suffix and over-long p
 
 // --- buildSendCommand ------------------------------------------------------
 
-test('buildSendCommand: fixed text, the integer pid and the single-quoted path only', () => {
+test('buildSendCommand: the whole script is one single-quoted argument of sh -c, whatever the login shell', () => {
+  const script = buildSendScript(4242, SOCKET);
   const cmd = buildSendCommand(4242, SOCKET);
+  assert.ok(cmd.startsWith("sh -c '"), 'a fish or csh login shell only ever parses sh -c <one word>');
+  assert.equal(cmd, `sh -c ${"'" + script.replace(/'/g, "'\\''") + "'"}`);
+  const outsideQuotes = cmd.replace(/'(?:[^']|'\\'')*'/g, '');
+  assert.equal(outsideQuotes, 'sh -c ', 'nothing of the script is left for the login shell to parse');
+});
+
+test('buildSendScript: fixed text, the integer pid and the single-quoted path only', () => {
+  const cmd = buildSendScript(4242, SOCKET);
   assert.ok(cmd.includes(`'${SOCKET}'`));
   assert.match(cmd, /\/proc\/4242\/cmdline/);
   assert.match(cmd, /-S '\/run\/user\/1000\/cc-socks\/4242\.sock'/);
@@ -100,11 +111,24 @@ test('buildSendCommand: fixed text, the integer pid and the single-quoted path o
   assert.ok(cmd.indexOf('/proc/4242/cmdline') < cmd.indexOf('-S '), 'the pid check runs before the socket test');
 });
 
+test('OPENBSD_NC_USAGE_RE: the pattern grep receives is the intended one, run through a real grep', { skip: (() => { const r = spawnSync('grep', ['-E', 'a'], { input: 'a' }); return r.error ? 'grep is not available here' : false; })() }, () => {
+  assert.equal(OPENBSD_NC_USAGE_RE, 'usage: nc \\[-[0-9A-Za-z]*N[0-9A-Za-z]*U');
+  assert.ok(buildDeliverSegment(SOCKET).includes(`grep -Eq '${OPENBSD_NC_USAGE_RE}'`));
+  const matches = (text) => spawnSync('grep', ['-Eq', OPENBSD_NC_USAGE_RE], { input: text }).status === 0;
+  assert.equal(matches(OPENBSD_HELP), true);
+  assert.equal(matches('usage: nc [-46CDdFhklNnrStvZz] [-I length]'), false, 'no U in the cluster');
+  assert.equal(matches('usage: nc [-46CDdFhklnrStUvZz] [-I length]'), false, 'no N in the cluster');
+  assert.equal(matches('usage: nc N U'), false, 'a literal bracket is required');
+  assert.equal(matches(BUSYBOX_HELP), false);
+  assert.equal(matches(TRADITIONAL_HELP), false);
+});
+
 test('buildSendCommand: refuses an unsafe path or a bad pid by throwing, never by building', () => {
   assert.throws(() => buildSendCommand(4242, "/tmp/x'; touch y; '.sock"));
   assert.throws(() => buildSendCommand(4242, '/tmp/../x.sock'));
   assert.throws(() => buildSendCommand('4242; id', SOCKET));
   assert.throws(() => buildSendCommand(-1, SOCKET));
+  assert.throws(() => buildSendScript(4242, '/tmp/../x.sock'));
 });
 
 // --- adapter: argv and stdin -----------------------------------------------

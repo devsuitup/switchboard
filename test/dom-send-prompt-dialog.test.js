@@ -79,6 +79,36 @@ test('a refusal shows the reason and keeps the text for a retry', async () => {
   } finally { ctx.destroy(); }
 });
 
+test('a session without a session id is sent as is and the main-side refusal is shown', async () => {
+  const ctx = setup({ ok: false, error: 'invalid request' });
+  try {
+    ctx.window.showSendPromptDialog({ remoteAlias: 'planificator' });
+    const dialog = ctx.document.querySelector('.new-session-dialog');
+    dialog.querySelector('textarea').value = 'x';
+    dialog.querySelector('.send-prompt-send-btn').click();
+    await tick();
+    assert.deepEqual(ctx.calls, [['planificator', undefined, 'x']]);
+    assert.match(dialog.querySelector('.send-prompt-status').textContent, /invalid request/);
+  } finally { ctx.destroy(); }
+});
+
+test('focus stays in the dialog: the overlay is focusable and a click inside returns focus to the textarea, so Escape works', () => {
+  const ctx = setup({ ok: true });
+  try {
+    ctx.window.showSendPromptDialog(SESSION);
+    const overlay = ctx.document.querySelector('.new-session-overlay');
+    const textarea = ctx.document.querySelector('textarea');
+    assert.equal(overlay.getAttribute('tabindex'), '-1');
+    assert.equal(ctx.document.activeElement, textarea, 'focused on open');
+    textarea.blur();
+    assert.notEqual(ctx.document.activeElement, textarea);
+    ctx.document.querySelector('.new-session-dialog h3').click();
+    assert.equal(ctx.document.activeElement, textarea, 'focus comes back after a click on non-input text');
+    overlay.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+  } finally { ctx.destroy(); }
+});
+
 test('Cancel and Escape close the dialog without sending', () => {
   const ctx = setup({ ok: true });
   try {

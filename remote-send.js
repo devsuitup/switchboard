@@ -17,7 +17,7 @@ const NOT_CLAUDE_EXIT_CODE = 7;
 const NO_SOCKET_EXIT_CODE = 8;
 const NC_MISSING_EXIT_CODE = 127;
 const SOCKET_PATH_RE = /^\/[A-Za-z0-9._/-]+\.sock$/;
-const OPENBSD_NC_USAGE_RE = 'usage: nc \[-[0-9A-Za-z]*N[0-9A-Za-z]*U';
+const OPENBSD_NC_USAGE_RE = String.raw`usage: nc \[-[0-9A-Za-z]*N[0-9A-Za-z]*U`;
 const WINDOWS_PIPE_PREFIX = '\\\\.\\pipe\\';
 
 function validateSocketPath(value) {
@@ -43,13 +43,17 @@ function buildDeliverSegment(socketPath) {
     `else exit ${NC_MISSING_EXIT_CODE}; fi`;
 }
 
-function buildSendCommand(pid, socketPath) {
+function buildSendScript(pid, socketPath) {
   if (!isValidPid(pid)) throw new Error('invalid pid');
   const checked = validateSocketPath(socketPath);
   if (!checked.ok) throw new Error(checked.error);
   return `alive=$(${buildProcCmdlineCheck(pid)}); if [ "$alive" != "1" ]; then exit ${NOT_CLAUDE_EXIT_CODE}; fi; ` +
     `[ -S ${shellSingleQuote(socketPath)} ] || exit ${NO_SOCKET_EXIT_CODE}; ` +
     buildDeliverSegment(socketPath);
+}
+
+function buildSendCommand(pid, socketPath) {
+  return `sh -c ${shellSingleQuote(buildSendScript(pid, socketPath))}`;
 }
 
 function createRemoteSendAdapter(opts = {}) {
@@ -139,7 +143,7 @@ async function handleSendRequest(payload, deps) {
   }
   const descriptor = deps.getDescriptor(alias, sessionId);
   if (!descriptor) return { ok: false, error: 'session not found on that host' };
-  if (text.length > MAX_LINE_BYTES) return { ok: false, error: 'the prompt is over 1 MiB once encoded' };
+  if (text.length > MAX_LINE_BYTES) return { ok: false, error: 'the prompt is longer than 1 MiB' };
   if (deps.isAttached(sessionId)) {
     return { ok: false, error: 'the session is attached in a terminal — type the prompt there' };
   }
@@ -151,7 +155,9 @@ module.exports = {
   handleSendRequest,
   buildPromptLine,
   buildSendCommand,
+  buildSendScript,
   buildDeliverSegment,
+  OPENBSD_NC_USAGE_RE,
   validateSocketPath,
   MAX_LINE_BYTES,
   DEDUPE_WINDOW_MS,

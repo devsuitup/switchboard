@@ -765,6 +765,10 @@ from the descriptor the refresh cycle already pulls.
   dropped, the line is written and stdin closed. Same spawn site as every other
   remote ssh, so `remote-ssh-spawn-sites.test.js` is unchanged. The remote
   command holds fixed text, the integer pid and the single-quoted path.
+  The script is passed as `sh -c '<script>'` (one single-quoted word), so the
+  login shell of the host never parses it; `$(...)` and `if ...; then` fail under
+  fish. The tmux probe and stop commands in `remote-attach.js` / `remote-stop.js`
+  are still raw strings and share that problem; not changed here.
 - **The path is main-side only.** `messagingSocketPath` stays in the descriptor
   `parseSessions` keeps; the renderer sends `{alias, sessionId, text}` and
   `handleSendRequest` looks the descriptor up. `validateSocketPath` is stricter
