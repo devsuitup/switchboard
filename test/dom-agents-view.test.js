@@ -17,6 +17,7 @@ const HTML = `<!DOCTYPE html><html><body>
   <div id="agents-viewer" style="display:none;">
     <div id="agents-viewer-header"><span id="agents-viewer-title">Agents</span><span id="agents-viewer-count"></span>
       <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
+      <label id="agents-group-toggle">Group <select id="agents-group-by"><option value="none">None</option><option value="state">State</option><option value="project">Project</option></select></label>
       <button id="agents-new-btn" type="button">New agent</button></div>
     <div id="agents-viewer-banner" style="display:none;"></div>
     <div id="agents-viewer-body"><div id="agents-list"></div><div id="agents-detail"></div></div>
@@ -272,6 +273,116 @@ test('a failed job reads "failed", counts as finished and is hidden by the Finis
   box.checked = false;
   box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
   assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]'), null);
+});
+
+function chooseGroupBy(ctx, mode) {
+  const sel = ctx.document.getElementById('agents-group-by');
+  sel.value = mode;
+  sel.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+}
+
+function listLayout(ctx) {
+  return [...ctx.document.getElementById('agents-list').children].map(el =>
+    el.classList.contains('agents-group-header') ? '# ' + el.textContent : el.querySelector('.agents-row-name').textContent);
+}
+
+test('group by state: a header per non-empty group with its count, each row once, no header without the mode', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
+  chooseGroupBy(ctx, 'state');
+  assert.deepEqual(listLayout(ctx), ['# Working · 1', 'em-platform', '# Done · 1', 'spike', '# Failed · 1', 'broke', '# External · 1', 'lvds-1b']);
+  assert.equal(ctx.document.querySelectorAll('.agents-row').length, 4);
+  assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), 'state');
+  chooseGroupBy(ctx, 'none');
+  assert.deepEqual(listLayout(ctx), ['lvds-1b', 'em-platform', 'spike', 'broke']);
+});
+
+test('group by project: headers labelled by the last segment with the full path as title, live groups first', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const second = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'em-two', state: 'done', startedAt: Date.now() - 120_000 };
+  const homeless = { ...ROSTER[1], id: 'dddddddd', sessionId: 's-d', name: 'nowhere', cwd: null };
+  ctx.setSnapshot({ roster: [...ROSTER, second, homeless], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  chooseGroupBy(ctx, 'project');
+  assert.deepEqual(listLayout(ctx), ['# em · 2', 'em-platform', 'em-two', '# l · 1', 'lvds-1b', '# f · 1', 'spike', '# No project · 1', 'nowhere']);
+  const head = ctx.document.querySelector('.agents-group-header');
+  assert.equal(head.getAttribute('title'), '/w/em');
+  assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), 'project');
+});
+
+test('the Finished filter applies before grouping: a group left empty is not shown', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  chooseGroupBy(ctx, 'state');
+  const box = ctx.document.getElementById('agents-show-finished');
+  box.checked = false;
+  box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+  assert.deepEqual(listLayout(ctx), ['# Working · 1', 'em-platform', '# External · 1', 'lvds-1b']);
+  ctx.emitChanged({ roster: [], daemonReachable: true });
+  assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
+  assert.match(ctx.document.getElementById('agents-list').textContent, /No background agents/);
+});
+
+test('the selected row stays selected across a regroup, and a click on a header does nothing', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]').click();
+  chooseGroupBy(ctx, 'project');
+  assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]').classList.contains('selected'));
+  chooseGroupBy(ctx, 'state');
+  assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]').classList.contains('selected'));
+  ctx.document.querySelector('.agents-group-header').click();
+  assert.equal(ctx.read('agentsSelectedKey'), 'bg:bbbbbbbb');
+  assert.equal(ctx.document.querySelectorAll('.agents-row.selected').length, 1);
+  assert.match(ctx.document.getElementById('agents-detail').textContent, /spike/);
+  assert.equal(ctx.calls.verbs.length, 0);
+});
+
+test('the grouping is restored from storage; an invalid stored value falls back to none', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  assert.equal(ctx.document.getElementById('agents-group-by').value, 'project');
+  assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 3);
+  const bad = setup({ storage: { agentsGroupBy: 'evil" onclick="x' } }); t.after(() => bad.destroy());
+  bad.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await bad.window.showAgentsView();
+  assert.equal(bad.document.getElementById('agents-group-by').value, 'none');
+  assert.equal(bad.document.querySelectorAll('.agents-group-header').length, 0);
+});
+
+test('a throwing localStorage leaves the grouping at none and choosing one still works', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  Object.defineProperty(ctx.window, 'localStorage', { configurable: true, get() { throw new Error('denied'); } });
+  assert.equal(ctx.window.readAgentsGroupBy(), 'none');
+  chooseGroupBy(ctx, 'state');
+  assert.equal(ctx.read('agentsGroupBy'), 'state');
+  assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 3);
+});
+
+test('quotes and attribute payloads in a cwd used as a project group title cannot inject attributes', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const payload = 'x" class="agents-verb-btn" data-verb="stop" y=\'z';
+  const evil = { ...ROSTER[1], id: 'cccccccc', cwd: '/w/' + payload };
+  ctx.setSnapshot({ roster: [evil], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  chooseGroupBy(ctx, 'project');
+  const head = ctx.document.querySelector('.agents-group-header');
+  assert.equal(head.getAttribute('title'), '/w/' + payload);
+  assert.equal(head.className, 'agents-group-header');
+  assert.equal(head.hasAttribute('data-verb'), false);
+  assert.equal(head.hasAttribute('y'), false);
+  assert.equal(head.textContent, payload + ' · 1');
+  assert.equal(ctx.document.querySelectorAll('[data-verb]').length, 0);
+  head.click();
+  assert.equal(ctx.calls.verbs.length, 0);
 });
 
 test('hiding a view that is not open leaves the persisted flag untouched', (t) => {

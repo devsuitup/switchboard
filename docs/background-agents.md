@@ -24,6 +24,20 @@ first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
 the choice is remembered. The list refreshes when the daemon's files change,
 and is re-read from the CLI every 30 seconds while the view is open.
 
+**Group**, next to Finished, splits the list into sections with a header
+each (its name and how many rows it holds):
+
+- **None** (the default): one flat list.
+- **State**: Working, Blocked, Done, Stopped, Failed, then External for the
+  interactive sessions running outside Switchboard, then Unknown.
+- **Project**: one section per directory, named after its last folder (hover
+  the header for the full path; two projects with the same folder name show
+  their parent folder too). Projects with something running come first, then
+  the rest alphabetically; sessions without a directory go under No project.
+
+Rows keep their usual order inside a section, the Finished filter applies
+first (a section left empty is not shown), and the choice is remembered.
+
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` both count as live; the other three are finished.

@@ -7,6 +7,7 @@ let agentsRoster = [];
 let agentsDaemonReachable = true;
 let agentsSelectedKey = null;
 let agentsShowFinished = true;
+let agentsGroupBy = 'none';
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
@@ -36,6 +37,62 @@ function sortAgentEntries(entries) {
     const sb = Number.isFinite(b.startedAt) ? b.startedAt : -Infinity;
     return sb - sa;
   });
+}
+
+const AGENTS_GROUP_MODES = ['none', 'state', 'project'];
+const AGENTS_STATE_GROUPS = [
+  ['working', 'Working'], ['blocked', 'Blocked'], ['done', 'Done'], ['stopped', 'Stopped'],
+  ['failed', 'Failed'], ['external', 'External'], ['unknown', 'Unknown'],
+];
+
+function normalizeAgentsGroupBy(value) {
+  return AGENTS_GROUP_MODES.includes(value) ? value : 'none';
+}
+
+function agentStateGroupKey(entry) {
+  if (entry.kind === 'interactive') return 'external';
+  return ['working', 'blocked', 'done', 'stopped', 'failed'].includes(entry.state) ? entry.state : 'unknown';
+}
+
+function agentPathSegments(cwd) {
+  return String(cwd).split(/[\\/]+/).filter(Boolean);
+}
+
+function groupAgentsByProject(entries) {
+  const byCwd = new Map();
+  for (const entry of entries) {
+    const key = entry.cwd || '';
+    if (!byCwd.has(key)) byCwd.set(key, []);
+    byCwd.get(key).push(entry);
+  }
+  const groups = [...byCwd].map(([key, list]) => {
+    const segs = agentPathSegments(key);
+    return { key, segs, label: key ? (segs[segs.length - 1] || key) : 'No project', title: key, entries: list };
+  });
+  const relabel = (pick) => {
+    const counts = new Map();
+    for (const g of groups) if (g.key) counts.set(g.label, (counts.get(g.label) || 0) + 1);
+    for (const g of groups) if (g.key && counts.get(g.label) > 1) g.label = pick(g);
+  };
+  relabel((g) => (g.segs.length > 1 ? `${g.segs[g.segs.length - 1]} (${g.segs[g.segs.length - 2]})` : g.key));
+  relabel((g) => g.key);
+  const rank = (g) => (g.entries.some(agentIsLive) ? 0 : 1);
+  groups.sort((a, b) => {
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    if (!a.key !== !b.key) return a.key ? -1 : 1;
+    return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+  });
+  return groups.map(({ key, label, title, entries: list }) => ({ key, label, title, entries: list }));
+}
+
+function groupAgentEntries(entries, mode) {
+  if (!entries.length) return [];
+  const m = normalizeAgentsGroupBy(mode);
+  if (m === 'none') return [{ key: '', label: '', title: '', entries: entries.slice() }];
+  if (m === 'project') return groupAgentsByProject(entries);
+  return AGENTS_STATE_GROUPS
+    .map(([key, label]) => ({ key, label, title: '', entries: entries.filter(e => agentStateGroupKey(e) === key) }))
+    .filter(g => g.entries.length);
 }
 
 function agentRowIcon(entry) {
@@ -129,6 +186,26 @@ function renderAgentRow(entry) {
   </div>`;
 }
 
+function renderAgentGroupHeader(group) {
+  const title = group.title ? ` title="${agentsEscapeAttr(group.title)}"` : '';
+  return `<div class="agents-group-header" data-group="${agentsEscapeAttr(group.key)}"${title}><span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+}
+
+function renderAgentList(visible) {
+  if (agentsGroupBy === 'none') return visible.map(renderAgentRow).join('');
+  return groupAgentEntries(visible, agentsGroupBy)
+    .map(g => renderAgentGroupHeader(g) + g.entries.map(renderAgentRow).join(''))
+    .join('');
+}
+
+function readAgentsGroupBy() {
+  try {
+    return normalizeAgentsGroupBy(localStorage.getItem('agentsGroupBy'));
+  } catch {
+    return 'none';
+  }
+}
+
 function renderAgentDetail(entry) {
   const key = agentsEntryKey(entry);
   const v = agentVerbAvailability(entry, agentsDaemonReachable);
@@ -185,7 +262,7 @@ function renderAgentsView() {
   const nextList = document.createElement('div');
   nextList.id = 'agents-list';
   nextList.innerHTML = visible.length
-    ? visible.map(renderAgentRow).join('')
+    ? renderAgentList(visible)
     : '<div class="plans-empty">No background agents. <code>claude --bg</code> starts one, or New agent.</div>';
   morphdom(listEl, nextList);
 
@@ -303,6 +380,16 @@ function initAgentsView() {
       renderAgentsView();
     });
   }
+  agentsGroupBy = readAgentsGroupBy();
+  const groupSel = document.getElementById('agents-group-by');
+  if (groupSel) {
+    groupSel.value = agentsGroupBy;
+    groupSel.addEventListener('change', () => {
+      agentsGroupBy = normalizeAgentsGroupBy(groupSel.value);
+      try { localStorage.setItem('agentsGroupBy', agentsGroupBy); } catch {}
+      renderAgentsView();
+    });
+  }
   const newBtn = document.getElementById('agents-new-btn');
   if (newBtn) {
     newBtn.addEventListener('click', () => {
@@ -336,5 +423,5 @@ function initAgentsView() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey };
+  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy };
 }

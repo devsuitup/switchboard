@@ -16,7 +16,7 @@ doc: `docs/background-agents.md`.
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `pty-ops.js` | `detachPty` |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; `bgAgents.stop()` in the window's `closed` handler |
-| `public/agents-view.js` | The view; `agentJobIsLive`; `bgAgentSessionIds` for the sidebar badge |
+| `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
 | `public/dialogs.js` | `showDispatchAgentDialog` |
 | `public/shortcuts.js` | The rebindable `agentsToggle` (default Primary+Shift+`A`) |
@@ -110,7 +110,8 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   `restoreAgentsViewAtStartup()` after the working set is restored, so the
   view is shown once the restored sessions are open.
   `agentsShowFinished` persists under `localStorage.agentsShowFinished`
-  (`'0'` hides finished sessions).
+  (`'0'` hides finished sessions); the grouping under
+  `localStorage.agentsGroupBy` (see "Group by").
 - `claude --bg` prints its id wrapped in ANSI colour codes (see "Measured
   facts"); `parseDispatchOutput` takes the first standalone eight-hex token,
   which the colour codes do not hide, and `dispatch` reports
@@ -133,6 +134,41 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 - When a row is attached here and the user runs Stop or Delete on it, the
   renderer stops the local attach pty first (`stopSession`), so the client
   does not outlive the job.
+
+## Group by
+
+The header's `#agents-group-by` select sets `agentsGroupBy` (`none`, `state`,
+`project`), persisted under `localStorage.agentsGroupBy`. `readAgentsGroupBy`
+wraps the read in try/catch and `normalizeAgentsGroupBy` maps anything else to
+`none`; the write is wrapped too, so a storage that throws still lets the
+choice apply for the session.
+
+- `groupAgentEntries(entries, mode)` is pure and returns
+  `[{ key, label, title, entries }]`, empty groups dropped. It keeps the input
+  order inside each group: the renderer passes it the already filtered
+  (Finished) and sorted (`sortAgentEntries`) list, so grouping never re-sorts
+  rows. `none` returns one unlabelled group; the renderer then skips headers
+  entirely, so the flat list is byte-identical to before.
+- State order is fixed (`AGENTS_STATE_GROUPS`): Working, Blocked, Done,
+  Stopped, Failed, External (interactive entries, whatever their state),
+  Unknown (a background entry whose state is `null` or not in the list).
+  "Blocked" matches the row's own state word.
+- Project groups are keyed by the exact `cwd` string (no normalisation: a
+  trailing slash or a different case makes a different group); no `cwd` is
+  the "No project" group. The label is the last path segment (`/` and `\`
+  both split, so Windows paths work). Labels shared by several cwds become
+  `last (parent)`; if still shared, the full path. Order: a group holding any
+  `agentIsLive` entry first — interactive sessions count as live, the same
+  rank `sortAgentEntries` uses — then by label, case-insensitive
+  (`localeCompare`, `sensitivity: 'base'`), with "No project" last in its
+  rank.
+- Header rows are `.agents-group-header`, not `.agents-row`: the click
+  handler only acts on `.agents-row`, `.agents-verb-btn` and `.agents-link`,
+  so a header click does nothing and the selection (`agentsSelectedKey`) is
+  untouched by a regroup. The header's `title` (full path) and `data-group`
+  go through `agentsEscapeAttr`; the label through `escapeHtml`.
+- Headers are `position: sticky` in the scrolling `#agents-list`. Collapsing
+  a group is not implemented.
 
 ## The sidebar
 
