@@ -5009,6 +5009,7 @@ body.window-frameless.platform-darwin:not(.window-full-screen) #sidebar.collapse
 body.window-frameless :is(
   #terminal-header,
   #grid-viewer-header,
+  #agents-viewer-header,
   #stats-viewer-header,
   #settings-viewer-header,
   #jsonl-viewer-header,
@@ -5023,6 +5024,7 @@ body.window-frameless :is(
 body.window-frameless #sidebar.collapsed ~ #main :is(
   #terminal-header,
   #grid-viewer-header,
+  #agents-viewer-header,
   #stats-viewer-header,
   #settings-viewer-header,
   #jsonl-viewer-header,
@@ -5034,7 +5036,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path, #agents-viewer-header label),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }

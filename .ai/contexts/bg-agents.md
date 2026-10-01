@@ -142,6 +142,14 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   `overflow: hidden`. `#main` now shrinks to the space left, the list
   scrolls sideways, and the header wraps its controls (`flex-wrap`, New
   agent `flex-shrink: 0`) onto extra rows.
+- Window controls: the frameless window draws the system buttons over the
+  top-right corner, and `#agents-viewer-header` is the top row of `#main`.
+  It is in the `window-frameless` header lists of `style.css` (right inset
+  `--strip-inset-right`, left inset for a collapsed sidebar), and its labels
+  are `no-drag`, so New agent stays clear of the controls and a click on
+  "Finished" or "Group" does not start a window drag. A new view that
+  reaches the top of `#main` must join those lists; see
+  [window-frame.md](window-frame.md).
 
 ## Group by
 

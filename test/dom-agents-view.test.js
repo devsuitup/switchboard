@@ -783,3 +783,17 @@ test('the header wraps its controls so New agent stays reachable at narrow width
   assert.ok(main, 'a #main rule');
   assert.match(main[2], /min-width:\s*0/, 'the rows\' minimum width must not push #main past the window');
 });
+
+test('the header keeps its right end out from under the window controls', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  const rules = [...css.matchAll(/body\.window-frameless[^{]*:is\(([^)]*)\)\s*\{([^}]*)\}/g)];
+  const right = rules.find(m => /strip-inset-right/.test(m[2]));
+  assert.ok(right, 'the rule that pads the headers by --strip-inset-right');
+  assert.match(right[1], /#agents-viewer-header/);
+  const left = rules.find(m => /strip-inset-left/.test(m[2]));
+  assert.ok(left, 'the rule that pads the headers by --strip-inset-left');
+  assert.match(left[1], /#agents-viewer-header/);
+  const noDrag = css.match(/body\.window-frameless :is\([^{]*#agents-viewer-header label[^{]*\{([^}]*)\}/);
+  assert.ok(noDrag, 'a no-drag rule that covers the header labels');
+  assert.match(noDrag[1], /app-region:\s*no-drag/);
+});
