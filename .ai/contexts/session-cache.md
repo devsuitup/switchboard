@@ -771,12 +771,17 @@ from the descriptor the refresh cycle already pulls.
   than `isSafeSocketPath` (which also guards tmux sockets): `^/[A-Za-z0-9._/-]+\.sock$`,
   no `..`, at most 107 bytes (`sockaddr_un`). `buildSendCommand` throws on a path
   it would refuse.
-- **Exit codes** of the remote command: 7 the pid is no longer a `claude`
+- **nc variants**: the command probes `ncat --help` for `--send-only` and
+  `nc -h` for an OpenBSD usage line carrying `N` and `U`; a BusyBox or
+  netcat-traditional `nc` is never run with flags it would reject, the command
+  exits 127 instead. **Exit codes** of the remote command: 7 the pid is no longer a `claude`
   process, 8 the socket is gone, 127 no `ncat`/`nc`. Anything else is a failure
   carrying ssh's stderr. A timeout (nc did not exit after the line was written)
   is a failure saying nothing confirms the write, never a success.
-- **30 s dedupe** is client-side and per host, session and text; it is armed only
-  by a send that succeeded, on an injectable clock. The server also has a
+- **30 s dedupe** is client-side and per host, session and text, on an injectable
+  clock. The key is reserved before the ssh spawns, so two concurrent sends of the
+  same text go once; a definite failure releases it, a timeout keeps it (the line
+  may already be on the socket). The server also has a
   30-token bucket refilling at 0.5/s; nothing here retries.
 - **Entry point**: the `session-send-btn` on remote rows (CSS-gated like Stop:
   shown for `.is-alive` and not `.has-running-pty`), and `showSendPromptDialog`
