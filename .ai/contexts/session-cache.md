@@ -758,9 +758,11 @@ feeds it the last cycle's own data (`at`, `error`, live descriptors), so there i
   The tiers are independent requirements: the reported tier is the highest available one, not the highest contiguous one.
 - `launch` is never available: starting a session from here is not implemented.
 - A tier that needs a live session reads as missing on an idle host; that is "nothing to read it from", not "unsupported".
-- `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`) and, when the host is `none`,
-  sets `remoteAttachable: false` plus `remoteAttachBlocked` / `remoteStopBlocked` (the reason) on the session. The
-  renderer only shows the strings: the tooltip of the host dot, the disabled Stop button, the row and badge titles.
+- `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`). After 3 consecutive failed
+  cycles (`attachBlockReason`), it sets `remoteAttachable: false` plus `remoteAttachBlocked` (the last error) on the
+  session: a single transient poll failure blocks nothing, and the descriptors of the last good cycle are kept.
+  Stop is never blocked, it runs its own ssh. The renderer only shows the strings: the host dot's tooltip (which states
+  the last error from the first failure), the row and badge titles.
 - The new-session button was already disabled for every remote host; it is unchanged.
 - Not done: the probe for what the descriptors cannot tell (multiplexer installed but no session in it, `inotifywait`),
   the inject affordance (issue #219), the launch tier.

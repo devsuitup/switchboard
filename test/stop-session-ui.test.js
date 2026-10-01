@@ -43,9 +43,3 @@ test('isRemoteSessionAlive: falls back to remoteDescriptorSeen when no adapter s
   assert.equal(isRemoteSessionAlive({ sessionId: 's1', remoteAlias: 'vps', remoteDescriptorSeen: false }), false);
   assert.equal(isRemoteSessionAlive({ sessionId: 's1', remoteAlias: 'vps' }), false, 'missing field must not read as alive');
 });
-
-test('a remote session blocked by its host tier resolves to a plan carrying the reason', () => {
-  const plan = resolveSessionStop({ sessionId: 's1', remoteAlias: 'vps', remoteStopBlocked: 'host unreachable' });
-  assert.equal(plan.blocked, 'host unreachable');
-  assert.equal(resolveSessionStop({ sessionId: 's1', remoteAlias: 'vps' }).blocked, null);
-});

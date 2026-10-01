@@ -123,10 +123,9 @@ The project header carries a dot for the host's state, with a tooltip:
 Hovering the dot also lists the host's capability: the highest of observe,
 liveness, inject, attach and launch that its last refresh could confirm, and for
 each one above it why it is missing (for example no live session names a tmux
-pane). A tier that needs a live session reads as missing on an idle host. While
-the last refresh failed, the **Stop** button of the host's live sessions is
-disabled and a row that would attach opens its transcript, each with the reason
-in its tooltip.
+pane). A tier that needs a live session reads as missing on an idle host. After
+three failed refreshes in a row, a row that would attach opens its transcript,
+with the reason in its tooltip; **Stop** is never disabled, it runs its own ssh.
 
 A failing host is retried with a doubling delay, up to 30 minutes, and never
 dropped; one success resets it. **Reconnect** on the header retries at once and

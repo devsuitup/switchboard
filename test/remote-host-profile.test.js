@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { computeHostProfile, TIERS } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS } = require('../remote-host-profile');
 
 const AT = Date.parse('2026-10-01T10:00:00Z');
 const tmuxDescriptor = { pid: 101, sessionId: 'a', tmux: 'main:@0.%0' };
@@ -83,4 +83,18 @@ test('garbage input never throws and yields no tier', () => {
   assert.equal(computeHostProfile(undefined).tier, 'none');
   assert.equal(computeHostProfile({ at: AT, error: null, descriptors: 'nope' }).tier, 'observe');
   assert.equal(computeHostProfile({ at: AT, error: null, descriptors: [null, 3] }).tier, 'observe');
+});
+
+test('attach is blocked only from the third consecutive failure, with the last error as reason', () => {
+  const profile = computeHostProfile({ at: AT, error: 'connect timed out', descriptors: [tmuxDescriptor] });
+  assert.equal(ATTACH_BLOCK_AFTER_FAILURES, 3);
+  assert.equal(attachBlockReason(profile, 1), null);
+  assert.equal(attachBlockReason(profile, 2), null);
+  assert.match(attachBlockReason(profile, 3), /connect timed out/);
+  assert.match(attachBlockReason(profile, 9), /connect timed out/);
+});
+
+test('attach is never blocked on a host with no error, whatever the failure count', () => {
+  const profile = computeHostProfile({ at: AT, error: null, descriptors: [tmuxDescriptor] });
+  assert.equal(attachBlockReason(profile, 5), null);
 });

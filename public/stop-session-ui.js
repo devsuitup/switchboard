@@ -4,7 +4,7 @@
 function resolveSessionStop(session) {
   const alias = session && session.remoteAlias;
   if (alias) {
-    return { remote: true, alias, confirmText: `Stop this session on ${alias}?`, blocked: session.remoteStopBlocked || null };
+    return { remote: true, alias, confirmText: `Stop this session on ${alias}?` };
   }
   return { remote: false, alias: null, confirmText: 'Stop this session?' };
 }

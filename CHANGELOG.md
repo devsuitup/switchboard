@@ -8,7 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A remote host's project header now shows what the host supports: hover its status dot to see the highest capability reached (observe, liveness, inject, attach) and, for each one above it, why it is missing. (#218)
 
 ### Changed
-- On a remote host whose last refresh failed, the Stop button is disabled and a row that would have attached opens its transcript, each saying why in its tooltip, instead of failing when clicked. (#218)
+- After three failed refreshes of a remote host in a row, a row that would have attached opens its transcript and says why in its tooltip, instead of failing when clicked. Stop is never disabled: it runs its own ssh. (#218)
 
 ## v0.0.86 — 2026-10-01
 

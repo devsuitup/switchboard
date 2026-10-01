@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { computeHostProfile, isTierAvailable, tierReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason } = require('../remote-host-profile');
 
 const root = path.join(__dirname, '..');
 
@@ -38,7 +38,7 @@ function makeAnnotate(mocks) {
   const source = extractAnnotateRemoteAttachableSource();
   const factory = new Function(
     'remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker', 'cliSessionState',
-    'isTierAvailable', 'tierReason',
+    'attachBlockReason',
     source + '\nreturn annotateRemoteAttachable;'
   );
   return factory(
@@ -50,8 +50,7 @@ function makeAnnotate(mocks) {
     mocks.remoteAttachAdapter || { supports: () => false },
     mocks.remoteActivityTracker || { activeAt: () => null },
     mocks.cliSessionState || { getStatus: () => undefined },
-    isTierAvailable,
-    tierReason
+    attachBlockReason
   );
 }
 
@@ -119,10 +118,10 @@ test('a remote session still gets status/statusUpdatedAt from the remote descrip
   assert.equal(projects[0].sessions[0].remoteAttachable, true);
 });
 
-function failedHostIndexer(error) {
+function failedHostIndexer(error, failures = 3) {
   return {
     getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }], at: 111, error }),
-    getRemoteHostState: () => ({ consecutiveFailures: 1, lastError: error, nextAttemptAt: 0 }),
+    getRemoteHostState: () => ({ consecutiveFailures: failures, lastError: error, nextAttemptAt: 0 }),
     getRemoteHostProfile: () => computeHostProfile({ at: 111, error, descriptors: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }] }),
   };
 }
@@ -135,7 +134,7 @@ function remoteProjects() {
   }];
 }
 
-test('a session on a host whose last refresh failed is not attachable and carries the reason for attach and stop', () => {
+test('a session on a host that failed three refreshes in a row is not attachable and carries the reason', () => {
   const annotate = makeAnnotate({
     remoteIndexer: failedHostIndexer('connect timed out'),
     remoteAttachAdapter: { supports: () => true },
@@ -145,8 +144,21 @@ test('a session on a host whose last refresh failed is not attachable and carrie
   const session = projects[0].sessions[0];
   assert.equal(session.remoteAttachable, false);
   assert.match(session.remoteAttachBlocked, /connect timed out/);
-  assert.match(session.remoteStopBlocked, /connect timed out/);
+  assert.equal(session.remoteStopBlocked, undefined, 'stop runs its own ssh and is never blocked by a poll failure');
   assert.equal(projects[0].remoteHostProfile.tier, 'none');
+});
+
+test('a single failed refresh does not block attach, while the project profile still states the error', () => {
+  const annotate = makeAnnotate({
+    remoteIndexer: failedHostIndexer('connect timed out', 1),
+    remoteAttachAdapter: { supports: () => true },
+  });
+  const projects = remoteProjects();
+  annotate(projects);
+  const session = projects[0].sessions[0];
+  assert.equal(session.remoteAttachable, true);
+  assert.equal(session.remoteAttachBlocked, null);
+  assert.match(projects[0].remoteHostProfile.missing[0].reason, /connect timed out/);
 });
 
 test('a session on a healthy host carries no blocking reason and the project carries the host profile', () => {
@@ -163,6 +175,5 @@ test('a session on a healthy host carries no blocking reason and the project car
   const session = projects[0].sessions[0];
   assert.equal(session.remoteAttachable, true);
   assert.equal(session.remoteAttachBlocked, null);
-  assert.equal(session.remoteStopBlocked, null);
   assert.equal(projects[0].remoteHostProfile.tier, 'attach');
 });

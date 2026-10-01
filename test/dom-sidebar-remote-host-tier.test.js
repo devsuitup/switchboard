@@ -56,29 +56,6 @@ test('a host with no profile keeps the plain status title', () => {
   } finally { ctx.destroy(); }
 });
 
-test('a stop button blocked by the host tier is disabled and its title is the reason', () => {
-  const ctx = setupSidebarDom();
-  try {
-    const blocked = { ...SESSION, remoteStopBlocked: 'last refresh of this host failed: connect timed out' };
-    ctx.window.sessionMap.set(blocked.sessionId, blocked);
-    ctx.sidebar.renderProjects([project(undefined, blocked)], true);
-    const stopBtn = ctx.document.getElementById('si-remote-1').querySelector('.session-stop-btn');
-    assert.equal(stopBtn.disabled, true);
-    assert.match(stopBtn.title, /connect timed out/);
-  } finally { ctx.destroy(); }
-});
-
-test('a stop button with no block stays enabled', () => {
-  const ctx = setupSidebarDom();
-  try {
-    ctx.window.sessionMap.set(SESSION.sessionId, SESSION);
-    ctx.sidebar.renderProjects([project(undefined, SESSION)], true);
-    const stopBtn = ctx.document.getElementById('si-remote-1').querySelector('.session-stop-btn');
-    assert.equal(stopBtn.disabled, false);
-    assert.equal(stopBtn.title, 'Stop session');
-  } finally { ctx.destroy(); }
-});
-
 test('a row whose attach is blocked says why in its title and badge, and opens the transcript', () => {
   const ctx = setupSidebarDom();
   try {

@@ -3,6 +3,7 @@
 
 const { parseTmuxField, isValidPid } = require('./remote-attach');
 
+const ATTACH_BLOCK_AFTER_FAILURES = 3;
 const TIERS = ['observe', 'liveness', 'inject', 'attach', 'launch'];
 
 function hasPosixSocketPath(descriptor) {
@@ -55,14 +56,10 @@ function computeHostProfile(input) {
   };
 }
 
-function isTierAvailable(profile, tier) {
-  const hit = profile && Array.isArray(profile.tiers) && profile.tiers.find(t => t.tier === tier);
-  return !!(hit && hit.available);
-}
-
-function tierReason(profile, tier) {
-  const hit = profile && Array.isArray(profile.tiers) && profile.tiers.find(t => t.tier === tier);
+function attachBlockReason(profile, consecutiveFailures) {
+  if (!(consecutiveFailures >= ATTACH_BLOCK_AFTER_FAILURES)) return null;
+  const hit = profile && Array.isArray(profile.tiers) && profile.tiers.find(t => t.tier === 'observe');
   return hit && hit.reason ? hit.reason : null;
 }
 
-module.exports = { computeHostProfile, isTierAvailable, tierReason, TIERS };
+module.exports = { computeHostProfile, attachBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS };

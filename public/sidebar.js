@@ -1279,10 +1279,6 @@ function rebindSidebarEvents(projects) {
     }
 
     const stopBtn = item.querySelector('.session-stop-btn');
-    if (stopBtn && session.remoteStopBlocked) {
-      stopBtn.disabled = true;
-      stopBtn.title = 'Stop unavailable: ' + session.remoteStopBlocked;
-    }
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
