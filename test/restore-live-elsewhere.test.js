@@ -82,6 +82,8 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function setSessionMcpActive() {}
     function setSessionSandboxed() {}
     function forgetSessionExit() {}
+    function beginPtyOpen() {}
+    function settlePtyOpen() {}
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);

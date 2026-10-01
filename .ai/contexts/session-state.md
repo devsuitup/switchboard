@@ -530,6 +530,18 @@ redrawn by `loadProjects()`.
 - `updateRunningIndicators()` calls `renderDefaultStatus()` whenever the set
   changed, so the status bar count follows `activePtyIds`.
 
+**Pty generation.** `wireSessionPty` (`main.js`) gives every spawn the next value of
+a monotonically increasing counter (`session.generation`). It is returned by all
+three `open-terminal` replies and sent as the fifth argument of every
+`process-exited` (the fork re-key's second send included). `app.js` records the
+generation of the last reply per id (`ptyGenerations`) and `handleProcessExited`
+ignores an exit older than it — no drop, no `closed`, no banner. An exit that
+lands while `openSession` awaits the reply is buffered (`pendingOpens`);
+`settlePtyOpen` then applies it unless the reply's generation is newer, so a
+stale exit never touches the new pty and a fast-failing launch still reads
+as exited. Chosen over suppressing the event in main because main cannot know
+which exit the renderer has already seen when it is delivered.
+
 Remote rows stay with the remote adapter (see "Row ownership"). Not covered: a
 busy signal that arrives after `process-exited` — main sends none, the PTY is
 gone. The pre-fix sequence is reasoned from the code, not reproduced live;

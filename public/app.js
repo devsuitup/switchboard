@@ -125,6 +125,8 @@ let showTodayOnly = false;
 let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
+const ptyGenerations = new Map();
+const pendingOpens = new Map();
 let sortedOrder = []; // [{ projectPath, itemIds: [itemId, ...] }, ...] — single source of truth for sidebar order
 let activeTab = 'sessions';
 let visibleSessionCount = SETTING_DEFAULTS.visibleSessionCount;
@@ -498,7 +500,7 @@ window.api.onSessionForked((oldId, newId) => {
   pollActiveSessions();
 });
 
-window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
+function applyProcessExit(sessionId, exitCode, signal, stopped) {
   if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal, stopped });
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId);
@@ -510,11 +512,9 @@ window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
   }
   noteSessionExit(sessionId, exitCode, signal, stopped);
   // see .ai/contexts/session-state.md ("A session main drops")
-  if (!entry?.opening) {
-    activePtyIds.delete(sessionId);
-    if (!sessionItemEl(sessionId)?.dataset.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
-    updateRunningIndicators();
-  }
+  activePtyIds.delete(sessionId);
+  if (!sessionItemEl(sessionId)?.dataset.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
+  updateRunningIndicators();
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
@@ -568,6 +568,37 @@ window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
   // Claude session exited → update persisted working set (entry.closed=true → excluded from set)
   schedulePersistWorkingSet();
   pollActiveSessions();
+}
+
+// see .ai/contexts/session-state.md ("A session main drops")
+function handleProcessExited(sessionId, exitCode, signal, stopped, generation) {
+  const recorded = ptyGenerations.get(sessionId);
+  if (typeof generation === 'number' && typeof recorded === 'number' && generation < recorded) return;
+  const pending = pendingOpens.get(sessionId);
+  if (pending) {
+    pending.push({ args: [sessionId, exitCode, signal, stopped], generation });
+    return;
+  }
+  applyProcessExit(sessionId, exitCode, signal, stopped);
+}
+
+function beginPtyOpen(sessionId) {
+  pendingOpens.set(sessionId, []);
+}
+
+function settlePtyOpen(sessionId, result) {
+  const buffered = pendingOpens.get(sessionId) || [];
+  pendingOpens.delete(sessionId);
+  const generation = result && result.generation;
+  if (typeof generation === 'number') ptyGenerations.set(sessionId, generation);
+  for (const exit of buffered) {
+    if (typeof generation === 'number' && typeof exit.generation === 'number' && exit.generation < generation) continue;
+    applyProcessExit(...exit.args);
+  }
+}
+
+window.api.onProcessExited((sessionId, exitCode, signal, stopped, generation) => {
+  handleProcessExited(sessionId, exitCode, signal, stopped, generation);
 });
 
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
@@ -1231,9 +1262,15 @@ async function openSession(session, customOptions, { automatic = false, live } =
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   forgetSessionExit(sessionId);
-  entry.opening = true;
-  const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
-  entry.opening = false;
+  beginPtyOpen(sessionId);
+  let result;
+  try {
+    result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
+  } catch (err) {
+    settlePtyOpen(sessionId, null);
+    throw err;
+  }
+  settlePtyOpen(sessionId, result);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;

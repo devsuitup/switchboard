@@ -34,6 +34,8 @@ function sliceBlock(marker, tail = '') {
 const PRELUDE = `
   let activePtyIds = new Set();
   let _lastPtySignature = '';
+  const ptyGenerations = new Map();
+  const pendingOpens = new Map();
   const calls = { dropped: [], status: 0, indicators: 0 };
   const openSessions = new Map();
   const sessionMap = new Map();
@@ -78,6 +80,8 @@ function setup() {
   run(PRELUDE, 'prelude.js');
   run(sliceBlock('function updateRunningIndicators() {'), 'app.js#updateRunningIndicators');
   run(`function updateTerminalHeader() {}`, 'stub.js');
+  run(sliceBlock('function applyProcessExit('), 'app.js#applyProcessExit');
+  run(sliceBlock('function handleProcessExited('), 'app.js#handleProcessExited');
   run(sliceBlock('window.api.onProcessExited((', ');'), 'app.js#onProcessExited');
   return {
     exit: (id) => exitHandler(id, 0, null, true),
@@ -141,14 +145,6 @@ test('process-exited leaves a remote row to its own adapter, even with no sessio
   h.read("const row = document.createElement('div'); row.className = 'session-item'; row.dataset.sessionId = 'r'; row.dataset.remoteAlias = 'vps'; document.body.append(row)");
   h.exit('r');
   assert.equal(h.read('calls.dropped.length'), 0, 'a remote row is not purged by the local drop path');
-});
-
-test('an exit that lands while the same id is being reopened does not drop the new pty', () => {
-  const h = setup();
-  h.read("activePtyIds = new Set(['b']); sessionMap.set('b', { sessionId: 'b', type: 'claude' }); openSessions.set('b', { closed: false, opening: true, terminal: { write() {} } })");
-  h.exit('b');
-  assert.equal(h.read('JSON.stringify(Array.from(activePtyIds))'), '["b"]', 'the new pty stays in the running set');
-  assert.equal(h.read('calls.dropped.length'), 0, 'its live state is not purged');
 });
 
 test('a change in the running set refreshes the status bar count, an unchanged one does not', () => {

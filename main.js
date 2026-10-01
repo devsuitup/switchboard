@@ -2132,7 +2132,11 @@ function sandboxBindEnv(dirs) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+let ptyGenerationCounter = 0;
+
+// see .ai/contexts/session-state.md ("A session main drops")
 function wireSessionPty(session, sessionId, ptyProcess) {
+  session.generation = ++ptyGenerationCounter;
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
 
@@ -2235,12 +2239,12 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped);
+      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
       // the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped, session.generation);
       }
     }
     activeSessions.delete(realId);
@@ -2277,7 +2281,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       mainWindow.webContents.send('terminal-data', sessionId, '\x1b[?25l');
     }
 
-    return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
+    return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox, generation: session.generation };
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -2311,7 +2315,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       };
       activeSessions.set(sessionId, remoteSession);
       wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
-      return { ok: true, reattached: false, remote: true, sandbox: false };
+      return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
     }
   }
 
@@ -2614,7 +2618,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     log.info(`[fork-spawn] tempId=${sessionId} forkFrom=${sessionOptions.forkFrom} folder=${projectFolder} knownFiles=${knownJsonlFiles.size}`);
   }
 
-  return { ok: true, reattached: false, mcpActive: !!mcpServer, sandbox: !!sessionOptions?.sandbox };
+  return { ok: true, reattached: false, mcpActive: !!mcpServer, sandbox: !!sessionOptions?.sandbox, generation: session.generation };
 });
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
