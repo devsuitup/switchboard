@@ -538,6 +538,13 @@ function initAgentsView() {
     });
   }
   if (viewer) {
+    viewer.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.agents-verb-btn, .agents-link, [data-collapse]')) return;
+      const row = e.target.closest('.agents-row');
+      if (!row) return;
+      const entry = agentsRoster.find(x => agentsEntryKey(x) === row.dataset.key);
+      if (entry && agentVerbAvailability(entry, agentsDaemonReachable).attach) attachBgAgent(entry);
+    });
     viewer.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       const head = e.target.closest && e.target.closest('[data-collapse]');

@@ -797,3 +797,39 @@ test('the header keeps its right end out from under the window controls', () => 
   assert.ok(noDrag, 'a no-drag rule that covers the header labels');
   assert.match(noDrag[1], /app-region:\s*no-drag/);
 });
+
+const dblclick = (ctx, el) => el.dispatchEvent(new ctx.window.MouseEvent('dblclick', { bubbles: true }));
+
+test('a double click on a working or blocked row attaches, with the same options as the Attach button', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const blocked = { ...ROSTER[0], id: 'dddddddd', sessionId: 's-d', name: 'waits', state: 'blocked', cwd: '/w/d' };
+  ctx.setSnapshot({ roster: [...ROSTER, blocked], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]'));
+  assert.equal(ctx.calls.opened.length, 1);
+  assert.equal(ctx.calls.opened[0][0].sessionId, 's-a');
+  assert.deepEqual({ ...ctx.calls.opened[0][1] }, { type: 'attach', jobId: 'aaaaaaaa', cwd: '/w/em' });
+  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:dddddddd"] .agents-row-state'));
+  assert.equal(ctx.calls.opened.length, 2, 'a double click on a cell of the row counts too');
+  assert.deepEqual({ ...ctx.calls.opened[1][1] }, { type: 'attach', jobId: 'dddddddd', cwd: '/w/d' });
+});
+
+test('a double click does nothing on a finished row, an external session, a header or a button', async (t) => {
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'));
+  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="int:s-i"]'));
+  dblclick(ctx, ctx.document.querySelector('.agents-group-header'));
+  ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();
+  dblclick(ctx, ctx.document.querySelector('#agents-detail [data-verb="transcript"]'));
+  assert.equal(ctx.calls.opened.length, 0);
+});
+
+test('a double click does not attach while the daemon is not answering', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: false });
+  await ctx.window.showAgentsView();
+  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]'));
+  assert.equal(ctx.calls.opened.length, 0);
+});

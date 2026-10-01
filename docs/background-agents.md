@@ -97,6 +97,11 @@ it first.
 
 ## Attaching
 
+Double-click a row you can attach to (a live `working` or `blocked` session,
+with the daemon answering) to attach, the same as the **Attach** button in the
+detail pane. A double click on a finished or external session, on a group
+header or on a button does nothing extra.
+
 An attach tab is an ordinary terminal tab running `claude attach`. Its stop
 button reads **Detach**: closing the tab sends Ctrl+Z, the attach client
 leaves, and the session keeps running under the daemon. Stopping the session
