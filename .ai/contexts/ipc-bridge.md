@@ -21,7 +21,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `get-projects` | `(showArchived)` | `Project[]` | Sidebar payload. Reads from cache. |
 | `get-active-sessions` | — | `{sessionId, busy}[]` | Currently open PTY sessions plus each one's live `_cliBusy` flag — see "Busy-state reconciliation" below. |
 | `get-active-terminals` | — | `Terminal[]` | Active PTY identifiers |
-| `open-terminal` | `(id, projectPath, isNew, sessionOptions)` | `{ok, error?, mcpActive}` | Spawn or attach a PTY. |
+| `open-terminal` | `(id, projectPath, isNew, sessionOptions)` | `{ok, error?, mcpState, mcpError?}` | Spawn or attach a PTY. |
 | `session-live-elsewhere` | `(id)` | `{pid, cwd, startedAt} \| null` | Whether another process (another Switchboard, a CLI in a terminal) is running session `id`: a live pid in `~/.claude/sessions/` and no PTY for it in this instance. Called by `openSession` before a resume; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `sessions-live-elsewhere` | `(ids)` | `{[id]: {pid, cwd, startedAt}}` | The same check for a working-set restore batch, answered from one scan of `~/.claude/sessions/`; ids that are not live are absent, and at most 200 ids are looked up. Called once by `runRestore`; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `stop-session` | `(id)` | `{ok}` | Kill the PTY for `id`. Local only — a remote-attach session's PTY is the local ssh attach client, so this only detaches it; see `remote-stop-session` for the real remote "stop". |
