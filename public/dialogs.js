@@ -530,7 +530,7 @@ async function showDispatchAgentDialog(project) {
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
   const dialog = document.createElement('div');
-  dialog.className = 'new-session-dialog';
+  dialog.className = 'new-session-dialog dispatch-agent-dialog';
 
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = !!effective.dangerouslySkipPermissions;

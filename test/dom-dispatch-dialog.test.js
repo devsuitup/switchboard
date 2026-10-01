@@ -136,3 +136,15 @@ test('a project path and add-dirs holding quotes and markup reach dispatch intac
   assert.equal(ctx.calls.dispatched[0].cwd, odd);
   assert.equal(ctx.calls.dispatched[0].addDirs, dirs.trim());
 });
+
+test('the dialog scrolls inside the window when it is taller than the screen', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const dialog = ctx.document.querySelector('.new-session-dialog');
+  assert.ok(dialog.classList.contains('dispatch-agent-dialog'), 'the dialog carries its own class');
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  const rule = css.match(/\.new-session-dialog\.dispatch-agent-dialog\s*\{([^}]*)\}/);
+  assert.ok(rule, 'a rule scoped to the dispatch dialog');
+  assert.match(rule[1], /max-height:\s*calc\(100vh\s*-\s*\d+px\)/);
+  assert.match(rule[1], /overflow-y:\s*auto/);
+});

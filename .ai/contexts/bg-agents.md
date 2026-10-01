@@ -142,6 +142,12 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   `overflow: hidden`. `#main` now shrinks to the space left, the list
   scrolls sideways, and the header wraps its controls (`flex-wrap`, New
   agent `flex-shrink: 0`) onto extra rows.
+- Dispatch dialog height: it reuses `.new-session-dialog`, which has no
+  height limit, so on a short screen the bottom (Start / Cancel) left the
+  window. The dispatch dialog adds `dispatch-agent-dialog`
+  (`max-height: calc(100vh - 32px)`, `overflow-y: auto`) and scrolls inside
+  the window. The class is scoped on purpose: the other dialogs share
+  `.new-session-dialog` and may hold popovers that an `overflow` would clip.
 - Window controls: the frameless window draws the system buttons over the
   top-right corner, and `#agents-viewer-header` is the top row of `#main`.
   It is in the `window-frameless` header lists of `style.css` (right inset
