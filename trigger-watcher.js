@@ -348,7 +348,7 @@ function getCliReadyWaitMs() {
   return v !== undefined ? v : DEFAULT_CLI_READY_WAIT_MS;
 }
 
-function readCliStatus(ctx, sessionId) {
+function readCliStatusRaw(ctx, sessionId) {
   if (typeof ctx.getCliStatus !== 'function') return null;
   try {
     const s = ctx.getCliStatus(sessionId);
@@ -358,13 +358,25 @@ function readCliStatus(ctx, sessionId) {
   }
 }
 
+function readCliStatus(ctx, sessionId) {
+  const s = readCliStatusRaw(ctx, sessionId);
+  return s && Number.isInteger(s.statusUpdatedAt) ? s : null;
+}
+
+const CLI_REACTION_STATUSES = ['busy', 'idle', 'waiting'];
+
 function isCompactCommand(command) {
   return /^\/compact(\s|$)/.test(String(command).trim());
 }
 
-function cliBusyEdgeSince(ctx, sessionId, sinceMs) {
+function cliReactedSince(ctx, sessionId, sinceMs) {
   const s = readCliStatus(ctx, sessionId);
-  return !!s && s.status === 'busy' && Number.isInteger(s.statusUpdatedAt) && s.statusUpdatedAt >= sinceMs;
+  return !!s && CLI_REACTION_STATUSES.includes(s.status) && s.statusUpdatedAt >= sinceMs;
+}
+
+function cliForbidsRecoveryEnter(ctx, sessionId) {
+  const s = readCliStatusRaw(ctx, sessionId);
+  return !!s && (s.status === 'waiting' || s.status === 'busy');
 }
 
 /**
@@ -450,7 +462,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // must fire on window expiry, so the deadline must NOT coincide with it.
   const effectiveDeadline = (deadlineMs !== undefined) ? deadlineMs : Infinity;
 
-  const probe = edgeMode ? () => cliBusyEdgeSince(ctx, sessionId, enterAt) : undefined;
+  const probe = edgeMode ? () => cliReactedSince(ctx, sessionId, enterAt) : undefined;
   const first = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline, probe);
   if (first.sawBusy || first.sessionExited || first.timedOut) {
     return {
@@ -469,6 +481,19 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // Nothing observed in the window — retry the Enter ONCE (bare '\r', never the text),
   // and only into a free composer. See docs/automation.md.
   const recoveryDeadline = Math.min(effectiveDeadline, Date.now() + windowMs);
+  if (cliForbidsRecoveryEnter(ctx, sessionId)) {
+    return {
+      submit_retries: 0,
+      sawBusy: false,
+      confirmed: edgeMode ? false : null,
+      composerConfirmed: false,
+      sessionExited: false,
+      timedOut: false,
+      recoverySkipped: true,
+      recoveryReason: 'the CLI reports a dialog open or a turn running, a bare Enter could answer it',
+      waited_ms: first.waited_ms,
+    };
+  }
   const polite = await waitForComposerFree(sessionId, ctx, recoveryDeadline);
   if (!polite.free) {
     return {
@@ -1216,6 +1241,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
 
     let readyWaitedMs = 0;
+    if (readyAfterMs !== null && !readCliStatus(ctx, sessionId)) {
+      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId}, readiness wait skipped before chain step ${i}`);
+    }
     if (readyAfterMs !== null && readCliStatus(ctx, sessionId)) {
       const readyDeadline = Math.min(stepDeadline, Date.now() + getCliReadyWaitMs());
       const ready = await waitForCliIdleAfter(sessionId, ctx, readyAfterMs, readyDeadline);
@@ -1225,6 +1253,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         ctx.log.warn(`[trigger-watcher] Session exited waiting for the CLI to be ready at chain step ${i}:`, sessionId);
         await writeResult({ ok: false, submitted: (i > 0) ? chainSubmitted : SUBMITTED_NO, error: 'session exited during wait', partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
         return;
+      }
+      if (!ready.available) {
+        ctx.log.info(`[trigger-watcher] CLI descriptor vanished for ${sessionId}, readiness wait ended early before chain step ${i}`);
       }
       if (ready.timedOut) {
         ctx.log.warn(`[trigger-watcher] CLI not idle after /compact within ${readyWaitedMs} ms, writing chain step ${i} anyway:`, sessionId);

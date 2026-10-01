@@ -841,13 +841,24 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   deadline; on expiry the step is written anyway, with the warning `CLI not
   idle after /compact within N ms, writing chain step N anyway`. Its time is
   counted in the step's and the chain's `waited_ms`.
-- **Proof of submission by edge.** When a descriptor is available for the
-  session, a submission counts only if the descriptor reads `busy` with a
-  `statusUpdatedAt` at or after the moment of our Enter write
-  (`cliBusyEdgeSince`); a spinner on the level probe, or a `busy` that began
-  earlier, proves nothing. Otherwise the existing recovery applies unchanged
-  (one bare `\r`, only into a free composer, same window), and the edge is
-  looked for again. Still nothing: `confirmed: false`.
+- **Proof of submission by edge.** When a descriptor with an integer
+  `statusUpdatedAt` is available, a submission counts when the descriptor
+  shows ANY status write (`busy`, `idle` or `waiting`) with a
+  `statusUpdatedAt` at or after the moment of our Enter (`cliReactedSince`):
+  the CLI reacted. `idle` alone covers a turn too fast for a poll to see
+  `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
+  level probe, or a status that began earlier, proves nothing. Otherwise the
+  existing recovery applies (one bare ``, only into a free composer, same
+  window), and the reaction is looked for again. Still nothing:
+  `confirmed: false`.
+- **The recovery Enter is never written while the descriptor reads `waiting`
+  or `busy`** (`cliForbidsRecoveryEnter`, in edge and fallback modes, whenever
+  the descriptor has a status, even without a usable timestamp): a bare Enter
+  would answer the dialog with its default, or land in a running turn. The
+  step reports `recoverySkipped` and `confirmed: false`.
+- **A descriptor whose `statusUpdatedAt` is not an integer** is treated as no
+  descriptor for readiness and proof (old behaviour), not as one that never
+  matches.
 - **Result and log.** `submitWithVerify` returns `confirmed`: `true` (edge
   seen), `false` (descriptor available, no edge even after the recovery Enter)
   or `null` (no descriptor: the level probe decides, as before). `true` logs

@@ -78,10 +78,9 @@ test('edge: descriptor goes busy after our Enter -> confirmed, no recovery Enter
   assert.equal(v.submit_retries, 0);
 });
 
-test('edge: a spinner on the level probe and a stale busy descriptor prove nothing -> one recovery Enter, then unconfirmed', async (t) => {
+test('edge: a spinner on the level probe and a stale idle descriptor prove nothing -> one recovery Enter, then unconfirmed', async (t) => {
   enableClock(t);
   const s = fakeSession({ levelBusy: true });
-  s.desc.status = 'busy';
   s.desc.statusUpdatedAt = T0 - 500;
   const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
   assert.deepEqual(s.writes, ['hello', '\r', '\r']);
@@ -98,6 +97,61 @@ test('edge: first Enter absorbed, the recovery Enter starts the turn -> confirme
   assert.deepEqual(s.writes, ['hello', '\r', '\r']);
   assert.equal(v.confirmed, true);
   assert.equal(v.submit_retries, 1);
+});
+
+test('edge: a fast turn seen only as idle with a newer timestamp still proves the CLI reacted', async (t) => {
+  enableClock(t);
+  const s = fakeSession({ onEnter: (_n, desc) => {
+    setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 120);
+  } });
+  const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+  assert.deepEqual(s.writes, ['hello', '\r']);
+  assert.equal(v.confirmed, true);
+  assert.equal(v.submit_retries, 0);
+});
+
+test('edge: a dialog opened by our Enter (waiting, newer timestamp) is a submission and gets no recovery Enter', async (t) => {
+  enableClock(t);
+  const s = fakeSession({ onEnter: (_n, desc) => {
+    setTimeout(() => { desc.status = 'waiting'; desc.statusUpdatedAt = Date.now(); }, 120);
+  } });
+  const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+  assert.deepEqual(s.writes, ['hello', '\r']);
+  assert.equal(v.confirmed, true);
+});
+
+for (const status of ['waiting', 'busy']) {
+  test(`recovery: the descriptor reading "${status}" without a reaction to our Enter never gets a recovery Enter`, async (t) => {
+    enableClock(t);
+    const s = fakeSession();
+    s.desc.status = status;
+    s.desc.statusUpdatedAt = T0 - 500;
+    const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+    assert.deepEqual(s.writes, ['hello', '\r']);
+    assert.equal(v.recoverySkipped, true);
+    assert.equal(v.confirmed, false);
+  });
+}
+
+test('recovery: a descriptor without a usable timestamp still forbids the recovery Enter while a dialog is open', async (t) => {
+  enableClock(t);
+  const s = fakeSession();
+  s.ctx.getCliStatus = () => ({ status: 'waiting', statusUpdatedAt: null });
+  const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+  assert.deepEqual(s.writes, ['hello', '\r']);
+  assert.equal(v.recoverySkipped, true);
+  assert.equal(v.confirmed, null);
+});
+
+test('fallback: a descriptor whose statusUpdatedAt is not an integer is treated as no descriptor', async (t) => {
+  enableClock(t);
+  const s = fakeSession({ levelBusy: true });
+  s.ctx.getCliStatus = () => ({ status: 'idle', statusUpdatedAt: null });
+  const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+  assert.equal(v.confirmed, null);
+  assert.equal(v.sawBusy, true);
+  const r = await settle(t, waitForCliIdleAfter('sid', s.ctx, T0, T0 + 60_000));
+  assert.equal(r.available, false);
 });
 
 test('fallback: no ctx.getCliStatus -> the level probe still decides and confirmed stays null', async (t) => {
