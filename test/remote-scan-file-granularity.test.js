@@ -194,3 +194,33 @@ test('property 3: a compaction-mirror merge on a file-subset rescan matches a fu
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }
 });
+
+test('property 4: a named file that vanished from the mirror leaves the index, its siblings stay', async () => {
+  const projectsDir = tmp('gran-gone');
+  try {
+    const folderPath = path.join(projectsDir, '-srv-two');
+    writeJsonl(path.join(folderPath, 'a.jsonl'), [
+      { type: 'user', cwd: '/srv/two', timestamp: '2026-09-01T10:00:00.000Z', message: { role: 'user', content: 'session a' } },
+    ]);
+
+    const cachedRows = [
+      { sessionId: 'a', folder: 'vps::-srv-two', projectPath: '/srv/two', created: '2026-09-01T10:00:00.000Z', modified: '2026-09-01T10:00:00.000Z', messageCount: 1 },
+      { sessionId: 'gone', folder: 'vps::-srv-two', projectPath: '/srv/two', created: '2026-09-01T11:00:00.000Z', modified: '2026-09-01T11:00:00.000Z', messageCount: 1 },
+    ];
+    const { db, store, deletedFolders, deletedSessions } = makeFakeDb(cachedRows);
+    initCache(db);
+
+    const fileSubsets = new Map([['-srv-two', new Set(['gone.jsonl'])]]);
+    const scan = await sessionCache.scanFoldersViaWorker({
+      projectsDir, folderPrefix: 'vps', folders: ['-srv-two'], fileSubsets,
+    });
+    assert.equal(scan.ok, true, scan.error);
+
+    assert.deepEqual(deletedSessions, ['gone']);
+    assert.equal(deletedFolders.length, 0);
+    assert.ok(store.get('a'), 'the sibling that was not named stays indexed');
+    assert.equal(store.has('gone'), false);
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
