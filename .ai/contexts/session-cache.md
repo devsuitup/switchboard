@@ -744,6 +744,51 @@ created the `.jsonl`; a manual host refresh did not help.
     rel path, not its own, because `readSubagentMeta()` in the transcript's
     row is what actually needs re-deriving.
 
+## Remote hosts — sending a prompt (issue #219)
+
+`remote-send.js` writes one prompt to a live, unattached remote session through
+the CLI's own messaging socket. Send only: nothing is read back, the state comes
+from the descriptor the refresh cycle already pulls.
+
+- **Protocol** (measured in the issue, CLI 2.1.263): NDJSON over a unix socket,
+  one line `{"type":"user","message":{"role":"user","content":...},"msgV":1,"session_id":...}`
+  terminated by `
+`, capped at 1 MiB, first line within 30 s. The connection is
+  one-way; the server never answers on it. No auth line on POSIX (the peer is
+  identified by `SO_PEERCRED`); on Windows the token lives in a `.key` file that
+  the descriptor fetch and the denylist exclude on purpose, so a `\.\pipe\`
+  path is refused, not worked around.
+- **`session_id` is in the line** so a descriptor that outlived its process, whose
+  pid was reused, never has its prompt accepted by another session.
+- **The text is stdin only.** `defaultRunRemoteCommand` takes an `input` option:
+  stdin becomes a pipe, `-n` (which points ssh's stdin at the null device) is
+  dropped, the line is written and stdin closed. Same spawn site as every other
+  remote ssh, so `remote-ssh-spawn-sites.test.js` is unchanged. The remote
+  command holds fixed text, the integer pid and the single-quoted path.
+- **The path is main-side only.** `messagingSocketPath` stays in the descriptor
+  `parseSessions` keeps; the renderer sends `{alias, sessionId, text}` and
+  `handleSendRequest` looks the descriptor up. `validateSocketPath` is stricter
+  than `isSafeSocketPath` (which also guards tmux sockets): `^/[A-Za-z0-9._/-]+\.sock$`,
+  no `..`, at most 107 bytes (`sockaddr_un`). `buildSendCommand` throws on a path
+  it would refuse.
+- **Exit codes** of the remote command: 7 the pid is no longer a `claude`
+  process, 8 the socket is gone, 127 no `ncat`/`nc`. Anything else is a failure
+  carrying ssh's stderr. A timeout (nc did not exit after the line was written)
+  is a failure saying nothing confirms the write, never a success.
+- **30 s dedupe** is client-side and per host, session and text; it is armed only
+  by a send that succeeded, on an injectable clock. The server also has a
+  30-token bucket refilling at 0.5/s; nothing here retries.
+- **Entry point**: the `session-send-btn` on remote rows (CSS-gated like Stop:
+  shown for `.is-alive` and not `.has-running-pty`), and `showSendPromptDialog`
+  in `public/dialogs.js`. An attached session is refused main-side as well.
+- Not done, on purpose: replies and idle notification (they need an inbox of our
+  own and a published key), Windows hosts, trigger files targeting remote ids,
+  and the attention state.
+- Tests: `remote-send.test.js` (the line, the path, the command run through a real
+  `sh` with a fake `nc`, exit codes, byte cap, dedupe, IPC contract),
+  `remote-run-input.test.js`, `dom-sidebar-remote-send.test.js`,
+  `dom-send-prompt-dialog.test.js`.
+
 ## Remote hosts — tmux attach (issue #221)
 
 `open-terminal` no longer refuses every remote session outright. When

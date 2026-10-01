@@ -121,6 +121,7 @@ const rendererCrossFileGlobals = {
   renderActivityTraceFiles: 'readonly',
   openActivityTraceFile: 'readonly',
   showResumeSessionDialog: 'readonly',
+  showSendPromptDialog: 'readonly',
   showJsonlViewer: 'readonly',
   showSubagentTranscript: 'readonly',
   narrowSessionsToSearch: 'readonly',
