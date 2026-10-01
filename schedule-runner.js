@@ -238,21 +238,41 @@ function resolveScheduleSandbox(cwd, getSetting, defaultValue) {
   return !!defaultValue;
 }
 
+/** The real path of `p`; for a path that does not exist, its nearest existing ancestor's real path plus the rest. */
+function canonicalPath(p) {
+  const resolved = path.resolve(p);
+  const rest = [];
+  let dir = resolved;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(dir), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) return resolved;
+      rest.push(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
 /**
- * The add-dirs of a sandboxed schedule that lie under $HOME without being a
- * known project or inside one: binding them read-write would hand the run
- * whatever they hold.
+ * The add-dirs of a sandboxed schedule that the wrapper must not bind: any at
+ * or inside a `.claude` or `.git` directory, and any under $HOME that is
+ * neither a known project nor inside one. Each is judged both as spelled
+ * (normalised) and by its real path.
+ * see docs/sandbox.md ("Additional directories")
  */
 function refusedScheduleBinds(addDirs, knownProjects, home) {
   const inside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
-  const homeDir = path.resolve(home);
+  const homeDir = canonicalPath(home);
+  const projects = knownProjects.map(canonicalPath);
+  const protectedName = (p) => p.split(path.sep).some(c => c === '.claude' || c === '.git');
   return addDirs.filter((dir) => {
-    const p = path.resolve(dir);
-    if (!inside(p, homeDir)) return false;
-    for (const project of knownProjects) {
-      if (inside(p, path.resolve(project))) return false;
-    }
-    return true;
+    const lexical = path.resolve(dir);
+    const real = canonicalPath(dir);
+    if (protectedName(lexical) || protectedName(real)) return true;
+    if (!inside(real, homeDir)) return false;
+    return !projects.some(project => inside(real, project));
   });
 }
 

@@ -140,6 +140,18 @@ for d in ${RW_DIRS[@]+"${RW_DIRS[@]}"}; do
   fi
 done
 
+# see docs/sandbox.md ("Additional directories")
+for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
+  [ -n "$d" ] || continue
+  for _form in "$(realpath -m -s -- "$d")" "$(readlink -m -- "$d")"; do
+    case "/$_form/" in
+      */.claude/*|*/.git/*)
+        fail "refusing to bind '$d' — it is at or inside a .claude or .git directory, which the sandbox keeps read-only. Bind the project directory instead."
+        ;;
+    esac
+  done
+done
+
 # True when $1 is at or below one of the read-write state dirs.
 under_rw_state() {
   local candidate="$1/" d

@@ -212,7 +212,53 @@ test('sandbox wrapper: extra binds survive a newline in a path and missing ones 
   }
 });
 
-test('sandbox wrapper: resolves the real binary when "claude" is also a shell function', { skip: !LINUX && 'linux only' }, () => {
+test('sandbox wrapper: refuses an extra bind at or under a .claude or .git, however the path is spelled', { skip: !LINUX && 'linux only' }, () => {
+  const rig = makeRig({ bwrapExit: 1 });
+  try {
+    fs.mkdirSync(path.join(rig.home, '.claude'));
+    const other = path.join(rig.root, 'other');
+    fs.mkdirSync(path.join(other, '.claude', 'commands'), { recursive: true });
+    fs.mkdirSync(path.join(other, '.git', 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(other, 'sub'));
+    fs.symlinkSync(path.join(other, '.claude'), path.join(rig.root, 'lnk'));
+    fs.symlinkSync(path.join(other, 'sub'), path.join(other, '.git', 'back'));
+
+    const refused = [
+      path.join(other, '.claude'),
+      path.join(other, '.claude') + '/',
+      path.join(other, '.claude', 'commands'),
+      path.join(other, '.claude', 'missing'),
+      path.join(other, '.git'),
+      path.join(other, '.git', 'hooks'),
+      path.join(other, 'sub', '..', '.claude'),
+      path.join(rig.root, 'lnk'),
+      path.join(rig.root, 'lnk', 'commands'),
+      path.join(other, 'sub', '.claude'),
+      path.join(other, '.git', 'back'),
+    ];
+    for (const bind of refused) {
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: bind });
+      assert.equal(status, 125, `${bind} must be refused`);
+      assert.match(stderr, /refusing to bind .* \.claude or \.git/, bind);
+    }
+    const allowed = [
+      other,
+      other + '/',
+      path.join(other, 'sub'),
+      path.join(other, '.claude', '..'),
+      path.join(other, '.claude-notes'),
+      path.join(other, 'x.git'),
+    ];
+    for (const bind of allowed) {
+      const { stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: bind });
+      assert.doesNotMatch(stderr, /\.claude or \.git/, `${bind} must not be refused`);
+    }
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test('sandbox wrapper: resolves the real binary when "claude" is also a shell function',{ skip: !LINUX && 'linux only' }, () => {
   const rig = makeRig({ bwrapExit: 1 });
   try {
     fs.mkdirSync(path.join(rig.home, '.claude'));
