@@ -99,7 +99,7 @@ function purgeActivityFor(sessionId, via) {
 
 // see .ai/contexts/session-state.md ("A session main drops")
 function dropLocalPtySession(sessionId, via) {
-  if (typeof clearActiveSubagentsFor === 'function') clearActiveSubagentsFor(sessionId);
+  clearActiveSubagentsFor(sessionId);
   purgeActivityFor(sessionId, via);
 }
 

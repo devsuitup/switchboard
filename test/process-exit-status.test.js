@@ -65,6 +65,7 @@ const PRELUDE = `
   function setActiveSession() {}
   function refreshSidebar() {}
   function dropLocalPtySession() {}
+  function sessionItemEl() { return null; }
   function updateRunningIndicators() {}
   function schedulePersistWorkingSet() {}
   function pollActiveSessions() { updateTerminalHeader(); }
@@ -132,6 +133,16 @@ test('a relaunch that fails to open shows no exit code from the process before i
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
   assert.equal(h.title(), 'Stopped');
+});
+
+test('a relaunch marks its entry as opening until openTerminal answers', async () => {
+  const h = setup();
+  h.exit(1, null);
+  let during = null;
+  h.whileOpening = () => { during = h.read("openSessions.get('s1').opening"); };
+  await h.read("openSession(sessionMap.get('s1'))");
+  assert.equal(during, true, 'an exit landing now may belong to the old pty');
+  assert.equal(h.read("openSessions.get('s1').opening"), false, 'cleared once main answered');
 });
 
 test('a relaunch that opens shows no old exit code before its first poll', async () => {

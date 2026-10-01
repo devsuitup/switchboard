@@ -63,6 +63,7 @@ const PRELUDE = `
   function localTranscriptPtyTakeover() {}
   function paintSessionIcon() {}
   function isSessionAlive() { return false; }
+  function sessionItemEl(id) { return document.querySelector('.session-item[data-session-id="' + id + '"]'); }
   function dropLocalPtySession(id, via) { calls.dropped.push([id, via]); }
   function renderDefaultStatus() { calls.status++; }
 `;
@@ -135,11 +136,19 @@ test('process-exited removes the session from the running set and drops its acti
   assert.equal(h.read('JSON.stringify(calls.dropped)'), '[["b","process-exited"]]');
 });
 
-test('process-exited leaves a remote row to its own adapter', () => {
+test('process-exited leaves a remote row to its own adapter, even with no sessionMap entry', () => {
   const h = setup();
-  h.read("sessionMap.set('r', { sessionId: 'r', type: 'claude', remoteAlias: 'vps' })");
+  h.read("const row = document.createElement('div'); row.className = 'session-item'; row.dataset.sessionId = 'r'; row.dataset.remoteAlias = 'vps'; document.body.append(row)");
   h.exit('r');
   assert.equal(h.read('calls.dropped.length'), 0, 'a remote row is not purged by the local drop path');
+});
+
+test('an exit that lands while the same id is being reopened does not drop the new pty', () => {
+  const h = setup();
+  h.read("activePtyIds = new Set(['b']); sessionMap.set('b', { sessionId: 'b', type: 'claude' }); openSessions.set('b', { closed: false, opening: true, terminal: { write() {} } })");
+  h.exit('b');
+  assert.equal(h.read('JSON.stringify(Array.from(activePtyIds))'), '["b"]', 'the new pty stays in the running set');
+  assert.equal(h.read('calls.dropped.length'), 0, 'its live state is not purged');
 });
 
 test('a change in the running set refreshes the status bar count, an unchanged one does not', () => {

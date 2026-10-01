@@ -510,9 +510,11 @@ window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
   }
   noteSessionExit(sessionId, exitCode, signal, stopped);
   // see .ai/contexts/session-state.md ("A session main drops")
-  activePtyIds.delete(sessionId);
-  if (!session?.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
-  updateRunningIndicators();
+  if (!entry?.opening) {
+    activePtyIds.delete(sessionId);
+    if (!sessionItemEl(sessionId)?.dataset.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
+    updateRunningIndicators();
+  }
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
@@ -1229,7 +1231,9 @@ async function openSession(session, customOptions, { automatic = false, live } =
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   forgetSessionExit(sessionId);
+  entry.opening = true;
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
+  entry.opening = false;
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
