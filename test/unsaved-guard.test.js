@@ -215,3 +215,47 @@ test('quit cleanup runs only once the user has confirmed, and Cancel leaves ever
   assert.equal(willQuit, 1);
   assert.equal(t.sent.length, 2, 'the window close after approval asks nothing more');
 });
+
+test('an updater install asks before the installer starts: a no leaves it unstarted, a yes pre-approves the quit', async () => {
+  const t = setup();
+  const first = t.guard.confirmQuit(t.win);
+  t.ack(t.sent[0].args[0]);
+  t.answer(t.sent[0].args[0], false);
+  assert.equal(await first, false);
+
+  const second = t.guard.confirmQuit(t.win);
+  t.answer(t.sent[1].args[0], true);
+  assert.equal(await second, true);
+  const e2 = t.closeEvent();
+  assert.equal(t.guard.beforeQuit(e2, t.win), false, 'the quit the installer triggers is not asked about again');
+  assert.equal(e2.prevented, false);
+  const c = t.closeEvent();
+  t.win.emit('close', c);
+  assert.equal(c.prevented, false);
+});
+
+test('a Windows session end approves the quit so logoff never waits on the dialog', () => {
+  for (const name of ['query-session-end', 'session-end']) {
+    const t = setup();
+    t.win.emit(name, {});
+    const e = t.closeEvent();
+    assert.equal(t.guard.beforeQuit(e, t.win), false, name);
+    const c = t.closeEvent();
+    t.win.emit('close', c);
+    assert.equal(c.prevented, false, name);
+    assert.equal(t.sent.length, 0, name);
+  }
+});
+
+test('a window close and a quit share one question, and one answer settles both', async () => {
+  const t = setup();
+  t.win.emit('close', t.closeEvent());
+  const e = t.closeEvent();
+  assert.equal(t.guard.beforeQuit(e, t.win), true);
+  assert.equal(t.sent.length, 1, 'one dialog, not two');
+  t.answer(t.sent[0].args[0], true);
+  await tick();
+  assert.equal(t.win.closes, 1);
+  const again = t.closeEvent();
+  assert.equal(t.guard.beforeQuit(again, t.win), false, 'the same yes approved the quit');
+});

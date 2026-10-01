@@ -9,6 +9,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
   let nextId = 1;
   let quitApproved = false;
   let quitAsking = false;
+  let inflight = null;
 
   ipcMain.on('unsaved-check-ack', (_event, id) => {
     const entry = pending.get(id);
@@ -24,9 +25,11 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
   });
 
   function ask(win, reason) {
+    if (inflight) return inflight;
     const wc = win.webContents;
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
-    return new Promise((resolve) => {
+    let settled = false;
+    const asked = new Promise((resolve) => {
       const id = nextId++;
       const entry = { acked: false, timer: null, finish: null };
       const onGone = () => entry.finish(true);
@@ -36,6 +39,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
         clearTimeoutFn(entry.timer);
         wc.removeListener('render-process-gone', onGone);
         wc.removeListener('destroyed', onGone);
+        settled = true;
+        inflight = null;
         resolve(proceed);
       };
       entry.timer = setTimeoutFn(() => entry.finish(true), timeoutMs);
@@ -48,6 +53,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
         entry.finish(true);
       }
     });
+    if (!settled) inflight = asked;
+    return asked;
   }
 
   function beforeQuit(event, win) {
@@ -69,6 +76,9 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     let closing = false;
     let reloading = false;
     let allowNextUnload = false;
+
+    win.on('query-session-end', approveQuit);
+    win.on('session-end', approveQuit);
 
     win.on('close', (event) => {
       if (approved || quitApproved) return;
@@ -100,7 +110,18 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     });
   }
 
-  return { attach, beforeQuit };
+  function confirmQuit(win) {
+    return ask(win, 'quit').then((proceed) => {
+      if (proceed) quitApproved = true;
+      return proceed;
+    });
+  }
+
+  function approveQuit() {
+    quitApproved = true;
+  }
+
+  return { attach, beforeQuit, confirmQuit, approveQuit };
 }
 
 module.exports = { createUnsavedGuard, DEFAULT_TIMEOUT_MS };

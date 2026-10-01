@@ -2957,9 +2957,10 @@ ipcMain.handle('updater-download', () => {
   if (!autoUpdater) return;
   return autoUpdater.downloadUpdate();
 });
-ipcMain.handle('updater-install', () => {
-  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
+ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
+  if (mainWindow && !(await unsavedGuard.confirmQuit(mainWindow))) return;
+  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
   autoUpdater.quitAndInstall();
 });
 
