@@ -145,6 +145,7 @@ function initFilePanel() {
   });
   if (window.api.onUnsavedCheck) {
     window.api.onUnsavedCheck(async (id) => {
+      window.api.unsavedCheckAck(id);
       let proceed = true;
       try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
       window.api.unsavedCheckResult(id, proceed);

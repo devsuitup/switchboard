@@ -4,16 +4,23 @@
 
 const DEFAULT_TIMEOUT_MS = 2500;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {} }) {
   const pending = new Map();
   let nextId = 1;
+  let quitApproved = false;
+  let quitAsking = false;
+
+  ipcMain.on('unsaved-check-ack', (_event, id) => {
+    const entry = pending.get(id);
+    if (!entry || entry.acked) return;
+    entry.acked = true;
+    clearTimeoutFn(entry.timer);
+  });
 
   ipcMain.on('unsaved-check-result', (_event, id, proceed) => {
     const entry = pending.get(id);
     if (!entry) return;
-    pending.delete(id);
-    clearTimeoutFn(entry.timer);
-    entry.resolve(proceed === true);
+    entry.finish(proceed === true);
   });
 
   function ask(win, reason) {
@@ -21,28 +28,50 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
     return new Promise((resolve) => {
       const id = nextId++;
-      const timer = setTimeoutFn(() => {
+      const entry = { acked: false, timer: null, finish: null };
+      const onGone = () => entry.finish(true);
+      entry.finish = (proceed) => {
+        if (!pending.has(id)) return;
         pending.delete(id);
-        resolve(true);
-      }, timeoutMs);
-      pending.set(id, { resolve, timer });
+        clearTimeoutFn(entry.timer);
+        wc.removeListener('render-process-gone', onGone);
+        wc.removeListener('destroyed', onGone);
+        resolve(proceed);
+      };
+      entry.timer = setTimeoutFn(() => entry.finish(true), timeoutMs);
+      pending.set(id, entry);
+      wc.on('render-process-gone', onGone);
+      wc.on('destroyed', onGone);
       try {
         wc.send('unsaved-check', id, reason);
       } catch {
-        pending.delete(id);
-        clearTimeoutFn(timer);
-        resolve(true);
+        entry.finish(true);
       }
     });
+  }
+
+  function beforeQuit(event, win) {
+    if (quitApproved || !win || win.isDestroyed()) return false;
+    event.preventDefault();
+    if (quitAsking) return true;
+    quitAsking = true;
+    ask(win, 'quit').then((proceed) => {
+      quitAsking = false;
+      if (!proceed) return;
+      quitApproved = true;
+      quit();
+    });
+    return true;
   }
 
   function attach(win) {
     let approved = false;
     let closing = false;
     let reloading = false;
+    let allowNextUnload = false;
 
     win.on('close', (event) => {
-      if (approved) return;
+      if (approved || quitApproved) return;
       event.preventDefault();
       if (closing) return;
       closing = true;
@@ -55,7 +84,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     });
 
     win.webContents.on('will-prevent-unload', (event) => {
-      if (approved) {
+      if (approved || quitApproved || allowNextUnload) {
+        allowNextUnload = false;
         event.preventDefault();
         return;
       }
@@ -63,12 +93,14 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
       reloading = true;
       ask(win, 'reload').then((proceed) => {
         reloading = false;
-        if (proceed && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.reload();
+        if (!proceed || win.isDestroyed() || win.webContents.isDestroyed()) return;
+        allowNextUnload = true;
+        win.webContents.reload();
       });
     });
   }
 
-  return { attach };
+  return { attach, beforeQuit };
 }
 
 module.exports = { createUnsavedGuard, DEFAULT_TIMEOUT_MS };

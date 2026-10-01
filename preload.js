@@ -145,6 +145,7 @@ contextBridge.exposeInMainWorld('api', {
   onUnsavedCheck: (callback) => {
     ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
   },
+  unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
   unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));

@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 
 const { createUnsavedGuard } = require('../unsaved-guard');
 
-function setup({ timeoutMs = 1000 } = {}) {
+function setup({ timeoutMs = 1000, quit } = {}) {
   const ipcMain = new EventEmitter();
   const timers = [];
   const setTimeoutFn = (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; };
@@ -25,12 +25,13 @@ function setup({ timeoutMs = 1000 } = {}) {
   });
   const win = new EventEmitter();
   Object.assign(win, { webContents: wc, isDestroyed: () => false, close: () => { win.closes += 1; }, closes: 0 });
-  const guard = createUnsavedGuard({ ipcMain, timeoutMs, setTimeoutFn, clearTimeoutFn });
+  const guard = createUnsavedGuard({ ipcMain, timeoutMs, setTimeoutFn, clearTimeoutFn, quit });
   guard.attach(win);
 
   const closeEvent = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
   const answer = (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed);
-  return { win, wc, sent, timers, closeEvent, answer, ipcMain };
+  const ack = (id) => ipcMain.emit('unsaved-check-ack', {}, id);
+  return { win, wc, sent, timers, closeEvent, answer, ack, ipcMain, guard };
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -133,4 +134,84 @@ test('a blocked unload during an approved close is let through', () => {
     t.wc.emit('will-prevent-unload', e);
     assert.equal(e.prevented, true, 'preventDefault on will-prevent-unload lets the unload proceed');
   });
+});
+
+test('an acknowledged check waits for a slow human, past the bound', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  t.win.emit('close', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.ack(id);
+  assert.equal(t.timers[0].cleared, true, 'the ack ends the bound');
+  await tick();
+  assert.equal(t.win.closes, 0, 'still waiting for the user');
+  t.answer(id, true);
+  await tick();
+  assert.equal(t.win.closes, 1);
+});
+
+test('an acknowledged check gives up when the renderer process goes away', async () => {
+  const t = setup();
+  t.win.emit('close', t.closeEvent());
+  t.ack(t.sent[0].args[0]);
+  t.wc.emit('render-process-gone');
+  await tick();
+  assert.equal(t.win.closes, 1);
+});
+
+test('a reload approved by timeout reloads once, not in a loop', async () => {
+  const t = setup();
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  t.timers[0].fn();
+  await tick();
+  assert.equal(t.wc.reloads, 1);
+  const e = t.closeEvent();
+  t.wc.emit('will-prevent-unload', e);
+  assert.equal(e.prevented, true, 'the reloaded page is let through');
+  assert.equal(t.sent.length, 1, 'and is not asked again');
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  assert.equal(t.sent.length, 2, 'the allowance covers one unload only');
+});
+
+function fakeApp(t, cleanup) {
+  const app = new EventEmitter();
+  app.quitCalls = 0;
+  app.quit = () => {
+    app.quitCalls += 1;
+    const e = t.closeEvent();
+    app.emit('before-quit', e);
+    if (e.prevented) return;
+    const c = t.closeEvent();
+    t.win.emit('close', c);
+    if (c.prevented) return;
+    app.emit('will-quit');
+  };
+  app.on('before-quit', (e) => {
+    if (t.guard.beforeQuit(e, t.win)) return;
+    cleanup();
+  });
+  return app;
+}
+
+test('quit cleanup runs only once the user has confirmed, and Cancel leaves everything alive', async () => {
+  let cleaned = 0;
+  let app;
+  const t = setup({ quit: () => app.quit() });
+  app = fakeApp(t, () => { cleaned += 1; });
+  let willQuit = 0;
+  app.on('will-quit', () => { willQuit += 1; });
+
+  app.quit();
+  assert.equal(cleaned, 0, 'no cleanup while the question is open');
+  t.ack(t.sent[0].args[0]);
+  t.answer(t.sent[0].args[0], false);
+  await tick();
+  assert.equal(cleaned, 0, 'Cancel: PTYs and watchers untouched');
+  assert.equal(willQuit, 0);
+
+  app.quit();
+  t.answer(t.sent[1].args[0], true);
+  await tick();
+  assert.equal(cleaned, 1);
+  assert.equal(willQuit, 1);
+  assert.equal(t.sent.length, 2, 'the window close after approval asks nothing more');
 });

@@ -40,7 +40,7 @@ const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createWhatsNew } = require('./changelog');
 const { createUnsavedGuard } = require('./unsaved-guard');
-const unsavedGuard = createUnsavedGuard({ ipcMain });
+const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
 const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
@@ -3153,6 +3153,7 @@ app.on('window-all-closed', () => {
 
 // see .ai/contexts/activitywatch.md ("Quitting")
 app.on('before-quit', (event) => {
+  if (unsavedGuard.beforeQuit(event, mainWindow)) return;
   if (!activityFlushedForQuit && activityReporter.hasPendingWork) {
     event.preventDefault();
     activityFlushedForQuit = true;

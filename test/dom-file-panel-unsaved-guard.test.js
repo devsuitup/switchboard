@@ -41,12 +41,13 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { openFile: null, check: null, answers: [], saves: [], confirms: [] };
+  const calls = { openFile: null, check: null, acks: [], answers: [], saves: [], confirms: [] };
   let editor = null;
 
   window.api = new Proxy({
     onMcpOpenFile: (cb) => { calls.openFile = cb; },
     onUnsavedCheck: (cb) => { calls.check = cb; },
+    unsavedCheckAck: (id) => { calls.acks.push({ id, at: calls.answers.length, dialog: !!window.document.getElementById('unsaved-edits-dialog') }); },
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
@@ -219,5 +220,17 @@ test('beforeunload blocks while a tab is dirty and lets go once it is saved', as
     ctx.window.document.getElementById('file-panel-viewer').dispatchEvent(new ctx.window.CustomEvent('cm-save'));
     await flush();
     assert.equal(beforeUnload(ctx).defaultPrevented, false);
+  } finally { ctx.destroy(); }
+});
+
+test('the check is acknowledged on receipt, before any dialog is shown', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTab(ctx, 's1', A);
+    ctx.calls.check(9, 'quit');
+    assert.deepEqual(ctx.calls.acks, [{ id: 9, at: 0, dialog: false }]);
+    await flush();
+    button(ctx, 'unsaved-cancel').click();
+    await flush();
   } finally { ctx.destroy(); }
 });
