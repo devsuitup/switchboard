@@ -137,3 +137,43 @@ test('a missing path under an ordinary directory is not refused for failing to r
   const missing = path.join(realRoot, 'nowhere', 'file.txt');
   assert.deepStrictEqual(await bothGuards(missing), [false, false]);
 });
+
+test('a failure of one realpath fails closed even when the other resolves', { skip: !win && 'win32 only' }, async () => {
+  const target = path.join(realRoot, 'plain.txt');
+  const nativeSync = fs.realpathSync.native;
+  const nativeAsync = fs.realpath.native;
+  fs.realpathSync.native = () => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); };
+  fs.realpath.native = (p, cb) => cb(Object.assign(new Error('denied'), { code: 'EPERM' }));
+  try {
+    assert.deepStrictEqual(await bothGuards(target), [true, true]);
+  } finally {
+    fs.realpathSync.native = nativeSync;
+    fs.realpath.native = nativeAsync;
+  }
+});
+
+test('trailing dots and spaces on a credential name are refused by both guards', { skip: !win && 'win32 only' }, async () => {
+  for (const name of [path.join('.ssh.', 'id_rsa'), '.git-credentials.', '.netrc ', path.join('.ssh. ', 'x')]) {
+    assert.deepStrictEqual(await bothGuards(path.join(realRoot, name)), [true, true], name);
+  }
+});
+
+test('stripTrailingDotsAndSpaces trims each segment and keeps the root', { skip: !win && 'win32 only' }, () => {
+  const { stripTrailingDotsAndSpaces } = require('../resolve-path-on-disk');
+  assert.strictEqual(stripTrailingDotsAndSpaces('C:' + BS + 'a. ' + BS + 'b.' + BS + 'c '), 'C:' + BS + 'a' + BS + 'b' + BS + 'c');
+});
+
+test('a missing file is resolved with a bounded number of realpath calls', { skip: !win && 'win32 only' }, () => {
+  const real = fs.realpathSync;
+  const nativeSync = real.native;
+  let calls = 0;
+  const count = (fn) => Object.assign((...a) => { calls++; return fn(...a); }, { native: nativeSync });
+  fs.realpathSync = count(real);
+  fs.realpathSync.native = (...a) => { calls++; return nativeSync(...a); };
+  try {
+    isSensitivePath(path.join(realRoot, 'a', 'b', 'c', 'd', 'e', 'f', 'file.txt'));
+  } finally {
+    fs.realpathSync = Object.assign(real, { native: nativeSync });
+  }
+  assert.ok(calls <= 6, 'realpath calls: ' + calls);
+});

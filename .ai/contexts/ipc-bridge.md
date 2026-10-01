@@ -193,9 +193,10 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 
 - the literal path, and the same path with a Windows `\\?\` / `\\.\` prefix removed (`\\?\UNC\host\share` becomes `\\host\share`);
 - the JS realpath **and** the native realpath. They diverge on Windows: the JS walker keeps 8.3 short names (`SSH~1` for `.ssh`) and throws `EISDIR` on a `\\?\` path through a junction, while `fs.realpath.native` expands the short name and resolves the junction. Either one alone misses a spelling the other catches, so both are tried and every result is matched;
-- when nothing exists at the path yet (a file about to be saved), the deepest existing ancestor resolved the same two ways, with the missing tail re-attached — otherwise `SSH~1\new-key` would pass because there is nothing to resolve.
+- on win32, the same path with trailing dots and spaces removed from each segment (`.ssh.\id_rsa`, `.netrc `): Win32 normalisation drops them, so `shell.openPath` reaches the real file while the literal string matches nothing. Not applied to `\?\` paths, which Win32 does not normalise;
+- when nothing exists at the path yet (a file about to be saved), the first existing ancestor — found with one `lstat` per level going up, then resolved the two ways — with the missing tail re-attached, otherwise `SSH~1\new-key` would pass because there is nothing to resolve.
 
-A resolution that fails for a reason other than `ENOENT`/`ENOTDIR` (`EACCES`, `EPERM`, `ELOOP`, …) and yields no path at all is treated as sensitive: the path may exist behind a spelling we could not resolve. `resolveOnDisk` / `resolveOnDiskAsync` are unchanged and stay on the JS realpath (the allowlist and containment checks compare against it). The tests are in `test/sensitive-path-windows.test.js`; the 8.3 cases skip, with a stated reason, on a volume that generates no short names.
+Fail closed: if **either** realpath fails for a reason other than `ENOENT`/`ENOTDIR` (`EACCES`, `EPERM`, `ELOOP`, ...), or an ancestor cannot be `lstat`ed, the path is treated as sensitive even when the other realpath succeeded: the one that failed may have been the one that sees the credential location. `resolveOnDisk` / `resolveOnDiskAsync` are unchanged and stay on the JS realpath (the allowlist and containment checks compare against it). The tests are in `test/sensitive-path-windows.test.js`; the 8.3 cases skip, with a stated reason, on a volume that generates no short names.
 
 ### Non-obvious behaviors
 

@@ -82,67 +82,77 @@ function attemptAsync(fn, arg) {
   });
 }
 
-function ancestorsOf(p) {
-  const out = [];
-  let dir = path.dirname(p);
-  let prev = p;
-  while (dir !== prev) {
-    out.push(dir);
-    prev = dir;
-    dir = path.dirname(dir);
+function stripTrailingDotsAndSpaces(p) {
+  const root = path.parse(p).root;
+  const rest = p.slice(root.length).split(path.sep).map((seg) => seg.replace(/[. ]+$/, ''));
+  return root + rest.join(path.sep);
+}
+
+function literalsOf(filePath) {
+  const literal = path.resolve(stripExtendedPrefix(filePath));
+  const out = [literal];
+  if (process.platform === 'win32' && stripExtendedPrefix(filePath) === filePath) {
+    const trimmed = stripTrailingDotsAndSpaces(literal);
+    if (trimmed !== literal) out.push(trimmed);
   }
   return out;
 }
 
-function collect(literal, results) {
-  const paths = [literal];
-  for (const r of results) if (r.real) paths.push(r.real);
-  const resolved = paths.length > 1;
-  const missing = !resolved && results.every((r) => MISSING.has(r.code));
-  return { paths, resolved, missing };
+const failed = (results) => results.some((r) => !r.real && !MISSING.has(r.code));
+
+function addResolved(paths, results, tail) {
+  for (const r of results) if (r.real) paths.add(tail ? path.join(r.real, tail) : r.real);
 }
 
 // see .ai/contexts/ipc-bridge.md, "Sensitive-path candidates"
 function sensitiveCandidates(filePath) {
-  const literal = path.resolve(stripExtendedPrefix(filePath));
-  const paths = new Set([path.resolve(filePath), literal]);
-  const first = collect(literal, [attempt(fs.realpathSync, literal), attempt(fs.realpathSync.native, literal)]);
-  first.paths.forEach((p) => paths.add(p));
-  if (first.resolved) return { paths: [...paths], unresolved: false };
-  if (!first.missing) return { paths: [...paths], unresolved: true };
-  for (const dir of ancestorsOf(literal)) {
-    const r = collect(dir, [attempt(fs.realpathSync, dir), attempt(fs.realpathSync.native, dir)]);
-    if (r.resolved) {
-      const tail = path.relative(dir, literal);
-      r.paths.slice(1).forEach((p) => paths.add(path.join(p, tail)));
-      return { paths: [...paths], unresolved: false };
+  const paths = new Set([path.resolve(filePath)]);
+  let unresolved = false;
+  for (const literal of literalsOf(filePath)) {
+    paths.add(literal);
+    const first = [attempt(fs.realpathSync, literal), attempt(fs.realpathSync.native, literal)];
+    if (failed(first)) { unresolved = true; continue; }
+    if (first.some((r) => r.real)) { addResolved(paths, first); continue; }
+    let dir = literal;
+    for (;;) {
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      const st = attempt(fs.lstatSync, dir);
+      if (st.code && MISSING.has(st.code)) continue;
+      if (st.code) { unresolved = true; break; }
+      const results = [attempt(fs.realpathSync, dir), attempt(fs.realpathSync.native, dir)];
+      if (failed(results)) unresolved = true;
+      else addResolved(paths, results, path.relative(dir, literal));
+      break;
     }
-    if (!r.missing) return { paths: [...paths], unresolved: true };
   }
-  return { paths: [...paths], unresolved: false };
+  return { paths: [...paths], unresolved };
 }
 
 async function sensitiveCandidatesAsync(filePath) {
-  const literal = path.resolve(stripExtendedPrefix(filePath));
-  const paths = new Set([path.resolve(filePath), literal]);
-  const both = async (p) => collect(p, [
-    await attemptAsync(fs.realpath, p),
-    await attemptAsync(fs.realpath.native, p),
-  ]);
-  const first = await both(literal);
-  first.paths.forEach((p) => paths.add(p));
-  if (first.resolved) return { paths: [...paths], unresolved: false };
-  if (!first.missing) return { paths: [...paths], unresolved: true };
-  for (const dir of ancestorsOf(literal)) {
-    const r = await both(dir);
-    if (r.resolved) {
-      const tail = path.relative(dir, literal);
-      r.paths.slice(1).forEach((p) => paths.add(path.join(p, tail)));
-      return { paths: [...paths], unresolved: false };
+  const paths = new Set([path.resolve(filePath)]);
+  let unresolved = false;
+  for (const literal of literalsOf(filePath)) {
+    paths.add(literal);
+    const first = [await attemptAsync(fs.realpath, literal), await attemptAsync(fs.realpath.native, literal)];
+    if (failed(first)) { unresolved = true; continue; }
+    if (first.some((r) => r.real)) { addResolved(paths, first); continue; }
+    let dir = literal;
+    for (;;) {
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      const st = await attemptAsync(fs.lstat, dir);
+      if (st.code && MISSING.has(st.code)) continue;
+      if (st.code) { unresolved = true; break; }
+      const results = [await attemptAsync(fs.realpath, dir), await attemptAsync(fs.realpath.native, dir)];
+      if (failed(results)) unresolved = true;
+      else addResolved(paths, results, path.relative(dir, literal));
+      break;
     }
-    if (!r.missing) return { paths: [...paths], unresolved: true };
   }
-  return { paths: [...paths], unresolved: false };
+  return { paths: [...paths], unresolved };
 }
 
 /**
@@ -164,4 +174,4 @@ function isInsideDir(child, parent) {
   return c === p || c.startsWith(p + path.sep);
 }
 
-module.exports = { resolveOnDisk, resolveOnDiskAsync, isInsideDir, stripExtendedPrefix, sensitiveCandidates, sensitiveCandidatesAsync };
+module.exports = { resolveOnDisk, resolveOnDiskAsync, isInsideDir, stripExtendedPrefix, stripTrailingDotsAndSpaces, sensitiveCandidates, sensitiveCandidatesAsync };
