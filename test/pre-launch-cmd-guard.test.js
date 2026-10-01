@@ -16,7 +16,6 @@ const assert = require('node:assert/strict');
 const path   = require('path');
 const fs     = require('fs');
 const os     = require('os');
-const { spawnSync } = require('child_process');
 const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
 const { validatePreLaunchCmd } = require('../pre-launch-cmd-guard');
@@ -157,7 +156,7 @@ test('validatePreLaunchCmd + real bash: a rejected process-substitution prefix n
     // the assertion is about the real, wired-together behaviour.
     if (check.ok) {
       const claudeCmd = pre + ' echo AFTER_CLAUDE';
-      spawnSync(bash, ['-l', '-i', '-c', claudeCmd], { cwd: tmp, encoding: 'utf8' });
+      spawnSyncRetryingCrash(bash, ['-l', '-i', '-c', claudeCmd], { cwd: tmp, encoding: 'utf8' });
     }
 
     assert.equal(fs.existsSync(markerWin), false, 'refused prefix must not have created the marker file');
