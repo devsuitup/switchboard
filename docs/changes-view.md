@@ -43,6 +43,11 @@ the plain file viewer.
   When a working tree holds tens of thousands of untracked files, the untracked
   part is listed by directory instead, as `git status` does by default, and the
   panel says so.
+- When a subagent of the session works in a worktree of its own, its changes
+  are listed after the session's own, under a header with the agent's name and
+  branch (at most 8 agents, 100 rows each). Those rows open as read-only
+  diffs. A subagent in the session's directory, one whose worktree is gone, and
+  one with nothing changed add nothing. Local sessions only.
 - **Refresh** reloads the list.
 
 Clicking a row opens the file under the list, which stays visible with the row

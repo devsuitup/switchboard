@@ -31,11 +31,13 @@ function isValidChangesSessionId(id, opts) {
 function isSafeWorktreePath(p) {
   if (typeof p !== 'string' || p === '' || p.length > 4096) return false;
   if (/[\x00-\x1f]/.test(p)) return false;
+  if (/^[/\\]{2}/.test(p)) return false;
   if (!path.isAbsolute(p)) return false;
   return !p.split(/[/\\]/).includes('..');
 }
 
-function resolveSubagentTarget(id, deps) {
+// {ok: true, worktree: string|null} (null: the agent records none, so it shares its parent's directory) or a refusal.
+function readSubagentWorktree(id, deps) {
   const { parentId, agentId } = parseSubagentId(id);
   let folder = null;
   try { folder = deps.getCachedFolder(id); } catch {}
@@ -44,16 +46,73 @@ function resolveSubagentTarget(id, deps) {
 
   const jsonlPath = path.join(deps.projectsDir, folder, parentId, 'subagents', `agent-${agentId}.jsonl`);
   const meta = deps.readSubagentMeta(jsonlPath);
-  const recorded = meta && typeof meta === 'object' ? meta.worktreePath : undefined;
-  if (recorded === undefined || recorded === null) {
-    const parent = resolveGitChangesTarget(parentId, deps);
-    return parent.ok ? { ...parent, subagent: true } : parent;
+  if (!meta || typeof meta !== 'object') {
+    return { ok: false, reason: 'no-worktree-recorded', error: 'the subagent has no readable record of its worktree' };
   }
+  const recorded = meta.worktreePath;
+  if (recorded === undefined || recorded === null) return { ok: true, worktree: null };
   if (!isSafeWorktreePath(recorded)) return { ok: false, error: 'the subagent recorded an unusable worktree path' };
   if (!deps.existsSync(recorded)) {
     return { ok: false, reason: 'worktree-removed', error: 'the worktree of this subagent no longer exists' };
   }
-  return { ok: true, kind: 'local', cwd: recorded, subagent: true };
+  return { ok: true, worktree: recorded };
+}
+
+function resolveSubagentTarget(id, deps) {
+  const found = readSubagentWorktree(id, deps);
+  if (!found.ok) return found;
+  if (found.worktree === null) {
+    const parent = resolveGitChangesTarget(parseSubagentId(id).parentId, deps);
+    return parent.ok ? { ...parent, subagent: true } : parent;
+  }
+  return { ok: true, kind: 'local', cwd: found.worktree, subagent: true };
+}
+
+const MAX_SUBAGENT_WORKTREES = 8;
+
+// deps adds listSubagents(parentId) -> [{sessionId, agentId, description, subagentType}]
+function listSubagentWorktrees(parentId, deps) {
+  const id = String(parentId || '');
+  if (!isValidChangesSessionId(id)) return [];
+  const parent = resolveGitChangesTarget(id, deps);
+  if (!parent.ok || parent.kind !== 'local') return [];
+  const out = [];
+  for (const row of deps.listSubagents(id)) {
+    if (out.length >= MAX_SUBAGENT_WORKTREES) break;
+    if (!row || !isValidChangesSessionId(row.sessionId, { allowSubagent: true })) continue;
+    const parsed = parseSubagentId(row.sessionId);
+    if (!parsed || parsed.parentId !== id) continue;
+    const found = readSubagentWorktree(row.sessionId, deps);
+    if (!found.ok || found.worktree === null) continue;
+    if (path.relative(path.resolve(parent.cwd), path.resolve(found.worktree)) === '') continue;
+    out.push({
+      sessionId: row.sessionId,
+      agentId: parsed.agentId,
+      label: row.description || row.subagentType || parsed.agentId,
+      cwd: found.worktree,
+    });
+  }
+  return out;
+}
+
+async function collectSubagentChanges(groups, runnerFor) {
+  const settled = await Promise.all(groups.map(async (group) => {
+    try {
+      const result = await runnerFor(group.cwd).status();
+      if (!result || result.ok === false || !Array.isArray(result.files) || result.files.length === 0) return null;
+      return {
+        sessionId: group.sessionId,
+        agentId: group.agentId,
+        label: group.label,
+        branch: result.branch,
+        files: result.files,
+        totals: result.totals,
+      };
+    } catch {
+      return null;
+    }
+  }));
+  return settled.filter(Boolean);
 }
 
 // deps: {getCachedFolder, isRemoteFolder, parseFolderKey, getRemoteSessions, activeSessions, resolveSessionRealCwd, existsSync, projectsDir, readSubagentMeta}
@@ -84,4 +143,4 @@ function resolveGitChangesTarget(sessionId, deps, opts) {
   return { ok: false, error: 'could not resolve a working directory for this session' };
 }
 
-module.exports = { resolveGitChangesTarget, isValidChangesSessionId, parseSubagentId };
+module.exports = { resolveGitChangesTarget, isValidChangesSessionId, parseSubagentId, listSubagentWorktrees, collectSubagentChanges };

@@ -1704,8 +1704,8 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
 });
 
 // --- IPC: git-changes-status / git-changes-diff — see .ai/contexts/changes-view.md ---
-function resolveGitChangesTarget(sessionId, opts) {
-  return gitChangesTarget.resolveGitChangesTarget(sessionId, {
+function gitChangesTargetDeps() {
+  return {
     getCachedFolder,
     isRemoteFolder,
     parseFolderKey,
@@ -1715,7 +1715,12 @@ function resolveGitChangesTarget(sessionId, opts) {
     existsSync: (p) => fs.existsSync(p),
     projectsDir: PROJECTS_DIR,
     readSubagentMeta,
-  }, opts);
+    listSubagents: (parentId) => getCachedByParent(parentId),
+  };
+}
+
+function resolveGitChangesTarget(sessionId, opts) {
+  return gitChangesTarget.resolveGitChangesTarget(sessionId, gitChangesTargetDeps(), opts);
 }
 
 function gitChangesRunnerFor(target) {
@@ -1729,7 +1734,12 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   if (!target.ok) return target;
   try {
     const result = await gitChangesRunnerFor(target).status();
-    return result.ok === false ? result : { ...result, kind: target.kind };
+    if (result.ok === false) return result;
+    const worktrees = gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
+    if (worktrees.length === 0) return { ...result, kind: target.kind };
+    const subagents = await gitChangesTarget.collectSubagentChanges(
+      worktrees, (cwd) => createGitChangesRunner({ kind: 'local', cwd }));
+    return { ...result, kind: target.kind, subagents };
   } catch (err) {
     return { ok: false, error: err.message };
   }

@@ -4846,6 +4846,15 @@ body { display: flex; flex-direction: column; }
   color: var(--text-muted);
 }
 
+.changes-subagent-header {
+  padding: 6px 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-top: 1px solid var(--hairline);
+}
+
 /* The list keeps its explicit height while the editor is open; it is the
    editor that takes the remaining space. */
 #changes-list.changes-list-split {

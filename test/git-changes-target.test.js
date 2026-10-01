@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveGitChangesTarget, isValidChangesSessionId } = require('../git-changes-target');
+const { resolveGitChangesTarget, isValidChangesSessionId, listSubagentWorktrees, collectSubagentChanges } = require('../git-changes-target');
 
 function baseDeps(overrides = {}) {
   return {
@@ -229,10 +229,12 @@ test('resolveGitChangesTarget: a subagent with no worktreePath shares the parent
   assert.deepEqual(result, { ok: true, kind: 'local', cwd: path.resolve('/repo'), subagent: true });
 });
 
-test('resolveGitChangesTarget: a subagent whose sidecar is missing shares the parent target', () => {
-  const result = resolveGitChangesTarget(SUB_ID, subDeps(null), SUB_OPTS);
-  assert.equal(result.ok, true);
-  assert.equal(result.cwd, path.resolve('/repo'));
+test('resolveGitChangesTarget: a sidecar that is missing or unparsable is a distinct refusal, not the parent rows (mutation target: sharing the parent target)', () => {
+  for (const meta of [null, undefined, 'text', 7]) {
+    const result = resolveGitChangesTarget(SUB_ID, subDeps(meta), SUB_OPTS);
+    assert.equal(result.ok, false, JSON.stringify(meta));
+    assert.equal(result.reason, 'no-worktree-recorded');
+  }
 });
 
 test('resolveGitChangesTarget: a removed worktree is reported as such, not thrown and not the parent directory (mutation target: falling back to the parent)', () => {
@@ -265,4 +267,98 @@ test('resolveGitChangesTarget: a subagent absent from the cache is refused', () 
   const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
   assert.equal(result.ok, false);
   assert.deepEqual(deps.metaReads, []);
+});
+
+test('resolveGitChangesTarget: a UNC worktreePath is refused without a stat (mutation target: dropping the UNC check)', () => {
+  for (const worktreePath of ['\\\\host\\share\\wt', '\\\\?\\UNC\\host\\share\\wt', '//host/share/wt', '\\\\?\\C:\\wt']) {
+    let stat = false;
+    const deps = subDeps({ worktreePath }, { existsSync: () => { stat = true; return true; } });
+    const result = resolveGitChangesTarget(SUB_ID, deps, SUB_OPTS);
+    assert.equal(result.ok, false, worktreePath);
+    assert.equal(stat, false, worktreePath);
+  }
+});
+
+// --- listing a parent's subagent worktrees ---------------------------------
+
+const WT2 = path.resolve('/repo/.claude/worktrees/agent-bbbb');
+
+function listDeps(rows, metas, overrides = {}) {
+  return subDeps(null, {
+    getCachedFolder: (id) => (id === 'parent-1' || id.startsWith('sub:parent-1:') ? '-repo' : null),
+    existsSync: (p) => [WORKTREE, WT2, path.resolve('/repo')].includes(p),
+    listSubagents: () => rows,
+    readSubagentMeta: (jsonlPath) => metas[path.basename(jsonlPath, '.jsonl').slice('agent-'.length)] ?? null,
+    ...overrides,
+  });
+}
+
+test('listSubagentWorktrees: lists only subagents whose worktree differs from the parent, labelled description then type then id', () => {
+  const rows = [
+    { sessionId: 'sub:parent-1:aaaa', agentId: 'aaaa', description: 'fix the thing', subagentType: 'general-purpose' },
+    { sessionId: 'sub:parent-1:bbbb', agentId: 'bbbb', description: null, subagentType: 'Explore' },
+    { sessionId: 'sub:parent-1:cccc', agentId: 'cccc', description: null, subagentType: null },
+    { sessionId: 'sub:parent-1:dddd', agentId: 'dddd', description: 'shares', subagentType: 'x' },
+    { sessionId: 'sub:parent-1:eeee', agentId: 'eeee', description: 'same as parent', subagentType: 'x' },
+    { sessionId: 'sub:parent-1:ffff', agentId: 'ffff', description: 'sidecar gone', subagentType: 'x' },
+    { sessionId: 'sub:parent-1:gggg', agentId: 'gggg', description: 'removed', subagentType: 'x' },
+  ];
+  const metas = {
+    aaaa: { worktreePath: WORKTREE },
+    bbbb: { worktreePath: WT2 },
+    cccc: { worktreePath: WORKTREE },
+    dddd: { agentType: 'x' },
+    eeee: { worktreePath: path.resolve('/repo') },
+    gggg: { worktreePath: path.resolve('/repo/.claude/worktrees/gone') },
+  };
+  const out = listSubagentWorktrees('parent-1', listDeps(rows, metas));
+  assert.deepEqual(out.map((o) => [o.agentId, o.label, o.cwd]), [
+    ['aaaa', 'fix the thing', WORKTREE],
+    ['bbbb', 'Explore', WT2],
+    ['cccc', 'cccc', WORKTREE],
+  ]);
+  assert.equal(out[0].sessionId, 'sub:parent-1:aaaa');
+});
+
+test('listSubagentWorktrees: a parent that is not a local session, or an invalid id, lists nothing and reads nothing', () => {
+  let read = false;
+  const rows = [{ sessionId: 'sub:parent-1:aaaa', agentId: 'aaaa' }];
+  const metas = { aaaa: { worktreePath: WORKTREE } };
+  const guard = { readSubagentMeta: () => { read = true; return { worktreePath: WORKTREE }; } };
+  assert.deepEqual(listSubagentWorktrees('../x', listDeps(rows, metas, guard)), []);
+  assert.deepEqual(listSubagentWorktrees('sub:parent-1:aaaa', listDeps(rows, metas, guard)), []);
+  assert.deepEqual(listSubagentWorktrees('parent-1', listDeps(rows, metas, { ...guard, isRemoteFolder: () => true })), []);
+  assert.equal(read, false);
+});
+
+test('listSubagentWorktrees: the listing is bounded', () => {
+  const rows = []; const metas = {};
+  for (let i = 0; i < 30; i++) {
+    rows.push({ sessionId: 'sub:parent-1:a' + i, agentId: 'a' + i });
+    metas['a' + i] = { worktreePath: WORKTREE };
+  }
+  assert.equal(listSubagentWorktrees('parent-1', listDeps(rows, metas)).length, 8);
+});
+
+// --- the groups the parent's panel shows -----------------------------------
+
+test('collectSubagentChanges: keeps the groups git reports files for, drops clean, failed and throwing ones', async () => {
+  const groups = [
+    { sessionId: 'sub:p:a', agentId: 'a', label: 'A', cwd: '/wa' },
+    { sessionId: 'sub:p:b', agentId: 'b', label: 'B', cwd: '/wb' },
+    { sessionId: 'sub:p:c', agentId: 'c', label: 'C', cwd: '/wc' },
+    { sessionId: 'sub:p:d', agentId: 'd', label: 'D', cwd: '/wd' },
+  ];
+  const status = {
+    '/wa': { ok: true, branch: { head: 'wa' }, files: [{ path: 'x.js', state: 'M' }], totals: { files: 1, added: 1, deleted: 0, uncounted: 0 }, kind: 'local' },
+    '/wb': { ok: true, branch: { head: 'wb' }, files: [], totals: { files: 0 } },
+    '/wc': { ok: false, error: 'boom' },
+  };
+  const out = await collectSubagentChanges(groups, (cwd) => ({
+    status: async () => { if (cwd === '/wd') throw new Error('x'); return status[cwd]; },
+  }));
+  assert.deepEqual(out, [{
+    sessionId: 'sub:p:a', agentId: 'a', label: 'A', branch: { head: 'wa' },
+    files: [{ path: 'x.js', state: 'M' }], totals: { files: 1, added: 1, deleted: 0, uncounted: 0 },
+  }]);
 });

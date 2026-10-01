@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- A session's Changes panel also lists the changes in the worktrees its subagents are working in, under a header naming the agent and its branch. Those rows open as read-only diffs; a subagent that works in the session's own directory adds nothing. (#303)
+
 ## v0.0.86 — 2026-10-01
 
 ### New

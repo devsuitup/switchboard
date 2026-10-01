@@ -2348,3 +2348,125 @@ test('the tab the panel X closed is reopened by the Changes button', async () =>
     assert.equal(ctx.document.querySelectorAll('.changes-file-row').length, 2);
   } finally { ctx.destroy(); }
 });
+
+// --- Subagent worktrees (issue #303) -------------------------------------
+
+function subagentGroup(overrides = {}) {
+  return {
+    sessionId: 'sub:s1:aaaa',
+    agentId: 'aaaa',
+    label: 'worktree long',
+    branch: { head: 'worktree-agent-aaaa', upstream: null, ahead: 0, behind: 0 },
+    files: [
+      { path: 'src/a.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 2, deleted: 0 },
+      { path: 'essai.md', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: 2, deleted: null },
+    ],
+    totals: { files: 2, added: 4, deleted: 0, uncounted: 0 },
+    ...overrides,
+  };
+}
+
+function subagentRows(ctx) {
+  return Array.from(ctx.document.querySelectorAll('.changes-file-row[data-subagent]'));
+}
+
+test('a parent with no subagent worktrees renders no group header (mutation target: rendering an empty group)', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-subagent-header').length, 0);
+    assert.equal(subagentRows(ctx).length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('the parent panel lists each subagent worktree under a header naming the agent, rows kept apart from the parent rows', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ subagents: [subagentGroup()] }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const headers = Array.from(ctx.document.querySelectorAll('.changes-subagent-header'));
+    assert.equal(headers.length, 1);
+    assert.match(headers[0].textContent, /worktree long/);
+    assert.match(headers[0].textContent, /worktree-agent-aaaa/);
+
+    assert.deepEqual(subagentRows(ctx).map((r) => r.dataset.path), ['src/a.js', 'essai.md']);
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row:not([data-subagent])').length, 2,
+      'the parent keeps its own two rows, even where a path repeats');
+    assert.match(ctx.document.getElementById('changes-summary').textContent, /2 files changed \+3/,
+      'the header total stays the session own directory total');
+  } finally { ctx.destroy(); }
+});
+
+test('with no change in its own directory the panel says so and still lists the subagent group', async () => {
+  const empty = { files: [], totals: { files: 0, added: 0, deleted: 0, uncounted: 0 } };
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ ...empty, subagents: [subagentGroup()] }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    const summary = ctx.document.getElementById('changes-summary').textContent;
+    assert.match(summary, /No changes/);
+    assert.match(summary, /session/i, 'it is the session directory that has none');
+    assert.equal(subagentRows(ctx).length, 2);
+  } finally { ctx.destroy(); }
+});
+
+test('clicking a subagent row diffs it through the subagent id, read-only, with no editor and no watch (mutation target: opening the editor)', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ subagents: [subagentGroup()] }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    subagentRows(ctx)[0].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    assert.deepEqual(ctx.calls.diff, [{ sessionId: 'sub:s1:aaaa', filePath: 'src/a.js', staged: false, untracked: false }]);
+    assert.equal(ctx.calls.file.length, 0, 'the editable content pair is never requested for a subagent row');
+    assert.equal(ctx.calls.watch.length, 0);
+    assert.equal(ctx.editors.length, 0);
+    assert.ok(ctx.document.querySelector('.changes-diff-line, #changes-diff-view *'), 'the diff is shown');
+  } finally { ctx.destroy(); }
+});
+
+test('selecting a subagent row does not select the parent row with the same path, and its counts never land on the parent record (mutation target: matching on path alone)', async () => {
+  const group = subagentGroup({
+    files: [{ path: 'new.txt', origPath: null, staged: false, unstaged: false, untracked: true, renamed: false, state: '?', added: null, deleted: null, countStatus: 'on-open' }],
+    totals: { files: 1, added: 0, deleted: 0, uncounted: 1 },
+  });
+  const ctx = setupFilePanelDom({
+    statusImpl: () => makeStatusResult({ subagents: [group] }),
+    diffImpl: () => ({ ok: true, content: '--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,5 @@\n+a\n+b\n+c\n+d\n+e\n', truncated: false, added: 5, deleted: 0 }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    subagentRows(ctx)[0].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+
+    const selected = ctx.document.querySelectorAll('.changes-file-row.selected');
+    assert.equal(selected.length, 1);
+    assert.ok(selected[0].dataset.subagent, 'the subagent row is the selected one');
+    const parentRow = ctx.document.querySelector('.changes-file-row[data-path="new.txt"]:not([data-subagent])');
+    assert.match(parentRow.textContent, /count on open/, 'the parent record kept its own count status');
+  } finally { ctx.destroy(); }
+});
+
+test('a diff failure on a subagent row is shown, not thrown', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => makeStatusResult({ subagents: [subagentGroup()] }),
+    diffImpl: () => ({ ok: false, error: 'the worktree of this subagent no longer exists' }),
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    subagentRows(ctx)[0].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+    assert.match(ctx.document.getElementById('changes-diff-view').textContent, /no longer exists/);
+  } finally { ctx.destroy(); }
+});

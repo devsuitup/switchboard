@@ -140,6 +140,9 @@ test('only the read-only status and diff handlers admit a subagent id (mutation 
     assert.doesNotMatch(handlerBody(main, channel), /allowSubagent/, `${channel} must keep refusing a subagent id`);
   }
   assert.match(main, /readSubagentMeta/, 'main must inject the sidecar reader');
+  const status = handlerBody(main, 'git-changes-status');
+  assert.match(status, /const worktrees = gitChangesTarget.listSubagentWorktrees\(sessionId/, 'the status handler lists the parent subagent worktrees');
+  assert.match(status, /collectSubagentChanges\(/, 'and attaches their changes to the result');
 });
 
 test('git-changes-locate is the one handler that takes an absolute path, and it maps it main-side', () => {
