@@ -155,6 +155,7 @@ function setupSidebarDom() {
   return {
     window,
     document: window.document,
+    context: ctx,
     sidebar: {
       renderProjects: window.renderProjects,
       buildSessionItem: window.buildSessionItem,
