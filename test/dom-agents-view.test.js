@@ -255,6 +255,25 @@ test('a blocked job counts as running, sorts with the live rows and keeps only t
   assert.deepEqual({ ...ctx.calls.opened[0][1] }, { type: 'attach', jobId: 'cccccccc', cwd: '/w/em' });
 });
 
+test('a failed job reads "failed", counts as finished and is hidden by the Finished filter', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const row = ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]');
+  assert.equal(row.querySelector('.agents-row-state').textContent, 'failed');
+  assert.equal(ctx.document.getElementById('agents-viewer-count').textContent, '1 running · 2 finished');
+  row.click();
+  const detail = ctx.document.getElementById('agents-detail');
+  assert.equal(detail.querySelector('[data-verb="rm"]').disabled, false);
+  assert.equal(detail.querySelector('[data-verb="respawn"]').disabled, false);
+  assert.equal(detail.querySelector('[data-verb="attach"]').disabled, true);
+  const box = ctx.document.getElementById('agents-show-finished');
+  box.checked = false;
+  box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+  assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]'), null);
+});
+
 test('hiding a view that is not open leaves the persisted flag untouched', (t) => {
   const ctx = setup({ storage: { agentsViewActive: '1' } }); t.after(() => ctx.destroy());
   ctx.window.hideAllViewers();

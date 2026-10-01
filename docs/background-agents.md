@@ -20,12 +20,13 @@ One row per session: a state glyph (the same rungs as the sidebar: spinner
 while busy, orange while waiting, green when idle, grey when finished), its
 name, its `--agent`, `state · status`, its directory, and its age. Working
 and blocked sessions and external interactive sessions come first, newest
-first. **Finished** shows or hides `done` and `stopped` sessions; the choice
-is remembered. The list refreshes when the daemon's files change, and is
-re-read from the CLI every 30 seconds while the view is open.
+first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
+the choice is remembered. The list refreshes when the daemon's files change,
+and is re-read from the CLI every 30 seconds while the view is open.
 
-A job is in one of four states: `working`, `blocked` (live, waiting for
-input), `done` or `stopped`. `working` and `blocked` both count as live.
+A job is in one of five states: `working`, `blocked` (live, waiting for
+input), `done`, `stopped` or `failed` (ended in error). `working` and
+`blocked` both count as live; the other three are finished.
 
 Selecting a row opens its detail: the daemon's one-line status, tokens,
 model, start time, pid, the subagents it ran, the links it produced (merge

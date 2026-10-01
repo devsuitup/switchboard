@@ -49,10 +49,15 @@ doc: `docs/background-agents.md`.
 ## Job states
 
 `JOB_STATES` in `bg-agents-roster.js` is `working`, `blocked`, `done`,
-`stopped`. `blocked` is a live job waiting on input (observed on CLI 2.1.285,
-2026-09-30; the first design listed three states). `agentJobIsLive`
+`stopped`, `failed`. `blocked` is a live job waiting on input (observed on CLI
+2.1.285, 2026-09-30; the first design listed three states). `failed` is a job
+that ended in error (observed on CLI 2.1.285, 2026-10-01, two jobs); before it
+was in the set such a job parsed as `null` and its row read `?`. `failed` is
+finished, like `done` and `stopped`: not live, hidden by the Finished filter,
+counted as finished, Respawn and Delete enabled. `agentJobIsLive`
 (`public/agents-view.js`) — `working` or `blocked` on a background entry — is
-the single live predicate in the renderer.
+the single live predicate in the renderer, so every state outside those two
+is finished without a list to keep in sync.
 
 | Verb | Live job | Not live |
 |---|---|---|
@@ -215,7 +220,7 @@ Agents view.
 - `claude agents --json --all`: ~0.15 s CPU; array of `{id, sessionId, name,
   cwd, kind, startedAt, pid?, state?, status?}`.
 - The daemon reports a fourth job state, `blocked`, for a live job waiting on
-  input.
+  input, and (2026-10-01) a fifth, `failed`, for a job that ended in error.
 - `claude attach <id>` in a pty: Ctrl+Z detaches, client exits 0, session
   stays `working`.
 - `claude logs <id>` prints screen ANSI, unusable without xterm — not used.

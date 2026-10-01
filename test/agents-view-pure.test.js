@@ -58,6 +58,13 @@ test('verb availability: a blocked job is live like a working one', () => {
   assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked' }), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
 });
 
+test('a failed job is finished: sorts after the live rows, stale icon, Delete and Respawn allowed', () => {
+  const sorted = sortAgentEntries([bg({ id: 'f1', state: 'failed', startedAt: 900 }), bg({ id: 'w1', startedAt: 100 })]);
+  assert.deepEqual(sorted.map(e => e.id), ['w1', 'f1']);
+  assert.equal(agentRowIcon(bg({ state: 'failed', status: 'busy' })).slotClass, 'session-icon--stale');
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'failed' }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
+});
+
 test('formatting helpers', () => {
   assert.equal(formatTokens(null), '');
   assert.equal(formatTokens(274), '274');

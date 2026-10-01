@@ -166,3 +166,9 @@ test('parseJobState and parseCliList keep the blocked state a job reports while 
   const [s] = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId: 's1', kind: 'background', state: 'blocked' }]));
   assert.equal(s.state, 'blocked');
 });
+
+test('parseJobState and parseCliList keep the failed state the daemon reports for a job that ended in error', () => {
+  assert.equal(parseJobState('{"state":"failed","detail":"crashed"}').state, 'failed');
+  const [s] = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId: 's1', kind: 'background', state: 'failed' }]));
+  assert.equal(s.state, 'failed');
+});

@@ -1,7 +1,7 @@
 // bg-agents-roster.js — see .ai/contexts/bg-agents.md
 'use strict';
 
-const JOB_STATES = new Set(['working', 'blocked', 'done', 'stopped']);
+const JOB_STATES = new Set(['working', 'blocked', 'done', 'stopped', 'failed']);
 const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
 const JOB_ID_RE = /^[0-9a-f]{8}$/;
 const JOB_ID_IN_TEXT_RE = /(?:^|[^0-9a-f])([0-9a-f]{8})(?![0-9a-f])/i;
