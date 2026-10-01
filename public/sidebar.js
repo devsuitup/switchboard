@@ -1426,7 +1426,7 @@ function buildSessionItem(session) {
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (activePtyIds.has(session.sessionId) ? ' running' : '');
   paintSessionIcon(icon, session.sessionId, session);
-  if (remoteAttention) writeIconSlot(icon, renderSessionIcon(remoteAttention));
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block
   const info = document.createElement('div');
