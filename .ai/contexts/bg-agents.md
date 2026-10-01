@@ -139,9 +139,12 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 
 The header's `#agents-group-by` select sets `agentsGroupBy` (`none`, `state`,
 `project`), persisted under `localStorage.agentsGroupBy`. `readAgentsGroupBy`
-wraps the read in try/catch and `normalizeAgentsGroupBy` maps anything else to
-`none`; the write is wrapped too, so a storage that throws still lets the
-choice apply for the session.
+wraps the read in try/catch and `normalizeAgentsGroupBy` maps anything else
+(unset included) to `state`, the default; an explicitly stored `none` or
+`project` is kept. The default is not written back, so it only lands in
+storage once the user picks something. The write is wrapped too, so a storage
+that throws still lets the choice apply for the session. The `<select>` in
+`index.html` marks `state` as `selected` to match before `initAgentsView` runs.
 
 - `groupAgentEntries(entries, mode)` is pure and returns
   `[{ key, label, title, entries }]`, empty groups dropped. It keeps the input
@@ -149,10 +152,17 @@ choice apply for the session.
   (Finished) and sorted (`sortAgentEntries`) list, so grouping never re-sorts
   rows. `none` returns one unlabelled group; the renderer then skips headers
   entirely, so the flat list is byte-identical to before.
-- State order is fixed (`AGENTS_STATE_GROUPS`): Working, Blocked, Done,
-  Stopped, Failed, External (interactive entries, whatever their state),
-  Unknown (a background entry whose state is `null` or not in the list).
-  "Blocked" matches the row's own state word.
+- `AGENT_STATE_META` (key → `{ emoji, label }`) is the single source for the
+  state groups' order, their header label and emoji, and the emoji at the
+  start of each row's `.agents-row-state` (in every mode). `agentStateMeta`
+  (entry → `{ key, emoji, label }`) is the only lookup: interactive entries
+  are `external` whatever their state; a background entry whose state is
+  `null` or not a key is `unknown`. Order: Working, Blocked, Done, Stopped,
+  Failed, External, Unknown. "Blocked" matches the row's own state word.
+  Emojis are literals from the map, never data, and sit in their own
+  `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the
+  label and the state text stay plain text. Project headers carry no emoji.
+  A new job state needs an entry here, or its rows fall into Unknown.
 - Project groups are keyed by the exact `cwd` string (no normalisation: a
   trailing slash or a different case makes a different group); no `cwd` is
   the "No project" group. The label is the last path segment (`/` and `\`
@@ -167,8 +177,10 @@ choice apply for the session.
   so a header click does nothing and the selection (`agentsSelectedKey`) is
   untouched by a regroup. The header's `title` (full path) and `data-group`
   go through `agentsEscapeAttr`; the label through `escapeHtml`.
-- Headers are `position: sticky` in the scrolling `#agents-list`. Collapsing
-  a group is not implemented.
+- Headers are `position: sticky` in the scrolling `#agents-list`, sized
+  `1.2em` of the list's 12px (rows are 12px), weight 600, with more padding
+  above than below; the count is weight 400, smaller and `--text-muted`.
+  Collapsing a group is not implemented.
 
 ## The sidebar
 

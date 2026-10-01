@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { renderSessionIcon } = require('../public/session-state');
 global.renderSessionIcon = renderSessionIcon;
-const { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy } = require('../public/agents-view');
+const { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta } = require('../public/agents-view');
 
 const bg = (over) => ({ id: 'aaaaaaaa', sessionId: 's', kind: 'background', state: 'working', status: 'idle', startedAt: 100, ...over });
 
@@ -68,13 +68,35 @@ test('a failed job is finished: sorts after the live rows, stale icon, Delete an
 const ext = (over) => ({ id: null, sessionId: 'i', kind: 'interactive', state: null, status: 'busy', startedAt: 100, ...over });
 const ids = (groups) => groups.map(g => [g.label, g.entries.map(e => e.id || e.sessionId)]);
 
-test('group mode: only none, state and project are valid; anything else is none', () => {
+test('group mode: none, state and project are kept; anything else (unset included) is state', () => {
   assert.equal(normalizeAgentsGroupBy('state'), 'state');
   assert.equal(normalizeAgentsGroupBy('project'), 'project');
   assert.equal(normalizeAgentsGroupBy('none'), 'none');
-  assert.equal(normalizeAgentsGroupBy('bogus'), 'none');
-  assert.equal(normalizeAgentsGroupBy(null), 'none');
-  assert.equal(normalizeAgentsGroupBy(undefined), 'none');
+  assert.equal(normalizeAgentsGroupBy('bogus'), 'state');
+  assert.equal(normalizeAgentsGroupBy(null), 'state');
+  assert.equal(normalizeAgentsGroupBy(undefined), 'state');
+});
+
+test('state meta: one emoji and label per state group, in the group order', () => {
+  assert.deepEqual(Object.entries(AGENT_STATE_META).map(([k, m]) => [k, m.emoji, m.label]), [
+    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
+    ['failed', '❌', 'Failed'], ['external', '🖥️', 'External'], ['unknown', '❓', 'Unknown'],
+  ]);
+  const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k })));
+  for (const g of groupAgentEntries(every, 'state')) {
+    assert.ok(AGENT_STATE_META[g.key], `meta for ${g.key}`);
+    assert.equal(g.label, AGENT_STATE_META[g.key].label);
+  }
+  assert.equal(groupAgentEntries(every, 'state').length, 7);
+});
+
+test('state meta lookup: by state, null or unlisted is unknown, interactive is external', () => {
+  assert.equal(agentStateMeta(bg()).emoji, '⚙️');
+  assert.equal(agentStateMeta(bg({ state: 'failed' })).emoji, '❌');
+  assert.equal(agentStateMeta(bg({ state: null })).emoji, '❓');
+  assert.equal(agentStateMeta(bg({ state: 'weird' })).label, 'Unknown');
+  assert.equal(agentStateMeta(ext({ state: 'working' })).emoji, '🖥️');
+  assert.equal(agentStateMeta(ext()).key, 'external');
 });
 
 test('group none: one unlabelled group holding every entry in order', () => {

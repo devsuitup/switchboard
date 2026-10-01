@@ -17,7 +17,7 @@ const HTML = `<!DOCTYPE html><html><body>
   <div id="agents-viewer" style="display:none;">
     <div id="agents-viewer-header"><span id="agents-viewer-title">Agents</span><span id="agents-viewer-count"></span>
       <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
-      <label id="agents-group-toggle">Group <select id="agents-group-by"><option value="none">None</option><option value="state">State</option><option value="project">Project</option></select></label>
+      <label id="agents-group-toggle">Group <select id="agents-group-by"><option value="none">None</option><option value="state" selected>State</option><option value="project">Project</option></select></label>
       <button id="agents-new-btn" type="button">New agent</button></div>
     <div id="agents-viewer-banner" style="display:none;"></div>
     <div id="agents-viewer-body"><div id="agents-list"></div><div id="agents-detail"></div></div>
@@ -29,7 +29,7 @@ function evalFile(dom, file) {
   vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
 }
 
-function setup({ storage = {}, settingsPanel = false } = {}) {
+function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = {}) {
   const dom = new JSDOM(HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   for (const [k, v] of Object.entries(storage)) window.localStorage.setItem(k, v);
@@ -262,7 +262,7 @@ test('a failed job reads "failed", counts as finished and is hidden by the Finis
   ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
   await ctx.window.showAgentsView();
   const row = ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]');
-  assert.equal(row.querySelector('.agents-row-state').textContent, 'failed');
+  assert.equal(row.querySelector('.agents-row-state').textContent, '❌ failed');
   assert.equal(ctx.document.getElementById('agents-viewer-count').textContent, '1 running · 2 finished');
   row.click();
   const detail = ctx.document.getElementById('agents-detail');
@@ -293,7 +293,7 @@ test('group by state: a header per non-empty group with its count, each row once
   await ctx.window.showAgentsView();
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
   chooseGroupBy(ctx, 'state');
-  assert.deepEqual(listLayout(ctx), ['# Working · 1', 'em-platform', '# Done · 1', 'spike', '# Failed · 1', 'broke', '# External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# ❌ Failed · 1', 'broke', '# 🖥️ External · 1', 'lvds-1b']);
   assert.equal(ctx.document.querySelectorAll('.agents-row').length, 4);
   assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), 'state');
   chooseGroupBy(ctx, 'none');
@@ -321,7 +321,7 @@ test('the Finished filter applies before grouping: a group left empty is not sho
   const box = ctx.document.getElementById('agents-show-finished');
   box.checked = false;
   box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
-  assert.deepEqual(listLayout(ctx), ['# Working · 1', 'em-platform', '# External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# 🖥️ External · 1', 'lvds-1b']);
   ctx.emitChanged({ roster: [], daemonReachable: true });
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
   assert.match(ctx.document.getElementById('agents-list').textContent, /No background agents/);
@@ -343,7 +343,7 @@ test('the selected row stays selected across a regroup, and a click on a header 
   assert.equal(ctx.calls.verbs.length, 0);
 });
 
-test('the grouping is restored from storage; an invalid stored value falls back to none', async (t) => {
+test('the grouping is restored from storage; an invalid stored value falls back to state', async (t) => {
   const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -352,18 +352,19 @@ test('the grouping is restored from storage; an invalid stored value falls back 
   const bad = setup({ storage: { agentsGroupBy: 'evil" onclick="x' } }); t.after(() => bad.destroy());
   bad.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await bad.window.showAgentsView();
-  assert.equal(bad.document.getElementById('agents-group-by').value, 'none');
-  assert.equal(bad.document.querySelectorAll('.agents-group-header').length, 0);
+  assert.equal(bad.document.getElementById('agents-group-by').value, 'state');
+  assert.equal(bad.document.querySelectorAll('.agents-group-header').length, 3);
+  assert.equal(bad.read('agentsGroupBy'), 'state');
 });
 
-test('a throwing localStorage leaves the grouping at none and choosing one still works', async (t) => {
+test('a throwing localStorage leaves the grouping at state and choosing one still works', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
   Object.defineProperty(ctx.window, 'localStorage', { configurable: true, get() { throw new Error('denied'); } });
-  assert.equal(ctx.window.readAgentsGroupBy(), 'none');
-  chooseGroupBy(ctx, 'state');
-  assert.equal(ctx.read('agentsGroupBy'), 'state');
+  assert.equal(ctx.window.readAgentsGroupBy(), 'state');
+  chooseGroupBy(ctx, 'project');
+  assert.equal(ctx.read('agentsGroupBy'), 'project');
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 3);
 });
 
@@ -383,6 +384,68 @@ test('quotes and attribute payloads in a cwd used as a project group title canno
   assert.equal(ctx.document.querySelectorAll('[data-verb]').length, 0);
   head.click();
   assert.equal(ctx.calls.verbs.length, 0);
+});
+
+test('with nothing stored the list is grouped by state, headers carrying emoji, label and count', async (t) => {
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  const blocked = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'asks', state: 'blocked', startedAt: Date.now() - 5_000 };
+  const stopped = { ...ROSTER[1], id: 'dddddddd', sessionId: 's-d', name: 'halted', state: 'stopped' };
+  const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
+  ctx.setSnapshot({ roster: [...ROSTER, blocked, stopped, odd], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  assert.equal(ctx.read('agentsGroupBy'), 'state');
+  assert.equal(ctx.document.getElementById('agents-group-by').value, 'state');
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✋ Blocked · 1', 'asks', '# ✅ Done · 1', 'spike',
+    '# ⏹️ Stopped · 1', 'halted', '# 🖥️ External · 1', 'lvds-1b', '# ❓ Unknown · 1', 'odd']);
+  const emoji = ctx.document.querySelector('.agents-group-header .agents-group-emoji');
+  assert.equal(emoji.getAttribute('aria-hidden'), 'true');
+  assert.equal(emoji.textContent, '⚙️');
+  assert.equal(ctx.document.querySelector('.agents-group-header .agents-group-label').textContent, 'Working');
+  assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), null, 'the default is not written back');
+});
+
+test('a stored none or project is respected over the state default', async (t) => {
+  for (const mode of ['none', 'project']) {
+    const ctx = setup({ storage: { agentsGroupBy: mode } }); t.after(() => ctx.destroy());
+    ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+    await ctx.window.showAgentsView();
+    assert.equal(ctx.document.getElementById('agents-group-by').value, mode);
+    assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, mode === 'none' ? 0 : 3);
+    assert.equal(ctx.document.querySelectorAll('.agents-group-emoji').length, 0);
+  }
+});
+
+test('every row starts its state column with its state emoji in every grouping mode', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
+  ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const expected = { 'em-platform': '⚙️ working · idle', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
+  for (const mode of ['none', 'state', 'project']) {
+    chooseGroupBy(ctx, mode);
+    const got = Object.fromEntries([...ctx.document.querySelectorAll('.agents-row')].map(r =>
+      [r.querySelector('.agents-row-name').textContent, r.querySelector('.agents-row-state').textContent]));
+    assert.deepEqual(got, expected, mode);
+    assert.equal(ctx.document.querySelectorAll('.agents-row .agents-state-emoji[aria-hidden="true"]').length, 5, mode);
+    assert.equal(ctx.document.querySelectorAll('.agents-row .session-icon').length, 5, mode);
+  }
+});
+
+test('the group header is styled larger and semi-bold, its count secondary', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  const rule = (sel) => {
+    const m = css.match(new RegExp('(^|\\n)' + sel.replace(/[.#-]/g, '\\$&') + '\\s*\\{([^}]*)\\}'));
+    return m ? m[2] : '';
+  };
+  const head = rule('.agents-group-header');
+  const size = head.match(/font-size:\s*([\d.]+)em/);
+  assert.ok(size && Number(size[1]) >= 1.15, 'header font-size of at least 1.15em');
+  assert.match(head, /font-weight:\s*600/);
+  assert.match(head, /padding:\s*\d+px/);
+  assert.match(rule('.agents-group-count'), /font-weight:\s*400/);
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  assert.match(html, /<option value="state" selected>/);
 });
 
 test('hiding a view that is not open leaves the persisted flag untouched', (t) => {

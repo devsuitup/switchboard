@@ -18,7 +18,8 @@ restarts.
 
 One row per session: a state glyph (the same rungs as the sidebar: spinner
 while busy, orange while waiting, green when idle, grey when finished), its
-name, its `--agent`, `state · status`, its directory, and its age. Working
+name, its `--agent`, its state emoji then `state · status` (see the table
+below), its directory, and its age. Working
 and blocked sessions and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
 the choice is remembered. The list refreshes when the daemon's files change,
@@ -27,9 +28,10 @@ and is re-read from the CLI every 30 seconds while the view is open.
 **Group**, next to Finished, splits the list into sections with a header
 each (its name and how many rows it holds):
 
-- **None** (the default): one flat list.
-- **State**: Working, Blocked, Done, Stopped, Failed, then External for the
-  interactive sessions running outside Switchboard, then Unknown.
+- **State** (the default): Working, Blocked, Done, Stopped, Failed, then
+  External for the interactive sessions running outside Switchboard, then
+  Unknown. Each header starts with the state's emoji.
+- **None**: one flat list.
 - **Project**: one section per directory, named after its last folder (hover
   the header for the full path; two projects with the same folder name show
   their parent folder too). Projects with something running come first, then
@@ -41,6 +43,19 @@ first (a section left empty is not shown), and the choice is remembered.
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` both count as live; the other three are finished.
+
+The same emoji marks a state in the State headers and at the start of every
+row's state column, whatever the grouping:
+
+| Emoji | State |
+|---|---|
+| ⚙️ | Working |
+| ✋ | Blocked (waiting for input) |
+| ✅ | Done |
+| ⏹️ | Stopped |
+| ❌ | Failed |
+| 🖥️ | External (an interactive session outside Switchboard) |
+| ❓ | Unknown |
 
 Selecting a row opens its detail: the daemon's one-line status, tokens,
 model, start time, pid, the subagents it ran, the links it produced (merge

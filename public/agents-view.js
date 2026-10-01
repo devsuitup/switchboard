@@ -7,7 +7,7 @@ let agentsRoster = [];
 let agentsDaemonReachable = true;
 let agentsSelectedKey = null;
 let agentsShowFinished = true;
-let agentsGroupBy = 'none';
+let agentsGroupBy = 'state';
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
@@ -40,18 +40,29 @@ function sortAgentEntries(entries) {
 }
 
 const AGENTS_GROUP_MODES = ['none', 'state', 'project'];
-const AGENTS_STATE_GROUPS = [
-  ['working', 'Working'], ['blocked', 'Blocked'], ['done', 'Done'], ['stopped', 'Stopped'],
-  ['failed', 'Failed'], ['external', 'External'], ['unknown', 'Unknown'],
-];
+const AGENT_STATE_META = {
+  working: { emoji: '⚙️', label: 'Working' },
+  blocked: { emoji: '✋', label: 'Blocked' },
+  done: { emoji: '✅', label: 'Done' },
+  stopped: { emoji: '⏹️', label: 'Stopped' },
+  failed: { emoji: '❌', label: 'Failed' },
+  external: { emoji: '🖥️', label: 'External' },
+  unknown: { emoji: '❓', label: 'Unknown' },
+};
 
 function normalizeAgentsGroupBy(value) {
-  return AGENTS_GROUP_MODES.includes(value) ? value : 'none';
+  return AGENTS_GROUP_MODES.includes(value) ? value : 'state';
 }
 
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
-  return ['working', 'blocked', 'done', 'stopped', 'failed'].includes(entry.state) ? entry.state : 'unknown';
+  const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
+  return known ? entry.state : 'unknown';
+}
+
+function agentStateMeta(entry) {
+  const key = agentStateGroupKey(entry);
+  return { key, ...AGENT_STATE_META[key] };
 }
 
 function agentPathSegments(cwd) {
@@ -90,8 +101,8 @@ function groupAgentEntries(entries, mode) {
   const m = normalizeAgentsGroupBy(mode);
   if (m === 'none') return [{ key: '', label: '', title: '', entries: entries.slice() }];
   if (m === 'project') return groupAgentsByProject(entries);
-  return AGENTS_STATE_GROUPS
-    .map(([key, label]) => ({ key, label, title: '', entries: entries.filter(e => agentStateGroupKey(e) === key) }))
+  return Object.entries(AGENT_STATE_META)
+    .map(([key, meta]) => ({ key, label: meta.label, emoji: meta.emoji, title: '', entries: entries.filter(e => agentStateGroupKey(e) === key) }))
     .filter(g => g.entries.length);
 }
 
@@ -172,6 +183,7 @@ function renderAgentRow(entry) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
   const state = entry.kind === 'interactive' ? 'external' : (entry.state || '?');
+  const stateEmoji = agentStateMeta(entry).emoji;
   const status = entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];
   if (key === agentsSelectedKey) classes.push('selected');
@@ -180,7 +192,7 @@ function renderAgentRow(entry) {
     <span class="session-icon ${icon.slotClass}" title="${agentsEscapeAttr(icon.title)}"></span>
     <span class="agents-row-name">${escapeHtml(entry.name || entry.sessionId || entry.id || '')}</span>
     <span class="agents-row-agent">${escapeHtml(entry.agent || '—')}</span>
-    <span class="agents-row-state">${escapeHtml(state + status)}</span>
+    <span class="agents-row-state"><span class="agents-state-emoji" aria-hidden="true">${stateEmoji}</span> ${escapeHtml(state + status)}</span>
     <span class="agents-row-cwd" title="${agentsEscapeAttr(entry.cwd || '')}">${escapeHtml(entry.cwd ? shortProjectPath(entry.cwd) : '')}</span>
     <span class="agents-row-age">${escapeHtml(formatAgentAge(entry.startedAt))}</span>
   </div>`;
@@ -188,7 +200,8 @@ function renderAgentRow(entry) {
 
 function renderAgentGroupHeader(group) {
   const title = group.title ? ` title="${agentsEscapeAttr(group.title)}"` : '';
-  return `<div class="agents-group-header" data-group="${agentsEscapeAttr(group.key)}"${title}><span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+  const emoji = group.emoji ? `<span class="agents-group-emoji" aria-hidden="true">${group.emoji}</span> ` : '';
+  return `<div class="agents-group-header" data-group="${agentsEscapeAttr(group.key)}"${title}>${emoji}<span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
 }
 
 function renderAgentList(visible) {
@@ -202,7 +215,7 @@ function readAgentsGroupBy() {
   try {
     return normalizeAgentsGroupBy(localStorage.getItem('agentsGroupBy'));
   } catch {
-    return 'none';
+    return 'state';
   }
 }
 
@@ -423,5 +436,5 @@ function initAgentsView() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy };
+  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta };
 }
