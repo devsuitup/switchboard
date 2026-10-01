@@ -263,6 +263,7 @@ spends the same budget.
 | `SWITCHBOARD_TRIGGER_MAX_AGE_MS` | The staleness limit | 300 000 |
 | `SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` | Delay between the text and its Enter | 50 |
 | `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
+| `SWITCHBOARD_CLI_READY_WAIT_MS` | How long a chain step after `/compact` waits for the CLI to report idle | 60 000 |
 | `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
 
 The triggers directory does not move with `SWITCHBOARD_DATA_DIR`: an instance

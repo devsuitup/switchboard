@@ -3100,7 +3100,7 @@ if (!gotSingleInstanceLock) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }));
+      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id) }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }

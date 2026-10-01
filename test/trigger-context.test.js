@@ -137,3 +137,21 @@ test('log is forwarded, and isPtyAlive is only present when supplied', () => {
   });
   assert.equal(withProbe.isPtyAlive, probe);
 });
+
+test('getCliStatus is only present when supplied, and answers for local live sessions only', () => {
+  assert.equal('getCliStatus' in createTriggerContext({ activeSessions: new Map(), log: silentLog }), false);
+
+  const sessions = new Map([
+    ['local', { pty: {}, host: null }],
+    ['remote', { pty: {}, host: 'box', handle: {} }],
+  ]);
+  const seen = [];
+  const ctx = createTriggerContext({
+    activeSessions: sessions, log: silentLog,
+    getCliStatus: (id) => { seen.push(id); return { status: 'idle', statusUpdatedAt: 5 }; },
+  });
+  assert.deepEqual(ctx.getCliStatus('local'), { status: 'idle', statusUpdatedAt: 5 });
+  assert.equal(ctx.getCliStatus('remote'), undefined, 'a remote session has no local descriptor');
+  assert.equal(ctx.getCliStatus('unknown'), undefined);
+  assert.deepEqual(seen, ['local']);
+});

@@ -24,9 +24,10 @@ function createLocalSessionHandle(ptyProcess) {
  * @param {Map} deps.activeSessions
  * @param {object} deps.log  electron-log compatible logger
  * @param {function} [deps.isPtyAlive]  (ptyProcess) => boolean
+ * @param {function} [deps.getCliStatus]  (sessionId) => { status, statusUpdatedAt } | undefined
  * @returns {object} ctx
  */
-function createTriggerContext({ activeSessions, log, isPtyAlive }) {
+function createTriggerContext({ activeSessions, log, isPtyAlive, getCliStatus }) {
   const ctx = {
     log,
     getPtyForSession(sessionId) {
@@ -50,6 +51,13 @@ function createTriggerContext({ activeSessions, log, isPtyAlive }) {
     },
   };
   if (isPtyAlive) ctx.isPtyAlive = isPtyAlive;
+  if (getCliStatus) {
+    ctx.getCliStatus = (sessionId) => {
+      const session = activeSessions.get(sessionId);
+      if (!session || session.host != null) return undefined;
+      return getCliStatus(sessionId);
+    };
+  }
   return ctx;
 }
 

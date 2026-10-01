@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A step of a trigger chain that follows `/compact` now waits for the CLI to be back at its prompt before it is written, and a step whose Enter did not start a turn is retried once and then reported as "not confirmed submitted" in the log and the result instead of "sent". (#407)
+
 ## v0.0.86 — 2026-10-01
 
 ### New
