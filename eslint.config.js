@@ -273,7 +273,7 @@ const rendererCrossFileGlobals = {
   openWorkFile: 'readonly',
   clearNotifications: 'readonly',
   clearUnread: 'readonly',
-  setSessionMcpActive: 'readonly',
+  setSessionMcpState: 'readonly',
   setSessionSandboxed: 'readonly',
   destroySession: 'readonly',
   launchNewSession: 'readonly',

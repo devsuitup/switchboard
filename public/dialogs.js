@@ -73,7 +73,7 @@ async function launchScheduleCreator(project) {
     return;
   }
   syncPtySizeAfterOpen(entry);
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(result.sessionId, !!openResult.mcpActive);
+  if (typeof setSessionMcpState === 'function') setSessionMcpState(result.sessionId, openResult.mcpState, openResult.mcpError);
   if (typeof setSessionSandboxed === 'function') setSessionSandboxed(result.sessionId, openResult.sandbox);
   showSession(result.sessionId);
   pollActiveSessions();

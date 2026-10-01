@@ -414,6 +414,12 @@ function wireIpcListeners() {
     closeDiffByDiffId(sessionId, diffId);
   });
 
+  if (window.api.onMcpStatus) {
+    window.api.onMcpStatus((sessionId, mcpState) => {
+      setSessionMcpState(sessionId, mcpState);
+    });
+  }
+
   if (window.api.onGitChangesFileChanged) {
     window.api.onGitChangesFileChanged((sessionId, filePath) => {
       handleChangesFileChanged(sessionId, filePath);
@@ -429,15 +435,17 @@ function getSessionState(sessionId) {
       currentTab: null,
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
-      mcpActive: false,
+      mcpState: 'off',
+      mcpDetail: '',
     });
   }
   return filePanelState.get(sessionId);
 }
 
-function setSessionMcpActive(sessionId, active) {
+function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
-  state.mcpActive = active;
+  state.mcpState = mcpState || 'off';
+  state.mcpDetail = detail || '';
   if (currentPanelSessionId === sessionId) updateMcpIndicator();
 }
 
@@ -754,7 +762,15 @@ function updateMcpIndicator() {
     return;
   }
   const state = filePanelState.get(currentPanelSessionId);
-  mcpIndicatorEl.style.display = (state && state.mcpActive) ? '' : 'none';
+  const mcpState = state ? state.mcpState : 'off';
+  const look = MCP_INDICATOR_STATES[mcpState];
+  if (!look) {
+    mcpIndicatorEl.style.display = 'none';
+    return;
+  }
+  mcpIndicatorEl.textContent = look.text;
+  mcpIndicatorEl.title = look.title + (mcpState === 'failed' && state.mcpDetail ? ` (${state.mcpDetail})` : '');
+  mcpIndicatorEl.style.display = '';
 }
 
 // ── Panel Rendering ─────────────────────────────────────────────────
@@ -1734,6 +1750,12 @@ function classifyDiffLine(line) {
 // ── IDE Emulation Indicator ─────────────────────────────────────────
 
 let mcpIndicatorEl = null;
+
+const MCP_INDICATOR_STATES = {
+  connected: { text: 'IDE Emulation', title: 'IDE Emulation is active: the CLI is connected. Go to Global Settings to disable.' },
+  listening: { text: 'IDE Emulation: waiting for CLI', title: 'IDE Emulation server is listening but the CLI is not connected, so file opens will not reach Switchboard.' },
+  failed: { text: 'IDE Emulation: failed', title: 'IDE Emulation could not start for this session; it runs without it.' },
+};
 
 function addMcpToggle() {
   mcpIndicatorEl = document.createElement('span');

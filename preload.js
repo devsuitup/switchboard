@@ -173,6 +173,9 @@ contextBridge.exposeInMainWorld('api', {
   onMcpCloseAllDiffs: (callback) => {
     ipcRenderer.on('mcp-close-all-diffs', (_event, sessionId) => callback(sessionId));
   },
+  onMcpStatus: (callback) => {
+    ipcRenderer.on('mcp-status', (_event, sessionId, state) => callback(sessionId, state));
+  },
   onMcpCloseTab: (callback) => {
     ipcRenderer.on('mcp-close-tab', (_event, sessionId, diffId) => callback(sessionId, diffId));
   },

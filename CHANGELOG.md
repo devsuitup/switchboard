@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- The IDE Emulation label in a session's terminal header now says whether the CLI is connected: it reads "IDE Emulation" only while it is, "IDE Emulation: waiting for CLI" when Switchboard is listening but the CLI has not connected, and "IDE Emulation: failed" when it could not start for that session, with the reason in its tooltip. A session whose IDE Emulation port was already taken no longer shows the label as if it worked. (#320)
+
 ## v0.0.86 — 2026-10-01
 
 ### New

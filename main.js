@@ -17,7 +17,7 @@ if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
 
 // getFolderIndexMtimeMs moved to session-cache.js
 const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./output-buffer');
-const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
+const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 
 // SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
@@ -2277,7 +2277,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       mainWindow.webContents.send('terminal-data', sessionId, '\x1b[?25l');
     }
 
-    return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
+    return {
+      ok: true, reattached: true, sandbox: !!session.sandbox,
+      mcpState: session.mcpError ? 'failed' : getMcpState(session.realSessionId || sessionId),
+      mcpError: session.mcpError || null,
+    };
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -2404,6 +2408,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   let ptyProcess;
   let mcpServer = null;
+  let mcpError = null;
   try {
     if (isPlainTerminal) {
       const launch = plainTerminalLaunch({
@@ -2522,6 +2527,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           claudeCmd += ' --ide';
         } catch (err) {
+          mcpError = err.message;
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
       }
@@ -2593,7 +2599,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
     sandbox: !!sessionOptions?.sandbox,
-    mcpServer, _openedAt: Date.now(),
+    mcpServer, mcpError, _openedAt: Date.now(),
     // see docs/automation.md — the trigger watcher's politeness guard
     composerState: createComposerState(),
     // see .ai/contexts/trigger-watcher.md, "Session handle"
@@ -2614,7 +2620,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     log.info(`[fork-spawn] tempId=${sessionId} forkFrom=${sessionOptions.forkFrom} folder=${projectFolder} knownFiles=${knownJsonlFiles.size}`);
   }
 
-  return { ok: true, reattached: false, mcpActive: !!mcpServer, sandbox: !!sessionOptions?.sandbox };
+  return {
+    ok: true, reattached: false, sandbox: !!sessionOptions?.sandbox,
+    mcpState: mcpError ? 'failed' : getMcpState(sessionId),
+    mcpError,
+  };
 });
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
