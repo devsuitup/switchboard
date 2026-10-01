@@ -76,7 +76,7 @@ function setup(sessionIds = ['s1']) {
     snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
     applyRemoteDescriptor: (session) => call('applyRemoteDescriptor', session),
     setRemoteAttached: (id, attached) => call('setRemoteAttached', id, attached),
-    seedRemoteActivity: (session, hostError) => call("seedRemoteActivity", session, hostError === undefined ? null : hostError),
+    seedRemoteActivity: (session, hostError) => call('seedRemoteActivity', session, hostError === undefined ? null : hostError),
     scheduled,
     pending: () => scheduled.filter(h => !h.cleared),
     destroy: () => window.close(),
@@ -275,7 +275,7 @@ function setupWithClock(sessionIds = ['s1']) {
     now: () => clock,
     emit: (payload) => onRemoteActivityCb(payload),
     snapshot: (id) => vm.runInContext(`remoteState(${JSON.stringify(id)}).snapshot()`, ctx),
-    seedRemoteActivity: (session, hostError) => call("seedRemoteActivity", session, hostError === undefined ? null : hostError),
+    seedRemoteActivity: (session, hostError) => call('seedRemoteActivity', session, hostError === undefined ? null : hostError),
     advance(ms) {
       clock += ms;
       for (const t of timers) {

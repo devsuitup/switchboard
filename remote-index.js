@@ -45,6 +45,10 @@ function sanitizeWaitingFor(value) {
     if (code >= 0x200b && code <= 0x200f) return null;
     if (code >= 0x202a && code <= 0x202e) return null;
     if (code >= 0x2066 && code <= 0x2069) return null;
+    if (code >= 0x80 && code <= 0x9f) return null;
+    if (code === 0xad || code === 0x61c || code === 0x180e || code === 0xfeff) return null;
+    if (code === 0x2028 || code === 0x2029) return null;
+    if (code >= 0x2060 && code <= 0x2064) return null;
   }
   return text;
 }
@@ -116,15 +120,18 @@ function createRemoteIndexer(ctx) {
     if (state.failures > 0) {
       log.info(`[remote:${alias}] refresh recovered after ${state.failures} consecutive failure(s)`);
     }
+    const errorChanged = state.lastError !== null;
     state.failures = 0;
     state.lastError = null;
     state.nextAttemptAt = 0;
+    return errorChanged;
   }
 
   function onHostFailure(alias, err, intervalMs) {
     const state = backoffState(alias);
     const prevDelay = backoffDelayMs(state.failures, intervalMs);
     state.failures += 1;
+    const errorChanged = state.lastError !== err.message;
     state.lastError = err.message;
     const delay = backoffDelayMs(state.failures, intervalMs);
     state.nextAttemptAt = now() + delay;
@@ -132,6 +139,7 @@ function createRemoteIndexer(ctx) {
       log.warn(`[remote:${alias}] refresh failed (${state.failures}x consecutive): ${err.message}; ` +
         `retrying in ${Math.round(delay / 1000)}s`);
     }
+    return errorChanged;
   }
 
   function getRemoteHostState(alias) {
@@ -272,13 +280,13 @@ function createRemoteIndexer(ctx) {
         }
         try {
           if (await refreshHost(host)) changed = true;
-          onHostSuccess(host.alias);
+          if (onHostSuccess(host.alias)) changed = true;
           remoteSessionsAt.set(host.alias, now());
         } catch (err) {
           // A failed cycle keeps the last known descriptors — see
           // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
           errors.push({ alias: host.alias, error: err.message });
-          onHostFailure(host.alias, err, intervalMs);
+          if (onHostFailure(host.alias, err, intervalMs)) changed = true;
         }
       }
     } finally {
@@ -308,12 +316,12 @@ function createRemoteIndexer(ctx) {
     let error = null;
     try {
       changed = await refreshHost(host);
-      onHostSuccess(alias);
+      if (onHostSuccess(alias)) changed = true;
       remoteSessionsAt.set(alias, now());
     } catch (err) {
       // A failed cycle keeps the last known descriptors — see
       // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
-      onHostFailure(alias, err, intervalMs);
+      if (onHostFailure(alias, err, intervalMs)) changed = true;
       error = err.message;
     } finally {
       hostInFlight.delete(alias);

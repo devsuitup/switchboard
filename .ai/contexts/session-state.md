@@ -264,6 +264,9 @@ Two more releases keep it from freezing:
   `renderProjects` passes the project's `remoteHostError` and the descriptor
   event then carries `attention: false`, which releases descriptor-owned
   attention for the whole outage. A fresh host passes `attention: true`.
+  The indexer notifies the renderer when a host's last error changes (first
+  failure, a different error, recovery), not only when files changed, so the
+  gate applies without an unrelated render.
 
 The sidebar render replaces row classes from the rebuilt row (morphdom takes the
 new element's classes), so `buildSessionItem` reads the unattached remote

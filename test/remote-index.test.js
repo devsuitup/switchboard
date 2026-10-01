@@ -936,3 +936,68 @@ test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
   }
   assert.equal(sanitizeWaitingFor('caf\u00e9 \u2014 ok'), 'caf\u00e9 \u2014 ok');
 });
+
+test('sanitizeWaitingFor rejects C1 controls, soft hyphen, ALM, invisible operators and BOM', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  for (const code of [0x80, 0x9f, 0xad, 0x61c, 0x180e, 0x2028, 0x2029, 0x2060, 0x2064, 0xfeff]) {
+    assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
+  }
+  assert.equal(sanitizeWaitingFor('a\u00a0b'), 'a\u00a0b', 'a no-break space is plain text');
+});
+
+function hostFlipIndexer(notifyCalls, outcome) {
+  const dataDir = tmp('idx-notify');
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }],
+    dataDir,
+    transport: {},
+    scanFolders: () => Promise.resolve({ ok: true }),
+    listIndexedFolderKeys: () => [],
+    notify: () => { notifyCalls.push(1); },
+    timers: fakeTimers(),
+    sync: async () => {
+      const o = outcome.next;
+      if (o instanceof Error) throw o;
+      return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set(), sessions: [] };
+    },
+  });
+  return { indexer, dataDir };
+}
+
+test('a host that starts failing, changes its error or recovers notifies once per change, with no file changes', async () => {
+  const calls = [];
+  const outcome = { next: null };
+  const { indexer, dataDir } = hostFlipIndexer(calls, outcome);
+  try {
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 0, 'a quiet healthy host does not notify');
+    outcome.next = new Error('ssh: timed out');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 1, 'the first failure notifies');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 1, 'the same error again does not');
+    outcome.next = new Error('ssh: refused');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 2, 'a different error notifies');
+    outcome.next = null;
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 3, 'recovery notifies');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 3, 'staying healthy does not');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshHostNow notifies on a host error change too', async () => {
+  const calls = [];
+  const outcome = { next: new Error('ssh: timed out') };
+  const { indexer, dataDir } = hostFlipIndexer(calls, outcome);
+  try {
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 1);
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 1);
+    outcome.next = null;
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 2);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
