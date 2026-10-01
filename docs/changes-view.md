@@ -45,7 +45,7 @@ the plain file viewer.
   panel says so.
 - When a subagent of the session works in a worktree of its own, its changes
   are listed after the session's own, under a header with the agent's name and
-  branch (at most 8 agents, 100 rows each). Those rows open as read-only
+  branch (at most 8 agents with changes, 100 rows each; the panel counts the agents it leaves out). Those rows open as read-only
   diffs. A subagent in the session's directory, one whose worktree is gone, and
   one with nothing changed add nothing. Local sessions only.
 - **Refresh** reloads the list.

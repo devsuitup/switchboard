@@ -80,7 +80,8 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
-const { createGitChangesRunner } = require('./git-changes-runner');
+const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
+const { runToExit } = require('./run-to-exit');
 const gitChangesTarget = require('./git-changes-target');
 const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
@@ -1715,8 +1716,26 @@ function gitChangesTargetDeps() {
     existsSync: (p) => fs.existsSync(p),
     projectsDir: PROJECTS_DIR,
     readSubagentMeta,
+    readSubagentMetaAsync,
+    exists: (p) => fs.promises.access(p).then(() => true, () => false),
+    gitCommonDir: gitCommonDirOf,
     listSubagents: (parentId) => getCachedByParent(parentId),
   };
+}
+
+async function readSubagentMetaAsync(jsonlPath) {
+  try {
+    return JSON.parse(await fs.promises.readFile(jsonlPath.replace(/[.]jsonl$/, '.meta.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function gitCommonDirOf(cwd) {
+  const result = await runToExit('git', ['rev-parse', '--git-common-dir'], { cwd, env: localGitEnv(), timeoutMs: 5000, maxBuffer: 65536 });
+  if (result.code !== 0) return null;
+  const out = result.stdout.toString('utf8').trim();
+  return out ? path.resolve(cwd, out) : null;
 }
 
 function resolveGitChangesTarget(sessionId, opts) {
@@ -1730,16 +1749,18 @@ function gitChangesRunnerFor(target) {
 }
 
 ipcMain.handle('git-changes-status', async (_event, sessionId) => {
-  const target = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const resolved = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const target = await gitChangesTarget.checkSubagentRepo(sessionId, resolved, gitChangesTargetDeps());
   if (!target.ok) return target;
   try {
-    const result = await gitChangesRunnerFor(target).status();
+    const result = await gitChangesRunnerFor(resolved).status();
     if (result.ok === false) return result;
-    const worktrees = gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
-    if (worktrees.length === 0) return { ...result, kind: target.kind };
-    const subagents = await gitChangesTarget.collectSubagentChanges(
+    const worktrees = await gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
+    if (worktrees.length === 0) return { ...result, kind: resolved.kind };
+    const { subagents, omitted } = await gitChangesTarget.collectSubagentChanges(
       worktrees, (cwd) => createGitChangesRunner({ kind: 'local', cwd }));
-    return { ...result, kind: target.kind, subagents };
+    if (subagents.length === 0) return { ...result, kind: resolved.kind };
+    return { ...result, kind: resolved.kind, subagents, subagentsOmitted: omitted };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1748,10 +1769,11 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
 // filePath is a git pathspec, or an untracked file's --no-index operand — see .ai/contexts/changes-view.md
 ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, untracked) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path' };
-  const target = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const resolved = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const target = await gitChangesTarget.checkSubagentRepo(sessionId, resolved, gitChangesTargetDeps());
   if (!target.ok) return target;
   try {
-    return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged, untracked: !!untracked });
+    return await gitChangesRunnerFor(resolved).diff(filePath, { staged: !!staged, untracked: !!untracked });
   } catch (err) {
     return { ok: false, error: err.message };
   }

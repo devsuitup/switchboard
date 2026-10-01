@@ -2401,6 +2401,27 @@ test('the parent panel lists each subagent worktree under a header naming the ag
   } finally { ctx.destroy(); }
 });
 
+test('subagent worktrees past the cap are counted, not silently dropped (mutation target: ignoring the omitted count)', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ subagents: [subagentGroup()], subagentsOmitted: 3 }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    const notes = Array.from(ctx.document.querySelectorAll('.changes-more-note')).map((n) => n.textContent);
+    assert.ok(notes.includes('+3 more subagent worktrees not shown'), JSON.stringify(notes));
+  } finally { ctx.destroy(); }
+});
+
+test('with no subagent worktree omitted there is no such note', async () => {
+  const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ subagents: [subagentGroup()], subagentsOmitted: 0 }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-more-note').length, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('with no change in its own directory the panel says so and still lists the subagent group', async () => {
   const empty = { files: [], totals: { files: 0, added: 0, deleted: 0, uncounted: 0 } };
   const ctx = setupFilePanelDom({ statusImpl: () => makeStatusResult({ ...empty, subagents: [subagentGroup()] }) });

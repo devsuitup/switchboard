@@ -1290,6 +1290,12 @@ function renderChangesList(sessionId, tab) {
   }
 
   for (const group of subagentGroups) appendSubagentChangesGroup(sessionId, tab, group);
+  if (subagentGroups.length > 0 && data.subagentsOmitted > 0) {
+    const more = document.createElement('div');
+    more.className = 'changes-more-note';
+    more.textContent = `+${data.subagentsOmitted} more subagent worktrees not shown`;
+    changesListEl.appendChild(more);
+  }
 }
 
 // see .ai/contexts/changes-view.md ("Subagent worktrees")

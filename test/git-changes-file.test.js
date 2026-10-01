@@ -140,8 +140,12 @@ test('only the read-only status and diff handlers admit a subagent id (mutation 
     assert.doesNotMatch(handlerBody(main, channel), /allowSubagent/, `${channel} must keep refusing a subagent id`);
   }
   assert.match(main, /readSubagentMeta/, 'main must inject the sidecar reader');
+  for (const channel of ['git-changes-status', 'git-changes-diff']) {
+    assert.match(handlerBody(main, channel), /await gitChangesTarget[.]checkSubagentRepo[(]sessionId, resolved/,
+      `${channel} must check a subagent worktree belongs to the session repository`);
+  }
   const status = handlerBody(main, 'git-changes-status');
-  assert.match(status, /const worktrees = gitChangesTarget.listSubagentWorktrees\(sessionId/, 'the status handler lists the parent subagent worktrees');
+  assert.match(status, /const worktrees = await gitChangesTarget.listSubagentWorktrees\(sessionId/, 'the status handler lists the parent subagent worktrees');
   assert.match(status, /collectSubagentChanges\(/, 'and attaches their changes to the result');
 });
 
