@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- A remote session that is not open in a tab and waits on a dialog on its host, such as a permission prompt or a question, shows the orange attention state, and its status line says what it waits for. It appears and clears with the next refresh of the host. (#394)
+
 ## v0.0.86 — 2026-10-01
 
 ### New

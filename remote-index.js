@@ -32,6 +32,20 @@ function placeholderTitle(cwd) {
   return parts[parts.length - 1] || cwd;
 }
 
+const MAX_WAITING_FOR_LENGTH = 64;
+
+// see .ai/contexts/cli-session-state.md ("waiting")
+function sanitizeWaitingFor(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!text || text.length > MAX_WAITING_FOR_LENGTH) return null;
+  for (let k = 0; k < text.length; k++) {
+    const code = text.charCodeAt(k);
+    if (code < 32 || code === 127) return null;
+  }
+  return text;
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
 function buildPlaceholderSession(alias, descriptor) {
   const id = (typeof descriptor.sessionId === 'string' && descriptor.sessionId)
@@ -45,6 +59,7 @@ function buildPlaceholderSession(alias, descriptor) {
     remoteDescriptorSeen: true,
     status: descriptor.status || null,
     statusUpdatedAt: descriptor.statusUpdatedAt || null,
+    waitingFor: sanitizeWaitingFor(descriptor.waitingFor),
     modified: descriptor.statusUpdatedAt || descriptor.startedAt || null,
     messageCount: 0,
     summary: placeholderTitle(descriptor.cwd),
@@ -179,7 +194,9 @@ function createRemoteIndexer(ctx) {
       log,
     });
 
-    remoteSessions.set(host.alias, Array.isArray(result.sessions) ? result.sessions : []);
+    remoteSessions.set(host.alias, Array.isArray(result.sessions)
+      ? result.sessions.map(s => (s && 'waitingFor' in s ? { ...s, waitingFor: sanitizeWaitingFor(s.waitingFor) } : s))
+      : []);
 
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);
@@ -394,4 +411,4 @@ function createRemoteIndexer(ctx) {
   };
 }
 
-module.exports = { createRemoteIndexer, backoffDelayMs, buildPlaceholderSession, placeholderTitle };
+module.exports = { createRemoteIndexer, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };

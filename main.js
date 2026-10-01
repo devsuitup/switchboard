@@ -578,6 +578,7 @@ function annotateRemoteAttachable(projects) {
         session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
+        session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
@@ -616,6 +617,7 @@ function toSidebarPlaceholderSession(ph) {
     remoteDescriptorSeen: ph.remoteDescriptorSeen,
     status: ph.status,
     statusUpdatedAt: ph.statusUpdatedAt,
+    waitingFor: ph.waitingFor,
     placeholder: true,
   };
 }

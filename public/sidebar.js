@@ -1443,7 +1443,8 @@ function buildSessionItem(session) {
   statusEl.className = 'session-status';
   if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
-    statusEl.textContent = session.status + (age ? ' · ' + age : '');
+    const why = session.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
+    statusEl.textContent = session.status + why + (age ? ' · ' + age : '');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);
 

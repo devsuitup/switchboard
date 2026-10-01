@@ -164,7 +164,7 @@ function applyRemoteDescriptor(session) {
   const state = remoteState(session.sessionId);
   if (session.remoteDescriptorSeen) state.apply({ type: 'liveness', value: 'alive' });
   if (session.status !== undefined) {
-    state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
+    state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt, attention: true });
   }
   projectRemoteState(session.sessionId);
 }

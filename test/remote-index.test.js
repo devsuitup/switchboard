@@ -888,3 +888,43 @@ test('refreshNow({force:true}) ignores backoff for every host and resets it on s
     assert.equal(recovered.nextAttemptAt, 0);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('sanitizeWaitingFor keeps a short plain string and drops everything else', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  assert.equal(sanitizeWaitingFor('permission prompt'), 'permission prompt');
+  assert.equal(sanitizeWaitingFor('  input needed '), 'input needed');
+  assert.equal(sanitizeWaitingFor('x'.repeat(64)), 'x'.repeat(64));
+  assert.equal(sanitizeWaitingFor('x'.repeat(65)), null, 'over the length bound');
+  for (const bad of [undefined, null, 5, {}, ['a'], '', '   ', 'a\nb', 'a\u001b[31mb', 'a\u007fb']) {
+    assert.equal(sanitizeWaitingFor(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('the indexer and the placeholder keep a validated waitingFor beside the status', async () => {
+  const dataDir = tmp('idx-waiting');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [
+          { pid: 1, sessionId: 'a', cwd: '/srv/a', status: 'waiting', waitingFor: 'permission prompt', descriptorOnly: true },
+          { pid: 2, sessionId: 'b', cwd: '/srv/b', status: 'waiting', waitingFor: 'x'.repeat(500), descriptorOnly: true },
+        ],
+      }),
+    });
+    await indexer.refreshNow();
+    const byId = new Map(indexer.getRemoteSessions('vps').sessions.map(s => [s.sessionId, s]));
+    assert.equal(byId.get('a').waitingFor, 'permission prompt');
+    assert.equal(byId.get('b').waitingFor, null, 'an oversized value is dropped, not truncated');
+    const ph = new Map(indexer.getPlaceholderSessions('vps').map(s => [s.sessionId, s]));
+    assert.equal(ph.get('a').waitingFor, 'permission prompt');
+    assert.equal(ph.get('b').waitingFor, null);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
