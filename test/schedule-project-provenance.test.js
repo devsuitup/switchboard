@@ -16,7 +16,7 @@ process.env.USERPROFILE = ROOT;
 delete process.env.SWITCHBOARD_DATA_DIR;
 
 const {
-  scanSchedules, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry,
+  scanSchedules, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry,
 } = require('../schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 
@@ -186,4 +186,19 @@ test('schedules: a relative cwd is judged from its resolved path', () => {
   const get = (key) => (key === 'project:' + proj ? { sandbox: true } : undefined);
   assert.equal(resolveScheduleSandbox('rel-proj-385', get, false), true);
   assert.equal(resolveScheduleSandbox(path.join('rel-proj-385', 'sub', '..', 'sub'), get, false), true);
+});
+
+test('schedules: a relative add-dir is taken from the schedule\'s directory, and the refusal says why', () => {
+  const home = path.resolve('/home/u');
+  const app = path.resolve('/home/u/work/app');
+  const known = [app];
+  assert.deepEqual(refusedScheduleBinds(['sub', './docs'], known, home, app), []);
+  assert.deepEqual(refusedScheduleBinds(['../../.ssh', '../lib'], known, home, app), ['../../.ssh', '../lib']);
+  assert.deepEqual(refusedScheduleBinds(['../app/sub'], known, home, path.resolve('/home/u/work/other')), []);
+  assert.deepEqual(
+    scheduleBindRefusals(['.claude', '../../.ssh', 'sub'], known, home, app),
+    [
+      { dir: '.claude', reason: 'at or inside a .claude or .git directory' },
+      { dir: '../../.ssh', reason: 'under the home directory and not a Switchboard project' },
+    ]);
 });

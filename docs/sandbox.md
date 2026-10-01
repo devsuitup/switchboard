@@ -225,8 +225,9 @@ in a directory the sandbox can write — `core.hooksPath=linked/hooks` with
 instead, so the launch is refused; point `core.hooksPath` at a hooks directory
 instead of linking `.git/hooks` to it.
 
-The paths are resolved when the wrapper builds the sandbox and mounted when
-bwrap starts it; a second sandboxed session on the same project that swaps a
+The paths, and the Additional Directories (below), are resolved when the
+wrapper builds the sandbox and mounted when bwrap starts it; a second sandboxed
+session on the same project that swaps a
 directory in between is not detected.
 
 ### Additional directories
@@ -238,8 +239,13 @@ an entry is skipped with the reason in the main log. The path is judged both as
 spelled (`..` and a trailing slash resolved) and by its real path, so a link
 to a `.claude`, or a `.claude` that is itself a link, does not get through. Add
 the project directory instead: its `.claude` and `.git` are then protected as
-above. The session's own working directory is not checked this way, because a
-session in a worktree under `.claude/worktrees` is legitimate.
+above. The session's working directory is held to the same rule, with one exception:
+a directory below `.claude/worktrees` is allowed, because Claude Code's
+worktrees live there (a `.claude` or `.git` further down is still refused). A
+path the wrapper cannot resolve is refused. The same check refuses `$HOME` and
+its parents however they are spelled (`$HOME/`, `$HOME/.`, a link to it).
+A relative `add-dirs` entry of a schedule is taken from the schedule's
+directory.
 
 ### Schedules
 

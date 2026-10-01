@@ -67,7 +67,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -3047,9 +3047,9 @@ if (!gotSingleInstanceLock) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
         // see docs/sandbox.md ("Schedules")
-        const refused = refusedScheduleBinds(addDirs, scheduleProjects().list(), os.homedir());
+        const refused = scheduleBindRefusals(addDirs, scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
-          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
           return;
         }

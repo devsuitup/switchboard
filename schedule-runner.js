@@ -258,22 +258,31 @@ function canonicalPath(p) {
 /**
  * The add-dirs of a sandboxed schedule that the wrapper must not bind: any at
  * or inside a `.claude` or `.git` directory, and any under $HOME that is
- * neither a known project nor inside one. Each is judged both as spelled
+ * neither a known project nor inside one. A relative one is taken from the
+ * schedule's directory, `baseDir`. Each is judged both as spelled
  * (normalised) and by its real path.
  * see docs/sandbox.md ("Additional directories")
  */
-function refusedScheduleBinds(addDirs, knownProjects, home) {
+function scheduleBindRefusals(addDirs, knownProjects, home, baseDir = process.cwd()) {
   const inside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
   const homeDir = canonicalPath(home);
   const projects = knownProjects.map(canonicalPath);
   const protectedName = (p) => p.split(path.sep).some(c => c === '.claude' || c === '.git');
-  return addDirs.filter((dir) => {
-    const lexical = path.resolve(dir);
-    const real = canonicalPath(dir);
-    if (protectedName(lexical) || protectedName(real)) return true;
-    if (!inside(real, homeDir)) return false;
-    return !projects.some(project => inside(real, project));
-  });
+  const refusals = [];
+  for (const dir of addDirs) {
+    const lexical = path.resolve(baseDir, dir);
+    const real = canonicalPath(lexical);
+    if (protectedName(lexical) || protectedName(real)) {
+      refusals.push({ dir, reason: 'at or inside a .claude or .git directory' });
+    } else if (inside(real, homeDir) && !projects.some(project => inside(real, project))) {
+      refusals.push({ dir, reason: 'under the home directory and not a Switchboard project' });
+    }
+  }
+  return refusals;
+}
+
+function refusedScheduleBinds(addDirs, knownProjects, home, baseDir) {
+  return scheduleBindRefusals(addDirs, knownProjects, home, baseDir).map(r => r.dir);
 }
 
 /**
@@ -528,4 +537,4 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };

@@ -258,6 +258,80 @@ test('sandbox wrapper: refuses an extra bind at or under a .claude or .git, howe
   }
 });
 
+test('sandbox wrapper: refuses a working directory at or inside a .claude or .git, except below .claude/worktrees', { skip: !LINUX && 'linux only' }, () => {
+  const rig = makeRig({ bwrapExit: 1 });
+  try {
+    fs.mkdirSync(path.join(rig.home, '.claude'));
+    const plain = path.join(rig.root, 'plain');
+    fs.mkdirSync(path.join(plain, '.claude', 'worktrees', 'w', '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(plain, '.git', 'hooks'), { recursive: true });
+    fs.symlinkSync(path.join(plain, '.claude'), path.join(rig.root, 'lnk'));
+    const refused = [
+      path.join(plain, '.claude'),
+      path.join(plain, '.claude', 'commands'),
+      path.join(plain, '.git'),
+      path.join(plain, '.git', 'hooks'),
+      path.join(rig.root, 'lnk'),
+      path.join(plain, '.claude', 'worktrees', 'w', '.claude'),
+      path.join(plain, '.claude', 'worktrees', '..', 'commands'),
+    ];
+    for (const cwd of refused) {
+      fs.mkdirSync(cwd, { recursive: true });
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: plain }, cwd);
+      assert.equal(status, 125, `a session in ${cwd} must be refused`);
+      assert.match(stderr, /refusing to launch in .* \.claude or \.git/, cwd);
+    }
+    for (const cwd of [plain, path.join(plain, '.claude', 'worktrees', 'w')]) {
+      const { stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: plain }, cwd);
+      assert.doesNotMatch(stderr, /refusing to launch in/, `${cwd} must not be refused`);
+    }
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test('sandbox wrapper: refuses $HOME or a parent however the path is spelled, links included', { skip: !LINUX && 'linux only' }, () => {
+  const rig = makeRig({ bwrapExit: 1 });
+  try {
+    fs.mkdirSync(path.join(rig.home, '.claude'));
+    fs.mkdirSync(path.join(rig.home, 'sub'));
+    fs.symlinkSync(rig.home, path.join(rig.root, 'homelink'));
+    fs.symlinkSync(rig.root, path.join(rig.proj, 'rootlink'));
+    const refused = [
+      rig.home + '/',
+      rig.home + '/.',
+      path.join(rig.home, 'sub', '..'),
+      path.join(rig.root, 'homelink'),
+      rig.root + '/',
+      path.join(rig.proj, 'rootlink'),
+      path.join(rig.home, '..') + '/',
+    ];
+    for (const bind of refused) {
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: bind });
+      assert.equal(status, 125, `${bind} must be refused`);
+      assert.match(stderr, /refusing to bind .* (\$HOME itself|a parent of \$HOME)/, bind);
+    }
+    const { stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: path.join(rig.home, 'sub') });
+    assert.doesNotMatch(stderr, /refusing to bind/, 'a directory below $HOME is not $HOME');
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test('sandbox wrapper: a path whose forms cannot be resolved is refused, not passed', { skip: !LINUX && 'linux only' }, () => {
+  const rig = makeRig({ bwrapExit: 1 });
+  try {
+    fs.mkdirSync(path.join(rig.home, '.claude'));
+    fs.writeFileSync(path.join(rig.root, 'bin', 'realpath'), '#!/usr/bin/env bash\nexit 0\n');
+    fs.chmodSync(path.join(rig.root, 'bin', 'realpath'), 0o755);
+    const { status, stderr } = rig.run(['--version']);
+    assert.equal(status, 125);
+    assert.match(stderr, /cannot be resolved|cannot resolve/);
+  } finally {
+    rig.cleanup();
+  }
+});
+
 test('sandbox wrapper: resolves the real binary when "claude" is also a shell function',{ skip: !LINUX && 'linux only' }, () => {
   const rig = makeRig({ bwrapExit: 1 });
   try {
