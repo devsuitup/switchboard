@@ -12,6 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
 const { LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, splitListOutput, parseSessions } = require('../remote-transport');
 
@@ -29,7 +30,7 @@ function sandbox() {
 test('LIST_COMMAND: .claude/projects missing yields a non-zero exit status', { skip: SH_SKIP }, () => {
   const dir = sandbox();
   try {
-    const result = spawnSync('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSyncRetryingCrash('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
     assert.notEqual(result.status, 0, 'a missing inventory root must fail the whole command');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -38,7 +39,7 @@ test('LIST_COMMAND: .claude/sessions missing but .claude/projects present (even 
   const dir = sandbox();
   try {
     fs.mkdirSync(path.join(dir, '.claude', 'projects'), { recursive: true });
-    const result = spawnSync('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSyncRetryingCrash('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
     assert.equal(result.status, 0);
     assert.ok(result.stdout.includes(SESSIONS_MARKER), 'the marker must still be emitted');
     const { inventoryBlock, sessionsBlock } = splitListOutput(result.stdout);
@@ -69,7 +70,7 @@ test('LIST_COMMAND: only a digit-named .json FILE is read — never a .key file,
     }
 
     fs.writeFileSync(path.join(sessionsDir, '4242.json'), '{"pid":4242,"sessionId":"abc"}');
-    const result = spawnSync('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSyncRetryingCrash('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
 
     assert.equal(result.status, 0, result.stderr);
     assert.ok(!result.stdout.includes('top-secret-key-material-should-never-appear'),
@@ -98,7 +99,7 @@ function sessionsSandbox(descriptors) {
 }
 
 function listSessions(dir, command) {
-  const result = spawnSync('sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
+  const result = spawnSyncRetryingCrash('sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const { sessionsBlock } = splitListOutput(result.stdout);
   const markers = sessionsBlock.split('\n').filter((line) => line.startsWith(ALIVE_MARKER_PREFIX));
