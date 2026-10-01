@@ -107,6 +107,9 @@ const MAX_SCANNED_WORKTREES = 24;
 const SIDECAR_READ_CONCURRENCY = 8;
 const SUBAGENT_STATUS_CONCURRENCY = 3;
 const MAX_CACHE_ENTRIES = 4000;
+const TTL_WORKTREE_MS = 300_000;
+const TTL_SHORT_MS = 30_000;
+const TTL_UNREADABLE_MS = 10_000;
 
 const defaultCache = new Map();
 
@@ -126,31 +129,68 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
-function cacheSet(cache, key, value) {
+function nowOf(deps) {
+  return typeof deps.now === 'function' ? deps.now() : Date.now();
+}
+
+function cacheGet(cache, key, now) {
+  const hit = cache.get(key);
+  if (!hit) return undefined;
+  if (hit.expires <= now) {
+    cache.delete(key);
+    return undefined;
+  }
+  return hit.value;
+}
+
+function cacheSet(cache, key, value, ttlMs, now) {
   if (cache.size >= MAX_CACHE_ENTRIES) cache.clear();
-  cache.set(key, value);
+  cache.set(key, { value, expires: now + ttlMs });
 }
 
 async function commonDirOf(cwd, deps, cache) {
   const key = 'common:' + cwd;
-  if (cache.has(key)) return cache.get(key);
+  const now = nowOf(deps);
+  const cached = cacheGet(cache, key, now);
+  if (cached) return cached;
   let dir = null;
   try { dir = await deps.gitCommonDir(cwd); } catch {}
   if (typeof dir !== 'string' || dir === '') return null;
-  cacheSet(cache, key, dir);
+  cacheSet(cache, key, dir, TTL_SHORT_MS, now);
   return dir;
 }
 
+// A linked worktree's .git is a file naming a directory under <common dir>/worktrees; read it, never ask git.
+// deps.readDotGit(worktree) -> {file: boolean, content: string} | null
+async function worktreeBelongsTo(worktree, parentCommon, deps, pathOps) {
+  let info = null;
+  try { info = await deps.readDotGit(worktree); } catch {}
+  if (!info || info.file !== true || typeof info.content !== 'string') return false;
+  const line = info.content.split('\n')[0].trim();
+  if (!line.startsWith('gitdir:')) return false;
+  const target = line.slice('gitdir:'.length).trim();
+  if (target === '' || hasControlChar(target)) return false;
+  const rel = pathOps.relative(pathOps.resolve(parentCommon, 'worktrees'), pathOps.resolve(worktree, target));
+  return rel !== '' && rel.split(pathOps.sep)[0] !== '..' && !pathOps.isAbsolute(rel);
+}
+
+function timeOf(row) {
+  const t = Date.parse(row && row.modified);
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
 // deps adds listSubagents(parentId) -> [{sessionId, agentId, description, subagentType, modified}],
-// readSubagentMetaAsync(jsonlPath), exists(path), gitCommonDir(cwd) and optionally cache and pathOps.
-// see .ai/contexts/changes-view.md ("Subagent worktrees")
+// readSubagentMetaAsync(jsonlPath), exists(path), gitCommonDir(cwd), readDotGit(worktree) and optionally cache, now and pathOps.
+// Resolves {worktrees, notScanned}. see .ai/contexts/changes-view.md ("Subagent worktrees")
 async function listSubagentWorktrees(parentId, deps) {
+  const none = { worktrees: [], notScanned: 0 };
   const id = String(parentId || '');
-  if (!isValidChangesSessionId(id)) return [];
+  if (!isValidChangesSessionId(id)) return none;
   const parent = resolveGitChangesTarget(id, deps);
-  if (!parent.ok || parent.kind !== 'local') return [];
+  if (!parent.ok || parent.kind !== 'local') return none;
   const pathOps = deps.pathOps || path;
   const cache = deps.cache || defaultCache;
+  const now = nowOf(deps);
 
   const items = [];
   for (const row of deps.listSubagents(id) || []) {
@@ -164,47 +204,54 @@ async function listSubagentWorktrees(parentId, deps) {
   }
 
   await mapLimit(items, SIDECAR_READ_CONCURRENCY, async (item) => {
-    let entry = cache.get(item.key);
+    let entry = cacheGet(cache, item.key, now);
     if (!entry) {
       let meta = null;
       try { meta = await deps.readSubagentMetaAsync(item.key.slice('sidecar:'.length)); } catch {}
       const found = worktreeFromMeta(meta);
-      if (found.reason === 'no-worktree-recorded') return;
-      entry = { worktree: found.ok ? found.worktree : null, gone: false };
-      cacheSet(cache, item.key, entry);
+      if (found.reason === 'no-worktree-recorded') {
+        cacheSet(cache, item.key, { unreadable: true }, TTL_UNREADABLE_MS, now);
+        return;
+      }
+      entry = { worktree: found.ok ? found.worktree : null };
+      cacheSet(cache, item.key, entry, entry.worktree ? TTL_WORKTREE_MS : TTL_SHORT_MS, now);
     }
     item.entry = entry;
   });
 
   const candidates = items
-    .filter((item) => item.entry && item.entry.worktree && !item.entry.gone)
-    .sort((a, b) => String(b.row.modified || '').localeCompare(String(a.row.modified || '')));
-  if (candidates.length === 0) return [];
+    .filter((item) => item.entry && item.entry.worktree && !cacheGet(cache, 'gone:' + item.entry.worktree, now))
+    .sort((x, y) => timeOf(y.row) - timeOf(x.row));
+  if (candidates.length === 0) return none;
 
   const parentCommon = await commonDirOf(parent.cwd, deps, cache);
-  if (!parentCommon) return [];
+  if (!parentCommon) return none;
 
-  const out = [];
+  const worktrees = [];
+  let scanned = 0;
   for (const item of candidates) {
-    if (out.length >= MAX_SCANNED_WORKTREES) break;
+    if (scanned >= MAX_SCANNED_WORKTREES) break;
+    scanned++;
     const worktree = item.entry.worktree;
     let present = false;
     try { present = await deps.exists(worktree); } catch {}
-    if (!present) { item.entry.gone = true; continue; }
+    if (!present) {
+      cacheSet(cache, 'gone:' + worktree, true, TTL_SHORT_MS, now);
+      continue;
+    }
     if (samePath(parent.cwd, worktree, pathOps)) continue;
-    const common = await commonDirOf(worktree, deps, cache);
-    if (!common || !samePath(parentCommon, common, pathOps)) continue;
-    out.push({
+    if (!(await worktreeBelongsTo(worktree, parentCommon, deps, pathOps))) continue;
+    worktrees.push({
       sessionId: item.row.sessionId,
       agentId: item.parsed.agentId,
       label: item.row.description || item.row.subagentType || item.parsed.agentId,
       cwd: worktree,
     });
   }
-  return out;
+  return { worktrees, notScanned: candidates.length - scanned };
 }
 
-// A subagent worktree is only read through git when it belongs to the parent's repository.
+// A subagent worktree is only read through git when it is a linked worktree of the parent's repository.
 async function checkSubagentRepo(sessionId, target, deps) {
   if (!target || target.ok !== true) return target;
   if (!target.subagent) return { ok: true };
@@ -213,8 +260,8 @@ async function checkSubagentRepo(sessionId, target, deps) {
   const parent = resolveGitChangesTarget(parseSubagentId(sessionId).parentId, deps);
   if (!parent.ok) return parent;
   if (samePath(parent.cwd, target.cwd, pathOps)) return { ok: true };
-  const [parentCommon, common] = [await commonDirOf(parent.cwd, deps, cache), await commonDirOf(target.cwd, deps, cache)];
-  if (!parentCommon || !common || !samePath(parentCommon, common, pathOps)) {
+  const parentCommon = await commonDirOf(parent.cwd, deps, cache);
+  if (!parentCommon || !(await worktreeBelongsTo(target.cwd, parentCommon, deps, pathOps))) {
     return { ok: false, reason: 'other-repo', error: 'the subagent worktree does not belong to the session repository' };
   }
   return { ok: true };

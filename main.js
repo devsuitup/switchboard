@@ -1719,6 +1719,7 @@ function gitChangesTargetDeps() {
     readSubagentMetaAsync,
     exists: (p) => fs.promises.access(p).then(() => true, () => false),
     gitCommonDir: gitCommonDirOf,
+    readDotGit: readDotGitFile,
     listSubagents: (parentId) => getCachedByParent(parentId),
   };
 }
@@ -1726,6 +1727,17 @@ function gitChangesTargetDeps() {
 async function readSubagentMetaAsync(jsonlPath) {
   try {
     return JSON.parse(await fs.promises.readFile(jsonlPath.replace(/[.]jsonl$/, '.meta.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function readDotGitFile(worktree) {
+  const dotGit = path.join(worktree, '.git');
+  try {
+    const stat = await fs.promises.lstat(dotGit);
+    if (!stat.isFile() || stat.size > 4096) return { file: false, content: '' };
+    return { file: true, content: await fs.promises.readFile(dotGit, 'utf8') };
   } catch {
     return null;
   }
@@ -1745,7 +1757,7 @@ function resolveGitChangesTarget(sessionId, opts) {
 function gitChangesRunnerFor(target) {
   return target.kind === 'remote'
     ? createGitChangesRunner({ kind: 'remote', cwd: target.cwd, alias: target.alias })
-    : createGitChangesRunner({ kind: 'local', cwd: target.cwd });
+    : createGitChangesRunner({ kind: 'local', cwd: target.cwd, hardened: !!target.subagent });
 }
 
 ipcMain.handle('git-changes-status', async (_event, sessionId) => {
@@ -1755,12 +1767,12 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
   try {
     const result = await gitChangesRunnerFor(resolved).status();
     if (result.ok === false) return result;
-    const worktrees = await gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
+    const { worktrees, notScanned } = await gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
     if (worktrees.length === 0) return { ...result, kind: resolved.kind };
     const { subagents, omitted } = await gitChangesTarget.collectSubagentChanges(
-      worktrees, (cwd) => createGitChangesRunner({ kind: 'local', cwd }));
+      worktrees, (cwd) => createGitChangesRunner({ kind: 'local', cwd, hardened: true }));
     if (subagents.length === 0) return { ...result, kind: resolved.kind };
-    return { ...result, kind: resolved.kind, subagents, subagentsOmitted: omitted };
+    return { ...result, kind: resolved.kind, subagents, subagentsOmitted: omitted + notScanned };
   } catch (err) {
     return { ok: false, error: err.message };
   }
