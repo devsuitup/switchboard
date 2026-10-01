@@ -1303,6 +1303,7 @@ body { display: flex; flex-direction: column; }
   flex-direction: column;
   position: relative;
   min-height: 0;
+  min-width: 0;
   background: var(--surface-sunken);
 }
 
@@ -1664,9 +1665,10 @@ body { display: flex; flex-direction: column; }
 /* Agents view — see .ai/contexts/bg-agents.md */
 #agents-viewer { display: none; flex-direction: column; flex: 1; min-height: 0; }
 #agents-viewer-header {
-  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px;
   background: var(--surface-chrome); border-bottom: 1px solid var(--hairline); flex-shrink: 0;
 }
+#agents-new-btn { flex-shrink: 0; }
 #agents-viewer-title { font-size: 13px; color: #b0b0c4; font-weight: 500; }
 #agents-viewer-count { font-size: 11px; color: #7a7a90; margin-right: auto; }
 #agents-worktrees-toggle:has(input:disabled) { opacity: 0.5; }

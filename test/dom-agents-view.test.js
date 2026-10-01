@@ -770,3 +770,16 @@ test('a quote in a session id round-trips through the row key without injecting 
   assert.equal(row.getAttribute('data-key'), 'int:' + sid);
   assert.equal(row.hasAttribute('data-verb'), false);
 });
+
+test('the header wraps its controls so New agent stays reachable at narrow widths', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  const header = css.match(/(^|\n)#agents-viewer-header\s*\{([^}]*)\}/);
+  assert.ok(header, 'a #agents-viewer-header rule');
+  assert.match(header[2], /flex-wrap:\s*wrap/);
+  const btn = css.match(/(^|\n)#agents-new-btn\s*\{([^}]*)\}/);
+  assert.ok(btn, 'a #agents-new-btn rule of its own');
+  assert.match(btn[2], /flex-shrink:\s*0/);
+  const main = css.match(/(^|\n)#main\s*\{([^}]*)\}/);
+  assert.ok(main, 'a #main rule');
+  assert.match(main[2], /min-width:\s*0/, 'the rows\' minimum width must not push #main past the window');
+});

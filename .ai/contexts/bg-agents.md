@@ -135,6 +135,13 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 - When a row is attached here and the user runs Stop or Delete on it, the
   renderer stops the local attach pty first (`stopSession`), so the client
   does not outlive the job.
+- Narrow widths: a row's grid columns add up to ~670 px of minimum width.
+  Without `min-width: 0` on `#main` that minimum became `#main`'s own, so
+  with a narrow window or a wide sidebar `#main` ran past the window edge
+  and the header's right end (New agent) was clipped by `body`'s
+  `overflow: hidden`. `#main` now shrinks to the space left, the list
+  scrolls sideways, and the header wraps its controls (`flex-wrap`, New
+  agent `flex-shrink: 0`) onto extra rows.
 
 ## Group by
 
