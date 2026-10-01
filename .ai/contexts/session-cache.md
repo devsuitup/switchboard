@@ -744,6 +744,27 @@ created the `.jsonl`; a manual host refresh did not help.
     rel path, not its own, because `readSubagentMeta()` in the transcript's
     row is what actually needs re-deriving.
 
+### Remote hosts — capability tiers (issue #218, first slice)
+
+`remote-host-profile.js` is a pure function: `computeHostProfile({ at, error, descriptors })` returns
+`{ tier, tiers, missing }`, the highest of `observe < liveness < inject < attach < launch` that is
+available plus, for every tier above it, the reason it is not. The indexer's `getRemoteHostProfile(alias)`
+feeds it the last cycle's own data (`at`, `error`, live descriptors), so there is no probe and no extra ssh.
+
+- `none`: never synced, or the last cycle failed. A failed `find ~/.claude/projects` fails the whole
+  cycle, so an unreadable projects directory and an unreachable host are not told apart; the ssh error is the reason.
+- `liveness`: at least one live descriptor. `inject`: a live descriptor with a `messagingSocketPath` that is a POSIX
+  absolute path. `attach`: a live descriptor naming a tmux pane with a valid pid (the adapter's own test).
+  The tiers are independent requirements: the reported tier is the highest available one, not the highest contiguous one.
+- `launch` is never available: starting a session from here is not implemented.
+- A tier that needs a live session reads as missing on an idle host; that is "nothing to read it from", not "unsupported".
+- `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`) and, when the host is `none`,
+  sets `remoteAttachable: false` plus `remoteAttachBlocked` / `remoteStopBlocked` (the reason) on the session. The
+  renderer only shows the strings: the tooltip of the host dot, the disabled Stop button, the row and badge titles.
+- The new-session button was already disabled for every remote host; it is unchanged.
+- Not done: the probe for what the descriptors cannot tell (multiplexer installed but no session in it, `inotifywait`),
+  the inject affordance (issue #219), the launch tier.
+
 ## Remote hosts — tmux attach (issue #221)
 
 `open-terminal` no longer refuses every remote session outright. When

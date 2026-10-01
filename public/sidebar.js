@@ -56,7 +56,19 @@ function formatNextAttemptIn(epochMs) {
 // sync cycle failed (host unreachable, reason visible), the host has never
 // been read yet, or it was read successfully and genuinely has no live
 // session right now. See .ai/contexts/session-cache.md.
+function remoteHostTierLines(profile) {
+  if (!profile || typeof profile.tier !== 'string' || !Array.isArray(profile.missing)) return '';
+  return '\nCapability: ' + profile.tier
+    + profile.missing.map(m => '\n' + m.tier + ' unavailable: ' + m.reason).join('');
+}
+
 function remoteHostState(project) {
+  const state = remoteHostStatus(project);
+  state.detail += remoteHostTierLines(project.remoteHostProfile);
+  return state;
+}
+
+function remoteHostStatus(project) {
   if (project.remoteHostError) {
     const age = formatStatusAge(project.remoteHostAt);
     const nextIn = formatNextAttemptIn(project.remoteHostNextAttemptAt);
@@ -1233,7 +1245,9 @@ function rebindSidebarEvents(projects) {
 
     // see .ai/contexts/session-cache.md ("Remote SSH hosts")
     if (session.remoteAlias && !session.remoteAttachable) {
-      item.title = 'Not currently attachable — opening the transcript instead';
+      item.title = session.remoteAttachBlocked
+        ? 'Attach unavailable: ' + session.remoteAttachBlocked + ' — opening the transcript instead'
+        : 'Not currently attachable — opening the transcript instead';
     }
 
     item.onclick = () => {
@@ -1265,6 +1279,10 @@ function rebindSidebarEvents(projects) {
     }
 
     const stopBtn = item.querySelector('.session-stop-btn');
+    if (stopBtn && session.remoteStopBlocked) {
+      stopBtn.disabled = true;
+      stopBtn.title = 'Stop unavailable: ' + session.remoteStopBlocked;
+    }
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
@@ -1452,7 +1470,9 @@ function buildSessionItem(session) {
     badge.className = 'remote-badge';
     badge.title = session.remoteAttachable
       ? 'Live session on ' + session.remoteAlias + ' — click to attach'
-      : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
+      : session.remoteAttachBlocked
+        ? 'Session on ' + session.remoteAlias + ' — attach unavailable: ' + session.remoteAttachBlocked + ', click to read its transcript'
+        : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
     badge.textContent = session.remoteAlias;
     summaryEl.prepend(badge);
   }

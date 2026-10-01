@@ -855,6 +855,11 @@ async function triggerRebuildAndSearch() {
 // btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
 async function confirmAndStopSession(sessionId, btn) {
   const plan = resolveSessionStop(sessionMap.get(sessionId));
+  if (plan.blocked) {
+    if (btn && typeof window.flashButtonText === 'function') window.flashButtonText(btn, 'Unavailable', 1500);
+    console.error('[stop-session]', plan.blocked);
+    return;
+  }
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)

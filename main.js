@@ -80,6 +80,7 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
+const { isTierAvailable, tierReason } = require('./remote-host-profile');
 const { createGitChangesRunner } = require('./git-changes-runner');
 const gitChangesTarget = require('./git-changes-target');
 const terminalPathTarget = require('./terminal-path-target');
@@ -561,7 +562,8 @@ function annotateRemoteAttachable(projects) {
     if (!hostInfoByAlias.has(alias)) {
       const { sessions, at, error } = remoteIndexer.getRemoteSessions(alias);
       const { nextAttemptAt } = remoteIndexer.getRemoteHostState(alias);
-      hostInfoByAlias.set(alias, { at, error, nextAttemptAt, byId: new Map(sessions.map(d => [d.sessionId, d])) });
+      const profile = remoteIndexer.getRemoteHostProfile(alias);
+      hostInfoByAlias.set(alias, { at, error, nextAttemptAt, profile, byId: new Map(sessions.map(d => [d.sessionId, d])) });
     }
     return hostInfoByAlias.get(alias);
   }
@@ -571,11 +573,17 @@ function annotateRemoteAttachable(projects) {
       project.remoteHostAt = info.at;
       project.remoteHostError = info.error;
       project.remoteHostNextAttemptAt = info.nextAttemptAt || null;
+      project.remoteHostProfile = info.profile;
     }
     for (const session of project.sessions) {
       if (session.remoteAlias) {
-        const descriptor = hostInfo(session.remoteAlias).byId.get(session.sessionId);
-        session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        const info = hostInfo(session.remoteAlias);
+        const descriptor = info.byId.get(session.sessionId);
+        const hostBlocked = isTierAvailable(info.profile, 'observe') ? null : tierReason(info.profile, 'observe');
+        const supportsAttach = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        session.remoteAttachable = supportsAttach && !hostBlocked;
+        session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
+        session.remoteStopBlocked = descriptor ? hostBlocked : null;
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);

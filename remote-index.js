@@ -12,6 +12,7 @@ const {
 } = require('./remote-hosts');
 const { syncMirror } = require('./remote-mirror');
 const { encodeProjectPath } = require('./encode-project-path');
+const { computeHostProfile } = require('./remote-host-profile');
 
 const NOOP_LOG = { info() {}, warn() {}, error() {} };
 
@@ -346,6 +347,12 @@ function createRemoteIndexer(ctx) {
     };
   }
 
+  // see .ai/contexts/session-cache.md ("Remote hosts — capability tiers")
+  function getRemoteHostProfile(alias) {
+    const { sessions, at, error } = getRemoteSessions(alias);
+    return computeHostProfile({ at, error, descriptors: sessions });
+  }
+
   // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
   function getPlaceholderSessions(alias) {
     const list = remoteSessions.get(alias) || [];
@@ -386,6 +393,7 @@ function createRemoteIndexer(ctx) {
     start, stop, dispose, restart, refreshNow, refreshHostNow,
     isRunning: () => timer !== null,
     getRemoteSessions,
+    getRemoteHostProfile,
     getPlaceholderSessions,
     getAllPlaceholderSessions,
     findSessionAlias,
