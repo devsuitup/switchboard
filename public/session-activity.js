@@ -97,6 +97,12 @@ function purgeActivityFor(sessionId, via) {
   applyStateClasses(sessionId, createSessionState('local-pty').snapshot());
 }
 
+// see .ai/contexts/session-state.md ("A session main drops")
+function dropLocalPtySession(sessionId, via) {
+  if (typeof clearActiveSubagentsFor === 'function') clearActiveSubagentsFor(sessionId);
+  purgeActivityFor(sessionId, via);
+}
+
 // Central activity dispatcher. `via` is trace-only — see docs/activity-trace.md.
 // opts.armReady=false: going idle must not arm response-ready — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
 function setActivity(sessionId, active, via, opts) {

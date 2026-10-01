@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A session that has exited no longer keeps a busy dot in the sidebar, and the status bar's running count drops as soon as the session ends instead of waiting for the next refresh. (#375)
+
 ## v0.0.86 — 2026-10-01
 
 ### New

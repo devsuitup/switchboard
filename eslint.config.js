@@ -153,6 +153,7 @@ const rendererCrossFileGlobals = {
   currentActivitySeq: 'readonly',
   forgetActivitySeq: 'readonly',
   purgeActivityFor: 'readonly',
+  dropLocalPtySession: 'readonly',
   pruneRemoteActivityTimers: 'readonly',
   // public/session-activity.js's persisted per-session state — see .ai/contexts/session-state.md ("The local-pty adapter")
   localPtyState: 'readonly',

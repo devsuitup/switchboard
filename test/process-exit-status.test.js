@@ -64,6 +64,8 @@ const PRELUDE = `
   function destroySession(id) { openSessions.delete(id); }
   function setActiveSession() {}
   function refreshSidebar() {}
+  function dropLocalPtySession() {}
+  function updateRunningIndicators() {}
   function schedulePersistWorkingSet() {}
   function pollActiveSessions() { updateTerminalHeader(); }
   async function guardResume() { return true; }

@@ -509,6 +509,10 @@ window.api.onProcessExited((sessionId, exitCode, signal, stopped) => {
     return;
   }
   noteSessionExit(sessionId, exitCode, signal, stopped);
+  // see .ai/contexts/session-state.md ("A session main drops")
+  activePtyIds.delete(sessionId);
+  if (!session?.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
+  updateRunningIndicators();
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
@@ -956,9 +960,7 @@ function updateRunningIndicators() {
         // A stopped PTY can never emit subagent-completed (stop-session kills
         // the process; detectSubagentTransitions skips exited sessions), so
         // drop the live-subagent state now instead of waiting for the TTL.
-        clearActiveSubagentsFor(id);
-        // Runs after clearActiveSubagentsFor — see .ai/contexts/session-state.md ("The local-pty adapter")
-        purgeActivityFor(id, 'pty-gone');
+        dropLocalPtySession(id, 'pty-gone');
       }
       if (item.dataset.remoteAlias) setRemoteAttached(id, running);
       // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md
@@ -976,6 +978,7 @@ function updateRunningIndicators() {
       const dot = group.querySelector('.slug-group-dot');
       if (dot) dot.classList.toggle('running', hasRunning);
     });
+    renderDefaultStatus();
   }
 
   // Update grid card dots and status text — always run because sessionBusyState

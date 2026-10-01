@@ -470,6 +470,6 @@ test('public/app.js: pty-stop cleanup removes has-busy-agents and purges the sid
   // the only place allowed to touch this class (eslint.config.js).
   assert.match(body, /setHasBusyAgents\(item,\s*false\)/,
     "the !running cleanup must clear 'has-busy-agents' along with the other per-session state classes");
-  assert.match(body, /clearActiveSubagentsFor\(id\)/,
-    'the !running cleanup must purge activeSubagentsByParent via clearActiveSubagentsFor so a re-render cannot resurrect the indicator');
+  assert.match(body, /dropLocalPtySession\(id,\s*'pty-gone'\)/,
+    'the !running cleanup must purge activeSubagentsByParent via dropLocalPtySession so a re-render cannot resurrect the indicator');
 });
