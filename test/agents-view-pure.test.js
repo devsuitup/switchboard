@@ -4,7 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { renderSessionIcon } = require('../public/session-state');
 global.renderSessionIcon = renderSessionIcon;
-const { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta } = require('../public/agents-view');
+const { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta,
+  agentsCollapseKey, parseCollapsedGroups, serializeCollapsedGroups, AGENTS_COLLAPSE_MAX } = require('../public/agents-view');
 
 const bg = (over) => ({ id: 'aaaaaaaa', sessionId: 's', kind: 'background', state: 'working', status: 'idle', startedAt: 100, ...over });
 
@@ -221,6 +222,34 @@ test('worktree option is ignored outside project mode', () => {
   const entries = [wt('a', '/w/app'), wt('b', '/w/app/.claude/worktrees/x')];
   assert.ok(groupAgentEntries(entries, 'state', { worktrees: true }).every(g => !g.children));
   assert.ok(groupAgentEntries(entries, 'none', { worktrees: true }).every(g => !g.children));
+});
+
+test('collapse keys are scoped by mode and level', () => {
+  assert.equal(agentsCollapseKey('state', { key: 'working' }), 'state:working');
+  assert.equal(agentsCollapseKey('project', { key: '/w/app' }), 'project:/w/app');
+  assert.equal(agentsCollapseKey('project', { key: '' }), 'project:');
+  assert.equal(agentsCollapseKey('worktree', { key: '/w/app/.claude/worktrees/x' }, '/w/app'), 'worktree:/w/app|/w/app/.claude/worktrees/x');
+  assert.notEqual(agentsCollapseKey('state', { key: 'x' }), agentsCollapseKey('project', { key: 'x' }));
+});
+
+test('stored collapsed groups: a JSON array of strings, anything else is empty, capped to the newest', () => {
+  assert.deepEqual(parseCollapsedGroups('["state:done","project:/a"]'), ['state:done', 'project:/a']);
+  assert.deepEqual(parseCollapsedGroups(null), []);
+  assert.deepEqual(parseCollapsedGroups(''), []);
+  assert.deepEqual(parseCollapsedGroups('{not json'), []);
+  assert.deepEqual(parseCollapsedGroups('{"a":1}'), []);
+  assert.deepEqual(parseCollapsedGroups('"state:done"'), []);
+  assert.deepEqual(parseCollapsedGroups('["a", 3, null, "a", "b"]'), ['a', 'b']);
+  const many = Array.from({ length: AGENTS_COLLAPSE_MAX + 5 }, (_, i) => 'k' + i);
+  const parsed = parseCollapsedGroups(JSON.stringify(many));
+  assert.equal(parsed.length, AGENTS_COLLAPSE_MAX);
+  assert.equal(parsed[0], 'k5');
+  assert.equal(parsed[parsed.length - 1], 'k' + (AGENTS_COLLAPSE_MAX + 4));
+  const out = JSON.parse(serializeCollapsedGroups(many));
+  assert.equal(out.length, AGENTS_COLLAPSE_MAX);
+  assert.equal(out[0], 'k5');
+  assert.deepEqual(JSON.parse(serializeCollapsedGroups(new Set(['x', 'y']))), ['x', 'y']);
+  assert.ok(AGENTS_COLLAPSE_MAX >= 100 && AGENTS_COLLAPSE_MAX <= 500);
 });
 
 test('formatting helpers', () => {

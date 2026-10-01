@@ -50,6 +50,13 @@ a single worktree stays a flat list under its header. Worktrees with
 something running come first, then main, then the others alphabetically. The
 box is greyed out in the other modes.
 
+Click a header (or focus it and press Enter or Space) to fold its section:
+the header keeps its name and count, its rows are hidden; folding a project
+hides its worktree sub-sections too. The arrow at the start of the header
+shows which sections are folded. It works in every grouping, each grouping
+remembers its own folded sections, and they stay folded across refreshes and
+restarts. A selected session in a folded section stays selected.
+
 Rows keep their usual order inside a section, the Finished filter applies
 first (a section left empty is not shown), and the choice is remembered.
 

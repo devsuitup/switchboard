@@ -9,6 +9,8 @@ let agentsSelectedKey = null;
 let agentsShowFinished = true;
 let agentsGroupBy = 'state';
 let agentsGroupWorktrees = true;
+const AGENTS_COLLAPSE_MAX = 200;
+let agentsCollapsedGroups = new Set();
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
@@ -228,24 +230,63 @@ function renderAgentRow(entry, nested = false) {
   </div>`;
 }
 
-function renderAgentGroupHeader(group) {
-  const title = group.title ? ` title="${agentsEscapeAttr(group.title)}"` : '';
-  const emoji = group.emoji ? `<span class="agents-group-emoji" aria-hidden="true">${group.emoji}</span> ` : '';
-  return `<div class="agents-group-header" data-group="${agentsEscapeAttr(group.key)}"${title}>${emoji}<span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+function agentsCollapseKey(mode, group, parentKey) {
+  if (mode === 'worktree') return `worktree:${parentKey}|${group.key}`;
+  return `${mode}:${group.key}`;
 }
 
-function renderAgentSubgroupHeader(group) {
+function parseCollapsedGroups(text) {
+  let list;
+  try { list = JSON.parse(text); } catch { return []; }
+  if (!Array.isArray(list)) return [];
+  const keys = [...new Set(list.filter(k => typeof k === 'string'))];
+  return keys.slice(-AGENTS_COLLAPSE_MAX);
+}
+
+function serializeCollapsedGroups(keys) {
+  return JSON.stringify([...keys].slice(-AGENTS_COLLAPSE_MAX));
+}
+
+function readAgentsCollapsedGroups() {
+  try {
+    return new Set(parseCollapsedGroups(localStorage.getItem('agentsCollapsedGroups')));
+  } catch {
+    return new Set();
+  }
+}
+
+function toggleAgentsGroup(collapseKey) {
+  if (agentsCollapsedGroups.has(collapseKey)) agentsCollapsedGroups.delete(collapseKey);
+  else agentsCollapsedGroups.add(collapseKey);
+  while (agentsCollapsedGroups.size > AGENTS_COLLAPSE_MAX) agentsCollapsedGroups.delete(agentsCollapsedGroups.values().next().value);
+  try { localStorage.setItem('agentsCollapsedGroups', serializeCollapsedGroups(agentsCollapsedGroups)); } catch {}
+  renderAgentsView();
+}
+
+function renderAgentHeader(cls, group, collapseKey, collapsed) {
   const title = group.title ? ` title="${agentsEscapeAttr(group.title)}"` : '';
-  return `<div class="agents-subgroup-header" data-subgroup="${agentsEscapeAttr(group.key)}"${title}><span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+  const emoji = group.emoji ? `<span class="agents-group-emoji" aria-hidden="true">${group.emoji}</span> ` : '';
+  const chevron = `<span class="agents-group-chevron" aria-hidden="true">${collapsed ? '▸' : '▾'}</span> `;
+  return `<div class="${cls}" data-collapse="${agentsEscapeAttr(collapseKey)}" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}"${title}>${chevron}${emoji}<span class="agents-group-label">${escapeHtml(group.label)}</span> · <span class="agents-group-count">${group.entries.length}</span></div>`;
+}
+
+function renderAgentGroup(group) {
+  const key = agentsCollapseKey(agentsGroupBy, group);
+  const collapsed = agentsCollapsedGroups.has(key);
+  const head = renderAgentHeader('agents-group-header', group, key, collapsed);
+  if (collapsed) return head;
+  if (!group.children) return head + group.entries.map(e => renderAgentRow(e)).join('');
+  return head + group.children.map((c) => {
+    const subKey = agentsCollapseKey('worktree', c, group.key);
+    const subCollapsed = agentsCollapsedGroups.has(subKey);
+    const subHead = renderAgentHeader('agents-subgroup-header', c, subKey, subCollapsed);
+    return subCollapsed ? subHead : subHead + c.entries.map(e => renderAgentRow(e, true)).join('');
+  }).join('');
 }
 
 function renderAgentList(visible) {
   if (agentsGroupBy === 'none') return visible.map(e => renderAgentRow(e)).join('');
-  return groupAgentEntries(visible, agentsGroupBy, { worktrees: agentsGroupWorktrees })
-    .map(g => renderAgentGroupHeader(g) + (g.children
-      ? g.children.map(c => renderAgentSubgroupHeader(c) + c.entries.map(e => renderAgentRow(e, true)).join('')).join('')
-      : g.entries.map(e => renderAgentRow(e)).join('')))
-    .join('');
+  return groupAgentEntries(visible, agentsGroupBy, { worktrees: agentsGroupWorktrees }).map(renderAgentGroup).join('');
 }
 
 function readAgentsGroupWorktrees() {
@@ -450,6 +491,7 @@ function initAgentsView() {
       renderAgentsView();
     });
   }
+  agentsCollapsedGroups = readAgentsCollapsedGroups();
   agentsGroupWorktrees = readAgentsGroupWorktrees();
   const worktreesBox = document.getElementById('agents-group-worktrees');
   if (worktreesBox) {
@@ -483,6 +525,11 @@ function initAgentsView() {
         if (!verbBtn.disabled) runAgentVerb(verbBtn.dataset.verb, agentsSelectedEntry());
         return;
       }
+      const head = e.target.closest('[data-collapse]');
+      if (head) {
+        toggleAgentsGroup(head.dataset.collapse);
+        return;
+      }
       const row = e.target.closest('.agents-row');
       if (row) {
         agentsSelectedKey = row.dataset.key;
@@ -490,9 +537,19 @@ function initAgentsView() {
       }
     });
   }
+  if (viewer) {
+    viewer.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const head = e.target.closest && e.target.closest('[data-collapse]');
+      if (!head) return;
+      e.preventDefault();
+      toggleAgentsGroup(head.dataset.collapse);
+    });
+  }
   window.api.onBgAgentsChanged((snapshot) => applyAgentsSnapshot(snapshot));
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta };
+  module.exports = { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta,
+    agentsCollapseKey, parseCollapsedGroups, serializeCollapsedGroups, AGENTS_COLLAPSE_MAX };
 }

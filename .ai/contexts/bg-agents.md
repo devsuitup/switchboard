@@ -174,15 +174,35 @@ that throws still lets the choice apply for the session. The `<select>` in
   rank `sortAgentEntries` uses — then by label, case-insensitive
   (`localeCompare`, `sensitivity: 'base'`), with "No project" last in its
   rank.
-- Header rows are `.agents-group-header`, not `.agents-row`: the click
-  handler only acts on `.agents-row`, `.agents-verb-btn` and `.agents-link`,
-  so a header click does nothing and the selection (`agentsSelectedKey`) is
-  untouched by a regroup. The header's `title` (full path) and `data-group`
-  go through `agentsEscapeAttr`; the label through `escapeHtml`.
+- Header rows are `.agents-group-header` / `.agents-subgroup-header`, not
+  `.agents-row`. The viewer's click handler checks `[data-collapse]` before
+  `.agents-row`, so a header click toggles the group and never selects a row;
+  the selection (`agentsSelectedKey`) is untouched by a regroup or a
+  collapse. The header's `title` (full path) and `data-collapse` go through
+  `agentsEscapeAttr` and are read back with `dataset`; the label through
+  `escapeHtml`.
 - Headers are `position: sticky` in the scrolling `#agents-list`, sized
   `1.2em` of the list's 12px (rows are 12px), weight 600, with more padding
   above than below; the count is weight 400, smaller and `--text-muted`.
-  Collapsing a group is not implemented.
+- Collapsing: every header (State, Project, worktree sub-group) is
+  `role="button"`, `tabindex="0"`, `aria-expanded`, with a `▾`/`▸` chevron in
+  an `aria-hidden` span; click, Enter or Space (a `keydown` on the viewer)
+  calls `toggleAgentsGroup`. A collapsed header keeps its label and total
+  count and renders none of its rows; a collapsed project also hides its
+  sub-groups; a collapsed sub-group hides only its rows. Keys
+  (`agentsCollapseKey`) are scoped by mode and level — `state:<state>`,
+  `project:<projectRoot or cwd>` (`project:` for No project),
+  `worktree:<projectRoot>|<worktreeRoot>` — so folding Done in State mode
+  folds nothing in Project mode. The set (`agentsCollapsedGroups`, a `Set`
+  whose insertion order is the age) is kept in memory across roster pushes,
+  regroups, mode switches and the Finished filter, and persisted as a JSON
+  array under `localStorage.agentsCollapsedGroups` (read and write in
+  try/catch). `parseCollapsedGroups` drops invalid JSON, non-arrays and
+  non-strings, de-duplicates, and keeps the newest `AGENTS_COLLAPSE_MAX`
+  (200); a toggle that adds past the cap evicts the oldest key. Keys of
+  groups that no longer exist stay until evicted. The selected row may sit in
+  a collapsed group: the selection and the detail pane stay (and its verbs
+  keep working); the row is just not drawn. Nothing collapses in None mode.
 - Worktree sub-groups: `#agents-group-worktrees` sets `agentsGroupWorktrees`,
   persisted under `localStorage.agentsGroupWorktrees` (`'0'` off; unset or
   anything else on; read and write in try/catch). It is disabled (kept

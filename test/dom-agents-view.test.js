@@ -282,10 +282,14 @@ function chooseGroupBy(ctx, mode) {
   sel.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
 }
 
+function headText(el) {
+  return el.textContent.replace(/^[▾▸] /, '');
+}
+
 function listLayout(ctx) {
   return [...ctx.document.getElementById('agents-list').children].map(el =>
-    el.classList.contains('agents-group-header') ? '# ' + el.textContent
-      : el.classList.contains('agents-subgroup-header') ? '## ' + el.textContent
+    el.classList.contains('agents-group-header') ? '# ' + headText(el)
+      : el.classList.contains('agents-subgroup-header') ? '## ' + headText(el)
         : el.querySelector('.agents-row-name').textContent);
 }
 
@@ -330,7 +334,7 @@ test('the Finished filter applies before grouping: a group left empty is not sho
   assert.match(ctx.document.getElementById('agents-list').textContent, /No background agents/);
 });
 
-test('the selected row stays selected across a regroup, and a click on a header does nothing', async (t) => {
+test('the selected row stays selected across a regroup, and a click on a header toggles it without selecting a row', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -340,10 +344,150 @@ test('the selected row stays selected across a regroup, and a click on a header 
   chooseGroupBy(ctx, 'state');
   assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]').classList.contains('selected'));
   ctx.document.querySelector('.agents-group-header').click();
+  assert.equal(ctx.document.querySelector('.agents-group-header').getAttribute('aria-expanded'), 'false');
   assert.equal(ctx.read('agentsSelectedKey'), 'bg:bbbbbbbb');
   assert.equal(ctx.document.querySelectorAll('.agents-row.selected').length, 1);
   assert.match(ctx.document.getElementById('agents-detail').textContent, /spike/);
   assert.equal(ctx.calls.verbs.length, 0);
+});
+
+function header(ctx, collapseKey) {
+  return [...ctx.document.querySelectorAll('[data-collapse]')].find(h => h.dataset.collapse === collapseKey);
+}
+
+function storedCollapsed(ctx) {
+  return JSON.parse(ctx.window.localStorage.getItem('agentsCollapsedGroups') || '[]');
+}
+
+test('collapse: a header click folds its rows, keeps label and count, flips the chevron and aria-expanded, and is remembered', async (t) => {
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const done = header(ctx, 'state:done');
+  assert.equal(done.getAttribute('role'), 'button');
+  assert.equal(done.getAttribute('tabindex'), '0');
+  assert.equal(done.getAttribute('aria-expanded'), 'true');
+  assert.equal(done.querySelector('.agents-group-chevron').textContent, '▾');
+  assert.equal(done.querySelector('.agents-group-chevron').getAttribute('aria-hidden'), 'true');
+  done.click();
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', '# 🖥️ External · 1', 'lvds-1b']);
+  const folded = header(ctx, 'state:done');
+  assert.equal(folded.getAttribute('aria-expanded'), 'false');
+  assert.equal(folded.querySelector('.agents-group-chevron').textContent, '▸');
+  assert.deepEqual(storedCollapsed(ctx), ['state:done']);
+  folded.click();
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# 🖥️ External · 1', 'lvds-1b']);
+  assert.deepEqual(storedCollapsed(ctx), []);
+});
+
+test('collapse: Enter and Space on a focused header toggle it', async (t) => {
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const key = (k) => {
+    const ev = new ctx.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true });
+    header(ctx, 'state:working').dispatchEvent(ev);
+    return ev;
+  };
+  const ev = key('Enter');
+  assert.equal(ev.defaultPrevented, true);
+  assert.equal(header(ctx, 'state:working').getAttribute('aria-expanded'), 'false');
+  key(' ');
+  assert.equal(header(ctx, 'state:working').getAttribute('aria-expanded'), 'true');
+  key('a');
+  assert.equal(header(ctx, 'state:working').getAttribute('aria-expanded'), 'true');
+});
+
+test('collapse: restored from storage, survives a roster push, a mode switch and the Finished filter; selection kept', async (t) => {
+  const ctx = setup({ storage: { agentsCollapsedGroups: '["state:done"]' } }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'), null);
+  assert.equal(header(ctx, 'state:done').textContent.includes('· 1'), true);
+  ctx.emitChanged({ roster: [...ROSTER], daemonReachable: true });
+  assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'), null);
+  chooseGroupBy(ctx, 'project');
+  assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'), 'state:done does not fold a project');
+  ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();
+  header(ctx, 'project:/w/em').click();
+  assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]'), null);
+  assert.equal(ctx.read('agentsSelectedKey'), 'bg:aaaaaaaa');
+  assert.match(ctx.document.getElementById('agents-detail').textContent, /em-platform/);
+  ctx.emitChanged({ roster: [{ ...ROSTER[0], detail: 'pushed' }, ROSTER[1], ROSTER[2]], daemonReachable: true });
+  assert.equal(ctx.read('agentsSelectedKey'), 'bg:aaaaaaaa');
+  assert.match(ctx.document.getElementById('agents-detail').textContent, /pushed/);
+  chooseGroupBy(ctx, 'state');
+  assert.equal(ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'), null);
+  const box = ctx.document.getElementById('agents-show-finished');
+  box.checked = false;
+  box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+  box.checked = true;
+  box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+  assert.equal(header(ctx, 'state:done').getAttribute('aria-expanded'), 'false');
+  assert.deepEqual(storedCollapsed(ctx).sort(), ['project:/w/em', 'state:done']);
+});
+
+test('collapse: invalid stored value collapses nothing; a throwing storage still toggles', async (t) => {
+  for (const bad of ['{nope', '{"a":1}', '42']) {
+    const ctx = setup({ storage: { agentsCollapsedGroups: bad } }); t.after(() => ctx.destroy());
+    ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+    await ctx.window.showAgentsView();
+    assert.equal(ctx.document.querySelectorAll('[aria-expanded="false"]').length, 0, bad);
+    assert.equal(ctx.document.querySelectorAll('.agents-row').length, 3, bad);
+  }
+  const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  Object.defineProperty(ctx.window, 'localStorage', { configurable: true, get() { throw new Error('denied'); } });
+  header(ctx, 'state:done').click();
+  assert.equal(header(ctx, 'state:done').getAttribute('aria-expanded'), 'false');
+});
+
+test('collapse: a project folds its worktree sub-groups; a sub-group folds only its rows', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: APP_ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const subKey = 'worktree:' + APP + '|' + APP + '/.claude/worktrees/x';
+  const sub = header(ctx, subKey);
+  assert.ok(sub && sub.classList.contains('agents-subgroup-header'));
+  assert.equal(sub.getAttribute('role'), 'button');
+  sub.click();
+  assert.deepEqual(listLayout(ctx), ['# app · 2', '## main · 1', 'on-main', '## x · 1', '# other · 1', 'other-repo']);
+  header(ctx, 'project:' + APP).click();
+  assert.deepEqual(listLayout(ctx), ['# app · 2', '# other · 1', 'other-repo']);
+  header(ctx, 'project:' + APP).click();
+  assert.deepEqual(listLayout(ctx), ['# app · 2', '## main · 1', 'on-main', '## x · 1', '# other · 1', 'other-repo']);
+  toggleWorktrees(ctx, false);
+  assert.deepEqual(listLayout(ctx), ['# app · 2', 'on-main', 'in-wt', '# other · 1', 'other-repo']);
+});
+
+test('collapse: quotes and class= payloads in a project path used as a collapse key inject nothing and round-trip', async (t) => {
+  const ctx = setup({ storage: { agentsGroupBy: 'project' } }); t.after(() => ctx.destroy());
+  const payload = 'x" class="agents-row" data-key="bg:aaaaaaaa" data-verb="stop" y=\'z';
+  const root = '/w/' + payload;
+  ctx.setSnapshot({ roster: [{ ...ROSTER[1], id: 'cccccccc', cwd: root, projectRoot: root, worktreeRoot: root }], daemonReachable: true });
+  await ctx.window.showAgentsView();
+  const head = header(ctx, 'project:' + root);
+  assert.ok(head);
+  assert.equal(head.className, 'agents-group-header');
+  assert.equal(head.hasAttribute('data-verb'), false);
+  assert.equal(head.hasAttribute('data-key'), false);
+  head.click();
+  assert.equal(ctx.read('agentsSelectedKey'), null);
+  assert.equal(ctx.calls.verbs.length, 0);
+  assert.deepEqual(storedCollapsed(ctx), ['project:' + root]);
+  assert.equal(ctx.document.querySelectorAll('.agents-row').length, 0);
+  const again = setup({ storage: { agentsGroupBy: 'project', agentsCollapsedGroups: ctx.window.localStorage.getItem('agentsCollapsedGroups') } });
+  t.after(() => again.destroy());
+  again.setSnapshot({ roster: [{ ...ROSTER[1], id: 'cccccccc', cwd: root, projectRoot: root, worktreeRoot: root }], daemonReachable: true });
+  await again.window.showAgentsView();
+  assert.equal(header(again, 'project:' + root).getAttribute('aria-expanded'), 'false');
+});
+
+test('collapse: the header looks clickable, focusable and does not select text', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
+  assert.match(css, /\.agents-group-header,\s*\.agents-subgroup-header\s*\{[^}]*cursor:\s*pointer[^}]*user-select:\s*none/);
+  assert.match(css, /\.agents-group-header:focus-visible/);
 });
 
 test('the grouping is restored from storage; an invalid stored value falls back to state', async (t) => {
@@ -383,7 +527,7 @@ test('quotes and attribute payloads in a cwd used as a project group title canno
   assert.equal(head.className, 'agents-group-header');
   assert.equal(head.hasAttribute('data-verb'), false);
   assert.equal(head.hasAttribute('y'), false);
-  assert.equal(head.textContent, payload + ' · 1');
+  assert.equal(headText(head), payload + ' · 1');
   assert.equal(ctx.document.querySelectorAll('[data-verb]').length, 0);
   head.click();
   assert.equal(ctx.calls.verbs.length, 0);
@@ -525,7 +669,7 @@ test('quotes and attribute payloads in a worktree path cannot inject attributes 
   assert.equal(head.className, 'agents-subgroup-header');
   assert.equal(head.hasAttribute('data-verb'), false);
   assert.equal(head.hasAttribute('y'), false);
-  assert.equal(head.textContent, payload + ' · 1');
+  assert.equal(headText(head), payload + ' · 1');
   assert.equal(ctx.document.querySelectorAll('[data-verb]').length, 0);
 });
 
