@@ -39,6 +39,8 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createWhatsNew } = require('./changelog');
+const { createUnsavedGuard } = require('./unsaved-guard');
+const unsavedGuard = createUnsavedGuard({ ipcMain });
 const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
@@ -354,6 +356,8 @@ function createWindow() {
       void 0;
     `);
   });
+
+  unsavedGuard.attach(mainWindow);
 
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm

@@ -142,6 +142,10 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingFinished: (callback) => {
     ipcRenderer.on('indexing-finished', () => callback());
   },
+  onUnsavedCheck: (callback) => {
+    ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
+  },
+  unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));
   },

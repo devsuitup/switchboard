@@ -138,6 +138,19 @@ function initFilePanel() {
     onDetachedSave: dropSavedHeldTabs,
   });
 
+  window.addEventListener('beforeunload', (event) => {
+    if (unloadApproved || !collectUnsavedFileTabs().length) return;
+    event.preventDefault();
+    event.returnValue = false;
+  });
+  if (window.api.onUnsavedCheck) {
+    window.api.onUnsavedCheck(async (id) => {
+      let proceed = true;
+      try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
+      window.api.unsavedCheckResult(id, proceed);
+    });
+  }
+
   // ── Diff-specific UI ──
   const diffContainer = document.createElement('div');
   diffContainer.id = 'file-panel-diff';
@@ -555,6 +568,134 @@ function takeHeldFileTab(state, filePath) {
   const tab = state.heldFileTabs.get(key) || null;
   state.heldFileTabs.delete(key);
   return tab;
+}
+
+// see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
+let unloadApproved = false;
+let unsavedPrompt = null;
+
+function collectUnsavedFileTabs() {
+  if (!fpViewerPanel) return [];
+  const found = new Set();
+  for (const state of filePanelState.values()) {
+    const tabs = [];
+    if (state.currentTab && state.currentTab.type === 'file') tabs.push(state.currentTab);
+    if (state.heldFileTabs) tabs.push(...state.heldFileTabs.values());
+    for (const tab of tabs) if (fileTabHasUnsavedEdits(tab)) found.add(tab);
+  }
+  return [...found];
+}
+
+async function saveUnsavedFileTab(tab) {
+  if (fpViewerOwner === tab) {
+    await fpViewerPanel.saveNow();
+    return fileTabHasUnsavedEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
+  }
+  const saved = tab.viewerState;
+  const result = await window.api.saveFileForPanel(tab.filePath, saved.content, saved.agreedBase);
+  if (result && result.ok !== false) {
+    tab.viewerState = { ...saved, agreedBase: saved.content, lastSeenDisk: saved.content };
+    return null;
+  }
+  if (result && result.reason === 'stale') return 'not saved: it changed on disk since you opened it';
+  return `not saved: ${(result && result.error) || 'unknown error'}`;
+}
+
+function showUnsavedEditsDialog(tabs) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog';
+    dialog.id = 'unsaved-edits-dialog';
+    dialog.setAttribute('role', 'alertdialog');
+
+    const title = document.createElement('h3');
+    title.textContent = 'Unsaved file edits';
+    dialog.appendChild(title);
+
+    const hint = document.createElement('div');
+    hint.className = 'add-project-hint';
+    hint.textContent = 'These files have edits that are not saved. Discarding loses them.';
+    dialog.appendChild(hint);
+
+    const labels = heldTabLabels(tabs);
+    const list = document.createElement('ul');
+    tabs.forEach((tab, i) => {
+      const li = document.createElement('li');
+      li.textContent = labels[i];
+      li.title = tab.filePath;
+      list.appendChild(li);
+    });
+    dialog.appendChild(list);
+
+    const errorEl = document.createElement('div');
+    errorEl.className = 'add-project-error';
+    dialog.appendChild(errorEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'add-project-actions';
+    const makeBtn = (id, cls, text) => {
+      const btn = document.createElement('button');
+      btn.id = id;
+      btn.className = cls;
+      btn.textContent = text;
+      actions.appendChild(btn);
+      return btn;
+    };
+    const cancelBtn = makeBtn('unsaved-cancel', 'add-project-cancel-btn', 'Cancel');
+    const discardBtn = makeBtn('unsaved-discard', 'add-project-cancel-btn', 'Discard');
+    const saveBtn = makeBtn('unsaved-save', 'add-project-add-btn', tabs.length > 1 ? 'Save all' : 'Save');
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    saveBtn.focus();
+
+    function finish(proceed) {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(proceed);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') finish(false);
+    }
+    document.addEventListener('keydown', onKey);
+
+    cancelBtn.onclick = () => finish(false);
+    discardBtn.onclick = () => finish(true);
+    saveBtn.onclick = async () => {
+      for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = true;
+      const failures = [];
+      for (let i = 0; i < tabs.length; i++) {
+        if (!fileTabHasUnsavedEdits(tabs[i])) continue;
+        let reason;
+        try { reason = await saveUnsavedFileTab(tabs[i]); } catch (err) { reason = `not saved: ${(err && err.message) || 'unknown error'}`; }
+        if (reason) failures.push(`${labels[i]} ${reason}`);
+      }
+      if (!failures.length) {
+        finish(true);
+        return;
+      }
+      errorEl.textContent = failures.join('. ');
+      errorEl.style.display = 'block';
+      for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = false;
+    };
+  });
+}
+
+function askAboutUnsavedEdits() {
+  if (unsavedPrompt) return unsavedPrompt;
+  const tabs = collectUnsavedFileTabs();
+  if (!tabs.length) return Promise.resolve(true);
+  unsavedPrompt = showUnsavedEditsDialog(tabs).then((proceed) => {
+    unsavedPrompt = null;
+    if (proceed) {
+      unloadApproved = true;
+      setTimeout(() => { unloadApproved = false; }, 10000);
+    }
+    return proceed;
+  });
+  return unsavedPrompt;
 }
 
 function endCurrentTab(sessionId, state) {

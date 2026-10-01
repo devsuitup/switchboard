@@ -451,6 +451,10 @@ class ViewerPanel {
     this.toolbar.setWrapMode(this.wrapMode);
   }
 
+  saveNow() {
+    return this._save();
+  }
+
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save() {
     if (!this.opts.onSave || !this.filePath || this._pendingContent !== null) return;

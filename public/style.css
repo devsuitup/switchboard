@@ -5115,3 +5115,13 @@ body.window-frameless :is(#terminal-header-status, #terminal-header-id, #termina
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }
+
+#unsaved-edits-dialog ul {
+  margin: 0 0 4px 0;
+  padding-left: 18px;
+  color: #b0b0c4;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  max-height: 160px;
+  overflow-y: auto;
+}
