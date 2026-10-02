@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - An Agents view lists the sessions the Claude daemon runs in the background (`claude --bg`) and the interactive sessions running outside Switchboard, grouped by state or by project and worktree. Open it from the people icon in the sidebar or with Ctrl+Shift+A (Cmd+Shift+A on macOS); attach to a live one by double click, stop, respawn or delete one, and start a new one with New agent. A background session that is running shows a `bg` badge in the sidebar and is attached instead of resumed. (#374)
+- A remote session that is not open in a tab and waits on a dialog on its host, such as a permission prompt or a question, shows the orange attention state, and its status line says what it waits for. It appears and clears with the next refresh of the host. (#394)
 
 ## v0.0.86 — 2026-10-01
 

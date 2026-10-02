@@ -229,6 +229,55 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 `projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
 remote-ssh adapter's own snapshot instead.
 
+### Descriptor-owned attention (issue #394)
+
+A CLI that has a blocking dialog open (permission prompt, question,
+elicitation) writes `status: "waiting"` to its descriptor — see
+cli-session-state.md. OSC 9 does not reach Switchboard from a tmux pane on a
+host, so the descriptor is the only signal an unattached remote row has.
+
+`applyRemoteDescriptor` passes `attention: true` on its `descriptorStatus`
+event. Only the remote adapter does: local callers send the same event without
+it and never get attention from the descriptor. The reducer's rule:
+
+- `waiting` with `attention: true` and liveness not dead sets attention,
+  clears busy / waitingForInput / responseReady like an `attention` event, and
+  records that the descriptor owns it.
+- Any other status (`busy`, `idle`, `shell`, none), a `liveness: dead` event,
+  or an `attention` event releases it — but only when the descriptor owns it. An
+  attention raised by an explicit `attention` event is never cleared by a
+  descriptor, and that event takes ownership over a descriptor-set one.
+- Busy edges and transcript touches never clear it (attention is orthogonal to
+  busy and outranks it), so a busy decay cannot erase an open dialog's state.
+  The status leaving `waiting` is the one thing that clears it.
+- Descriptor absence is a null status on the session object, which releases it;
+  an unattached row whose descriptor disappears loses the attention at the next
+  refresh. `applyRemoteStopped` also clears it.
+
+Two more releases keep it from freezing:
+
+- The attached true to false handoff releases descriptor-owned attention. The
+  reducer keeps following the descriptor while a row is attached, so without
+  this a dialog answered in the PTY would repaint a stale orange on detach; the
+  next descriptor re-asserts it if the session still waits.
+- A host in error keeps its last descriptors (freshness contract), so
+  `renderProjects` passes the project's `remoteHostError` and the descriptor
+  event then carries `attention: false`, which releases descriptor-owned
+  attention for the whole outage. A fresh host passes `attention: true`.
+  The indexer notifies the renderer when a host's last error changes (first
+  failure, a different error, recovery), not only when files changed, so the
+  gate applies without an unrelated render.
+
+The sidebar render replaces row classes from the rebuilt row (morphdom takes the
+new element's classes), so `buildSessionItem` reads the unattached remote
+state's attention for the row class and the icon slot, as it does for
+`agentsBusy`; seeding alone would be wiped at the next render.
+
+Attached rows are untouched: `projectRemoteState` still refuses to paint them,
+and the local-pty path owns their attention. The sidebar's status line appends
+`waitingFor` while the status is `waiting` (`waiting · permission prompt · 3m
+ago`). Latency is the refresh cycle, not the dialog.
+
 ### A parent's busy decay shortens while a subagent is running (issue #284)
 
 A Task-tool invocation typically appends to the parent's own top-level

@@ -256,3 +256,93 @@ test('renderSessionIcon: slot class, glyph and title move together with the rung
   assert.deepEqual(agentsBusy, { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' });
   assert.notDeepEqual(busy, agentsBusy);
 });
+
+// ---------------------------------------------------------------------------
+// descriptor-owned attention (issue #394) — see .ai/contexts/session-state.md
+// ---------------------------------------------------------------------------
+
+test('descriptorStatus waiting with attention:true lights attention and clears busy and unread', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'busy', active: true });
+  s.apply({ type: 'descriptorStatus', status: 'waiting', at: 1, attention: true });
+  const snap = s.snapshot();
+  assert.equal(snap.attention, true);
+  assert.equal(snap.busy, false);
+  assert.equal(renderSessionIcon(snap).slotClasses[0], 'session-icon--attention');
+});
+
+test('descriptorStatus waiting without attention:true never lights attention (local callers)', () => {
+  const s = createSessionState('local-pty');
+  s.apply({ type: 'descriptorStatus', status: 'waiting', at: 1 });
+  assert.equal(s.snapshot().attention, false);
+});
+
+test('descriptor-owned attention clears when the status leaves waiting, or is null', () => {
+  for (const next of ['busy', 'idle', null]) {
+    const s = createSessionState('remote-ssh');
+    s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+    s.apply({ type: 'descriptorStatus', status: next, attention: true });
+    assert.equal(s.snapshot().attention, false, `status ${next} clears attention`);
+  }
+});
+
+test('descriptor-owned attention clears when liveness turns dead', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+  s.apply({ type: 'liveness', value: 'dead' });
+  assert.equal(s.snapshot().attention, false);
+});
+
+test('descriptor-owned attention survives busy edges and transcript touches', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+  s.apply({ type: 'transcriptTouched', at: 5 });
+  s.apply({ type: 'busy', active: true });
+  s.apply({ type: 'busy', active: false, armReady: false });
+  assert.equal(s.snapshot().attention, true);
+});
+
+test('a descriptor leaving waiting does not clear attention raised by an explicit attention event', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'attention', active: true });
+  s.apply({ type: 'descriptorStatus', status: 'idle', attention: true });
+  assert.equal(s.snapshot().attention, true);
+});
+
+test('an explicit attention:false clears descriptor-owned attention', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+  s.apply({ type: 'attention', active: false });
+  assert.equal(s.snapshot().attention, false);
+});
+
+test('an explicit attention event takes over from descriptor-owned attention', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+  s.apply({ type: 'attention', active: true });
+  s.apply({ type: 'descriptorStatus', status: 'idle', attention: true });
+  assert.equal(s.snapshot().attention, true);
+});
+
+test('a waiting descriptor does not light attention on a session known dead', () => {
+  const s = createSessionState('remote-ssh');
+  s.apply({ type: 'liveness', value: 'dead' });
+  s.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+  assert.equal(s.snapshot().attention, false);
+});
+
+test('descriptorStatus attention:false and releaseDescriptorAttention release only descriptor-owned attention', () => {
+  for (const release of [
+    (s) => s.apply({ type: 'descriptorStatus', status: 'waiting', attention: false }),
+    (s) => s.apply({ type: 'releaseDescriptorAttention' }),
+  ]) {
+    const owned = createSessionState('remote-ssh');
+    owned.apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+    release(owned);
+    assert.equal(owned.snapshot().attention, false);
+    const explicit = createSessionState('remote-ssh');
+    explicit.apply({ type: 'attention', active: true });
+    release(explicit);
+    assert.equal(explicit.snapshot().attention, true);
+  }
+});
