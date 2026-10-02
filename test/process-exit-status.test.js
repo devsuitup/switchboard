@@ -69,7 +69,7 @@ const PRELUDE = `
   async function guardResume() { return true; }
   async function resolveDefaultSessionOptions() { return {}; }
   function syncPtySizeAfterOpen() {}
-  function setSessionMcpActive() {}
+  function setSessionMcpState() {}
   function setSessionSandboxed() {}
   function showSession() { updateTerminalHeader(); }
   function makeEntry() { return { closed: false, initialSize: null, terminal: { write: (d) => calls.writes.push(d) } }; }
