@@ -61,7 +61,7 @@ function fakeSessionState(descriptors = []) {
   };
 }
 
-function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots } = {}) {
+function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots = async () => null } = {}) {
   bgAgents.init({
     jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
     makeIsOwnPid: () => () => false, isAttachedHere: attached, resolveProjectRoots,

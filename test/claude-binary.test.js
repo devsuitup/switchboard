@@ -53,3 +53,18 @@ test('escapeForCmd quotes the argument and escapes the cmd metacharacters', () =
   assert.ok(escapeForCmd('a&b').includes('^&'));
   assert.ok(!/(^|[^^])&/.test(escapeForCmd('a&b')));
 });
+
+test('the current npm shim, which points to bin\claude.exe, runs that exe directly', () => {
+  const shim = '@ECHO off\r\nSET dp0=%~dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n';
+  const exe = `${NPM}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+  const r = resolveWindowsClaude(['--bg', 'a\nb'], { PATH: NPM }, deps({ [`${NPM}\\claude.cmd`]: shim, [exe]: '' }));
+  assert.deepEqual(r, { program: exe, args: ['--bg', 'a\nb'], verbatim: false });
+});
+
+test('the extensionless sh shim npm leaves next to claude.cmd is never picked', () => {
+  const shim = '@ECHO off\r\nSET dp0=%~dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n';
+  const exe = `${NPM}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+  const files = { [`${NPM}\\claude`]: '#!/bin/sh', [`${NPM}\\claude.cmd`]: shim, [exe]: '' };
+  const r = resolveWindowsClaude(['agents'], { PATH: NPM }, deps(files));
+  assert.equal(r.program, exe);
+});
