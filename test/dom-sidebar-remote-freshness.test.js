@@ -198,3 +198,58 @@ test('a host genuinely without any live session is distinct from a host with a l
     assert.match(emptyDot.title, /no live session/i);
   } finally { ctx.destroy(); }
 });
+
+test('a waiting remote session is orange on a fresh host and not on a host in error', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = {
+      sessionId: 'wait-1', summary: 'waiting', modified: '2026-09-09T11:59:00.000Z', starred: false,
+      archived: 0, messageCount: 1, remoteAlias: 'planificator', remoteDescriptorSeen: true,
+      status: 'waiting', statusUpdatedAt: 1, waitingFor: 'permission prompt',
+    };
+    const project = (remoteHostError) => remoteProject({
+      projectPath: '/srv/w', folder: 'planificator::-srv-w', remoteAlias: 'planificator',
+      remoteHostAt: 1, remoteHostError, sessions: [{ ...session }],
+    });
+    const orange = () => ctx.document.querySelector('.session-item[data-session-id="wait-1"]').classList.contains('needs-attention');
+    ctx.sidebar.renderProjects([project(null)], true);
+    assert.equal(orange(), true);
+    ctx.sidebar.renderProjects([project('ssh: timed out')], true);
+    assert.equal(orange(), false);
+  } finally { ctx.destroy(); }
+});
+
+test('a rebuilt waiting remote row keeps its attention icon through the morphdom render', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = remoteProject({
+      projectPath: '/srv/w', folder: 'planificator::-srv-w', remoteAlias: 'planificator', remoteHostAt: 1,
+      sessions: [{
+        sessionId: 'wait-2', summary: 'waiting', modified: '2026-09-09T11:59:00.000Z', starred: false,
+        archived: 0, messageCount: 1, remoteAlias: 'planificator', remoteDescriptorSeen: true, status: 'waiting',
+      }],
+    });
+    ctx.sidebar.renderProjects([project], true);
+    ctx.sidebar.renderProjects([project], true);
+    const icon = ctx.document.querySelector('.session-item[data-session-id="wait-2"] .session-icon');
+    assert.ok(icon.classList.contains('session-icon--attention'));
+  } finally { ctx.destroy(); }
+});
+
+test('an attached waiting remote row is not painted attention by the rebuilt row', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = remoteProject({
+      projectPath: '/srv/w', folder: 'planificator::-srv-w', remoteAlias: 'planificator', remoteHostAt: 1,
+      sessions: [{
+        sessionId: 'wait-3', summary: 'waiting', modified: '2026-09-09T11:59:00.000Z', starred: false,
+        archived: 0, messageCount: 1, remoteAlias: 'planificator', remoteDescriptorSeen: true, status: 'waiting',
+      }],
+    });
+    ctx.sidebar.renderProjects([project], true);
+    ctx.window.setRemoteAttached('wait-3', true);
+    ctx.sidebar.renderProjects([project], true);
+    const item = ctx.document.querySelector('.session-item[data-session-id="wait-3"]');
+    assert.ok(!item.classList.contains('needs-attention'));
+  } finally { ctx.destroy(); }
+});

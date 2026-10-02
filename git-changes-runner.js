@@ -368,8 +368,9 @@ function missingCwdError(cwd, fsOps = DEFAULT_FS_OPS) {
 }
 
 // --literal-pathspecs on every invocation — see .ai/contexts/changes-view.md ("Quoting rule").
-function buildGitArgs(args) {
-  return ['--literal-pathspecs', ...args];
+function buildGitArgs(args, opts) {
+  const hardened = opts && opts.hardened ? ['-c', 'core.fsmonitor=false'] : [];
+  return ['--literal-pathspecs', ...hardened, ...args];
 }
 
 // Cut on a line boundary at or under maxBytes, measured in UTF-8 bytes — see .ai/contexts/changes-view.md ("Runner interface")
@@ -449,7 +450,7 @@ function isStdoutCapFailure(result) {
 }
 
 // {kind, cwd, alias, exec, timeoutMs, fsOps, countLimits} — see .ai/contexts/changes-view.md ("Runner interface")
-function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, countLimits } = {}) {
+function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, countLimits, hardened } = {}) {
   if (kind !== 'local' && kind !== 'remote') {
     throw new Error('createGitChangesRunner requires kind "local" or "remote"');
   }
@@ -473,7 +474,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
 
   // opts.at runs the command in that directory instead of the session cwd; maxStdoutBytes matters only remotely — see .ai/contexts/changes-view.md ("Remote transport stdout cap")
   function invoke(args, opts = {}) {
-    const fullArgs = buildGitArgs(args);
+    const fullArgs = buildGitArgs(args, { hardened: !!hardened && kind === 'local' });
     const at = opts.at || cwd;
     if (kind === 'local') {
       const localOpts = {};

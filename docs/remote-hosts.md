@@ -129,6 +129,13 @@ written, until 20 seconds of silence (3 seconds while a subagent is busy), and
 never "response ready". A session that has a live descriptor but no transcript
 yet (before its first prompt) is listed under its directory's name.
 
+A session that is not open in a tab and is waiting on a dialog on the host
+(a permission prompt or a question) shows the orange attention state, and its
+status line says what it waits for. The state comes from the session's
+descriptor, so it appears with the next refresh (about 15 seconds with the host
+watch, the pull interval without it) and clears the same way once the dialog is
+answered. A session open in a tab keeps the terminal's own signals.
+
 ### Opening a session
 
 - A **live session in tmux** — its descriptor names a tmux pane and its pid is a
@@ -155,6 +162,32 @@ works, read-only, by running git over ssh in the session's directory.
 - **Archive** stops a live session first, the same way.
 - **Delete** is refused: the mirrored transcript is a copy that the next pull
   would fetch again.
+
+## Send a prompt
+
+A live session that is not attached in a terminal has a **Send a prompt…**
+button next to Stop. It opens a small dialog; Send (or Ctrl+Enter) writes the
+text to the running session as a new prompt. The dialog says *Sent*, never
+*delivered*: nothing comes back on that channel, so Switchboard cannot know the
+session read it. Read the result in the row's status, which the next refresh
+picks up from the session's descriptor.
+
+How it works: the session's descriptor names a messaging socket
+(`messagingSocketPath`). Switchboard runs one `ssh` to the host, checks that the
+pid is still a `claude` process and that the socket exists, then pipes a single
+line of JSON into the socket with `ncat --send-only -U` or `nc -N -U`. The text
+travels on ssh's standard input only, never on a command line.
+
+- The host needs `ncat` or an OpenBSD `nc` that supports `-U` and closes on end
+  of input. A BusyBox `nc` has no `-U`; the dialog then says nc was not found.
+- The socket path is read from the descriptor on the host, never typed or sent
+  by the interface, and must be an absolute `.sock` path of plain characters.
+- A prompt is limited to 1 MiB once encoded. The same text sent to the same
+  session twice within 30 seconds is refused here, because the session would
+  drop it.
+- A host running Windows is refused: its channel needs the session's key file,
+  which Switchboard does not read.
+- A session attached in a terminal is refused: type in the terminal.
 
 ## Known limits
 
