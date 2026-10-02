@@ -321,7 +321,7 @@ test('an omitted count, malformed lines and a truncated read are each reported',
   const ctx = setupDom({
     touchedImpl: () => result({
       omitted: 7,
-      coverage: { transcripts: 3, subagents: 2, malformedLines: 4, truncated: true },
+      coverage: { transcripts: 3, subagents: 2, malformedLines: 4, skippedLines: 2, truncated: true },
     }),
   });
   try {
@@ -330,6 +330,7 @@ test('an omitted count, malformed lines and a truncated read are each reported',
     assert.match(text, /7 more/);
     assert.match(text, /2 subagents/);
     assert.match(text, /4 unreadable lines/);
+    assert.match(text, /2 oversized lines/);
     assert.match(text, /read only part/i);
   } finally { ctx.destroy(); }
 });

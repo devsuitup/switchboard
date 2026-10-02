@@ -38,3 +38,10 @@ test('the touched tab opens a file only through readFileForPanel', () => {
   const apis = [...src.matchAll(/window\.api\.(\w+)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(apis)].sort(), ['readFileForPanel', 'sessionTouchedFiles']);
 });
+
+test('a path is shown in its own bidi isolate, so an override in it cannot reorder the row', () => {
+  const css = read('public/style.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rule = /\.touched-file-path\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, 'the rule exists');
+  assert.match(rule[1], /unicode-bidi:\s*isolate/);
+});

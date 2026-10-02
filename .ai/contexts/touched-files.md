@@ -48,7 +48,10 @@ listing *does* with it.
 
 - **`resolveTouchedPath`** accepts an absolute path, normalised, and refuses
   (the row goes to `unresolved`, with no `path` field at all): control
-  characters, over 4096 characters, a leading `~`, on Windows any leading
+  characters, which means C0, DEL, C1, U+2028/2029 and every `\p{Cf}` (bidi
+  overrides and isolates, LRM/RLM/ALM, zero-width, tag characters; one of them
+  makes `report<U+202E>txt.exe` display reversed while opening the real file),
+  over 4096 characters, a leading `~`, on Windows any leading
   double separator (UNC, `\\?\`, `\\.\`: a `stat` on a UNC path reaches the
   network), a rooted path with no drive and a drive-relative one.
 - **A relative path** resolves only against a cwd passed through
@@ -72,12 +75,27 @@ listing *does* with it.
 - **The folder** comes from `getCachedFolder` and must be a plain name (no
   separator, not `.` or `..`) before it is joined to the projects directory; a
   `sub:` session id and a remote folder are refused.
-- **Rendering** is `textContent` throughout; sources (subagent type from the
+- **Rendering** is `textContent` throughout, an unresolved path shows its unsafe code points as visible escapes (`\u202E`, `\u{E0041}`), `.touched-file-path` is `unicode-bidi: isolate`; sources (subagent type from the
   `.meta.json` sidecar) are stripped of control characters and cut to 80.
 
-Bounds: 500 distinct resolved rows and 500 unresolved (`omitted` counts the
-rest), stat concurrency 8, a line over 32 MiB is skipped, and a prefilter
-(`tool_use` plus a quoted tool name) keeps `JSON.parse` off every other line.
+## Bounds
+
+- 500 distinct resolved rows and 500 unresolved; the overflow is a counter
+  (`omitted`; duplicates of an overflowing path count again), not a kept set.
+- A prefilter (`tool_use` plus a quoted tool name) keeps `JSON.parse` off every
+  other line. A line that passes it is skipped past 4 MiB: a tool call carries
+  at most a model output, a few hundred KB, so a larger one is not a tool call
+  worth parsing. A line over 32 MiB without a newline is skipped as well. Both
+  are counted in `coverage.skippedLines` and the summary says so.
+- 256 MiB of transcript in total across the session's files, then
+  `coverage.truncated`.
+- **The disk check is bounded as a whole.** The sensitivity guard
+  (`isSensitivePathAsync`: realpath and lstat) and the `stat` run under one
+  3 s timeout per path, with 8 paths in flight. A timeout makes the row
+  `unreadable`. A timed-out call still holds a libuv thread, so after 8
+  timed-out checks no new call is issued and the remaining rows are
+  `unreadable` without being checked: 500 planted paths on an offline mapped
+  drive hold at most about 16 threads, not 500.
 
 ## Decisions that were open in the issue
 

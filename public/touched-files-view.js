@@ -1,4 +1,5 @@
 // touched-files-view.js — the "Touched" tab of the file panel — see .ai/contexts/touched-files.md
+/* exported initTouchedView, renderTouchedTab, hideTouchedView */
 
 let touchedContainerEl = null;
 let touchedSummaryEl = null;
@@ -207,6 +208,7 @@ function touchedSummaryText(tab) {
   if (coverage.subagents > 0) parts.push(`including ${plural(coverage.subagents, 'subagent', 'subagents')}`);
   if (data.omitted > 0) parts.push(`+${data.omitted} more not shown`);
   if (coverage.malformedLines > 0) parts.push(`${plural(coverage.malformedLines, 'unreadable line', 'unreadable lines')} skipped`);
+  if (coverage.skippedLines > 0) parts.push(`${plural(coverage.skippedLines, 'oversized line', 'oversized lines')} skipped`);
   if (coverage.truncated) parts.push('read only part of a very large transcript');
   return parts.join(' · ');
 }

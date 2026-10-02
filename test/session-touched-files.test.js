@@ -539,3 +539,100 @@ test('listSessionTouchedFiles names a subagent by its recorded type and a short 
     assert.deepEqual(r.files[0].sources, ['subagent reviewer forged line (abcdef0)']);
   } finally { w.cleanup(); }
 });
+
+// --- review follow-ups ------------------------------------------------------
+
+test('a sensitivity check that never answers leaves the row unreadable instead of holding the listing', async () => {
+  const w = makeWorld();
+  try {
+    const p = w.write('work/hang.txt', 'x');
+    w.write('projects/-proj/S1.jsonl', lines(assistantLine(toolUse('Write', { file_path: p }))));
+    const result = await collectSessionTouchedFiles(deps(w, {
+      isSensitive: () => new Promise(() => {}),
+      statTimeoutMs: 20,
+    }));
+    assert.equal(result.files[0].state, 'unreadable');
+    assert.equal(result.files[0].openable, false);
+  } finally { w.cleanup(); }
+});
+
+test('after a few timed-out checks no new file-system call is issued and the rest are unreadable', async () => {
+  const w = makeWorld();
+  try {
+    const blocks = [];
+    for (let i = 0; i < 60; i++) blocks.push(toolUse('Write', { file_path: path.join(w.work, `f${i}.txt`) }));
+    w.write('projects/-proj/S1.jsonl', lines(assistantLine(...blocks)));
+    let issued = 0;
+    const result = await collectSessionTouchedFiles(deps(w, {
+      isSensitive: () => { issued += 1; return new Promise(() => {}); },
+      statTimeoutMs: 15,
+      maxTimedOutChecks: 3,
+    }));
+    assert.equal(result.files.length, 60);
+    assert.ok(result.files.every((f) => f.state === 'unreadable'));
+    assert.ok(issued <= 3 + 8, `issued ${issued}`);
+    assert.ok(issued >= 3, `issued ${issued}`);
+  } finally { w.cleanup(); }
+});
+
+test('a path with a bidi override, isolate, mark, zero-width or C1 character is not resolved', () => {
+  const cwd = path.resolve(os.tmpdir(), 'proj');
+  const hostile = [
+    '\u202E', '\u202A', '\u2066', '\u2069', '\u200E', '\u200F', '\u061C', '\u200B', '\u2060', '\uFEFF', '\u0085', '\u009F', '\u2028', '\u{E0041}',
+  ];
+  for (const ch of hostile) {
+    const r = resolveTouchedPath(path.join(cwd, `report${ch}txt.exe`), { cwd });
+    assert.equal(r.path, undefined, JSON.stringify(ch));
+    assert.equal(r.unresolved, 'control-character', JSON.stringify(ch));
+  }
+  assert.deepEqual(resolveTouchedPath(path.join(cwd, 'rapport-é-日本.txt'), { cwd }), { path: path.join(cwd, 'rapport-é-日本.txt') });
+});
+
+test('an unresolved path shows its unsafe characters as visible escapes', async () => {
+  const w = makeWorld();
+  try {
+    const hostile = path.join(w.work, 'report\u202Etxt.exe');
+    w.write('projects/-proj/S1.jsonl', lines(assistantLine(
+      toolUse('Write', { file_path: hostile }),
+      toolUse('Write', { file_path: path.join(w.work, 'tag\u{E0041}x') }),
+      toolUse('Write', { file_path: path.join(w.work, 'tab\there') }),
+    )));
+    const result = await collectSessionTouchedFiles(deps(w));
+    assert.deepEqual(result.files, []);
+    const raws = result.unresolved.map((u) => u.raw);
+    assert.ok(raws.some((r) => r.endsWith('report\\u202Etxt.exe')), raws.join('|'));
+    assert.ok(raws.some((r) => r.endsWith('tag\\u{E0041}x')), raws.join('|'));
+    assert.ok(raws.some((r) => r.endsWith('tab\\u0009here')), raws.join('|'));
+    for (const r of raws) assert.doesNotMatch(r, /[\u0000-\u001f\u202e\u{e0041}]/u);
+  } finally { w.cleanup(); }
+});
+
+test('a tool-call line past the per-line bound is skipped and counted, the lines around it still read', async () => {
+  const w = makeWorld();
+  try {
+    const a = w.write('work/a.txt', 'x');
+    const b = w.write('work/b.txt', 'x');
+    const big = assistantLine(toolUse('Write', { file_path: path.join(w.work, 'huge.txt'), content: 'z'.repeat(4 * 1024 * 1024 + 10) }));
+    w.write('projects/-proj/S1.jsonl', lines(
+      assistantLine(toolUse('Write', { file_path: a })),
+      big,
+      assistantLine(toolUse('Write', { file_path: b })),
+    ));
+    const result = await collectSessionTouchedFiles(deps(w));
+    assert.deepEqual(result.files.map((f) => f.path).sort(), [path.resolve(a), path.resolve(b)].sort());
+    assert.equal(result.coverage.skippedLines, 1);
+  } finally { w.cleanup(); }
+});
+
+test('the overflow past the cap is counted without keeping the overflowing paths', async () => {
+  const w = makeWorld();
+  try {
+    const blocks = [];
+    for (let i = 0; i < 9; i++) blocks.push(toolUse('Write', { file_path: path.join(w.work, `f${i % 9}.txt`) }));
+    blocks.push(toolUse('Write', { file_path: path.join(w.work, 'f8.txt') }));
+    w.write('projects/-proj/S1.jsonl', lines(assistantLine(...blocks)));
+    const result = await collectSessionTouchedFiles(deps(w, { maxFiles: 5 }));
+    assert.equal(result.files.length, 5);
+    assert.equal(result.omitted, 5);
+  } finally { w.cleanup(); }
+});

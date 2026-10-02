@@ -17,12 +17,15 @@ const MAX_RAW_DISPLAY = 300;
 const MAX_FILES = 500;
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
 const MAX_LINE_CHARS = 32 * 1024 * 1024;
+const MAX_TOOL_LINE_CHARS = 4 * 1024 * 1024;
 const STAT_CONCURRENCY = 8;
 const STAT_TIMEOUT_MS = 3000;
+const MAX_TIMED_OUT_CHECKS = 8;
 
 const PREFILTER_TOOL = /"(?:Edit|Write|MultiEdit|NotebookEdit)"/;
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
-const CONTROL_CHARS_GLOBAL = /[\u0000-\u001f\u007f]/g;
+const UNSAFE_CHARS_SOURCE = '[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\p{Cf}]';
+const CONTROL_CHARS = new RegExp(UNSAFE_CHARS_SOURCE, 'u');
+const CONTROL_CHARS_GLOBAL = new RegExp(UNSAFE_CHARS_SOURCE, 'gu');
 const WIN_DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 const WIN_DRIVE_RELATIVE = /^[A-Za-z]:/;
 
@@ -37,6 +40,7 @@ function touchTarget(block) {
 function extractTouches(line) {
   const none = { touches: [], malformed: false };
   if (typeof line !== 'string' || !line.includes('tool_use') || !PREFILTER_TOOL.test(line)) return none;
+  if (line.length > MAX_TOOL_LINE_CHARS) return { touches: [], malformed: false, oversized: true };
   let entry;
   try {
     entry = JSON.parse(line);
@@ -61,7 +65,7 @@ function isSepChar(c) {
   return c === '/' || c === '\\';
 }
 
-// {path} — absolute and normalised — or {unresolved: reason}. A relative path is resolved against `cwd` only.
+// see .ai/contexts/touched-files.md ("Trust")
 function resolveTouchedPath(raw, { cwd = null, pathOps = path } = {}) {
   if (typeof raw !== 'string' || raw === '' || raw.length > MAX_PATH_LENGTH) return { unresolved: 'invalid' };
   if (CONTROL_CHARS.test(raw)) return { unresolved: 'control-character' };
@@ -89,7 +93,7 @@ function resolveTouchedPath(raw, { cwd = null, pathOps = path } = {}) {
   return { path: resolved };
 }
 
-// Complete lines of one transcript, charged against a byte budget shared by every transcript of the session.
+// see .ai/contexts/touched-files.md ("Bounds")
 async function* readTranscriptLines(filePath, budget) {
   const decoder = new StringDecoder('utf8');
   const stream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024 });
@@ -115,7 +119,7 @@ async function* readTranscriptLines(filePath, budget) {
         else yield line;
         nl = pending.indexOf('\n');
       }
-      if (pending.length > MAX_LINE_CHARS) { pending = ''; skipping = true; }
+      if (pending.length > MAX_LINE_CHARS) { pending = ''; skipping = true; budget.skipped += 1; }
       if (cut) break;
     }
   } catch {
@@ -149,16 +153,34 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function diskState(filePath, deps) {
+async function inspectPath(filePath, deps) {
   let sensitive;
   try { sensitive = await deps.isSensitive(filePath); } catch { sensitive = true; }
   if (sensitive) return 'refused';
   try {
-    const stat = await withTimeout(Promise.resolve().then(() => deps.statPath(filePath)), deps.statTimeoutMs);
+    const stat = await deps.statPath(filePath);
     return stat && stat.isFile() ? 'present' : 'not-file';
   } catch (err) {
     return err && (err.code === 'ENOENT' || err.code === 'ENOTDIR') ? 'gone' : 'unreadable';
   }
+}
+
+async function diskState(filePath, deps, gate) {
+  if (gate.timedOut >= deps.maxTimedOutChecks) return 'unreadable';
+  try {
+    return await withTimeout(inspectPath(filePath, deps), deps.statTimeoutMs);
+  } catch {
+    gate.timedOut += 1;
+    return 'unreadable';
+  }
+}
+
+function escapeUnsafe(text) {
+  return text.replace(CONTROL_CHARS_GLOBAL, (ch) => {
+    const cp = ch.codePointAt(0);
+    const hex = cp.toString(16).toUpperCase();
+    return cp <= 0xffff ? '\\u' + hex.padStart(4, '0') : '\\u{' + hex + '}';
+  });
 }
 
 function defaultLabel(entry) {
@@ -197,6 +219,7 @@ async function collectSessionTouchedFiles(options) {
     maxFiles = MAX_FILES,
     maxBytes = MAX_TRANSCRIPT_BYTES,
     statTimeoutMs = STAT_TIMEOUT_MS,
+    maxTimedOutChecks = MAX_TIMED_OUT_CHECKS,
   } = options;
   if (typeof isSensitive !== 'function') throw new TypeError('isSensitive is required');
 
@@ -211,9 +234,10 @@ async function collectSessionTouchedFiles(options) {
   const caseFold = isWindowsOps(pathOps);
   const resolvedRows = new Map();
   const unresolvedRows = new Map();
-  const omittedKeys = new Set();
-  const budget = { remaining: maxBytes, truncated: false };
+  let omitted = 0;
+  const budget = { remaining: maxBytes, truncated: false, skipped: 0 };
   let malformedLines = 0;
+  let oversizedLines = 0;
 
   for (const entry of entries) {
     let cwd = null;
@@ -222,17 +246,18 @@ async function collectSessionTouchedFiles(options) {
     try { label = safeLabel(labelOf(entry)); } catch { label = defaultLabel(entry); }
 
     for await (const line of readTranscriptLines(entry.filePath, budget)) {
-      const { touches, malformed } = extractTouches(line);
+      const { touches, malformed, oversized } = extractTouches(line);
       if (malformed) malformedLines += 1;
+      if (oversized) oversizedLines += 1;
       for (const touch of touches) {
         const resolved = resolveTouchedPath(touch.path, { cwd, pathOps });
         if (resolved.path !== undefined) {
           const key = caseFold ? resolved.path.toLowerCase() : resolved.path;
-          if (!resolvedRows.has(key) && resolvedRows.size >= maxFiles) { omittedKeys.add('r:' + key); continue; }
+          if (!resolvedRows.has(key) && resolvedRows.size >= maxFiles) { omitted += 1; continue; }
           tally(resolvedRows, key, () => ({ path: resolved.path, tools: new Set(), count: 0, sources: new Set() }), touch, label);
         } else {
-          const raw = touch.path.replace(CONTROL_CHARS_GLOBAL, '?').slice(0, MAX_RAW_DISPLAY);
-          if (!unresolvedRows.has(raw) && unresolvedRows.size >= maxFiles) { omittedKeys.add('u:' + raw); continue; }
+          const raw = escapeUnsafe(touch.path.slice(0, MAX_RAW_DISPLAY));
+          if (!unresolvedRows.has(raw) && unresolvedRows.size >= maxFiles) { omitted += 1; continue; }
           tally(unresolvedRows, raw, () => ({ raw, reason: resolved.unresolved, tools: new Set(), count: 0, sources: new Set() }), touch, label);
         }
       }
@@ -240,8 +265,9 @@ async function collectSessionTouchedFiles(options) {
   }
 
   const files = [...resolvedRows.values()].map((row) => ({ path: row.path, state: 'unknown', openable: false, ...present(row) }));
+  const gate = { timedOut: 0 };
   await mapLimit(files, STAT_CONCURRENCY, async (file) => {
-    file.state = await diskState(file.path, { isSensitive, statPath, statTimeoutMs });
+    file.state = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
     file.openable = file.state === 'present';
   });
 
@@ -249,11 +275,12 @@ async function collectSessionTouchedFiles(options) {
     ok: true,
     files,
     unresolved: [...unresolvedRows.values()].map((row) => ({ raw: row.raw, reason: row.reason, ...present(row) })),
-    omitted: omittedKeys.size,
+    omitted,
     coverage: {
       transcripts: entries.length,
       subagents: subagents.length,
       malformedLines,
+      skippedLines: oversizedLines + budget.skipped,
       truncated: budget.truncated,
     },
   };

@@ -251,10 +251,6 @@ const rendererCrossFileGlobals = {
   isPanelTerminalSession: 'readonly',
   notePanelTerminalExit: 'readonly',
   countSessionsWithoutPanelShells: 'readonly',
-  // public/touched-files-view.js — see .ai/contexts/touched-files.md
-  initTouchedView: 'readonly',
-  renderTouchedTab: 'readonly',
-  hideTouchedView: 'readonly',
   // public/header-controls.js — see .ai/contexts/window-frame.md
   placeHeaderControl: 'readonly',
   createHeaderToggle: 'readonly',
@@ -374,8 +370,13 @@ module.exports = [
     },
   },
 
-  // public/touched-files-view.js — see .ai/contexts/touched-files.md
-  // Hooks that public/file-panel.js reaches behind typeof; the panel's own state it uses is read-only here.
+  // see .ai/contexts/touched-files.md
+  {
+    files: ['public/file-panel.js'],
+    languageOptions: {
+      globals: { initTouchedView: 'readonly', renderTouchedTab: 'readonly', hideTouchedView: 'readonly' },
+    },
+  },
   {
     files: ['public/touched-files-view.js'],
     languageOptions: {
@@ -392,7 +393,6 @@ module.exports = [
         openFileTab: 'readonly',
       },
     },
-    rules: { 'no-unused-vars': 'off', 'no-redeclare': 'off' },
   },
 
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.

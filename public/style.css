@@ -4975,6 +4975,7 @@ body { display: flex; flex-direction: column; }
 .touched-file-path {
   flex: 1;
   min-width: 0;
+  unicode-bidi: isolate;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
