@@ -448,6 +448,17 @@ The two reserved values mean opposite things:
   any subagent runs, so `idle` is often unreachable; `not sent` there tells the
   caller the payload never left.
 - A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
+- When the wait ends because the session never got there and the CLI's
+  descriptor read `waiting` (a dialog is open: a permission prompt or a
+  question) at any sample in the last few hundred milliseconds of it, `reason`
+  says so: *the CLI reports a dialog open (waiting); nothing was written into
+  it* for a `command` or a chain's initial wait, in place of the plain timeout
+  reason. A chain whose turn was still awaited after a step was written ends
+  `chain timeout` with `reason` *the CLI reports a dialog open (waiting) while
+  the turn was awaited; the step had been written*; without a dialog, that
+  result carries no `reason`. Without a readable descriptor, results are as
+  before. The result file is the only place this is reported: answer the dialog
+  in the session.
 - A session that exits during that initial wait reports `submitted: "no"` and a
   `reason` saying nothing was written (`partial: false` on a chain).
 

@@ -957,6 +957,29 @@ state was the cause.
 Tests: `test/trigger-every-step-readiness.test.js` (the real watcher with a
 fake descriptor, plus the wait helpers under mocked timers).
 
+### A blocked session tells its driver (issue #379)
+
+Every wait that can end a trigger on its deadline reports a dialog, not only
+the chain's readiness wait. `createDialogProbe(ctx, sessionId, windowMs)` is
+the one mechanism: `sample(now)` reads the descriptor through `readCliStatus`
+and remembers when `waiting` last read, `seen(now)` is true when that was
+within `windowMs` (the busy-fall settle window, as in `waitForCliIdleAfter`).
+
+- `waitForIdle` (single trigger wait, chain initial wait) and `waitForBusyFall`
+  (chain, after a step was written) return `waitingSeen` on a timeout.
+  `waitForIdle` reads the descriptor only while the session still reads busy,
+  so a session that is already idle costs no descriptor read (a test counts
+  the reads of the readiness wait).
+- Before a write, `reason` is `REASON_DIALOG_OPEN` ("nothing was written into
+  it"). After a write, `REASON_DIALOG_OPEN_AFTER_WRITE` says the step had been
+  written; `error` stays `chain timeout`. Without a dialog the reasons are
+  unchanged, and none is added to the busy-fall timeout.
+- What is written into the PTY, and when, is unchanged. The submit-verify
+  timeout (`submitWithVerify`) is not covered: it still reports a bare
+  `chain timeout`.
+
+Tests: `test/trigger-blocked-session.test.js`.
+
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
 A proposal, considered and rejected 2026-09-04: since `submitToPty` writes

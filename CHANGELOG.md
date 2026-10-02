@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- A trigger that gave up waiting for a session now says, in its result file's `reason`, when the session was blocked on a dialog such as a permission prompt or a question: for a single trigger, a chain's first wait, and a chain step whose turn never finished. Without a dialog the result is as before. (#379)
+
 ## v0.0.87 — 2026-10-02
 
 ### New

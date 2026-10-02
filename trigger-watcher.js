@@ -90,6 +90,7 @@ const ERROR_NOT_SENT      = 'not sent';
 const ERROR_CHAIN_TIMEOUT = 'chain timeout';
 const ERROR_UNCONFIRMED  = 'step not confirmed';
 const REASON_DIALOG_OPEN  = 'the CLI reports a dialog open (waiting); nothing was written into it';
+const REASON_DIALOG_OPEN_AFTER_WRITE = 'the CLI reports a dialog open (waiting) while the turn was awaited; the step had been written';
 const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could be written; nothing was written';
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
@@ -361,6 +362,21 @@ function readCliStatus(ctx, sessionId) {
   return s && Number.isInteger(s.statusUpdatedAt) ? s : null;
 }
 
+// see .ai/contexts/trigger-watcher.md, "A blocked session tells its driver"
+function createDialogProbe(ctx, sessionId, windowMs) {
+  let lastWaitingAt = null;
+  return {
+    sample(now) {
+      const s = readCliStatus(ctx, sessionId);
+      if (s && s.status === 'waiting') lastWaitingAt = now;
+      return s;
+    },
+    seen(now) {
+      return lastWaitingAt !== null && now - lastWaitingAt <= windowMs;
+    },
+  };
+}
+
 const CLI_REACTION_STATUSES = ['busy', 'idle', 'waiting'];
 
 function isCompactCommand(command) {
@@ -383,16 +399,16 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
   let idleSince = null;
   let idleStamp = null;
   let lastStatus = null;
-  let lastWaitingAt = null;
+  const dialog = createDialogProbe(ctx, sessionId, settleMs);
   let everRead = false;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
-    const waitingSeen = lastWaitingAt !== null && now - lastWaitingAt <= settleMs;
+    const waitingSeen = dialog.seen(now);
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ ready: false, available: true, timedOut: false, sessionExited: true, waited_ms, lastStatus, waitingSeen });
     }
-    const s = readCliStatus(ctx, sessionId);
+    const s = dialog.sample(now);
     if (!s && !everRead) {
       return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
     }
@@ -402,7 +418,6 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
     } else {
       everRead = true;
       lastStatus = s.status;
-      if (s.status === 'waiting') lastWaitingAt = now;
       if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
         if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
           idleSince = now;
@@ -417,7 +432,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
       return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
     }
     if (now >= deadlineMs) {
-      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: lastWaitingAt !== null && now - lastWaitingAt <= settleMs });
+      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now) });
     }
     scheduleNext();
   });
@@ -575,7 +590,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
  *
  * see .ai/contexts/trigger-watcher.md, "Readiness before every step"
  *
- * Returns { timedOut, sessionExited, waited_ms }.
+ * Returns { timedOut, sessionExited, waited_ms, waitingSeen } (waitingSeen only set on a timeout).
  */
 function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs) {
   const start = Date.now();
@@ -588,11 +603,13 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs) {
   let idleSince = null;
   let descIdleSince = null;
   let descIdleStamp = null;
+  const dialog = createDialogProbe(ctx, sessionId, settleMs);
 
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
+    dialog.sample(now);
     if (now >= deadlineMs) {
-      return resolve({ timedOut: true, sessionExited: false, waited_ms: now - start });
+      return resolve({ timedOut: true, sessionExited: false, waited_ms: now - start, waitingSeen: dialog.seen(now) });
     }
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ timedOut: false, sessionExited: true, waited_ms: now - start });
@@ -675,14 +692,16 @@ function getTriggerMaxAgeMs() {
  * @param {object} ctx
  * @param {number} [timeoutMs]  explicit timeout in ms; falls back to
  *                              getIdleTimeout() (env var → default) when absent.
- * Returns { timedOut: boolean, sessionExited: boolean, waited_ms: number }.
+ * Returns { timedOut: boolean, sessionExited: boolean, waited_ms: number, waitingSeen?: boolean }.
  */
 function waitForIdle(sessionId, ctx, timeoutMs) {
   const timeout  = (timeoutMs !== undefined) ? timeoutMs : getIdleTimeout();
   const start    = Date.now();
+  const dialog   = createDialogProbe(ctx, sessionId, getBusyFallSettleMs());
 
   return pollLoop((resolve, scheduleNext) => {
-    const waited_ms = Date.now() - start;
+    const now = Date.now();
+    const waited_ms = now - start;
 
     // W5: detect PTY closure during wait
     if (!ctx.getPtyForSession(sessionId)) {
@@ -692,8 +711,9 @@ function waitForIdle(sessionId, ctx, timeoutMs) {
     if (!ctx.isSessionBusy(sessionId)) {
       return resolve({ timedOut: false, sessionExited: false, waited_ms });
     }
+    dialog.sample(now);
     if (waited_ms >= timeout) {
-      return resolve({ timedOut: true, sessionExited: false, waited_ms });
+      return resolve({ timedOut: true, sessionExited: false, waited_ms, waitingSeen: dialog.seen(now) });
     }
     scheduleNext();
   });
@@ -1070,7 +1090,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
           ok: false,
           submitted: SUBMITTED_NO,
           error: ERROR_NOT_SENT,
-          reason: 'timeout waiting for idle; nothing was written',
+          reason: result.waitingSeen ? REASON_DIALOG_OPEN : 'timeout waiting for idle; nothing was written',
           sessionId, waited_ms,
         });
         return;
@@ -1196,7 +1216,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         ok: false,
         submitted: SUBMITTED_NO,
         error: ERROR_NOT_SENT,
-        reason: 'timed out waiting for the session to go idle; nothing was written',
+        reason: result.waitingSeen ? REASON_DIALOG_OPEN : 'timed out waiting for the session to go idle; nothing was written',
         partial: false, steps_completed: 0, sessionId, sent_at: step0SentAt, steps,
         total_waited_ms: totalWaitedMs,
       });
@@ -1427,7 +1447,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       if (result.timedOut) {
         ctx.log.warn(`[trigger-watcher] Chain timeout at step ${i}:`, sessionId);
         steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
-        await writeResult({ ok: false, submitted: chainSubmitted, error: 'chain timeout', partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
+        await writeResult({ ok: false, submitted: chainSubmitted, error: 'chain timeout', ...(result.waitingSeen ? { reason: REASON_DIALOG_OPEN_AFTER_WRITE } : {}), partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
         return;
       }
     }
