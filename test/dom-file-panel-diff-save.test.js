@@ -1,0 +1,269 @@
+'use strict';
+
+// The MCP diff tab's Save sends the content the diff was opened against, so
+// main refuses it when the file moved since; a refusal asks before overwriting.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { JSDOM } = require('jsdom');
+
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+const INDEX_HTML = `<!DOCTYPE html>
+<html>
+  <body>
+    <div id="terminal-area"><div id="terminals"></div></div>
+    <div id="terminal-header" style="display:none;">
+      <div id="terminal-header-controls"><button id="terminal-stop-btn"></button></div>
+    </div>
+  </body>
+</html>`;
+
+function setup({ saveImpl, confirmAnswer = true } = {}) {
+  const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const calls = { saves: [], confirms: [], alerts: [], openDiff: null };
+
+  window.api = new Proxy({
+    onMcpOpenDiff: (cb) => { calls.openDiff = cb; },
+    saveFileForPanel: (filePath, content, expected) => {
+      calls.saves.push({ filePath, content, expected });
+      return Promise.resolve(saveImpl ? saveImpl(expected, calls.saves.length, content) : { ok: true });
+    },
+  }, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      if (typeof prop === 'string' && prop.startsWith('on')) return () => {};
+      return () => Promise.resolve({ ok: true });
+    },
+  });
+  window.confirm = (msg) => { calls.confirms.push(msg); return confirmAnswer; };
+  window.alert = (msg) => { calls.alerts.push(msg); };
+  window.loadCodeMirrorBundle = () => Promise.resolve();
+  window.localStorage.setItem('filePanelDiffMode', 'side-by-side');
+
+  const makeView = (parent, _old, newContent) => {
+    const el = window.document.createElement('div');
+    parent.appendChild(el);
+    return { dom: el, b: { state: { doc: { toString: () => newContent } } }, destroy() { el.remove(); } };
+  };
+  window.createMergeViewer = makeView;
+  window.createUnifiedMergeViewer = makeView;
+  window.createEditableViewer = makeView;
+  Object.defineProperty(window, 'ViewerPanel', {
+    value: function ViewerPanelStub() { return { open() {}, revealLine() {}, destroy() {}, hasUnsavedEdits: () => false }; },
+    writable: true, configurable: true,
+  });
+  Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
+
+  for (const f of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js']) {
+    vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
+  }
+  window.initFilePanel();
+  return { window, calls, destroy: () => window.close() };
+}
+
+function flush() {
+  let p = Promise.resolve();
+  for (let i = 0; i < 16; i++) p = p.then(() => Promise.resolve());
+  return p;
+}
+
+async function openDiffAndSave(ctx) {
+  ctx.window.switchPanel('s1');
+  ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
+  await flush();
+  ctx.window.document.querySelector('#file-panel-diff .fp-save-btn').click();
+  await flush();
+}
+
+test('the diff tab saves against the content it was opened with', async () => {
+  const ctx = setup();
+  try {
+    await openDiffAndSave(ctx);
+    assert.deepEqual(ctx.calls.saves.map((s) => s.expected), ['old\n']);
+
+    ctx.window.document.querySelector('#file-panel-diff .fp-save-btn').click();
+    await flush();
+    assert.equal(ctx.calls.saves[1].expected, 'proposed\n', 'after a save, the next is checked against what was written');
+  } finally { ctx.destroy(); }
+});
+
+
+test('any other refusal is reported', async () => {
+  const ctx = setup({ saveImpl: () => ({ ok: false, error: 'File does not exist' }) });
+  try {
+    await openDiffAndSave(ctx);
+    assert.deepEqual(ctx.calls.alerts, ['Save failed: File does not exist']);
+  } finally { ctx.destroy(); }
+});
+
+
+test('two quick Save clicks do not raise a false "changed on disk" confirm', async () => {
+  const finishers = [];
+  const ctx = setup({ saveImpl: (expected) => new Promise((resolve) => {
+    finishers.push(() => resolve(expected === 'old\n' || expected === 'proposed\n' ? { ok: true } : { ok: false, reason: 'stale', error: 'stale' }));
+  }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1, 'the second click waits for the first');
+    finishers[0]();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 2);
+    assert.equal(ctx.calls.saves[1].expected, 'proposed\n', 'checked against what the first save wrote');
+    finishers[1]();
+    await flush();
+    assert.deepEqual(ctx.calls.confirms, []);
+    assert.deepEqual(ctx.calls.alerts, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a queued click is dropped when the first save fails', async () => {
+  const finishers = [];
+  const ctx = setup({ saveImpl: () => new Promise((resolve) => { finishers.push(resolve); }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    finishers[0]({ ok: false, error: 'disk full' });
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1);
+    assert.deepEqual(ctx.calls.alerts, ['Save failed: disk full']);
+  } finally { ctx.destroy(); }
+});
+
+test('a rejected save IPC is reported', async () => {
+  const ctx = setup({ saveImpl: () => Promise.reject(new Error('the channel is gone')) });
+  try {
+    await openDiffAndSave(ctx);
+    assert.deepEqual(ctx.calls.alerts, ['Save failed: the channel is gone']);
+  } finally { ctx.destroy(); }
+});
+
+test('an answered diff disables Save, and a save request on it writes nothing', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    assert.equal(btn.disabled, false);
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.equal(btn.disabled, true, 'Save says it is off');
+    assert.match(btn.title, /answered/);
+    await ctx.window.handleDiffSave();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a queued click is not sent once its diff has been replaced', async () => {
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on('unhandledRejection', onRejection);
+  const finishers = [];
+  const ctx = setup({ saveImpl: () => new Promise((resolve) => { finishers.push(resolve); }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    btn.click();
+    btn.click();
+    await flush();
+    ctx.calls.openDiff('s1', 'd2', { oldFilePath: '/repo/b.js', oldContent: 'b\n', newContent: 'b2\n' });
+    await flush();
+    finishers[0]({ ok: true });
+    await flush();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ctx.calls.saves.length, 1, 'the replaced diff is not saved again');
+    assert.deepEqual(rejections, []);
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    ctx.destroy();
+  }
+});
+
+test('a diff opened after an answered one has its Save enabled again', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+    await flush();
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    const btn = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    assert.equal(btn.disabled, true);
+
+    ctx.calls.openDiff('s1', 'd2', { oldFilePath: '/repo/b.js', oldContent: 'b\n', newContent: 'b2\n' });
+    await flush();
+    assert.equal(btn.disabled, false, 'the new diff is not answered');
+    assert.equal(btn.title, 'Save changes');
+    btn.click();
+    await flush();
+    assert.equal(ctx.calls.saves.length, 1);
+    assert.equal(ctx.calls.saves[0].filePath, '/repo/b.js');
+  } finally { ctx.destroy(); }
+});
+
+// What main does, over one file: write only over the agreed content.
+function fakeDisk(initial) {
+  const disk = { text: initial };
+  disk.save = (expected, _n, content) => {
+    if (typeof expected !== 'string') return { ok: false, reason: 'invalid-expected', error: 'missing expected content' };
+    if (expected !== disk.text) return { ok: false, reason: 'stale', error: 'stale', disk: disk.text };
+    disk.text = content;
+    return { ok: true };
+  };
+  return disk;
+}
+
+test('a stale refusal asks; on yes the retry carries the disk the user agreed to, on no nothing is written', async () => {
+  const noDisk = fakeDisk('session\n');
+  const no = setup({ saveImpl: noDisk.save, confirmAnswer: false });
+  try {
+    await openDiffAndSave(no);
+    assert.equal(no.calls.confirms.length, 1);
+    assert.equal(no.calls.saves.length, 1, 'a refused confirm writes nothing');
+    assert.equal(noDisk.text, 'session\n');
+    assert.deepEqual(no.calls.alerts, [], 'a declined overwrite is not followed by a "Save failed" alert');
+  } finally { no.destroy(); }
+
+  const yesDisk = fakeDisk('session\n');
+  const yes = setup({ saveImpl: yesDisk.save, confirmAnswer: true });
+  try {
+    await openDiffAndSave(yes);
+    assert.deepEqual(yes.calls.saves.map((x) => x.expected), ['old\n', 'session\n']);
+    assert.equal(yesDisk.text, 'proposed\n');
+  } finally { yes.destroy(); }
+});
+
+test('the diff tab asks again when the disk moves during its confirm, and never writes blind', async () => {
+  const disk = fakeDisk('session\n');
+  const ctx = setup({ saveImpl: disk.save });
+  let asked = 0;
+  ctx.window.confirm = (msg) => {
+    ctx.calls.confirms.push(msg);
+    asked += 1;
+    if (asked === 1) { disk.text = 'second session write\n'; return true; }
+    return false;
+  };
+  try {
+    await openDiffAndSave(ctx);
+    assert.equal(ctx.calls.confirms.length, 2);
+    assert.equal(disk.text, 'second session write\n');
+    assert.ok(ctx.calls.saves.every((x) => typeof x.expected === 'string'), 'never an expected of null');
+  } finally { ctx.destroy(); }
+});

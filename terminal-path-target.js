@@ -10,17 +10,17 @@ const MAX_TEXT_LENGTH = 4096;
 const SNIFF_BYTES = 4096;
 
 // see .ai/contexts/terminal-path-links.md ("A candidate is checked")
-function fileHasNullByte(filePath) {
-  let fd = null;
+async function fileHasNullByte(filePath) {
+  let handle = null;
   try {
-    fd = fs.openSync(filePath, 'r');
+    handle = await fs.promises.open(filePath, 'r');
     const buf = Buffer.alloc(SNIFF_BYTES);
-    const read = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
-    return buf.subarray(0, read).includes(0);
+    const { bytesRead } = await handle.read(buf, 0, SNIFF_BYTES, 0);
+    return buf.subarray(0, bytesRead).includes(0);
   } catch {
     return true;
   } finally {
-    if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+    if (handle) { try { await handle.close(); } catch {} }
   }
 }
 
@@ -30,8 +30,8 @@ function expandHome(text, homedir) {
   return text;
 }
 
-// deps: {isSensitivePath, statSync, hasNullByte, homedir, maxBytes}
-function resolveTerminalPathTarget(text, cwd, deps) {
+// deps: {isSensitivePath, stat, hasNullByte, homedir, maxBytes} — the first three may return promises
+async function resolveTerminalPathTarget(text, cwd, deps) {
   if (typeof text !== 'string' || text === '' || text.length > MAX_TEXT_LENGTH) {
     return { ok: false, reason: 'invalid-path' };
   }
@@ -47,17 +47,36 @@ function resolveTerminalPathTarget(text, cwd, deps) {
   // see .ai/contexts/terminal-path-links.md ("A candidate is checked")
   let stat;
   try {
-    stat = deps.statSync(resolved);
+    stat = await deps.stat(resolved);
   } catch {
     return { ok: false, reason: 'missing' };
   }
-  if (deps.isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
+  if (await deps.isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
   if (stat.isDirectory()) return { ok: false, reason: 'directory' };
   if (!stat.isFile()) return { ok: false, reason: 'not-a-regular-file' };
   if (stat.size > deps.maxBytes) return { ok: false, reason: 'too-large' };
-  if (deps.hasNullByte(resolved)) return { ok: false, reason: 'binary' };
+  if (await deps.hasNullByte(resolved)) return { ok: false, reason: 'binary' };
 
   return { ok: true, path: resolved };
+}
+
+const DEFAULT_CONCURRENCY = 8;
+
+// see .ai/contexts/terminal-path-links.md ("Bounds")
+async function resolveTerminalPaths(texts, cwd, deps, { concurrency = DEFAULT_CONCURRENCY } = {}) {
+  const limit = Math.max(1, Math.floor(concurrency) || DEFAULT_CONCURRENCY);
+  const results = new Array(texts.length);
+  let next = 0;
+  async function worker() {
+    while (next < texts.length) {
+      const i = next++;
+      results[i] = await resolveTerminalPathTarget(texts[i], cwd, deps);
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < Math.min(limit, texts.length); i++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
 }
 
 /**
@@ -85,4 +104,4 @@ function resolveTerminalPathsCwd(sessionId, deps) {
   return { ok: true, cwd: target.cwd };
 }
 
-module.exports = { resolveTerminalPathTarget, resolveTerminalPathsCwd, fileHasNullByte };
+module.exports = { resolveTerminalPathTarget, resolveTerminalPaths, resolveTerminalPathsCwd, fileHasNullByte };

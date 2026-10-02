@@ -38,20 +38,14 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
+const { createWhatsNew } = require('./changelog');
+const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction.
-const cleanPtyEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) =>
-    !k.startsWith('ELECTRON_') &&
-    !k.startsWith('GOOGLE_API_KEY') &&
-    k !== 'NODE_OPTIONS' &&
-    k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-    k !== 'WT_SESSION'
-  )
-);
+const cleanPtyEnv = cleanEnv(process.env);
 
 // Windows: prefer node-pty's bundled ConPTY (conpty.dll + OpenConsole.exe)
 // over the OS inbox one. The inbox ConPTY re-renders TUI frames itself and is a
@@ -73,11 +67,11 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler } = require('./schedule-runner');
+const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
-const { isSensitivePath, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
+const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { setPtyOpLogger, resizePty, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
@@ -94,6 +88,8 @@ const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-termin
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
+const { createViewerWatchRegistry } = require('./viewer-file-watch');
+const { createMainPanelSaves } = require('./viewer-save-guard');
 const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
 const { createActivityWatchReporter } = require('./activitywatch-reporter');
 
@@ -153,6 +149,9 @@ const {
   closeDb,
   DB_PATH,
 } = require('./db');
+
+// see docs/changelog.md ("What's new in the app")
+const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
 
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
@@ -432,8 +431,29 @@ function createWindow() {
 }
 
 function buildMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name)));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name, { onWhatsNew: showWhatsNewFromMenu })));
 }
+
+// --- What's new (see docs/changelog.md) ---
+
+const whatsNew = createWhatsNew({
+  getSetting,
+  setSetting,
+  currentVersion: app.getVersion(),
+  existingInstall: INSTALL_PREDATES_LAUNCH,
+  lastSeenDefault: SETTING_DEFAULTS.lastSeenVersion,
+  readChangelog: () => fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8'),
+  log,
+});
+
+function showWhatsNewFromMenu() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const payload = whatsNew.forMenu();
+  if (payload) mainWindow.webContents.send('show-whats-new', payload);
+}
+
+ipcMain.handle('whats-new-startup', () => whatsNew.startup());
+ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
@@ -456,13 +476,14 @@ sessionCache.init({
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
-        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir } = sessionCache;
+        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
+require('./remote-ssh-binary').setResolverLog(log);
 const { createRemoteIndexer } = require('./remote-index');
 const { createRemoteWatcher } = require('./remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');
@@ -643,6 +664,11 @@ ipcMain.handle('browse-folder', async () => {
   return result.filePaths[0];
 });
 
+// Projects whose schedules may run; see docs/sandbox.md ("Schedules").
+function scheduleProjects() {
+  return scheduleRegistry(getSetting, setSetting);
+}
+
 // --- IPC: add-project ---
 ipcMain.handle('add-project', (_event, projectPath) => {
   try {
@@ -676,6 +702,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     // Immediately index the new folder so it's in cache before frontend renders
     refreshFolder(folder);
     notifyRendererProjectsChanged();
+    scheduleProjects().add(projectPath);
 
     return { ok: true, folder, projectPath };
   } catch (err) {
@@ -700,6 +727,7 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);
+    scheduleProjects().remove(projectPath);
 
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -971,68 +999,40 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     if (buf.includes(0)) return { ok: false, error: 'binary file' };
     return { ok: true, content: buf.toString('utf8') };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, code: err.code };
   }
 });
 
-ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
-  try {
-    const resolved = path.resolve(filePath);
-    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
-    // Close the sub-second window between save and search: if the saved file
-    // belongs to a type that the FTS index tracks, invalidate its signature so
-    // the next get-work-files / get-memories call triggers a full reindex
-    // (matching the explicit invalidation in save-memory / delete-work-file).
-    if (resolved.includes('/.work-files/')) invalidateFtsSignature('work-file');
-    if (resolved.endsWith('.md')) invalidateFtsSignature('memory');
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+// see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
+const panelSaves = createMainPanelSaves({
+  getKnownProjectPaths,
+  invalidateFtsSignature,
+  onError: (err) => console.error('Error saving memory file:', err),
 });
+
+ipcMain.handle('save-file-for-panel', (_event, filePath, content, expected) => panelSaves.saveFileForPanel(filePath, content, expected));
 
 // ── File Watching (for viewer panels) ────────────────────────────────
-const fileWatchers = new Map(); // filePath → FSWatcher
+const fileWatchers = createViewerWatchRegistry({
+  send: (resolved) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('file-changed', resolved);
+    }
+  },
+});
 
 function closeAllFileWatchers() {
-  for (const watcher of fileWatchers.values()) {
-    try { watcher.close(); } catch {}
-  }
-  fileWatchers.clear();
+  fileWatchers.closeAll();
 }
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
   if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-  if (fileWatchers.has(resolved)) return { ok: true };
-  try {
-    let debounce = null;
-    const watcher = fs.watch(resolved, (eventType) => {
-      if (eventType !== 'change') return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('file-changed', resolved);
-        }
-      }, 300);
-    });
-    fileWatchers.set(resolved, watcher);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return fileWatchers.watch(resolved);
 });
 
 ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
-  const watcher = fileWatchers.get(resolved);
-  if (watcher) {
-    watcher.close();
-    fileWatchers.delete(resolved);
-  }
-  return { ok: true };
+  return fileWatchers.unwatch(path.resolve(filePath));
 });
 
 // Full re-scan triggered from the UI. Re-reads every jsonl file in the worker
@@ -1049,6 +1049,8 @@ ipcMain.handle('rebuild-cache', async () => {
     return { ok: false, error: err.message };
   }
 });
+
+ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
 
 ipcMain.handle('get-projects', async (_event, showArchived) => {
   try {
@@ -1389,26 +1391,7 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 });
 
 // --- IPC: save-memory ---
-ipcMain.handle('save-memory', (_event, filePath, content) => {
-  try {
-    const literal = path.resolve(filePath);
-    if (!literal.endsWith('.md')) return { ok: false, error: 'not a .md file' };
-    // Same requirement as read-memory: existsSync/writeFileSync below must
-    // target the guard's resolved path, not `literal` again.
-    const resolved = resolveAllowedMemoryPath(literal);
-    if (!resolved) return { ok: false, error: 'path not allowed' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
-    // Invalidate the FTS signature so the next get-memories call reindexes
-    // (mtime change is caught by the signature, but an explicit invalidation
-    // guards against sub-second writes where the mtime might not advance).
-    invalidateFtsSignature('memory');
-    return { ok: true };
-  } catch (err) {
-    console.error('Error saving memory file:', err);
-    return { ok: false, error: err.message };
-  }
-});
+ipcMain.handle('save-memory', (_event, filePath, content, expected) => panelSaves.saveMemory(filePath, content, expected));
 
 // --- IPC: get-work-files ---
 // Walks <projectPath>/.work-files/ recursively for all known projects.
@@ -1820,7 +1803,7 @@ const changesWatchers = createChangesWatchRegistry({
 });
 
 // A path from terminal output is untrusted input — see .ai/contexts/terminal-path-links.md
-ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
+ipcMain.handle('resolve-terminal-paths', async (_event, sessionId, texts) => {
   if (!Array.isArray(texts)) return [];
   const wanted = texts.slice(0, TERMINAL_PATH_BATCH_MAX);
   const where = terminalPathTarget.resolveTerminalPathsCwd(sessionId, {
@@ -1830,13 +1813,13 @@ ipcMain.handle('resolve-terminal-paths', (_event, sessionId, texts) => {
   });
   if (!where.ok) return wanted.map(() => ({ ok: false, reason: where.reason }));
   const deps = {
-    isSensitivePath,
-    statSync: (p) => fs.statSync(p),
+    isSensitivePath: isSensitivePathAsync,
+    stat: (p) => fs.promises.stat(p),
     hasNullByte: terminalPathTarget.fileHasNullByte,
     homedir: () => os.homedir(),
     maxBytes: PANEL_FILE_MAX_BYTES,
   };
-  return wanted.map((text) => terminalPathTarget.resolveTerminalPathTarget(text, where.cwd, deps));
+  return terminalPathTarget.resolveTerminalPaths(wanted, where.cwd, deps);
 });
 
 // filePath is absolute here — the only Changes IPC that takes one, and it
@@ -2624,6 +2607,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
+      // see docs/sandbox.md ("Schedules")
+      if (projectPath) scheduleProjects().add(projectPath);
       if (!isAttach && sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
@@ -2633,6 +2618,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
         const bindEnv = sandboxBindEnv(extraBinds);
         if (bindEnv) ptyEnv.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        const transcriptCwd = spawnCwd || projectPath;
+        if (transcriptCwd) ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(transcriptCwd);
       }
 
       ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -3113,10 +3100,7 @@ if (!gotSingleInstanceLock) {
       // sessions do — an unattended headless run is exactly where the
       // isolation matters most. Same global → project override chain as
       // get-effective-settings.
-      const projectSettings = getSetting('project:' + cwd) || {};
-      let sandbox = SETTING_DEFAULTS.sandbox;
-      if (globalSettings.sandbox !== undefined) sandbox = globalSettings.sandbox;
-      if (projectSettings.sandbox !== undefined) sandbox = projectSettings.sandbox;
+      const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
       if (sandbox && process.platform !== 'linux') {
         // Fail closed, exactly like the interactive path: the whole point of
         // asking for a sandbox is not running unconfined. Silently downgrading
@@ -3135,8 +3119,16 @@ if (!gotSingleInstanceLock) {
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
+        // see docs/sandbox.md ("Schedules")
+        const refused = refusedScheduleBinds(addDirs, scheduleProjects().list(), os.homedir());
+        if (refused.length) {
+          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          if (onDone) onDone();
+          return;
+        }
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
       }
       const args = shellArgs(shell, cmd, profile.args || []);
 
@@ -3168,7 +3160,13 @@ if (!gotSingleInstanceLock) {
     }
 
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath);
-    startScheduler(log, runScheduleCommand);
+    // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
+    scheduleProjects().list();
+    startScheduler(log, runScheduleCommand, {
+      resumeSource: powerMonitor,
+      stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+      projects: () => scheduleProjects().list(),
+    });
 
     // File-trigger watcher — allows harness scripts to inject input into open
     // PTY sessions by dropping a JSON file in ~/.switchboard/triggers/.

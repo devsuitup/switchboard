@@ -70,6 +70,7 @@ function setup({ locateImpl, fileImpl } = {}) {
         open: (title, filePath) => calls.viewerOpened.push(filePath),
         revealLine: (line) => calls.viewerRevealed.push(line),
         destroy() {},
+        hasUnsavedEdits: () => false,
       };
     },
     writable: true, configurable: true,

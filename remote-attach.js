@@ -1,6 +1,8 @@
 // remote-attach.js — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 'use strict';
 
+const { resolveSshPath: defaultResolveSshPath } = require('./remote-ssh-binary');
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 
 const TMUX_FIELD_RE = /^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$/;
@@ -225,23 +227,6 @@ function parseDiscoveryProbeOutput(stdout) {
   return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount, cmdlineHasClaude };
 }
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
-function defaultResolveSshPath() {
-  if (process.env.SWITCHBOARD_SSH_PATH) return process.env.SWITCHBOARD_SSH_PATH;
-  const fs = require('fs');
-  const path = require('path');
-  const candidates = process.platform === 'win32'
-    ? [
-        path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'),
-        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', 'ssh.exe'),
-      ]
-    : ['/usr/bin/ssh'];
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch {}
-  }
-  return 'ssh';
-}
-
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", ConnectTimeout on the probe/restore ssh)
 function buildRemoteCommandArgs(alias, command) {
   return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-n', alias, command];
@@ -251,13 +236,13 @@ function buildRemoteCommandArgs(alias, command) {
 const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap")
-function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn } = {}) {
+function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn, resolveSshPath = defaultResolveSshPath } = {}) {
   const spawn = spawnFn || require('child_process').spawn;
   const stdoutCap = typeof maxStdoutBytes === 'number' ? maxStdoutBytes : DEFAULT_MAX_STDOUT_BYTES;
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn('ssh', buildRemoteCommandArgs(alias, command), {
+      child = spawn(resolveSshPath(), buildRemoteCommandArgs(alias, command), {
         windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
@@ -376,12 +361,11 @@ function createTmuxAttachAdapter(opts = {}) {
     const openCols = solo ? localSize.cols : discovery.cols;
     const openRows = solo ? localSize.rows : discovery.rows;
 
-    const sshPath = resolveSshPath();
     const argv = ['-tt', '-o', 'BatchMode=yes', alias, buildAttachCommand(discovery.socket, parsed.target, { solo, pre: discovery.pre })];
 
     let raw;
     try {
-      raw = spawnPtyFn(sshPath, argv, { name: 'xterm-256color', cols: openCols, rows: openRows });
+      raw = spawnPtyFn(resolveSshPath(), argv, { name: 'xterm-256color', cols: openCols, rows: openRows });
     } catch (err) {
       return { ok: false, error: `attach spawn failed: ${err.message}` };
     }

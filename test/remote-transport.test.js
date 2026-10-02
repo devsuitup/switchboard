@@ -17,6 +17,7 @@ const {
   createSshTransport, parseInventory, parseSessions, splitListOutput,
   LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, MAX_SESSION_DESCRIPTORS, MAX_SESSION_DESCRIPTOR_BYTES,
 } = require('../remote-transport');
+const { resolveSshPath, resolveScpPath } = require('../remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();
@@ -86,7 +87,7 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
 
   assert.equal(spawn.calls.length, 1, 'exactly one ssh call — the inventory and the sessions ride together');
   const { cmd, args } = spawn.calls[0];
-  assert.equal(cmd, 'ssh');
+  assert.equal(cmd, resolveSshPath());
   assert.ok(args.includes('BatchMode=yes'), 'must never prompt for a passphrase');
   // The alias is its own argv element and the remote command is the last one:
   // nothing the user typed is ever concatenated into a local shell string.
@@ -430,7 +431,7 @@ test('fetchFiles writes through a .part file so a killed scp leaves no half tran
     const final = path.join(dir, '-srv-a', 'uuid', 'subagents', 'agent-1.jsonl');
     assert.equal(fs.readFileSync(final, 'utf8'), 'transferred');
     assert.equal(fs.existsSync(final + '.part'), false);
-    assert.equal(spawn.calls[0].cmd, 'scp');
+    assert.equal(spawn.calls[0].cmd, resolveScpPath());
     assert.ok(spawn.calls[0].args.includes('vps:.claude/projects/-srv-a/uuid/subagents/agent-1.jsonl'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

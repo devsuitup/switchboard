@@ -163,7 +163,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   };
 
   Object.defineProperty(window, 'ViewerPanel', {
-    value: function ViewerPanelStub() { return { open() {}, destroy() {} }; },
+    value: function ViewerPanelStub() { return { open() {}, destroy() {}, hasUnsavedEdits: () => false }; },
     writable: true,
     configurable: true,
   });

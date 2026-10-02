@@ -223,9 +223,31 @@ test('warm start (initial scan already completed) never emits indexing-progress'
     const progressEvents = db.sentEvents.filter(([channel]) => channel === 'indexing-progress');
     assert.equal(progressEvents.length, 0, 'a warm-start rebuild must never trigger the first-run banner');
 
+    const finished = db.sentEvents.filter(([channel]) => channel === 'indexing-finished');
+    assert.equal(finished.length, 1, 'the restore planner needs the end of a warm-start scan too');
+    assert.equal(sessionCache.isIndexingFinished(), true, 'a listener that came late can pull the state');
+
     // The existing small-status-bar mechanism is untouched by this change.
     const statusEvents = db.sentEvents.filter(([channel]) => channel === 'status-update');
     assert.ok(statusEvents.length > 0, 'status-update should still fire for the small activity indicator');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('cold start also sends indexing-finished, once, after the last progress event', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-cold-fin-'));
+  try {
+    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
+    const db = makeFakeDb({ initialScanComplete: false });
+    initCache(projectsDir, db);
+    const run = sessionCache.populateCacheViaWorker();
+    assert.equal(sessionCache.isIndexingFinished(), false, 'a run in flight is not finished');
+    await run;
+    assert.equal(sessionCache.isIndexingFinished(), true);
+    const channels = db.sentEvents.map(([channel]) => channel);
+    assert.equal(channels.filter((c) => c === 'indexing-finished').length, 1);
+    assert.equal(channels.lastIndexOf('indexing-progress') < channels.indexOf('indexing-finished'), true);
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

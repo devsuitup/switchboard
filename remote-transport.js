@@ -4,6 +4,10 @@
 const fs = require('fs');
 const path = require('path');
 const { isSafeMirrorRelPath } = require('./remote-hosts');
+const {
+  resolveSshPath: defaultResolveSshPath,
+  resolveScpPath: defaultResolveScpPath,
+} = require('./remote-ssh-binary');
 
 const REMOTE_PROJECTS_REL = '.claude/projects';
 const REMOTE_SESSIONS_REL = '.claude/sessions';
@@ -123,6 +127,8 @@ function parseSessions(block) {
  */
 function createSshTransport(opts = {}) {
   const spawn = opts.spawn || require('child_process').spawn;
+  const resolveSshPath = opts.resolveSshPath || defaultResolveSshPath;
+  const resolveScpPath = opts.resolveScpPath || defaultResolveScpPath;
   const log = opts.log || { info() {}, warn() {}, error() {} };
   const listTimeoutMs = opts.listTimeoutMs || DEFAULT_LIST_TIMEOUT_MS;
   const fetchTimeoutMs = opts.fetchTimeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
@@ -212,7 +218,7 @@ function createSshTransport(opts = {}) {
   }
 
   async function listFiles(alias) {
-    const res = await run('ssh', [...SSH_BASE_OPTS, '-n', alias, LIST_COMMAND], {
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, LIST_COMMAND], {
       timeoutMs: listTimeoutMs,
       maxBytes: MAX_LIST_BYTES,
     });
@@ -235,7 +241,7 @@ function createSshTransport(opts = {}) {
     const tmpPath = destPath + '.part';
     // Deliberately unquoted; isSafeMirrorRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     const remote = `${alias}:${REMOTE_PROJECTS_REL}/${rel}`;
-    const res = await run('scp', [...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
+    const res = await run(resolveScpPath(), ['-S', resolveSshPath(), ...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
       timeoutMs: fetchTimeoutMs,
     });
     if (res.code !== 0 || res.timedOut) {
@@ -287,7 +293,7 @@ function createSshTransport(opts = {}) {
     const remoteRel = `${REMOTE_PROJECTS_REL}/${rel}`;
     // tail -c is 1-indexed: offset+1 is the first new byte.
     const rangeCommand = `tail -c +${offset + 1} '${remoteRel}'`;
-    const res = await run('ssh', [...SSH_BASE_OPTS, '-n', alias, rangeCommand], {
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, rangeCommand], {
       timeoutMs: fetchTimeoutMs,
       binary: true,
     });

@@ -11,16 +11,22 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
     settled = true;
   }
 
+  function giveUp() {
+    const unavailable = [...remaining].map(id => items.get(id));
+    finish();
+    return unavailable;
+  }
+
   function dismiss() {
     finish();
   }
 
   function tick({ sessionMap, openSessions, indexingDone, sessionOpenedOutsideRestore } = {}) {
-    if (settled) return { action: 'nothing', candidates: [], remaining: 0 };
+    if (settled) return { action: 'nothing', candidates: [], remaining: 0, unavailable: [] };
 
     if (sessionOpenedOutsideRestore) {
       finish();
-      return { action: 'nothing', candidates: [], remaining: 0 };
+      return { action: 'nothing', candidates: [], remaining: 0, unavailable: [] };
     }
 
     for (const id of remaining) {
@@ -28,7 +34,7 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
     }
     if (remaining.size === 0) {
       finish();
-      return { action: 'nothing', candidates: [], remaining: 0 };
+      return { action: 'nothing', candidates: [], remaining: 0, unavailable: [] };
     }
 
     const indexedIds = [...remaining].filter(id => sessionMap && sessionMap.has(id));
@@ -37,41 +43,40 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
     if (askOnce) {
       if (allIndexed || indexingDone) {
         const candidates = indexedIds.map(id => items.get(id));
-        finish();
+        for (const id of indexedIds) remaining.delete(id);
+        const unavailable = giveUp();
         return candidates.length > 0
-          ? { action: 'restore', candidates, remaining: 0 }
-          : { action: 'nothing', candidates: [], remaining: 0 };
+          ? { action: 'restore', candidates, remaining: 0, unavailable }
+          : { action: 'nothing', candidates: [], remaining: 0, unavailable };
       }
       ticks++;
       if (ticks >= maxTicks) {
-        finish();
-        return { action: 'nothing', candidates: [], remaining: 0 };
+        return { action: 'nothing', candidates: [], remaining: 0, unavailable: giveUp() };
       }
-      return { action: 'wait', candidates: [], remaining: remaining.size };
+      return { action: 'wait', candidates: [], remaining: remaining.size, unavailable: [] };
     }
 
     if (indexedIds.length > 0) {
       const candidates = indexedIds.map(id => items.get(id));
       for (const id of indexedIds) remaining.delete(id);
       if (remaining.size === 0) settled = true;
-      return { action: 'restore', candidates, remaining: remaining.size };
+      const unavailable = indexingDone ? giveUp() : [];
+      return { action: 'restore', candidates, remaining: remaining.size, unavailable };
     }
 
     if (indexingDone) {
-      finish();
-      return { action: 'nothing', candidates: [], remaining: 0 };
+      return { action: 'nothing', candidates: [], remaining: 0, unavailable: giveUp() };
     }
 
     ticks++;
     if (ticks >= maxTicks) {
-      finish();
-      return { action: 'nothing', candidates: [], remaining: 0 };
+      return { action: 'nothing', candidates: [], remaining: 0, unavailable: giveUp() };
     }
 
-    return { action: 'wait', candidates: [], remaining: remaining.size };
+    return { action: 'wait', candidates: [], remaining: remaining.size, unavailable: [] };
   }
 
-  return { tick, dismiss };
+  return { tick, dismiss, isSettled: () => settled };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

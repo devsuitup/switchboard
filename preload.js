@@ -8,10 +8,11 @@ contextBridge.exposeInMainWorld('api', {
   getUsage: () => ipcRenderer.invoke('get-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
-  saveMemory: (filePath, content) => ipcRenderer.invoke('save-memory', filePath, content),
+  saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getWorkFiles: () => ipcRenderer.invoke('get-work-files'),
   readWorkFile: (filePath) => ipcRenderer.invoke('read-work-file', filePath),
   deleteWorkFile: (filePath) => ipcRenderer.invoke('delete-work-file', filePath),
+  getIndexingState: () => ipcRenderer.invoke('get-indexing-state'),
   getProjects: (showArchived) => ipcRenderer.invoke('get-projects', showArchived),
   rebuildCache: () => ipcRenderer.invoke('rebuild-cache'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
@@ -56,6 +57,11 @@ contextBridge.exposeInMainWorld('api', {
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
+  whatsNewStartup: () => ipcRenderer.invoke('whats-new-startup'),
+  whatsNewDismissed: () => ipcRenderer.invoke('whats-new-dismissed'),
+  onShowWhatsNew: (callback) => {
+    ipcRenderer.on('show-whats-new', (_event, payload) => callback(payload));
+  },
   remoteHostsApply: () => ipcRenderer.invoke('remote-hosts-apply'),
   remoteHostsRefresh: () => ipcRenderer.invoke('remote-hosts-refresh'),
   remoteHostRefresh: (alias) => ipcRenderer.invoke('remote-host-refresh', alias),
@@ -138,6 +144,9 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingProgress: (callback) => {
     ipcRenderer.on('indexing-progress', (_event, payload) => callback(payload));
   },
+  onIndexingFinished: (callback) => {
+    ipcRenderer.on('indexing-finished', () => callback());
+  },
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));
   },
@@ -179,7 +188,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   resolveTerminalPaths: (sessionId, texts) => ipcRenderer.invoke('resolve-terminal-paths', sessionId, texts),
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
-  saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
+  saveFileForPanel: (filePath, content, expected) => ipcRenderer.invoke('save-file-for-panel', filePath, content, expected),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
   onFileChanged: (callback) => {

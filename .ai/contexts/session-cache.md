@@ -71,8 +71,9 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktree
   - **Open question #1 (absence)**: a transcript with no `bridgeSessionId` is never grouped with anything — `mergeBridgeGroups` only builds a group when the field is a non-empty string, so old-format transcripts and any layout that never emits the field simply keep their own row, exactly like today.
   - **Open question #2 (which file keeps being written)**: established by measurement above — the mirror, not the parent. That is exactly why the mirror is never discarded: dropping it would silently erase every message written after the compaction, for as long as the session keeps being used. The union design keeps both files' rows, forever, each independently refreshed.
   - **Open question #3 (existing databases)**: repaired on the next index pass, not left alone. `bridgeSessionId` and `mergedIntoSessionId` are added purely via the schema-reconciliation block (not a numbered migration — deliberately, to avoid coupling `migrations.length` to unrelated migration-ordering tests; see `db-schema-reconcile.test.js`'s "foreign higher-version" precedent for why reconciliation is the version-independent mechanism). Their absence sets `mustReindex = true`, which wipes `session_cache` + `cache_meta` + the `initial_scan_complete` marker, forcing every folder through the now-merging indexer on the next scan — the same repair path already used when `fileMtime` (v7) or the fork subagent columns (v4) were introduced.
+  - **"Open on claude.ai" (issue #213).** `buildProjectsFromCache` passes `bridgeSessionId` to the renderer (`null` when absent). `bridgeSessionUrl()` in `public/bridge-url.js` turns it into `https://claude.ai/code/session_<suffix>`: the transcript record carries `cse_<suffix>`, the CLI descriptor and the web URL carry `session_<suffix>`, and the suffix is the same (measured on local transcripts that mention both forms). Any other shape, or an id with a character outside `[A-Za-z0-9]`, gives no URL and the row shows no button. The button (`.session-bridge-btn` in `buildSessionItem`) opens the URL through `window.api.openExternal`, whose main-side handler already refuses anything but `http(s)`.
 
-- **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. See `test/session-restore-cold-cache.test.js`.
+- **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. The end of indexing reaches the renderer on its own `indexing-finished` channel, sent at the end of **every** `populateCacheViaWorker` run, warm start included: `indexing-progress` is first-run only, so a warm start never told the planner that indexing was over and a saved session missing from the index left the "Finishing indexing" toast up for good. When the planner gives up (indexing over, or the tick cap) it returns the saved entries it never found as `unavailable`, and `tickRestorePlanner` names them in a "Not restored" notice. The end is also pullable (`get-indexing-state`, read once when the planner starts) because the startup scan can finish before the renderer listens, and `markRestoreIndexingDone` reloads the projects before the final tick because the last folders may not have reached `sessionMap` yet. See `test/session-restore-cold-cache.test.js`, `test/restore-unavailable.test.js`.
 
 - **Neither the working-set restore nor the reload path resumes a session that is live in another process.** `runRestore` and the post-`loadProjects` re-open of `sessionStorage.activeSessionId` call `openSession(..., { automatic: true })`, which skips the session without a prompt when `guardResume` reports it live elsewhere; the skipped entry is not activated, stays in the persisted working set at its saved position, and is reported by a one-line notice. See `.ai/contexts/cli-session-state.md` ("Live elsewhere").
 
@@ -116,6 +117,64 @@ or deleted from here.
   Issue #240 adds a push channel alongside it (below) so a live host is not
   stale for up to 5 minutes; the pull remains the ground truth and the only
   path for a host with no push channel (see below).
+
+### Remote hosts — ssh and scp binaries (issue #359)
+
+`remote-ssh-binary.js` is the one place that decides which `ssh` and `scp` run;
+the order is user-facing and stated in `docs/remote-hosts.md` ("Which ssh and
+scp run"). What the code relies on:
+
+- **One value for every consumer.** The attach PTY is spawned with the home
+  directory as cwd (`main.js` `spawnPty`), the `child_process` sites with the
+  app's cwd. A relative value, or a bare name looked up late, could name two
+  binaries; the resolver therefore returns an absolute path whenever it finds
+  one (the PATH is searched by the resolver itself, relative PATH entries
+  skipped) and ignores a relative `SWITCHBOARD_SSH_PATH`/`SWITCHBOARD_SCP_PATH`
+  with a warning. The bare name is returned only when nothing was found.
+- **scp is given its ssh.** `scp` starts its own ssh from a path compiled into
+  it, not from `SWITCHBOARD_SSH_PATH`; `fetchOne` passes `-S <resolved ssh>` so
+  the copy uses the same client as everything else.
+- **Searched once per process, re-checked with one probe.** A search probes
+  the disk (PATH entries, then the system candidates); on Windows a UNC entry
+  can stall the main thread, and `fetchFiles` copies files in the hundreds. The
+  result is memoised in the module. A path the search found is probed again on
+  each call, one `stat` of a known file, so an `ssh` removed or upgraded away
+  is searched for again instead of failing with `ENOENT` until a restart. A
+  configured value and the bare-name fallback are not re-checked: the first
+  would re-resolve to itself, and the second would redo the whole search on
+  every spawn. `resetResolvedBinaries()` exists for tests, and
+  `createBinaryResolver({ env, platform, isExecutable, log })` gives a
+  resolver with no process state. `main.js` hands it the app log with
+  `setResolverLog`.
+- **No shell.** Every spawn is shell-less. On Windows Node refuses a `.cmd` or
+  `.bat` without a shell (`EINVAL`), so such a value is kept, and a warning
+  says to name an `.exe` instead.
+
+`test/remote-ssh-spawn-sites.test.js` holds the guarantee that nothing bypasses
+the resolver. It parses every main-process module (root `*.js` and `workers/`)
+with espree and eslint-scope and follows the values that reach a spawn:
+
+- **Spawners.** A call is a spawn site when its callee evaluates to a
+  `child_process` or `node-pty` function, however it was reached: a
+  destructuring rename, a member of the `require` result, an alias of the
+  module, an `opts.spawn || …` default. Spawners injected purely through
+  options (`spawnPtyFn`) are listed by hand.
+- **Programs.** Each site's program argument is followed through constants,
+  destructuring, defaults, `path.join`'s last segment, and a local wrapper's
+  callers (`run` in `remote-transport.js`). The verdicts are: a resolver call,
+  another literal (`git`, `powershell.exe`, `process.execPath`), an ssh/scp
+  literal (a bypass), or unresolved. Module names are matched with or without
+  the `node:` prefix.
+- **Failures.** A bypass fails the test, and so does an unresolved site outside
+  `UNRESOLVED_ALLOWED`, where each entry names its enclosing function and why its
+  program is not ssh. A second test fails on a spawning call — a
+  `child_process`/`node-pty` function, or a wrapper in `SPAWN_WRAPPERS` such as
+  `runToExit` — that passes an ssh/scp name as its first argument, in any
+  module; it covers the callers of exported wrappers. Each failure message says
+  what to change.
+- **Enumeration.** The resolver-backed sites are compared to an explicit table,
+  so a new one is noticed. The scanner is itself tested on fixtures that
+  reproduce each known evasion.
 
 ### Remote hosts — watch channel (issue #240)
 
@@ -1186,7 +1245,7 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one
-- `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, a `.key` file plus a directory named like a descriptor must both be excluded from what reaches stdout, and (F9) the ALIVE marker reflects real `/proc` liveness for both a live pid (the shell's own `$$`, so it reads as alive on any host) and a dead one
+- `remote-transport-shell.test.js` — runs `LIST_COMMAND` through a real `sh -c`, not a fake stdout fixture: a missing `.claude/projects` must exit non-zero, a missing `.claude/sessions` must still exit 0 with the marker present, a `.key` file, a directory and a symlink named like a descriptor must all be excluded from what reaches stdout (counted by ALIVE markers, so the check does not depend on whether the valid descriptor's pid is alive), and (F9) the ALIVE marker follows the presence of the pid's directory — decided on every host by pointing the command's `/proc/$pid` check at a directory the test creates, and against the real `/proc` on Linux only, with the test runner's own pid as the live one
 - `remote-index.test.js` — covers "no host declared: no timer, no ssh call", the 60 s floor, per-host failure isolation and alias pruning, and that `getRemoteSessions()` is cleared (not left stale) after a cycle whose `sync()` throws; and (issue #278) `getPlaceholderSessions()`/`getAllPlaceholderSessions()` synthesizing and then dropping a placeholder once its transcript is indexed, and `findSessionAlias()`
 - `remote-indexing-e2e.test.js` — covers the `<alias>::` prefix reaching session rows, the search entries, the metrics and the sidebar
 - `merge-placeholder-sessions.test.js` — covers `main.js`'s `mergePlaceholderSessions()` (issue #278): appending to an existing project group, creating a new one, and never duplicating a session id a real row already won

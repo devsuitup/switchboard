@@ -13,8 +13,8 @@
 // toasts, which call sites tick the planner) still can't be loaded via
 // vm.runInContext without prohibitive DOM scaffolding (see
 // test/session-restore.test.js, same codebase precedent) and is out of
-// scope here — only the wiring fact that updateIndexingBanner() ticks the
-// planner on payload.done is asserted, by reading the app.js source.
+// scope here — only the wiring fact that the indexing-finished handler ticks the
+// planner is asserted, by reading the app.js source.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -151,19 +151,16 @@ test('askOnce: indexingDone with some ids missing asks once with what indexed so
 });
 
 // ---------------------------------------------------------------------------
-// Wiring — updateIndexingBanner(payload) in app.js must tick the planner
-// when payload.done is true. app.js cannot be loaded headlessly (DOM), so
+// Wiring — the indexing-finished handler in app.js must tick the planner. app.js cannot be loaded headlessly (DOM), so
 // this is a source assertion rather than a behavioral one; see header.
 // ---------------------------------------------------------------------------
 
-test('wiring: updateIndexingBanner ticks the restore planner on payload.done', () => {
+test('wiring: the end of indexing ticks the restore planner', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const fnStart = src.indexOf('function updateIndexingBanner');
-  assert.ok(fnStart !== -1, 'updateIndexingBanner must exist');
-  const fnEnd = src.indexOf('\nfunction dismissIndexingBanner', fnStart);
-  assert.ok(fnEnd !== -1, 'dismissIndexingBanner must follow updateIndexingBanner');
-  const body = src.slice(fnStart, fnEnd);
-
-  assert.match(body, /if\s*\(payload\.done\)\s*\{/, 'must branch on payload.done');
+  assert.match(src, /window\.api\.onIndexingFinished\(markRestoreIndexingDone\)/);
+  const fnStart = src.indexOf('function markRestoreIndexingDone');
+  assert.ok(fnStart !== -1, 'markRestoreIndexingDone must exist');
+  const body = src.slice(fnStart, src.indexOf('\n}', fnStart));
+  assert.match(body, /restoreIndexingDone\s*=\s*true/);
   assert.match(body, /tickRestorePlanner\(\)/, 'must tick the planner when indexing finishes');
 });

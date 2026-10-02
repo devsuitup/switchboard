@@ -3,14 +3,16 @@
 // The window-`closed` handler is the only place the three watcher registries
 // are released together. Source-text assertions are the house pattern for
 // main.js handlers (see read-file-for-panel-bounds.test.js): they prove the
-// teardown is written, not that Electron runs it. The helper itself is lifted
-// out of the source and exercised, because a close() that throws inside the
+// teardown is written, not that Electron runs it. The viewer registry's
+// closeAll() is exercised directly, because a close() that throws inside the
 // handler would strand everything after it.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+
+const { createViewerWatchRegistry } = require('../viewer-file-watch');
 
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 
@@ -38,34 +40,43 @@ test('the closed handler releases all three watcher registries', () => {
   assert.match(body, /subagentWatchers\.clear\(\)/, 'the subagent transcript watches');
 });
 
-test('closeAllFileWatchers is declared beside the registry it drains', () => {
-  const decl = MAIN.indexOf('const fileWatchers = new Map()');
+test('closeAllFileWatchers is declared beside the registry it drains, and drains it', () => {
+  const decl = MAIN.indexOf('const fileWatchers = createViewerWatchRegistry(');
   assert.ok(decl > 0, 'fileWatchers must be declared');
   const helper = MAIN.indexOf('function closeAllFileWatchers()');
-  assert.ok(helper > decl, 'the helper belongs next to the map, not at a distance');
+  assert.ok(helper > decl, 'the helper belongs next to the registry, not at a distance');
+  assert.match(helperSource(), /fileWatchers\.closeAll\(\)/);
 });
 
-test('closeAllFileWatchers closes every watcher and empties the registry', () => {
+function registryWith(closers) {
+  const queue = closers.slice();
+  const registry = createViewerWatchRegistry({
+    watchFn: () => ({ close: queue.shift() }),
+    send: () => {},
+    realpath: (p) => p,
+    lstat: () => ({ isSymbolicLink: () => false }),
+  });
+  return registry;
+}
+
+test('closeAll closes every watcher and empties the registry', () => {
   const closed = [];
-  const fileWatchers = new Map([
-    ['/a.js', { close: () => closed.push('/a.js') }],
-    ['/b.js', { close: () => closed.push('/b.js') }],
-  ]);
-  new Function('fileWatchers', `${helperSource()}\nreturn closeAllFileWatchers();`)(fileWatchers);
+  const registry = registryWith([() => closed.push('/a.js'), () => closed.push('/b.js')]);
+  registry.watch('/a.js');
+  registry.watch('/b.js');
+  registry.closeAll();
 
   assert.deepEqual(closed, ['/a.js', '/b.js']);
-  assert.equal(fileWatchers.size, 0, 'nothing may survive the window');
+  assert.equal(registry.size(), 0, 'nothing may survive the window');
 });
 
 test('a watcher whose close() throws does not strand the rest of the teardown', () => {
   const closed = [];
-  const fileWatchers = new Map([
-    ['/gone.js', { close: () => { throw new Error('ENOENT'); } }],
-    ['/b.js', { close: () => closed.push('/b.js') }],
-  ]);
-  const run = new Function('fileWatchers', `${helperSource()}\nreturn closeAllFileWatchers();`);
+  const registry = registryWith([() => { throw new Error('ENOENT'); }, () => closed.push('/b.js')]);
+  registry.watch('/gone.js');
+  registry.watch('/b.js');
 
-  assert.doesNotThrow(() => run(fileWatchers));
+  assert.doesNotThrow(() => registry.closeAll());
   assert.deepEqual(closed, ['/b.js']);
-  assert.equal(fileWatchers.size, 0);
+  assert.equal(registry.size(), 0);
 });

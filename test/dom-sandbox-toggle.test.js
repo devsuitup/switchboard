@@ -293,7 +293,7 @@ test('main.js: sandbox defaults to off and wraps the claude command with the asa
   assert.ok(scheduleStart !== -1);
   const scheduleBody = src.slice(scheduleStart, src.indexOf('scheduleIpc.init', scheduleStart));
   assert.match(scheduleBody, /sandboxScriptPath\(\)/, 'runScheduleCommand must wrap claude with the sandbox script when the setting is on');
-  assert.match(scheduleBody, /projectSettings\.sandbox/, 'runScheduleCommand must resolve the project-level sandbox override');
+  assert.match(scheduleBody, /resolveScheduleSandbox\(cwd, getSetting,/, 'runScheduleCommand must resolve the project-level sandbox override (nearest project; see test/schedule-project-provenance.test.js)');
 
   // Off-linux a scheduled run must be skipped, not silently downgraded to an
   // unconfined one — nobody is watching the log during an unattended run.

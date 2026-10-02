@@ -28,7 +28,7 @@
 
 const os   = require('os');
 const path = require('path');
-const { resolveOnDisk } = require('./resolve-path-on-disk');
+const { resolveOnDisk, resolveOnDiskAsync } = require('./resolve-path-on-disk');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
@@ -69,6 +69,16 @@ function isSensitivePath(filePath) {
   // while the file it opens is not. Skipped when nothing exists there yet —
   // see the file header.
   const real = resolveOnDisk(resolved);
+  if (real && real !== resolved) {
+    return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(real));
+  }
+  return false;
+}
+
+async function isSensitivePathAsync(filePath) {
+  const resolved = path.resolve(filePath);
+  if (SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved))) return true;
+  const real = await resolveOnDiskAsync(resolved);
   if (real && real !== resolved) {
     return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(real));
   }
@@ -159,4 +169,4 @@ function isKnownProjectRoot(candidatePath, knownProjectPaths) {
   return false;
 }
 
-module.exports = { isSensitivePath, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot };
+module.exports = { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot };

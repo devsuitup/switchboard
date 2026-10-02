@@ -5,6 +5,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require('util');
+
+const realpathJs = promisify((p, cb) => fs.realpath(p, cb));
 
 /**
  * Resolve `filePath` to its real, symlink-free location on disk.
@@ -46,6 +49,14 @@ function resolveOnDisk(filePath) {
   }
 }
 
+async function resolveOnDiskAsync(filePath) {
+  try {
+    return await realpathJs(path.resolve(filePath));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * True when `child` is `parent` itself or lies beneath it.
  *
@@ -65,4 +76,4 @@ function isInsideDir(child, parent) {
   return c === p || c.startsWith(p + path.sep);
 }
 
-module.exports = { resolveOnDisk, isInsideDir };
+module.exports = { resolveOnDisk, resolveOnDiskAsync, isInsideDir };

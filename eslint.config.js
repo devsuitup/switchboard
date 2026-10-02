@@ -123,6 +123,7 @@ const rendererCrossFileGlobals = {
   showResumeSessionDialog: 'readonly',
   showJsonlViewer: 'readonly',
   showSubagentTranscript: 'readonly',
+  narrowSessionsToSearch: 'readonly',
   forkSession: 'readonly',
   openSession: 'readonly',
   loadProjects: 'readonly',
@@ -340,6 +341,8 @@ const rendererCrossFileGlobals = {
   runAgentVerb: 'readonly',
   selectAgentsRow: 'readonly',
   showDispatchAgentDialog: 'readonly',
+  // claude.ai bridge URL (public/bridge-url.js)
+  bridgeSessionUrl: 'readonly',
 };
 
 module.exports = [
@@ -380,7 +383,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js', 'public/agents-view.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/bridge-url.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js', 'public/whats-new.js', 'public/agents-view.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',

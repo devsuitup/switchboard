@@ -28,6 +28,21 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+  changelog:
+    # see docs/changelog.md ("The CI check")
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a CHANGELOG.md entry for app changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-changelog.js --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}"
+
   test:
     runs-on: ${{ matrix.os }}
 
@@ -49,6 +64,16 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # The sandbox tests that write from inside a real bwrap skip where
+      # unprivileged user namespaces are refused; on Linux they must run.
+      - name: Enable the real-sandbox tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          echo "SWITCHBOARD_REQUIRE_REAL_BWRAP=1" >> "$GITHUB_ENV"
 
       - name: Run tests with coverage
         run: npm run coverage

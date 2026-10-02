@@ -3,9 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { encodeProjectPath } = require('./encode-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const MINUTE_MS = 60 * 1000;
+const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -74,6 +77,56 @@ function cronMatches(cronExpr, now) {
   );
 }
 
+/** The latest minute in (afterMs, uptoMs] that the cron expression matches, or null. */
+function latestCronMatch(cronExpr, afterMs, uptoMs) {
+  for (let m = Math.floor(uptoMs / MINUTE_MS) * MINUTE_MS; m > afterMs; m -= MINUTE_MS) {
+    if (cronMatches(cronExpr, new Date(m))) return m;
+  }
+  return null;
+}
+
+function scheduleStateKey(schedule) {
+  return crypto.createHash('sha256').update(schedule.filePath).digest('hex').slice(0, 16);
+}
+
+/**
+ * Read the catch-up record: Map<key, { handled, files }>, where `handled` is
+ * the latest minute (epoch ms) already run or deliberately passed over.
+ */
+function readScheduleState(stateDir) {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const state = new Map();
+  for (const name of fs.readdirSync(stateDir)) {
+    const m = name.match(/^([0-9a-f]{16})-(\d+)\.json$/);
+    if (!m) continue;
+    const entry = state.get(m[1]) || { handled: -Infinity, files: [] };
+    entry.handled = Math.max(entry.handled, Number(m[2]));
+    entry.files.push(name);
+    state.set(m[1], entry);
+  }
+  return state;
+}
+
+/**
+ * Mark a minute of a schedule as handled. The exclusive create is the claim:
+ * of two instances deciding on the same minute, only one gets `true`.
+ */
+function claimScheduleMinute(stateDir, key, minuteMs, info) {
+  try {
+    fs.writeFileSync(path.join(stateDir, `${key}-${minuteMs}.json`), JSON.stringify(info) + '\n', { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if (err.code === 'EEXIST') return false;
+    throw err;
+  }
+}
+
+function pruneScheduleState(stateDir, entry) {
+  for (const name of entry.files) {
+    try { fs.unlinkSync(path.join(stateDir, name)); } catch {}
+  }
+}
+
 /**
  * Resolve a project folder name to its project path from the SQLite cache.
  * Returns a Map<folder, projectPath>, or an empty Map if the cache is
@@ -112,27 +165,106 @@ function readProjectPathFromJsonl(folderPath) {
   return null;
 }
 
-/** Scan all projects for schedule-*.md files and return parsed schedule objects. */
-function scanSchedules(log) {
+/**
+ * The projects to seed the schedule registry with, the first time it is
+ * read: the ~/.claude/projects folders whose recorded path encodes back to the
+ * folder's name and holds a schedule. After that seeding, a project enters the
+ * registry only from main-side actions, never from a transcript.
+ * see docs/sandbox.md ("Schedules")
+ */
+function initialScheduleProjects() {
+  const found = [];
+  if (!fs.existsSync(PROJECTS_DIR)) return found;
+  const folderMeta = loadFolderMetaMap();
+  for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+    if (!folder.isDirectory()) continue;
+    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    try {
+      const commandsDir = path.join(projectPath, '.claude', 'commands');
+      if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
+        found.push(projectPath);
+      }
+    } catch {}
+  }
+  return found;
+}
+
+/**
+ * The schedule registry, kept in the `scheduleProjects` setting: the projects
+ * Switchboard opened a session in or the user added, seeded once by
+ * `seed()` when the setting has never been written.
+ */
+function scheduleRegistry(getSetting, setSetting, seed = initialScheduleProjects) {
+  const read = () => {
+    const stored = getSetting('scheduleProjects');
+    if (Array.isArray(stored)) return stored;
+    const seeded = [...new Set(seed().map(p => path.resolve(p)))];
+    setSetting('scheduleProjects', seeded);
+    return seeded;
+  };
+  return {
+    list: read,
+    add(projectPath) {
+      if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return;
+      const p = path.resolve(projectPath);
+      const current = read();
+      if (!current.includes(p)) setSetting('scheduleProjects', [...current, p]);
+    },
+    remove(projectPath) {
+      const p = path.resolve(projectPath);
+      const current = read();
+      if (current.includes(p)) setSetting('scheduleProjects', current.filter(x => x !== p));
+    },
+  };
+}
+
+/**
+ * Whether a schedule running in `cwd` is sandboxed: the `project:` setting of
+ * `cwd` or, failing that, of the nearest directory above it that has one, then
+ * the global setting, then the default.
+ */
+function resolveScheduleSandbox(cwd, getSetting, defaultValue) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const project = getSetting('project:' + dir);
+    if (project && project.sandbox !== undefined) return !!project.sandbox;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const global = getSetting('global');
+  if (global && global.sandbox !== undefined) return !!global.sandbox;
+  return !!defaultValue;
+}
+
+/**
+ * The add-dirs of a sandboxed schedule that lie under $HOME without being a
+ * known project or inside one: binding them read-write would hand the run
+ * whatever they hold.
+ */
+function refusedScheduleBinds(addDirs, knownProjects, home) {
+  const inside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
+  const homeDir = path.resolve(home);
+  return addDirs.filter((dir) => {
+    const p = path.resolve(dir);
+    if (!inside(p, homeDir)) return false;
+    for (const project of knownProjects) {
+      if (inside(p, path.resolve(project))) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Scan the registered projects for schedule-*.md files and return parsed
+ * schedule objects. Without a registry, nothing is scanned.
+ */
+function scanSchedules(log, projectPaths = []) {
   const schedules = [];
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return schedules;
-    const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory());
-
-    // Prefer the cached folder→projectPath mapping; only read JSONLs for
-    // folders genuinely missing from the cache. This avoids re-reading 4KB of
-    // every JSONL of every project on each 60s tick.
-    const folderMeta = loadFolderMetaMap();
-
-    for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder.name);
-      let projectPath = folderMeta.get(folder.name) || null;
-      if (!projectPath) {
-        projectPath = readProjectPathFromJsonl(folderPath);
-      }
-      if (!projectPath) continue;
-
+    for (const projectPath of projectPaths) {
+      const folder = { name: encodeProjectPath(projectPath) };
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       try {
         if (!fs.existsSync(commandsDir)) continue;
@@ -147,6 +279,7 @@ function scanSchedules(log) {
               file, filePath: path.join(commandsDir, file),
               projectPath, folder: folder.name,
               name: meta.name || file, cron: meta.cron,
+              catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
               cli: meta.cli || {}, prompt: body,
             });
@@ -162,10 +295,16 @@ function scanSchedules(log) {
   return schedules;
 }
 
-/** Create a pre-seeded JSONL session file with user message and slug for grouping. */
-function createScheduleSession(schedule) {
+/**
+ * Create a pre-seeded JSONL session file with user message and slug for grouping.
+ * `dueMs` is set for a catch-up run: the minute it was due, named in the message.
+ */
+function createScheduleSession(schedule, dueMs) {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
+  const heading = dueMs == null
+    ? 'Scheduled Task: '
+    : `Scheduled Task (catch-up: due ${new Date(dueMs).toISOString()}, started ${timestamp}): `;
   const claudeProjectDir = path.join(PROJECTS_DIR, schedule.folder);
 
   fs.mkdirSync(claudeProjectDir, { recursive: true });
@@ -173,7 +312,7 @@ function createScheduleSession(schedule) {
 
   const msgId = crypto.randomUUID();
   const lines = [
-    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: 'Scheduled Task: ' + schedule.prompt } }),
+    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: heading + schedule.prompt } }),
   ];
   fs.writeFileSync(jsonlPath, lines.join('\n') + '\n');
   return { sessionId, jsonlPath };
@@ -257,42 +396,103 @@ function buildScheduleCommand(sessionId, schedule) {
 }
 
 /**
- * Start the cron loop. Checks every 60 seconds.
+ * Start the cron loop. Checks every 60 seconds; a schedule with `catch-up: true`
+ * is also checked at start and on `resume`, and runs once for missed minutes.
  * @param {object} log - Logger
  * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
+ * @param {object} [opts]
+ * @param {EventEmitter} [opts.resumeSource] - Emits `resume` after a system suspend (Electron's powerMonitor)
+ * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand) {
+function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
   let running = true;
   const runningTasks = new Set();
+  // see .ai/contexts/schedule-runner.md ("Isolated instances")
+  const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
+  if (!catchUpOn) log.info('[schedule] catch-up is off: SWITCHBOARD_DATA_DIR isolates this instance, schedules run on cron only');
 
-  function tick() {
-    if (!running) return;
-    const now = new Date();
-    const schedules = scanSchedules(log);
+  function launch(schedule, dueMs) {
+    const taskKey = `${schedule.folder}:${schedule.slug}`;
+    if (runningTasks.has(taskKey)) {
+      log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
+      return;
+    }
 
-    for (const schedule of schedules) {
-      if (!cronMatches(schedule.cron, now)) continue;
-      const taskKey = `${schedule.folder}:${schedule.slug}`;
-      if (runningTasks.has(taskKey)) {
-        log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
-        continue;
-      }
-
+    if (dueMs == null) {
       log.info(`[schedule] Triggering: ${schedule.name} (${schedule.cron})`);
-      try {
-        const { sessionId } = createScheduleSession(schedule);
-        const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
+    } else {
+      log.info(`[schedule] Catching up: ${schedule.name} (${schedule.cron}), due ${new Date(dueMs).toISOString()}`);
+    }
+    try {
+      const { sessionId } = createScheduleSession(schedule, dueMs);
+      const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-        runningTasks.add(taskKey);
-        runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
-          runningTasks.delete(taskKey);
-        });
-      } catch (err) {
-        log.error(`[schedule] Failed to run ${schedule.name}:`, err);
-      }
+      runningTasks.add(taskKey);
+      runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
+        runningTasks.delete(taskKey);
+      });
+    } catch (err) {
+      log.error(`[schedule] Failed to run ${schedule.name}:`, err);
     }
   }
+
+  function checkCatchUp(schedule, state, nowMs) {
+    const key = scheduleStateKey(schedule);
+    const nowMinute = Math.floor(nowMs / MINUTE_MS) * MINUTE_MS;
+    const info = { file: schedule.filePath, name: schedule.name };
+    let entry = state.get(key);
+    if (entry && entry.handled > nowMinute) {
+      log.warn(`[schedule] ${schedule.name}: recorded minute ${new Date(entry.handled).toISOString()} is ahead of the clock, restarting its record from now`);
+      pruneScheduleState(stateDir, entry);
+      entry = null;
+    }
+    if (!entry) {
+      const baseline = nowMinute - MINUTE_MS;
+      claimScheduleMinute(stateDir, key, baseline, info);
+      entry = { handled: baseline, files: [`${key}-${baseline}.json`] };
+    }
+    const due = latestCronMatch(schedule.cron, Math.max(entry.handled, nowMinute - CATCH_UP_WINDOW_MS), nowMinute);
+    if (due === null) return;
+    if (!claimScheduleMinute(stateDir, key, due, info)) {
+      log.info(`[schedule] Skipping ${schedule.name} — already triggered for that minute`);
+      return;
+    }
+    pruneScheduleState(stateDir, entry);
+    launch(schedule, due < nowMinute ? due : null);
+  }
+
+  function check(onTick) {
+    if (!running) return;
+    const now = new Date();
+    const schedules = scanSchedules(log, projects ? projects() : []);
+    let state = null;
+    if (catchUpOn && schedules.some(s => s.catchUp)) {
+      try {
+        state = readScheduleState(stateDir);
+      } catch (err) {
+        log.warn(`[schedule] Cannot read the catch-up record in ${stateDir}, running on cron only:`, err.message);
+      }
+    }
+
+    for (const schedule of schedules) {
+      if (schedule.catchUp && state) {
+        try {
+          checkCatchUp(schedule, state, now.getTime());
+          continue;
+        } catch (err) {
+          log.warn(`[schedule] Cannot keep the catch-up record of ${schedule.name}, running on cron only:`, err.message);
+        }
+      }
+      if (onTick && cronMatches(schedule.cron, now)) launch(schedule, null);
+    }
+  }
+
+  const tick = () => check(true);
+  const onResume = () => check(false);
+
+  check(false);
+  if (resumeSource) resumeSource.on('resume', onResume);
 
   const msUntilNextMinute = (60 - new Date().getSeconds()) * 1000;
   const initialTimer = setTimeout(() => {
@@ -308,4 +508,4 @@ function startScheduler(log, runCommand) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry };

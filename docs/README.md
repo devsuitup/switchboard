@@ -39,6 +39,7 @@ links are in the [README](../README.md#download).
 | [Testing a PR live](testing-a-pr.md) | `task test-pr`: a PR's code in an isolated instance next to your own, and its pitfalls |
 | [Live testing with a throwaway HOME](live-testing.md) | An instance that cannot see your sessions at all, driven by Playwright |
 | [Releasing](releasing.md) | Version bump, tag, draft release, publishing |
+| [Changelog](changelog.md) | Writing a `CHANGELOG.md` entry, the CI check, the What's new dialog |
 | [Decisions](decisions/README.md) | Architecture decision records |
 
 Code-level documentation for contributors and agents lives in

@@ -31,7 +31,7 @@ const memoryViewer = document.getElementById('memory-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
   language: 'markdown', storageKey: 'markdownPreviewMode',
-  onSave: (filePath, content) => window.api.saveMemory(filePath, content),
+  onSave: (filePath, content, expected) => window.api.saveMemory(filePath, content, expected),
 });
 const workFilesContent = document.getElementById('work-files-content');
 const workFilesViewer = document.getElementById('work-files-viewer');
@@ -250,7 +250,12 @@ async function restoreWorkingSet() {
     restorePlanner = createRestorePlanner({ savedSet, askOnce: restoreMode === 'ask' });
   }
 
-  await tickRestorePlanner();
+  let finished = false;
+  try {
+    finished = Boolean((await window.api.getIndexingState()).finished);
+  } catch { /* the event still arrives */ }
+  if (finished) await markRestoreIndexingDone();
+  else await tickRestorePlanner();
 }
 
 async function tickRestorePlanner() {
@@ -269,6 +274,7 @@ async function tickRestorePlanner() {
   }
 
   document.getElementById('restore-cold-toast')?.remove();
+  if (plan.unavailable.length) showNotRestoredNotice(plan.unavailable);
 
   if (plan.action === 'nothing') return;
 
@@ -323,14 +329,10 @@ function showColdCacheNotice(count) {
   });
 }
 
-function showLiveElsewhereNotice(skipped) {
-  document.getElementById('restore-live-elsewhere-toast')?.remove();
-  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
-  const text = skipped.length === 1
-    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
-    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
+function showRestoreNotice(id, text) {
+  document.getElementById(id)?.remove();
   const toast = document.createElement('div');
-  toast.id = 'restore-live-elsewhere-toast';
+  toast.id = id;
   toast.className = 'restore-toast';
   const msg = document.createElement('span');
   msg.className = 'restore-toast-msg';
@@ -342,6 +344,38 @@ function showLiveElsewhereNotice(skipped) {
   toast.append(msg, dismiss);
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), LIVE_ELSEWHERE_NOTICE_MS);
+}
+
+function showNotRestoredNotice(unavailable) {
+  const label = (item) => {
+    const s = sessionMap.get(item.sessionId);
+    return (s && cleanDisplayName(s.name || s.aiTitle || s.summary)) || item.sessionId;
+  };
+  const text = unavailable.length === 1
+    ? `Not restored: ${label(unavailable[0])} is not in the index`
+    : `Not restored: ${unavailable.length} sessions are not in the index (${unavailable.map(label).join(', ')})`;
+  showRestoreNotice('restore-unavailable-toast', text);
+}
+
+function showLiveElsewhereNotice(skipped) {
+  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
+  const text = skipped.length === 1
+    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
+    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
+  showRestoreNotice('restore-live-elsewhere-toast', text);
+}
+
+async function markRestoreIndexingDone() {
+  restoreIndexingDone = true;
+  if (!restorePlanner || restorePlanner.isSettled()) return;
+  let reloaded = false;
+  for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
+    try {
+      await loadProjects();
+      reloaded = true;
+    } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
+  }
+  if (reloaded) await tickRestorePlanner();
 }
 
 async function maybeRetryRestoreWorkingSet() {
@@ -576,7 +610,7 @@ function refreshSidebar({ resort = false } = {}) {
       if (!hasMatchingSessions && !projectMatched) return null;
       return {
         ...p,
-        sessions: hasMatchingSessions ? p.sessions.filter(s => searchMatchIds.has(s.sessionId)) : [],
+        sessions: hasMatchingSessions ? narrowSessionsToSearch(p.sessions, searchMatchIds) : [],
         _projectMatchedOnly: projectMatched && !hasMatchingSessions,
       };
     }).filter(Boolean);
@@ -1537,9 +1571,6 @@ let indexingBannerDismissed = false;
 function updateIndexingBanner(payload) {
   if (!payload || !payload.coldStart) return;
   if (payload.done) {
-    // indexing over: the planner's other stop condition — see .ai/contexts/session-cache.md
-    restoreIndexingDone = true;
-    tickRestorePlanner();
     if (payload.error) {
       // A failed scan used to just hide the banner, leaving the tiny status
       // text as the only trace of the failure. Show it where the user was
@@ -1563,6 +1594,7 @@ function dismissIndexingBanner() {
   indexingBannerDismissed = true;
 }
 window.api.onIndexingProgress(updateIndexingBanner);
+window.api.onIndexingFinished(markRestoreIndexingDone);
 document.getElementById('indexing-banner-dismiss').addEventListener('click', dismissIndexingBanner);
 
 // Refocus the active terminal after a fullscreen transition (F11, menu, IPC).

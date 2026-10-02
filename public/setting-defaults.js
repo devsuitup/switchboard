@@ -30,6 +30,7 @@ const SETTING_DEFAULTS = {
   autoUpdate: true,
   shellProfile: 'auto',
   activityReporting: false, // see .ai/contexts/activitywatch.md
+  lastSeenVersion: null, // see docs/changelog.md
 };
 
 if (typeof module !== 'undefined' && module.exports) {
