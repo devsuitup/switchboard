@@ -186,8 +186,10 @@ function initialScheduleProjects(listProjectSettingKeys) {
   const folderMeta = loadFolderMetaMap();
   for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
     if (!folder.isDirectory()) continue;
-    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
-    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    const recorded = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!recorded) continue;
+    const projectPath = path.resolve(recorded);
+    if (encodeProjectPath(projectPath) !== folder.name) continue;
     try {
       if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
       const commandsDir = path.join(projectPath, '.claude', 'commands');

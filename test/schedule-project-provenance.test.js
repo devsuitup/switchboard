@@ -87,6 +87,16 @@ test('schedules: the seed holds the projects with a setting and the git checkout
     'a setting registers a local project only; a transcript registers one only with a schedule and a .git, under its own name');
 });
 
+test('schedules: a transcript cwd is resolved before it is matched to its folder name', () => {
+  reset();
+  const app = path.join(ROOT, 'work', 'app');
+  fs.mkdirSync(path.join(ROOT, 'work', 'other'), { recursive: true });
+  withSchedule(app);
+  fs.mkdirSync(path.join(app, '.git'));
+  transcript(encodeProjectPath(app), [ROOT, 'work', 'other', '..', 'app'].join(path.sep));
+  assert.deepEqual(initialScheduleProjects(() => []), [app], 'registered as the resolved path, not as spelled');
+});
+
 test('schedules: a transcript folder with no schedule, or a schedule without a .git, seeds nothing', () => {
   reset();
   const noGit = path.join(ROOT, 'work', 'no-git');

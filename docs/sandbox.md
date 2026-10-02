@@ -260,10 +260,14 @@ with two kinds of project: those that carry a per-project setting of their own
 (a `project:` entry in the settings table, for a directory that exists on this
 machine), and those that already hold a schedule, are a git checkout (a `.git`
 directory or file) and have a transcript folder named after their path. A
-transcript folder alone registers nothing, and neither does a schedule outside
-a git checkout: a folder planted before that first read would otherwise be
-registered, and inherit the sandbox setting of the project enclosing it. Any
-other project enters the registry the normal way, when a session is launched in
+transcript folder alone registers nothing, and neither does a schedule in a
+directory that is not a git repository. A folder planted before the upgrade
+that holds a `.git` and a schedule is still registered, once, at that first
+read: under v0.0.85 a sandboxed session could write both `~/.claude/projects`
+and its project directory, and nothing in the seed can tell such a folder from
+a real repository. The maintainer accepted this residual on 2026-10-02. After
+the upgrade `~/.claude/projects` is read-only to a sandboxed session except its
+own folder, so nothing new can be planted. Any other project enters the registry the normal way, when a session is launched in
 it from the app or when you add it.
 
 A sandboxed session can still create a `.claude` below a bound directory

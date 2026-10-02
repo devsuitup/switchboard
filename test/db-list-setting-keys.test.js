@@ -19,8 +19,8 @@ test('listSettingKeys returns the keys with the prefix, not those that merely co
   try {
     const code = `
       const db = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
-      for (const k of ['global', 'project:/a', 'project:/b', 'xproject:/c', 'project_/d', 'project%']) db.setSetting(k, { v: 1 });
-      console.log(JSON.stringify(db.listSettingKeys('project:').sort()));
+      for (const k of ['global', 'project:/a', 'project:/b', 'xproject:/c', 'project_/d', 'project%', 'PROJECT:/x']) db.setSetting(k, { v: 1 });
+      console.log(JSON.stringify([db.listSettingKeys('project:').sort(), db.listSettingKeys('project_').sort()]));
     `;
     const r = spawnSync(electronBin, ['-e', code], {
       cwd: APP_DIR,
@@ -28,7 +28,7 @@ test('listSettingKeys returns the keys with the prefix, not those that merely co
       encoding: 'utf8',
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), ['project:/a', 'project:/b']);
+    assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), [['project:/a', 'project:/b'], ['project_/d']]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
