@@ -21,6 +21,7 @@ function createSessionState(kind) {
   let busy = false;
   let waitingForInput = false;
   let attention = false;
+  let attentionFromDescriptor = false;
   let responseReady = false;
   let agentsBusy = false;
   let lastActivityAt = null;
@@ -35,6 +36,12 @@ function createSessionState(kind) {
     busy = false;
     waitingForInput = false;
     responseReady = false;
+  }
+
+  function releaseDescriptorAttention() {
+    if (!attentionFromDescriptor) return;
+    attention = false;
+    attentionFromDescriptor = false;
   }
 
   function touch(event) {
@@ -57,6 +64,7 @@ function createSessionState(kind) {
         touch(event);
         break;
       case 'attention':
+        attentionFromDescriptor = false;
         if (event.active === false) {
           attention = false;
         } else {
@@ -65,11 +73,15 @@ function createSessionState(kind) {
         }
         touch(event);
         break;
+      case 'releaseDescriptorAttention':
+        releaseDescriptorAttention();
+        break;
       case 'clearUnread':
         responseReady = false;
         break;
       case 'liveness':
         liveness = event.value === 'alive' || event.value === 'dead' ? event.value : 'unknown';
+        if (liveness === 'dead') releaseDescriptorAttention();
         break;
       case 'attached':
         attached = !!event.value;
@@ -79,6 +91,16 @@ function createSessionState(kind) {
         break;
       case 'descriptorStatus':
         liveness = event.status === 'alive' || event.status === 'dead' ? event.status : liveness;
+        if (event.attention === false) releaseDescriptorAttention();
+        if (event.attention === true) {
+          if (event.status === 'waiting' && liveness !== 'dead') {
+            clearExclusive();
+            attention = true;
+            attentionFromDescriptor = true;
+          } else {
+            releaseDescriptorAttention();
+          }
+        }
         touch({ at: event.at, source: 'descriptor' });
         break;
       case 'subagentSpawned':

@@ -313,10 +313,10 @@ async function handleGetDiagnostics(entry, rpcId) {
  * Start an MCP WebSocket server for a session.
  * @returns {{ port: number, authToken: string }}
  */
-async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
+async function startMcpServer(sessionId, workspaceFolders, mainWindow, log, options = {}) {
   ensureIdeDir();
 
-  const port = await findFreePort();
+  const port = options.port ?? await findFreePort();
   const authToken = crypto.randomUUID();
 
   const wss = new WebSocketServer({
@@ -327,6 +327,15 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
       return false;
     },
   });
+  try {
+    await new Promise((resolve, reject) => {
+      wss.once('listening', resolve);
+      wss.once('error', reject);
+    });
+  } catch (err) {
+    try { wss.close(); } catch {}
+    throw err;
+  }
 
   const lockFilePath = path.join(IDE_DIR, `${port}.lock`);
   const lockData = JSON.stringify({
@@ -343,7 +352,16 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
   if (fs.existsSync(lockFilePath)) {
     try { fs.chmodSync(lockFilePath, 0o600); } catch {}
   }
-  fs.writeFileSync(lockFilePath, lockData, { encoding: 'utf8', mode: 0o600 });
+  try {
+    fs.writeFileSync(lockFilePath, lockData, { encoding: 'utf8', mode: 0o600 });
+    if (fs.readFileSync(lockFilePath, 'utf8') !== lockData) {
+      throw new Error(`lock file ${lockFilePath} does not read back as written`);
+    }
+  } catch (err) {
+    try { wss.close(); } catch {}
+    try { fs.unlinkSync(lockFilePath); } catch {}
+    throw err;
+  }
 
   const entry = {
     sessionId,
@@ -372,13 +390,17 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
       try { entry.ws.close(); } catch {}
     }
     entry.ws = ws;
+    notifyStatus(entry);
 
     ws.on('message', (data) => {
       handleMessage(entry, data.toString(), log);
     });
 
     ws.on('close', () => {
-      if (entry.ws === ws) entry.ws = null;
+      if (entry.ws === ws) {
+        entry.ws = null;
+        notifyStatus(entry);
+      }
       log.debug(`[mcp] session=${sessionId} CLI disconnected`);
     });
 
@@ -395,6 +417,23 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
   log.info(`[mcp] session=${sessionId} server started on port ${port}`);
 
   return { port, authToken };
+}
+
+/**
+ * What holds for a session's IDE emulation: 'connected' while the CLI is
+ * attached, 'listening' when the server is up and no CLI is attached, 'off'
+ * when there is no server.
+ */
+function getMcpState(sessionId) {
+  const entry = servers.get(sessionId);
+  if (!entry) return 'off';
+  return entry.ws ? 'connected' : 'listening';
+}
+
+function notifyStatus(entry) {
+  if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
+    entry.mainWindow.webContents.send('mcp-status', entry.sessionId, entry.ws ? 'connected' : 'listening');
+  }
 }
 
 /**
@@ -489,6 +528,7 @@ function cleanStaleLockFiles(log) {
 
 module.exports = {
   startMcpServer,
+  getMcpState,
   shutdownMcpServer,
   shutdownAll,
   resolvePendingDiff,

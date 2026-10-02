@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('api', {
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
+  remoteSendPrompt: (alias, sessionId, text) => ipcRenderer.invoke('remote-send-prompt', { alias, sessionId, text }),
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
@@ -110,7 +111,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('session-detected', (_event, tempId, realId) => callback(tempId, realId));
   },
   onProcessExited: (callback) => {
-    ipcRenderer.on('process-exited', (_event, sessionId, exitCode, signal, stopped) => callback(sessionId, exitCode, signal, stopped));
+    ipcRenderer.on('process-exited', (_event, sessionId, exitCode, signal, stopped, generation) => callback(sessionId, exitCode, signal, stopped, generation));
   },
   onTerminalNotification: (callback) => {
     ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
@@ -142,6 +143,11 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingFinished: (callback) => {
     ipcRenderer.on('indexing-finished', () => callback());
   },
+  onUnsavedCheck: (callback) => {
+    ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
+  },
+  unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
+  unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));
   },
@@ -172,6 +178,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   onMcpCloseAllDiffs: (callback) => {
     ipcRenderer.on('mcp-close-all-diffs', (_event, sessionId) => callback(sessionId));
+  },
+  onMcpStatus: (callback) => {
+    ipcRenderer.on('mcp-status', (_event, sessionId, state) => callback(sessionId, state));
   },
   onMcpCloseTab: (callback) => {
     ipcRenderer.on('mcp-close-tab', (_event, sessionId, diffId) => callback(sessionId, diffId));

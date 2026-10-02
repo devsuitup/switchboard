@@ -478,8 +478,8 @@ test('public/app.js: the pty-stop cleanup routes through purgeActivityFor and sk
 
   assert.match(body, /if\s*\(!running\s*&&\s*!item\.dataset\.remoteAlias\)\s*\{/,
     'the purge branch must skip rows carrying dataset.remoteAlias');
-  assert.match(body, /purgeActivityFor\(id,\s*'pty-gone'\)/,
-    'the purge must go through the shared dispatcher');
+  assert.match(body, /dropLocalPtySession\(id,\s*'pty-gone'\)/,
+    'the purge must go through the shared drop helper');
   assert.ok(!/sessionBusyState\.delete\(id\)/.test(body),
     'app.js must not delete from sessionBusyState directly anymore');
   assert.ok(!/responseReadySessions\.delete\(id\)/.test(body),

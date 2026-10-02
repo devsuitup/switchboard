@@ -16,7 +16,7 @@ process.env.USERPROFILE = ROOT;
 delete process.env.SWITCHBOARD_DATA_DIR;
 
 const {
-  scanSchedules, initialScheduleProjects, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry,
+  scanSchedules, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry,
 } = require('../schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 
@@ -125,4 +125,80 @@ test('schedules: sandboxed add-dirs under $HOME must be a registered project or 
     ['/home/u/.local/bin', '/home/u/work', '/home/u/work/application']);
   assert.deepEqual(refusedScheduleBinds(['/home/u/work/app/../../.ssh'], known, home), ['/home/u/work/app/../../.ssh'],
     'the path is judged normalised');
+});
+
+test('schedules: an add-dir at or under a .claude or .git is refused, even inside a registered project', () => {
+  reset();
+  const home = ROOT;
+  const app = path.join(ROOT, 'work', 'app');
+  fs.mkdirSync(path.join(app, '.claude', 'commands'), { recursive: true });
+  fs.mkdirSync(path.join(app, '.git', 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(app, 'sub'), { recursive: true });
+  const known = [app];
+  const refused = [
+    path.join(app, '.claude'),
+    path.join(app, '.claude') + path.sep,
+    path.join(app, '.claude', 'commands'),
+    path.join(app, '.claude', 'missing'),
+    path.join(app, '.git'),
+    path.join(app, '.git', 'hooks'),
+    path.join(app, 'sub', '..', '.claude'),
+    path.join(app, 'sub', '.claude'),
+  ];
+  assert.deepEqual(refusedScheduleBinds(refused, known, home), refused);
+  const allowed = [app, path.join(app, 'sub'), path.join(app, '.claude', '..'), path.join(app, '.claude-notes'), path.join(app, 'x.git')];
+  assert.deepEqual(refusedScheduleBinds(allowed, known, home), []);
+  assert.deepEqual(refusedScheduleBinds([path.join(path.dirname(ROOT), 'elsewhere', '.claude')], known, home),
+    [path.join(path.dirname(ROOT), 'elsewhere', '.claude')], 'outside $HOME too');
+});
+
+test('schedules: an add-dir that is a symbolic link to a .claude, or out of a project into $HOME, is judged by its target', (t) => {
+  reset();
+  const home = ROOT;
+  const app = path.join(ROOT, 'work', 'app');
+  fs.mkdirSync(path.join(app, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(ROOT, '.ssh'), { recursive: true });
+  const toClaude = path.join(app, 'link-claude');
+  const toSsh = path.join(app, 'link-ssh');
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-link-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const viaOutside = path.join(outside, 'to-ssh');
+  try {
+    fs.symlinkSync(path.join(app, '.claude'), toClaude, 'junction');
+    fs.symlinkSync(path.join(ROOT, '.ssh'), toSsh, 'junction');
+    fs.symlinkSync(path.join(ROOT, '.ssh'), viaOutside, 'junction');
+  } catch (err) {
+    t.skip(`cannot create links here: ${err.code}`);
+    return;
+  }
+  const known = [app];
+  assert.deepEqual(refusedScheduleBinds([toClaude, toSsh], known, home), [toClaude, toSsh]);
+  assert.deepEqual(refusedScheduleBinds([viaOutside], known, home), [viaOutside], 'a link from outside $HOME into it');
+  const movedClaude = path.join(ROOT, 'work', 'app2');
+  fs.mkdirSync(movedClaude, { recursive: true });
+  fs.symlinkSync(outside, path.join(movedClaude, '.claude'), 'junction');
+  const asSpelled = path.join(movedClaude, '.claude');
+  assert.deepEqual(refusedScheduleBinds([asSpelled], known, home), [asSpelled], 'a .claude that links elsewhere is refused as spelled');
+});
+
+test('schedules: a relative cwd is judged from its resolved path', () => {
+  const proj = path.resolve('rel-proj-385');
+  const get = (key) => (key === 'project:' + proj ? { sandbox: true } : undefined);
+  assert.equal(resolveScheduleSandbox('rel-proj-385', get, false), true);
+  assert.equal(resolveScheduleSandbox(path.join('rel-proj-385', 'sub', '..', 'sub'), get, false), true);
+});
+
+test('schedules: a relative add-dir is taken from the schedule\'s directory, and the refusal says why', () => {
+  const home = path.resolve('/home/u');
+  const app = path.resolve('/home/u/work/app');
+  const known = [app];
+  assert.deepEqual(refusedScheduleBinds(['sub', './docs'], known, home, app), []);
+  assert.deepEqual(refusedScheduleBinds(['../../.ssh', '../lib'], known, home, app), ['../../.ssh', '../lib']);
+  assert.deepEqual(refusedScheduleBinds(['../app/sub'], known, home, path.resolve('/home/u/work/other')), []);
+  assert.deepEqual(
+    scheduleBindRefusals(['.claude', '../../.ssh', 'sub'], known, home, app),
+    [
+      { dir: '.claude', reason: 'at or inside a .claude or .git directory' },
+      { dir: '../../.ssh', reason: 'under the home directory and not a Switchboard project' },
+    ]);
 });

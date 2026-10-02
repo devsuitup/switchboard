@@ -79,9 +79,11 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function destroySession(id) { openSessions.delete(id); }
     async function resolveDefaultSessionOptions() { return {}; }
     function syncPtySizeAfterOpen() {}
-    function setSessionMcpActive() {}
+    function setSessionMcpState() {}
     function setSessionSandboxed() {}
     function forgetSessionExit() {}
+    function beginPtyOpen() {}
+    function settlePtyOpen() {}
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
