@@ -45,8 +45,8 @@ function makeHandler(mocks) {
   const fn = new Function(
     'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
     'populateCacheViaWorker',
-    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
-    'annotateRemoteAttachable', 'showArchived',
+    'reconcileCacheFromFilesystem', 'buildProjectViewsFromCache', 'mergePlaceholderSessions',
+    'annotateRemoteAttachable',
     body
   );
   // annotateRemoteAttachable (remote-attach join, issue #221) and
@@ -58,8 +58,8 @@ function makeHandler(mocks) {
   return () => fn(
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
-    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, false
+    mocks.reconcileCacheFromFilesystem, mocks.buildProjectViewsFromCache, mergePlaceholderSessions,
+    annotateRemoteAttachable
   );
 }
 
@@ -71,7 +71,7 @@ test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synch
     isInitialScanComplete: () => false,
     populateCacheViaWorker: () => { calls.push('populate'); },
     reconcileCacheFromFilesystem: () => { calls.push('reconcile'); },
-    buildProjectsFromCache: () => { calls.push('build'); return []; },
+    buildProjectViewsFromCache: () => { calls.push('build'); return { projects: [], allProjects: [] }; },
   });
 
   handler();
@@ -92,7 +92,7 @@ test('get-projects on a warm cache still reconciles (stat-gated, cheap when noth
     isInitialScanComplete: () => true, // marker present: the scan really finished
     populateCacheViaWorker: () => { calls.push('populate'); },
     reconcileCacheFromFilesystem: () => { calls.push('reconcile'); },
-    buildProjectsFromCache: () => { calls.push('build'); return []; },
+    buildProjectViewsFromCache: () => { calls.push('build'); return { projects: [], allProjects: [] }; },
   });
 
   handler();
@@ -119,7 +119,7 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
     isInitialScanComplete: () => false, // ...but the scan never reached done
     populateCacheViaWorker: () => { calls.push('populate'); },
     reconcileCacheFromFilesystem: () => { calls.push('reconcile'); },
-    buildProjectsFromCache: () => { calls.push('build'); return []; },
+    buildProjectViewsFromCache: () => { calls.push('build'); return { projects: [], allProjects: [] }; },
   });
 
   handler();

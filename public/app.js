@@ -562,7 +562,7 @@ window.api.onCliBusyState((sessionId, busy) => {
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
-function refreshSidebar({ resort = false } = {}) {
+function refreshSidebar({ resort = false, skipIfUnchanged = false } = {}) {
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
@@ -581,7 +581,10 @@ function refreshSidebar({ resort = false } = {}) {
     }).filter(Boolean);
   }
 
-  renderProjects(projects, resort);
+  if (!renderProjects(projects, resort, { skipIfUnchanged })) {
+    refreshSessionTimeLabels();
+    return;
+  }
   pruneRemoteActivityTimers();
   pruneLocalTranscriptTimers();
 }
@@ -984,8 +987,7 @@ function updatePtyTitle() {
 
 scheduleActiveSessionsPoll();
 
-// Refresh sidebar timeago labels every 30s so "just now" ticks forward
-setInterval(() => {
+function refreshSessionTimeLabels() {
   for (const [sessionId, session] of sessionMap) {
     if (!session.modified) continue;
     const item = document.getElementById('si-' + sessionId);
@@ -995,7 +997,10 @@ setInterval(() => {
     const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
     timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
   }
-}, 30000);
+}
+
+// Refresh sidebar timeago labels every 30s so "just now" ticks forward
+setInterval(refreshSessionTimeLabels, 30000);
 
 // Shared session map so all caches reference the same objects
 const sessionMap = new Map();
@@ -1014,17 +1019,15 @@ function dedup(projects) {
   }
 }
 
-async function loadProjects({ resort = false } = {}) {
+async function loadProjects({ resort = false, skipIfUnchanged = false } = {}) {
   const wasEmpty = cachedProjects.length === 0;
   if (wasEmpty) {
     loadingStatus.textContent = 'Loading\u2026';
     loadingStatus.className = 'active';
     loadingStatus.style.display = '';
   }
-  const [defaultProjects, allProjects] = await Promise.all([
-    window.api.getProjects(false),
-    window.api.getProjects(true),
-  ]);
+  // see .ai/contexts/session-cache.md ("One build, two views")
+  const { projects: defaultProjects, allProjects } = await window.api.getProjects();
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
   loadingStatus.style.display = 'none';
@@ -1076,7 +1079,7 @@ async function loadProjects({ resort = false } = {}) {
   } catch {}
 
   await pollActiveSessions();
-  refreshSidebar({ resort });
+  refreshSidebar({ resort, skipIfUnchanged });
   renderDefaultStatus();
 }
 
@@ -1466,7 +1469,7 @@ window.api.onProjectsChanged(() => {
   // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    loadProjects().then(() => maybeRetryRestoreWorkingSet());
+    loadProjects({ skipIfUnchanged: true }).then(() => maybeRetryRestoreWorkingSet());
   }, 900);
 });
 

@@ -573,8 +573,78 @@ function buildSlugGroup(slug, sessions, subagentIndex) {
   return group;
 }
 
-function renderProjects(projects, resort) {
+// see .ai/contexts/session-cache.md ("Skipping an unchanged sidebar render")
+let lastSidebarRenderSignature = null;
+
+function sortedKeys(collection) {
+  if (!collection) return null;
+  return [...(typeof collection.keys === 'function' ? collection.keys() : collection)].map(String).sort();
+}
+
+const SIGNATURE_SKIPPED_FIELDS = new Set(['sessions', 'firstPrompt', 'created', 'lastActivityAt', 'lastActivitySource']);
+
+function signatureOfFields(obj) {
+  let out = '';
+  for (const key in obj) {
+    if (SIGNATURE_SKIPPED_FIELDS.has(key)) continue;
+    let value = obj[key];
+    if (key === 'modified') {
+      const t = Date.parse(value);
+      if (Number.isFinite(t)) value = Math.floor(t / 60000);
+    }
+    out += key + '\u0001' + (value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)) + '\u0002';
+  }
+  return out;
+}
+
+function sidebarRenderSignature(projects) {
+  try {
+    const projectParts = [];
+    for (const p of projects) {
+      const sessionParts = [];
+      const groups = new Map();
+      for (const s of p.sessions) {
+        sessionParts.push(signatureOfFields(s));
+        const key = s.parentSessionId ? 'p:' + s.parentSessionId : (s.slug ? 's:' + s.slug : null);
+        if (!key) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(s.sessionId);
+      }
+      const order = [];
+      for (const [key, ids] of groups) if (ids.length > 1) order.push(key + '=' + ids.join(','));
+      projectParts.push(signatureOfFields(p) + '\u0003' + sessionParts.sort().join('\u0004') + '\u0003' + order.sort().join('\u0004'));
+    }
+    const activity = [];
+    const stateMaps = [
+      ['l', typeof localPtyStates !== 'undefined' ? localPtyStates : null],
+      ['r', typeof remoteSessionStates !== 'undefined' ? remoteSessionStates : null],
+      ['t', typeof localTranscriptStates !== 'undefined' ? localTranscriptStates : null],
+    ];
+    for (const [tag, map] of stateMaps) {
+      if (!map) continue;
+      for (const [id, st] of map) activity.push(tag + ':' + id + ':' + signatureOfFields(st.snapshot()));
+    }
+    const subagents = [];
+    for (const [parentId, agents] of activeSubagentsByParent) subagents.push(parentId + ':' + sortedKeys(agents).join(','));
+    const state = JSON.stringify({
+      now: Math.floor(Date.now() / 60000),
+      starred: showStarredOnly, running: showRunningOnly, today: showTodayOnly,
+      search: sortedKeys(searchMatchIds), searchProjects: sortedKeys(searchMatchProjectPaths),
+      visible: visibleSessionCount, maxAge: sessionMaxAgeDays, active: activeSessionId,
+      pty: sortedKeys(activePtyIds), pending: sortedKeys(pendingSessions), subagents: subagents.sort(),
+    });
+    return state + '\u0005' + activity.sort().join('\u0004') + '\u0005' + projectParts.sort().join('\u0005');
+  } catch {
+    return null;
+  }
+}
+
+function renderProjects(projects, resort, { skipIfUnchanged = false } = {}) {
   pruneStaleSubagents();
+  const renderedProjects = projects;
+  if (skipIfUnchanged && !resort && lastSidebarRenderSignature !== null
+      && sidebarRenderSignature(projects) === lastSidebarRenderSignature) return false;
+  lastSidebarRenderSignature = null;
   pendingSubagentRest.clear();
   // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
   for (const project of projects) {
@@ -1036,6 +1106,8 @@ function renderProjects(projects, resort) {
   if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
     openSessions.get(activeSessionId).terminal.focus();
   }
+  lastSidebarRenderSignature = sidebarRenderSignature(renderedProjects);
+  return true;
 }
 
 function rebindSidebarEvents(projects) {

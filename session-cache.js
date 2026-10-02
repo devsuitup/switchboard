@@ -398,8 +398,8 @@ function isProjectHidden(hiddenProjects, alias, projectPath) {
   return alias !== null && hiddenProjects.has(joinFolderKey(alias, projectPath));
 }
 
-/** Build projects response from cached data */
-function buildProjectsFromCache(showArchived) {
+// see .ai/contexts/session-cache.md ("One build, two views")
+function gatherProjectInputs() {
   const metaMap = getAllMeta();
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
@@ -428,10 +428,7 @@ function buildProjectsFromCache(showArchived) {
   const cachedIds = new Set(cachedRows.map(r => r.sessionId));
   const isArchivedParent = (id) => cachedIds.has(id) && !!metaMap.get(id)?.archived;
 
-  // Keyed on alias + projectPath: two hosts can hold the same absolute path.
-  const projectMap = new Map();
-  // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
-  const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
+  const sessionEntries = [];
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
@@ -464,23 +461,9 @@ function buildProjectsFromCache(showArchived) {
       archived: meta?.archived || 0,
       remoteAlias: alias,
     };
-    if (!showArchived && s.archived) continue;
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")
-    if (!showArchived && s.parentSessionId && isArchivedParent(s.parentSessionId)) continue;
-    const key = groupKey(alias, row.projectPath);
-    if (!projectMap.has(key)) {
-      projectMap.set(key, {
-        folder: alias === null
-          ? encodeProjectPath(row.projectPath)
-          : joinFolderKey(alias, encodeProjectPath(row.projectPath)),
-        projectPath: row.projectPath,
-        remoteAlias: alias,
-        sessions: [],
-        // A remote root is never on this filesystem. see .ai/contexts/session-cache.md ("Remote SSH hosts")
-        missing: alias === null ? !fs.existsSync(row.projectPath) : false,
-      });
-    }
-    projectMap.get(key).sessions.push(s);
+    const hiddenUnlessArchived = !!s.archived || (!!s.parentSessionId && isArchivedParent(s.parentSessionId));
+    sessionEntries.push({ alias, projectPath: row.projectPath, session: s, hiddenUnlessArchived });
   }
 
   // Include empty project directories (no sessions yet). Resolve folder->projectPath
@@ -492,14 +475,14 @@ function buildProjectsFromCache(showArchived) {
   // While the INITIAL scan is still incomplete (completeness marker absent),
   // that fallback is forbidden: cache_meta is mostly/entirely empty, so
   // deriveProjectPath (readdir + up to 256 KB JSONL read) would run for every
-  // folder under PROJECTS_DIR — twice per sidebar paint (the renderer's
-  // showArchived false/true Promise.all) — synchronously on the main process,
-  // undermining the "return whatever's cached, zero per-folder I/O" contract
-  // of the non-blocking first launch. Use a best-effort decode of the folder
+  // folder under PROJECTS_DIR on every sidebar paint, synchronously on the
+  // main process, undermining the "return whatever's cached, zero per-folder
+  // I/O" contract of the non-blocking first launch. Use a best-effort decode of the folder
   // name instead (display-only, corrected per folder as the scan worker fills
   // cache_meta and fires projects-changed) and skip the fs.existsSync missing
   // probe for the same zero-I/O reason. Nothing is written to cache_meta on
   // this path — a lossy guess must never shadow the real derived path.
+  const dirEntries = [];
   try {
     const scanComplete = isInitialScanComplete ? isInitialScanComplete() : true;
     const folderMeta = getAllFolderMeta();
@@ -525,48 +508,91 @@ function buildProjectsFromCache(showArchived) {
         }
         if (!projectPath) continue;
         if (isProjectHidden(hiddenProjects, alias, projectPath)) continue;
-        const key = groupKey(alias, projectPath);
-        if (projectMap.has(key)) continue;
         // For a placeholder the on-disk name IS the ground truth — re-encoding
         // the lossy decode could diverge from it (>200-char hashed names).
         const bare = placeholder ? d.name : encodeProjectPath(projectPath);
-        projectMap.set(key, {
-          folder: alias === null ? bare : joinFolderKey(alias, bare),
-          projectPath,
-          remoteAlias: alias,
-          sessions: [],
-          // A remote root is never on this filesystem — see above.
-          missing: (placeholder || alias !== null) ? false : !fs.existsSync(projectPath),
-        });
+        dirEntries.push({ alias, projectPath, placeholder, bare });
       }
     }
   } catch {}
 
   // Inject active plain terminal sessions so they participate in sorting
+  const terminalEntries = [];
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
     // see .ai/contexts/panel-terminal.md ("A panel shell is not a session")
     if (isPanelShellSession(session)) continue;
     if (!session.projectPath) continue;
     if (isProjectHidden(hiddenProjects, null, session.projectPath)) continue;
-    const localKey = groupKey(null, session.projectPath);
+    terminalEntries.push({
+      sessionId, summary: 'Terminal', firstPrompt: '', projectPath: session.projectPath,
+      name: null, starred: 0, archived: 0, messageCount: 0,
+      modified: new Date(session._openedAt).toISOString(),
+      created: new Date(session._openedAt).toISOString(),
+      type: 'terminal',
+    });
+  }
+
+  const existsMemo = new Map();
+  const pathExists = (p) => {
+    if (!existsMemo.has(p)) existsMemo.set(p, fs.existsSync(p));
+    return existsMemo.get(p);
+  };
+
+  return { sessionEntries, dirEntries, terminalEntries, pathExists };
+}
+
+function assembleProjects(inputs, showArchived) {
+  const { sessionEntries, dirEntries, terminalEntries, pathExists } = inputs;
+  // Keyed on alias + projectPath: two hosts can hold the same absolute path.
+  const projectMap = new Map();
+  // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
+  const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
+
+  for (const { alias, projectPath, session, hiddenUnlessArchived } of sessionEntries) {
+    if (!showArchived && hiddenUnlessArchived) continue;
+    const key = groupKey(alias, projectPath);
+    if (!projectMap.has(key)) {
+      projectMap.set(key, {
+        folder: alias === null
+          ? encodeProjectPath(projectPath)
+          : joinFolderKey(alias, encodeProjectPath(projectPath)),
+        projectPath,
+        remoteAlias: alias,
+        sessions: [],
+        // A remote root is never on this filesystem. see .ai/contexts/session-cache.md ("Remote SSH hosts")
+        missing: alias === null ? !pathExists(projectPath) : false,
+      });
+    }
+    projectMap.get(key).sessions.push(session);
+  }
+
+  for (const { alias, projectPath, placeholder, bare } of dirEntries) {
+    const key = groupKey(alias, projectPath);
+    if (projectMap.has(key)) continue;
+    projectMap.set(key, {
+      folder: alias === null ? bare : joinFolderKey(alias, bare),
+      projectPath,
+      remoteAlias: alias,
+      sessions: [],
+      // A remote root is never on this filesystem — see above.
+      missing: (placeholder || alias !== null) ? false : !pathExists(projectPath),
+    });
+  }
+
+  for (const terminal of terminalEntries) {
+    const localKey = groupKey(null, terminal.projectPath);
     if (!projectMap.has(localKey)) {
       projectMap.set(localKey, {
-        folder: encodeProjectPath(session.projectPath),
-        projectPath: session.projectPath,
+        folder: encodeProjectPath(terminal.projectPath),
+        projectPath: terminal.projectPath,
         remoteAlias: null,
         sessions: [],
       });
     }
     const proj = projectMap.get(localKey);
-    if (!proj.sessions.some(s => s.sessionId === sessionId)) {
-      proj.sessions.push({
-        sessionId, summary: 'Terminal', firstPrompt: '', projectPath: session.projectPath,
-        name: null, starred: 0, archived: 0, messageCount: 0,
-        modified: new Date(session._openedAt).toISOString(),
-        created: new Date(session._openedAt).toISOString(),
-        type: 'terminal',
-      });
+    if (!proj.sessions.some(s => s.sessionId === terminal.sessionId)) {
+      proj.sessions.push(terminal);
     }
   }
 
@@ -589,6 +615,16 @@ function buildProjectsFromCache(showArchived) {
   });
 
   return projects;
+}
+
+/** Build projects response from cached data */
+function buildProjectsFromCache(showArchived) {
+  return assembleProjects(gatherProjectInputs(), showArchived);
+}
+
+function buildProjectViewsFromCache() {
+  const inputs = gatherProjectInputs();
+  return { projects: assembleProjects(inputs, false), allProjects: assembleProjects(inputs, true) };
 }
 
 
@@ -912,6 +948,7 @@ module.exports = {
   refreshFolder,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
+  buildProjectViewsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,

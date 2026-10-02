@@ -453,7 +453,7 @@ sessionCache.init({
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+        buildProjectViewsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir } = sessionCache;
 const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
@@ -1048,7 +1048,7 @@ ipcMain.handle('rebuild-cache', async () => {
   }
 });
 
-ipcMain.handle('get-projects', async (_event, showArchived) => {
+ipcMain.handle('get-projects', async () => {
   try {
     // "Cache has rows" is NOT enough to call the start warm: the scan worker
     // streams one DB write per folder, so killing the app mid-scan leaves
@@ -1074,7 +1074,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       // (see populateCacheViaWorker in session-cache.js), and emits
       // `indexing-progress` events the renderer turns into a one-time banner.
       // This immediate response returns whatever's cached right now (empty
-      // session rows on a true first run, but buildProjectsFromCache still
+      // session rows on a true first run, but buildProjectViewsFromCache still
       // lists every on-disk project directory synchronously below).
       populateCacheViaWorker();
     } else {
@@ -1094,10 +1094,15 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       reconcileCacheFromFilesystem();
     }
 
-    return annotateRemoteAttachable(mergePlaceholderSessions(buildProjectsFromCache(showArchived)));
+    // see .ai/contexts/session-cache.md ("One build, two views")
+    const views = buildProjectViewsFromCache();
+    return {
+      projects: annotateRemoteAttachable(mergePlaceholderSessions(views.projects)),
+      allProjects: annotateRemoteAttachable(mergePlaceholderSessions(views.allProjects)),
+    };
   } catch (err) {
     console.error('Error listing projects:', err);
-    return [];
+    return { projects: [], allProjects: [] };
   }
 });
 

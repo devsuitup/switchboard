@@ -29,7 +29,7 @@ From `session-cache.js`:
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
 - `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk.
 - `populateCacheFromFilesystem()` / `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
-- `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
+- `buildProjectViewsFromCache()` — returns `{ projects, allProjects }` (archived hidden / shown) from one read of the cache; this is what `get-projects` serves (see "One build, two views"). `buildProjectsFromCache(showArchived)` builds one of the two — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged()` — throttled (~1.5s leading-edge) push to renderer
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
 
@@ -75,6 +75,39 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktree
 - **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. See `test/session-restore-cold-cache.test.js`.
 
 - **Neither the working-set restore nor the reload path resumes a session that is live in another process.** `runRestore` and the post-`loadProjects` re-open of `sessionStorage.activeSessionId` call `openSession(..., { automatic: true })`, which skips the session without a prompt when `guardResume` reports it live elsewhere; the skipped entry is not activated, stays in the persisted working set at its saved position, and is reported by a one-line notice. See `.ai/contexts/cli-session-state.md` ("Live elsewhere").
+
+## Sidebar refresh cost
+
+Measured with 6 live Claude sessions: the renderer burned ~34% of a core and main ~17% (spikes to 110%). Every JSONL append reaches `notifyRendererProjectsChanged` (1.5 s throttle), then the renderer's `onProjectsChanged` (900 ms debounce), then `loadProjects`, which rebuilt the whole sidebar (~22k-node detached tree + morphdom) about once a second. Two changes remove most of that.
+
+### One build, two views
+
+The renderer keeps two lists: `cachedProjects` (archived sessions hidden) and `cachedAllProjects` (everything; used by the archive toggle, search, the status-bar totals and pending-session reconciliation). `loadProjects` used to fetch them with two `get-projects` calls (`showArchived` false and true), so every refresh paid two `getAllCached()` (`SELECT *` over every row), two `getAllMeta()`, two `readdirSync` of the projects dirs plus the per-project `existsSync` probes, two `reconcileCacheFromFilesystem()` stat sweeps and two structured clones over IPC.
+
+`get-projects` now takes no argument and returns `{ projects, allProjects }` from a single `buildProjectViewsFromCache()`:
+
+- `gatherProjectInputs()` does all the reading once: cache rows, meta, folder meta, the empty-dir listing (including the `deriveProjectPath` / `setFolderMeta` backfill), the plain-terminal rows. It builds each session object once and tags it `hiddenUnlessArchived` (archived itself, or a subagent of an archived parent — the same two filters as before).
+- `assembleProjects(inputs, showArchived)` is the old grouping/sorting pass, run twice on the same inputs. `existsSync` is memoised per build, so the `missing` probe runs once per path.
+- The two views share their session objects. Structured clone keeps shared references within one message, so the payload carries each session once, and the renderer's `dedup()` already expected the two lists to point at the same objects.
+
+The views are not derived from each other in the renderer on purpose: a project whose every session is archived appears in the hidden-archived view only through the on-disk empty-dir pass (with that pass's `folder`/`missing` values), which the renderer cannot reproduce without the directory listing. `buildProjectsFromCache(showArchived)` stays as a one-view wrapper over the same two functions; `test/sidebar-refresh-single-fetch.test.js` checks the two views equal the old per-flag builds.
+
+Not done: memoising the built views in main between calls. With one call per refresh there is no second caller in the same tick to share it with, and invalidating it correctly (cache writes, meta writes, hidden projects, terminals, remote descriptors) would cost more risk than it saves.
+
+### Skipping an unchanged sidebar render
+
+`renderProjects(projects, resort, { skipIfUnchanged })` returns `false` without touching the DOM when the signature of what it would render equals the one recorded after the last real render (from any caller). Only the `projects-changed` reload passes `skipIfUnchanged: true`; every other caller (toggles, archive, rename, remote-host refresh, tab return, `resort`) still renders unconditionally, because some of them patch the DOM by hand and count on the re-render to put it back. When the render is skipped, `refreshSidebar` runs `refreshSessionTimeLabels()` (the 30 s ticker's body) so the time labels still pick up the new `modified`.
+
+The signature (`sidebarRenderSignature` in `public/sidebar.js`) is recorded *after* rendering, because rendering itself writes state (`paintSessionIcon` creates and updates `localPtyStates`, `seedRemoteActivity` marks remote rows busy). It covers:
+
+- every field of every project and session, except `firstPrompt` and `created` (the sidebar never reads them) and with `modified` rounded down to the minute;
+- projects and sessions in a canonical order (by content), not the order main sends. Main sorts by exact recency, so a live session's append reorders the list on every flush, but the renderer keeps its own order (`sortedOrder`) for items it has already shown. The places where it does follow the data order are kept in the signature: the members of each slug group and the subagents of each parent, in data order, for every group with more than one member;
+- renderer state the build reads: the filters, search sets, `visibleSessionCount`, `sessionMaxAgeDays`, `activeSessionId`, `activePtyIds`, `pendingSessions`, `activeSubagentsByParent`, and every state snapshot in `localPtyStates` / `remoteSessionStates` / `localTranscriptStates` except `lastActivityAt` / `lastActivitySource`;
+- the current minute, so anything that depends on the clock (the age cutoff that moves sessions into "older", the stale-project auto-collapse, the "today" filter, slug-group header times, status ages) is re-rendered at least once a minute while updates keep coming.
+
+So a live session that only bumps its `modified` costs one render per minute instead of one per second, plus a label refresh. A change to any displayed field, a new or removed session, a different running/busy state or a minute boundary still renders. If you add something the sidebar renders, it is in the signature automatically when it is a field on the project or session object; renderer state it reads from elsewhere has to be added to `sidebarRenderSignature` by hand.
+
+The signature costs ~30 ms for ~5k sessions in jsdom (measured), against seconds for the render it replaces there.
 
 ## Remote SSH hosts (issue #201)
 

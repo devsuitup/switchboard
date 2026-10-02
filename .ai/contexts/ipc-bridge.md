@@ -18,7 +18,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
-| `get-projects` | `(showArchived)` | `Project[]` | Sidebar payload. Reads from cache. |
+| `get-projects` | `()` | `{ projects: Project[], allProjects: Project[] }` | Sidebar payload, archived sessions hidden / shown, from one build. Reads from cache. See `session-cache.md` ("One build, two views"). |
 | `get-active-sessions` | — | `{sessionId, busy}[]` | Currently open PTY sessions plus each one's live `_cliBusy` flag — see "Busy-state reconciliation" below. |
 | `get-active-terminals` | — | `Terminal[]` | Active PTY identifiers |
 | `open-terminal` | `(id, projectPath, isNew, sessionOptions)` | `{ok, error?, mcpActive}` | Spawn or attach a PTY. |
