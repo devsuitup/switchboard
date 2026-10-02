@@ -72,7 +72,7 @@ const warnedRejectedFolders = new Set();
 function warnRejectedCwd(folder, cwd) {
   if (warnedRejectedFolders.has(folder)) return;
   warnedRejectedFolders.add(folder);
-  if (log && log.warn) log.warn(`[session-cache] no transcript of folder ${folder} has a cwd that encodes to it; first rejected cwd: ${cwd}`);
+  if (log && log.warn) log.warn(`[session-cache] no transcript of folder ${folder} has a cwd that encodes to it; first rejected cwd: ${JSON.stringify(cwd)}`);
 }
 
 function deriveFolderProjectPath(folderPath, folderKey) {
@@ -687,8 +687,14 @@ function sendIndexingFinished() {
  *  Delete-then-insert, so re-scanning an already-written folder never
  *  duplicates rows. `folder` already carries the `<alias>::` prefix when the
  *  worker was pointed at a remote mirror. Returns the session count written. */
-function writeScannedFolder(r) {
-  if (!r) return 0;
+function writeScannedFolder(r, unverifiedLocalFolder = null) {
+  if (!r) {
+    if (unverifiedLocalFolder) {
+      deleteCachedFolder(unverifiedLocalFolder);
+      deleteSearchFolder(unverifiedLocalFolder);
+    }
+    return 0;
+  }
   const { folder, projectPath, sessions, indexMtimeMs } = r;
   deleteCachedFolder(folder);
   deleteSearchFolder(folder);
@@ -892,7 +898,7 @@ function populateCacheViaWorker() {
         if (msg.rejected) warnRejectedCwd(msg.rejected.folder, msg.rejected.cwd);
         scannedFolders = msg.current;
         totalFolders = msg.total;
-        const written = writeScannedFolder(msg.result);
+        const written = writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
         if (written > 0) {
           sessionCount += written;
           indexedProjects++;

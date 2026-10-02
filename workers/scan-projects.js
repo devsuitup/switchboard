@@ -116,7 +116,8 @@ try {
   for (let i = 0; i < folders.length; i++) {
     const result = readFolderFromFilesystem(folders[i]);
     current++;
-    parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected });
+    parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected,
+      unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
   }
   for (const t of targets) {
     const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);

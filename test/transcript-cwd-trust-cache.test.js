@@ -32,7 +32,7 @@ function writeTranscript(projectsDir, folder, sessionId, cwd) {
     JSON.stringify({ type: 'user', cwd, sessionId, message: { role: 'user', content: 'hi' } }) + '\n');
 }
 
-function makeStatefulDb({ settings = {}, folderMeta = new Map(), rows = [] } = {}) {
+function makeStatefulDb({ settings = {}, folderMeta = new Map(), rows = [], scanComplete = true } = {}) {
   const calls = { deletedFolders: [], metaWrites: [] };
   const db = {
     deleteCachedFolder: (f) => { calls.deletedFolders.push(f); },
@@ -56,6 +56,8 @@ function makeStatefulDb({ settings = {}, folderMeta = new Map(), rows = [] } = {
     getSetting: (k) => (k in settings ? settings[k] : {}),
     getMeta: () => null,
     setName: () => {},
+    isInitialScanComplete: () => scanComplete,
+    setInitialScanComplete: () => {},
   };
   return { db, calls, rows, folderMeta, settings };
 }
@@ -179,7 +181,7 @@ test('refreshFolder: a folder with no verifiable transcript loses its cached row
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /^\[session-cache\]/);
     assert.ok(warnings[0].includes(folder));
-    assert.ok(warnings[0].includes(evil));
+    assert.ok(warnings[0].includes(JSON.stringify(evil)));
   } finally { cleanup(tmp); }
 });
 
@@ -195,5 +197,23 @@ test('remap: a folder with a recorded path still refuses a cwd that differs from
     const state = makeStatefulDb({ settings: { projectRemaps: { [folder]: newP } } });
     initCache(projectsDir, state.db);
     assert.equal(deriveProjectPath(path.join(projectsDir, folder), folder), null);
+  } finally { cleanup(tmp); }
+});
+
+test('cold scan: a local folder with no verified path loses its cached rows, and a newline in the rejected cwd cannot forge a log line', async () => {
+  const tmp = mkTmp();
+  try {
+    const p = project(tmp, 'coldproj');
+    const forgedCwd = path.join(p, 'evil') + '\n[session-cache] forged line';
+    const projectsDir = project(tmp, 'projects');
+    const folder = encodeProjectPath(p);
+    writeTranscript(projectsDir, folder, 'forged', forgedCwd);
+    const warnings = [];
+    const state = makeStatefulDb({ scanComplete: false });
+    initCache(projectsDir, state.db, { info() {}, error() {}, warn: (m) => warnings.push(m) });
+    await sessionCache.populateCacheViaWorker();
+    assert.deepEqual(state.calls.deletedFolders, [folder]);
+    assert.equal(warnings.length, 1);
+    assert.ok(!warnings[0].includes('\n'));
   } finally { cleanup(tmp); }
 });
