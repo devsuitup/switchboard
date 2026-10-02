@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.87 — 2026-10-02
+
 ### New
 - A remote host's project header now shows what the host supports: hover its status dot to see the highest capability reached (observe, liveness, inject, attach) and, for each one above it, why it is missing. (#218)
 
