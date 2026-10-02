@@ -128,16 +128,75 @@ function pruneScheduleState(stateDir, entry) {
 }
 
 /**
+ * Resolve a project folder name to its project path from the SQLite cache.
+ * Returns a Map<folder, projectPath>, or an empty Map if the cache is
+ * unavailable (e.g. in tests that don't load the native DB binding).
+ */
+function loadFolderMetaMap() {
+  try {
+    // Lazy require so requiring schedule-runner.js never forces the native
+    // better-sqlite3 binding to load (keeps the module test-friendly).
+    const { getAllFolderMeta } = require('./db');
+    const meta = getAllFolderMeta();
+    const map = new Map();
+    for (const [folder, row] of meta) {
+      if (row && row.projectPath) map.set(folder, row.projectPath);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Read a project folder's first JSONL just enough to extract its cwd. */
+function readProjectPathFromJsonl(folderPath) {
+  try {
+    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
+    for (const jf of jsonlFiles) {
+      const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
+      for (const line of head.split('\n').filter(Boolean)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.cwd) return entry.cwd;
+        } catch {}
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
  * The projects to seed the schedule registry with, the first time it is read:
- * those with a `project:<path>` setting. A transcript never seeds one.
- * see docs/sandbox.md ("Schedules")
+ * the local directories that have a `project:<path>` setting, and the git
+ * checkouts under a ~/.claude/projects folder named after them that already
+ * hold a schedule. see docs/sandbox.md ("Schedules")
  */
 function initialScheduleProjects(listProjectSettingKeys) {
+  const found = new Set();
   const prefix = 'project:';
-  return listProjectSettingKeys()
-    .filter(key => typeof key === 'string' && key.startsWith(prefix))
-    .map(key => key.slice(prefix.length))
-    .filter(p => path.isAbsolute(p));
+  for (const key of listProjectSettingKeys()) {
+    if (typeof key !== 'string' || !key.startsWith(prefix)) continue;
+    const projectPath = key.slice(prefix.length);
+    if (!path.isAbsolute(projectPath)) continue;
+    try {
+      if (fs.statSync(projectPath).isDirectory()) found.add(projectPath);
+    } catch {}
+  }
+  if (!fs.existsSync(PROJECTS_DIR)) return [...found];
+  const folderMeta = loadFolderMetaMap();
+  for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+    if (!folder.isDirectory()) continue;
+    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    try {
+      if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
+      const commandsDir = path.join(projectPath, '.claude', 'commands');
+      if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
+        found.add(projectPath);
+      }
+    } catch {}
+  }
+  return [...found];
 }
 
 /**

@@ -99,9 +99,10 @@ runs under its slug; open it to read the result.
   [Sandbox](sandbox.md#schedules).
 - A schedule runs only in a project Switchboard has launched a session in, or
   that you added with **Add project**. A project with schedules that it never
-  opened runs none until you open a session in it once. Existing schedules
-  keep running: the list is seeded, on first use, with the projects that
-  already hold one. See [Sandbox](sandbox.md#schedules).
+  opened runs none until you open a session in it once. Schedules you
+  already have keep running if they are in a project that has settings of its
+  own or in a git checkout (a directory with a `.git`): the list is seeded, on
+  first use, with those projects. A project outside both is not in it. See [Sandbox](sandbox.md#schedules).
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
 
 ### Catching up a missed run

@@ -63,25 +63,38 @@ test('schedules: a path whose encoding collides with a registered project\'s fol
   assert.deepEqual(scanSchedules(undefined, [apiClient]), []);
 });
 
-test('schedules: the seed holds only the projects that carry a per-project setting', () => {
+test('schedules: the seed holds the projects with a setting and the git checkouts that hold a schedule', () => {
   reset();
-  const configured = path.join(ROOT, 'work', 'configured');
-  const folderOnly = path.join(ROOT, 'work', 'folder-only');
-  const planted = path.join(ROOT, 'work', 'planted');
-  for (const dir of [configured, folderOnly, planted]) withSchedule(dir);
-  transcript(encodeProjectPath(configured), configured);
-  transcript(encodeProjectPath(folderOnly), folderOnly);
-  transcript(encodeProjectPath(planted), planted);
-  const keys = ['global', 'project:' + configured, 'project:relative/dir', 'db_version'];
-  assert.deepEqual(initialScheduleProjects(() => keys), [configured],
-    'a transcript folder registers nothing, whatever its path or schedule; only an absolute project: key does');
+  const dir = (...p) => path.join(ROOT, 'work', ...p);
+  const configured = dir('configured');
+  const remote = dir('remote-host-path');
+  const gitDir = dir('git-dir');
+  const gitFile = dir('git-file');
+  const noGit = dir('no-git');
+  const noSchedule = dir('no-schedule');
+  const planted = dir('planted');
+  fs.mkdirSync(configured, { recursive: true });
+  for (const d of [gitDir, gitFile, noGit, planted]) withSchedule(d);
+  fs.mkdirSync(noSchedule, { recursive: true });
+  fs.mkdirSync(path.join(gitDir, '.git'));
+  fs.writeFileSync(path.join(gitFile, '.git'), 'gitdir: /elsewhere\n');
+  fs.mkdirSync(path.join(noSchedule, '.git'));
+  fs.mkdirSync(path.join(planted, '.git'));
+  for (const d of [configured, gitDir, gitFile, noGit, noSchedule]) transcript(encodeProjectPath(d), d);
+  transcript('-some-other-folder', planted);
+  const keys = ['global', 'project:' + configured, 'project:' + remote, 'project:relative/dir', 'db_version'];
+  assert.deepEqual(initialScheduleProjects(() => keys).sort(), [configured, gitDir, gitFile].sort(),
+    'a setting registers a local project only; a transcript registers one only with a schedule and a .git, under its own name');
 });
 
-test('schedules: a transcript folder alone does not enter the registry at its first read', () => {
+test('schedules: a transcript folder with no schedule, or a schedule without a .git, seeds nothing', () => {
   reset();
-  const planted = path.join(ROOT, 'work', 'planted');
-  withSchedule(planted);
-  transcript(encodeProjectPath(planted), planted);
+  const noGit = path.join(ROOT, 'work', 'no-git');
+  const noSchedule = path.join(ROOT, 'work', 'no-schedule');
+  withSchedule(noGit);
+  fs.mkdirSync(path.join(noSchedule, '.git'), { recursive: true });
+  transcript(encodeProjectPath(noGit), noGit);
+  transcript(encodeProjectPath(noSchedule), noSchedule);
   const store = {};
   const registry = scheduleRegistry(k => store[k], (k, v) => { store[k] = v; },
     () => initialScheduleProjects(() => []));
@@ -89,13 +102,9 @@ test('schedules: a transcript folder alone does not enter the registry at its fi
   assert.deepEqual(scanSchedules(undefined, registry.list()), []);
 });
 
-test('schedules: a project launched from the app is registered after a seed that left it out', () => {
-  const store = {};
-  const registry = scheduleRegistry(k => store[k], (k, v) => { store[k] = v; }, () => []);
-  const launched = path.resolve('/p/launched');
-  assert.deepEqual(registry.list(), []);
-  registry.add(launched);
-  assert.deepEqual(registry.list(), [launched]);
+test('schedules: main.js seeds the registry from the project: settings keys and the schedule source', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(source, /scheduleRegistry\(getSetting, setSetting, \(\) => initialScheduleProjects\(\(\) => listSettingKeys\('project:'\)\)\)/);
 });
 
 test('schedules: a schedule is sandboxed by the nearest project setting that contains it', () => {
