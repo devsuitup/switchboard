@@ -111,3 +111,26 @@ test('a remote session still gets status/statusUpdatedAt from the remote descrip
   assert.equal(projects[0].sessions[0].statusUpdatedAt, 999);
   assert.equal(projects[0].sessions[0].remoteAttachable, true);
 });
+
+test('a remote session carries the descriptor waitingFor, and null when the descriptor has none or is gone', () => {
+  const annotateRemoteAttachable = makeAnnotate({
+    remoteIndexer: {
+      getRemoteSessions: () => ({
+        sessions: [
+          { sessionId: 'w', status: 'waiting', statusUpdatedAt: 1, waitingFor: 'permission prompt' },
+          { sessionId: 'i', status: 'idle', statusUpdatedAt: 1 },
+        ],
+        at: 1,
+        error: null,
+      }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+    },
+  });
+  const projects = [{
+    projectPath: '/srv/proj',
+    remoteAlias: 'p',
+    sessions: ['w', 'i', 'gone'].map(sessionId => ({ sessionId, remoteAlias: 'p' })),
+  }];
+  annotateRemoteAttachable(projects);
+  assert.deepEqual(projects[0].sessions.map(s => s.waitingFor), ['permission prompt', null, null]);
+});

@@ -888,3 +888,116 @@ test('refreshNow({force:true}) ignores backoff for every host and resets it on s
     assert.equal(recovered.nextAttemptAt, 0);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('sanitizeWaitingFor keeps a short plain string and drops everything else', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  assert.equal(sanitizeWaitingFor('permission prompt'), 'permission prompt');
+  assert.equal(sanitizeWaitingFor('  input needed '), 'input needed');
+  assert.equal(sanitizeWaitingFor('x'.repeat(64)), 'x'.repeat(64));
+  assert.equal(sanitizeWaitingFor('x'.repeat(65)), null, 'over the length bound');
+  for (const bad of [undefined, null, 5, {}, ['a'], '', '   ', 'a\nb', 'a\u001b[31mb', 'a\u007fb']) {
+    assert.equal(sanitizeWaitingFor(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('the indexer and the placeholder keep a validated waitingFor beside the status', async () => {
+  const dataDir = tmp('idx-waiting');
+  try {
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'vps' }],
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      sync: async () => ({
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(),
+        sessions: [
+          { pid: 1, sessionId: 'a', cwd: '/srv/a', status: 'waiting', waitingFor: 'permission prompt', descriptorOnly: true },
+          { pid: 2, sessionId: 'b', cwd: '/srv/b', status: 'waiting', waitingFor: 'x'.repeat(500), descriptorOnly: true },
+        ],
+      }),
+    });
+    await indexer.refreshNow();
+    const byId = new Map(indexer.getRemoteSessions('vps').sessions.map(s => [s.sessionId, s]));
+    assert.equal(byId.get('a').waitingFor, 'permission prompt');
+    assert.equal(byId.get('b').waitingFor, null, 'an oversized value is dropped, not truncated');
+    const ph = new Map(indexer.getPlaceholderSessions('vps').map(s => [s.sessionId, s]));
+    assert.equal(ph.get('a').waitingFor, 'permission prompt');
+    assert.equal(ph.get('b').waitingFor, null);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  for (const code of [0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]) {
+    assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
+  }
+  assert.equal(sanitizeWaitingFor('caf\u00e9 \u2014 ok'), 'caf\u00e9 \u2014 ok');
+});
+
+test('sanitizeWaitingFor rejects C1 controls, soft hyphen, ALM, invisible operators and BOM', () => {
+  const { sanitizeWaitingFor } = require('../remote-index');
+  for (const code of [0x80, 0x9f, 0xad, 0x61c, 0x180e, 0x2028, 0x2029, 0x2060, 0x2064, 0xfeff]) {
+    assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
+  }
+  assert.equal(sanitizeWaitingFor('a\u00a0b'), 'a\u00a0b', 'a no-break space is plain text');
+});
+
+function hostFlipIndexer(notifyCalls, outcome) {
+  const dataDir = tmp('idx-notify');
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }],
+    dataDir,
+    transport: {},
+    scanFolders: () => Promise.resolve({ ok: true }),
+    listIndexedFolderKeys: () => [],
+    notify: () => { notifyCalls.push(1); },
+    timers: fakeTimers(),
+    sync: async () => {
+      const o = outcome.next;
+      if (o instanceof Error) throw o;
+      return { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set(), sessions: [] };
+    },
+  });
+  return { indexer, dataDir };
+}
+
+test('a host that starts failing, changes its error or recovers notifies once per change, with no file changes', async () => {
+  const calls = [];
+  const outcome = { next: null };
+  const { indexer, dataDir } = hostFlipIndexer(calls, outcome);
+  try {
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 0, 'a quiet healthy host does not notify');
+    outcome.next = new Error('ssh: timed out');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 1, 'the first failure notifies');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 1, 'the same error again does not');
+    outcome.next = new Error('ssh: refused');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 2, 'a different error notifies');
+    outcome.next = null;
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 3, 'recovery notifies');
+    await indexer.refreshNow({ force: true });
+    assert.equal(calls.length, 3, 'staying healthy does not');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('refreshHostNow notifies on a host error change too', async () => {
+  const calls = [];
+  const outcome = { next: new Error('ssh: timed out') };
+  const { indexer, dataDir } = hostFlipIndexer(calls, outcome);
+  try {
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 1);
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 1);
+    outcome.next = null;
+    await indexer.refreshHostNow('vps', { force: true });
+    assert.equal(calls.length, 2);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -136,3 +136,17 @@ test('renderProjects wires a real project fixture with a mix of local and remote
     assert.ok(el.querySelector('.session-status'), 'the local session row must show its status line');
   } finally { ctx.destroy(); }
 });
+
+test('a waiting session names what it waits for in the status line', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const base = {
+      summary: 'remote session', modified: '2026-09-09T11:59:00.000Z', starred: false, archived: 0,
+      messageCount: 1, remoteAlias: 'planificator', status: 'waiting',
+    };
+    const waiting = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'w', waitingFor: 'permission prompt' });
+    assert.match(waiting.querySelector('.session-status').textContent, /^waiting · permission prompt/);
+    const busy = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'b', status: 'busy', waitingFor: 'permission prompt' });
+    assert.doesNotMatch(busy.querySelector('.session-status').textContent, /permission/);
+  } finally { ctx.destroy(); }
+});
