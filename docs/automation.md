@@ -263,7 +263,6 @@ spends the same budget.
 | `SWITCHBOARD_TRIGGER_MAX_AGE_MS` | The staleness limit | 300 000 |
 | `SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` | Delay between the text and its Enter | 50 |
 | `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
-| `SWITCHBOARD_CLI_READY_WAIT_MS` | How long a chain step after `/compact` waits for the CLI to report idle | 60 000 |
 | `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
 
 The triggers directory does not move with `SWITCHBOARD_DATA_DIR`: an instance
@@ -434,6 +433,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
+| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld because the descriptor reads `busy` or `waiting`; the chain stopped there and nothing more was typed | the step may sit unsubmitted in the composer: look before sending again |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 The two reserved values mean opposite things:
@@ -446,6 +446,7 @@ The two reserved values mean opposite things:
   `partial: false` for a `chain`. A session reports itself busy for as long as
   any subagent runs, so `idle` is often unreachable; `not sent` there tells the
   caller the payload never left.
+- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor nothing is waited for.
 - A session that exits during that initial wait reports `submitted: "no"` and a
   `reason` saying nothing was written (`partial: false` on a chain).
 

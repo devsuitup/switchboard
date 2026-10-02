@@ -836,11 +836,9 @@ session, which has no local descriptor). No new watcher: it reuses the cache
 
 - **Readiness.** (Extended to every step, see the next section.) A chain step that follows a `/compact` step first waits
   (`waitForCliIdleAfter`) for `status: "idle"` with a `statusUpdatedAt` later
-  than the compact step's send time. Bounded by
-  `SWITCHBOARD_CLI_READY_WAIT_MS` (default 60 000 ms) and by the step's own
-  deadline; on expiry the step is written anyway, with the warning `CLI not
-  idle after /compact within N ms, writing chain step N anyway`. Its time is
-  counted in the step's and the chain's `waited_ms`.
+  than the compact step's Enter. Bounded by the step's own deadline; on
+  expiry the step is not written (see the next section). Its time is counted
+  in the step's and the chain's `waited_ms`.
 - **Proof of submission by edge.** When a descriptor with an integer
   `statusUpdatedAt` is available, a submission counts when the descriptor
   shows ANY status write (`busy`, `idle` or `waiting`) with a
@@ -889,45 +887,59 @@ descriptor for the helpers; the real watcher for the chain wiring).
 
 Second field case (2026-10-02): step 0 of a `compact-now.sh` chain, with no
 `/compact` before it, landed in the composer and its Enter became a line
-break, while four background subagents had just been spawned. The #407
-readiness wait only covered the step after a `/compact`; nothing waited
-before step 0. Text written while the CLI is mid-turn has its Enter absorbed
-whatever preceded it.
+break, while four background subagents had just been spawned (three still
+running). The #407 readiness wait only covered the step after a `/compact`;
+nothing waited before step 0.
 
-- **The wait now runs before EVERY chain step**, step 0 included
+**The mechanism is NOT established.** The working hypothesis is that text
+written while the CLI is mid-turn has its Enter absorbed as a newline, but #360
+shows the opposite: a step written mid-turn was enqueued and submitted
+normally. What is known is only that the step was typed while the descriptor
+read `busy`. The rule below stops typing in that state; it does not prove that
+state was the cause.
+
+- **The wait runs before EVERY chain step**, step 0 included
   (`waitForCliIdleAfter`, after the composer-free and liveness checks, so the
   descriptor is read as close to the write as possible). Before a step that
-  follows `/compact` the idle must also be newer than the compact's send;
-  before any other step any `idle` counts. The idle must hold for the busy-fall
-  settle window (`SWITCHBOARD_BUSY_FALL_SETTLE_MS`, 300 ms) with an unchanged
+  follows `/compact` the idle must also be newer than the compact's Enter
+  (`enterAt` from `submitWithVerify`); before any other step any `idle` counts.
+  The idle must hold for the busy-fall settle window
+  (`SWITCHBOARD_BUSY_FALL_SETTLE_MS`, 300 ms) with an unchanged
   `statusUpdatedAt`, so a `busy` that follows an `idle` within the window is
-  not mistaken for readiness. Bound: `SWITCHBOARD_CLI_READY_WAIT_MS` (default
-  60 000 ms) and the step's own deadline.
-- **`waiting` (a dialog is open) is never typed into.** If the descriptor still
-  reads `waiting` when the bound expires, the step is NOT written: the result
-  is `ok: false`, `error` `not sent` (step 0) or `chain timeout` (later steps),
-  `reason` "the CLI reports a dialog open (waiting); nothing was written into
-  it", the step is recorded with `submitted: "no"`.
-- **`busy` at the bound** keeps the #410 behaviour: the step is written anyway
-  with the warning `CLI not idle ... within N ms, writing chain step N anyway`.
-  Failing there instead would turn a stuck descriptor into a lost chain; the
-  submission proof and the recovery-Enter ban still apply to that write.
+  not mistaken for readiness.
+- **The wait is bounded by the step's own deadline only** (the per-step
+  `timeout_ms`, capped by the chain's). `SWITCHBOARD_CLI_READY_WAIT_MS` is gone.
+  A parent session keeps its descriptor `busy` for as long as a delegated
+  agent runs (`cli-session-state.md`), so a shorter bound would write into the
+  very state this rule exists for.
+- **Not idle at the deadline means not written, whatever the status**:
+  `busy`, `waiting` (a dialog is open) and any status this code does not know
+  (e.g. `shell`) are all not-idle and not-writable. The step fails: result
+  `ok: false`, `error` `not sent` (step 0) or `chain timeout` (later steps),
+  `submitted` the weakest of the chain so far, the step recorded with
+  `submitted: "no"`, and a `reason` naming the cause (dialog open, turn still
+  running, never idle). A dialog is reported when `waiting` was sampled
+  anywhere in the final settle window, not only on the last sample.
+- **A step typed but not confirmed, with the recovery Enter withheld** (the
+  descriptor reads `busy` or `waiting` and showed no reaction to our Enter)
+  stops the chain: `ok: false`, `error` `step not confirmed`, nothing more is
+  typed into that composer. The step's text may be sitting there.
 - **No usable descriptor** (`getCliStatus` absent, `undefined`, or a
   `statusUpdatedAt` that is not an integer): no wait, today's behaviour.
-- **Single triggers do not share this path.** Their own `wait` field
-  (`idle` by the level probe, or `none`) is unchanged and no descriptor wait
-  is added: `wait: "none"` is an explicit request not to wait.
+- **Single triggers have the same exposure and it is not addressed here.**
+  They keep their own `wait` field (`idle` by the level probe, or `none`) and
+  no descriptor wait; they can still be typed into a busy composer.
 - **Busy-fall authority (#360).** `waitForBusyFall` receives the Enter's
-  timestamp (`submitWithVerify` returns `enterAt`). A descriptor `idle` with
-  `statusUpdatedAt >= enterAt`, held for the settle window, ends the wait even
-  when `_cliBusy` is stuck true (observed: 600 s stuck, CLI idle within a
-  minute, `chain timeout` after step 0). An idle older than the Enter proves
-  nothing (the Enter may have been absorbed) and leaves the `_cliBusy` logic in
-  charge, as it does when no usable descriptor exists. A descriptor `busy`
-  does not hold the wait open on its own.
+  timestamp. A descriptor `idle` with `statusUpdatedAt >= enterAt`, held for the
+  settle window, ends the wait even when `_cliBusy` is stuck true. An idle
+  older than the Enter proves nothing (the Enter may have been absorbed) and
+  leaves the `_cliBusy` logic in charge, as it does when no usable descriptor
+  exists. Not measured as fixed for sessions with background agents: the
+  descriptor stays `busy` until the last agent ends, so the busy-fall still
+  waits for it.
 
 Tests: `test/trigger-every-step-readiness.test.js` (the real watcher with a
-fake descriptor, plus `waitForBusyFall` under mocked timers).
+fake descriptor, plus the wait helpers under mocked timers).
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 

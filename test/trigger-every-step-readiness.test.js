@@ -16,7 +16,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start, waitForBusyFall } = require('../trigger-watcher');
+const { start, waitForBusyFall, waitForCliIdleAfter } = require('../trigger-watcher');
 
 function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-trigger-every-')));
@@ -82,8 +82,7 @@ function quickTurn(session) {
 }
 
 test('step 0 while the descriptor reads busy: nothing is written until it reads idle', async () => {
-  process.env.SWITCHBOARD_CLI_READY_WAIT_MS = '5000';
-  try {
+  {
     const uuid = 'sess-every-busy-' + Date.now();
     const session = chainSession(uuid, { log: recordingLog(), onEnter: (n, d) => quickTurn(session)(n, d) });
     session.desc.status = 'busy';
@@ -97,20 +96,17 @@ test('step 0 while the descriptor reads busy: nothing is written until it reads 
     assert.equal(session.written[0].data, 'first step');
     assert.ok(session.written[0].at >= idleAt, `step 0 written ${idleAt - session.written[0].at} ms before the descriptor read idle`);
     assert.equal(result.ok, true);
-  } finally {
-    delete process.env.SWITCHBOARD_CLI_READY_WAIT_MS;
   }
 });
 
-test('a dialog open ("waiting"): never written into, the step fails at the bound with the dialog reason', async () => {
-  process.env.SWITCHBOARD_CLI_READY_WAIT_MS = '400';
-  try {
+test('a dialog open ("waiting"): never written into, the step fails at the deadline with the dialog reason', async () => {
+  {
     const uuid = 'sess-every-waiting-' + Date.now();
     const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
     session.desc.status = 'waiting';
     session.desc.statusUpdatedAt = Date.now();
 
-    const result = await runChain([{ command: 'first step' }, { command: 'second step' }], session, uuid);
+    const result = await runChain([{ command: 'first step' }, { command: 'second step' }], session, uuid, 1500);
 
     assert.deepEqual(session.written, []);
     assert.equal(result.ok, false);
@@ -118,8 +114,6 @@ test('a dialog open ("waiting"): never written into, the step fails at the bound
     assert.match(result.reason, /dialog/);
     assert.equal(result.steps_completed, 0);
     assert.equal(result.steps[0].submitted, 'no');
-  } finally {
-    delete process.env.SWITCHBOARD_CLI_READY_WAIT_MS;
   }
 });
 
@@ -173,4 +167,131 @@ test('waitForBusyFall: a descriptor idle that predates the Enter does not end th
     await new Promise((r) => setImmediate(r));
   }
   assert.equal(result.timedOut, true);
+});
+
+for (const status of ['busy', 'shell']) {
+  test(`step 0 while the descriptor reads "${status}" to the deadline: never written, the step fails "not sent" with a reason`, async () => {
+    const uuid = 'sess-every-never-' + status + Date.now();
+    const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
+    session.desc.status = status;
+    session.desc.statusUpdatedAt = Date.now();
+
+    const started = Date.now();
+    const result = await runChain([{ command: 'first step' }], session, uuid, 1500);
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert.deepEqual(session.written, []);
+    assert.ok(Date.now() - started >= 1400, 'the wait must run to the step deadline, not stop early');
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'not sent');
+    assert.ok(result.reason && result.reason.length > 0);
+    assert.equal(result.steps_completed, 0);
+  });
+}
+
+test('a later step held by a busy descriptor to the deadline: not written, "chain timeout", the first step stays completed', async () => {
+  const uuid = 'sess-every-later-' + Date.now();
+  const session = chainSession(uuid, {
+    log: recordingLog(),
+    onEnter(n, desc) {
+      desc.status = 'busy'; desc.statusUpdatedAt = Date.now();
+      session.setBusy(true);
+      setTimeout(() => session.setBusy(false), 100);
+    },
+  });
+
+  const result = await runChain([{ command: 'first step' }, { command: 'second step' }], session, uuid, 2500);
+
+  assert.ok(!session.written.some((w) => w.data === 'second step'));
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'chain timeout');
+  assert.match(result.reason, /busy/);
+  assert.equal(result.steps_completed, 1);
+});
+
+test('a step not confirmed with the recovery Enter withheld stops the chain: nothing more is typed', async () => {
+  const uuid = 'sess-every-stop-' + Date.now();
+  const session = chainSession(uuid, {
+    log: recordingLog(),
+    onEnter(n, desc) { desc.status = 'busy'; },
+  });
+
+  const result = await runChain([{ command: 'first step' }, { command: 'second step' }], session, uuid, 4000);
+
+  assert.deepEqual(session.written.map((w) => w.data), ['first step', '\r']);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'step not confirmed');
+  assert.ok(result.reason && result.reason.length > 0);
+  assert.equal(result.steps_completed, 0);
+  assert.equal(result.steps[0].submit_confirmed, false);
+});
+
+function fakeClock(t) {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
+}
+
+async function settleRun(t, promise, maxMs = 5000) {
+  let done = false;
+  let value;
+  promise.then((v) => { done = true; value = v; });
+  for (let i = 0; i < maxMs && !done; i += 5) {
+    t.mock.timers.tick(5);
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.ok(done, 'still pending');
+  return value;
+}
+
+function stateCtx(state) {
+  return { getPtyForSession: () => ({}), getCliStatus: () => ({ ...state }) };
+}
+
+test('readiness settle: an idle followed by busy inside the settle window is not ready; ready only once idle has held', async (t) => {
+  fakeClock(t);
+  const state = { status: 'idle', statusUpdatedAt: 1_000_000 };
+  setTimeout(() => { state.status = 'busy'; state.statusUpdatedAt = Date.now(); }, 150);
+  setTimeout(() => { state.status = 'idle'; state.statusUpdatedAt = Date.now(); }, 400);
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000 + 5000, 300));
+  assert.equal(r.ready, true);
+  assert.ok(r.waited_ms >= 700, 'ready after ' + r.waited_ms + ' ms, expected the settle to restart at the second idle');
+});
+
+test('readiness settle: a new statusUpdatedAt while idle restarts the settle window', async (t) => {
+  fakeClock(t);
+  const state = { status: 'idle', statusUpdatedAt: 1_000_000 };
+  setTimeout(() => { state.statusUpdatedAt = Date.now(); }, 200);
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000 + 5000, 300));
+  assert.equal(r.ready, true);
+  assert.ok(r.waited_ms >= 500, 'ready after ' + r.waited_ms + ' ms, expected the settle to restart at the new timestamp');
+});
+
+test('readiness: a dialog seen anywhere in the final settle window is reported even when the last sample is busy', async (t) => {
+  fakeClock(t);
+  const state = { status: 'busy', statusUpdatedAt: 1_000_000 };
+  setTimeout(() => { state.status = 'waiting'; state.statusUpdatedAt = Date.now(); }, 1800);
+  setTimeout(() => { state.status = 'busy'; state.statusUpdatedAt = Date.now(); }, 1900);
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000 + 2000, 300));
+  assert.equal(r.ready, false);
+  assert.equal(r.timedOut, true);
+  assert.equal(r.lastStatus, 'busy');
+  assert.equal(r.waitingSeen, true);
+});
+
+test('readiness: an unknown status is not idle', async (t) => {
+  fakeClock(t);
+  const state = { status: 'shell', statusUpdatedAt: 1_000_000 };
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000 + 1000, 0));
+  assert.equal(r.ready, false);
+  assert.equal(r.timedOut, true);
+});
+
+test('waitForBusyFall: an idle that flickers back to busy inside the settle window does not end the wait early', async (t) => {
+  fakeClock(t);
+  const state = { status: 'idle', statusUpdatedAt: 1_000_000 };
+  setTimeout(() => { state.status = 'busy'; state.statusUpdatedAt = Date.now(); }, 20);
+  setTimeout(() => { state.status = 'idle'; state.statusUpdatedAt = Date.now(); }, 200);
+  const ctx = { getPtyForSession: () => ({}), isSessionBusy: () => true, getCliStatus: () => ({ ...state }) };
+  const r = await settleRun(t, waitForBusyFall('sid', ctx, 1_000_000 + 5000, 1_000_000));
+  assert.equal(r.timedOut, false);
+  assert.ok(r.waited_ms >= 240, 'ended after ' + r.waited_ms + ' ms, before the second idle had held');
 });
