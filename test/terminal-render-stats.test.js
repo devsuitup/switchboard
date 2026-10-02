@@ -1,7 +1,3 @@
-// Render-path counters (issue #175): writes, batch size and atlas rebuilds,
-// reported as one `render.stats` activity-trace line per session per interval.
-// see docs/activity-trace.md "render.stats"
-
 const test = require('node:test');
 const assert = require('node:assert');
 const { setupTerminalDom } = require('./terminal-manager-harness');
@@ -138,6 +134,60 @@ test('a trace switched off mid-interval drops the report instead of sending it',
     t.timers[0].fn();
     assert.strictEqual(t.stats().length, 0);
     assert.strictEqual(t.inCtx('renderStats.size'), 0);
+  } finally {
+    t.destroy();
+  }
+});
+
+test('revealing a hidden session counts the replay write', () => {
+  const t = setup({ on: true });
+  try {
+    t.window.activeSessionId = 'other';
+    t.window.handleTerminalData('s1', 'hidden-data');
+    t.window.replayHiddenBuffer('s1');
+    t.timers[0].fn();
+    const f = t.stats()[0].fields;
+    assert.strictEqual(f.writes, 1);
+    assert.strictEqual(f.writeChars, 'hidden-data'.length);
+    assert.strictEqual(f.hiddenChunks, 1);
+  } finally {
+    t.destroy();
+  }
+});
+
+test('two sessions in one window report two lines with separate counts', () => {
+  const t = setup({ on: true });
+  try {
+    t.window.createTerminalEntry({ sessionId: 's2' });
+    t.window.handleTerminalData('s1', 'a');
+    t.window.handleTerminalData('s2', 'bb');
+    t.window.handleTerminalData('s2', 'cc');
+    t.timers[0].fn();
+    const lines = t.stats();
+    assert.strictEqual(t.timers.length, 1, 'one timer serves both sessions');
+    assert.strictEqual(lines.length, 2);
+    const bySid = Object.fromEntries(lines.map((l) => [l.sid, l.fields]));
+    assert.strictEqual(bySid.s1.chunks, 1);
+    assert.strictEqual(bySid.s1.chars, 1);
+    assert.strictEqual(bySid.s2.chunks, 2);
+    assert.strictEqual(bySid.s2.chars, 4);
+  } finally {
+    t.destroy();
+  }
+});
+
+test('data for a session with no entry does not throw, is counted as received and never as hidden', () => {
+  const t = setup({ on: true });
+  try {
+    t.window.activeSessionId = 'other';
+    assert.doesNotThrow(() => t.window.handleTerminalData('ghost', 'xyz'));
+    t.timers[0].fn();
+    const f = t.stats()[0].fields;
+    assert.strictEqual(t.stats()[0].sid, 'ghost');
+    assert.strictEqual(f.chunks, 1);
+    assert.strictEqual(f.chars, 3);
+    assert.strictEqual(f.hiddenChunks, 0);
+    assert.strictEqual(f.writes, 0);
   } finally {
     t.destroy();
   }

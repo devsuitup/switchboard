@@ -143,7 +143,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `class.toggle` | `has-running-pty` written | `el`, `cls`, `on` |
 | `class.subagent` | A subagent's `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
 | `class.render` | A full sidebar render rebuilt an item's classes from the stores | `el`, `cls` |
-| `render.stats` | Once per second per session that saw terminal activity, while the trace is on: the terminal render path's counters for that second | `ms` (the window's real length), `chunks`, `chars` (PTY data events received and their length), `hiddenChunks` (of those, for a session that is not displayed: accumulated, never parsed), `writes`, `writeChars` (calls to `terminal.write`, from the 30 fps flush or a reveal replay, and what they carried), `maxBatchChunks`, `maxBatchChars` (the largest single write), `atlasChanges`, `atlasCanvases` (glyph atlas rebuilds and added atlas pages, each of which repaints every visible row) |
+| `render.stats` | Once per second per session that saw terminal activity, while the trace is on: the terminal render path's counters for that second | `ms` (the window's real length), `chunks`, `chars` (PTY data events received and their length), `hiddenChunks` (of those, received while the session's terminal is not displayed in single view: accumulated, never parsed; grid sessions never count as hidden), `writes`, `writeChars` (calls to `terminal.write`, from the 30 fps flush or a reveal replay, and what they carried), `maxBatchChunks`, `maxBatchChars` (the largest single write), `atlasChanges`, `atlasCanvases` (glyph atlas rebuilds and added atlas pages, each of which repaints every visible row) |
 | `poll.recv` | The poll reply reaches the renderer | `sinceSeq`, `entries` |
 | `reconcile.apply` / `reconcile.skip` / `reconcile.noop` | Per session in the poll reply | `backend`, `local`, `reason`, `sinceSeq`, `sessionSeq` |
 
@@ -152,7 +152,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 
 ## What to look for
 
-**Is a terminal burning CPU legitimately?** `render.stats` has no line for a
+**Is a terminal burning CPU legitimately?** The volume is one line per active session per second, hidden sessions and sessions without a terminal entry included. A window that straddles a temp-to-real id rekey reports under both ids. `render.stats` has no line for a
 second in which the session saw nothing. Writes per second is `writes * 1000 /
 ms`; it cannot exceed about 30 for a displayed session, and `writeChars /
 writes` is the batch size. A high `atlasChanges` in the same seconds as the CPU

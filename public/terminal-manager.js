@@ -412,7 +412,6 @@ function isHiddenSingleViewSession(sessionId) {
   return !(entry && entry.panelMounted);
 }
 
-// Render-path counters, reported through the activity trace only.
 // see docs/activity-trace.md "render.stats"
 const RENDER_STATS_INTERVAL_MS = 1000;
 const renderStats = new Map();
