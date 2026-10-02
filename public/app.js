@@ -430,6 +430,7 @@ function clearNotifications(sessionId) {
 // terminal-manager.js (handleTerminalData) so the flush interplay is
 // covered by jsdom tests — app.js itself cannot be loaded in jsdom.
 window.api.onTerminalData((sessionId, data) => handleTerminalData(sessionId, data));
+initLocalTranscriptAdapter();
 
 window.api.onSessionDetected((tempId, realId) => {
   if (window.ATRACE) window.atrace('recv.session-detected', realId, { tempId });

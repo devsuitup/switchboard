@@ -189,6 +189,7 @@ const rendererCrossFileGlobals = {
   isRemoteRowOwned: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
   localTranscriptPtyTakeover: 'readonly',
+  initLocalTranscriptAdapter: 'readonly',
   pruneLocalTranscriptTimers: 'readonly',
   localTranscriptStates: 'readonly',
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal

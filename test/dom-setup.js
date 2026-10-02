@@ -51,7 +51,7 @@ function setupSidebarDom() {
   const apiTarget = {
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
     onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
-    // local-transcript-adapter.js registers this once at eval time — see
+    // initLocalTranscriptAdapter() registers this once — see
     // .ai/contexts/session-state.md (migration step 4).
     onSessionTranscriptActivity: (cb) => { apiTarget._sessionTranscriptActivityCb = cb; },
     // Manual remote reconnect (issue #252) — explicit defaults so a test that
@@ -148,6 +148,7 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
+  vm.runInContext('initLocalTranscriptAdapter()', dom.getInternalVMContext());
 
   const ctx = dom.getInternalVMContext();
   const read = (expr) => vm.runInContext(expr, ctx);
