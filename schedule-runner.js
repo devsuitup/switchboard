@@ -166,28 +166,39 @@ function readProjectPathFromJsonl(folderPath) {
 }
 
 /**
- * The projects to seed the schedule registry with, the first time it is
- * read: the ~/.claude/projects folders whose recorded path encodes back to the
- * folder's name and holds a schedule. After that seeding, a project enters the
- * registry only from main-side actions, never from a transcript.
- * see docs/sandbox.md ("Schedules")
+ * The projects to seed the schedule registry with, the first time it is read:
+ * the local directories that have a `project:<path>` setting, and the git
+ * checkouts under a ~/.claude/projects folder named after them that already
+ * hold a schedule. see docs/sandbox.md ("Schedules")
  */
-function initialScheduleProjects() {
-  const found = [];
-  if (!fs.existsSync(PROJECTS_DIR)) return found;
+function initialScheduleProjects(listProjectSettingKeys) {
+  const found = new Set();
+  const prefix = 'project:';
+  for (const key of listProjectSettingKeys()) {
+    if (typeof key !== 'string' || !key.startsWith(prefix)) continue;
+    const projectPath = key.slice(prefix.length);
+    if (!path.isAbsolute(projectPath)) continue;
+    try {
+      if (fs.statSync(projectPath).isDirectory()) found.add(projectPath);
+    } catch {}
+  }
+  if (!fs.existsSync(PROJECTS_DIR)) return [...found];
   const folderMeta = loadFolderMetaMap();
   for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
     if (!folder.isDirectory()) continue;
-    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
-    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    const recorded = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!recorded) continue;
+    const projectPath = path.resolve(recorded);
+    if (encodeProjectPath(projectPath) !== folder.name) continue;
     try {
+      if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
-        found.push(projectPath);
+        found.add(projectPath);
       }
     } catch {}
   }
-  return found;
+  return [...found];
 }
 
 /**
@@ -195,7 +206,7 @@ function initialScheduleProjects() {
  * Switchboard opened a session in or the user added, seeded once by
  * `seed()` when the setting has never been written.
  */
-function scheduleRegistry(getSetting, setSetting, seed = initialScheduleProjects) {
+function scheduleRegistry(getSetting, setSetting, seed = () => []) {
   const read = () => {
     const stored = getSetting('scheduleProjects');
     if (Array.isArray(stored)) return stored;
