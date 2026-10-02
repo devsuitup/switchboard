@@ -12,8 +12,8 @@ const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } =
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 const FLUSH_MS = 250;
 const MAX_JOBS = 200;
-const LIST_TIMEOUT_MS = 5000;
-const VERB_TIMEOUT_MS = 15000;
+const LIST_TIMEOUT_MS = 20000;
+const VERB_TIMEOUT_MS = 60000;
 const VERBS = new Set(['stop', 'respawn', 'rm']);
 const ROOT_CACHE_MAX = 500;
 const ROOT_CONCURRENCY = 4;
@@ -113,7 +113,8 @@ function resolveMissingRoots(entries) {
   pumpRoots();
 }
 
-function rebuild() {
+function rebuild({ onlyIfChanged = false } = {}) {
+  const previous = roster;
   let descriptors = [];
   try { descriptors = cliSessionState ? cliSessionState.readAllDescriptors() : []; } catch {}
   roster = mergeRoster({
@@ -123,13 +124,14 @@ function rebuild() {
     isOwnPid: makeIsOwnPid(),
     isAttachedHere,
   }).map(e => ({ ...e, ...rootsFor(e.cwd) }));
+  if (onlyIfChanged && JSON.stringify(previous) === JSON.stringify(roster)) return;
   emit();
   resolveMissingRoots(roster);
 }
 
 function scheduleRebuild() {
   if (!started || flushTimer) return;
-  flushTimer = setTimeout(() => { flushTimer = null; rebuild(); }, FLUSH_MS);
+  flushTimer = setTimeout(() => { flushTimer = null; rebuild({ onlyIfChanged: true }); }, FLUSH_MS);
   if (typeof flushTimer.unref === 'function') flushTimer.unref();
 }
 
@@ -177,7 +179,7 @@ function start() {
   if (started) return true;
   started = true;
   try {
-    dirWatcher = fs.watch(jobsDir, () => syncJobWatchers());
+    dirWatcher = fs.watch(jobsDir, (eventType) => { if (eventType !== 'change') syncJobWatchers(); });
     dirWatcher.on('error', (err) => { log.warn(`[bg-agents] jobs watcher error: ${err.message}`); });
   } catch (err) {
     dirWatcher = null;

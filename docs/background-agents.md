@@ -1,6 +1,6 @@
 # Background agents
 
-![The Agents view: grouping by state and by project, folding, the New agent dialog](../build/screenshot-agents.gif)
+![The Agents view grouped by state](../build/screenshot-agents.png)
 
 The Agents view is Switchboard's replacement for the `claude agents` TUI: it
 lists the sessions the Claude CLI daemon runs in the background

@@ -1144,6 +1144,7 @@ function showSession(sessionId) {
   lruTouch(sessionId);
 
   if (gridViewActive) {
+    if (typeof hideAgentsView === 'function' && agentsViewActive) hideAgentsView();
     // Ensure grid layout is set up (e.g. on first session after startup restore)
     if (!terminalsEl.classList.contains('grid-layout')) {
       showGridView();

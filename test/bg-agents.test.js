@@ -248,7 +248,7 @@ test('dispatch runs `claude --bg …` in the project directory and returns the p
     const r = await bgAgents.dispatch({ prompt: 'hello', name: 'n', cwd: dir });
     assert.deepEqual(r, { ok: true, id: 'cccccccc' });
     const call = cli.calls.find(c => c.argv[0] === '--bg');
-    assert.deepEqual(call.argv, ['--bg', '--name', 'n', 'hello']);
+    assert.deepEqual(call.argv, ['--bg', '--name', 'n', '--', 'hello']);
     assert.equal(call.opts.cwd, dir);
     const missing = await bgAgents.dispatch({ prompt: 'hello', cwd: path.join(dir, 'nope') });
     assert.equal(missing.ok, false);

@@ -2,9 +2,8 @@
 
 **Purpose**: The Agents view — a graphical replacement for the `claude agents`
 TUI. Lists the daemon's `--bg` sessions and the external interactive ones,
-attaches/stops/respawns/deletes/dispatches through the CLI. Design:
-`docs/superpowers/specs/2026-09-30-background-agents-view-design.md`. User
-doc: `docs/background-agents.md`.
+attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
+`docs/background-agents.md`.
 
 ## Key files
 
@@ -339,9 +338,25 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 `{ ok: true, detached: true }`: write `\x1a` (Ctrl+Z, which makes `claude attach` leave and
 leaves the session running), wait `graceMs` (2000), then
 `killPty` if the client is still there. If the write fails it kills at once.
+A detach already pending (`session.detaching`, `session.stopRequested`) makes
+every further Stop a no-op: a second kill of a ConPTY on Windows is a heap
+double free (#405). The write goes through `writePty`.
 The header's stop button is labelled **Detach** for such a tab
 (`terminalStopBtn.title`). The job is stopped only by `claude stop`, from the
 Agents view.
+
+## Running the CLI
+
+`runClaudeCommand` (`main.js`) runs `claude <argv>` through the login shell
+profile so `PATH` matches a terminal; the login shell makes a call slow (a
+`claude agents --json --all` took 12 s under bash on Windows), hence
+`LIST_TIMEOUT_MS` 20 s and `VERB_TIMEOUT_MS` 60 s. Under cmd.exe or PowerShell
+the shell would mangle quotes, `&` and newlines of a prompt, so `claude` is
+spawned directly with an argv array. A timeout kills the whole process tree
+(`taskkill /T` on Windows, the process group elsewhere), and the call resolves
+on `close` so stdout is drained. `dispatchArgs` puts `--` before the prompt:
+`--add-dir` is variadic and would otherwise swallow it. A job's own
+`state.json` state wins over the cached CLI list's.
 
 ## Known limits
 

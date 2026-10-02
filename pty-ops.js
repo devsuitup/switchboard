@@ -48,7 +48,9 @@ function writePty(session, data, sessionId) {
 
 // see .ai/contexts/bg-agents.md
 function detachPty(session, sessionId, { graceMs = 2000, schedule = setTimeout } = {}) {
-  const wrote = withPty(session, 'detach', (pty) => pty.write('\x1a'), sessionId);
+  if (session.detaching) return true;
+  session.detaching = true;
+  const wrote = writePty(session, '\x1a', sessionId);
   if (!wrote) return killPty(session, sessionId);
   const timer = schedule(() => {
     if (!session.exited) killPty(session, sessionId);

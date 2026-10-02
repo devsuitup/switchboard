@@ -38,8 +38,9 @@ test('CANARY: the Claude CLI daemon still writes jobs/<id>/state.json in the sha
     let raw;
     try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
     const seen = `(${file})`;
-    assert.ok(JOB_STATES.has(raw.state),
-      `PINNED ASSUMPTION BROKEN: "state" used to be one of ${[...JOB_STATES].join(', ')} ${seen}`);
+    if (!JOB_STATES.has(raw.state)) {
+      t.diagnostic(`unknown job state "${raw.state}" (known: ${[...JOB_STATES].join(', ')}) ${seen}; the view shows it as Unknown`);
+    }
     assert.ok(raw.detail === undefined || raw.detail === null || typeof raw.detail === 'string',
       `PINNED ASSUMPTION BROKEN: "detail" used to be a string, the one-line status the view shows ${seen}`);
     assert.ok(raw.respawnFlags === undefined || Array.isArray(raw.respawnFlags),

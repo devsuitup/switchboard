@@ -101,12 +101,12 @@ function fixture() {
   return { cli, jobs, descriptors, isOwnPid: (pid) => pid === 20, isAttachedHere: (id) => id === 'aaaaaaaa' };
 }
 
-test('mergeRoster: the CLI list decides which jobs exist and their state; the file and the descriptor enrich', () => {
+test('mergeRoster: the CLI list decides which jobs exist; the job file state, being live, wins over the CLI snapshot', () => {
   const roster = mergeRoster(fixture());
   const ids = roster.map(e => e.kind === 'background' ? e.id : e.sessionId);
   assert.deepEqual(ids, ['aaaaaaaa', 'bbbbbbbb', 's-ext']);
   const a = roster[0];
-  assert.equal(a.state, 'working', 'the CLI state wins over the file');
+  assert.equal(a.state, 'done', 'the live state.json wins over the cached CLI state');
   assert.equal(a.status, 'busy', 'the descriptor status wins over the CLI snapshot');
   assert.equal(a.detail, 'stale detail');
   assert.equal(a.tokens, 5);
@@ -132,9 +132,9 @@ test('mergeRoster without the CLI lists the jobs on disk instead', () => {
 
 test('dispatchArgs builds the argv in a fixed order and omits empty options', () => {
   const r = dispatchArgs({ prompt: '  do the thing  ', name: 'n1', agent: 'fleet:em', permissionMode: 'auto', addDirs: '/a, /b', cwd: '/proj' });
-  assert.deepEqual(r, { ok: true, cwd: '/proj', args: ['--bg', '--name', 'n1', '--agent', 'fleet:em', '--permission-mode', 'auto', '--add-dir', '/a', '--add-dir', '/b', 'do the thing'] });
+  assert.deepEqual(r, { ok: true, cwd: '/proj', args: ['--bg', '--name', 'n1', '--agent', 'fleet:em', '--permission-mode', 'auto', '--add-dir', '/a', '--add-dir', '/b', '--', 'do the thing'] });
   const bare = dispatchArgs({ prompt: 'p', cwd: '/proj', name: '', agent: '  ', dangerouslySkipPermissions: true, permissionMode: 'auto' });
-  assert.deepEqual(bare.args, ['--bg', '--dangerously-skip-permissions', 'p']);
+  assert.deepEqual(bare.args, ['--bg', '--dangerously-skip-permissions', '--', 'p']);
 });
 
 test('dispatchArgs refuses an empty prompt, a missing cwd, and a prompt that looks like a flag', () => {

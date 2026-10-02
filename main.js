@@ -1676,6 +1676,7 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   if (!session || session.exited) return { ok: false, error: 'not running' };
   // see .ai/contexts/bg-agents.md ("Detach")
   if (session.isAttach) {
+    if (session.stopRequested) return { ok: true, detached: true };
     session.stopRequested = true;
     detachPty(session, sessionId);
     return { ok: true, detached: true };
@@ -2259,13 +2260,23 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   });
 }
 
+function killProcessTree(child) {
+  try {
+    if (isWindows) spawnChild('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    else process.kill(-child.pid, 'SIGKILL');
+  } catch { try { child.kill('SIGKILL'); } catch {} }
+}
+
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md
 function runClaudeCommand(claudeArgv, { cwd, timeout }) {
   return new Promise((resolve) => {
     const globalSettings = getSetting('global') || {};
     const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
     const shell = profile.path;
-    const args = shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
+    // cmd.exe and PowerShell mangle quotes, `&` and newlines in a prompt: run claude itself
+    const direct = isWindows && !isWslShell(shell) && !/bash|zsh|fish|^sh$|^nu$/.test(path.basename(shell, path.extname(shell)).toLowerCase());
+    const program = direct ? 'claude' : shell;
+    const args = direct ? claudeArgv : shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -2276,21 +2287,22 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
     };
     let child;
     try {
-      child = spawnChild(shell, args, {
+      child = spawnChild(program, args, {
         cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanPtyEnv, FORCE_COLOR: '0' }, windowsHide: true,
+        detached: !isWindows,
       });
     } catch (err) {
       finish(null, err);
       return;
     }
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch {}
+      killProcessTree(child);
       finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
     }, timeout);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', (err) => { clearTimeout(timer); finish(null, err); });
-    child.on('exit', (code) => { clearTimeout(timer); finish(code); });
+    child.on('close', (code) => { clearTimeout(timer); finish(code); });
   });
 }
 

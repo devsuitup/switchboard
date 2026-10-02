@@ -28,7 +28,7 @@ async function guardResume(session, { automatic = false, api, confirm, live } = 
   }
   if (!live) return true;
   if (automatic) return false;
-  // A session the claude daemon runs is attached, never resumed -- see .ai/contexts/bg-agents.md
+  // see .ai/contexts/bg-agents.md
   if (live.kind === 'bg') {
     if (typeof live.jobId === 'string' && live.jobId) return { attach: live.jobId, cwd: live.cwd || null };
     return false;

@@ -38,3 +38,15 @@ test('detach on a pty that refuses the write falls back to a kill', () => {
   assert.equal(ok, true);
   assert.equal(calls.kills, 1);
 });
+
+test('a second detach on the same session neither writes nor arms another timer', () => {
+  const { session, calls } = fakeSession();
+  const timers = [];
+  const schedule = (fn) => { timers.push(fn); return {}; };
+  detachPty(session, 's1', { schedule });
+  detachPty(session, 's1', { schedule });
+  assert.deepEqual(calls.writes, ['\x1a']);
+  assert.equal(timers.length, 1);
+  timers[0]();
+  assert.equal(calls.kills, 1);
+});

@@ -68,7 +68,7 @@ test('CANARY: the Claude CLI still publishes per-session state we can read', (t)
   }
 });
 
-test('CANARY: a background worker descriptor still carries kind "bg" and its short job id (CLI 2.1.285, 2026-09-30)', (t) => {
+test('CANARY: a background worker descriptor still carries kind "bg" and its short job id', (t) => {
   const bg = [];
   for (const name of listStateFiles()) {
     try {

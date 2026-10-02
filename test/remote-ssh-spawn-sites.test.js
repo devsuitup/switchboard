@@ -32,7 +32,7 @@ const UNRESOLVED_ALLOWED = {
   'main.js': {
     spawnPty: 'node-pty wrapper: the shell of a local session, or the attach adapter\'s resolved ssh',
     runScheduleCommand: 'the shell of the schedule\'s shell profile',
-    runClaudeCommand: 'the shell profile running a local claude verb (agents, attach-less bg commands)',
+    runClaudeCommand: 'the shell profile running a local claude command (agents, --bg, stop, respawn, rm)',
   },
   'run-to-exit.js': {
     runToExit: 'exported wrapper; its callers are covered by the program-name test below',

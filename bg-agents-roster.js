@@ -142,7 +142,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.sessionId = cliEntry.sessionId || e.sessionId;
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;
-    e.state = cliEntry.state || e.state;
+    e.state = (job && job.state) || cliEntry.state || e.state;
     e.status = cliEntry.status || e.status;
     e.pid = cliEntry.pid || e.pid;
     e.startedAt = cliEntry.startedAt ?? e.startedAt;
@@ -205,7 +205,7 @@ function dispatchArgs(fields) {
   if (f.dangerouslySkipPermissions) args.push('--dangerously-skip-permissions');
   else if (typeof f.permissionMode === 'string' && f.permissionMode) args.push('--permission-mode', f.permissionMode);
   for (const dir of splitAddDirs(f.addDirs)) args.push('--add-dir', dir);
-  args.push(prompt);
+  args.push('--', prompt);
   return { ok: true, args, cwd: f.cwd };
 }
 
