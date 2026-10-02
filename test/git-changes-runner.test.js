@@ -242,6 +242,22 @@ test('local runner .status(): three commands, no -C flag (cwd passed via execFil
   }
 });
 
+test('a hardened local runner turns core.fsmonitor off on every git call, status and diff alike; a plain one does not (mutation target: dropping the flag)', async () => {
+  for (const hardened of [true, false]) {
+    const { exec, calls } = localFakeExec({});
+    const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec, hardened });
+    await runner.status();
+    await runner.diff('foo.js', { staged: false, untracked: false });
+    await runner.diff('foo.js', { staged: true, untracked: false });
+    assert.ok(calls.length >= 5);
+    for (const args of calls) {
+      const off = args.some((a, i) => a === '-c' && args[i + 1] === 'core.fsmonitor=false');
+      assert.equal(off, hardened, JSON.stringify(args));
+      assert.equal(args[0], '--literal-pathspecs');
+    }
+  }
+});
+
 test('local runner .status(): status runs with -uall so a wholly-untracked directory is listed file by file, never as one directory row (mutation target: dropping -uall)', async () => {
   const { exec, calls } = localFakeExec({});
   const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });

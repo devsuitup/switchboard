@@ -5,6 +5,9 @@ const os = require('os');
 
 let logger = null;
 
+// see .ai/contexts/ipc-bridge.md ("PTY operations race the exit")
+const killedPtys = new WeakSet();
+
 /** Install the sink used to report swallowed PTY errors. `null` disables it. */
 function setPtyOpLogger(next) {
   logger = next && typeof next.debug === 'function' ? next : null;
@@ -34,15 +37,23 @@ function withPty(session, label, fn, sessionId) {
   }
 }
 
+function isKilled(session) {
+  return !!(session && session.pty && killedPtys.has(session.pty));
+}
+
 function resizePty(session, cols, rows, sessionId) {
+  if (isKilled(session)) return false;
   return withPty(session, 'resize', (pty) => pty.resize(cols, rows), sessionId);
 }
 
 function killPty(session, sessionId) {
+  if (!session || !session.pty || killedPtys.has(session.pty)) return false;
+  killedPtys.add(session.pty);
   return withPty(session, 'kill', (pty) => pty.kill(), sessionId);
 }
 
 function writePty(session, data, sessionId) {
+  if (isKilled(session)) return false;
   return withPty(session, 'write', (pty) => pty.write(data), sessionId);
 }
 

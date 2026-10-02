@@ -812,6 +812,79 @@ still applies once a rise is observed (unchanged by the rise-wait bound)`
 is true). The two pre-existing settle-window spec tests above — including
 the documented deadline-vs-settle trade-off — remain green unmodified.
 
+### Readiness and edge proof from the CLI descriptor (issue #407)
+
+Field case (2026-10-01): after a `/compact` chain step, the next step's text
+landed in the composer but its Enter became a line break, while the log said
+`Chain step 1 sent`. Two defects stacked. The level probe
+(`pollForBusyObserved`) accepts any `_cliBusy = true` within the window, and
+`_cliBusy` comes from OSC titles / OSC 9;4, so the spinner that ends a
+compaction satisfied it and the recovery Enter was never armed. And nothing
+waited for the CLI to be back at its prompt: #185 (settle), #190 (rise wait)
+and the `midBusy` gate all read the same terminal-derived signal, which is
+not the CLI's own account of its state (the 0.0.64 incident above: even a
+lone retry `\r` seconds later was absorbed).
+
+The CLI's own descriptor (`~/.claude/sessions/<pid>.json`, read by
+`cli-session-state.js`, see `cli-session-state.md`) is the better source:
+`status` is `idle` at the prompt, `waiting` when a dialog is open, `busy`
+while working, and `statusUpdatedAt` is written on change. The watcher reaches
+it through the optional `ctx.getCliStatus(sessionId)` (`trigger-context.js`,
+wired to `cliSessionState.getStatus` in `main.js`; `undefined` for a remote
+session, which has no local descriptor). No new watcher: it reuses the cache
+`cli-session-state.js` already keeps.
+
+- **Readiness.** A chain step that follows a `/compact` step first waits
+  (`waitForCliIdleAfter`) for `status: "idle"` with a `statusUpdatedAt` later
+  than the compact step's send time. Bounded by
+  `SWITCHBOARD_CLI_READY_WAIT_MS` (default 60 000 ms) and by the step's own
+  deadline; on expiry the step is written anyway, with the warning `CLI not
+  idle after /compact within N ms, writing chain step N anyway`. Its time is
+  counted in the step's and the chain's `waited_ms`.
+- **Proof of submission by edge.** When a descriptor with an integer
+  `statusUpdatedAt` is available, a submission counts when the descriptor
+  shows ANY status write (`busy`, `idle` or `waiting`) with a
+  `statusUpdatedAt` at or after the moment of our Enter (`cliReactedSince`):
+  the CLI reacted. `idle` alone covers a turn too fast for a poll to see
+  `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
+  level probe, or a status that began earlier, proves nothing. Otherwise the
+  existing recovery applies (one bare ``, only into a free composer, same
+  window), and the reaction is looked for again. Still nothing:
+  `confirmed: false`.
+- **The recovery Enter is never written while the descriptor reads `waiting`
+  or `busy`** (`cliForbidsRecoveryEnter`, in edge and fallback modes, whenever
+  the descriptor has a status, even without a usable timestamp): a bare Enter
+  would answer the dialog with its default, or land in a running turn. The
+  step reports `recoverySkipped` and `confirmed: false`.
+- **A descriptor whose `statusUpdatedAt` is not an integer** is treated as no
+  descriptor for readiness and proof (old behaviour), not as one that never
+  matches.
+- **Result and log.** `submitWithVerify` returns `confirmed`: `true` (edge
+  seen), `false` (descriptor available, no edge even after the recovery Enter)
+  or `null` (no descriptor: the level probe decides, as before). `true` logs
+  `Chain step N submitted to ...` (single command: `Submitted command`);
+  `false` logs the warning `Chain step N not confirmed submitted to ...`
+  (`Command not confirmed submitted`) and never `sent`; `null` keeps `sent`.
+  A confirmed step reads `submitted: "confirmed"`; an unconfirmed one reads
+  `"assumed"`, so the chain fold drops to `assumed` too. The step carries
+  `submit_confirmed` and the chain result lists `unconfirmed_steps` (indexes)
+  when there are any. Both fields are absent without a descriptor.
+- **What it does not cover.** A command that never makes the CLI busy (a
+  local slash command that answers at once) cannot show a busy edge: it takes
+  the recovery `\r` (a no-op on an empty composer) and is reported
+  unconfirmed. The descriptor is written by the CLI process; the edge is as
+  fresh as `cli-session-state.js`'s watch of that file.
+
+Unverified against a real CLI: whether waiting for the descriptor's idle
+actually makes the Enter after `/compact` submit. The deciding measurement
+(isolated instance, real CLI) is `/compact` then text with
+`SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` 50 / 500 / 3000, with and without the
+readiness wait. Until then the fix guarantees the failure is recovered once or
+named, not that the first Enter always lands.
+
+Tests: `test/trigger-descriptor-proof.test.js` (fake timers and a fake
+descriptor for the helpers; the real watcher for the chain wiring).
+
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
 A proposal, considered and rejected 2026-09-04: since `submitToPty` writes

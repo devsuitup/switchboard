@@ -144,6 +144,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 
 - `node:test` runner via `npm test` / `task test`.
 - Renderer tests use jsdom via `test/dom-setup.js` + `vm.runInContext` to evaluate `public/*.js` in isolation.
+- `public/app.js` cannot be evaluated whole. To test one of its functions, load the shipped source with `loadAppFunctions` from `test/app-source.js` into the window `setupSidebarDom()` returns, and stub only its outside edges. Never copy the function into the test.
 - Pitfall: `installSpies: false` is required when the eval defines functions you also spy on — function declarations from eval overwrite property spies.
 - Always test in the **primary checkout** (`C:\Serveur\switchboard` on this machine), not inside `.claude/worktrees/agent-*`. Worktrees may have incomplete `node_modules` and produce false negatives on tests that require native modules (e.g. `morphdom`).
 

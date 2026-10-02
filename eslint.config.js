@@ -121,6 +121,7 @@ const rendererCrossFileGlobals = {
   renderActivityTraceFiles: 'readonly',
   openActivityTraceFile: 'readonly',
   showResumeSessionDialog: 'readonly',
+  showSendPromptDialog: 'readonly',
   showJsonlViewer: 'readonly',
   showSubagentTranscript: 'readonly',
   narrowSessionsToSearch: 'readonly',
@@ -153,6 +154,7 @@ const rendererCrossFileGlobals = {
   currentActivitySeq: 'readonly',
   forgetActivitySeq: 'readonly',
   purgeActivityFor: 'readonly',
+  dropLocalPtySession: 'readonly',
   pruneRemoteActivityTimers: 'readonly',
   // public/session-activity.js's persisted per-session state — see .ai/contexts/session-state.md ("The local-pty adapter")
   localPtyState: 'readonly',
@@ -173,6 +175,7 @@ const rendererCrossFileGlobals = {
   setIsAlive: 'readonly',
   isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
+  paintSessionIconFromSnapshot: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
   applyRemoteStopped: 'readonly',
@@ -273,7 +276,7 @@ const rendererCrossFileGlobals = {
   openWorkFile: 'readonly',
   clearNotifications: 'readonly',
   clearUnread: 'readonly',
-  setSessionMcpActive: 'readonly',
+  setSessionMcpState: 'readonly',
   setSessionSandboxed: 'readonly',
   destroySession: 'readonly',
   launchNewSession: 'readonly',

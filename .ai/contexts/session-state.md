@@ -229,6 +229,55 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 `projectLocalPtyState`, see "The local-pty adapter" below), just fed from the
 remote-ssh adapter's own snapshot instead.
 
+### Descriptor-owned attention (issue #394)
+
+A CLI that has a blocking dialog open (permission prompt, question,
+elicitation) writes `status: "waiting"` to its descriptor — see
+cli-session-state.md. OSC 9 does not reach Switchboard from a tmux pane on a
+host, so the descriptor is the only signal an unattached remote row has.
+
+`applyRemoteDescriptor` passes `attention: true` on its `descriptorStatus`
+event. Only the remote adapter does: local callers send the same event without
+it and never get attention from the descriptor. The reducer's rule:
+
+- `waiting` with `attention: true` and liveness not dead sets attention,
+  clears busy / waitingForInput / responseReady like an `attention` event, and
+  records that the descriptor owns it.
+- Any other status (`busy`, `idle`, `shell`, none), a `liveness: dead` event,
+  or an `attention` event releases it — but only when the descriptor owns it. An
+  attention raised by an explicit `attention` event is never cleared by a
+  descriptor, and that event takes ownership over a descriptor-set one.
+- Busy edges and transcript touches never clear it (attention is orthogonal to
+  busy and outranks it), so a busy decay cannot erase an open dialog's state.
+  The status leaving `waiting` is the one thing that clears it.
+- Descriptor absence is a null status on the session object, which releases it;
+  an unattached row whose descriptor disappears loses the attention at the next
+  refresh. `applyRemoteStopped` also clears it.
+
+Two more releases keep it from freezing:
+
+- The attached true to false handoff releases descriptor-owned attention. The
+  reducer keeps following the descriptor while a row is attached, so without
+  this a dialog answered in the PTY would repaint a stale orange on detach; the
+  next descriptor re-asserts it if the session still waits.
+- A host in error keeps its last descriptors (freshness contract), so
+  `renderProjects` passes the project's `remoteHostError` and the descriptor
+  event then carries `attention: false`, which releases descriptor-owned
+  attention for the whole outage. A fresh host passes `attention: true`.
+  The indexer notifies the renderer when a host's last error changes (first
+  failure, a different error, recovery), not only when files changed, so the
+  gate applies without an unrelated render.
+
+The sidebar render replaces row classes from the rebuilt row (morphdom takes the
+new element's classes), so `buildSessionItem` reads the unattached remote
+state's attention for the row class and the icon slot, as it does for
+`agentsBusy`; seeding alone would be wiped at the next render.
+
+Attached rows are untouched: `projectRemoteState` still refuses to paint them,
+and the local-pty path owns their attention. The sidebar's status line appends
+`waitingFor` while the status is `waiting` (`waiting · permission prompt · 3m
+ago`). Latency is the refresh cycle, not the dialog.
+
 ### A parent's busy decay shortens while a subagent is running (issue #284)
 
 A Task-tool invocation typically appends to the parent's own top-level
@@ -508,6 +557,44 @@ gone through at least one busy→idle cycle.
 response-ready (unchanged)" pin both branches of the decision — the icon
 slot's `session-icon--waiting`/`session-icon--response-ready` class and
 title, side by side, so a future reader finds the split intentional.
+
+#### A session main drops (issue #375)
+
+Main dropping a local-pty session (`process-exited`, then `activeSessions.delete`)
+is the one moment the renderer's running state for it has to end — in the
+sidebar row, the status bar and the activity state. The `pty-gone` purge in
+`updateRunningIndicators()` only runs when the running-set *signature* changes,
+so it could not be the only owner: a `cli-busy-state` or notification that lands
+after a poll already removed the id (a CLI stuck in an API retry loop keeps
+rewriting its title while it is killed) re-armed `cli-busy` on a row the
+signature gate then never revisited, and the status bar's `N running` was only
+redrawn by `loadProjects()`.
+
+- `onProcessExited` (`app.js`) removes the id from `activePtyIds`, calls
+  `dropLocalPtySession(id, 'process-exited')` for a non-remote row, and runs
+  `updateRunningIndicators()` at once instead of waiting for the next poll.
+- `dropLocalPtySession` (`session-activity.js`) is the single drop: live
+  subagents first (`clearActiveSubagentsFor`), then `purgeActivityFor`. The
+  `pty-gone` scan uses the same helper.
+- `updateRunningIndicators()` calls `renderDefaultStatus()` whenever the set
+  changed, so the status bar count follows `activePtyIds`.
+
+**Pty generation.** `wireSessionPty` (`main.js`) gives every spawn the next value of
+a monotonically increasing counter (`session.generation`). It is returned by all
+three `open-terminal` replies and sent as the fifth argument of every
+`process-exited` (the fork re-key's second send included). `app.js` records the
+generation of the last reply per id (`ptyGenerations`) and `handleProcessExited`
+ignores an exit older than it — no drop, no `closed`, no banner. An exit that
+lands while `openSession` awaits the reply is buffered (`pendingOpens`);
+`settlePtyOpen` then applies it unless the reply's generation is newer, so a
+stale exit never touches the new pty and a fast-failing launch still reads
+as exited. Chosen over suppressing the event in main because main cannot know
+which exit the renderer has already seen when it is delivered.
+
+Remote rows stay with the remote adapter (see "Row ownership"). Not covered: a
+busy signal that arrives after `process-exited` — main sends none, the PTY is
+gone. The pre-fix sequence is reasoned from the code, not reproduced live;
+`test/dropped-session-state.test.js` pins each step.
 
 ### The local-transcript adapter (step 4)
 

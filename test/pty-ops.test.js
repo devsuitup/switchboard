@@ -43,9 +43,9 @@ test('resizePty forwards cols/rows to a live pty and reports success', () => {
 
 test('killPty and writePty forward to a live pty and report success', () => {
   const pty = makeLivePty();
-  assert.equal(killPty({ pty }, 's1'), true);
   assert.equal(writePty({ pty }, 'hi', 's1'), true);
-  assert.deepEqual(pty.calls, [['kill'], ['write', 'hi']]);
+  assert.equal(killPty({ pty }, 's1'), true);
+  assert.deepEqual(pty.calls, [['write', 'hi'], ['kill']]);
 });
 
 // ── The race the crash came from ─────────────────────────────────────────────
@@ -139,4 +139,23 @@ test('a keystroke to a pty that exits mid-write does not escape handleTerminalIn
   assert.doesNotThrow(() => handleTerminalInput(sessions, 's1', 'hello', 1000));
   // The composer still saw the keystroke — the guard must not skip the bookkeeping.
   assert.equal(session.composerState.pending, 5);
+});
+
+// ── A killed pty is closed once (double ClosePseudoConsole corrupts the heap) ──
+
+test('killPty kills a live pty once and ignores later kills', () => {
+  const pty = makeLivePty();
+  const session = { pty };
+  assert.equal(killPty(session, 's1'), true);
+  assert.equal(killPty(session, 's1'), false);
+  assert.deepEqual(pty.calls, [['kill']]);
+});
+
+test('resizePty and writePty do nothing once the pty was killed', () => {
+  const pty = makeLivePty();
+  const session = { pty };
+  killPty(session, 's1');
+  assert.equal(resizePty(session, 80, 24, 's1'), false);
+  assert.equal(writePty(session, 'x', 's1'), false);
+  assert.deepEqual(pty.calls, [['kill']]);
 });

@@ -177,3 +177,27 @@ test('a session on a healthy host carries no blocking reason and the project car
   assert.equal(session.remoteAttachBlocked, null);
   assert.equal(projects[0].remoteHostProfile.tier, 'attach');
 });
+
+test('a remote session carries the descriptor waitingFor, and null when the descriptor has none or is gone', () => {
+  const annotateRemoteAttachable = makeAnnotate({
+    remoteIndexer: {
+      getRemoteSessions: () => ({
+        sessions: [
+          { sessionId: 'w', status: 'waiting', statusUpdatedAt: 1, waitingFor: 'permission prompt' },
+          { sessionId: 'i', status: 'idle', statusUpdatedAt: 1 },
+        ],
+        at: 1,
+        error: null,
+      }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: 1, error: null, descriptors: [] }),
+    },
+  });
+  const projects = [{
+    projectPath: '/srv/proj',
+    remoteAlias: 'p',
+    sessions: ['w', 'i', 'gone'].map(sessionId => ({ sessionId, remoteAlias: 'p' })),
+  }];
+  annotateRemoteAttachable(projects);
+  assert.deepEqual(projects[0].sessions.map(s => s.waitingFor), ['permission prompt', null, null]);
+});

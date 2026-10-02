@@ -318,7 +318,7 @@ test('package.json: the sandbox script ships in builds and is asar-unpacked so b
 test('sandbox badge: main.js reports the sandbox state on both open-terminal returns', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 
-  const returns = src.match(/return \{ ok: true, reattached: (?:true|false)[^}]*\}/g) || [];
+  const returns = src.match(/return \{\s*ok: true, reattached: (?:true|false)[^}]*\}/g) || [];
   // Local reattach, local spawn, and remote attach (issue #221) — each must
   // report the sandbox state so the renderer badge never reads `undefined`.
   assert.equal(returns.length, 3, 'open-terminal has exactly three success returns');

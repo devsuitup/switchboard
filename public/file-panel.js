@@ -51,6 +51,7 @@ let changesListSplitterEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
 const MAX_CHANGES_ROWS = 500;
+const MAX_SUBAGENT_GROUP_ROWS = 100;
 
 const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
 const DEFAULT_CHANGES_LIST_HEIGHT = 200;
@@ -137,6 +138,20 @@ function initFilePanel() {
     onClose: handleClose,
     onDetachedSave: dropSavedHeldTabs,
   });
+
+  window.addEventListener('beforeunload', (event) => {
+    if (unloadApproved || !collectUnsavedFileTabs().length) return;
+    event.preventDefault();
+    event.returnValue = false;
+  });
+  if (window.api.onUnsavedCheck) {
+    window.api.onUnsavedCheck(async (id) => {
+      window.api.unsavedCheckAck(id);
+      let proceed = true;
+      try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
+      window.api.unsavedCheckResult(id, proceed);
+    });
+  }
 
   // ── Diff-specific UI ──
   const diffContainer = document.createElement('div');
@@ -414,6 +429,12 @@ function wireIpcListeners() {
     closeDiffByDiffId(sessionId, diffId);
   });
 
+  if (window.api.onMcpStatus) {
+    window.api.onMcpStatus((sessionId, mcpState) => {
+      setSessionMcpState(sessionId, mcpState);
+    });
+  }
+
   if (window.api.onGitChangesFileChanged) {
     window.api.onGitChangesFileChanged((sessionId, filePath) => {
       handleChangesFileChanged(sessionId, filePath);
@@ -429,15 +450,17 @@ function getSessionState(sessionId) {
       currentTab: null,
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
-      mcpActive: false,
+      mcpState: 'off',
+      mcpDetail: '',
     });
   }
   return filePanelState.get(sessionId);
 }
 
-function setSessionMcpActive(sessionId, active) {
+function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
-  state.mcpActive = active;
+  state.mcpState = mcpState || 'off';
+  state.mcpDetail = detail || '';
   if (currentPanelSessionId === sessionId) updateMcpIndicator();
 }
 
@@ -555,6 +578,134 @@ function takeHeldFileTab(state, filePath) {
   const tab = state.heldFileTabs.get(key) || null;
   state.heldFileTabs.delete(key);
   return tab;
+}
+
+// see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
+let unloadApproved = false;
+let unsavedPrompt = null;
+
+function collectUnsavedFileTabs() {
+  if (!fpViewerPanel) return [];
+  const found = new Set();
+  for (const state of filePanelState.values()) {
+    const tabs = [];
+    if (state.currentTab && state.currentTab.type === 'file') tabs.push(state.currentTab);
+    if (state.heldFileTabs) tabs.push(...state.heldFileTabs.values());
+    for (const tab of tabs) if (fileTabHasUnsavedEdits(tab)) found.add(tab);
+  }
+  return [...found];
+}
+
+async function saveUnsavedFileTab(tab) {
+  if (fpViewerOwner === tab) {
+    await fpViewerPanel.saveNow();
+    return fileTabHasUnsavedEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
+  }
+  const saved = tab.viewerState;
+  const result = await window.api.saveFileForPanel(tab.filePath, saved.content, saved.agreedBase);
+  if (result && result.ok !== false) {
+    tab.viewerState = { ...saved, agreedBase: saved.content, lastSeenDisk: saved.content };
+    return null;
+  }
+  if (result && result.reason === 'stale') return 'not saved: it changed on disk since you opened it';
+  return `not saved: ${(result && result.error) || 'unknown error'}`;
+}
+
+function showUnsavedEditsDialog(tabs) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog';
+    dialog.id = 'unsaved-edits-dialog';
+    dialog.setAttribute('role', 'alertdialog');
+
+    const title = document.createElement('h3');
+    title.textContent = 'Unsaved file edits';
+    dialog.appendChild(title);
+
+    const hint = document.createElement('div');
+    hint.className = 'add-project-hint';
+    hint.textContent = 'These files have edits that are not saved. Discarding loses them.';
+    dialog.appendChild(hint);
+
+    const labels = heldTabLabels(tabs);
+    const list = document.createElement('ul');
+    tabs.forEach((tab, i) => {
+      const li = document.createElement('li');
+      li.textContent = labels[i];
+      li.title = tab.filePath;
+      list.appendChild(li);
+    });
+    dialog.appendChild(list);
+
+    const errorEl = document.createElement('div');
+    errorEl.className = 'add-project-error';
+    dialog.appendChild(errorEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'add-project-actions';
+    const makeBtn = (id, cls, text) => {
+      const btn = document.createElement('button');
+      btn.id = id;
+      btn.className = cls;
+      btn.textContent = text;
+      actions.appendChild(btn);
+      return btn;
+    };
+    const cancelBtn = makeBtn('unsaved-cancel', 'add-project-cancel-btn', 'Cancel');
+    const discardBtn = makeBtn('unsaved-discard', 'add-project-cancel-btn', 'Discard');
+    const saveBtn = makeBtn('unsaved-save', 'add-project-add-btn', tabs.length > 1 ? 'Save all' : 'Save');
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    saveBtn.focus();
+
+    function finish(proceed) {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(proceed);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') finish(false);
+    }
+    document.addEventListener('keydown', onKey);
+
+    cancelBtn.onclick = () => finish(false);
+    discardBtn.onclick = () => finish(true);
+    saveBtn.onclick = async () => {
+      for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = true;
+      const failures = [];
+      for (let i = 0; i < tabs.length; i++) {
+        if (!fileTabHasUnsavedEdits(tabs[i])) continue;
+        let reason;
+        try { reason = await saveUnsavedFileTab(tabs[i]); } catch (err) { reason = `not saved: ${(err && err.message) || 'unknown error'}`; }
+        if (reason) failures.push(`${labels[i]} ${reason}`);
+      }
+      if (!failures.length) {
+        finish(true);
+        return;
+      }
+      errorEl.textContent = failures.join('. ');
+      errorEl.style.display = 'block';
+      for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = false;
+    };
+  });
+}
+
+function askAboutUnsavedEdits() {
+  if (unsavedPrompt) return unsavedPrompt;
+  const tabs = collectUnsavedFileTabs();
+  if (!tabs.length) return Promise.resolve(true);
+  unsavedPrompt = showUnsavedEditsDialog(tabs).then((proceed) => {
+    unsavedPrompt = null;
+    if (proceed) {
+      unloadApproved = true;
+      setTimeout(() => { unloadApproved = false; }, 10000);
+    }
+    return proceed;
+  });
+  return unsavedPrompt;
 }
 
 function endCurrentTab(sessionId, state) {
@@ -754,7 +905,15 @@ function updateMcpIndicator() {
     return;
   }
   const state = filePanelState.get(currentPanelSessionId);
-  mcpIndicatorEl.style.display = (state && state.mcpActive) ? '' : 'none';
+  const mcpState = state ? state.mcpState : 'off';
+  const look = MCP_INDICATOR_STATES[mcpState];
+  if (!look) {
+    mcpIndicatorEl.style.display = 'none';
+    return;
+  }
+  mcpIndicatorEl.textContent = look.text;
+  mcpIndicatorEl.title = look.title + (mcpState === 'failed' && state.mcpDetail ? ` (${state.mcpDetail})` : '');
+  mcpIndicatorEl.style.display = '';
 }
 
 // ── Panel Rendering ─────────────────────────────────────────────────
@@ -1098,7 +1257,10 @@ async function openChangesDiff(sessionId, file, line = null) {
   tab.diffLoading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 
-  if (!tab.remote) {
+  const ipcId = file.subSessionId || sessionId;
+  if (file.subSessionId) {
+    tab.fallbackReason = 'subagent worktree';
+  } else if (!tab.remote) {
     const pair = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
 
     const pairState = filePanelState.get(sessionId);
@@ -1119,7 +1281,7 @@ async function openChangesDiff(sessionId, file, line = null) {
     tab.fallbackReason = describeFallback(pair);
   }
 
-  const result = await window.api.gitChangesDiff(sessionId, file.path, file.staged, file.untracked);
+  const result = await window.api.gitChangesDiff(ipcId, file.path, file.staged, file.untracked);
 
   const stillState = filePanelState.get(sessionId);
   if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
@@ -1130,7 +1292,7 @@ async function openChangesDiff(sessionId, file, line = null) {
   } else {
     tab.diffContent = result.content;
     tab.diffTruncated = !!result.truncated;
-    if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted, result.countStatus);
+    if (file.untracked && !file.subSessionId) applyUntrackedCounts(tab, dataAtRequest, file.path, result.added, result.deleted, result.countStatus);
   }
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
@@ -1252,8 +1414,10 @@ function renderChangesList(sessionId, tab) {
   if (!data) return;
   const { branch, files, totals } = data;
 
+  const subagentGroups = Array.isArray(data.subagents) ? data.subagents : [];
+  const noChangesText = subagentGroups.length > 0 ? 'No changes in the session directory' : 'No changes';
   changesSummaryEl.textContent = totals.files === 0
-    ? 'No changes'
+    ? noChangesText
     : `${totals.files} file${totals.files === 1 ? '' : 's'} changed +${totals.added} −${totals.deleted}` + describeUncounted(totals.uncounted);
 
   if (branchInfoEl) {
@@ -1282,6 +1446,36 @@ function renderChangesList(sessionId, tab) {
     more.textContent = `+${files.length - shown.length} more files not shown`;
     changesListEl.appendChild(more);
   }
+
+  for (const group of subagentGroups) appendSubagentChangesGroup(sessionId, tab, group);
+  if (subagentGroups.length > 0 && data.subagentsOmitted > 0) {
+    const more = document.createElement('div');
+    more.className = 'changes-more-note';
+    more.textContent = `+${data.subagentsOmitted} more subagent worktrees not shown`;
+    changesListEl.appendChild(more);
+  }
+}
+
+// see .ai/contexts/changes-view.md ("Subagent worktrees")
+function appendSubagentChangesGroup(sessionId, tab, group) {
+  if (!group || typeof group.sessionId !== 'string' || !Array.isArray(group.files) || group.files.length === 0) return;
+  const header = document.createElement('div');
+  header.className = 'changes-subagent-header';
+  const parts = [String(group.label || group.agentId || 'subagent')];
+  if (group.branch && group.branch.head) parts.push(group.branch.head);
+  header.textContent = parts.join(' · ');
+  changesListEl.appendChild(header);
+
+  const shown = group.files.length > MAX_SUBAGENT_GROUP_ROWS ? group.files.slice(0, MAX_SUBAGENT_GROUP_ROWS) : group.files;
+  for (const file of shown) {
+    changesListEl.appendChild(buildChangesFileRow(sessionId, tab, file, group.sessionId));
+  }
+  if (shown.length < group.files.length) {
+    const more = document.createElement('div');
+    more.className = 'changes-more-note';
+    more.textContent = `+${group.files.length - shown.length} more files not shown`;
+    changesListEl.appendChild(more);
+  }
 }
 
 // A row with no count says why — see .ai/contexts/changes-view.md ("Untracked line counts")
@@ -1299,10 +1493,11 @@ function describeUncounted(uncounted) {
   return ` (${uncounted} file${uncounted === 1 ? '' : 's'} not counted)`;
 }
 
-function buildChangesFileRow(sessionId, tab, file) {
+function buildChangesFileRow(sessionId, tab, file, subSessionId = null) {
   const row = document.createElement('div');
   row.className = 'changes-file-row';
   row.dataset.path = file.path;
+  if (subSessionId) row.dataset.subagent = subSessionId;
 
   const state = document.createElement('span');
   state.className = 'changes-file-state changes-state-' + (file.state || '?').toLowerCase();
@@ -1337,12 +1532,13 @@ function buildChangesFileRow(sessionId, tab, file) {
   }
   row.appendChild(counts);
 
-  if (isSelectedChangesRow(tab, file)) row.classList.add('selected');
+  const identity = { path: file.path, subSessionId };
+  if (isSelectedChangesRow(tab, identity)) row.classList.add('selected');
 
   row.addEventListener('click', () => {
     // prefer the unstaged (worktree) diff when a file has both
     const staged = !!file.staged && !file.unstaged;
-    openChangesDiff(sessionId, { path: file.path, staged, untracked: !!file.untracked });
+    openChangesDiff(sessionId, { path: file.path, staged, untracked: !!file.untracked, subSessionId });
   });
   return row;
 }
@@ -1576,7 +1772,7 @@ function mountChangesEditor(dom) {
 
 function isSelectedChangesRow(tab, file) {
   const selected = tab && tab.selectedFile;
-  return !!selected && selected.path === file.path;
+  return !!selected && selected.path === file.path && (selected.subSessionId || null) === (file.subSessionId || null);
 }
 
 function changesEditorKey(tab) {
@@ -1734,6 +1930,12 @@ function classifyDiffLine(line) {
 // ── IDE Emulation Indicator ─────────────────────────────────────────
 
 let mcpIndicatorEl = null;
+
+const MCP_INDICATOR_STATES = {
+  connected: { text: 'IDE Emulation', title: 'IDE Emulation is active: the CLI is connected. Go to Global Settings to disable.' },
+  listening: { text: 'IDE Emulation: waiting for CLI', title: 'IDE Emulation server is listening but the CLI is not connected, so file opens will not reach Switchboard.' },
+  failed: { text: 'IDE Emulation: failed', title: 'IDE Emulation could not start for this session; it runs without it.' },
+};
 
 function addMcpToggle() {
   mcpIndicatorEl = document.createElement('span');

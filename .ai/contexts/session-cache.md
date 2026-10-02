@@ -403,6 +403,20 @@ untouched.
 - **Out of scope, deliberately**: incremental parsing by byte offset within a
   changed file (issue #216's second half) — a changed file discovered this
   way is still read in full by `readSessionFile`.
+- **What the second half needs (measured at v0.0.86, not built).** A resume
+  has to restore the whole per-file accumulator, and the cached row holds only
+  part of it: `commandSummary`, `assistantSeen`, `sidechainSeen`, the first
+  timestamp's fallback and the per-day metric buckets built with the file-mtime
+  fallback date are not persisted. It therefore needs (1) a per-file state
+  record in the cache (byte offset of the last complete newline, a hash of the
+  first KB(s) of the consumed prefix, the accumulator above), with a schema
+  migration; (2) that state handed to the worker next to `existingRows`; (3) a
+  full re-read when the prefix hash differs or the size shrank (the
+  missing-project remap rewrites `.jsonl` atomically) and for any row touched by
+  `mergeBridgeGroups` (its counts are post-cutoff, so they cannot be resumed);
+  (4) pinning `readSessionFile` for local indexing first, since the same
+  function backs it. `test/remote-scan-file-granularity.test.js` pins the file
+  granularity, including a file that vanished from the mirror.
 
 ### Remote hosts — incremental fetch (issue #257)
 
@@ -766,6 +780,60 @@ feeds it the last cycle's own data (`at`, `error`, live descriptors), so there i
 - The new-session button was already disabled for every remote host; it is unchanged.
 - Not done: the probe for what the descriptors cannot tell (multiplexer installed but no session in it, `inotifywait`),
   the inject affordance (issue #219), the launch tier.
+
+## Remote hosts — sending a prompt (issue #219)
+
+`remote-send.js` writes one prompt to a live, unattached remote session through
+the CLI's own messaging socket. Send only: nothing is read back, the state comes
+from the descriptor the refresh cycle already pulls.
+
+- **Protocol** (measured in the issue, CLI 2.1.263): NDJSON over a unix socket,
+  one line `{"type":"user","message":{"role":"user","content":...},"msgV":1,"session_id":...}`
+  terminated by `
+`, capped at 1 MiB, first line within 30 s. The connection is
+  one-way; the server never answers on it. No auth line on POSIX (the peer is
+  identified by `SO_PEERCRED`); on Windows the token lives in a `.key` file that
+  the descriptor fetch and the denylist exclude on purpose, so a `\.\pipe\`
+  path is refused, not worked around.
+- **`session_id` is in the line** so a descriptor that outlived its process, whose
+  pid was reused, never has its prompt accepted by another session.
+- **The text is stdin only.** `defaultRunRemoteCommand` takes an `input` option:
+  stdin becomes a pipe, `-n` (which points ssh's stdin at the null device) is
+  dropped, the line is written and stdin closed. Same spawn site as every other
+  remote ssh, so `remote-ssh-spawn-sites.test.js` is unchanged. The remote
+  command holds fixed text, the integer pid and the single-quoted path.
+  The script is passed as `sh -c '<script>'` (one single-quoted word), so the
+  login shell of the host never parses it; `$(...)` and `if ...; then` fail under
+  fish. The tmux probe and stop commands in `remote-attach.js` / `remote-stop.js`
+  are still raw strings and share that problem; not changed here.
+- **The path is main-side only.** `messagingSocketPath` stays in the descriptor
+  `parseSessions` keeps; the renderer sends `{alias, sessionId, text}` and
+  `handleSendRequest` looks the descriptor up. `validateSocketPath` is stricter
+  than `isSafeSocketPath` (which also guards tmux sockets): `^/[A-Za-z0-9._/-]+\.sock$`,
+  no `..`, at most 107 bytes (`sockaddr_un`). `buildSendCommand` throws on a path
+  it would refuse.
+- **nc variants**: the command probes `ncat --help` for `--send-only` and
+  `nc -h` for an OpenBSD usage line carrying `N` and `U`; a BusyBox or
+  netcat-traditional `nc` is never run with flags it would reject, the command
+  exits 127 instead. **Exit codes** of the remote command: 7 the pid is no longer a `claude`
+  process, 8 the socket is gone, 127 no `ncat`/`nc`. Anything else is a failure
+  carrying ssh's stderr. A timeout (nc did not exit after the line was written)
+  is a failure saying nothing confirms the write, never a success.
+- **30 s dedupe** is client-side and per host, session and text, on an injectable
+  clock. The key is reserved before the ssh spawns, so two concurrent sends of the
+  same text go once; a definite failure releases it, a timeout keeps it (the line
+  may already be on the socket). The server also has a
+  30-token bucket refilling at 0.5/s; nothing here retries.
+- **Entry point**: the `session-send-btn` on remote rows (CSS-gated like Stop:
+  shown for `.is-alive` and not `.has-running-pty`), and `showSendPromptDialog`
+  in `public/dialogs.js`. An attached session is refused main-side as well.
+- Not done, on purpose: replies and idle notification (they need an inbox of our
+  own and a published key), Windows hosts, trigger files targeting remote ids,
+  and the attention state.
+- Tests: `remote-send.test.js` (the line, the path, the command run through a real
+  `sh` with a fake `nc`, exit codes, byte cap, dedupe, IPC contract),
+  `remote-run-input.test.js`, `dom-sidebar-remote-send.test.js`,
+  `dom-send-prompt-dialog.test.js`.
 
 ## Remote hosts — tmux attach (issue #221)
 

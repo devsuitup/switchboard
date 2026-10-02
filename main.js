@@ -17,7 +17,7 @@ if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
 
 // getFolderIndexMtimeMs moved to session-cache.js
 const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./output-buffer');
-const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
+const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 
 // SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
@@ -39,6 +39,8 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createWhatsNew } = require('./changelog');
+const { createUnsavedGuard } = require('./unsaved-guard');
+const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
 const { cleanEnv } = require('./clean-env');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
@@ -67,7 +69,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -81,7 +83,9 @@ const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { attachBlockReason } = require('./remote-host-profile');
-const { createGitChangesRunner } = require('./git-changes-runner');
+const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
+const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
+const { runToExit } = require('./run-to-exit');
 const gitChangesTarget = require('./git-changes-target');
 const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
@@ -356,6 +360,8 @@ function createWindow() {
     `);
   });
 
+  unsavedGuard.attach(mainWindow);
+
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm
   // for reverse-i-search.
@@ -476,7 +482,7 @@ sessionCache.init({
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
-const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
+const { resolveJsonlPath, enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
@@ -553,6 +559,9 @@ const remoteAttachAdapter = createTmuxAttachAdapter({
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 const remoteStopAdapter = createRemoteStopAdapter({ log });
 
+// see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+const remoteSendAdapter = createRemoteSendAdapter({ log });
+
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
 // — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach").
@@ -585,6 +594,7 @@ function annotateRemoteAttachable(projects) {
         session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
+        session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
@@ -623,6 +633,7 @@ function toSidebarPlaceholderSession(ph) {
     remoteDescriptorSeen: ph.remoteDescriptorSeen,
     status: ph.status,
     statusUpdatedAt: ph.statusUpdatedAt,
+    waitingFor: ph.waitingFor,
     placeholder: true,
   };
 }
@@ -1710,9 +1721,20 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   return result;
 });
 
+// --- IPC: remote-send-prompt ---
+// see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payload, {
+  getDescriptor: (alias, sessionId) => remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId),
+  isAttached: (sessionId) => {
+    const attached = activeSessions.get(sessionId);
+    return !!(attached && attached.kind === 'remote-attach' && !attached.exited);
+  },
+  adapter: remoteSendAdapter,
+}));
+
 // --- IPC: git-changes-status / git-changes-diff — see .ai/contexts/changes-view.md ---
-function resolveGitChangesTarget(sessionId) {
-  return gitChangesTarget.resolveGitChangesTarget(sessionId, {
+function gitChangesTargetDeps() {
+  return {
     getCachedFolder,
     isRemoteFolder,
     parseFolderKey,
@@ -1721,21 +1743,64 @@ function resolveGitChangesTarget(sessionId) {
     resolveSessionRealCwd,
     existsSync: (p) => fs.existsSync(p),
     projectsDir: PROJECTS_DIR,
-  });
+    readSubagentMeta,
+    readSubagentMetaAsync,
+    exists: (p) => fs.promises.access(p).then(() => true, () => false),
+    gitCommonDir: gitCommonDirOf,
+    readDotGit: readDotGitFile,
+    listSubagents: (parentId) => getCachedByParent(parentId),
+  };
+}
+
+async function readSubagentMetaAsync(jsonlPath) {
+  try {
+    return JSON.parse(await fs.promises.readFile(jsonlPath.replace(/[.]jsonl$/, '.meta.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function readDotGitFile(worktree) {
+  const dotGit = path.join(worktree, '.git');
+  try {
+    const stat = await fs.promises.lstat(dotGit);
+    if (!stat.isFile() || stat.size > 4096) return { file: false, content: '' };
+    return { file: true, content: await fs.promises.readFile(dotGit, 'utf8') };
+  } catch {
+    return null;
+  }
+}
+
+async function gitCommonDirOf(cwd) {
+  const result = await runToExit('git', ['rev-parse', '--git-common-dir'], { cwd, env: localGitEnv(), timeoutMs: 5000, maxBuffer: 65536 });
+  if (result.code !== 0) return null;
+  const out = result.stdout.toString('utf8').trim();
+  return out ? path.resolve(cwd, out) : null;
+}
+
+function resolveGitChangesTarget(sessionId, opts) {
+  return gitChangesTarget.resolveGitChangesTarget(sessionId, gitChangesTargetDeps(), opts);
 }
 
 function gitChangesRunnerFor(target) {
   return target.kind === 'remote'
     ? createGitChangesRunner({ kind: 'remote', cwd: target.cwd, alias: target.alias })
-    : createGitChangesRunner({ kind: 'local', cwd: target.cwd });
+    : createGitChangesRunner({ kind: 'local', cwd: target.cwd, hardened: !!target.subagent });
 }
 
 ipcMain.handle('git-changes-status', async (_event, sessionId) => {
-  const target = resolveGitChangesTarget(sessionId);
+  const resolved = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const target = await gitChangesTarget.checkSubagentRepo(sessionId, resolved, gitChangesTargetDeps());
   if (!target.ok) return target;
   try {
-    const result = await gitChangesRunnerFor(target).status();
-    return result.ok === false ? result : { ...result, kind: target.kind };
+    const result = await gitChangesRunnerFor(resolved).status();
+    if (result.ok === false) return result;
+    const { worktrees, notScanned } = await gitChangesTarget.listSubagentWorktrees(sessionId, gitChangesTargetDeps());
+    if (worktrees.length === 0) return { ...result, kind: resolved.kind };
+    const { subagents, omitted } = await gitChangesTarget.collectSubagentChanges(
+      worktrees, (cwd) => createGitChangesRunner({ kind: 'local', cwd, hardened: true }));
+    if (subagents.length === 0) return { ...result, kind: resolved.kind };
+    return { ...result, kind: resolved.kind, subagents, subagentsOmitted: omitted + notScanned };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1744,10 +1809,11 @@ ipcMain.handle('git-changes-status', async (_event, sessionId) => {
 // filePath is a git pathspec, or an untracked file's --no-index operand — see .ai/contexts/changes-view.md
 ipcMain.handle('git-changes-diff', async (_event, sessionId, filePath, staged, untracked) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path' };
-  const target = resolveGitChangesTarget(sessionId);
+  const resolved = resolveGitChangesTarget(sessionId, { allowSubagent: true });
+  const target = await gitChangesTarget.checkSubagentRepo(sessionId, resolved, gitChangesTargetDeps());
   if (!target.ok) return target;
   try {
-    return await gitChangesRunnerFor(target).diff(filePath, { staged: !!staged, untracked: !!untracked });
+    return await gitChangesRunnerFor(resolved).diff(filePath, { staged: !!staged, untracked: !!untracked });
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -2139,7 +2205,11 @@ function sandboxBindEnv(dirs) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+let ptyGenerationCounter = 0;
+
+// see .ai/contexts/session-state.md ("A session main drops")
 function wireSessionPty(session, sessionId, ptyProcess) {
+  session.generation = ++ptyGenerationCounter;
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
 
@@ -2242,12 +2312,12 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped);
+      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
       // the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped, session.generation);
       }
     }
     activeSessions.delete(realId);
@@ -2284,7 +2354,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       mainWindow.webContents.send('terminal-data', sessionId, '\x1b[?25l');
     }
 
-    return { ok: true, reattached: true, mcpActive: !!session.mcpServer, sandbox: !!session.sandbox };
+    return {
+      ok: true, reattached: true, sandbox: !!session.sandbox,
+      mcpState: session.mcpError ? 'failed' : getMcpState(session.realSessionId || sessionId),
+      mcpError: session.mcpError || null,
+      generation: session.generation,
+    };
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -2318,7 +2393,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       };
       activeSessions.set(sessionId, remoteSession);
       wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
-      return { ok: true, reattached: false, remote: true, sandbox: false };
+      return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
     }
   }
 
@@ -2411,6 +2486,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   let ptyProcess;
   let mcpServer = null;
+  let mcpError = null;
   try {
     if (isPlainTerminal) {
       const launch = plainTerminalLaunch({
@@ -2529,6 +2605,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           claudeCmd += ' --ide';
         } catch (err) {
+          mcpError = err.message;
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
       }
@@ -2600,7 +2677,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
     sandbox: !!sessionOptions?.sandbox,
-    mcpServer, _openedAt: Date.now(),
+    mcpServer, mcpError, _openedAt: Date.now(),
     // see docs/automation.md — the trigger watcher's politeness guard
     composerState: createComposerState(),
     // see .ai/contexts/trigger-watcher.md, "Session handle"
@@ -2621,7 +2698,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     log.info(`[fork-spawn] tempId=${sessionId} forkFrom=${sessionOptions.forkFrom} folder=${projectFolder} knownFiles=${knownJsonlFiles.size}`);
   }
 
-  return { ok: true, reattached: false, mcpActive: !!mcpServer, sandbox: !!sessionOptions?.sandbox };
+  return {
+    ok: true, reattached: false, sandbox: !!sessionOptions?.sandbox,
+    mcpState: mcpError ? 'failed' : getMcpState(sessionId),
+    mcpError,
+    generation: session.generation,
+  };
 });
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
@@ -2960,9 +3042,10 @@ ipcMain.handle('updater-download', () => {
   if (!autoUpdater) return;
   return autoUpdater.downloadUpdate();
 });
-ipcMain.handle('updater-install', () => {
-  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
+ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
+  if (mainWindow && !(await unsavedGuard.confirmQuit(mainWindow))) return;
+  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
   autoUpdater.quitAndInstall();
 });
 
@@ -3054,9 +3137,9 @@ if (!gotSingleInstanceLock) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
         // see docs/sandbox.md ("Schedules")
-        const refused = refusedScheduleBinds(addDirs, scheduleProjects().list(), os.homedir());
+        const refused = scheduleBindRefusals(addDirs, scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
-          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
           return;
         }
@@ -3107,7 +3190,7 @@ if (!gotSingleInstanceLock) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }));
+      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id) }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }
@@ -3156,6 +3239,7 @@ app.on('window-all-closed', () => {
 
 // see .ai/contexts/activitywatch.md ("Quitting")
 app.on('before-quit', (event) => {
+  if (unsavedGuard.beforeQuit(event, mainWindow)) return;
   if (!activityFlushedForQuit && activityReporter.hasPendingWork) {
     event.preventDefault();
     activityFlushedForQuit = true;
