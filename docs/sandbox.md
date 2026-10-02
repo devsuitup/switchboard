@@ -256,8 +256,12 @@ session in it or when you add it (**Add project**), and removes it when you
 remove the project. Nothing a session writes — a transcript, the `cwd` it
 records, the folder name derived from it — adds one. The registry is seeded
 once, when Switchboard first starts with it and before any session can run,
-with the projects whose transcript folder matches their path and that already
-hold a schedule.
+with the projects that carry a per-project setting of their own (a `project:`
+entry in the settings table). A transcript folder alone registers nothing: a
+folder planted before that first read would otherwise be registered, and inherit
+the sandbox setting of the project enclosing it. A project without a setting
+enters the registry the normal way, when a session is launched in it from the
+app or when you add it.
 
 A sandboxed session can still create a `.claude` below a bound directory
 after launch: the mount plan is fixed when the sandbox starts, and a new

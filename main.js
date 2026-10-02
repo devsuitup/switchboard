@@ -69,7 +69,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry, initialScheduleProjects } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -147,7 +147,7 @@ const {
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
-  getSetting, setSetting, deleteSetting,
+  getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
@@ -682,7 +682,7 @@ ipcMain.handle('browse-folder', async () => {
 
 // Projects whose schedules may run; see docs/sandbox.md ("Schedules").
 function scheduleProjects() {
-  return scheduleRegistry(getSetting, setSetting);
+  return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
 // --- IPC: add-project ---

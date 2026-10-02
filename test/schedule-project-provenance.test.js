@@ -63,20 +63,39 @@ test('schedules: a path whose encoding collides with a registered project\'s fol
   assert.deepEqual(scanSchedules(undefined, [apiClient]), []);
 });
 
-test('schedules: the registry is seeded once from the projects that already carry a schedule', () => {
+test('schedules: the seed holds only the projects that carry a per-project setting', () => {
   reset();
-  const app = path.join(ROOT, 'work', 'app');
-  const plain = path.join(ROOT, 'work', 'plain');
+  const configured = path.join(ROOT, 'work', 'configured');
+  const folderOnly = path.join(ROOT, 'work', 'folder-only');
   const planted = path.join(ROOT, 'work', 'planted');
-  withSchedule(app);
+  for (const dir of [configured, folderOnly, planted]) withSchedule(dir);
+  transcript(encodeProjectPath(configured), configured);
+  transcript(encodeProjectPath(folderOnly), folderOnly);
+  transcript(encodeProjectPath(planted), planted);
+  const keys = ['global', 'project:' + configured, 'project:relative/dir', 'db_version'];
+  assert.deepEqual(initialScheduleProjects(() => keys), [configured],
+    'a transcript folder registers nothing, whatever its path or schedule; only an absolute project: key does');
+});
+
+test('schedules: a transcript folder alone does not enter the registry at its first read', () => {
+  reset();
+  const planted = path.join(ROOT, 'work', 'planted');
   withSchedule(planted);
-  fs.mkdirSync(path.join(plain, '.claude', 'commands'), { recursive: true });
-  fs.writeFileSync(path.join(plain, '.claude', 'commands', 'review.md'), 'Review.\n');
-  transcript(encodeProjectPath(app), app);
-  transcript(encodeProjectPath(plain), plain);
-  transcript('-some-other-folder', planted);
-  assert.deepEqual(initialScheduleProjects(), [app],
-    'neither a project without a schedule nor a transcript naming a path its folder is not named after');
+  transcript(encodeProjectPath(planted), planted);
+  const store = {};
+  const registry = scheduleRegistry(k => store[k], (k, v) => { store[k] = v; },
+    () => initialScheduleProjects(() => []));
+  assert.deepEqual(registry.list(), []);
+  assert.deepEqual(scanSchedules(undefined, registry.list()), []);
+});
+
+test('schedules: a project launched from the app is registered after a seed that left it out', () => {
+  const store = {};
+  const registry = scheduleRegistry(k => store[k], (k, v) => { store[k] = v; }, () => []);
+  const launched = path.resolve('/p/launched');
+  assert.deepEqual(registry.list(), []);
+  registry.add(launched);
+  assert.deepEqual(registry.list(), [launched]);
 });
 
 test('schedules: a schedule is sandboxed by the nearest project setting that contains it', () => {
