@@ -834,7 +834,7 @@ wired to `cliSessionState.getStatus` in `main.js`; `undefined` for a remote
 session, which has no local descriptor). No new watcher: it reuses the cache
 `cli-session-state.js` already keeps.
 
-- **Readiness.** A chain step that follows a `/compact` step first waits
+- **Readiness.** (Extended to every step, see the next section.) A chain step that follows a `/compact` step first waits
   (`waitForCliIdleAfter`) for `status: "idle"` with a `statusUpdatedAt` later
   than the compact step's send time. Bounded by
   `SWITCHBOARD_CLI_READY_WAIT_MS` (default 60 000 ms) and by the step's own
@@ -884,6 +884,50 @@ named, not that the first Enter always lands.
 
 Tests: `test/trigger-descriptor-proof.test.js` (fake timers and a fake
 descriptor for the helpers; the real watcher for the chain wiring).
+
+### Readiness before every step, and the descriptor as busy-fall authority (issues #407, #360)
+
+Second field case (2026-10-02): step 0 of a `compact-now.sh` chain, with no
+`/compact` before it, landed in the composer and its Enter became a line
+break, while four background subagents had just been spawned. The #407
+readiness wait only covered the step after a `/compact`; nothing waited
+before step 0. Text written while the CLI is mid-turn has its Enter absorbed
+whatever preceded it.
+
+- **The wait now runs before EVERY chain step**, step 0 included
+  (`waitForCliIdleAfter`, after the composer-free and liveness checks, so the
+  descriptor is read as close to the write as possible). Before a step that
+  follows `/compact` the idle must also be newer than the compact's send;
+  before any other step any `idle` counts. The idle must hold for the busy-fall
+  settle window (`SWITCHBOARD_BUSY_FALL_SETTLE_MS`, 300 ms) with an unchanged
+  `statusUpdatedAt`, so a `busy` that follows an `idle` within the window is
+  not mistaken for readiness. Bound: `SWITCHBOARD_CLI_READY_WAIT_MS` (default
+  60 000 ms) and the step's own deadline.
+- **`waiting` (a dialog is open) is never typed into.** If the descriptor still
+  reads `waiting` when the bound expires, the step is NOT written: the result
+  is `ok: false`, `error` `not sent` (step 0) or `chain timeout` (later steps),
+  `reason` "the CLI reports a dialog open (waiting); nothing was written into
+  it", the step is recorded with `submitted: "no"`.
+- **`busy` at the bound** keeps the #410 behaviour: the step is written anyway
+  with the warning `CLI not idle ... within N ms, writing chain step N anyway`.
+  Failing there instead would turn a stuck descriptor into a lost chain; the
+  submission proof and the recovery-Enter ban still apply to that write.
+- **No usable descriptor** (`getCliStatus` absent, `undefined`, or a
+  `statusUpdatedAt` that is not an integer): no wait, today's behaviour.
+- **Single triggers do not share this path.** Their own `wait` field
+  (`idle` by the level probe, or `none`) is unchanged and no descriptor wait
+  is added: `wait: "none"` is an explicit request not to wait.
+- **Busy-fall authority (#360).** `waitForBusyFall` receives the Enter's
+  timestamp (`submitWithVerify` returns `enterAt`). A descriptor `idle` with
+  `statusUpdatedAt >= enterAt`, held for the settle window, ends the wait even
+  when `_cliBusy` is stuck true (observed: 600 s stuck, CLI idle within a
+  minute, `chain timeout` after step 0). An idle older than the Enter proves
+  nothing (the Enter may have been absorbed) and leaves the `_cliBusy` logic in
+  charge, as it does when no usable descriptor exists. A descriptor `busy`
+  does not hold the wait open on its own.
+
+Tests: `test/trigger-every-step-readiness.test.js` (the real watcher with a
+fake descriptor, plus `waitForBusyFall` under mocked timers).
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
