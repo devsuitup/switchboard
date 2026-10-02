@@ -1272,6 +1272,14 @@ function rebindSidebarEvents(projects) {
       };
     }
 
+    const sendBtn = item.querySelector('.session-send-btn');
+    if (sendBtn) {
+      sendBtn.onclick = (e) => {
+        e.stopPropagation();
+        showSendPromptDialog(session);
+      };
+    }
+
     const launchConfigBtn = item.querySelector('.session-launch-config-btn');
     if (launchConfigBtn) {
       launchConfigBtn.onclick = (e) => {
@@ -1496,6 +1504,11 @@ function buildSessionItem(session) {
   stopBtn.title = 'Stop session';
   stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
 
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'session-send-btn';
+  sendBtn.title = 'Send a prompt…';
+  sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>';
+
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
@@ -1527,6 +1540,7 @@ function buildSessionItem(session) {
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
   actions.appendChild(stopBtn);
+  if (session.remoteAlias) actions.appendChild(sendBtn);
   if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")

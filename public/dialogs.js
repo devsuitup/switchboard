@@ -73,7 +73,7 @@ async function launchScheduleCreator(project) {
     return;
   }
   syncPtySizeAfterOpen(entry);
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(result.sessionId, !!openResult.mcpActive);
+  if (typeof setSessionMcpState === 'function') setSessionMcpState(result.sessionId, openResult.mcpState, openResult.mcpError);
   if (typeof setSessionSandboxed === 'function') setSessionSandboxed(result.sessionId, openResult.sandbox);
   showSession(result.sessionId);
   pollActiveSessions();
@@ -446,6 +446,73 @@ async function showResumeSessionDialog(session) {
     if (e.key === 'Enter' && !e.target.matches('input')) resume();
   }
   document.addEventListener('keydown', onKey);
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+function showSendPromptDialog(session) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Send a prompt — ' + session.remoteAlias;
+  const textarea = document.createElement('textarea');
+  textarea.className = 'send-prompt-textarea';
+  textarea.rows = 6;
+  textarea.spellcheck = false;
+  textarea.placeholder = 'The text is written to the running session as a new prompt';
+  const status = document.createElement('div');
+  status.className = 'send-prompt-status';
+  const actions = document.createElement('div');
+  actions.className = 'new-session-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'new-session-cancel-btn';
+  cancelBtn.textContent = 'Close';
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'new-session-start-btn send-prompt-send-btn';
+  sendBtn.textContent = 'Send';
+  actions.append(cancelBtn, sendBtn);
+  dialog.append(title, textarea, status, actions);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  overlay.tabIndex = -1;
+  textarea.focus();
+  dialog.addEventListener('click', (e) => { if (e.target !== textarea) textarea.focus(); });
+
+  function close() {
+    overlay.remove();
+  }
+
+  async function send() {
+    const text = textarea.value;
+    if (!text.trim() || sendBtn.disabled) return;
+    sendBtn.disabled = true;
+    status.textContent = 'Sending…';
+    let result;
+    try {
+      result = await window.api.remoteSendPrompt(session.remoteAlias, session.sessionId, text);
+    } catch (err) {
+      result = { ok: false, error: err && err.message ? err.message : 'unknown error' };
+    }
+    sendBtn.disabled = false;
+    if (result && result.ok) {
+      textarea.value = '';
+      status.textContent = 'Sent. The session reads it when it is next free.';
+    } else {
+      status.textContent = (result && result.error) || 'unknown error';
+    }
+  }
+
+  cancelBtn.onclick = close;
+  sendBtn.onclick = send;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
+  });
 }
 
 // Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)
