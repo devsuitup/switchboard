@@ -923,9 +923,25 @@ state was the cause.
 - **A step typed but not confirmed, with the recovery Enter withheld** (the
   descriptor reads `busy` or `waiting` and showed no reaction to our Enter)
   stops the chain: `ok: false`, `error` `step not confirmed`, nothing more is
-  typed into that composer. The step's text may be sitting there.
-- **No usable descriptor** (`getCliStatus` absent, `undefined`, or a
-  `statusUpdatedAt` that is not an integer): no wait, today's behaviour.
+  typed into that composer. The step's text may be sitting there. The
+  recovery Enter is also withheld when input of the user's own is pending in
+  the composer (`waitForComposerFree`), which stops the chain the same way.
+- **No usable descriptor at the START of the wait** (`getCliStatus` absent,
+  `undefined`, or a `statusUpdatedAt` that is not an integer): no wait, today's
+  behaviour (`available: false`). A descriptor lost AFTER it was read (the CLI
+  rewriting its file, a failed pid probe, a momentary bad timestamp) is not the
+  same: it may reappear, so the wait goes on, counted as not idle, until the
+  deadline, then fails like any not-idle case. Nothing is typed on the strength
+  of a descriptor that merely vanished.
+- **Never ready past the deadline, never written past it.** A settle that
+  completes at or after the deadline is a timeout, not readiness, and the
+  deadline is checked again immediately before the write (a step timeout of 0
+  or a settle of 0 included): the step fails with `not sent`/`chain timeout`
+  and the reason "the step deadline passed before it could be written".
+- **`waitForCliIdleAfter` return shape**: `{ ready, available, timedOut,
+  sessionExited, waited_ms, lastStatus, waitingSeen }`. `lastStatus` is the
+  status at the last sample; `waitingSeen` is true when `waiting` was sampled
+  within the last settle window before the end.
 - **Single triggers have the same exposure and it is not addressed here.**
   They keep their own `wait` field (`idle` by the level probe, or `none`) and
   no descriptor wait; they can still be typed into a busy composer.

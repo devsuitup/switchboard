@@ -433,7 +433,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
-| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld because the descriptor reads `busy` or `waiting`; the chain stopped there and nothing more was typed | the step may sit unsubmitted in the composer: look before sending again |
+| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed | the step may sit unsubmitted in the composer: look before sending again |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 The two reserved values mean opposite things:

@@ -90,6 +90,7 @@ const ERROR_NOT_SENT      = 'not sent';
 const ERROR_CHAIN_TIMEOUT = 'chain timeout';
 const ERROR_UNCONFIRMED  = 'step not confirmed';
 const REASON_DIALOG_OPEN  = 'the CLI reports a dialog open (waiting); nothing was written into it';
+const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could be written; nothing was written';
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
 
@@ -376,24 +377,14 @@ function cliForbidsRecoveryEnter(ctx, sessionId) {
   return !!s && (s.status === 'waiting' || s.status === 'busy');
 }
 
-/**
- * Wait until the CLI's own descriptor reports "idle" with a statusUpdatedAt
- * later than `afterMs`, held for `settleMs`, bounded by `deadlineMs`.
- *
- * Returns { ready, available, timedOut, sessionExited, waited_ms, lastStatus,
- * waitingSeen }. `available: false` means no descriptor could be read (at the
- * start or later): the caller keeps its pre-descriptor behaviour. `lastStatus`
- * is the descriptor's status at the last sample; `waitingSeen` is true when a
- * dialog (`waiting`) was sampled within the last `settleMs` before the end.
- *
- * see .ai/contexts/trigger-watcher.md, "Readiness before every step"
- */
+// see .ai/contexts/trigger-watcher.md, "Readiness before every step" (return shape, descriptor loss, deadline)
 function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) {
   const start = Date.now();
   let idleSince = null;
   let idleStamp = null;
   let lastStatus = null;
   let lastWaitingAt = null;
+  let everRead = false;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
@@ -402,21 +393,28 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
       return resolve({ ready: false, available: true, timedOut: false, sessionExited: true, waited_ms, lastStatus, waitingSeen });
     }
     const s = readCliStatus(ctx, sessionId);
-    if (!s) {
+    if (!s && !everRead) {
       return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
     }
-    lastStatus = s.status;
-    if (s.status === 'waiting') lastWaitingAt = now;
-    if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
-      if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
-        idleSince = now;
-        idleStamp = s.statusUpdatedAt;
-      }
-      if (now - idleSince >= settleMs) {
-        return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
-      }
-    } else {
+    let idleHeld = false;
+    if (!s) {
       idleSince = null;
+    } else {
+      everRead = true;
+      lastStatus = s.status;
+      if (s.status === 'waiting') lastWaitingAt = now;
+      if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
+        if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
+          idleSince = now;
+          idleStamp = s.statusUpdatedAt;
+        }
+        idleHeld = now - idleSince >= settleMs;
+      } else {
+        idleSince = null;
+      }
+    }
+    if (idleHeld && now < deadlineMs) {
+      return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
     }
     if (now >= deadlineMs) {
       return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: lastWaitingAt !== null && now - lastWaitingAt <= settleMs });
@@ -1293,7 +1291,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         return;
       }
       if (!ready.available) {
-        ctx.log.info(`[trigger-watcher] CLI descriptor vanished for ${sessionId}, readiness wait ended early before chain step ${i}`);
+        ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait before chain step ${i}`);
       }
       if (ready.timedOut) {
         const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
@@ -1313,6 +1311,23 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         });
         return;
       }
+    }
+
+    if (Date.now() >= stepDeadline) {
+      ctx.log.warn(`[trigger-watcher] Step deadline passed before chain step ${i} could be written:`, sessionId);
+      steps.push({
+        idx: i, command: step.command, sent_at: stepSentAt, waited_ms: polite.waited_ms + readyWaitedMs,
+        submit_retries: 0, submitted: SUBMITTED_NO,
+      });
+      await writeResult({
+        ok: false,
+        submitted: weakestSubmitted(chainSubmitted, SUBMITTED_NO),
+        error: (i === 0) ? ERROR_NOT_SENT : ERROR_CHAIN_TIMEOUT,
+        reason: REASON_DEADLINE_BEFORE_WRITE,
+        partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps,
+        total_waited_ms: totalWaitedMs,
+      });
+      return;
     }
 
     // Submit the step, then look for activity on the session.

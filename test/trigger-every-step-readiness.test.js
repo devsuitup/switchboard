@@ -295,3 +295,110 @@ test('waitForBusyFall: an idle that flickers back to busy inside the settle wind
   assert.equal(r.timedOut, false);
   assert.ok(r.waited_ms >= 240, 'ended after ' + r.waited_ms + ' ms, before the second idle had held');
 });
+
+test('a descriptor that vanishes after it was read keeps the wait going to the deadline: nothing is written', async () => {
+  const uuid = 'sess-every-vanish-' + Date.now();
+  const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
+  session.desc.status = 'busy';
+  session.desc.statusUpdatedAt = Date.now();
+  setTimeout(() => { session.ctx.getCliStatus = () => undefined; }, 500);
+
+  const started = Date.now();
+  const result = await runChain([{ command: 'first step' }], session, uuid, 1800);
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.deepEqual(session.written, []);
+  assert.ok(Date.now() - started >= 1700, 'the wait must run to the deadline');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'not sent');
+});
+
+test('a descriptor that vanishes and reappears idle: the wait resumes and the step is written', async () => {
+  const uuid = 'sess-every-reappear-' + Date.now();
+  const session = chainSession(uuid, { log: recordingLog(), onEnter: (n, d) => quickTurn(session)(n, d) });
+  session.desc.status = 'busy';
+  session.desc.statusUpdatedAt = Date.now();
+  const started = Date.now();
+  const original = session.ctx.getCliStatus;
+  setTimeout(() => { session.ctx.getCliStatus = () => undefined; }, 200);
+  setTimeout(() => {
+    session.desc.status = 'idle'; session.desc.statusUpdatedAt = Date.now();
+    session.ctx.getCliStatus = original;
+  }, 700);
+
+  const result = await runChain([{ command: 'first step' }], session, uuid, 5000);
+
+  assert.equal(result.ok, true);
+  assert.ok(session.written[0].at - started >= 650, 'written before the descriptor reappeared idle');
+});
+
+test('readiness: a settle that completes after the deadline is a timeout, never ready', async (t) => {
+  fakeClock(t);
+  const state = { status: 'idle', statusUpdatedAt: 1_000_000 };
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000 + 290, 300));
+  assert.equal(r.ready, false);
+  assert.equal(r.timedOut, true);
+});
+
+test('readiness: a deadline already passed is a timeout even for an idle descriptor with no settle', async (t) => {
+  fakeClock(t);
+  const state = { status: 'idle', statusUpdatedAt: 1_000_000 };
+  const r = await settleRun(t, waitForCliIdleAfter('sid', stateCtx(state), -Infinity, 1_000_000, 0));
+  assert.equal(r.ready, false);
+  assert.equal(r.timedOut, true);
+});
+
+test('a step whose deadline has passed is not written, even with no descriptor to wait for', async () => {
+  const uuid = 'sess-every-expired-' + Date.now();
+  const session = chainSession(uuid, { log: recordingLog(), withDescriptor: false, onEnter: () => {} });
+  session.ctx.getComposerState = () => {
+    const t = Date.now();
+    while (Date.now() - t < 5) { /* let the 1 ms step budget lapse */ }
+    return { pending: 0, lastInputAt: 0 };
+  };
+  const tmp = mkTmp();
+  process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
+  const watcher = start(session.ctx);
+  try {
+    fs.writeFileSync(path.join(tmp, uuid + '.json'),
+      JSON.stringify({ sessionId: uuid, wait: 'none', chain: [{ command: 'first step', timeout_ms: 1 }], timeout_ms: 20000 }), 'utf8');
+    const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(resultPath)) {
+      if (Date.now() > deadline) throw new Error('no result file');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    assert.deepEqual(session.written, []);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'not sent');
+  } finally {
+    watcher.close();
+    delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('post-compact readiness is anchored on the compact\'s own Enter, not on when the step began', async () => {
+  process.env.SWITCHBOARD_SUBMIT_ENTER_DELAY_MS = '250';
+  try {
+    const uuid = 'sess-every-anchor-' + Date.now();
+    const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
+    const realWrite = session.ctx.getPtyForSession(uuid).ptyProcess.write;
+    session.ctx.getPtyForSession(uuid).ptyProcess.write = function (data) {
+      realWrite.call(this, data);
+      if (data === '/compact') {
+        setTimeout(() => { session.desc.status = 'idle'; session.desc.statusUpdatedAt = Date.now(); }, 60);
+      }
+    };
+
+    const result = await runChain([{ command: '/compact' }, { command: 'second step' }], session, uuid, 3500);
+
+    assert.ok(!session.written.some((w) => w.data === 'second step'), 'an idle older than the compact Enter must not release the next step');
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'chain timeout');
+  } finally {
+    process.env.SWITCHBOARD_SUBMIT_ENTER_DELAY_MS = '1';
+  }
+});
