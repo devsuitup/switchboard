@@ -232,7 +232,60 @@ test('trimHiddenBuffer: never splits a surrogate pair (emoji) in the no-marker f
   assert.strictEqual(result.data, 'TAIL_AFTER_EMOJI', 'the whole (unpaired) emoji is dropped, tail starts clean');
 });
 
+function forwardScanBoundary(str, index) {
+  if (index <= 0) return 0;
+  if (index >= str.length) return str.length;
+  let pos = 0;
+  while (pos < str.length) {
+    if (pos >= index) return skipLoneLowSurrogate(str, index);
+    if (str[pos] !== '\x1b') { pos++; continue; }
+    const end = findEscapeSequenceEnd(str, pos);
+    const seqEnd = end === -1 ? str.length : end;
+    if (index > pos && index < seqEnd) return skipLoneLowSurrogate(str, seqEnd);
+    pos = seqEnd;
+  }
+  return skipLoneLowSurrogate(str, index);
+}
+
+test('advanceToAnsiSafeBoundary: matches a full forward scan on well-formed output, at every index', () => {
+  const pieces = [
+    'plain text ', '\x1b[1;31m', '\x1b[0m', '\x1b]0;title\x07', '\x1b]8;;https://x.y/z\x1b\\',
+    '\x1bPq#0;2;0;0;0#1~~~~\x1b\\', '\x1b7', '\x1b[?2026h', '\u{1F600}', 'é', '\n', '\x1b[2K\x1b[1A',
+  ];
+  let seed = 42;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let round = 0; round < 50; round++) {
+    let str = '';
+    for (let k = 0; k < 40; k++) str += pieces[rand(pieces.length)];
+    if (round % 5 === 0) str += '\x1b[12;3'; // unterminated trailing CSI
+    for (let i = 0; i <= str.length; i++) {
+      assert.strictEqual(advanceToAnsiSafeBoundary(str, i), forwardScanBoundary(str, i), `round ${round}, index ${i}`);
+    }
+  }
+});
+
 // --- Accumulate-while-hidden / replay-on-show integration ---
+
+test('overflow trims below the cap, so the next chunks are appended without another trim', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'hidden' });
+    window.createTerminalEntry({ sessionId: 'active' });
+    window.activeSessionId = 'active';
+    window.gridViewActive = false;
+
+    window.handleTerminalData('hidden', 'y'.repeat(2 * 1024 * 1024 + 1));
+    for (let i = 0; i < 1000; i++) window.handleTerminalData('hidden', 'z'.repeat(10));
+
+    window.showSession('hidden');
+
+    const replayed = spies.writes[0];
+    assert.strictEqual(replayed.length, 1.5 * 1024 * 1024 + 10000, 'trimmed to 1.5 MB once, then only appended');
+    assert.ok(replayed.endsWith('z'.repeat(10000)), 'every chunk after the trim is kept');
+  } finally {
+    destroy();
+  }
+});
 
 test('a hidden session never calls terminal.write() while receiving data', () => {
   const { window, spies, destroy } = setupTerminalDom();
@@ -296,9 +349,9 @@ test('overflow cuts at the last safe redraw marker (alt-screen) and never mid-es
 
     // Push past HIDDEN_BUFFER_MAX_LEN (2 MB) with junk, then a real alt-screen
     // redraw near the end — the kept buffer should start at that marker.
-    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100));
+    window.handleTerminalData('hidden', 'x'.repeat(1024 * 1024));
     const tail = '\x1b[?1049hALT-SCREEN-CONTENT';
-    window.handleTerminalData('hidden', tail);
+    window.handleTerminalData('hidden', 'x'.repeat(1024 * 1024 + 100) + tail);
 
     window.showSession('hidden');
 

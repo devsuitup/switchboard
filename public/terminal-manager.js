@@ -500,6 +500,9 @@ const hiddenAccumulators = new Map(); // sessionId → { raw, reset }
 // overwhelming majority of overflow events — trimHiddenBuffer's reset+tail
 // fallback exists for the rare non-TUI full-throughput dump.
 const HIDDEN_BUFFER_MAX_LEN = 2 * 1024 * 1024; // ~2 MB per hidden session
+// Trim target below the cap so a busy session does not re-trim on every chunk
+// (see .ai/contexts/terminal-hidden-buffer.md).
+const HIDDEN_BUFFER_TRIM_TO = 1.5 * 1024 * 1024;
 
 // Full-redraw markers: once one of these has been written, everything
 // visible afterward is rebuilt from scratch, so cutting the buffer to start
@@ -584,20 +587,16 @@ function skipLoneLowSurrogate(str, index) {
 // naive byte-budget cut point forward so it never splits one of either. An
 // escape sequence left unterminated at the end of the string is treated as
 // extending to the end of the string (nothing after it is a safe place to
-// start either).
+// start either). Only the last ESC before index is examined (see
+// .ai/contexts/terminal-hidden-buffer.md).
 function advanceToAnsiSafeBoundary(str, index) {
   if (index <= 0) return 0;
   if (index >= str.length) return str.length;
-  let pos = 0;
-  while (pos < str.length) {
-    if (pos >= index) return skipLoneLowSurrogate(str, index); // reached the target at a clean boundary
-    if (str[pos] !== '\x1b') { pos++; continue; }
-    const end = findEscapeSequenceEnd(str, pos);
-    const seqEnd = end === -1 ? str.length : end;
-    if (index > pos && index < seqEnd) return skipLoneLowSurrogate(str, seqEnd); // target lands inside — skip past it
-    pos = seqEnd;
-  }
-  return skipLoneLowSurrogate(str, index);
+  const pos = str.lastIndexOf('\x1b', index - 1);
+  if (pos === -1) return skipLoneLowSurrogate(str, index);
+  const end = findEscapeSequenceEnd(str, pos);
+  const seqEnd = end === -1 ? str.length : end;
+  return skipLoneLowSurrogate(str, index < seqEnd ? seqEnd : index);
 }
 
 // Bounds a hidden session's accumulated buffer, dropping the OLDEST bytes on
@@ -678,7 +677,7 @@ function appendToHiddenAccumulator(sessionId, data) {
   }
   acc.raw += data;
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
-    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
+    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_TRIM_TO);
     acc.raw = trimmed.data;
     acc.reset = trimmed.reset;
   }
