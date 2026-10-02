@@ -28,7 +28,7 @@
 
 const os   = require('os');
 const path = require('path');
-const { resolveOnDisk, resolveOnDiskAsync } = require('./resolve-path-on-disk');
+const { resolveOnDisk, sensitiveCandidates, sensitiveCandidatesAsync } = require('./resolve-path-on-disk');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
@@ -61,28 +61,17 @@ const SENSITIVE_PATH_PATTERNS = [
  * @returns {boolean}
  */
 function isSensitivePath(filePath) {
-  const resolved = path.resolve(filePath);
-  if (SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved))) return true;
-
-  // Also test the on-disk real path: a symlink (e.g. a "notes" directory that
-  // is actually a link to ~/.ssh) makes the literal string look harmless
-  // while the file it opens is not. Skipped when nothing exists there yet —
-  // see the file header.
-  const real = resolveOnDisk(resolved);
-  if (real && real !== resolved) {
-    return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(real));
-  }
-  return false;
+  const { paths, unresolved } = sensitiveCandidates(filePath);
+  return unresolved || matchesDenylist(paths);
 }
 
 async function isSensitivePathAsync(filePath) {
-  const resolved = path.resolve(filePath);
-  if (SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved))) return true;
-  const real = await resolveOnDiskAsync(resolved);
-  if (real && real !== resolved) {
-    return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(real));
-  }
-  return false;
+  const { paths, unresolved } = await sensitiveCandidatesAsync(filePath);
+  return unresolved || matchesDenylist(paths);
+}
+
+function matchesDenylist(paths) {
+  return paths.some(candidate => SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(candidate)));
 }
 
 /**

@@ -130,6 +130,27 @@ test('every Changes handler that touches the filesystem refuses a remote session
   }
 });
 
+test('only the read-only status and diff handlers admit a subagent id (mutation target: the wiring)', () => {
+  const main = mainSource();
+  for (const channel of ['git-changes-status', 'git-changes-diff']) {
+    assert.match(handlerBody(main, channel), /resolveGitChangesTarget\(sessionId, \{ allowSubagent: true \}\)/,
+      `${channel} must opt in to a subagent id`);
+  }
+  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch', 'git-changes-locate']) {
+    assert.doesNotMatch(handlerBody(main, channel), /allowSubagent/, `${channel} must keep refusing a subagent id`);
+  }
+  assert.match(main, /readSubagentMeta/, 'main must inject the sidecar reader');
+  assert.match(main, /hardened: !!target[.]subagent/, 'a subagent target runs a hardened runner');
+  assert.match(handlerBody(main, 'git-changes-status'), /hardened: true/, 'the groups of a status reply run hardened runners');
+  for (const channel of ['git-changes-status', 'git-changes-diff']) {
+    assert.match(handlerBody(main, channel), /await gitChangesTarget[.]checkSubagentRepo[(]sessionId, resolved/,
+      `${channel} must check a subagent worktree belongs to the session repository`);
+  }
+  const status = handlerBody(main, 'git-changes-status');
+  assert.match(status, /await gitChangesTarget.listSubagentWorktrees\(sessionId/, 'the status handler lists the parent subagent worktrees');
+  assert.match(status, /collectSubagentChanges\(/, 'and attaches their changes to the result');
+});
+
 test('git-changes-locate is the one handler that takes an absolute path, and it maps it main-side', () => {
   const main = mainSource();
   const body = handlerBody(main, 'git-changes-locate');

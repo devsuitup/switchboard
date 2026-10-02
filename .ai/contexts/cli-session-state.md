@@ -59,10 +59,17 @@ Facts established by measurement, not by documentation:
 - Sampling 295 times at 2 s over 10 min with 2–3 subagents writing, `status`
   stayed `busy` throughout, with no false dip. The parent is `busy` while any
   delegated agent runs (`delegatedActive` in the CLI's own status computation).
-- **Unverified reservation**: no permission dialog occurred during that
-  measurement, so the `waiting` branch was never observed empirically. We treat
-  `waiting` as "not idle" on the strength of the name alone. If that reading is
-  wrong, the only consequence is a missed early rescan — the tick still fires.
+- **`waiting` (read from the CLI bundle, 2.1.286; still not observed live)**:
+  the status computation returns `waiting` whenever a blocking dialog is open,
+  ahead of `busy`; the prompt at rest is `idle`, never `waiting`. A
+  `waitingFor` string is written beside it (`permission prompt`,
+  `input needed`, `dialog open`, `goal proposal`, `worker request`,
+  `sandbox request`), and `statusUpdatedAt` is rewritten on each status write.
+  No permission dialog occurred during the 295-sample measurement above, so no
+  live descriptor was captured during a dialog. A remote row lights the
+  attention state from it (see session-state.md, "Descriptor-owned attention");
+  the remote index keeps `waitingFor` only as a trimmed string of at most 64
+  characters without control characters, and drops anything else.
 
 The `busy` glyph in the terminal title was considered instead and rejected: it
 conflates idle, waiting and shell. The state file distinguishes them, which is

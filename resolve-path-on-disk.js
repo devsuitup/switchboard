@@ -57,6 +57,105 @@ async function resolveOnDiskAsync(filePath) {
   }
 }
 
+const EXTENDED_UNC = /^[\\/]{2}[?.][\\/]UNC[\\/]/i;
+const EXTENDED_DRIVE = /^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/;
+const VERBATIM_PREFIX = /^[\\/]{2}\?[\\/]/;
+const MISSING = new Set(['ENOENT', 'ENOTDIR']);
+
+// see .ai/contexts/ipc-bridge.md, "Sensitive-path candidates"
+function stripExtendedPrefix(p) {
+  if (typeof p !== 'string') return p;
+  if (EXTENDED_UNC.test(p)) return '\\\\' + p.replace(EXTENDED_UNC, '');
+  return p.replace(EXTENDED_DRIVE, '');
+}
+
+function attempt(fn, arg) {
+  try { return { real: fn(arg) }; } catch (e) { return { code: e && e.code }; }
+}
+
+function attemptAsync(fn, arg) {
+  return new Promise((resolve) => {
+    try {
+      fn(arg, (e, real) => resolve(e ? { code: e.code } : { real }));
+    } catch (e) {
+      resolve({ code: e && e.code });
+    }
+  });
+}
+
+function stripTrailingDotsAndSpaces(p) {
+  const root = path.parse(p).root;
+  const rest = p.slice(root.length).split(path.sep).map((seg) => seg.replace(/[. ]+$/, ''));
+  return root + rest.join(path.sep);
+}
+
+function literalsOf(filePath) {
+  const literal = path.resolve(stripExtendedPrefix(filePath));
+  const out = [literal];
+  if (process.platform === 'win32' && !VERBATIM_PREFIX.test(filePath)) {
+    const trimmed = stripTrailingDotsAndSpaces(literal);
+    if (trimmed !== literal) out.push(trimmed);
+  }
+  return out;
+}
+
+const failed = (results) => results.some((r) => !r.real && !MISSING.has(r.code));
+
+function addResolved(paths, results, tail) {
+  for (const r of results) if (r.real) paths.add(tail ? path.join(r.real, tail) : r.real);
+}
+
+// see .ai/contexts/ipc-bridge.md, "Sensitive-path candidates"
+function sensitiveCandidates(filePath) {
+  const paths = new Set([path.resolve(filePath)]);
+  let unresolved = false;
+  for (const literal of literalsOf(filePath)) {
+    paths.add(literal);
+    const first = [attempt(fs.realpathSync, literal), attempt(fs.realpathSync.native, literal)];
+    if (failed(first)) { unresolved = true; continue; }
+    if (first.some((r) => r.real)) { addResolved(paths, first); continue; }
+    let dir = literal;
+    for (;;) {
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      const st = attempt(fs.lstatSync, dir);
+      if (st.code && MISSING.has(st.code)) continue;
+      if (st.code) { unresolved = true; break; }
+      const results = [attempt(fs.realpathSync, dir), attempt(fs.realpathSync.native, dir)];
+      if (failed(results)) unresolved = true;
+      else addResolved(paths, results, path.relative(dir, literal));
+      break;
+    }
+  }
+  return { paths: [...paths], unresolved };
+}
+
+async function sensitiveCandidatesAsync(filePath) {
+  const paths = new Set([path.resolve(filePath)]);
+  let unresolved = false;
+  for (const literal of literalsOf(filePath)) {
+    paths.add(literal);
+    const first = [await attemptAsync(fs.realpath, literal), await attemptAsync(fs.realpath.native, literal)];
+    if (failed(first)) { unresolved = true; continue; }
+    if (first.some((r) => r.real)) { addResolved(paths, first); continue; }
+    let dir = literal;
+    for (;;) {
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      const st = await attemptAsync(fs.lstat, dir);
+      if (st.code && MISSING.has(st.code)) continue;
+      if (st.code) { unresolved = true; break; }
+      const results = [await attemptAsync(fs.realpath, dir), await attemptAsync(fs.realpath.native, dir)];
+      if (failed(results)) unresolved = true;
+      else addResolved(paths, results, path.relative(dir, literal));
+      break;
+    }
+  }
+  return { paths: [...paths], unresolved };
+}
+
 /**
  * True when `child` is `parent` itself or lies beneath it.
  *
@@ -76,4 +175,4 @@ function isInsideDir(child, parent) {
   return c === p || c.startsWith(p + path.sep);
 }
 
-module.exports = { resolveOnDisk, resolveOnDiskAsync, isInsideDir };
+module.exports = { resolveOnDisk, resolveOnDiskAsync, isInsideDir, stripExtendedPrefix, stripTrailingDotsAndSpaces, sensitiveCandidates, sensitiveCandidatesAsync };

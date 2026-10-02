@@ -1166,6 +1166,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-stop-btn,
+.session-send-btn,
 .session-launch-config-btn,
 .session-fork-btn,
 .session-jsonl-btn,
@@ -1193,6 +1194,15 @@ body { display: flex; flex-direction: column; }
 
 .session-stop-btn {
   color: #9b4058;
+}
+
+.session-send-btn {
+  color: #5a7a6a;
+}
+
+.session-send-btn:hover {
+  color: #3ecf5a;
+  background: rgba(62,207,90,0.1);
 }
 
 .session-launch-config-btn {
@@ -1238,6 +1248,14 @@ body { display: flex; flex-direction: column; }
 
 .session-item.has-running-pty .session-stop-btn,
 .session-item.is-alive .session-stop-btn {
+  display: flex;
+}
+
+.session-send-btn {
+  display: none;
+}
+
+.session-item.is-alive:not(.has-running-pty) .session-send-btn {
   display: flex;
 }
 
@@ -4139,6 +4157,27 @@ body { display: flex; flex-direction: column; }
   color: rgba(224,80,112,0.5);
 }
 
+.send-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--control-surface);
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.send-prompt-status {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
 .new-session-actions {
   display: flex;
   justify-content: flex-end;
@@ -4846,6 +4885,15 @@ body { display: flex; flex-direction: column; }
   color: var(--text-muted);
 }
 
+.changes-subagent-header {
+  padding: 6px 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-top: 1px solid var(--hairline);
+}
+
 /* The list keeps its explicit height while the editor is open; it is the
    editor that takes the remaining space. */
 #changes-list.changes-list-split {
@@ -5114,4 +5162,14 @@ body.window-frameless :is(button, input, select, textarea, a, [role="button"], [
 body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
+}
+
+#unsaved-edits-dialog ul {
+  margin: 0 0 4px 0;
+  padding-left: 18px;
+  color: #b0b0c4;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  max-height: 160px;
+  overflow-y: auto;
 }
