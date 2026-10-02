@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
+const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
@@ -39,6 +40,7 @@ function init(ctx) {
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
   getSetting = ctx.db.getSetting;
+  setRemappedProjectReader((folder) => remappedProjectsSetting()[folder]);
   getMeta = ctx.db.getMeta;
   setName = ctx.db.setName;
   isInitialScanComplete = ctx.db.isInitialScanComplete;
@@ -65,9 +67,25 @@ function resolveFolderDir(folderKey) {
 
 // readSessionFile is imported from read-session-file.js (shared with worker)
 
+const warnedRejectedFolders = new Set();
+
+function warnRejectedCwd(folder, cwd) {
+  if (warnedRejectedFolders.has(folder)) return;
+  warnedRejectedFolders.add(folder);
+  if (log && log.warn) log.warn(`[session-cache] no transcript of folder ${folder} has a cwd that encodes to it; first rejected cwd: ${cwd}`);
+}
+
 function deriveFolderProjectPath(folderPath, folderKey) {
   const { alias, folder } = parseFolderKey(folderKey);
-  return deriveProjectPath(folderPath, folder, { remote: alias !== null });
+  return deriveProjectPath(folderPath, folder, {
+    remote: alias !== null,
+    onRejected: (cwd) => warnRejectedCwd(folder, cwd),
+  });
+}
+
+function remappedProjectsSetting() {
+  const stored = getSetting ? getSetting('projectRemaps') : null;
+  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
 }
 
 /** Read one folder from filesystem by scanning .jsonl files directly */
@@ -122,6 +140,10 @@ function refreshFolder(folder, opts = {}) {
     : null;
   if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder);
   if (!projectPath) {
+    if (parseFolderKey(folder).alias === null) {
+      deleteCachedFolder(folder);
+      deleteSearchFolder(folder);
+    }
     setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
     return;
   }
@@ -215,7 +237,7 @@ function refreshFolder(folder, opts = {}) {
     // file's mtime and can't serve as the change-detection key. Comparing
     // `modified` here would miss on nearly every row and re-read every dirty
     // file on every watcher flush.
-    if (cachedEntry && cachedEntry.fileMtime === fileMtime) {
+    if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath) {
       continue; // unchanged, skip
     }
 
@@ -388,7 +410,8 @@ function reconcileCacheFromFilesystem() {
     for (const folder of folders) {
       const meta = metaMap.get(folder);
       const folderPath = path.join(PROJECTS_DIR, folder);
-      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
+      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
+        || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder))) {
         refreshFolder(folder);
       }
     }
@@ -520,10 +543,11 @@ function buildProjectsFromCache(showArchived) {
       for (const d of dirs) {
         const folderKey = alias === null ? d.name : joinFolderKey(alias, d.name);
         let projectPath = folderMeta.get(folderKey)?.projectPath;
+        if (projectPath && alias === null && !storedProjectPathMatchesFolder(projectPath, d.name)) projectPath = null;
         let placeholder = false;
         if (!projectPath) {
           if (scanComplete) {
-            projectPath = deriveProjectPath(path.join(dir, d.name), d.name, { remote: alias !== null });
+            projectPath = deriveFolderProjectPath(path.join(dir, d.name), folderKey);
             if (projectPath) setFolderMeta(folderKey, projectPath, 0);
           } else {
             projectPath = decodeProjectFolderBestEffort(d.name);
@@ -769,7 +793,7 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets 
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets },
+        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting() },
       });
     } catch (err) {
       settle({ ok: false, error: err.message, folders: 0, sessions: 0 });
@@ -856,7 +880,7 @@ function populateCacheViaWorker() {
     };
 
     const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-      workerData: { projectsDir: PROJECTS_DIR },
+      workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting() },
     });
 
     worker.on('message', (msg) => {
@@ -865,6 +889,7 @@ function populateCacheViaWorker() {
       // (notifyRendererProjectsChanged is already throttled ~1.5s) so a large
       // history fills in progressively rather than sitting empty for minutes.
       if (msg.type === 'folder') {
+        if (msg.rejected) warnRejectedCwd(msg.rejected.folder, msg.rejected.cwd);
         scannedFolders = msg.current;
         totalFolders = msg.total;
         const written = writeScannedFolder(msg.result);

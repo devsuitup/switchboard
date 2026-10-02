@@ -13,11 +13,21 @@ function encodeProjectPath(projectPath) {
   return sanitized.slice(0, 200) + '-' + Math.abs(h).toString(36);
 }
 
+let remappedProjectReader = () => null;
+
+function setRemappedProjectReader(reader) {
+  remappedProjectReader = typeof reader === 'function' ? reader : () => null;
+}
+
 // see .ai/contexts/session-cache.md ("Transcript cwd trust")
 function verifiedTranscriptCwd(cwd, folderName) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
   const resolved = path.resolve(cwd);
-  return encodeProjectPath(resolved) === folderName ? resolved : null;
+  if (encodeProjectPath(resolved) === folderName) return resolved;
+  let remapped = null;
+  try { remapped = remappedProjectReader(folderName); } catch {}
+  if (typeof remapped === 'string' && path.isAbsolute(remapped) && path.resolve(remapped) === resolved) return resolved;
+  return null;
 }
 
 // Best-effort inverse of encodeProjectPath, for DISPLAY ONLY while the
@@ -34,4 +44,4 @@ function decodeProjectFolderBestEffort(folder) {
   return folder.replace(/-/g, '/');
 }
 
-module.exports = { encodeProjectPath, decodeProjectFolderBestEffort, verifiedTranscriptCwd };
+module.exports = { encodeProjectPath, decodeProjectFolderBestEffort, verifiedTranscriptCwd, setRemappedProjectReader };

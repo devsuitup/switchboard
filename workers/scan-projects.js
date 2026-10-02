@@ -3,15 +3,23 @@ const fs = require('fs');
 const path = require('path');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
 const { deriveProjectPath } = require('../derive-project-path');
+const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId } = require('../read-session-file');
 
 const PROJECTS_DIR = workerData.projectsDir;
+const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
+setRemappedProjectReader((folder) => REMAPS[folder]);
+let lastRejected = null;
 // Non-empty only for a remote mirror root; `folder` is then <alias>::<folder>.
 const FOLDER_PREFIX = workerData.folderPrefix ? workerData.folderPrefix + '::' : '';
 
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
-  const projectPath = deriveProjectPath(folderPath, folder, { remote: FOLDER_PREFIX !== '' });
+  lastRejected = null;
+  const projectPath = deriveProjectPath(folderPath, folder, {
+    remote: FOLDER_PREFIX !== '',
+    onRejected: (cwd) => { lastRejected = { folder, cwd }; },
+  });
   if (!projectPath) return null;
   const key = FOLDER_PREFIX + folder;
   const sessions = [];
@@ -108,7 +116,7 @@ try {
   for (let i = 0; i < folders.length; i++) {
     const result = readFolderFromFilesystem(folders[i]);
     current++;
-    parentPort.postMessage({ type: 'folder', result, current, total });
+    parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected });
   }
   for (const t of targets) {
     const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);

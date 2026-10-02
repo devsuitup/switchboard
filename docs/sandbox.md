@@ -276,7 +276,7 @@ binds as its own transcript folder all come from a transcript's `cwd` only when
 that `cwd`, with every character but letters and digits replaced by `-`, is the
 name of the folder holding the transcript. A transcript forged in the session's
 own folder with a `cwd` below the project therefore moves none of them, and
-registers nothing. Paths of 200 characters or more are shortened and hashed in
+registers nothing. Moving a project with the remap dialog is the one case where a transcript's `cwd` differs from its folder name; Switchboard records the new path itself and accepts that one. Paths of 200 characters or more are shortened and hashed in
 that name, so two of them can share a folder name; this is not closed.
 
 A sandboxed session can still create a `.claude` below a bound directory

@@ -48,7 +48,21 @@ function resolveWorktreePath(cwd) {
 function deriveProjectPath(folderPath, folderName, opts) {
   const name = folderName || path.basename(folderPath);
   const remote = !!(opts && opts.remote);
-  const trusted = (cwd) => (remote ? (typeof cwd === 'string' && cwd ? cwd : null) : verifiedTranscriptCwd(cwd, name));
+  let firstRejected = null;
+  const trusted = (cwd) => {
+    if (remote) return typeof cwd === 'string' && cwd ? cwd : null;
+    const verified = verifiedTranscriptCwd(cwd, name);
+    if (!verified && cwd && firstRejected === null) firstRejected = cwd;
+    return verified;
+  };
+  const result = deriveVerified(folderPath, trusted);
+  if (result === null && firstRejected !== null && opts && typeof opts.onRejected === 'function') {
+    opts.onRejected(firstRejected);
+  }
+  return result;
+}
+
+function deriveVerified(folderPath, trusted) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first

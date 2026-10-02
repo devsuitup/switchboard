@@ -463,6 +463,7 @@ ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { deriveProjectPath, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { remapProjectTranscripts } = require('./project-remap');
 const { resolveDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -482,7 +483,7 @@ sessionCache.init({
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
-const { resolveJsonlPath, enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
+const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
@@ -754,34 +755,6 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
 
 // --- IPC: remap-project ---
 
-/**
- * Atomically rewrite cwd occurrences of oldPath → newPath in a single JSONL
- * file. Uses a .tmp sibling + rename for crash safety. On any failure the .tmp
- * orphan is cleaned up so it cannot block a future remap attempt.
- */
-function rewriteJsonlAtomic(filePath, oldPath, newPath) {
-  const tmp = filePath + '.tmp';
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const updated = content.split('\n').map(line => {
-      if (!line) return line;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.cwd === oldPath) {
-          parsed.cwd = newPath;
-          return JSON.stringify(parsed);
-        }
-      } catch {}
-      return line;
-    }).join('\n');
-    fs.writeFileSync(tmp, updated);
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
-
 ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
   try {
     // Validate oldPath/newPath are strings (basic sanitisation)
@@ -819,10 +792,7 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
 
     // Rewrite cwd in all session JSONL files (top-level + subagents) so
     // `claude --resume` from CLI also picks up the new path.
-    const sessionFiles = enumerateSessionFiles(folderPath);
-    for (const { filePath } of sessionFiles) {
-      rewriteJsonlAtomic(filePath, oldPath, newPath);
-    }
+    remapProjectTranscripts({ folder, folderPath, oldPath, newPath, getSetting, setSetting });
 
     // Refresh the folder cache so the new path takes effect in the UI
     refreshFolder(folder);
