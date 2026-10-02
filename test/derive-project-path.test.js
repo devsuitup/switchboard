@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const { encodeProjectPath } = require('../encode-project-path');
 const { deriveProjectPath, resolveWorktreePath, resolveSessionRealCwd } = require('../derive-project-path');
 
 function mkTmp() {
@@ -92,7 +93,7 @@ test('deriveProjectPath end-to-end: jsonl with worktree cwd resolves to parent r
 
     // The folder we feed deriveProjectPath is a "projects/foo" style dir
     // containing a single jsonl whose first cwd line points at the worktree.
-    const folder = path.join(tmp, 'project-folder');
+    const folder = path.join(tmp, encodeProjectPath(worktreeCwd));
     fs.mkdirSync(folder);
     fs.writeFileSync(
       path.join(folder, 'session-1.jsonl'),
@@ -118,7 +119,7 @@ const CWD_SCAN_BYTES = 256 * 1024;
 test('extractCwdFromJsonl: finds cwd on line 1 of a small file (< scan window)', () => {
   const tmp = mkTmp();
   try {
-    const folder = path.join(tmp, 'folder');
+    const folder = path.join(tmp, encodeProjectPath(path.join(tmp, 'myproject')));
     fs.mkdirSync(folder);
     const cwd = path.join(tmp, 'myproject');
     // Small file: one header line with cwd, then a few regular lines
@@ -137,7 +138,7 @@ test('extractCwdFromJsonl: finds cwd on line 1 of a small file (< scan window)',
 test('extractCwdFromJsonl: finds cwd when file is larger than 256 KB and cwd is on line 1', () => {
   const tmp = mkTmp();
   try {
-    const folder = path.join(tmp, 'folder');
+    const folder = path.join(tmp, encodeProjectPath(path.join(tmp, 'bigproject')));
     fs.mkdirSync(folder);
     const cwd = path.join(tmp, 'bigproject');
     // First line: the header with cwd
@@ -168,7 +169,7 @@ test('extractCwdFromJsonl: returns null when cwd only appears beyond the 256 KB 
   // file that we deliberately do not support to avoid the re-read hot-loop.
   const tmp = mkTmp();
   try {
-    const folder = path.join(tmp, 'folder');
+    const folder = path.join(tmp, encodeProjectPath(path.join(tmp, 'hidden-project')));
     fs.mkdirSync(folder);
     const cwd = path.join(tmp, 'hidden-project');
     // Fill more than 256 KB with lines that have NO cwd field, then append
@@ -196,7 +197,7 @@ test('extractCwdFromJsonl: does not throw when the 256 KB boundary cuts a line m
   // the cut produces a partial UTF-8 / partial JSON fragment.
   const tmp = mkTmp();
   try {
-    const folder = path.join(tmp, 'folder');
+    const folder = path.join(tmp, encodeProjectPath(path.join(tmp, 'trunctest')));
     fs.mkdirSync(folder);
     const cwd = path.join(tmp, 'trunctest');
     // First line has a cwd so we get a real return value; the truncation
@@ -229,14 +230,15 @@ test('resolveSessionRealCwd: finds the cwd of a session in any project folder', 
   const tmp = mkTmp();
   try {
     const cwd = path.join(tmp, 'repo', '.claude', 'worktrees', 'agent-xyz');
+    const wtFolder = encodeProjectPath(cwd);
     fs.mkdirSync(path.join(tmp, '-other-project'));
-    fs.mkdirSync(path.join(tmp, '-home-user-repo'));
+    fs.mkdirSync(path.join(tmp, wtFolder));
     fs.writeFileSync(
       path.join(tmp, '-other-project', 'aaaa.jsonl'),
       JSON.stringify({ type: 'summary', cwd: '/elsewhere' }) + '\n', 'utf8'
     );
     fs.writeFileSync(
-      path.join(tmp, '-home-user-repo', 'sess-1.jsonl'),
+      path.join(tmp, wtFolder, 'sess-1.jsonl'),
       JSON.stringify({ type: 'summary', cwd }) + '\n' +
       JSON.stringify({ type: 'user', message: 'hello' }) + '\n', 'utf8'
     );
@@ -281,9 +283,9 @@ test('resolveSessionRealCwd: returns null when the projects dir does not exist',
 test('resolveSessionRealCwd: uses the bounded scan — cwd on line 1 of a >256 KB transcript is found', () => {
   const tmp = mkTmp();
   try {
-    fs.mkdirSync(path.join(tmp, '-big'));
     const cwd = path.join(tmp, 'bigproject');
-    const filePath = path.join(tmp, '-big', 'sess-big.jsonl');
+    fs.mkdirSync(path.join(tmp, encodeProjectPath(cwd)));
+    const filePath = path.join(tmp, encodeProjectPath(cwd), 'sess-big.jsonl');
     const header = JSON.stringify({ type: 'summary', cwd }) + '\n';
     const fillerLine = JSON.stringify({ type: 'assistant', message: 'x'.repeat(80) }) + '\n';
     const fillerCount = Math.ceil((300 * 1024 - header.length) / fillerLine.length) + 10;
@@ -307,17 +309,19 @@ test('resolveSessionRealCwd: checks the preferredFolder hint before the alphabet
     // alphabetically-first one would win a naive scan. The hint must win.
     const decoyCwd = path.join(tmp, 'decoy');
     const realCwd = path.join(tmp, 'real');
-    fs.mkdirSync(path.join(tmp, '-aaa-decoy'));
-    fs.mkdirSync(path.join(tmp, '-zzz-hinted'));
+    const decoyFolder = encodeProjectPath(decoyCwd);
+    const hintedFolder = encodeProjectPath(realCwd);
+    fs.mkdirSync(path.join(tmp, decoyFolder));
+    fs.mkdirSync(path.join(tmp, hintedFolder));
     fs.writeFileSync(
-      path.join(tmp, '-aaa-decoy', 'sess-h.jsonl'),
+      path.join(tmp, decoyFolder, 'sess-h.jsonl'),
       JSON.stringify({ type: 'summary', cwd: decoyCwd }) + '\n', 'utf8'
     );
     fs.writeFileSync(
-      path.join(tmp, '-zzz-hinted', 'sess-h.jsonl'),
+      path.join(tmp, hintedFolder, 'sess-h.jsonl'),
       JSON.stringify({ type: 'summary', cwd: realCwd }) + '\n', 'utf8'
     );
-    assert.equal(resolveSessionRealCwd(tmp, 'sess-h', '-zzz-hinted'), realCwd);
+    assert.equal(resolveSessionRealCwd(tmp, 'sess-h', hintedFolder), realCwd);
     assert.equal(resolveSessionRealCwd(tmp, 'sess-h'), decoyCwd);
   } finally {
     cleanup(tmp);
@@ -330,10 +334,11 @@ test('resolveSessionRealCwd: falls back to the full scan when the preferredFolde
     // Fork-of-worktree-session shape: the caller hints the collapsed parent's
     // folder, but the fork source's transcript lives under the worktree folder.
     const cwd = path.join(tmp, 'repo', '.worktrees', 'agent-w');
+    const wtFolder = encodeProjectPath(cwd);
     fs.mkdirSync(path.join(tmp, '-repo'));
-    fs.mkdirSync(path.join(tmp, '-repo--worktrees-agent-w'));
+    fs.mkdirSync(path.join(tmp, wtFolder));
     fs.writeFileSync(
-      path.join(tmp, '-repo--worktrees-agent-w', 'sess-fork-src.jsonl'),
+      path.join(tmp, wtFolder, 'sess-fork-src.jsonl'),
       JSON.stringify({ type: 'summary', cwd }) + '\n', 'utf8'
     );
     assert.equal(resolveSessionRealCwd(tmp, 'sess-fork-src', '-repo'), cwd);

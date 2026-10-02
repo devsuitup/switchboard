@@ -35,6 +35,7 @@ let deriveCalls = 0;
 deriveModule.deriveProjectPath = (...args) => { deriveCalls++; return realDerive(...args); };
 
 const sessionCache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 
 function writeSession(folderPath, cwd) {
   fs.mkdirSync(folderPath, { recursive: true });
@@ -117,7 +118,8 @@ test('cold start in flight: the empty-dir fallback does zero per-folder I/O and 
 test('scan complete: the fallback still derives real paths and backfills cache_meta (warm path unchanged)', () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-bpfc-warm-'));
   try {
-    writeSession(path.join(projectsDir, '-tmp-proj-a'), '/tmp/proj-a');
+    const warmCwd = path.join(projectsDir, 'proj-a');
+    writeSession(path.join(projectsDir, encodeProjectPath(warmCwd)), warmCwd);
 
     const setFolderMetaCalls = [];
     initCache(projectsDir, { initialScanComplete: true, setFolderMetaCalls });
@@ -126,9 +128,9 @@ test('scan complete: the fallback still derives real paths and backfills cache_m
     const projects = sessionCache.buildProjectsFromCache(false);
 
     assert.equal(deriveCalls, 1, 'a folder unknown to cache_meta is derived for real once the scan is complete');
-    assert.deepEqual(setFolderMetaCalls.map(c => c.projectPath), ['/tmp/proj-a'],
+    assert.deepEqual(setFolderMetaCalls.map(c => c.projectPath), [warmCwd],
       'the real derived path is backfilled so subsequent renders are pure DB reads');
-    assert.deepEqual(projects.map(p => p.projectPath), ['/tmp/proj-a']);
+    assert.deepEqual(projects.map(p => p.projectPath), [warmCwd]);
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

@@ -270,6 +270,15 @@ the upgrade `~/.claude/projects` is read-only to a sandboxed session except its
 own folder, so nothing new can be planted. Any other project enters the registry the normal way, when a session is launched in
 it from the app or when you add it.
 
+A project path is never read from a transcript on trust. The sidebar project,
+the directory a resumed or forked session starts in and the folder the sandbox
+binds as its own transcript folder all come from a transcript's `cwd` only when
+that `cwd`, with every character but letters and digits replaced by `-`, is the
+name of the folder holding the transcript. A transcript forged in the session's
+own folder with a `cwd` below the project therefore moves none of them, and
+registers nothing. Paths of 200 characters or more are shortened and hashed in
+that name, so two of them can share a folder name; this is not closed.
+
 A sandboxed session can still create a `.claude` below a bound directory
 after launch: the mount plan is fixed when the sandbox starts, and a new
 directory is not in it. The registry is what keeps a

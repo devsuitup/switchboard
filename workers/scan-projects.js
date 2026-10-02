@@ -11,7 +11,7 @@ const FOLDER_PREFIX = workerData.folderPrefix ? workerData.folderPrefix + '::' :
 
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
-  const projectPath = deriveProjectPath(folderPath, folder);
+  const projectPath = deriveProjectPath(folderPath, folder, { remote: FOLDER_PREFIX !== '' });
   if (!projectPath) return null;
   const key = FOLDER_PREFIX + folder;
   const sessions = [];
@@ -49,7 +49,7 @@ function sessionIdFromRel(rel, parentSessionId) {
 // ("Remote hosts file-level rescan").
 function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
   const folderPath = path.join(PROJECTS_DIR, folder);
-  const projectPath = deriveProjectPath(folderPath, folder);
+  const projectPath = deriveProjectPath(folderPath, folder, { remote: FOLDER_PREFIX !== '' });
   if (!projectPath) return null;
   const key = FOLDER_PREFIX + folder;
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);

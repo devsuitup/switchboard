@@ -27,8 +27,11 @@ const os = require('os');
 const path = require('path');
 
 const sessionCache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 
-function writeSession(folderPath, cwd) {
+function writeSession(projectsDir, name) {
+  const cwd = path.join(projectsDir, name);
+  const folderPath = path.join(projectsDir, encodeProjectPath(cwd));
   fs.mkdirSync(folderPath, { recursive: true });
   const line = JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'hello' } });
   fs.writeFileSync(path.join(folderPath, 'session.jsonl'), line + '\n', 'utf8');
@@ -78,9 +81,9 @@ function initCache(projectsDir, db) {
 test('populateCacheViaWorker writes each folder to the DB as it streams in (not batched at the end)', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-cold-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
-    writeSession(path.join(projectsDir, 'proj-b'), '/tmp/proj-b');
-    writeSession(path.join(projectsDir, 'proj-c'), '/tmp/proj-c');
+    writeSession(projectsDir, 'proj-a');
+    writeSession(projectsDir, 'proj-b');
+    writeSession(projectsDir, 'proj-c');
 
     const db = makeFakeDb({ initialScanComplete: false });
     initCache(projectsDir, db);
@@ -98,8 +101,8 @@ test('populateCacheViaWorker writes each folder to the DB as it streams in (not 
 test('cold start (empty cache) emits indexing-progress events ending in done:true, with increasing counters', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-cold-2-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
-    writeSession(path.join(projectsDir, 'proj-b'), '/tmp/proj-b');
+    writeSession(projectsDir, 'proj-a');
+    writeSession(projectsDir, 'proj-b');
 
     const db = makeFakeDb({ initialScanComplete: false });
     initCache(projectsDir, db);
@@ -135,7 +138,7 @@ test('cold start (empty cache) emits indexing-progress events ending in done:tru
 test('the completeness marker is written exactly once, on the successful done message', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-marker-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
+    writeSession(projectsDir, 'proj-a');
 
     const db = makeFakeDb({ initialScanComplete: false });
     initCache(projectsDir, db);
@@ -153,7 +156,7 @@ test('the completeness marker is written exactly once, on the successful done me
 test('a resumed interrupted scan (marker absent, cache already has rows) still emits the banner events and re-marks completion', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-resume-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
+    writeSession(projectsDir, 'proj-a');
 
     // Note the fake db deliberately exposes NO row-count primitive: the
     // cold/warm decision must be a pure function of the marker. Before the
@@ -180,7 +183,7 @@ test('indexing-progress is throttled: intermediate folder events are dropped, fi
   const realNow = Date.now;
   try {
     for (const name of ['proj-a', 'proj-b', 'proj-c', 'proj-d', 'proj-e']) {
-      writeSession(path.join(projectsDir, name), '/tmp/' + name);
+      writeSession(projectsDir, name);
     }
 
     const db = makeFakeDb({ initialScanComplete: false });
@@ -213,7 +216,7 @@ test('indexing-progress is throttled: intermediate folder events are dropped, fi
 test('warm start (initial scan already completed) never emits indexing-progress', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-warm-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
+    writeSession(projectsDir, 'proj-a');
 
     const db = makeFakeDb({ initialScanComplete: true });
     initCache(projectsDir, db);
@@ -238,7 +241,7 @@ test('warm start (initial scan already completed) never emits indexing-progress'
 test('cold start also sends indexing-finished, once, after the last progress event', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-cold-fin-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
+    writeSession(projectsDir, 'proj-a');
     const db = makeFakeDb({ initialScanComplete: false });
     initCache(projectsDir, db);
     const run = sessionCache.populateCacheViaWorker();

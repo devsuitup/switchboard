@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
 
 // Only the head of the file is scanned: every session/subagent transcript
 // carries `cwd` on its first JSONL line. Reading the whole file here froze
@@ -44,13 +45,16 @@ function resolveWorktreePath(cwd) {
   return cwd;
 }
 
-function deriveProjectPath(folderPath) {
+function deriveProjectPath(folderPath, folderName, opts) {
+  const name = folderName || path.basename(folderPath);
+  const remote = !!(opts && opts.remote);
+  const trusted = (cwd) => (remote ? (typeof cwd === 'string' && cwd ? cwd : null) : verifiedTranscriptCwd(cwd, name));
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first
     for (const e of entries) {
       if (e.isFile() && e.name.endsWith('.jsonl')) {
-        const cwd = extractCwdFromJsonl(path.join(folderPath, e.name));
+        const cwd = trusted(extractCwdFromJsonl(path.join(folderPath, e.name)));
         if (cwd) return resolveWorktreePath(cwd);
       }
     }
@@ -69,7 +73,7 @@ function deriveProjectPath(folderPath) {
             if (agentFiles.length > 0) jsonlPath = path.join(subDir, 'subagents', agentFiles[0]);
           }
           if (jsonlPath) {
-            const cwd = extractCwdFromJsonl(jsonlPath);
+            const cwd = trusted(extractCwdFromJsonl(jsonlPath));
             if (cwd) return resolveWorktreePath(cwd);
           }
         }
@@ -132,6 +136,13 @@ function sessionTranscriptExists(projectsDir, sessionId) {
   return false;
 }
 
+function storedProjectPathMatchesFolder(projectPath, folder) {
+  if (verifiedTranscriptCwd(projectPath, folder)) return true;
+  if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return false;
+  const base = encodeProjectPath(path.resolve(projectPath));
+  return folder.startsWith(base) && /^--(?:claude-)?worktrees-./.test(folder.slice(base.length));
+}
+
 function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
   try {
     const folders = fs.readdirSync(projectsDir);
@@ -145,10 +156,11 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
     for (const folder of folders) {
       const jsonl = path.join(projectsDir, folder, sessionId + '.jsonl');
       if (!fs.existsSync(jsonl)) continue;
-      return extractCwdFromJsonl(jsonl);
+      const cwd = verifiedTranscriptCwd(extractCwdFromJsonl(jsonl), folder);
+      if (cwd) return cwd;
     }
   } catch {}
   return null;
 }
 
-module.exports = { deriveProjectPath, resolveWorktreePath, extractCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };
+module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };

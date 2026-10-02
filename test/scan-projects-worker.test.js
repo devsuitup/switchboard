@@ -20,8 +20,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const { encodeProjectPath } = require('../encode-project-path');
 
-function writeSession(folderPath, cwd) {
+function writeSession(projectsDir, name, cwd = path.join(projectsDir, name)) {
+  const folderPath = path.join(projectsDir, encodeProjectPath(cwd));
   fs.mkdirSync(folderPath, { recursive: true });
   const line = JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'hello' } });
   fs.writeFileSync(path.join(folderPath, 'session.jsonl'), line + '\n', 'utf8');
@@ -51,9 +53,9 @@ function runWorker(projectsDir) {
 test('scan-projects worker streams one folder message per folder, then a final done message', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scan-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-a'), '/tmp/proj-a');
-    writeSession(path.join(projectsDir, 'proj-b'), '/tmp/proj-b');
-    writeSession(path.join(projectsDir, 'proj-c'), '/tmp/proj-c');
+    writeSession(projectsDir, 'proj-a');
+    writeSession(projectsDir, 'proj-b');
+    writeSession(projectsDir, 'proj-c');
 
     const messages = await runWorker(projectsDir);
 
@@ -76,7 +78,7 @@ test('scan-projects worker streams one folder message per folder, then a final d
     }
 
     const folders = folderMsgs.map(m => m.result.folder).sort();
-    assert.deepEqual(folders, ['proj-a', 'proj-b', 'proj-c']);
+    assert.deepEqual(folders, ['proj-a', 'proj-b', 'proj-c'].map(n => encodeProjectPath(path.join(projectsDir, n))).sort());
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }
@@ -91,6 +93,26 @@ test('scan-projects worker reports done:ok even for an empty projects dir', asyn
     assert.equal(messages[0].type, 'done');
     assert.equal(messages[0].ok, true);
     assert.equal(messages[0].total, 0);
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('scan-projects worker indexes no project path from a transcript whose cwd does not encode to its folder', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scan-forged-'));
+  try {
+    const project = path.join(projectsDir, 'proj');
+    writeSession(projectsDir, 'proj', path.join(project, 'evil'));
+    fs.renameSync(
+      path.join(projectsDir, encodeProjectPath(path.join(project, 'evil'))),
+      path.join(projectsDir, encodeProjectPath(project))
+    );
+
+    const messages = await runWorker(projectsDir);
+
+    const folderMsgs = messages.filter(m => m.type === 'folder');
+    assert.equal(folderMsgs.length, 1);
+    assert.equal(folderMsgs[0].result, null);
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

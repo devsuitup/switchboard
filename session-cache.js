@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
-const { deriveProjectPath } = require('./derive-project-path');
+const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
@@ -65,11 +65,16 @@ function resolveFolderDir(folderKey) {
 
 // readSessionFile is imported from read-session-file.js (shared with worker)
 
+function deriveFolderProjectPath(folderPath, folderKey) {
+  const { alias, folder } = parseFolderKey(folderKey);
+  return deriveProjectPath(folderPath, folder, { remote: alias !== null });
+}
+
 /** Read one folder from filesystem by scanning .jsonl files directly */
 function readFolderFromFilesystem(folder) {
   const folderPath = resolveFolderDir(folder);
   if (!folderPath) return { projectPath: null, sessions: [] };
-  const projectPath = deriveProjectPath(folderPath, folder);
+  const projectPath = deriveFolderProjectPath(folderPath, folder);
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
@@ -112,9 +117,10 @@ function refreshFolder(folder, opts = {}) {
   // project remap detection keeps working.
   const knownMeta = getFolderMeta ? getFolderMeta(folder) : null;
   let projectPath = knownMeta && knownMeta.projectPath && fs.existsSync(knownMeta.projectPath)
+    && (parseFolderKey(folder).alias !== null || storedProjectPathMatchesFolder(knownMeta.projectPath, folder))
     ? knownMeta.projectPath
     : null;
-  if (!projectPath) projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder);
   if (!projectPath) {
     setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
     return;
@@ -517,7 +523,7 @@ function buildProjectsFromCache(showArchived) {
         let placeholder = false;
         if (!projectPath) {
           if (scanComplete) {
-            projectPath = deriveProjectPath(path.join(dir, d.name), d.name);
+            projectPath = deriveProjectPath(path.join(dir, d.name), d.name, { remote: alias !== null });
             if (projectPath) setFolderMeta(folderKey, projectPath, 0);
           } else {
             projectPath = decodeProjectFolderBestEffort(d.name);

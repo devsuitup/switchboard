@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { encodeProjectPath } = require('./encode-project-path');
+const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -188,8 +188,8 @@ function initialScheduleProjects(listProjectSettingKeys) {
     if (!folder.isDirectory()) continue;
     const recorded = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
     if (!recorded) continue;
-    const projectPath = path.resolve(recorded);
-    if (encodeProjectPath(projectPath) !== folder.name) continue;
+    const projectPath = verifiedTranscriptCwd(recorded, folder.name);
+    if (!projectPath) continue;
     try {
       if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
       const commandsDir = path.join(projectPath, '.claude', 'commands');

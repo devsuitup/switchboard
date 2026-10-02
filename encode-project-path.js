@@ -1,3 +1,5 @@
+const path = require('path');
+
 // Mirror Claude CLI's project-folder naming so Switchboard-created folders
 // match the ones the CLI writes for the same project path.
 // Reverse-engineered from claude CLI 2.1.126.
@@ -9,6 +11,13 @@ function encodeProjectPath(projectPath) {
     h = (h << 5) - h + projectPath.charCodeAt(i) | 0;
   }
   return sanitized.slice(0, 200) + '-' + Math.abs(h).toString(36);
+}
+
+// see .ai/contexts/session-cache.md ("Transcript cwd trust")
+function verifiedTranscriptCwd(cwd, folderName) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  const resolved = path.resolve(cwd);
+  return encodeProjectPath(resolved) === folderName ? resolved : null;
 }
 
 // Best-effort inverse of encodeProjectPath, for DISPLAY ONLY while the
@@ -25,4 +34,4 @@ function decodeProjectFolderBestEffort(folder) {
   return folder.replace(/-/g, '/');
 }
 
-module.exports = { encodeProjectPath, decodeProjectFolderBestEffort };
+module.exports = { encodeProjectPath, decodeProjectFolderBestEffort, verifiedTranscriptCwd };
