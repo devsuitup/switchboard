@@ -129,6 +129,13 @@ written, until 20 seconds of silence (3 seconds while a subagent is busy), and
 never "response ready". A session that has a live descriptor but no transcript
 yet (before its first prompt) is listed under its directory's name.
 
+A session that is not open in a tab and is waiting on a dialog on the host
+(a permission prompt or a question) shows the orange attention state, and its
+status line says what it waits for. The state comes from the session's
+descriptor, so it appears with the next refresh (about 15 seconds with the host
+watch, the pull interval without it) and clears the same way once the dialog is
+answered. A session open in a tab keeps the terminal's own signals.
+
 ### Opening a session
 
 - A **live session in tmux** — its descriptor names a tmux pane and its pid is a

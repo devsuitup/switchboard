@@ -403,6 +403,20 @@ untouched.
 - **Out of scope, deliberately**: incremental parsing by byte offset within a
   changed file (issue #216's second half) — a changed file discovered this
   way is still read in full by `readSessionFile`.
+- **What the second half needs (measured at v0.0.86, not built).** A resume
+  has to restore the whole per-file accumulator, and the cached row holds only
+  part of it: `commandSummary`, `assistantSeen`, `sidechainSeen`, the first
+  timestamp's fallback and the per-day metric buckets built with the file-mtime
+  fallback date are not persisted. It therefore needs (1) a per-file state
+  record in the cache (byte offset of the last complete newline, a hash of the
+  first KB(s) of the consumed prefix, the accumulator above), with a schema
+  migration; (2) that state handed to the worker next to `existingRows`; (3) a
+  full re-read when the prefix hash differs or the size shrank (the
+  missing-project remap rewrites `.jsonl` atomically) and for any row touched by
+  `mergeBridgeGroups` (its counts are post-cutoff, so they cannot be resumed);
+  (4) pinning `readSessionFile` for local indexing first, since the same
+  function backs it. `test/remote-scan-file-granularity.test.js` pins the file
+  granularity, including a file that vanished from the mirror.
 
 ### Remote hosts — incremental fetch (issue #257)
 

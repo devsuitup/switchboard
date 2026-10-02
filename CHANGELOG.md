@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - A live session on a remote host that is not open in a terminal has a Send a prompt… button on its row: type a text and it is written to the running session as a new prompt, without attaching. It needs `ncat` or an OpenBSD `nc` on the host, and is refused for a Windows host. The dialog says "Sent": the session's own status shows whether it picked the prompt up. (#219)
+- A remote session that is not open in a tab and waits on a dialog on its host, such as a permission prompt or a question, shows the orange attention state, and its status line says what it waits for. It appears and clears with the next refresh of the host. (#394)
 
 ## v0.0.86 — 2026-10-01
 
