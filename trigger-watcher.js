@@ -1279,9 +1279,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
 
     let readyWaitedMs = 0;
-    if (!readCliStatus(ctx, sessionId)) {
-      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId}, readiness wait skipped before chain step ${i}`);
-    } else {
+    {
       const ready = await waitForCliIdleAfter(sessionId, ctx, readyAfterMs === null ? -Infinity : readyAfterMs, stepDeadline, getBusyFallSettleMs());
       readyWaitedMs = ready.waited_ms;
       totalWaitedMs += readyWaitedMs;

@@ -402,3 +402,20 @@ test('post-compact readiness is anchored on the compact\'s own Enter, not on whe
     process.env.SWITCHBOARD_SUBMIT_ENTER_DELAY_MS = '1';
   }
 });
+
+test('the only readable sample is the first one, then the descriptor is unreadable: the wait owns the start decision, nothing is written', async () => {
+  const uuid = 'sess-every-first-read-' + Date.now();
+  const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
+  let reads = 0;
+  session.ctx.getCliStatus = () => {
+    reads += 1;
+    return reads === 1 ? { status: 'busy', statusUpdatedAt: Date.now() } : undefined;
+  };
+
+  const result = await runChain([{ command: 'first step' }], session, uuid, 1500);
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.deepEqual(session.written, []);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'not sent');
+});

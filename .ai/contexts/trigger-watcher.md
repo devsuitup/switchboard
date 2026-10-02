@@ -926,7 +926,7 @@ state was the cause.
   typed into that composer. The step's text may be sitting there. The
   recovery Enter is also withheld when input of the user's own is pending in
   the composer (`waitForComposerFree`), which stops the chain the same way.
-- **No usable descriptor at the START of the wait** (`getCliStatus` absent,
+- **No usable descriptor at the FIRST read of the wait** (the wait owns this decision: there is no separate precheck, so a descriptor read once and lost at the next sample is "not idle", never the legacy path) (`getCliStatus` absent,
   `undefined`, or a `statusUpdatedAt` that is not an integer): no wait, today's
   behaviour (`available: false`). A descriptor lost AFTER it was read (the CLI
   rewriting its file, a failed pid probe, a momentary bad timestamp) is not the

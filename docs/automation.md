@@ -446,7 +446,7 @@ The two reserved values mean opposite things:
   `partial: false` for a `chain`. A session reports itself busy for as long as
   any subagent runs, so `idle` is often unreachable; `not sent` there tells the
   caller the payload never left.
-- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor nothing is waited for.
+- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
 - A session that exits during that initial wait reports `submitted: "no"` and a
   `reason` saying nothing was written (`partial: false` on a chain).
 
