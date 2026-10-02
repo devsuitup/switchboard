@@ -13,8 +13,15 @@ Application → IDE Emulation** and save. It applies to sessions launched or
 resumed afterwards; running sessions keep what they started with, and the
 settings page says so when the value changes. It is a global setting only.
 
-While a session is connected, its terminal header shows an **IDE Emulation**
-label.
+The terminal header says what holds for the session:
+
+- **IDE Emulation** — the CLI is connected.
+- **IDE Emulation: waiting for CLI** — Switchboard is listening but the CLI
+  has not connected (or has disconnected), so file opens do not reach it.
+- **IDE Emulation: failed** — the server could not start (port taken, lock
+  file not written); the session runs without it, and the tooltip gives the
+  reason.
+- Nothing — IDE Emulation is off for the session.
 
 With it off, Switchboard does not register, and `claude` finds your own IDE
 (VS Code, Cursor, …) the way it does outside Switchboard.

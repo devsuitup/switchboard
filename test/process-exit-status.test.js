@@ -56,7 +56,7 @@ const PRELUDE = `
   const placeholder = document.createElement('div');
   const terminalHeaderStatus = document.createElement('span');
   const terminalStopBtn = document.createElement('button');
-  const calls = { writes: [], opened: [] };
+  const calls = { writes: [], opened: [], dropped: [] };
   let openResult = { ok: true };
   function updatePtyTitle() {}
   function isPanelTerminalSession() { return false; }
@@ -64,12 +64,17 @@ const PRELUDE = `
   function destroySession(id) { openSessions.delete(id); }
   function setActiveSession() {}
   function refreshSidebar() {}
+  function dropLocalPtySession(id) { calls.dropped.push(id); }
+  function sessionItemEl() { return null; }
+  const ptyGenerations = new Map();
+  const pendingOpens = new Map();
+  function updateRunningIndicators() {}
   function schedulePersistWorkingSet() {}
   function pollActiveSessions() { updateTerminalHeader(); }
   async function guardResume() { return true; }
   async function resolveDefaultSessionOptions() { return {}; }
   function syncPtySizeAfterOpen() {}
-  function setSessionMcpActive() {}
+  function setSessionMcpState() {}
   function setSessionSandboxed() {}
   function showSession() { updateTerminalHeader(); }
   function makeEntry() { return { closed: false, initialSize: null, terminal: { write: (d) => calls.writes.push(d) } }; }
@@ -94,11 +99,15 @@ function setup() {
   run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');
   run(sliceBlock('function updateTerminalHeader() {'), 'app.js#updateTerminalHeader');
   run(sliceBlock('async function openSession(session'), 'app.js#openSession');
+  run(sliceBlock('function applyProcessExit('), 'app.js#applyProcessExit');
+  run(sliceBlock('function handleProcessExited('), 'app.js#handleProcessExited');
+  run(sliceBlock('function beginPtyOpen('), 'app.js#beginPtyOpen');
+  run(sliceBlock('function settlePtyOpen('), 'app.js#settlePtyOpen');
   run(sliceBlock('window.api.onProcessExited((', ');'), 'app.js#onProcessExited');
   run(`sessionMap.set('s1', { sessionId: 's1', projectPath: '/p', type: 'claude' }); openSessions.set('s1', makeEntry());`, 'fixture.js');
   const read = (expr) => run(expr, 'read.js');
   return Object.assign(h, {
-    exit: (code, signal, stopped) => exitHandler('s1', code, signal, stopped),
+    exit: (code, signal, stopped, generation) => exitHandler('s1', code, signal, stopped, generation),
     exitOf: (id, code) => exitHandler(id, code, null, false),
     poll: (running) => { read(running ? "activePtyIds.add('s1')" : "activePtyIds.delete('s1')"); read('updateTerminalHeader()'); },
     title: () => read('terminalHeaderStatus.title'),
@@ -130,6 +139,45 @@ test('a relaunch that fails to open shows no exit code from the process before i
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
   assert.equal(h.title(), 'Stopped');
+});
+
+test('a stale exit that arrives after the reply of the relaunch leaves the new pty alone', async () => {
+  const h = setup();
+  h.exit(1, null, false, 1);
+  h.read("openResult = { ok: true, generation: 2 }");
+  await h.read("openSession(sessionMap.get('s1'))");
+  h.read("activePtyIds.add('s1')");
+  const writes = h.read('calls.writes.length');
+  const dropped = h.read('calls.dropped.length');
+  h.exit(9, null, false, 1);
+  assert.equal(h.read("openSessions.get('s1').closed"), false, 'the new pty is not marked closed');
+  assert.equal(h.read('calls.writes.length'), writes, 'no banner for the old pty');
+  assert.equal(h.read("activePtyIds.has('s1')"), true, 'the new pty stays in the running set');
+  assert.equal(h.read('calls.dropped.length'), dropped, 'its live state is not purged');
+});
+
+test('a stale exit that arrives before the reply is discarded once the reply names a newer generation', async () => {
+  const h = setup();
+  h.exit(1, null, false, 1);
+  h.read("openResult = { ok: true, generation: 2 }");
+  h.whileOpening = () => h.exit(9, null, false, 1);
+  await h.read("openSession(sessionMap.get('s1'))");
+  h.read("activePtyIds.add('s1')");
+  assert.equal(h.read("openSessions.get('s1').closed"), false, 'the new pty is not marked closed');
+  assert.equal(h.read("activePtyIds.has('s1')"), true);
+});
+
+test('a fast-failing launch whose exit lands during the await is applied after the reply', async () => {
+  const h = setup();
+  h.exit(1, null, false, 1);
+  h.read("openResult = { ok: true, generation: 2 }");
+  h.whileOpening = () => h.exit(3, null, false, 2);
+  const droppedBefore = h.read('calls.dropped.length');
+  await h.read("openSession(sessionMap.get('s1'))");
+  assert.equal(h.read("openSessions.get('s1').closed"), true, 'the exit of the current pty closes its entry');
+  assert.equal(h.title(), 'Exited (code 3)');
+  assert.match(h.lastWrite(), /session exited \(code 3\)/);
+  assert.equal(h.read('calls.dropped.length'), droppedBefore + 1, 'and drops its state');
 });
 
 test('a relaunch that opens shows no old exit code before its first poll', async () => {
@@ -201,12 +249,14 @@ test('main names the signal node-pty reports and forwards it with the exit code'
   assert.match(MAIN_SRC, /ptyProcess\.onExit\(\(\{ exitCode, signal \}\) => \{\s*const exitSignal = ptyExitSignalName\(signal\);/);
   const sends = MAIN_SRC.match(/webContents\.send\('process-exited', [^)]*\)/g);
   assert.equal(sends.length, 2);
-  for (const send of sends) assert.match(send, /, exitCode, exitSignal, stopped\)$/);
+  for (const send of sends) assert.match(send, /, exitCode, exitSignal, stopped, session\.generation\)$/);
   assert.match(MAIN_SRC, /const stopped = !!session\.stopRequested;/);
   const stopHandler = MAIN_SRC.slice(MAIN_SRC.indexOf("ipcMain.handle('stop-session'"), MAIN_SRC.indexOf("ipcMain.handle('remote-stop-session'"));
   assert.match(stopHandler, /session\.stopRequested = true;\s*killPty\(session, sessionId\);/, 'a Stop is recorded before the signal is sent');
   assert.match(MAIN_SRC, /attachedSession\.stopRequested = true;\s*killPty\(attachedSession, sessionId\);/);
-  assert.match(PRELOAD_SRC, /'process-exited', \(_event, sessionId, exitCode, signal, stopped\) => callback\(sessionId, exitCode, signal, stopped\)/);
+  assert.ok(MAIN_SRC.includes('session.generation = ++ptyGenerationCounter;'), 'every wired pty gets the next generation');
+  assert.equal(MAIN_SRC.match(/return \{\s*ok: true, reattached: (true|false), [^}]*generation: (session|remoteSession)\.generation,?\s*\}/g).length, 3, 'all three open-terminal replies carry the generation');
+  assert.ok(PRELOAD_SRC.includes("'process-exited', (_event, sessionId, exitCode, signal, stopped, generation) => callback(sessionId, exitCode, signal, stopped, generation)"));
   assert.match(APP_SRC, /notePanelTerminalExit\(sessionId, exitCode, signal, stopped\)/);
 });
 

@@ -577,7 +577,7 @@ function renderProjects(projects, resort) {
   pendingSubagentRest.clear();
   // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
   for (const project of projects) {
-    for (const session of project.sessions) seedRemoteActivity(session);
+    for (const session of project.sessions) seedRemoteActivity(session, project.remoteHostError);
   }
   const newSidebar = document.createElement('div');
 
@@ -1272,6 +1272,14 @@ function rebindSidebarEvents(projects) {
       };
     }
 
+    const sendBtn = item.querySelector('.session-send-btn');
+    if (sendBtn) {
+      sendBtn.onclick = (e) => {
+        e.stopPropagation();
+        showSendPromptDialog(session);
+      };
+    }
+
     const launchConfigBtn = item.querySelector('.session-launch-config-btn');
     if (launchConfigBtn) {
       launchConfigBtn.onclick = (e) => {
@@ -1381,6 +1389,15 @@ function rebindSidebarEvents(projects) {
   }
 }
 
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function remoteAttentionSnapshot(sessionId) {
+  if (typeof remoteSessionStates === 'undefined') return null;
+  const state = remoteSessionStates.get(sessionId);
+  if (!state) return null;
+  const snapshot = state.snapshot();
+  return !snapshot.attached && snapshot.attention ? snapshot : null;
+}
+
 function buildSessionItem(session) {
   const item = document.createElement('div');
   item.className = 'session-item js-stateful';
@@ -1388,7 +1405,8 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
-  setNeedsAttention(item, attentionSessions.has(session.sessionId));
+  const remoteAttention = remoteAttentionSnapshot(session.sessionId);
+  setNeedsAttention(item, attentionSessions.has(session.sessionId) || !!remoteAttention);
   setResponseReady(item, responseReadySessions.has(session.sessionId));
   setCliBusy(item, !!sessionBusyState.get(session.sessionId));
   setHasBusyAgents(item, parentHasActiveSubagent(session.sessionId));
@@ -1416,6 +1434,7 @@ function buildSessionItem(session) {
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (activePtyIds.has(session.sessionId) ? ' running' : '');
   paintSessionIcon(icon, session.sessionId, session);
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block
   const info = document.createElement('div');
@@ -1443,7 +1462,8 @@ function buildSessionItem(session) {
   statusEl.className = 'session-status';
   if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
-    statusEl.textContent = session.status + (age ? ' · ' + age : '');
+    const why = session.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
+    statusEl.textContent = session.status + why + (age ? ' · ' + age : '');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);
 
@@ -1474,6 +1494,11 @@ function buildSessionItem(session) {
   stopBtn.className = 'session-stop-btn';
   stopBtn.title = 'Stop session';
   stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
+
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'session-send-btn';
+  sendBtn.title = 'Send a prompt…';
+  sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>';
 
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
@@ -1506,6 +1531,7 @@ function buildSessionItem(session) {
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
   actions.appendChild(stopBtn);
+  if (session.remoteAlias) actions.appendChild(sendBtn);
   if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
