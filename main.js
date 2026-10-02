@@ -80,6 +80,7 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
+const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./run-to-exit');
 const gitChangesTarget = require('./git-changes-target');
@@ -553,6 +554,9 @@ const remoteAttachAdapter = createTmuxAttachAdapter({
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 const remoteStopAdapter = createRemoteStopAdapter({ log });
 
+// see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+const remoteSendAdapter = createRemoteSendAdapter({ log });
+
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
 // — see .ai/contexts/session-cache.md ("Remote hosts — tmux attach").
@@ -579,6 +583,7 @@ function annotateRemoteAttachable(projects) {
         session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
+        session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
@@ -617,6 +622,7 @@ function toSidebarPlaceholderSession(ph) {
     remoteDescriptorSeen: ph.remoteDescriptorSeen,
     status: ph.status,
     statusUpdatedAt: ph.statusUpdatedAt,
+    waitingFor: ph.waitingFor,
     placeholder: true,
   };
 }
@@ -1703,6 +1709,17 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   }
   return result;
 });
+
+// --- IPC: remote-send-prompt ---
+// see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payload, {
+  getDescriptor: (alias, sessionId) => remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId),
+  isAttached: (sessionId) => {
+    const attached = activeSessions.get(sessionId);
+    return !!(attached && attached.kind === 'remote-attach' && !attached.exited);
+  },
+  adapter: remoteSendAdapter,
+}));
 
 // --- IPC: git-changes-status / git-changes-diff — see .ai/contexts/changes-view.md ---
 function gitChangesTargetDeps() {
