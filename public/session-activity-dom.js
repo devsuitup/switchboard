@@ -74,6 +74,12 @@ function snapshotForLocal(sessionId, session) {
   return state.snapshot();
 }
 
+// Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function paintSessionIconFromSnapshot(el, snapshot) {
+  if (!el) return;
+  writeIconSlot(el, renderSessionIcon(snapshot));
+}
+
 // Paints a local-pty row's icon slot — see .ai/contexts/session-state.md
 function paintSessionIcon(el, sessionId, session) {
   if (!el) return;

@@ -74,7 +74,7 @@ const PRELUDE = `
   async function guardResume() { return true; }
   async function resolveDefaultSessionOptions() { return {}; }
   function syncPtySizeAfterOpen() {}
-  function setSessionMcpActive() {}
+  function setSessionMcpState() {}
   function setSessionSandboxed() {}
   function showSession() { updateTerminalHeader(); }
   function makeEntry() { return { closed: false, initialSize: null, terminal: { write: (d) => calls.writes.push(d) } }; }
@@ -255,7 +255,7 @@ test('main names the signal node-pty reports and forwards it with the exit code'
   assert.match(stopHandler, /session\.stopRequested = true;\s*killPty\(session, sessionId\);/, 'a Stop is recorded before the signal is sent');
   assert.match(MAIN_SRC, /attachedSession\.stopRequested = true;\s*killPty\(attachedSession, sessionId\);/);
   assert.ok(MAIN_SRC.includes('session.generation = ++ptyGenerationCounter;'), 'every wired pty gets the next generation');
-  assert.equal(MAIN_SRC.match(/return \{ ok: true, reattached: (true|false), [^}]*generation: (session|remoteSession)\.generation \}/g).length, 3, 'all three open-terminal replies carry the generation');
+  assert.equal(MAIN_SRC.match(/return \{\s*ok: true, reattached: (true|false), [^}]*generation: (session|remoteSession)\.generation,?\s*\}/g).length, 3, 'all three open-terminal replies carry the generation');
   assert.ok(PRELOAD_SRC.includes("'process-exited', (_event, sessionId, exitCode, signal, stopped, generation) => callback(sessionId, exitCode, signal, stopped, generation)"));
   assert.match(APP_SRC, /notePanelTerminalExit\(sessionId, exitCode, signal, stopped\)/);
 });

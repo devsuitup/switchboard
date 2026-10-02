@@ -1197,7 +1197,7 @@ async function launchNewSession(project, sessionOptions) {
     return;
   }
   syncPtySizeAfterOpen(entry);
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
+  if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
   showSession(sessionId);
@@ -1279,7 +1279,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   }
   skippedWorkingSetEntries.delete(sessionId);
   syncPtySizeAfterOpen(entry);
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
+  if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
   showSession(sessionId);

@@ -228,22 +228,24 @@ function parseDiscoveryProbeOutput(stdout) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", ConnectTimeout on the probe/restore ssh)
-function buildRemoteCommandArgs(alias, command) {
-  return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-n', alias, command];
+function buildRemoteCommandArgs(alias, command, { input } = {}) {
+  const head = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'];
+  return typeof input === 'string' ? [...head, alias, command] : [...head, '-n', alias, command];
 }
 
 // Default stdout cap for a single ssh exec — see .ai/contexts/changes-view.md ("Remote transport stdout cap").
 const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
-// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap")
-function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn, resolveSshPath = defaultResolveSshPath } = {}) {
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap"); `input` — .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
+function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn, input, resolveSshPath = defaultResolveSshPath } = {}) {
   const spawn = spawnFn || require('child_process').spawn;
   const stdoutCap = typeof maxStdoutBytes === 'number' ? maxStdoutBytes : DEFAULT_MAX_STDOUT_BYTES;
+  const hasInput = typeof input === 'string';
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(resolveSshPath(), buildRemoteCommandArgs(alias, command), {
-        windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      child = spawn(resolveSshPath(), buildRemoteCommandArgs(alias, command, { input }), {
+        windowsHide: true, stdio: [hasInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
       resolve({ code: -1, stdout: '', stderr: err.message });
@@ -254,7 +256,8 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, sp
     let stderr = '';
     let settled = false;
     let overflowed = false;
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutMs || DEFAULT_PROBE_TIMEOUT_MS);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch {} }, timeoutMs || DEFAULT_PROBE_TIMEOUT_MS);
     const finish = (code) => {
       if (settled) return;
       settled = true;
@@ -263,8 +266,12 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, sp
         resolve({ code: -1, stdout: '', stderr: `stdout exceeded ${stdoutCap} bytes` });
         return;
       }
-      resolve({ code, stdout, stderr: stderr.slice(0, 4096) });
+      resolve(timedOut ? { code, stdout, stderr: stderr.slice(0, 4096), timedOut: true } : { code, stdout, stderr: stderr.slice(0, 4096) });
     };
+    if (hasInput && child.stdin) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
     if (child.stdout) child.stdout.on('data', (c) => {
       if (overflowed) return;
       stdoutBytes += Buffer.byteLength(c);
