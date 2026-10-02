@@ -19,6 +19,7 @@ links are in the [README](../README.md#download).
 | [Subagents](subagents.md) | Subagent rows, their live status, the read-only transcript viewer |
 | [IDE emulation](ide-emulation.md) | Switchboard as Claude's IDE: file opens and diffs in a side panel |
 | [Changes view](changes-view.md) | A session's git status and diffs, with an editor for local sessions |
+| [Touched files](touched-files.md) | The files a session's file tools touched, including outside any repository |
 | [Agent Files and Work Files](memory-workfiles.md) | The two file tabs: `CLAUDE.md` and memory files, schedules, `.work-files/` |
 | [Stats](activity-stats.md) | Heatmap, totals, per-model tokens, rate limits |
 | [Session restore](session-restore.md) | Reopening the open sessions at the next launch |

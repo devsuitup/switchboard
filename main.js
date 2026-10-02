@@ -91,6 +91,7 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
+const { listSessionTouchedFiles } = require('./session-touched-files');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
@@ -1886,6 +1887,20 @@ ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
 ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: true };
   return changesWatchers.unwatch(sessionId, filePath);
+});
+
+// see .ai/contexts/touched-files.md
+ipcMain.handle('session-touched-files', async (_event, sessionId) => {
+  try {
+    return await listSessionTouchedFiles(sessionId, {
+      projectsDir: PROJECTS_DIR,
+      getCachedFolder,
+      isRemoteFolder,
+      isSensitive: isSensitivePathAsync,
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // --- IPC: toggle-star ---

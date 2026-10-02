@@ -279,6 +279,7 @@ function initFilePanel() {
   setupPanelResizeHandle();
   addMcpToggle();
   addChangesToggle();
+  if (typeof initTouchedView === 'function') initTouchedView(filePanelContentEl);
 
   // see .ai/contexts/changes-view.md ("Refresh triggers")
   if (typeof onSessionIdle === 'function') {
@@ -872,6 +873,7 @@ function hidePanel() {
     return;
   }
   setHeaderToggle(changesToggleBtn, false);
+  if (typeof hideTouchedView === 'function') hideTouchedView();
   filePanelEl.classList.remove('open');
   filePanelEl.style.width = '0';
   filePanelResizeHandle.style.display = 'none';
@@ -947,6 +949,7 @@ function renderTabContent(sessionId, tab) {
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
   setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes');
+  if (typeof renderTouchedTab === 'function') renderTouchedTab(sessionId, tab);
   renderHeldBar(sessionId, tab);
 
   if (!tab) {
@@ -971,6 +974,10 @@ function renderTabContent(sessionId, tab) {
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = 'flex';
     renderChangesContent(sessionId, tab);
+  } else if (tab.type === 'touched') {
+    vpContainer.style.display = 'none';
+    diffContainer.style.display = 'none';
+    changesContainerEl.style.display = 'none';
   } else {
     // MCP diff mode
     vpContainer.style.display = 'none';

@@ -41,6 +41,7 @@ test('the row is declared once: indicators, then panel toggles, then Stop last',
     ['ide-emulation-indicator', 'indicator'],
     ['panel-terminal-toggle-btn', 'toggle'],
     ['changes-toggle-btn', 'toggle'],
+    ['touched-toggle-btn', 'toggle'],
     ['terminal-stop-btn', 'action'],
   ]);
   const ranks = HEADER_CONTROLS.map((c) => KIND_RANK[c.kind]);
@@ -64,8 +65,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['terminal-stop-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
-    ['changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
+    ['terminal-stop-btn', 'touched-toggle-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
+    ['touched-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {
@@ -112,7 +113,7 @@ test('a header toggle is an icon button with a tooltip, and shows its on state',
 
   assert.throws(() => createHeaderToggle({ id: 'terminal-stop-btn', label: 'x', title: 'x', icon: 'shell', onClick() {} }, doc),
     /not a header toggle/);
-  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'shell']);
+  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'shell', 'touched']);
 });
 
 test('the live row, built by the modules in their start-up order, reads in the declared order', () => {
@@ -120,9 +121,9 @@ test('the live row, built by the modules in their start-up order, reads in the d
   try {
     const doc = ctx.window.document;
     const present = HEADER_CONTROLS.map((c) => c.id).filter((id) => doc.getElementById(id));
-    assert.deepEqual(present, ['ide-emulation-indicator', 'panel-terminal-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn']);
+    assert.deepEqual(present, ['ide-emulation-indicator', 'panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn', 'terminal-stop-btn']);
     assert.deepEqual(rowIds(doc), present);
-    for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn']) {
+    for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn']) {
       assert.equal(doc.getElementById(id).className, 'icon-btn', `#${id}`);
     }
   } finally { ctx.destroy(); }

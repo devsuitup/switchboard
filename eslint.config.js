@@ -251,6 +251,10 @@ const rendererCrossFileGlobals = {
   isPanelTerminalSession: 'readonly',
   notePanelTerminalExit: 'readonly',
   countSessionsWithoutPanelShells: 'readonly',
+  // public/touched-files-view.js — see .ai/contexts/touched-files.md
+  initTouchedView: 'readonly',
+  renderTouchedTab: 'readonly',
+  hideTouchedView: 'readonly',
   // public/header-controls.js — see .ai/contexts/window-frame.md
   placeHeaderControl: 'readonly',
   createHeaderToggle: 'readonly',
@@ -368,6 +372,27 @@ module.exports = [
       'no-unreachable': 'warn',
       'no-redeclare': 'warn',
     },
+  },
+
+  // public/touched-files-view.js — see .ai/contexts/touched-files.md
+  // Hooks that public/file-panel.js reaches behind typeof; the panel's own state it uses is read-only here.
+  {
+    files: ['public/touched-files-view.js'],
+    languageOptions: {
+      globals: {
+        FP_ICONS: 'readonly',
+        currentPanelSessionId: 'readonly',
+        handleClose: 'readonly',
+        getSessionState: 'readonly',
+        endCurrentTab: 'readonly',
+        destroyCurrentTab: 'readonly',
+        showPanel: 'readonly',
+        renderPanel: 'readonly',
+        filePanelState: 'readonly',
+        openFileTab: 'readonly',
+      },
+    },
+    rules: { 'no-unused-vars': 'off', 'no-redeclare': 'off' },
   },
 
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
@@ -575,6 +600,7 @@ module.exports = [
       'git-changes.js',
       'git-changes-runner.js',
       'git-changes-target.js',
+      'session-touched-files.js',
       'panel-terminal-target.js',
       'folder-index-state.js',
       'pty-size.js',

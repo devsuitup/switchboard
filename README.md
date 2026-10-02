@@ -45,6 +45,7 @@ its sessions from `~/.claude/projects`. Installed builds update themselves; see
 | Subagent hierarchy, live status, transcripts | [Subagents](docs/subagents.md) |
 | Claude's file opens and proposed edits in a side panel | [IDE emulation](docs/ide-emulation.md) |
 | A session's git changes, with an editor | [Changes view](docs/changes-view.md) |
+| The files a session's file tools touched | [Touched files](docs/touched-files.md) |
 | `CLAUDE.md`, memory files and `.work-files/` | [Agent Files and Work Files](docs/memory-workfiles.md) |
 | Activity heatmap, token counts, rate limits | [Stats](docs/activity-stats.md) |
 | Reopening the open sessions after a restart | [Session restore](docs/session-restore.md) |

@@ -115,6 +115,16 @@ design (parser, runner, quoting, cwd resolution, refresh triggers, editing):
 boundary in either direction: the session's cwd is re-resolved main-side on
 every call, and the absolute path built from it is used and discarded there.
 
+### Touched files (issue #309)
+
+| IPC | Args | Returns | Notes |
+|---|---|---|---|
+| `session-touched-files` | `(sessionId)` | `{ok, files, unresolved, omitted, coverage} \| {ok:false, reason?, error}` | The files the session's file tools touched, from its transcript and its subagents'. `files` rows are `{path, state, openable, tools, count, sources}` with `state` one of `present`, `gone`, `unreadable`, `refused`, `not-file`; `unresolved` rows carry the raw text and a reason, never a `path`. `reason` is `remote` or `no-transcript`. Local sessions only; a `sub:` id is refused. Full design: `.ai/contexts/touched-files.md`. |
+
+This is the one handler whose *output* is a list of absolute paths taken from
+attacker-influenced data. Listing is not opening: the renderer opens a row
+through `read-file-for-panel` and its guards, never through this IPC.
+
 ### Misc
 
 | IPC | Notes |
@@ -185,6 +195,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
 | `git-changes-file` / `git-changes-watch` / `git-changes-unwatch` / `git-changes-locate` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root and git directories come from `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, a symlink at the target is refused before anything follows it, and **every remaining check runs on the disk-resolved path** — containment in the root, no `.git` segment, nothing inside a git directory, `isSensitivePath`, regular file | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
+| `session-touched-files` | `isValidChangesSessionId` (no subagent shape), a plain-folder-name check on the cached folder, `resolveTouchedPath` (absolute, no UNC / `\?\` / device form, no control character; relative only against a `verifiedTranscriptCwd`), `isSensitivePathAsync` on every resolved path before its `stat` | shape + disk-resolved denylist — **stat-only**: a path that fails the denylist is listed `refused` and never stat-ed; nothing is read. The click goes to `read-file-for-panel` |
 | `git-changes-diff` | `isSafeGitPath`, or `isSafeNoIndexPath` + containment when `untracked` (`git-changes-runner.js`) | a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist. The untracked variant is a real filesystem operand of `git diff --no-index`, which has no repository-boundary check of its own: on top of the syntactic guard it is resolved with `realpath`/`stat` against the resolved cwd (local) or checked against `git ls-files --others` (remote), git receives the guard's operand rather than the caller's, and the returned diff must name that same path in its `diff --git` line — see "Untracked files" in the same doc |
 
 ### Sensitive-path candidates
