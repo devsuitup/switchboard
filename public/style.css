@@ -1322,6 +1322,7 @@ body { display: flex; flex-direction: column; }
   flex-direction: column;
   position: relative;
   min-height: 0;
+  min-width: 0;
   background: var(--surface-sunken);
 }
 
@@ -1679,6 +1680,65 @@ body { display: flex; flex-direction: column; }
   margin-left: 10px;
   margin-right: auto;
 }
+
+/* Agents view — see .ai/contexts/bg-agents.md */
+#agents-viewer { display: none; flex-direction: column; flex: 1; min-height: 0; }
+#agents-viewer-header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px;
+  background: var(--surface-chrome); border-bottom: 1px solid var(--hairline); flex-shrink: 0;
+}
+#agents-new-btn { flex-shrink: 0; }
+#agents-viewer-title { font-size: 13px; color: #b0b0c4; font-weight: 500; }
+#agents-viewer-count { font-size: 11px; color: #7a7a90; margin-right: auto; }
+#agents-worktrees-toggle:has(input:disabled) { opacity: 0.5; }
+#agents-finished-toggle, #agents-group-toggle, #agents-worktrees-toggle { font-size: 11px; color: #7a7a90; display: inline-flex; align-items: center; gap: 4px; }
+#agents-group-by, #agents-new-btn, .agents-verb-btn {
+  background: transparent; border: 1px solid var(--control-border); color: #b0b0c4;
+  font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+}
+#agents-group-by:hover, #agents-new-btn:hover, .agents-verb-btn:hover:not([disabled]) { background: var(--control-surface); }
+#agents-group-by option { background: var(--surface-chrome); color: #c8c8d8; }
+.agents-group-header {
+  padding: 14px 16px 6px; font-size: 1.2em; font-weight: 600; color: #d0d0e0; line-height: 1.3;
+  border-bottom: 1px solid var(--hairline); background: var(--surface-chrome);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: sticky; top: 0; z-index: 1;
+}
+.agents-group-emoji { margin-right: 2px; }
+.agents-group-count { font-weight: 400; font-size: 0.85em; color: var(--text-muted); }
+.agents-state-emoji { margin-right: 2px; }
+.agents-subgroup-header {
+  padding: 8px 16px 4px 28px; font-size: 1em; font-weight: 600; color: var(--text-muted);
+  border-bottom: 1px solid var(--hairline); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agents-row--nested { padding-left: 28px; }
+.agents-group-header, .agents-subgroup-header { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.agents-group-header:hover, .agents-subgroup-header:hover { color: #e8e8f4; }
+.agents-group-header:focus-visible, .agents-subgroup-header:focus-visible { outline: 2px solid var(--accent-border-strong); outline-offset: -2px; }
+.agents-group-chevron { display: inline-block; width: 1em; color: var(--text-muted); font-weight: 400; }
+.agents-verb-btn[disabled] { opacity: 0.4; cursor: default; }
+#agents-viewer-banner { padding: 6px 16px; font-size: 11px; color: #f0a050; background: rgba(240,160,80,0.08); }
+#agents-viewer-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#agents-list { flex: 1; overflow: auto; min-height: 0; font-size: 12px; }
+.agents-row {
+  display: grid; grid-template-columns: 18px minmax(160px, 2fr) minmax(90px, 1fr) minmax(110px, 1fr) minmax(160px, 2fr) 60px;
+  gap: 8px; align-items: center; padding: 6px 16px; font-size: 12px; color: #c8c8d8; cursor: pointer;
+  border-bottom: 1px solid var(--hairline);
+}
+.agents-row:hover { background: var(--control-surface); }
+.agents-row.selected { background: rgba(128,136,255,0.1); }
+.agents-row.pending { opacity: 0.5; }
+.agents-row-name, .agents-row-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-row-agent, .agents-row-state, .agents-row-age { color: #7a7a90; }
+#agents-detail { border-top: 1px solid var(--hairline); padding: 10px 16px; max-height: 40%; overflow: auto; font-size: 12px; color: #c8c8d8; flex-shrink: 0; }
+.agents-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.agents-detail-name { font-weight: 500; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-detail-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.agents-detail-line { margin: 4px 0; }
+.agents-detail-meta, .agents-detail-empty { color: #7a7a90; margin: 4px 0; }
+.agents-detail-section { margin-top: 8px; }
+.agents-detail-section ul { margin: 4px 0 0 16px; padding: 0; }
+.agents-detail-error { margin-top: 8px; color: #f06060; }
+.agents-link { color: var(--accent); }
 
 #grid-group-toggle-btn {
   background: transparent;
@@ -3263,6 +3323,7 @@ body { display: flex; flex-direction: column; }
 
 /* ========== ADD PROJECT BUTTON ========== */
 #grid-toggle-btn,
+#agents-toggle-btn,
 #resort-btn,
 #add-project-btn {
   background: transparent;
@@ -3284,10 +3345,12 @@ body { display: flex; flex-direction: column; }
 }
 
 #grid-toggle-btn { margin-left: auto; }
+#agents-toggle-btn { margin-left: 2px; }
 #resort-btn { margin-left: 2px; }
 #add-project-btn { margin-left: 2px; }
 
 #grid-toggle-btn:hover,
+#agents-toggle-btn:hover,
 #resort-btn:hover,
 #add-project-btn:hover {
   background: var(--control-surface);
@@ -3295,7 +3358,8 @@ body { display: flex; flex-direction: column; }
   color: #888;
 }
 
-#grid-toggle-btn.active {
+#grid-toggle-btn.active,
+#agents-toggle-btn.active {
   background: rgba(128,136,255,0.1);
   border-color: rgba(128,136,255,0.3);
   color: var(--accent);
@@ -4059,6 +4123,11 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 16px 48px rgba(0,0,0,0.4);
 }
 
+.new-session-dialog.dispatch-agent-dialog {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
 .new-session-dialog .new-session-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -4392,6 +4461,12 @@ body { display: flex; flex-direction: column; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.bg-badge {
+  display: inline-block; margin-right: 5px; padding: 0 5px;
+  border: 1px solid #5a4a7a; border-radius: 3px; color: #b39ddb;
+  font-size: 10px; line-height: 15px; vertical-align: middle;
 }
 
 /* Issue #212/#245 — see .ai/contexts/session-cache.md ("Remote hosts —
@@ -5134,6 +5209,7 @@ body.window-frameless.platform-darwin:not(.window-full-screen) #sidebar.collapse
 body.window-frameless :is(
   #terminal-header,
   #grid-viewer-header,
+  #agents-viewer-header,
   #stats-viewer-header,
   #settings-viewer-header,
   #jsonl-viewer-header,
@@ -5148,6 +5224,7 @@ body.window-frameless :is(
 body.window-frameless #sidebar.collapsed ~ #main :is(
   #terminal-header,
   #grid-viewer-header,
+  #agents-viewer-header,
   #stats-viewer-header,
   #settings-viewer-header,
   #jsonl-viewer-header,
@@ -5159,7 +5236,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
+body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path, #agents-viewer-header label),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }

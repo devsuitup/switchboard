@@ -177,6 +177,7 @@ function persistWorkingSet() {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
+      if (entry.attach) continue; // attach tabs are not restored
       if (entry.closed) continue;
       set.push({
         sessionId,
@@ -891,7 +892,8 @@ async function triggerRebuildAndSearch() {
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 // btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
 async function confirmAndStopSession(sessionId, btn) {
-  const plan = resolveSessionStop(sessionMap.get(sessionId));
+  const openEntry = openSessions.get(sessionId);
+  const plan = resolveSessionStop(sessionMap.get(sessionId), { attach: !!(openEntry && openEntry.attach) });
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
@@ -1215,6 +1217,9 @@ async function showTerminalHeader(session) {
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeaderSandbox.style.display = sandboxedSessions.get(session.sessionId) ? '' : 'none';
+  const headerEntry = openSessions.get(session.sessionId);
+  terminalStopBtn.title = headerEntry && headerEntry.attach ? 'Detach (the session keeps running)' : 'Stop process';
+  terminalStopBtn.setAttribute('aria-label', terminalStopBtn.title);
   terminalHeader.style.display = '';
   updateTerminalHeader();
 
@@ -1252,8 +1257,12 @@ async function openSession(session, customOptions, { automatic = false, live } =
     }
   }
 
-  // see .ai/contexts/cli-session-state.md ("Live elsewhere")
-  if (!(await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
+  // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) });
+  if (verdict === false) return false;
+  if (verdict && typeof verdict === 'object' && verdict.attach) {
+    customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
+  }
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
@@ -1261,6 +1270,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  entry.attach = resumeOptions.type === 'attach';
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
   let result;
@@ -1277,6 +1287,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
     showSession(sessionId);
     return;
   }
+  if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
   syncPtySizeAfterOpen(entry);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
@@ -1359,6 +1370,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       terminalArea.style.display = 'none';
       memoryViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
+      if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
       statsViewer.style.display = 'flex';
       loadStats();
     } else if (tabName === 'memory') {
@@ -1379,6 +1391,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
 initGridGroupToggle();
+initAgentsView();
 
 // JSONL viewer (renderJsonlText, formatDuration, makeCollapsible, renderJsonlEntry, showJsonlViewer) → jsonl-viewer.js
 
@@ -1454,11 +1467,23 @@ initGridGroupToggle();
   // Insert next to the resort button
   resortBtn.parentElement.insertBefore(gridToggleBtn, resortBtn);
 
+  const agentsToggleBtn = document.createElement('button');
+  agentsToggleBtn.id = 'agents-toggle-btn';
+  agentsToggleBtn.title = 'Background agents';
+  agentsToggleBtn.innerHTML = '<svg width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>';
+  agentsToggleBtn.addEventListener('click', toggleAgentsView);
+  resortBtn.parentElement.insertBefore(agentsToggleBtn, resortBtn);
+
   // Global keyboard shortcuts (covers non-terminal focus)
   // When a terminal is focused, xterm's customKeyEventHandler fires first and sets
   // e._handled to prevent the document listener from double-firing the same action.
   document.addEventListener('keydown', (e) => {
     if (e._handled) return;
+    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+      e.preventDefault();
+      toggleAgentsView();
+      return;
+    }
     // Toggle grid view (default Cmd/Ctrl+Shift+G)
     if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
       e.preventDefault();
@@ -1527,6 +1552,7 @@ loadProjects().then(async () => {
   }
   // Restore working set (persisted across full restarts via global settings)
   await restoreWorkingSet();
+  restoreAgentsViewAtStartup();
 });
 
 // Live-reload sidebar when filesystem changes are detected

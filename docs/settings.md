@@ -46,7 +46,7 @@ for one launch — see [Launching sessions](launching-sessions.md).
 
 ### Keyboard Shortcuts
 
-Three rebindable shortcuts, stored as `shortcuts` — see
+Four rebindable shortcuts, stored as `shortcuts` — see
 [Keyboard shortcuts](keyboard-shortcuts.md#rebinding).
 
 ### Updates

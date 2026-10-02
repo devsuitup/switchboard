@@ -17,6 +17,7 @@ links are in the [README](../README.md#download).
 | [Grid overview](grid-overview.md) | All open sessions as live cards, grouped by project or flat |
 | [Status indicators](notifications.md) | What each dot and colour in the sidebar means, and the status bar |
 | [Subagents](subagents.md) | Subagent rows, their live status, the read-only transcript viewer |
+| [Background agents](background-agents.md) | The Agents view: the daemon's `--bg` sessions, attach in a tab, stop, respawn, delete, dispatch |
 | [IDE emulation](ide-emulation.md) | Switchboard as Claude's IDE: file opens and diffs in a side panel |
 | [Changes view](changes-view.md) | A session's git status and diffs, with an editor for local sessions |
 | [Agent Files and Work Files](memory-workfiles.md) | The two file tabs: `CLAUDE.md` and memory files, schedules, `.work-files/` |
@@ -27,7 +28,7 @@ links are in the [README](../README.md#download).
 | [ActivityWatch](activitywatch.md) | Opt-in reporting of session time to a local ActivityWatch server |
 | [Activity trace](activity-trace.md) | Debug mode: the trace behind the activity indicators |
 | [Settings reference](settings.md) | Every setting, its default, its scope, and where it is explained |
-| [Keyboard shortcuts](keyboard-shortcuts.md) | Every shortcut, and how to rebind the three that can be |
+| [Keyboard shortcuts](keyboard-shortcuts.md) | Every shortcut, and how to rebind the four that can be |
 | [Customizing colors](customizing-colors.md) | Community guide, in French, to editing the CSS inside `app.asar` (written against v0.0.30) |
 
 ## Working on the app

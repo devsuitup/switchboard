@@ -38,6 +38,9 @@ const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
 const lastProbeAt = new Map();
+const MAX_DESCRIPTOR_SCAN = 1000;
+// Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
+const descriptorListeners = new Set();
 
 function defaultIsProcessAlive(pid) {
   try {
@@ -145,6 +148,54 @@ function parseState(text) {
   };
 }
 
+// The descriptor subset the agents view reads -- see .ai/contexts/bg-agents.md
+function parseDescriptor(text) {
+  let raw;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  if (!Number.isInteger(raw.pid) || raw.pid <= 0) return null;
+  if (typeof raw.sessionId !== 'string' || !raw.sessionId) return null;
+  const s = (v) => (typeof v === 'string' && v ? v : null);
+  return {
+    pid: raw.pid,
+    sessionId: raw.sessionId,
+    kind: s(raw.kind),
+    jobId: s(raw.jobId),
+    agent: s(raw.agent),
+    name: s(raw.name),
+    cwd: s(raw.cwd),
+    status: KNOWN_STATUSES.has(raw.status) ? raw.status : null,
+    startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+  };
+}
+
+function readAllDescriptors() {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  let seen = 0;
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    if (++seen > MAX_DESCRIPTOR_SCAN) break;
+    let text;
+    try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
+    const d = parseDescriptor(text);
+    if (d && isProcessAlive(d.pid)) out.push(d);
+  }
+  return out;
+}
+
+function onDescriptorsChanged(listener) {
+  descriptorListeners.add(listener);
+  return () => { descriptorListeners.delete(listener); };
+}
+
+function notifyDescriptorsChanged() {
+  for (const listener of descriptorListeners) {
+    try { listener(); } catch (err) { log.warn(`[cli-state] descriptor listener failed: ${err.message}`); }
+  }
+}
+
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
@@ -207,6 +258,7 @@ function flush() {
   const batch = [...pending];
   pending.clear();
   for (const name of batch) handleFile(name);
+  if (batch.length > 0) notifyDescriptorsChanged();
 }
 
 function seed() {
@@ -344,6 +396,8 @@ async function scanLiveProcesses(sessionIds, exclude) {
       pid: raw.pid,
       cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
       startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+      kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : null,
+      jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
     });
   }
   return found;
@@ -388,6 +442,10 @@ module.exports = {
   ensureWatching,
   stop,
   parseState,
+  onDescriptorsChanged,
+  readAllDescriptors,
+  parseDescriptor,
+  ownProcessFilter,
   getStatus,
   KNOWN_STATUSES,
   DEFAULT_DIR,

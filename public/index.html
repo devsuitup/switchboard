@@ -75,6 +75,27 @@
       </div>
       <div id="jsonl-viewer-body"></div>
     </div>
+    <div id="agents-viewer" style="display:none;">
+      <div id="agents-viewer-header">
+        <span id="agents-viewer-title">Agents</span>
+        <span id="agents-viewer-count"></span>
+        <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
+        <label id="agents-group-toggle">Group
+          <select id="agents-group-by" title="Group the list">
+            <option value="none">None</option>
+            <option value="state" selected>State</option>
+            <option value="project">Project</option>
+          </select>
+        </label>
+        <label id="agents-worktrees-toggle" title="Sub-group each project by worktree"><input type="checkbox" id="agents-group-worktrees" checked> Worktrees</label>
+        <button id="agents-new-btn" type="button">New agent</button>
+      </div>
+      <div id="agents-viewer-banner" style="display:none;"></div>
+      <div id="agents-viewer-body">
+        <div id="agents-list"></div>
+        <div id="agents-detail"></div>
+      </div>
+    </div>
     <div id="terminal-area">
       <div id="terminal-header" style="display:none;">
         <div id="terminal-header-info">
@@ -155,6 +176,8 @@
   <script src="remote-activity-ui.js"></script>
   <script src="local-transcript-adapter.js"></script>
   <script src="memory-workfiles-view.js"></script>
+  <!-- see .ai/contexts/bg-agents.md -->
+  <script src="agents-view.js"></script>
   <!-- restore-plan.js decides working-set restore vs. defer-and-retry; consumed by app.js only. -->
   <script src="restore-plan.js"></script>
   <script src="resume-guard.js"></script>

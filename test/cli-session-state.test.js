@@ -427,3 +427,65 @@ test('getStatus keeps returning the cached status within the 5s probe throttle e
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Descriptor hooks for the agents view (see .ai/contexts/bg-agents.md) ---
+
+test('onDescriptorsChanged fires once per flushed batch, and the unsubscribe stops it', async () => {
+  const dir = mkTmp();
+  try {
+    boot(dir, oneSession());
+    let fired = 0;
+    const off = cliSessionState.onDescriptorsChanged(() => { fired++; });
+    writeState(dir, 4242, { status: 'busy', kind: 'bg', jobId: 'aaaaaaaa' });
+    writeState(dir, 4243, { status: 'idle', sessionId: 'sess-2' });
+    await waitFor(() => fired >= 1);
+    await delay(SETTLE_MS);
+    assert.equal(fired, 1, 'two writes inside one FLUSH_MS window are one notification');
+    off();
+    writeState(dir, 4242, { status: 'idle', kind: 'bg', jobId: 'aaaaaaaa' });
+    await delay(SETTLE_MS);
+    assert.equal(fired, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('readAllDescriptors returns the live descriptors with their kind, jobId and agent', () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 10, { status: 'idle', kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', startedAt: 5 });
+    writeState(dir, 11, { status: 'busy', kind: 'interactive', sessionId: 'sess-2' });
+    writeState(dir, 12, { status: 'busy', kind: 'interactive', sessionId: 'sess-dead' });
+    fs.writeFileSync(path.join(dir, '13.json'), '{not json', 'utf8');
+    boot(dir, oneSession(), { isProcessAlive: (pid) => pid !== 12 });
+    const all = cliSessionState.readAllDescriptors().sort((a, b) => a.pid - b.pid);
+    assert.deepEqual(all.map(d => d.pid), [10, 11]);
+    assert.deepEqual(all[0], { pid: 10, sessionId: 'sess-1', kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', cwd: dir, status: 'idle', startedAt: 5 });
+    assert.equal(all[1].kind, 'interactive');
+    assert.equal(all[1].jobId, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('liveElsewhere reports the descriptor kind and jobId, so a bg session can be attached instead of resumed', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'idle', kind: 'bg', jobId: 'bc3fd129' });
+    boot(dir, new Map());
+    const live = await cliSessionState.liveElsewhere('sess-1', () => false, () => []);
+    assert.equal(live.pid, 4242);
+    assert.equal(live.kind, 'bg');
+    assert.equal(live.jobId, 'bc3fd129');
+    writeState(dir, 4242, { status: 'idle' });
+    const plain = await cliSessionState.liveElsewhere('sess-1', () => false, () => []);
+    assert.equal(plain.kind, null);
+    assert.equal(plain.jobId, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('ownProcessFilter is exported and claims our own PTY pids', () => {
+  const dir = mkTmp();
+  try {
+    boot(dir, new Map());
+    const isOwn = cliSessionState.ownProcessFilter(() => [77]);
+    assert.equal(isOwn(77), true);
+    assert.equal(isOwn(78), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

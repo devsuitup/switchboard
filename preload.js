@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('api', {
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  // see .ai/contexts/bg-agents.md
+  getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),
+  bgAgentVerb: (verb, id) => ipcRenderer.invoke('bg-agent-verb', verb, id),
+  dispatchBgAgent: (fields) => ipcRenderer.invoke('dispatch-bg-agent', fields),
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
   remoteSendPrompt: (alias, sessionId, text) => ipcRenderer.invoke('remote-send-prompt', { alias, sessionId, text }),
@@ -125,6 +129,7 @@ contextBridge.exposeInMainWorld('api', {
   onSubagentSpawned: (cb) => ipcRenderer.on('subagent-spawned', (_e, payload) => cb(payload)),
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),
+  onBgAgentsChanged: (cb) => ipcRenderer.on('bg-agents-changed', (_e, payload) => cb(payload)),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
   },

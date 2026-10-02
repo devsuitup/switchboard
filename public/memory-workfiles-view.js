@@ -16,6 +16,7 @@ function hideAllViewers() {
   if (traceViewer) traceViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
+  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   terminalArea.style.display = '';
   // Stop any subagent file-watches kept alive by Agent blocks that the user
   // was viewing — without this, fs.watchFile keeps polling indefinitely.
@@ -192,6 +193,7 @@ async function openMemory(file) {
   terminalArea.style.display = 'none';
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);
@@ -344,6 +346,7 @@ async function openWorkFile(file) {
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
+  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   workFilesViewer.style.display = 'flex';
 
   workFilesPanel.open(file.filename, file.filePath, content);

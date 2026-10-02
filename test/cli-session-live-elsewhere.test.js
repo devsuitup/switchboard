@@ -63,7 +63,7 @@ test('a session whose id is in a state file under a live pid is live elsewhere',
   writeState(dir, 4242);
   boot(dir);
   assert.deepEqual(await cliSessionState.liveElsewhere('sess-1', noPty),
-    { pid: 4242, cwd: '/work/proj', startedAt: 1790685077444 });
+    { pid: 4242, cwd: '/work/proj', startedAt: 1790685077444, kind: 'interactive', jobId: null });
 }));
 
 test('a session this instance holds a PTY for is not live elsewhere, even with a live state file', () => withDir(async (dir) => {
