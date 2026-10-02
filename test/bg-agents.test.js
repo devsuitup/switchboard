@@ -11,6 +11,10 @@ const bgAgents = require('../bg-agents');
 function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-bg-agents-')));
 }
+function rmTmp(dir) {
+  bgAgents.stop();
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+}
 const silentLog = { info() {}, warn() {}, error() {}, debug() {} };
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 function waitFor(fn, maxMs = 4000) {
@@ -80,7 +84,7 @@ test('reconcile runs `claude agents --json --all`, merges the job files, and rep
     assert.deepEqual(snap.roster.map(e => e.id), ['aaaaaaaa', 'bbbbbbbb']);
     assert.equal(snap.roster[0].detail, 'reading rules');
     assert.equal(snap.roster[0].tokens, 42);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a state.json rewrite reaches listeners once, coalesced, without another CLI call', async () => {
@@ -98,7 +102,7 @@ test('a state.json rewrite reaches listeners once, coalesced, without another CL
     await delay(bgAgents.FLUSH_MS * 2);
     assert.deepEqual(seen, ['two']);
     assert.equal(cli.calls.length, callsBefore, 'a file change never spawns the CLI');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a job directory that appears after start is watched too', async () => {
@@ -111,7 +115,7 @@ test('a job directory that appears after start is watched too', async () => {
     bgAgents.onChange((snap) => seen.push((snap.roster.find(e => e.id === 'bbbbbbbb') || {}).detail));
     writeJob(dir, 'bbbbbbbb', { state: 'done', detail: 'late' });
     await waitFor(() => seen.includes('late'));
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('an empty state.json (mid-rewrite) keeps the previous value', async () => {
@@ -124,7 +128,7 @@ test('an empty state.json (mid-rewrite) keeps the previous value', async () => {
     fs.writeFileSync(path.join(dir, 'aaaaaaaa', 'state.json'), '', 'utf8');
     await delay(bgAgents.FLUSH_MS * 3);
     assert.equal(bgAgents.getSnapshot().roster[0].detail, 'kept');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a descriptor change rebuilds the roster from readAllDescriptors', async () => {
@@ -140,7 +144,7 @@ test('a descriptor change rebuilds the roster from readAllDescriptors', async ()
     descriptors.push({ pid: 30, sessionId: 's-ext', kind: 'interactive', jobId: null, agent: null, name: 'ext', cwd: '/e', status: 'busy', startedAt: 3 });
     sessionState.fire();
     await waitFor(() => seen.some(s => s.includes('s-ext')));
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('when the CLI fails the roster comes from the files and the daemon is reported unreachable', async () => {
@@ -152,7 +156,7 @@ test('when the CLI fails the roster comes from the files and the daemon is repor
     const snap = await bgAgents.reconcile();
     assert.equal(snap.daemonReachable, false);
     assert.deepEqual(snap.roster.map(e => e.id), ['cccccccc']);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('runVerb spawns `claude <verb> <id>` in the session cwd when it exists, then reconciles', async () => {
@@ -169,7 +173,7 @@ test('runVerb spawns `claude <verb> <id>` in the session cwd when it exists, the
     assert.equal(verbCall.opts.cwd, dir);
     assert.equal(verbCall.opts.timeout, bgAgents.VERB_TIMEOUT_MS);
     assert.equal(cli.calls[cli.calls.length - 1].argv[0], 'agents', 'a verb is followed by a reconcile');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('runVerb runs rm from the home directory, never from the job cwd it may delete; respawn keeps the job cwd', async () => {
@@ -186,8 +190,8 @@ test('runVerb runs rm from the home directory, never from the job cwd it may del
     assert.deepEqual(await bgAgents.runVerb('respawn', 'bbbbbbbb'), { ok: true });
     assert.equal(cli.calls.find(c => c.argv[0] === 'respawn').opts.cwd, dir);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.rmSync(home, { recursive: true, force: true });
+    rmTmp(dir);
+    rmTmp(home);
   }
 });
 
@@ -200,7 +204,7 @@ test('runVerb refuses an unknown verb or a malformed id before spawning anything
     assert.equal((await bgAgents.runVerb('stop', '--all')).ok, false);
     assert.equal((await bgAgents.runVerb('rm', 'AAAAAAAA')).ok, false);
     assert.equal(cli.calls.length, 0);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('runVerb reports the CLI stderr when it fails', async () => {
@@ -211,7 +215,7 @@ test('runVerb reports the CLI stderr when it fails', async () => {
     const r = await bgAgents.runVerb('rm', 'aaaaaaaa');
     assert.equal(r.ok, false);
     assert.equal(r.error, 'boom');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('runVerb strips the login-shell job-control noise from the CLI stderr it reports', async () => {
@@ -226,7 +230,7 @@ test('runVerb strips the login-shell job-control noise from the CLI stderr it re
     const r = await bgAgents.runVerb('rm', 'bbbbbbbb');
     assert.equal(r.ok, false);
     assert.equal(r.error, 'Error: no such session');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a reconcile tolerates login-shell noise printed before the JSON list', async () => {
@@ -237,7 +241,7 @@ test('a reconcile tolerates login-shell noise printed before the JSON list', asy
     bgAgents.start();
     const snap = await bgAgents.reconcile();
     assert.equal(snap.daemonReachable, true);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('dispatch runs `claude --bg …` in the project directory and returns the printed id', async () => {
@@ -253,7 +257,7 @@ test('dispatch runs `claude --bg …` in the project directory and returns the p
     const missing = await bgAgents.dispatch({ prompt: 'hello', cwd: path.join(dir, 'nope') });
     assert.equal(missing.ok, false);
     assert.match(missing.error, /no longer exists/);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 function trackWatchers(t) {
@@ -280,7 +284,7 @@ test('stop closes every watcher it opened', async (t) => {
     assert.equal(open.size, 3);
     bgAgents.stop();
     assert.equal(open.size, 0);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a reconcile still running when stop() is called arms nothing and restores nothing', async (t) => {
@@ -303,7 +307,7 @@ test('a reconcile still running when stop() is called arms nothing and restores 
     assert.equal(snap.daemonReachable, false);
     assert.equal(bgAgents.getSnapshot().daemonReachable, false);
     assert.deepEqual(bgAgents.getSnapshot().roster, []);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 for (const liveState of ['working', 'blocked']) {
@@ -319,7 +323,7 @@ for (const liveState of ['working', 'blocked']) {
       assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, false);
       assert.equal(cli.calls.length, before);
       assert.equal((await bgAgents.runVerb('stop', 'aaaaaaaa')).ok, true);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    } finally { rmTmp(dir); }
   });
 }
 
@@ -360,7 +364,7 @@ test('roster entries carry projectRoot and worktreeRoot: the pattern or the cwd 
     await delay(bgAgents.FLUSH_MS * 2);
     assert.equal(resolved.length, before, 'a known cwd is not resolved again');
     assert.equal(new Set(resolved).size, resolved.length, 'each cwd resolved once');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });
 
 test('a resolver that throws or answers nothing leaves the cwd as the root, and is not retried', async () => {
@@ -378,5 +382,5 @@ test('a resolver that throws or answers nothing leaves the cwd as the root, and 
     await delay(20);
     assert.equal(calls, n);
     assert.equal(bgAgents.getSnapshot().roster.find(e => e.id === 'bbbbbbbb').projectRoot, '/b');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmTmp(dir); }
 });

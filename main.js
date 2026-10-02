@@ -74,6 +74,7 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
+const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, resizePty, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { createComposerState } = require('./composer-state');
@@ -2275,8 +2276,19 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
     const shell = profile.path;
     // cmd.exe and PowerShell mangle quotes, `&` and newlines in a prompt: run claude itself
     const direct = isWindows && !isWslShell(shell) && !/bash|zsh|fish|^sh$|^nu$/.test(path.basename(shell, path.extname(shell)).toLowerCase());
-    const program = direct ? 'claude' : shell;
-    const args = direct ? claudeArgv : shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
+    const childEnv = { ...cleanPtyEnv, FORCE_COLOR: '0' };
+    let program = shell;
+    let args;
+    let verbatim = false;
+    if (direct) {
+      const plan = resolveWindowsClaude(claudeArgv, childEnv);
+      if (plan.error) { resolve({ code: null, stdout: '', stderr: plan.error }); return; }
+      ({ program, args, verbatim } = plan);
+    } else {
+      args = shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
+    }
+    // a timed-out --bg may have started the daemon: kill the client only, never its group
+    const killTree = claudeArgv[0] !== '--bg';
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -2288,21 +2300,27 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
     let child;
     try {
       child = spawnChild(program, args, {
-        cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanPtyEnv, FORCE_COLOR: '0' }, windowsHide: true,
-        detached: !isWindows,
+        cwd, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv, windowsHide: true,
+        windowsVerbatimArguments: verbatim, detached: killTree && !isWindows,
       });
     } catch (err) {
       finish(null, err);
       return;
     }
     const timer = setTimeout(() => {
-      killProcessTree(child);
+      if (killTree) killProcessTree(child);
+      else { try { child.kill('SIGKILL'); } catch {} }
       finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
     }, timeout);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', (err) => { clearTimeout(timer); finish(null, err); });
     child.on('close', (code) => { clearTimeout(timer); finish(code); });
+    // a daemon that inherited the pipes keeps `close` from firing: settle shortly after the client exits
+    child.on('exit', (code) => {
+      const grace = setTimeout(() => { clearTimeout(timer); finish(code); }, 1000);
+      if (typeof grace.unref === 'function') grace.unref();
+    });
   });
 }
 

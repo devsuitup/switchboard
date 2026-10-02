@@ -351,10 +351,15 @@ Agents view.
 profile so `PATH` matches a terminal; the login shell makes a call slow (a
 `claude agents --json --all` took 12 s under bash on Windows), hence
 `LIST_TIMEOUT_MS` 20 s and `VERB_TIMEOUT_MS` 60 s. Under cmd.exe or PowerShell
-the shell would mangle quotes, `&` and newlines of a prompt, so `claude` is
-spawned directly with an argv array. A timeout kills the whole process tree
-(`taskkill /T` on Windows, the process group elsewhere), and the call resolves
-on `close` so stdout is drained. `dispatchArgs` puts `--` before the prompt:
+the shell would mangle quotes, `&` and newlines of a prompt, so
+`claude-binary.js` finds `claude` on `PATH` and spawns it without a shell: the
+`.exe` itself, or, for an npm `claude.cmd` shim (libuv does not resolve
+`.cmd`), the `node` + `cli.js` the shim points to, or `cmd.exe /d /s /c` with
+escaped arguments as a last resort (a multi-line argument is refused there).
+A timeout kills the whole process tree (`taskkill /T` on Windows, the process
+group elsewhere), except for `--bg`: it may have started the daemon, so only
+the client is killed. The call resolves on `close` so stdout is drained, or
+1 s after `exit` when a daemon holding the pipes keeps `close` from firing. `dispatchArgs` puts `--` before the prompt:
 `--add-dir` is variadic and would otherwise swallow it. A job's own
 `state.json` state wins over the cached CLI list's.
 
