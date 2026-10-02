@@ -143,6 +143,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `class.toggle` | `has-running-pty` written | `el`, `cls`, `on` |
 | `class.subagent` | A subagent's `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
 | `class.render` | A full sidebar render rebuilt an item's classes from the stores | `el`, `cls` |
+| `render.stats` | Once per second per session that saw terminal activity, while the trace is on: the terminal render path's counters for that second | `ms` (the window's real length), `chunks`, `chars` (PTY data events received and their length), `hiddenChunks` (of those, for a session that is not displayed: accumulated, never parsed), `writes`, `writeChars` (calls to `terminal.write`, from the 30 fps flush or a reveal replay, and what they carried), `maxBatchChunks`, `maxBatchChars` (the largest single write), `atlasChanges`, `atlasCanvases` (glyph atlas rebuilds and added atlas pages, each of which repaints every visible row) |
 | `poll.recv` | The poll reply reaches the renderer | `sinceSeq`, `entries` |
 | `reconcile.apply` / `reconcile.skip` / `reconcile.noop` | Per session in the poll reply | `backend`, `local`, `reason`, `sinceSeq`, `sessionSeq` |
 
@@ -150,6 +151,16 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 `via`, the caller that asked.
 
 ## What to look for
+
+**Is a terminal burning CPU legitimately?** `render.stats` has no line for a
+second in which the session saw nothing. Writes per second is `writes * 1000 /
+ms`; it cannot exceed about 30 for a displayed session, and `writeChars /
+writes` is the batch size. A high `atlasChanges` in the same seconds as the CPU
+means repaints from the glyph atlas, not parsing:
+
+```bash
+jq -c 'select(.cat=="render.stats") | {sid, w: (.writes*1000/.ms), batch: (.writeChars/(.writes|if .==0 then 1 else . end)), atlasChanges, atlasCanvases}' $TRACE
+```
 
 **Does the CLI's title still match the busy test?** The spinner glyphs are the
 CLI's private business and can change with a release. After a CLI upgrade:
@@ -285,10 +296,15 @@ is the OSC 0 `log.debug` line, guarded by `if (LOG_DEBUG_ON)` instead and pinned
 by `test/osc-debug-log-guards.test.js`: a packaged build logs at `info`, so it
 is inert there.
 
-Even with the trace on, no probe sits on the terminal render path: `osc.title`
-fires only for chunks carrying an OSC introducer, and `pty.input` only for
-chunks sent *to* the PTY. This matters because of
-[decision 0002](decisions/0002-discrete-steps-sidebar-animations.md): the
+Even with the trace on, no per-chunk line is written for the terminal render
+path: `osc.title` fires only for chunks carrying an OSC introducer, and
+`pty.input` only for chunks sent *to* the PTY. The render path is observed by
+`render.stats`, which counts in memory and sends one line per session per
+second. Off, each of its sites in `public/terminal-manager.js` is one
+`window.ATRACE` read: no counter object, no timer and no clock read per write.
+On, a write costs an integer increment; the one timer is armed by the first
+event of a window and is not re-armed when nothing happens. This matters because
+of [decision 0002](decisions/0002-discrete-steps-sidebar-animations.md): the
 indicators are built not to burn CPU at idle.
 
 ## Implementation notes

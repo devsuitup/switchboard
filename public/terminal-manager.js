@@ -412,6 +412,46 @@ function isHiddenSingleViewSession(sessionId) {
   return !(entry && entry.panelMounted);
 }
 
+// Render-path counters, reported through the activity trace only.
+// see docs/activity-trace.md "render.stats"
+const RENDER_STATS_INTERVAL_MS = 1000;
+const renderStats = new Map();
+let renderStatsTimer = 0;
+let renderStatsSince = 0;
+
+function renderStatFor(sessionId) {
+  let s = renderStats.get(sessionId);
+  if (!s) {
+    s = {
+      chunks: 0, chars: 0, hiddenChunks: 0, writes: 0, writeChars: 0,
+      maxBatchChunks: 0, maxBatchChars: 0, atlasChanges: 0, atlasCanvases: 0,
+    };
+    renderStats.set(sessionId, s);
+  }
+  if (!renderStatsTimer) {
+    renderStatsSince = performance.now();
+    renderStatsTimer = setTimeout(emitRenderStats, RENDER_STATS_INTERVAL_MS);
+  }
+  return s;
+}
+
+function noteRenderWrite(sessionId, chunks, chars) {
+  const s = renderStatFor(sessionId);
+  s.writes++;
+  s.writeChars += chars;
+  if (chunks > s.maxBatchChunks) s.maxBatchChunks = chunks;
+  if (chars > s.maxBatchChars) s.maxBatchChars = chars;
+}
+
+function emitRenderStats() {
+  renderStatsTimer = 0;
+  const ms = Math.round(performance.now() - renderStatsSince);
+  const pending = Array.from(renderStats);
+  renderStats.clear();
+  if (!window.ATRACE) return;
+  for (const [sid, s] of pending) window.atrace('render.stats', sid, { ms, ...s });
+}
+
 function flushTerminalBuffer(sessionId) {
   const buf = terminalWriteBuffers.get(sessionId);
   if (!buf) return;
@@ -426,6 +466,7 @@ function flushTerminalBuffer(sessionId) {
   if (!entry) return;
 
   const data = buf.chunks.join('');
+  if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
   const savedViewportY = entry.terminal.buffer.active.viewportY;
@@ -739,6 +780,7 @@ function replayHiddenBuffer(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return; // destroySession may have removed it first
   if (acc.reset) entry.terminal.reset();
+  if (window.ATRACE) noteRenderWrite(sessionId, 1, acc.raw.length);
   entry.terminal.write(acc.raw);
 }
 
@@ -748,8 +790,15 @@ function replayHiddenBuffer(sessionId) {
 // this logic sat in untestable app.js.
 function handleTerminalData(sessionId, data) {
   const entry = openSessions.get(sessionId);
+  const hidden = !!entry && isHiddenSingleViewSession(sessionId);
+  if (window.ATRACE) {
+    const s = renderStatFor(sessionId);
+    s.chunks++;
+    s.chars += data.length;
+    if (hidden) s.hiddenChunks++;
+  }
   if (entry) {
-    if (isHiddenSingleViewSession(sessionId)) {
+    if (hidden) {
       // Fully suspended — accumulate only, never call terminal.write().
       // drainLiveBufferIntoHiddenAccumulator folds in whatever was left
       // pending from before this session became hidden (see its own
@@ -1056,8 +1105,14 @@ function loadTerminalWebgl(entry) {
     // garbled glyphs. Repaint all visible rows so they re-resolve against the
     // new atlas.
     const repaintVisible = () => entry.terminal.refresh(0, entry.terminal.rows - 1);
-    webglAddon.onChangeTextureAtlas(repaintVisible);
-    webglAddon.onAddTextureAtlasCanvas(repaintVisible);
+    webglAddon.onChangeTextureAtlas(() => {
+      if (window.ATRACE) renderStatFor(entry.session.sessionId).atlasChanges++;
+      repaintVisible();
+    });
+    webglAddon.onAddTextureAtlasCanvas(() => {
+      if (window.ATRACE) renderStatFor(entry.session.sessionId).atlasCanvases++;
+      repaintVisible();
+    });
     entry.webglAddon = webglAddon;
   } catch (e) {
     console.warn('[terminal] WebGL addon failed, falling back to DOM renderer', e);

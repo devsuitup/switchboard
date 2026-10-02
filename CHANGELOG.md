@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- With Debug mode on, the activity trace now records how hard each terminal is being drawn: once a second per session, how many writes reached it, how large they were and how often its glyph atlas was rebuilt, to tell a legitimately busy terminal from a runaway one. (#175)
 ### Changed
 - A trigger that gave up waiting for a session now says, in its result file's `reason`, when the session was blocked on a dialog such as a permission prompt or a question: for a single trigger, a chain's first wait, and a chain step whose turn never finished. Without a dialog the result is as before. (#379)
 
