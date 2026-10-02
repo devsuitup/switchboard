@@ -210,6 +210,10 @@ The paths come from `git rev-parse --git-dir --git-common-dir --git-path hooks`
 run in the directory before launch; a repository it cannot read is refused
 rather than guessed at.
 
+The search below a bound directory does not enter `node_modules`, and does not
+cross into another filesystem (`find -xdev`): a `.git` or `.claude` inside a
+`node_modules`, or on a mount or a bind inside the project, is not protected.
+
 ### The way to a protected path
 
 A read-only mount protects one path, not the directories leading to it. Every
@@ -221,9 +225,27 @@ in a directory the sandbox can write — `core.hooksPath=linked/hooks` with
 instead, so the launch is refused; point `core.hooksPath` at a hooks directory
 instead of linking `.git/hooks` to it.
 
-The paths are resolved when the wrapper builds the sandbox and mounted when
-bwrap starts it; a second sandboxed session on the same project that swaps a
+The paths, and the Additional Directories (below), are resolved when the
+wrapper builds the sandbox and mounted when bwrap starts it; a second sandboxed
+session on the same project that swaps a
 directory in between is not detected.
+
+### Additional directories
+
+An Additional Directory, or a schedule's `add-dirs` entry, is bound
+read-write, so one at or inside a `.claude` or `.git` directory is refused: the
+wrapper stops with status 125 and names it, and a sandboxed schedule with such
+an entry is skipped with the reason in the main log. The path is judged both as
+spelled (`..` and a trailing slash resolved) and by its real path, so a link
+to a `.claude`, or a `.claude` that is itself a link, does not get through. Add
+the project directory instead: its `.claude` and `.git` are then protected as
+above. The session's working directory is held to the same rule, with one exception:
+a directory below `.claude/worktrees` is allowed, because Claude Code's
+worktrees live there (a `.claude` or `.git` further down is still refused). A
+path the wrapper cannot resolve is refused. The same check refuses `$HOME` and
+its parents however they are spelled (`$HOME/`, `$HOME/.`, a link to it).
+A relative `add-dirs` entry of a schedule is taken from the schedule's
+directory.
 
 ### Schedules
 

@@ -69,7 +69,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, refusedScheduleBinds, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -84,6 +84,7 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
+const { attachBlockReason } = require('./remote-host-profile');
 const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./run-to-exit');
@@ -572,8 +573,9 @@ function annotateRemoteAttachable(projects) {
   function hostInfo(alias) {
     if (!hostInfoByAlias.has(alias)) {
       const { sessions, at, error } = remoteIndexer.getRemoteSessions(alias);
-      const { nextAttemptAt } = remoteIndexer.getRemoteHostState(alias);
-      hostInfoByAlias.set(alias, { at, error, nextAttemptAt, byId: new Map(sessions.map(d => [d.sessionId, d])) });
+      const { nextAttemptAt, consecutiveFailures } = remoteIndexer.getRemoteHostState(alias);
+      const profile = remoteIndexer.getRemoteHostProfile(alias);
+      hostInfoByAlias.set(alias, { at, error, nextAttemptAt, consecutiveFailures, profile, byId: new Map(sessions.map(d => [d.sessionId, d])) });
     }
     return hostInfoByAlias.get(alias);
   }
@@ -583,11 +585,16 @@ function annotateRemoteAttachable(projects) {
       project.remoteHostAt = info.at;
       project.remoteHostError = info.error;
       project.remoteHostNextAttemptAt = info.nextAttemptAt || null;
+      project.remoteHostProfile = info.profile;
     }
     for (const session of project.sessions) {
       if (session.remoteAlias) {
-        const descriptor = hostInfo(session.remoteAlias).byId.get(session.sessionId);
-        session.remoteAttachable = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        const info = hostInfo(session.remoteAlias);
+        const descriptor = info.byId.get(session.sessionId);
+        const hostBlocked = attachBlockReason(info.profile, info.consecutiveFailures);
+        const supportsAttach = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        session.remoteAttachable = supportsAttach && !hostBlocked;
+        session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
@@ -2208,7 +2215,11 @@ function sandboxBindEnv(dirs) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
+let ptyGenerationCounter = 0;
+
+// see .ai/contexts/session-state.md ("A session main drops")
 function wireSessionPty(session, sessionId, ptyProcess) {
+  session.generation = ++ptyGenerationCounter;
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
 
@@ -2311,12 +2322,12 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped);
+      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
       // the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped, session.generation);
       }
     }
     activeSessions.delete(realId);
@@ -2420,6 +2431,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       ok: true, reattached: true, attach: !!session.isAttach, sandbox: !!session.sandbox,
       mcpState: session.mcpError ? 'failed' : getMcpState(session.realSessionId || sessionId),
       mcpError: session.mcpError || null,
+      generation: session.generation,
     };
   }
 
@@ -2454,7 +2466,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       };
       activeSessions.set(sessionId, remoteSession);
       wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
-      return { ok: true, reattached: false, remote: true, sandbox: false };
+      return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
     }
   }
 
@@ -2777,6 +2789,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     ok: true, reattached: false, sandbox: !!sessionOptions?.sandbox,
     mcpState: mcpError ? 'failed' : getMcpState(sessionId),
     mcpError,
+    generation: session.generation,
   };
 });
 
@@ -3227,9 +3240,9 @@ if (!gotSingleInstanceLock) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
         // see docs/sandbox.md ("Schedules")
-        const refused = refusedScheduleBinds(addDirs, scheduleProjects().list(), os.homedir());
+        const refused = scheduleBindRefusals(addDirs, scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
-          log.error(`[schedule] ${name}: skipped — add-dirs under the home directory that are not Switchboard projects: ${refused.join(', ')}`);
+          log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
           return;
         }
@@ -3280,7 +3293,7 @@ if (!gotSingleInstanceLock) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }));
+      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id) }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }

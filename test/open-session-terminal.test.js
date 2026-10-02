@@ -47,7 +47,10 @@ async function withHarness(setup, fn) {
       },
     });
     setup(window, calls);
-    const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession'] });
+    const { openSession } = loadAppFunctions(ctx.context, {
+      declarations: ['ptyGenerations', 'pendingOpens'],
+      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession'],
+    });
     await fn({ openSession, window, calls });
   } finally {
     ctx.destroy();

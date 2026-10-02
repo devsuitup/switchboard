@@ -4,7 +4,16 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- A remote host's project header now shows what the host supports: hover its status dot to see the highest capability reached (observe, liveness, inject, attach) and, for each one above it, why it is missing. (#218)
+
+### Changed
+- After three failed refreshes of a remote host in a row, a row that would have attached opens its transcript and says why in its tooltip, instead of failing when clicked. Stop is never disabled: it runs its own ssh. (#218)
 ### Fixed
+- A step of a trigger chain that follows `/compact` now waits for the CLI to be back at its prompt before it is written, and a step whose Enter did not start a turn is retried once and then reported as "not confirmed submitted" in the log and the result instead of "sent". (#407)
+- Stopping a terminal twice in quick succession, or resizing it while it is being stopped, no longer closes the Windows pseudo console twice, which could kill the whole app with no error. (#405)
+- A sandboxed session, or a sandboxed schedule, whose Additional Directories include a `.claude` or `.git` directory, or a path inside one, is now refused instead of binding it read-write over its read-only protection; add the project directory instead. A session started in a `.claude` or `.git` directory is refused too, except below `.claude/worktrees`, and Additional Directories naming your home directory or a parent of it are refused however the path is written. A relative `add-dirs` entry in a schedule is taken from the schedule's directory. (#385)
+- A session that has exited no longer keeps a busy dot in the sidebar, and the status bar's running count drops as soon as the session ends instead of waiting for the next refresh. (#375)
 - Quitting, closing the window or reloading while a file in the file panel has unsaved edits now asks first, in any session, kept-aside tabs included: Save writes them (a file that changed on disk is not overwritten), Discard drops them, Cancel stays. If Switchboard does not answer within a few seconds, it closes anyway. (#373)
 - The IDE Emulation label in a session's terminal header now says whether the CLI is connected: it reads "IDE Emulation" only while it is, "IDE Emulation: waiting for CLI" when Switchboard is listening but the CLI has not connected, and "IDE Emulation: failed" when it could not start for that session, with the reason in its tooltip. A session whose IDE Emulation port was already taken no longer shows the label as if it worked. (#320)
 - On Windows, the file panel no longer opens or saves a credential file (such as one under `.ssh`) through its 8.3 short name or a `\\?\` path. (#390)

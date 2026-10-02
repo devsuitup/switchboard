@@ -15,6 +15,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
+const { computeHostProfile, attachBlockReason } = require('../remote-host-profile');
+
 const root = path.join(__dirname, '..');
 
 function extractAnnotateRemoteAttachableSource() {
@@ -36,16 +38,19 @@ function makeAnnotate(mocks) {
   const source = extractAnnotateRemoteAttachableSource();
   const factory = new Function(
     'remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker', 'cliSessionState',
+    'attachBlockReason',
     source + '\nreturn annotateRemoteAttachable;'
   );
   return factory(
     mocks.remoteIndexer || {
       getRemoteSessions: () => ({ sessions: [], at: null, error: null }),
       getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: null, error: null, descriptors: [] }),
     },
     mocks.remoteAttachAdapter || { supports: () => false },
     mocks.remoteActivityTracker || { activeAt: () => null },
-    mocks.cliSessionState || { getStatus: () => undefined }
+    mocks.cliSessionState || { getStatus: () => undefined },
+    attachBlockReason
   );
 }
 
@@ -94,6 +99,7 @@ test('a remote session still gets status/statusUpdatedAt from the remote descrip
         error: null,
       }),
       getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: 111, error: null, descriptors: [{ pid: 4, sessionId: 'remote-1' }] }),
     },
     remoteAttachAdapter: { supports: () => true },
     cliSessionState: { getStatus: () => { throw new Error('must not be called for a remote session'); } },
@@ -112,6 +118,66 @@ test('a remote session still gets status/statusUpdatedAt from the remote descrip
   assert.equal(projects[0].sessions[0].remoteAttachable, true);
 });
 
+function failedHostIndexer(error, failures = 3) {
+  return {
+    getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }], at: 111, error }),
+    getRemoteHostState: () => ({ consecutiveFailures: failures, lastError: error, nextAttemptAt: 0 }),
+    getRemoteHostProfile: () => computeHostProfile({ at: 111, error, descriptors: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }] }),
+  };
+}
+
+function remoteProjects() {
+  return [{
+    projectPath: '/srv/proj',
+    remoteAlias: 'planificator',
+    sessions: [{ sessionId: 'remote-1', remoteAlias: 'planificator' }],
+  }];
+}
+
+test('a session on a host that failed three refreshes in a row is not attachable and carries the reason', () => {
+  const annotate = makeAnnotate({
+    remoteIndexer: failedHostIndexer('connect timed out'),
+    remoteAttachAdapter: { supports: () => true },
+  });
+  const projects = remoteProjects();
+  annotate(projects);
+  const session = projects[0].sessions[0];
+  assert.equal(session.remoteAttachable, false);
+  assert.match(session.remoteAttachBlocked, /connect timed out/);
+  assert.equal(session.remoteStopBlocked, undefined, 'stop runs its own ssh and is never blocked by a poll failure');
+  assert.equal(projects[0].remoteHostProfile.tier, 'none');
+});
+
+test('a single failed refresh does not block attach, while the project profile still states the error', () => {
+  const annotate = makeAnnotate({
+    remoteIndexer: failedHostIndexer('connect timed out', 1),
+    remoteAttachAdapter: { supports: () => true },
+  });
+  const projects = remoteProjects();
+  annotate(projects);
+  const session = projects[0].sessions[0];
+  assert.equal(session.remoteAttachable, true);
+  assert.equal(session.remoteAttachBlocked, null);
+  assert.match(projects[0].remoteHostProfile.missing[0].reason, /connect timed out/);
+});
+
+test('a session on a healthy host carries no blocking reason and the project carries the host profile', () => {
+  const annotate = makeAnnotate({
+    remoteIndexer: {
+      getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }], at: 111, error: null }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: 111, error: null, descriptors: [{ sessionId: 'remote-1', pid: 4, tmux: 'main:@0.%0' }] }),
+    },
+    remoteAttachAdapter: { supports: () => true },
+  });
+  const projects = remoteProjects();
+  annotate(projects);
+  const session = projects[0].sessions[0];
+  assert.equal(session.remoteAttachable, true);
+  assert.equal(session.remoteAttachBlocked, null);
+  assert.equal(projects[0].remoteHostProfile.tier, 'attach');
+});
+
 test('a remote session carries the descriptor waitingFor, and null when the descriptor has none or is gone', () => {
   const annotateRemoteAttachable = makeAnnotate({
     remoteIndexer: {
@@ -124,6 +190,7 @@ test('a remote session carries the descriptor waitingFor, and null when the desc
         error: null,
       }),
       getRemoteHostState: () => ({ consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: 1, error: null, descriptors: [] }),
     },
   });
   const projects = [{

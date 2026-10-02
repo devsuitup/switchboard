@@ -237,6 +237,16 @@ write is bounded by the try/catch on the write"). Callers get a boolean instead
 of an exception; the first-resize nudge uses it to skip its follow-up when the
 PTY is already gone.
 
+A kill is once-only. With `useConptyDll`, node-pty's `kill` ends in
+`ConptyClosePseudoConsole(hpc)`, and the native handle is only dropped when the
+shell's exit thread runs; a second kill before that finds the handle still
+registered and closes an already-freed pseudo console, a heap corruption
+(0xc0000374) that kills the whole main process with no JS error. So `killPty`
+closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
+`writePty` return false on a killed pty. `test/pty-ops-conpty-kill.test.js`
+proves it against the real node-pty in a child process (Windows only): with the
+guard removed the child dies with 3221226356.
+
 Swallowed errors are not silent: `setPtyOpLogger(log)` in `main.js` routes them
 to `log.debug` as `[pty] <op> skipped session=<id> reason=<message>`. Debug level
 is deliberate — the file transport is at `info` in packaged builds, so a resize

@@ -120,6 +120,13 @@ The project header carries a dot for the host's state, with a tooltip:
 | red | *host unreachable: &lt;error&gt;*, when it was last confirmed, and when the next attempt is |
 | amber, pulsing | a reconnect in progress |
 
+Hovering the dot also lists the host's capability: the highest of observe,
+liveness, inject, attach and launch that its last refresh could confirm, and for
+each one above it why it is missing (for example no live session names a tmux
+pane). A tier that needs a live session reads as missing on an idle host. After
+three failed refreshes in a row, a row that would attach opens its transcript,
+with the reason in its tooltip; **Stop** is never disabled, it runs its own ssh.
+
 A failing host is retried with a doubling delay, up to 30 minutes, and never
 dropped; one success resets it. **Reconnect** on the header retries at once and
 restarts the watch connection. The sidebar's global refresh retries every host.

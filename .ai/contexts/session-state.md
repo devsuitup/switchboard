@@ -558,6 +558,44 @@ response-ready (unchanged)" pin both branches of the decision — the icon
 slot's `session-icon--waiting`/`session-icon--response-ready` class and
 title, side by side, so a future reader finds the split intentional.
 
+#### A session main drops (issue #375)
+
+Main dropping a local-pty session (`process-exited`, then `activeSessions.delete`)
+is the one moment the renderer's running state for it has to end — in the
+sidebar row, the status bar and the activity state. The `pty-gone` purge in
+`updateRunningIndicators()` only runs when the running-set *signature* changes,
+so it could not be the only owner: a `cli-busy-state` or notification that lands
+after a poll already removed the id (a CLI stuck in an API retry loop keeps
+rewriting its title while it is killed) re-armed `cli-busy` on a row the
+signature gate then never revisited, and the status bar's `N running` was only
+redrawn by `loadProjects()`.
+
+- `onProcessExited` (`app.js`) removes the id from `activePtyIds`, calls
+  `dropLocalPtySession(id, 'process-exited')` for a non-remote row, and runs
+  `updateRunningIndicators()` at once instead of waiting for the next poll.
+- `dropLocalPtySession` (`session-activity.js`) is the single drop: live
+  subagents first (`clearActiveSubagentsFor`), then `purgeActivityFor`. The
+  `pty-gone` scan uses the same helper.
+- `updateRunningIndicators()` calls `renderDefaultStatus()` whenever the set
+  changed, so the status bar count follows `activePtyIds`.
+
+**Pty generation.** `wireSessionPty` (`main.js`) gives every spawn the next value of
+a monotonically increasing counter (`session.generation`). It is returned by all
+three `open-terminal` replies and sent as the fifth argument of every
+`process-exited` (the fork re-key's second send included). `app.js` records the
+generation of the last reply per id (`ptyGenerations`) and `handleProcessExited`
+ignores an exit older than it — no drop, no `closed`, no banner. An exit that
+lands while `openSession` awaits the reply is buffered (`pendingOpens`);
+`settlePtyOpen` then applies it unless the reply's generation is newer, so a
+stale exit never touches the new pty and a fast-failing launch still reads
+as exited. Chosen over suppressing the event in main because main cannot know
+which exit the renderer has already seen when it is delivered.
+
+Remote rows stay with the remote adapter (see "Row ownership"). Not covered: a
+busy signal that arrives after `process-exited` — main sends none, the PTY is
+gone. The pre-fix sequence is reasoned from the code, not reproduced live;
+`test/dropped-session-state.test.js` pins each step.
+
 ### The local-transcript adapter (step 4)
 
 `public/local-transcript-adapter.js` keeps one persistent

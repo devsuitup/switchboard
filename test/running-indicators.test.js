@@ -43,6 +43,7 @@ function withIndicators(fn) {
   const ctx = setupSidebarDom();
   try {
     ctx.window.gridCards = new Map();
+    ctx.window.renderDefaultStatus = () => {};
     const { updateRunningIndicators } = loadAppFunctions(ctx.context, {
       declarations: ['_lastPtySignature'],
       functions: ['updateRunningIndicators'],

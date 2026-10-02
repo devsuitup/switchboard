@@ -143,7 +143,9 @@ function delayWithBusyPoll(ms, sessionId, ctx) {
 // then send Enter as a SEPARATE write so it is read as a discrete "submit"
 // keypress rather than a trailing newline. See DEFAULT_SUBMIT_ENTER_DELAY_MS.
 //
-// Returns `midBusy`: busy polled continuously between the text write and the
+// Returns `{ midBusy, enterAt }` (enterAt: the clock just before the Enter
+// write, the lower bound the descriptor edge proof is compared against).
+// `midBusy`: busy polled continuously between the text write and the
 // Enter write, true if observed at any point in that window. A single sample
 // -- at the start, or at the end -- can miss a busy that rises and falls
 // entirely inside the window, which is a real, reproduced case (see
@@ -156,8 +158,9 @@ async function submitToPty(handle, command, sessionId, ctx) {
   const envMs = envNumber('SWITCHBOARD_SUBMIT_ENTER_DELAY_MS');
   const delayMs = envMs !== undefined ? envMs : DEFAULT_SUBMIT_ENTER_DELAY_MS;
   const midBusy = await delayWithBusyPoll(delayMs, sessionId, ctx);
+  const enterAt = Date.now();
   handle.write('\r');
-  return midBusy;
+  return { midBusy, enterAt };
 }
 
 // A variable set to the empty string is a launcher artefact, not a value:
@@ -313,7 +316,8 @@ function getBusyRiseWaitMs() {
  *   - timedOut:      global deadline fired before any observation
  *   - sessionExited: PTY vanished during the poll
  */
-function pollForBusyObserved(sessionId, ctx, windowMs, deadlineMs) {
+function pollForBusyObserved(sessionId, ctx, windowMs, deadlineMs, probe) {
+  const isBusy = probe || (() => ctx.isSessionBusy(sessionId));
   const start = Date.now();
   const windowEnd = start + windowMs;
 
@@ -326,12 +330,80 @@ function pollForBusyObserved(sessionId, ctx, windowMs, deadlineMs) {
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ sawBusy: false, timedOut: false, sessionExited: true, waited_ms: now - start });
     }
-    if (ctx.isSessionBusy(sessionId)) {
+    if (isBusy()) {
       return resolve({ sawBusy: true, timedOut: false, sessionExited: false, waited_ms: now - start });
     }
     if (now >= windowEnd) {
       // Verify window elapsed without seeing busy — caller decides.
       return resolve({ sawBusy: false, timedOut: false, sessionExited: false, waited_ms: now - start });
+    }
+    scheduleNext();
+  });
+}
+
+// see .ai/contexts/trigger-watcher.md, "Readiness and edge proof from the CLI descriptor"
+const DEFAULT_CLI_READY_WAIT_MS = 60_000; // ms
+function getCliReadyWaitMs() {
+  const v = envNumber('SWITCHBOARD_CLI_READY_WAIT_MS');
+  return v !== undefined ? v : DEFAULT_CLI_READY_WAIT_MS;
+}
+
+function readCliStatusRaw(ctx, sessionId) {
+  if (typeof ctx.getCliStatus !== 'function') return null;
+  try {
+    const s = ctx.getCliStatus(sessionId);
+    return s && typeof s.status === 'string' ? s : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function readCliStatus(ctx, sessionId) {
+  const s = readCliStatusRaw(ctx, sessionId);
+  return s && Number.isInteger(s.statusUpdatedAt) ? s : null;
+}
+
+const CLI_REACTION_STATUSES = ['busy', 'idle', 'waiting'];
+
+function isCompactCommand(command) {
+  return /^\/compact(\s|$)/.test(String(command).trim());
+}
+
+function cliReactedSince(ctx, sessionId, sinceMs) {
+  const s = readCliStatus(ctx, sessionId);
+  return !!s && CLI_REACTION_STATUSES.includes(s.status) && s.statusUpdatedAt >= sinceMs;
+}
+
+function cliForbidsRecoveryEnter(ctx, sessionId) {
+  const s = readCliStatusRaw(ctx, sessionId);
+  return !!s && (s.status === 'waiting' || s.status === 'busy');
+}
+
+/**
+ * Wait until the CLI's own descriptor reports "idle" with a statusUpdatedAt
+ * later than `afterMs`, bounded by `deadlineMs`.
+ *
+ * Returns { ready, available, timedOut, sessionExited, waited_ms }. `available:
+ * false` means no descriptor could be read (at the start or later): the caller
+ * keeps its pre-descriptor behaviour.
+ */
+function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs) {
+  const start = Date.now();
+  return pollLoop((resolve, scheduleNext) => {
+    const now = Date.now();
+    const waited_ms = now - start;
+    if (!ctx.getPtyForSession(sessionId)) {
+      return resolve({ ready: false, available: true, timedOut: false, sessionExited: true, waited_ms });
+    }
+    const s = readCliStatus(ctx, sessionId);
+    if (!s) {
+      return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms });
+    }
+    if (s.status === 'idle' && Number.isInteger(s.statusUpdatedAt) && s.statusUpdatedAt > afterMs) {
+      return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms });
+    }
+    if (now >= deadlineMs) {
+      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms });
     }
     scheduleNext();
   });
@@ -375,7 +447,9 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // Sampled before the write — see .ai/contexts/trigger-watcher.md ("submitted").
   const preBusy = ctx.isSessionBusy(sessionId);
 
-  const midBusy = await submitToPty(handle, command, sessionId, ctx);
+  const edgeMode = readCliStatus(ctx, sessionId) !== null;
+
+  const { midBusy, enterAt } = await submitToPty(handle, command, sessionId, ctx);
 
   // Composer read-back: unconditional, immediate, never gated on activity.
   const postWriteState = (typeof ctx.getComposerState === 'function')
@@ -388,12 +462,16 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // must fire on window expiry, so the deadline must NOT coincide with it.
   const effectiveDeadline = (deadlineMs !== undefined) ? deadlineMs : Infinity;
 
-  const first = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline);
+  const probe = edgeMode ? () => cliReactedSince(ctx, sessionId, enterAt) : undefined;
+  const first = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline, probe);
   if (first.sawBusy || first.sessionExited || first.timedOut) {
     return {
       submit_retries: 0,
       sawBusy: first.sawBusy,
-      composerConfirmed: first.sawBusy && preBusy === false && midBusy === false && composerEmptyAfterWrite,
+      confirmed: edgeMode ? first.sawBusy : null,
+      composerConfirmed: edgeMode
+        ? first.sawBusy
+        : first.sawBusy && preBusy === false && midBusy === false && composerEmptyAfterWrite,
       sessionExited: first.sessionExited,
       timedOut: first.timedOut,
       waited_ms: first.waited_ms,
@@ -403,11 +481,25 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   // Nothing observed in the window — retry the Enter ONCE (bare '\r', never the text),
   // and only into a free composer. See docs/automation.md.
   const recoveryDeadline = Math.min(effectiveDeadline, Date.now() + windowMs);
+  if (cliForbidsRecoveryEnter(ctx, sessionId)) {
+    return {
+      submit_retries: 0,
+      sawBusy: false,
+      confirmed: edgeMode ? false : null,
+      composerConfirmed: false,
+      sessionExited: false,
+      timedOut: false,
+      recoverySkipped: true,
+      recoveryReason: 'the CLI reports a dialog open or a turn running, a bare Enter could answer it',
+      waited_ms: first.waited_ms,
+    };
+  }
   const polite = await waitForComposerFree(sessionId, ctx, recoveryDeadline);
   if (!polite.free) {
     return {
       submit_retries: 0,
       sawBusy: false,
+      confirmed: edgeMode ? false : null,
       composerConfirmed: false,
       sessionExited: false,
       timedOut: false,
@@ -424,6 +516,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
     return {
       submit_retries: 1,
       sawBusy: false,
+      confirmed: edgeMode ? false : null,
       composerConfirmed: false,
       sessionExited: false,
       timedOut: false,
@@ -432,11 +525,12 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
     };
   }
 
-  const second = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline);
+  const second = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline, probe);
   return {
     submit_retries: 1,
     sawBusy: second.sawBusy,
-    composerConfirmed: false,
+    confirmed: edgeMode ? second.sawBusy : null,
+    composerConfirmed: edgeMode && second.sawBusy,
     sessionExited: second.sessionExited,
     timedOut: second.timedOut,
     waited_ms: first.waited_ms + second.waited_ms,
@@ -980,9 +1074,11 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let composerConfirmed = false;
     let recoverySkipped = false;
     let recoveryReason = null;
+    let submitConfirmed = null;
     try {
       const v = await submitWithVerify(handle, sessionId, command, ctx);
       submitRetries     = v.submit_retries;
+      submitConfirmed   = v.confirmed;
       sawBusy           = v.sawBusy;
       composerConfirmed = !!v.composerConfirmed;
       recoverySkipped   = !!v.recoverySkipped;
@@ -1000,8 +1096,13 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     if (recoverySkipped) {
       ctx.log.warn('[trigger-watcher] Recovery Enter withheld for ' + sessionId + ': ' + recoveryReason);
     }
-    ctx.log.info(`[trigger-watcher] Sent command to ${sessionId}: ${command}` +
-      (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    if (submitConfirmed === false) {
+      ctx.log.warn(`[trigger-watcher] Command not confirmed submitted to ${sessionId}: ${command}` +
+        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    } else {
+      ctx.log.info(`[trigger-watcher] ${submitConfirmed ? 'Submitted' : 'Sent'} command to ${sessionId}: ${command}` +
+        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    }
 
     await writeResult({
       ok:             true,
@@ -1011,6 +1112,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       sent_at:        new Date().toISOString(),
       waited_ms,
       submit_retries: submitRetries,
+      ...(submitConfirmed === null ? {} : { submit_confirmed: submitConfirmed }),
       ...(recoverySkipped ? { reason: recoveryReason } : {}),
     });
     return;
@@ -1063,8 +1165,13 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
   }
 
+  let compactSentAtMs = null;
+  const unconfirmedSteps = [];
+
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i];
+    const readyAfterMs = compactSentAtMs;
+    compactSentAtMs = null;
 
     // Check deadline before each step
     if (Date.now() >= globalDeadline) {
@@ -1085,6 +1192,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // Inject the step command
     const stepSentAt = new Date().toISOString();
     if (i === 0) step0SentAt = stepSentAt;
+    if (isCompactCommand(step.command)) compactSentAtMs = Date.parse(stepSentAt);
 
     // Per-step timeout_ms (if set) bounds THIS whole step (verify + retry + the
     // busy-fall wait for non-final steps), capped by the remaining global
@@ -1132,6 +1240,28 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       return;
     }
 
+    let readyWaitedMs = 0;
+    if (readyAfterMs !== null && !readCliStatus(ctx, sessionId)) {
+      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId}, readiness wait skipped before chain step ${i}`);
+    }
+    if (readyAfterMs !== null && readCliStatus(ctx, sessionId)) {
+      const readyDeadline = Math.min(stepDeadline, Date.now() + getCliReadyWaitMs());
+      const ready = await waitForCliIdleAfter(sessionId, ctx, readyAfterMs, readyDeadline);
+      readyWaitedMs = ready.waited_ms;
+      totalWaitedMs += readyWaitedMs;
+      if (ready.sessionExited) {
+        ctx.log.warn(`[trigger-watcher] Session exited waiting for the CLI to be ready at chain step ${i}:`, sessionId);
+        await writeResult({ ok: false, submitted: (i > 0) ? chainSubmitted : SUBMITTED_NO, error: 'session exited during wait', partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
+        return;
+      }
+      if (!ready.available) {
+        ctx.log.info(`[trigger-watcher] CLI descriptor vanished for ${sessionId}, readiness wait ended early before chain step ${i}`);
+      }
+      if (ready.timedOut) {
+        ctx.log.warn(`[trigger-watcher] CLI not idle after /compact within ${readyWaitedMs} ms, writing chain step ${i} anyway:`, sessionId);
+      }
+    }
+
     // Submit the step, then look for activity on the session.
     // The verify poll IS this step's Phase 1 — for non-final steps we proceed
     // straight to the busy-FALL wait, never re-observing busy.
@@ -1141,7 +1271,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // Includes this step's own politeness wait (see "total_waited_ms" in
     // docs/automation.md) so steps[i].waited_ms accounts for everything this
     // step spent, not just the submit-verify portion.
-    let stepWaitedMs = polite.waited_ms;
+    let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
     try {
       verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline);
@@ -1168,19 +1298,26 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       ctx.log.warn(`[trigger-watcher] Recovery Enter withheld at chain step ${i} for ` +
         `${sessionId}: ${verify.recoveryReason}`);
     }
-    ctx.log.info(`[trigger-watcher] Chain step ${i} sent to ${sessionId}: ${step.command}` +
-      (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    const stepConfirmed = verify.confirmed === undefined ? null : verify.confirmed;
+    if (stepConfirmed === false) {
+      unconfirmedSteps.push(i);
+      ctx.log.warn(`[trigger-watcher] Chain step ${i} not confirmed submitted to ${sessionId}: ${step.command}` +
+        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    } else {
+      ctx.log.info(`[trigger-watcher] Chain step ${i} ${stepConfirmed ? 'submitted' : 'sent'} to ${sessionId}: ${step.command}` +
+        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+    }
 
     // Session exited / global timeout observed during verify.
     if (verify.sessionExited) {
       ctx.log.warn(`[trigger-watcher] Session exited during chain step ${i} submit verify:`, sessionId);
-      steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted });
+      steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
       await writeResult({ ok: false, submitted: chainSubmitted, error: 'session exited during wait', partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
     if (verify.timedOut) {
       ctx.log.warn(`[trigger-watcher] Chain timeout during step ${i} submit verify:`, sessionId);
-      steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted });
+      steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
       await writeResult({ ok: false, submitted: chainSubmitted, error: 'chain timeout', partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
@@ -1200,20 +1337,20 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
       if (result.sessionExited) {
         ctx.log.warn(`[trigger-watcher] Session exited during chain step ${i} turn wait:`, sessionId);
-        steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted });
+        steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
         await writeResult({ ok: false, submitted: chainSubmitted, error: 'session exited during wait', partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
         return;
       }
 
       if (result.timedOut) {
         ctx.log.warn(`[trigger-watcher] Chain timeout at step ${i}:`, sessionId);
-        steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted });
+        steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
         await writeResult({ ok: false, submitted: chainSubmitted, error: 'chain timeout', partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
         return;
       }
     }
 
-    steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted });
+    steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }) });
   }
 
   await writeResult({
@@ -1223,6 +1360,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     sent_at:          step0SentAt,
     steps,
     total_waited_ms:  totalWaitedMs,
+    ...(unconfirmedSteps.length ? { unconfirmed_steps: unconfirmedSteps } : {}),
   });
 
   } catch (err) {
@@ -1249,6 +1387,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
  * @param {function} ctx.isSessionBusy     (sessionId: string) => boolean
  * @param {function} [ctx.getComposerState] (sessionId) => { pending, lastInputAt } | null;
  *                                          absent or null means busy, never free
+ * @param {function} [ctx.getCliStatus]   (sessionId) => { status, statusUpdatedAt } | undefined;
+ *                                          the CLI's own descriptor; absent keeps the level probe
  * @param {function} [ctx.isPtyAlive]      (ptyProcess) => boolean (default: handle.isAlive())
  * @param {object}   ctx.log               electron-log compatible logger
  * @returns {{ close(): void }}
@@ -1381,4 +1521,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd };
+module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, isCompactCommand };

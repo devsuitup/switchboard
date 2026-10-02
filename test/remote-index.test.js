@@ -889,6 +889,37 @@ test('refreshNow({force:true}) ignores backoff for every host and resets it on s
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
+test('getRemoteHostProfile follows the last cycle: never synced, then live tmux session, then a failure', async () => {
+  const dataDir = tmp('idx-profile');
+  try {
+    const clock = fakeClock(1_000);
+    let outcome = 'tmux';
+    const indexer = createRemoteIndexer({
+      getHosts: () => [{ alias: 'box' }],
+      getRefreshMs: () => 60_000,
+      dataDir,
+      transport: {},
+      scanFolders: () => Promise.resolve({ ok: true }),
+      listIndexedFolderKeys: () => [],
+      timers: fakeTimers(),
+      now: clock,
+      sync: async () => {
+        if (outcome === 'fail') throw new Error('connect timed out');
+        return { changedFolders: [], sessions: [{ pid: 5, sessionId: 's', tmux: 'main:@0.%0' }] };
+      },
+    });
+
+    assert.equal(indexer.getRemoteHostProfile('box').tier, 'none', 'never synced');
+    await indexer.refreshNow();
+    assert.equal(indexer.getRemoteHostProfile('box').tier, 'attach');
+    outcome = 'fail';
+    await indexer.refreshNow({ force: true });
+    const failed = indexer.getRemoteHostProfile('box');
+    assert.equal(failed.tier, 'none');
+    assert.match(failed.missing[0].reason, /connect timed out/);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test('sanitizeWaitingFor keeps a short plain string and drops everything else', () => {
   const { sanitizeWaitingFor } = require('../remote-index');
   assert.equal(sanitizeWaitingFor('permission prompt'), 'permission prompt');

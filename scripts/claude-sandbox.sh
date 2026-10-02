@@ -126,18 +126,69 @@ fi
 # session was launched with the wrong working directory. Fail closed and say so:
 # a sandbox that silently hands out the whole home directory is worse than none,
 # because the user believes they are protected.
+# The forms of a path the checks below compare: as spelled but normalised
+# (.. and trailing slashes resolved), and with every link followed. An empty
+# answer from either is a refusal, never a pass.
+path_forms() {
+  local lexical real
+  lexical="$(realpath -m -s -- "$1" 2>/dev/null)" && [ -n "$lexical" ] &&
+    real="$(readlink -m -- "$1" 2>/dev/null)" && [ -n "$real" ] || return 1
+  printf '%s\n%s\n' "$lexical" "$real"
+}
+
+has_protected_component() {
+  case "/$1/" in
+    */.claude/*|*/.git/*) return 0 ;;
+  esac
+  return 1
+}
+
+# A cwd inside a .claude or .git is legitimate only below .claude/worktrees: the
+# part after that, and the part before it, must not hold another one.
+cwd_in_protected_dir() {
+  local form="$1"
+  case "$form/" in
+    */.claude/worktrees/*)
+      has_protected_component "${form%%/.claude/worktrees/*}" && return 0
+      has_protected_component "${form#*/.claude/worktrees/}" && return 0
+      return 1 ;;
+  esac
+  has_protected_component "$form"
+}
+
+_home_forms="$(path_forms "$HOME")" || fail "refusing to launch: cannot resolve \$HOME ($HOME)."
 for d in ${RW_DIRS[@]+"${RW_DIRS[@]}"}; do
+  _d_forms="$(path_forms "$d")" || fail "refusing to bind '$d' — its real path cannot be resolved."
   _bad=""
-  case "$d" in
-    /) _bad="the filesystem root" ;;
-  esac
-  case "$HOME" in
-    "$d") _bad="\$HOME itself" ;;
-    "$d"/*) _bad="a parent of \$HOME" ;;
-  esac
+  while IFS= read -r _df; do
+    [ "$_df" = / ] && _bad="the filesystem root"
+    while IFS= read -r _hf; do
+      case "$_hf/" in
+        "$_df/") _bad="\$HOME itself" ;;
+        "$_df"/*) [ -n "$_bad" ] || _bad="a parent of \$HOME" ;;
+      esac
+    done <<<"$_home_forms"
+  done <<<"$_d_forms"
   if [ -n "$_bad" ]; then
     fail "refusing to bind '$d' — it is $_bad, so the sandbox would expose everything it is meant to hide. Expected a project directory; the session's working directory is '$PWD'."
   fi
+done
+
+# see docs/sandbox.md ("Additional directories")
+_pwd_forms="$(path_forms "$PWD")" || fail "refusing to launch: cannot resolve the working directory '$PWD'."
+while IFS= read -r _form; do
+  if cwd_in_protected_dir "$_form"; then
+    fail "refusing to launch in '$PWD' — it is at or inside a .claude or .git directory, which the sandbox keeps read-only. Only a worktree below .claude/worktrees is allowed."
+  fi
+done <<<"$_pwd_forms"
+for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
+  [ -n "$d" ] || continue
+  _d_forms="$(path_forms "$d")" || fail "refusing to bind '$d' — its real path cannot be resolved."
+  while IFS= read -r _form; do
+    if has_protected_component "$_form"; then
+      fail "refusing to bind '$d' — it is at or inside a .claude or .git directory, which the sandbox keeps read-only. Bind the project directory instead."
+    fi
+  done <<<"$_d_forms"
 done
 
 # True when $1 is at or below one of the read-write state dirs.
