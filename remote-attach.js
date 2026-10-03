@@ -469,6 +469,7 @@ function createTmuxAttachAdapter(opts = {}) {
     let pollTimer = null;
     let inFlight = null;
     let optionApplication = null;
+    let resizeAllowedCallback = () => {};
 
     function stopPolling() {
       if (pollTimer == null) return;
@@ -504,6 +505,7 @@ function createTmuxAttachAdapter(opts = {}) {
           if (!alive || detaching) return;
           try { raw.resize(currentSize.cols, currentSize.rows); } catch {}
           log.info(`[remote-attach:${alias}] ${parsed.target} is now solo — following local resizes`);
+          resizeAllowedCallback();
         } catch {
           // see .ai/contexts/session-cache.md ("Mode re-evaluation, issue #452")
         }
@@ -565,6 +567,7 @@ function createTmuxAttachAdapter(opts = {}) {
       },
       kill: detach,
       reevaluateMode,
+      onResizeAllowed(callback) { resizeAllowedCallback = callback; },
       onData(cb) { return raw.onData(cb); },
       onExit(cb) { return raw.onExit(cb); },
       isAlive() { return alive; },

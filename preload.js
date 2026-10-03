@@ -117,6 +117,9 @@ contextBridge.exposeInMainWorld('api', {
   onProcessExited: (callback) => {
     ipcRenderer.on('process-exited', (_event, sessionId, exitCode, signal, stopped, generation) => callback(sessionId, exitCode, signal, stopped, generation));
   },
+  onRemoteResizeAllowed: (callback) => {
+    ipcRenderer.on('remote-resize-allowed', (_event, sessionId) => callback(sessionId));
+  },
   onTerminalNotification: (callback) => {
     ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
   },

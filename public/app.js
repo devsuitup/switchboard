@@ -602,6 +602,10 @@ window.api.onProcessExited((sessionId, exitCode, signal, stopped, generation) =>
   handleProcessExited(sessionId, exitCode, signal, stopped, generation);
 });
 
+window.api.onRemoteResizeAllowed((sessionId) => {
+  allowRemoteResize(sessionId);
+});
+
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
 window.api.onTerminalNotification((sessionId, message) => {
   if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), active: sessionId === activeSessionId });

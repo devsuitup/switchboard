@@ -291,6 +291,7 @@ const rendererCrossFileGlobals = {
   isSessionNavKey: 'readonly',
   fitAndScroll: 'readonly',
   requestTerminalRefresh: 'readonly',
+  allowRemoteResize: 'readonly',
   refreshRemoteTerminalOnReturn: 'readonly',
   safeFit: 'readonly',
   proposeFittedDimensions: 'readonly',

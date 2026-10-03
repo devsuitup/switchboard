@@ -2367,6 +2367,11 @@ function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyPr
   };
   activeSessions.set(sessionId, remoteSession);
   wireSessionPty(remoteSession, sessionId, ptyProcess);
+  ptyProcess.onResizeAllowed?.(() => {
+    if (activeSessions.get(sessionId) !== remoteSession || remoteSession.exited || remoteSession.remoteResizeAllowed) return;
+    remoteSession.remoteResizeAllowed = true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('remote-resize-allowed', sessionId);
+  });
   return remoteSession;
 }
 

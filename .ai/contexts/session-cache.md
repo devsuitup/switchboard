@@ -1090,6 +1090,18 @@ Launching a new remote session (#222) and injection over the messaging socket
     ports and injected clocks; a real host and the SSH/tmux chain have not been
     exercised here.
 
+- **Promotion sizing notification, issue #452 after #453.** The attach handle's
+  onResizeAllowed subscriber runs once after a live shared-to-solo promotion,
+  retaining the promotion log. registerRemoteAttachSession updates the current
+  session's remoteResizeAllowed flag and sends remote-resize-allowed(sessionId)
+  through preload.onRemoteResizeAllowed; exited or replaced sessions are
+  ignored. The renderer enables solo sizing and schedules its existing
+  debounced fit to send one current fitted size, even if unchanged. Later
+  resizes, return refresh and the solo PTY nudge are enabled. Unknown or closed
+  entries ignore the notification. No promotion means no event, and solo never
+  silently downgrades. See .ai/contexts/terminal-refresh.md for coalescing and
+  hidden-entry behavior.
+
 - **Solo attach parity, issue #253.** A solo attach now makes the remote
   tmux session look and behave like a local terminal instead of a plain
   multiplexer view: `buildAttachCommand(socket, target, { solo, pre })`

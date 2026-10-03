@@ -147,7 +147,13 @@ through `read-file-for-panel` and its guards, never through this IPC.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`
+
+`remote-resize-allowed(sessionId)` is emitted once when a live remote attach
+promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
+to the renderer, which enables solo sizing and schedules a fitted resize.
+Initial solo attaches and failed promotions emit no event; there is no reverse
+notification. See `.ai/contexts/terminal-refresh.md`.
 
 `session-transcript-activity` and (not listed above; see
 `.ai/contexts/session-cache.md`, "Remote hosts — busy spinner") `remote-activity`

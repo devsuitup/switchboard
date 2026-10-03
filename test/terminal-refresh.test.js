@@ -51,6 +51,120 @@ async function flush(ctx) {
   ctx.advance(160);
 }
 
+function promotionReceiver(ctx) {
+  const listeners = new Map();
+  let api;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload.js'), 'utf8'), {
+    process: { platform: 'fixture', argv: [] },
+    require: () => ({
+      contextBridge: { exposeInMainWorld(_name, value) { api = value; } },
+      ipcRenderer: { on(channel, cb) { listeners.set(channel, cb); } },
+      webUtils: {},
+    }),
+  });
+  ctx.window.api.onRemoteResizeAllowed = api.onRemoteResizeAllowed;
+  const app = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+  const start = app.indexOf('window.api.onRemoteResizeAllowed(');
+  if (start !== -1) {
+    const end = app.indexOf('\n});', start) + 4;
+    vm.runInContext(app.slice(start, end), ctx.context);
+  }
+  return id => listeners.get('remote-resize-allowed')?.(null, id);
+}
+
+for (const changed of [false, true]) {
+  test(`promotion event enables fitted resize and later refresh on return (${changed ? 'changed' : 'unchanged'} dimensions)`, () => {
+    let dims = { cols: 120, rows: 40 };
+    const ctx = setup({ proposeDimensions: () => dims });
+    try {
+      const receive = promotionReceiver(ctx);
+      const e = ctx.entry('shared', true);
+      e.remoteResizeAllowed = false;
+      ctx.entry('local');
+      ctx.window.showSession('shared');
+      ctx.advance(160);
+      assert.deepEqual(ctx.resizes, []);
+      if (changed) dims = { cols: 150, rows: 35 };
+      receive('shared');
+      receive('shared');
+      ctx.spies.resizeObservers[0].trigger();
+      assert.equal(e.remoteResizeAllowed, true, 'renderer must learn the attachment is solo');
+      ctx.advance(79);
+      assert.deepEqual(ctx.resizes, [], 'promotion uses the debounced fit path');
+      ctx.advance(1);
+      assert.deepEqual(ctx.resizes, [{ id: 'shared', ...dims }], 'promotion sends one current fitted size');
+      receive('shared');
+      ctx.advance(80);
+      assert.equal(ctx.resizes.length, 1, 'a repeated notification cannot resynchronize a solo entry');
+      dims = { cols: 160, rows: 45 };
+      ctx.spies.resizeObservers[0].trigger();
+      ctx.advance(80);
+      assert.deepEqual(ctx.resizes.at(-1), { id: 'shared', ...dims });
+      assert.equal(ctx.resizes.length, 2, 'later geometry changes reach IPC');
+      ctx.window.showSession('local');
+      ctx.window.showSession('shared');
+      ctx.advance(160);
+      assert.deepEqual(ctx.refreshes, [{ id: 'shared', ...dims }], 'return now refreshes the solo terminal');
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('promotion events ignore unknown, closed and local entries', () => {
+  const ctx = setup();
+  try {
+    const receive = promotionReceiver(ctx);
+    const closed = ctx.entry('closed', true);
+    closed.remoteResizeAllowed = false;
+    closed.closed = true;
+    const local = ctx.entry('local');
+    receive('unknown');
+    receive('closed');
+    receive('local');
+    ctx.advance(160);
+    assert.equal(closed.remoteResizeAllowed, false);
+    assert.notEqual(local.remoteResizeAllowed, true);
+    assert.deepEqual(ctx.resizes, []);
+  } finally { ctx.destroy(); }
+});
+
+test('promotion schedules a fitted resize without a geometry observer callback', () => {
+  const ctx = setup();
+  try {
+    const receive = promotionReceiver(ctx);
+    const e = ctx.entry('shared', true);
+    e.remoteResizeAllowed = false;
+    ctx.window.showSession('shared');
+    ctx.advance(160);
+    receive('shared');
+    assert.deepEqual(ctx.resizes, []);
+    ctx.advance(80);
+    assert.deepEqual(ctx.resizes, [{ id: 'shared', cols: 120, rows: 40 }]);
+  } finally { ctx.destroy(); }
+});
+
+test('a background promotion keeps selection and sends the fitted size when revealed', () => {
+  const ctx = setup();
+  try {
+    const receive = promotionReceiver(ctx);
+    const e = ctx.entry('shared', true);
+    e.remoteResizeAllowed = false;
+    ctx.entry('local');
+    ctx.window.showSession('local');
+    ctx.advance(160);
+    ctx.resizes.length = 0;
+    Object.defineProperty(e.element, 'clientHeight', { value: 0, configurable: true });
+    receive('shared');
+    ctx.advance(160);
+    assert.equal(e.remoteResizeAllowed, true);
+    assert.equal(ctx.window.activeSessionId, 'local');
+    assert.deepEqual(ctx.resizes, []);
+    Object.defineProperty(e.element, 'clientHeight', { value: 800, configurable: true });
+    ctx.window.showSession('shared');
+    ctx.advance(160);
+    assert.deepEqual(ctx.refreshes, [{ id: 'shared', cols: 120, rows: 40 }]);
+  } finally { ctx.destroy(); }
+});
+
 test('returning to a tmux terminal refreshes once; returning to a local terminal does not', async () => {
   const ctx = setup();
   try {

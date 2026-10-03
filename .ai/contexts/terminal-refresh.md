@@ -9,11 +9,24 @@ control starts a process. A hidden open terminal is revealed for refresh.
 
 ## Solo and shared tmux attachments
 
-The attach probe determines sizing once, at attach time. A solo attachment
+The attach probe determines initial sizing at attach time. A solo attachment
 has no other client and a valid local size. `remoteResizeAllowed` carries
 that decision through the main session registry and the open, reattach and
 remote-launch IPC results. `syncPtySizeAfterOpen` stores it on the entry
 before selection. Missing capability information fails closed.
+
+When a shared attachment becomes solo (#452), the adapter calls its handle's
+`onResizeAllowed` subscriber after applying the solo options. Main updates the
+current live session's `remoteResizeAllowed` and sends `remote-resize-allowed`
+with its session id; preload exposes `onRemoteResizeAllowed`. The renderer's
+`allowRemoteResize` enables the entry and schedules the existing debounced fit,
+sending one fitted size even if dimensions have not changed. Its pending size
+sync suppresses xterm's resize callback until that fit, avoiding duplicate IPC;
+an already pending refresh sends the size through its usual refresh path.
+Subsequent resizes and automatic refresh on return use solo behavior. Unknown,
+closed, local or already solo entries ignore the event. A hidden entry keeps
+its selection and synchronizes when revealed. Initial solo attachments and
+unsuccessful or interrupted promotions emit no event; no downgrade is added.
 
 Returning to a solo remote terminal requests one refresh. `showSession`
 owns single-view selection, including sidebar opens and working-set restore;

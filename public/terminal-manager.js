@@ -342,6 +342,14 @@ function scheduleTerminalFit(entry) {
       return;
     }
     safeFit(entry);
+    if (entry.resizeSyncRequested) {
+      entry.resizeSyncRequested = false;
+      if (!entry.refreshRequested) {
+        const { cols, rows } = entry.terminal;
+        entry.lastPtySize = { cols, rows };
+        window.api.resizeTerminal(entry.session.sessionId, cols, rows);
+      }
+    }
     if (!entry.refreshRequested) return;
     entry.refreshRequested = false;
     forceRepaint(entry);
@@ -349,6 +357,14 @@ function scheduleTerminalFit(entry) {
     entry.lastPtySize = { cols, rows };
     window.api.resizeTerminal(entry.session.sessionId, cols, rows, { refresh: true });
   }, CONTAINER_RESIZE_DEBOUNCE_MS);
+}
+
+function allowRemoteResize(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed || !entry.session.remoteAlias || entry.remoteResizeAllowed === true) return;
+  entry.remoteResizeAllowed = true;
+  entry.resizeSyncRequested = true;
+  scheduleTerminalFit(entry);
 }
 
 function requestTerminalRefresh(sessionId) {
@@ -1117,6 +1133,7 @@ function createTerminalEntry(session, opts = {}) {
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
+    if (entry.resizeSyncRequested) return;
     if (entry.session.remoteAlias && entry.remoteResizeAllowed !== true) return;
     // Only tell the PTY when the size really moved — see ptySizeChanged.
     if (!ptySizeChanged(entry, cols, rows)) return;

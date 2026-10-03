@@ -232,7 +232,7 @@ Remote sessions get no [IDE emulation](ide-emulation.md), no
 works, read-only, by running git over ssh in the session's directory.
 
 Returning to an attached terminal refreshes its screen automatically only
-when no other client was attached at discovery time.
+when it is solo, including after the other clients leave during an attach.
 **Refresh screen**, beside Stop in the terminal header and in the sidebar
 session context menu, also refreshes on demand. The control works for open
 local terminals too. Refreshing a hidden terminal reveals it to fit its size;
