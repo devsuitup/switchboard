@@ -208,7 +208,13 @@ answered. A session open in a tab keeps the terminal's own signals.
   `ssh -tt` (badge tooltip: *Live session on &lt;alias&gt; — click to attach*).
   Switchboard finds the tmux socket from the process's own `TMUX` variable.
   When no other client is attached, it hides tmux's status bar, turns the mouse
-  on and follows the window's size; otherwise the size is fixed at attach time.
+  on and follows the window's size. If other clients are found, it checks again
+  after three seconds before opening. A shared terminal keeps its fixed size
+  while other clients remain; it checks every three seconds and starts following
+  the current local size once its own client is the only one left. A lingering
+  client after a restart counts until tmux removes it: even an old tagged client
+  is never kicked merely for being idle. Leaving a solo terminal restores the
+  tmux options that were present before attaching.
   Leaving the session ends the local ssh client only: the remote session keeps
   running, and opening it again reattaches.
 - **Any other session** opens its transcript in the read-only viewer.

@@ -2,6 +2,7 @@
 'use strict';
 
 const { resolveSshPath: defaultResolveSshPath } = require('./remote-ssh-binary');
+const { randomUUID } = require('node:crypto');
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 
@@ -9,6 +10,9 @@ const TMUX_FIELD_RE = /^([A-Za-z0-9._-]{1,64}):(@?\d{1,10}(?:\.%?\d{1,10})?)$/;
 const PROBE_SEP = '\u0001';
 const DEFAULT_PROBE_TIMEOUT_MS = 15000;
 const DETACH_CLIENT_COUNT_TIMEOUT_MS = 5000;
+const SHARED_MODE_POLL_INTERVAL_MS = 3000;
+const SHARED_MODE_PROBE_TIMEOUT_MS = 5000;
+const RESTART_CLIENT_RETRY_DELAY_MS = 3000;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
 const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
@@ -212,6 +216,27 @@ function buildClientCountProbeCommand(socket, target) {
   return `tmux -S '${socket}' list-clients -t ${target} 2>/dev/null | wc -l`;
 }
 
+function buildClientListProbeCommand(socket, target, clientTag) {
+  return `tmux -S ${shellSingleQuote(socket)} list-clients -t ${shellSingleQuote(target)} -F ${shellSingleQuote(`#{client_pid}:#{${clientTag}}`)}`;
+}
+
+function isOnlyAttachedClient(stdout) {
+  if (typeof stdout !== 'string') return false;
+  const clients = stdout.trim().split(/\r?\n/);
+  const match = /^([1-9]\d*):([1-9]\d*)$/.exec(clients[0]);
+  return clients.length === 1 && match != null && match[1] === match[2];
+}
+
+function buildSoloOptionsCommand(socket, target) {
+  const quotedTarget = shellSingleQuote(target);
+  const segments = [
+    `set -t ${quotedTarget} status off`,
+    `set -t ${quotedTarget} mouse on`,
+    `set -t ${quotedTarget} window-size latest`,
+  ];
+  return `tmux -S ${shellSingleQuote(socket)} ${segments.join(' \\; ')}`;
+}
+
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
 // parts: [socket, size, status, mouse, window-size, set-titles, set-titles-string,
 // clientCount, cmdlineHasClaude]; trailing ones optional
@@ -311,6 +336,9 @@ function createTmuxAttachAdapter(opts = {}) {
   const runRemoteCommand = opts.runRemoteCommand || defaultRunRemoteCommand;
   const resolveSshPath = opts.resolveSshPath || defaultResolveSshPath;
   const log = opts.log || { info() {}, warn() {}, error() {}, debug() {} };
+  const setTimeoutFn = opts.setTimeoutFn || setTimeout;
+  const clearTimeoutFn = opts.clearTimeoutFn || clearTimeout;
+  const waitForClientRetry = opts.waitForClientRetry || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
   function logDebug(msg) {
     if (typeof log.debug === 'function') log.debug(msg);
@@ -350,7 +378,7 @@ function createTmuxAttachAdapter(opts = {}) {
       const reason = (probe.stderr || '').trim() || 'no stderr';
       return { ok: false, error: `size probe failed (exit ${probe.code}): ${reason}` };
     }
-    const discovery = parseDiscoveryProbeOutput(probe.stdout);
+    let discovery = parseDiscoveryProbeOutput(probe.stdout);
     if (!discovery) {
       return { ok: false, error: 'could not parse the remote window size' };
     }
@@ -364,11 +392,31 @@ function createTmuxAttachAdapter(opts = {}) {
     const hasLocalSize = !!localSize
       && Number.isInteger(localSize.cols) && localSize.cols > 0
       && Number.isInteger(localSize.rows) && localSize.rows > 0;
-    const solo = discovery.clientCount === 0 && hasLocalSize;
+    if (discovery.clientCount > 0 && hasLocalSize) {
+      await waitForClientRetry(RESTART_CLIENT_RETRY_DELAY_MS);
+      try {
+        const retry = await runRemoteCommand(alias, buildProbeCommand(descriptor.pid, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+        const refreshed = retry && retry.code === 0 && parseDiscoveryProbeOutput(retry.stdout);
+        if (refreshed) discovery = refreshed;
+      } catch {
+        // see .ai/contexts/session-cache.md ("Mode re-evaluation, issue #452")
+      }
+      if (discovery.cmdlineHasClaude === false) {
+        return { ok: false, error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
+      }
+    }
+    let solo = discovery.clientCount === 0 && hasLocalSize;
+    let currentSize = hasLocalSize ? { cols: localSize.cols, rows: localSize.rows } : null;
+    let restoreBase = solo;
+    const clientTag = solo ? null : `@switchboard-attach-${randomUUID()}`;
     const openCols = solo ? localSize.cols : discovery.cols;
     const openRows = solo ? localSize.rows : discovery.rows;
 
-    const argv = ['-tt', '-o', 'BatchMode=yes', alias, buildAttachCommand(discovery.socket, parsed.target, { solo, pre: discovery.pre })];
+    let attachCommand = buildAttachCommand(discovery.socket, parsed.target, { solo, pre: discovery.pre });
+    if (clientTag) {
+      attachCommand = `tmux -S ${shellSingleQuote(discovery.socket)} set-option -t ${shellSingleQuote(parsed.target)} ${shellSingleQuote(clientTag)} "$$" && exec ${attachCommand}`;
+    }
+    const argv = ['-tt', '-o', 'BatchMode=yes', alias, attachCommand];
 
     let raw;
     try {
@@ -378,15 +426,62 @@ function createTmuxAttachAdapter(opts = {}) {
     }
 
     let alive = true;
-    raw.onExit(() => { alive = false; });
-
     let detaching = false;
+    let pollTimer = null;
+    let inFlight = null;
+    let optionApplication = null;
+
+    function stopPolling() {
+      if (pollTimer == null) return;
+      clearTimeoutFn(pollTimer);
+      pollTimer = null;
+    }
+
+    function schedulePoll() {
+      if (solo || !alive || detaching || !currentSize || pollTimer != null || inFlight) return;
+      pollTimer = setTimeoutFn(() => {
+        pollTimer = null;
+        reevaluateMode();
+      }, SHARED_MODE_POLL_INTERVAL_MS);
+      if (typeof pollTimer.unref === 'function') pollTimer.unref();
+    }
+
+    function reevaluateMode() {
+      if (solo || !alive || detaching || !currentSize) return Promise.resolve();
+      if (inFlight) return inFlight;
+      stopPolling();
+      inFlight = (async () => {
+        try {
+          const clients = await runRemoteCommand(alias, buildClientListProbeCommand(discovery.socket, parsed.target, clientTag), { timeoutMs: SHARED_MODE_PROBE_TIMEOUT_MS });
+          if (!alive || detaching || !clients || clients.code !== 0 || !isOnlyAttachedClient(clients.stdout)) return;
+          restoreBase = true;
+          optionApplication = runRemoteCommand(alias, buildSoloOptionsCommand(discovery.socket, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+          const applied = await optionApplication;
+          if (!applied || applied.code !== 0) return;
+          solo = true;
+          if (!alive || detaching) return;
+          try { raw.resize(currentSize.cols, currentSize.rows); } catch {}
+          log.info(`[remote-attach:${alias}] ${parsed.target} is now solo — following local resizes`);
+        } catch {
+          // see .ai/contexts/session-cache.md ("Mode re-evaluation, issue #452")
+        }
+      })().finally(() => {
+        inFlight = null;
+        schedulePoll();
+      });
+      return inFlight;
+    }
+
+    raw.onExit(() => { alive = false; stopPolling(); });
     // Ending the local ssh client is what detaches: the remote tmux client
     // loses its pty and tmux drops it, leaving the session running. Sending a
     // prefix keystroke instead would assume this host's prefix, and land as
     // literal text in the remote session on any host that remapped it.
     // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
     async function restoreOnDetach() {
+      if (optionApplication) {
+        try { await optionApplication; } catch {}
+      }
       let includeTitles = true;
       try {
         const clientProbe = await runRemoteCommand(alias, buildClientCountProbeCommand(discovery.socket, parsed.target), { timeoutMs: DETACH_CLIENT_COUNT_TIMEOUT_MS });
@@ -401,28 +496,39 @@ function createTmuxAttachAdapter(opts = {}) {
         logDebug(`[remote-attach:${alias}] skipping title restore on detach — another client is still attached to ${parsed.target}`);
       }
       try { raw.kill(); } catch {}
-      const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { includeBase: solo, includeTitles });
-      if (!restoreCmd) return;
-      const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
-      if (!result || result.code !== 0) {
-        const reason = result ? `exit ${result.code}: ${(result.stderr || '').trim() || 'no stderr'}` : 'no response';
-        log.warn(`[remote-attach:${alias}] restore-on-detach failed (${reason})`);
+      const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { includeBase: restoreBase, includeTitles });
+      try {
+        if (restoreCmd) {
+          const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+          if (!result || result.code !== 0) {
+            const reason = result ? `exit ${result.code}: ${(result.stderr || '').trim() || 'no stderr'}` : 'no response';
+            log.warn(`[remote-attach:${alias}] restore-on-detach failed (${reason})`);
+          }
+        }
+      } finally {
+        if (clientTag) {
+          await runRemoteCommand(alias, `tmux -S ${shellSingleQuote(discovery.socket)} set -u -t ${shellSingleQuote(parsed.target)} ${shellSingleQuote(clientTag)}`, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+        }
       }
     }
 
     function detach() {
       if (detaching || !alive) return;
       detaching = true;
+      stopPolling();
       restoreOnDetach().catch((err) => log.warn(`[remote-attach:${alias}] restore-on-detach failed: ${err && err.message}`));
     }
 
     const ptyProcess = {
       write(data) { if (alive) raw.write(data); },
       resize(cols, rows, options) {
-        if (!solo || !alive) return;
+        if (!alive || detaching || !Number.isInteger(cols) || cols <= 0 || !Number.isInteger(rows) || rows <= 0) return;
+        currentSize = { cols, rows };
+        if (!solo) { schedulePoll(); return; }
         try { raw.resize(cols, rows); } catch (err) { if (options?.refresh === true) throw err; }
       },
       kill: detach,
+      reevaluateMode,
       onData(cb) { return raw.onData(cb); },
       onExit(cb) { return raw.onExit(cb); },
       isAlive() { return alive; },
@@ -439,6 +545,7 @@ function createTmuxAttachAdapter(opts = {}) {
           : 'no local size supplied';
       log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (fixed at attach time — ${reason})`);
     }
+    schedulePoll();
     return { ok: true, ptyProcess, cols: openCols, rows: openRows, remoteResizeAllowed: solo };
   }
 
