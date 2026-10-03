@@ -346,7 +346,8 @@ module.exports = [
       'dist/**',
       'build/**',
       'public/codemirror-bundle.js',
-      'scripts/**', // ad-hoc build helpers; out of lint scope for now
+      'scripts/**/*', // ad-hoc build helpers; out of lint scope for now
+      '!scripts/test-pr.js',
       '.work-files/**',
       '.claude/**', // agent worktrees (nested checkouts) and command config; not lint scope
     ],
@@ -629,6 +630,7 @@ module.exports = [
       'shell-profiles.js',
       'terminal-input.js',
       'trigger-context.js',
+      'scripts/test-pr.js',
       'workers/**/*.js',
     ],
     languageOptions: {
