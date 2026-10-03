@@ -247,12 +247,13 @@
           <div class="settings-field-info">
             <span class="settings-label">Restore Sessions on Startup</span>
             <!-- No live-apply hook — this setting is only read at next app launch. -->
-            <div class="settings-description">Re-open the sessions that were open when Switchboard last closed. Each is resumed in turn.</div>
+            <div class="settings-description">Re-open the sessions that were open when Switchboard last closed. "On click" only marks them in the sidebar and resumes each one when you click it.</div>
           </div>
           <div class="settings-field-control">
             <select class="settings-select" id="sv-restore-startup">
               <option value="off" ${restoreStartupValue === 'off' ? 'selected' : ''}>Don't restore</option>
               <option value="ask" ${restoreStartupValue === 'ask' ? 'selected' : ''}>Ask on startup (default)</option>
+              <option value="lazy" ${restoreStartupValue === 'lazy' ? 'selected' : ''}>Restore on click</option>
               <option value="auto" ${restoreStartupValue === 'auto' ? 'selected' : ''}>Restore automatically</option>
             </select>
           </div>

@@ -71,6 +71,7 @@ const rendererCrossFileGlobals = {
   setActiveSession: 'readonly',
   activePtyIds: 'writable',
   pendingSessions: 'readonly',
+  dormantWorkingSet: 'readonly',
   sessionMap: 'writable',
   lastActivityTime: 'readonly',
   sortedOrder: 'writable',

@@ -165,6 +165,9 @@ let sessionOpenedOutsideRestore = false;
 const skippedWorkingSetEntries = new Map();
 let restoreSavedIndex = new Map();
 
+// 'lazy' restore: last run's sessions kept in the working set, PTY spawned on click.
+const dormantWorkingSet = new Map();
+
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
@@ -184,7 +187,7 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
-    const skipped = [...skippedWorkingSetEntries.values()]
+    const skipped = [...skippedWorkingSetEntries.values(), ...dormantWorkingSet.values()]
       .filter(({ item }) => !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index } of skipped) {
@@ -266,7 +269,7 @@ async function tickRestorePlanner() {
     sessionMap,
     openSessions,
     indexingDone: restoreIndexingDone,
-    sessionOpenedOutsideRestore,
+    sessionOpenedOutsideRestore: restoreMode !== 'lazy' && sessionOpenedOutsideRestore,
   });
 
   if (plan.action === 'wait') {
@@ -280,6 +283,15 @@ async function tickRestorePlanner() {
   if (plan.action === 'nothing') return;
 
   const candidates = plan.candidates;
+
+  if (restoreMode === 'lazy') {
+    for (const [position, item] of candidates.entries()) {
+      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+      dormantWorkingSet.set(item.sessionId, { item, index });
+    }
+    refreshSidebar();
+    return;
+  }
 
   if (restoreMode === 'auto') {
     restoringWorkingSet = true;
@@ -1288,6 +1300,9 @@ async function showTerminalHeader(session) {
 async function openSession(session, customOptions, { automatic = false, live } = {}) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   const { sessionId, projectPath } = session;
+  if (dormantWorkingSet.delete(sessionId)) {
+    document.getElementById('si-' + sessionId)?.classList.remove('dormant');
+  }
 
   // If already open, handle closed-session cleanup or just show it
   if (openSessions.has(sessionId)) {
