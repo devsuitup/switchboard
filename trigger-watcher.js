@@ -96,6 +96,9 @@ const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could b
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
 const REASON_UNCONFIRMED_BEFORE_DEADLINE = 'the step was written while the CLI reported busy; neither the CLI nor the transcript (the step\'s own entry, then a closed turn) confirmed it before the step deadline; nothing more was typed';
+function reasonNoOwnEntry(ms) {
+  return `the step was written while the CLI reported busy; the CLI did not react and the transcript did not show the step within ${Math.round(ms / 1000)} s of its Enter; nothing more was typed`;
+}
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
@@ -315,6 +318,13 @@ function getTranscriptQuietMs() {
 
 const TRANSCRIPT_FALLBACK_STATUSES = ['busy', 'shell'];
 
+// see .ai/contexts/trigger-watcher.md, "A chain step written while the CLI stays busy"
+const DEFAULT_PENDING_OWN_ENTRY_MS = 30000; // ms
+function getPendingOwnEntryMs() {
+  const v = envNumber('SWITCHBOARD_PENDING_OWN_ENTRY_MS');
+  return v !== undefined ? v : DEFAULT_PENDING_OWN_ENTRY_MS;
+}
+
 function readTranscriptTurn(ctx, sessionId) {
   if (typeof ctx.getTranscriptTurn !== 'function') return null;
   try {
@@ -353,21 +363,23 @@ function transcriptReactedSince(ctx, sessionId, sinceMs, command) {
 // see .ai/contexts/trigger-watcher.md, "A chain step written while the CLI stays busy"
 function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadlineMs) {
   const start = Date.now();
-  const dialog = createDialogProbe(ctx, sessionId, getBusyFallSettleMs());
+  const ownEntryDeadline = isCompactCommand(command) ? deadlineMs : Math.min(deadlineMs, enterAtMs + getPendingOwnEntryMs());
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ confirmed: false, sessionExited: true, timedOut: false, waited_ms });
     }
-    dialog.sample(now);
     if (cliReactedSince(ctx, sessionId, enterAtMs)) {
       return resolve({ confirmed: true, source: 'descriptor', sessionExited: false, timedOut: false, waited_ms });
     }
     const ownAt = transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command);
     if (ownAt !== null
-      && transcriptShowsTurnOver(ctx, sessionId, readCliStatusRaw(ctx, sessionId), ownAt, now, dialog.seen(now))) {
+      && transcriptShowsTurnOver(ctx, sessionId, readCliStatusRaw(ctx, sessionId), ownAt, now, false)) {
       return resolve({ confirmed: true, source: 'transcript', sessionExited: false, timedOut: false, waited_ms });
+    }
+    if (ownAt === null && now >= ownEntryDeadline && ownEntryDeadline < deadlineMs) {
+      return resolve({ confirmed: false, sessionExited: false, timedOut: true, noOwnEntry: true, waited_ms });
     }
     if (now >= deadlineMs) {
       return resolve({ confirmed: false, sessionExited: false, timedOut: true, waited_ms });
@@ -1551,7 +1563,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       } else if (pending.sessionExited) {
         verify = { ...verify, sessionExited: true };
       } else {
-        verify = { ...verify, pendingTimedOut: true };
+        verify = { ...verify, pendingTimedOut: true, pendingNoOwnEntry: !!pending.noOwnEntry };
       }
     }
     if (verify.confirmSource) sources.confirm_source = verify.confirmSource;
@@ -1595,7 +1607,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         ok: false,
         submitted: chainSubmitted,
         error: ERROR_UNCONFIRMED,
-        reason: verify.pendingTimedOut
+        reason: verify.pendingNoOwnEntry
+          ? `chain step ${i}: ${reasonNoOwnEntry(getPendingOwnEntryMs())}`
+          : verify.pendingTimedOut
           ? `chain step ${i}: ${REASON_UNCONFIRMED_BEFORE_DEADLINE}`
           : `chain step ${i} was typed but its submission was not confirmed and the recovery Enter was withheld (${verify.recoveryReason}); nothing more was typed`,
         partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps,

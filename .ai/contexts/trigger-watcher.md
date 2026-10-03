@@ -1080,11 +1080,24 @@ readable: it is pending (`waitForPendingConfirmation`), up to the step's own
 deadline, and no Enter is written meanwhile. The step is confirmed when the
 descriptor reacts after the Enter (`confirm_source` `descriptor`), or when
 the step's own entry, stamped at or after the Enter, appears and the turn is
-closed after that entry under the rules above, quiet window and no dialog
-included (`confirm_source` `transcript`). A turn closed before the step's own
-entry, or another turn with no own entry, does not count. At the deadline the
-chain stops: `error` `step not confirmed`, `reason`
-`REASON_UNCONFIRMED_BEFORE_DEADLINE`, nothing more typed. A dialog, a remote
+closed after that entry under the rules above, quiet window included
+(`confirm_source` `transcript`). A turn closed before the step's own entry,
+or another turn with no own entry, does not count. The dialog check is not
+applied here: a `waiting` written after the Enter carries a new stamp, so the
+descriptor branch, checked first, confirms the step on it.
+
+Two limits, `error` `step not confirmed` and nothing more typed at either:
+
+- No own entry within `SWITCHBOARD_PENDING_OWN_ENTRY_MS` of the Enter
+  (default 30 s, `DEFAULT_PENDING_OWN_ENTRY_MS`): `reasonNoOwnEntry`. A
+  prompt or slash command shows at once, as a `user` entry or an `enqueue`,
+  so a swallowed Enter fails then instead of spending the chain's budget.
+- `/compact` is exempt: none of the 82 manual compactions measured wrote an
+  entry naming `/compact` before compaction ended (Enter to boundary: 0.5 s
+  to 332 s, median 129 s). It waits to the step deadline, as does any step
+  whose own entry has appeared and whose turn is not closed yet:
+  `REASON_UNCONFIRMED_BEFORE_DEADLINE`. A chain starting with `/compact`
+  under busy should set `timeout_ms` to 600 000. A dialog, a remote
 session or a missing transcript keep the immediate `step not confirmed`. Once
 confirmed, the step goes on as any other: for a non-final step the busy-fall
 wait reads the same closed turn and ends at once.

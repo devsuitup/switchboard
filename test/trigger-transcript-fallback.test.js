@@ -11,6 +11,7 @@ process.env.SWITCHBOARD_SUBMIT_VERIFY_MS = '400';
 process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = '50';
 process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS = '100';
 process.env.SWITCHBOARD_TRANSCRIPT_QUIET_MS = '300';
+process.env.SWITCHBOARD_PENDING_OWN_ENTRY_MS = '1000';
 
 const test   = require('node:test');
 const assert = require('node:assert/strict');
@@ -676,7 +677,7 @@ test('chain: /compact as the only step with the descriptor held busy -> confirme
   }
 });
 
-test('chain: a swallowed Enter under a busy descriptor fails at the step deadline with its own reason, the next step never typed', async () => {
+test('chain: a swallowed Enter under a busy descriptor fails once the own-entry wait is over, not at the step deadline, the next step never typed', async () => {
   const uuid = 'sess-tx-swallowed-busy-' + Date.now();
   const s = transcriptSession(uuid, { onEnter: () => {} });
   const forgotten = [];
@@ -684,17 +685,35 @@ test('chain: a swallowed Enter under a busy descriptor fails at the step deadlin
   s.ctx.forgetTranscriptTurn = (id) => { forgotten.push(id); return forget(id); };
   const startedAt = Date.now();
   try {
-    const result = await runChain([{ command: 'first step', timeout_ms: 2000 }, { command: 'second step' }], s, uuid, 6000);
+    const result = await runChain([{ command: 'first step', timeout_ms: 5000 }, { command: 'second step' }], s, uuid, 8000);
+    const elapsed = Date.now() - startedAt;
 
     assert.equal(result.ok, false);
     assert.equal(result.error, 'step not confirmed');
-    assert.match(result.reason, /before the step deadline/);
+    assert.match(result.reason, /did not show the step within 1 s of its Enter/);
     assert.equal(result.steps[0].submit_confirmed, false);
     assert.equal(result.steps_completed, 0);
-    assert.ok(Date.now() - startedAt >= 1900, 'failed before the step deadline');
+    assert.ok(elapsed >= 900, 'failed before the own-entry wait was over: ' + elapsed);
+    assert.ok(elapsed < 4000, 'waited for the step deadline: ' + elapsed);
     assert.ok(!s.written.some((w) => w.data === 'second step'));
     assert.equal(s.written.filter((w) => w.data === '\r').length, 1, 'a recovery Enter was typed into the busy CLI');
     assert.deepEqual(forgotten, [uuid]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: a swallowed /compact under a busy descriptor waits for the step deadline, its entry only comes when compaction ends', async () => {
+  const uuid = 'sess-tx-swallowed-compact-' + Date.now();
+  const s = transcriptSession(uuid, { onEnter: () => {} });
+  const startedAt = Date.now();
+  try {
+    const result = await runChain([{ command: '/compact', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /before the step deadline/);
+    assert.ok(Date.now() - startedAt >= 2400, 'gave up on /compact before the step deadline');
+    assert.ok(!s.written.some((w) => w.data === 'second step'));
   } finally {
     s.cleanup();
   }
@@ -705,10 +724,12 @@ test('chain: the step\'s own entry under a busy descriptor with the turn still r
   const s = transcriptSession(uuid, {
     onEnter: ({ append, command }) => setTimeout(() => append([ownPrompt(Date.now(), command), assistant(Date.now(), 'tool_use')]), 800),
   });
+  const startedAt = Date.now();
   try {
     const result = await runChain([{ command: 'first step', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
 
     assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.ok(Date.now() - startedAt >= 2400, 'stopped waiting for the closed turn once the own entry was there');
     assert.match(result.reason, /before the step deadline/);
     assert.ok(!s.written.some((w) => w.data === 'second step'));
   } finally {
@@ -728,7 +749,7 @@ test('chain: under a busy descriptor, another turn closing after the Enter witho
     const result = await runChain([{ command: 'first step', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
 
     assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
-    assert.match(result.reason, /before the step deadline/);
+    assert.match(result.reason, /did not show the step within/);
     assert.ok(!s.written.some((w) => w.data === 'second step'));
   } finally {
     s.cleanup();

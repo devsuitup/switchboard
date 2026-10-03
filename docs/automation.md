@@ -257,7 +257,11 @@ Size the budget by what the steps do, not by how many there are. A chain that
 compacts and then resumes spends most of it waiting for the session to go idle
 after `/compact`: `{"chain": [{"command": "/compact"}, {"command": "…"}],
 "timeout_ms": 600000}` is the shape that fits. A session busy for another reason
-spends the same budget.
+spends the same budget. Keep `timeout_ms` at 600 000 for a chain that starts
+with `/compact` while background agents keep the CLI busy: the step is
+confirmed only when compaction ends, and the 82 manual compactions measured
+on one machine took from under a second to 332 s from the Enter, median
+129 s.
 
 ### Environment overrides
 
@@ -268,6 +272,7 @@ spends the same budget.
 | `SWITCHBOARD_TRIGGER_QUIET_MS` | The politeness quiet window | 3 000 |
 | `SWITCHBOARD_TRIGGER_MAX_AGE_MS` | The staleness limit | 300 000 |
 | `SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` | Delay between the text and its Enter | 50 |
+| `SWITCHBOARD_PENDING_OWN_ENTRY_MS` | How long a chain step written while the CLI reads `busy` may take to show in the transcript (not `/compact`) | 30 000 |
 | `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
 | `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
 
@@ -440,7 +445,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
-| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed. For a local session whose descriptor reads `busy`, the chain first waits, up to the step's deadline, for the step to show in the session transcript with its turn finished, and `reason` then says the deadline passed | the step may sit unsubmitted in the composer: look before sending again |
+| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed. For a local session whose descriptor reads `busy`, the chain first waits for the step to show in the session transcript with its turn finished: up to 30 s for the step to show at all (up to the step's deadline for `/compact`, which shows only when compaction ends), then up to the step's deadline for its turn to finish; `reason` says which wait ran out | after a dialog or input of your own, the step may sit unsubmitted in the composer: look before sending again. After a wait under `busy`, the step may still be running or queued in the CLI: look at the session before sending again |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 The two reserved values mean opposite things:
