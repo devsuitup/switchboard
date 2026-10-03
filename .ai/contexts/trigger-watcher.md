@@ -1073,7 +1073,9 @@ notice) never confirm. The reader keeps the last 50 such entries of the tail
 **A chain step written while the CLI stays busy.** The CLI writes the
 `<command-name>/compact` entry only when compaction ends, one to three
 minutes after the Enter although it is stamped at the Enter, and a descriptor
-held `busy` writes no new stamp. The 2 s verify window cannot see either, so
+held `busy` writes no new stamp. In 79 of 82 measured compactions a plain
+`user` entry `/compact` is also written at the Enter, which the 2 s verify
+window does confirm; in the other 3 it sees nothing, so
 an unconfirmed chain step whose recovery Enter was withheld is not a failure
 when the descriptor reads `busy` or `shell` and the session's transcript is
 readable: it is pending (`waitForPendingConfirmation`), up to the step's own
@@ -1092,7 +1094,7 @@ Two limits, `error` `step not confirmed` and nothing more typed at either:
   (default 30 s, `DEFAULT_PENDING_OWN_ENTRY_MS`): `reasonNoOwnEntry`. A
   prompt or slash command shows at once, as a `user` entry or an `enqueue`,
   so a swallowed Enter fails then instead of spending the chain's budget.
-- `/compact` is exempt: none of the 82 manual compactions measured wrote an
+- `/compact` is exempt: 3 of the 82 manual compactions measured wrote no
   entry naming `/compact` before compaction ended (Enter to boundary: 0.5 s
   to 332 s, median 129 s). It waits to the step deadline, as does any step
   whose own entry has appeared and whose turn is not closed yet:
