@@ -88,6 +88,25 @@ test('a later cycle inside the probe interval does not probe again, one past it 
   } finally { h.cleanup(); }
 });
 
+test('an answer with a missing tool is asked again after the retry delay, one with both present only after the interval', async () => {
+  for (const [answer, delay] of [
+    [{ tmux: false, inotifywait: true }, PROBE_RETRY_MS],
+    [{ tmux: true, inotifywait: false }, PROBE_RETRY_MS],
+    [{ tmux: true, inotifywait: true }, PROBE_INTERVAL_MS],
+  ]) {
+    const h = harness({ probe: async () => answer });
+    try {
+      await h.indexer.refreshNow();
+      h.advance(delay - 1);
+      await h.indexer.refreshNow();
+      assert.equal(h.probes.length, 1, JSON.stringify(answer) + ' before the delay');
+      h.advance(1);
+      await h.indexer.refreshNow();
+      assert.equal(h.probes.length, 2, JSON.stringify(answer) + ' at the delay');
+    } finally { h.cleanup(); }
+  }
+});
+
 test('a probe failure leaves the profile unknown, does not fail the refresh, and retries only after the retry delay', async () => {
   let fail = true;
   const h = harness({ probe: async () => { if (fail) throw new Error('ssh probe timed out after 15000 ms'); return { tmux: false, inotifywait: false }; } });

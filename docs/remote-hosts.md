@@ -128,7 +128,7 @@ as missing on an idle host.
 
 Once per host, at its first successful refresh and then every six hours (and on
 **Reconnect**), one extra ssh asks whether `tmux` and `inotifywait` are
-installed and nothing else. A host with `tmux` and no session offers attach; a
+installed and nothing else; while one of them is missing it asks again every 30 minutes, so an install is noticed. A host with `tmux` and no session offers attach; a
 host without it does not, even when a descriptor names a pane, and the dot says
 so. A host without `inotifywait` says that only the periodic pull runs. When the
 probe fails (timeout after 15 seconds, refused, unreadable answer), the host

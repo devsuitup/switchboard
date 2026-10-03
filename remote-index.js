@@ -217,7 +217,7 @@ function createRemoteIndexer(ctx) {
       log.warn(`[remote:${alias}] tool probe failed: ${err.message}`);
     }
     const kept = tools || (prev ? prev.tools : null);
-    hostTools.set(alias, { tools: kept, nextProbeAt: now() + (tools ? PROBE_INTERVAL_MS : PROBE_RETRY_MS) });
+    hostTools.set(alias, { tools: kept, nextProbeAt: now() + (kept && kept.tmux && kept.inotifywait && tools ? PROBE_INTERVAL_MS : PROBE_RETRY_MS) });
     return !!tools && (!prev || !prev.tools || prev.tools.tmux !== tools.tmux || prev.tools.inotifywait !== tools.inotifywait);
   }
 
