@@ -12,6 +12,8 @@ function stampOf(entry) {
   return Number.isFinite(t) ? t : null;
 }
 
+const MAX_PROMPTS = 50;
+
 function isLocalCommandOutput(entry) {
   const content = entry.message && entry.message.content;
   if (typeof content !== 'string') return false;
@@ -19,23 +21,71 @@ function isLocalCommandOutput(entry) {
   return t.startsWith('<local-command-stdout>') && t.endsWith('</local-command-stdout>');
 }
 
-function endsTurn(entry) {
-  if (entry.type === 'user') return entry.isCompactSummary === true || isLocalCommandOutput(entry);
-  return CLOSED_STOP_REASONS.has(entry.message && entry.message.stop_reason);
+function isManualCompactBoundary(entry) {
+  return !!entry && entry.type === 'system' && entry.subtype === 'compact_boundary'
+    && !!entry.compactMetadata && entry.compactMetadata.trigger === 'manual';
 }
 
-function classifyTranscriptTail(text) {
-  const lines = String(text).split('\n');
-  let lastEntryAt = null;
-  let enqueued = 0;
-  let removed = 0;
-  let dequeued = 0;
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].trim();
+function endsTurn(entry, turnDurationAfter, previous) {
+  if (entry.type === 'user') {
+    if (entry.isCompactSummary === true) return isManualCompactBoundary(previous);
+    return isLocalCommandOutput(entry);
+  }
+  return turnDurationAfter && CLOSED_STOP_REASONS.has(entry.message && entry.message.stop_reason);
+}
+
+function parseMainThread(text) {
+  const entries = [];
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
     if (!line) continue;
     let entry;
     try { entry = JSON.parse(line); } catch (_) { continue; }
     if (!entry || typeof entry !== 'object' || entry.isSidechain) continue;
+    entries.push(entry);
+  }
+  return entries;
+}
+
+function promptOf(entry) {
+  if (entry.type === 'queue-operation') {
+    return entry.operation === 'enqueue' && typeof entry.content === 'string' ? entry.content : null;
+  }
+  if (entry.type !== 'user' || entry.isMeta) return null;
+  const content = entry.message && entry.message.content;
+  return typeof content === 'string' ? content : null;
+}
+
+function collectPrompts(entries) {
+  const prompts = [];
+  for (const entry of entries) {
+    const text = promptOf(entry);
+    const at = stampOf(entry);
+    if (text !== null && at !== null) prompts.push({ at, text });
+  }
+  return prompts.slice(-MAX_PROMPTS);
+}
+
+function promptMatches(text, command) {
+  if (typeof text !== 'string' || typeof command !== 'string') return false;
+  const want = command.trim();
+  if (!want) return false;
+  const got = text.trim();
+  if (got === want) return true;
+  const name = got.match(/^<command-name>([^<]*)<\/command-name>/);
+  return !!name && name[1].trim() === want.split(/\s/)[0];
+}
+
+function classifyTranscriptTail(text) {
+  const entries = parseMainThread(text);
+  const prompts = collectPrompts(entries);
+  let lastEntryAt = null;
+  let enqueued = 0;
+  let removed = 0;
+  let dequeued = 0;
+  let turnDurationAfter = false;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
     const at = stampOf(entry);
     if (at !== null && (lastEntryAt === null || at > lastEntryAt)) lastEntryAt = at;
     if (entry.type === 'queue-operation') {
@@ -44,12 +94,13 @@ function classifyTranscriptTail(text) {
       else if (entry.operation === 'dequeue') dequeued += 1;
       continue;
     }
+    if (entry.type === 'system' && entry.subtype === 'turn_duration') turnDurationAfter = true;
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
     const queueIdle = enqueued <= removed && dequeued === 0;
-    const closed = endsTurn(entry) && queueIdle && at !== null;
-    return { closed, closedAt: closed ? at : null, lastEntryAt };
+    const closed = endsTurn(entry, turnDurationAfter, entries[i - 1]) && queueIdle && at !== null;
+    return { closed, closedAt: closed ? at : null, lastEntryAt, prompts };
   }
-  return { closed: false, closedAt: null, lastEntryAt };
+  return { closed: false, closedAt: null, lastEntryAt, prompts };
 }
 
 function readTail(filePath, size, tailBytes) {
@@ -71,21 +122,20 @@ function readTail(filePath, size, tailBytes) {
 }
 
 function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
-  let cache = null;
+  const cache = new Map();
   return {
     read(filePath) {
       let stat;
       try { stat = fs.statSync(filePath); } catch (_) { return null; }
-      if (cache && cache.filePath === filePath && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
-        return { ...cache.turn };
-      }
+      const hit = cache.get(filePath);
+      if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { ...hit.turn };
       let tail;
       try { tail = readTail(filePath, stat.size, tailBytes); } catch (_) { return null; }
       const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs };
-      cache = { filePath, mtimeMs: stat.mtimeMs, size: stat.size, turn };
+      cache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, turn });
       return { ...turn };
     },
   };
 }
 
-module.exports = { classifyTranscriptTail, createTranscriptTurnReader, CLOSED_STOP_REASONS };
+module.exports = { classifyTranscriptTail, createTranscriptTurnReader, promptMatches, CLOSED_STOP_REASONS };

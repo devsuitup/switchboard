@@ -37,6 +37,7 @@ const path = require('path');
 const os   = require('os');
 
 const { createLocalSessionHandle } = require('./trigger-context');
+const { promptMatches } = require('./transcript-turn');
 
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
 // Default idle-wait timeout: 5 minutes.
@@ -304,7 +305,6 @@ function getBusyFallSettleMs() {
   return v !== undefined ? v : DEFAULT_BUSY_FALL_SETTLE_MS;
 }
 
-// see .ai/contexts/trigger-watcher.md, "waitForBusyFall waits for the rise too"
 // see .ai/contexts/trigger-watcher.md, "Transcript fallback while the descriptor stays busy"
 const DEFAULT_TRANSCRIPT_QUIET_MS = 3000; // ms
 function getTranscriptQuietMs() {
@@ -332,13 +332,15 @@ function transcriptShowsTurnOver(ctx, sessionId, desc, afterMs, now, dialogSeen)
   return now - turn.mtimeMs >= getTranscriptQuietMs();
 }
 
-function transcriptReactedSince(ctx, sessionId, sinceMs) {
+function transcriptReactedSince(ctx, sessionId, sinceMs, command) {
   const desc = readCliStatusRaw(ctx, sessionId);
   if (!desc || !TRANSCRIPT_FALLBACK_STATUSES.includes(desc.status)) return false;
   const turn = readTranscriptTurn(ctx, sessionId);
-  return !!turn && Number.isFinite(turn.lastEntryAt) && turn.lastEntryAt >= sinceMs;
+  if (!turn || !Array.isArray(turn.prompts)) return false;
+  return turn.prompts.some((p) => Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command));
 }
 
+// see .ai/contexts/trigger-watcher.md, "waitForBusyFall waits for the rise too"
 function getBusyRiseWaitMs() {
   const v = envNumber('SWITCHBOARD_BUSY_RISE_WAIT_MS');
   return v !== undefined ? v : getSubmitVerifyMs();
@@ -533,7 +535,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
  * the caller keeps the legacy instant-reply semantics — submit_retries traces
  * that the verification could not confirm a turn started.
  */
-async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
+async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { transcriptReaction = false } = {}) {
   // Sampled before the write — see .ai/contexts/trigger-watcher.md ("submitted").
   const preBusy = ctx.isSessionBusy(sessionId);
 
@@ -553,7 +555,8 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs) {
   const effectiveDeadline = (deadlineMs !== undefined) ? deadlineMs : Infinity;
 
   const probe = edgeMode
-    ? () => cliReactedSince(ctx, sessionId, enterAt) || transcriptReactedSince(ctx, sessionId, enterAt)
+    ? () => cliReactedSince(ctx, sessionId, enterAt)
+      || (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command))
     : undefined;
   const first = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline, probe);
   if (first.sawBusy || first.sessionExited || first.timedOut) {
@@ -1473,7 +1476,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
     try {
-      verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline);
+      verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true });
     } catch (err) {
       ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, err.message);
       await writeResult({ ok: false, error: 'pty write failed: ' + err.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });

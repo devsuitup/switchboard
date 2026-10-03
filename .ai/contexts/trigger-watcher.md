@@ -8,7 +8,7 @@
 |---|---|---|
 | `trigger-watcher.js` | ~1050 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
 | `trigger-context.js` | ~35 | `createTriggerContext({ activeSessions, log })` — builds the whole `ctx` object out of `main.js`'s session map. |
-| `transcript-turn.js` | ~80 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
+| `transcript-turn.js` | ~140 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `terminal-input.js` | ~20 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `main.js` (wiring) | 3 | `require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
@@ -981,10 +981,13 @@ reaches it either.
 - The last main-thread message entry of the transcript closes a turn and
   has a parseable `timestamp` (`transcript-turn.js`, `classifyTranscriptTail`).
   Three entries close one: an `assistant` entry with `stop_reason` `end_turn`
-  or `stop_sequence` (the synthetic error message uses the latter); a `user`
-  entry whose string content is one `<local-command-stdout>` block, start to
-  end (the output of `/compact`, `/clear`, `/model`, …); a `user` entry with
-  `isCompactSummary: true`. Any other `user` entry (a prompt, a meta prompt
+  or `stop_sequence`, followed by a main-thread `system` `turn_duration`
+  entry; a `user` entry whose string content is one `<local-command-stdout>`
+  block, start to end (the output of `/compact`, `/clear`, `/model`, …); a
+  `user` entry with `isCompactSummary: true` whose previous main-thread entry
+  is a `compact_boundary` with `compactMetadata.trigger` `manual` (an
+  automatic compaction happens inside a turn that goes on). Any other `user`
+  entry (a prompt, a meta prompt
   such as a scheduled task or the `<local-command-caveat>`, a
   `<command-name>` entry, a `tool_result`) means a turn is in progress, and so
   does a `tool_use` stop. A slash command that expands into a prompt writes
@@ -999,12 +1002,34 @@ reaches it either.
   anchor before step 0). A turn that closed before our Enter says nothing
   about our step.
 - The transcript file has not changed for `SWITCHBOARD_TRANSCRIPT_QUIET_MS`
-  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). Measured on real
-  transcripts (2026-10-03): the `end_turn` entry is followed by the
-  `stop_hook_summary` and `turn_duration` entries 0.8 to 1.3 s later, and a
-  queued prompt's `enqueue`/`dequeue` lands in the same burst. 3 s is more
-  than twice the longest observed gap and costs 3 s per step against chain
-  budgets of minutes.
+  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). With `turn_duration`
+  required, the quiet window no longer decides when a turn ends; it lets the
+  entries written in the same burst (a queued prompt's `enqueue`/`dequeue`)
+  land before the tail is trusted.
+
+**Why `turn_duration`, measured.** An `end_turn` alone is not the end of a
+turn. Measured on the 19 real transcripts of this machine (2026-10-03, read
+only), over 4344 main-thread `end_turn` messages:
+
+- 4120 (94.8 %) are followed by a `turn_duration` before the next message
+  entry. The gap is p50 0.27 s, p90 2.9 s, p99 42.8 s, max 124 s; 404 gaps
+  (9.8 %) are 3 s or more, so a quiet window alone would have read those
+  turns as over while their Stop hook still ran.
+- The 224 others are all continued, never ended: 173 by a meta `user` entry,
+  24 by a `user` prompt, 17 by a `<task-notification>`, 5 by a synthetic
+  `stop_sequence` message 9 to 76 s later, 2 by a local command, and 3 end
+  the file (a session still running, or killed).
+- Where both are present (3695 times), `stop_hook_summary` always comes
+  before `turn_duration` (0 exceptions; `turn_duration` lands p50 16 ms, max
+  5.5 s after it): `turn_duration` is written after the Stop hook. 39
+  `end_turn` have a `stop_hook_summary` and no `turn_duration`; all 39 were
+  continued, so `stop_hook_summary` alone does not close.
+- `stop_sequence` is only the synthetic message (`model` `<synthetic>`, 39
+  entries): 19 are followed by a `turn_duration`, 20 are not. It closes on the
+  same condition as `end_turn`.
+- No `turn_duration` follows a `<local-command-stdout>` entry (0 of 95) or a
+  compaction summary (0 of 82), so those two keep the rule above, without
+  `turn_duration`. All 82 compactions of the corpus are `manual`.
 
 **What `/compact` leaves.** Measured on a real transcript (CLI of
 2026-10-03, two compactions), in file order once compaction ends: a `system`
@@ -1021,10 +1046,17 @@ synthetic text.
 
 **Proof of submission.** In edge mode a busy descriptor that does not change
 status writes no new `statusUpdatedAt`, so our Enter would never count as
-seen and the chain would stop on `step not confirmed`. While the descriptor
-reads `busy` or `shell`, a main-thread transcript entry stamped at or after
-the Enter (the prompt, or its `queue-operation`) also counts as the CLI's
-reaction (`transcriptReactedSince`). The recovery Enter rules are unchanged.
+seen and the chain would stop on `step not confirmed`. For a chain step only
+(`submitWithVerify(…, { transcriptReaction: true })`; single triggers do not
+pass it), while the descriptor reads `busy` or `shell`, the step's own entry
+stamped at or after the Enter also counts as the CLI's reaction
+(`transcriptReactedSince`): a non-meta main-thread `user` entry with string
+content, or an `enqueue` `queue-operation`, whose text equals the step's
+command once trimmed, or, for a slash command, whose `<command-name>` equals
+the command's first word (`promptMatches`). Attachments, `system` entries,
+meta entries and other texts (another agent's notice) never confirm. The
+reader keeps the last 50 such entries of the tail (`prompts`). The recovery
+Enter rules are unchanged.
 
 **The result records the signal.** Each chain step carries `ready_source`
 (`descriptor` or `transcript`: what released the readiness wait before it;
@@ -1038,17 +1070,19 @@ transcript also logs one info line.
 (`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
 key>.jsonl`, local sessions only (a remote session returns `null`). The reader
 stats the file and re-reads only when its mtime or size changed, the last
-256 KB, so a poll costs a `stat`. A missing file, a read error, or a tail
+256 KB, so a poll costs a `stat`. The cache holds one entry per path, so
+two chains on two sessions do not re-read each other's files. A missing file, a read error, or a tail
 with no message entry is never "closed".
 
 **Known limits.**
 
-- A long stop hook that writes nothing for 3 s after `end_turn` reads as
-  free; if it then continues the turn, the next step is queued by the CLI.
+- An `end_turn` with no `turn_duration` never reads closed: in the corpus,
+  3 of 4344 ended the file that way; a chain there waits for the descriptor.
 - An interrupted turn ends on a `user` entry and never reads closed.
-- A background agent's completion notification written into the main
-  transcript within the verify window after our Enter can be taken as the
-  reaction to it.
+- A step whose text is pasted and stored differently by the CLI (a
+  `[Pasted text]` placeholder, for example) is not matched: its Enter is
+  confirmed by the descriptor or not at all. Not measured.
+- `popAll` queue operations (26 in the corpus) are not counted.
 - The anchors compare the CLI's transcript timestamps with this process's
   clock; both are the same machine's clock.
 
