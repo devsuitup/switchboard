@@ -191,6 +191,7 @@ function shQuote(p) { return `'${p.replace(/'/g, `'\\''`)}'`; }
 function runEnrol({ home, prelude }) {
   const result = spawnSyncRetryingCrash('sh', ['-c', `HOME=${shQuote(home)}; PATH=/usr/bin:/bin; ${prelude}${ENROL_COMMAND}`], { encoding: 'utf8' });
   assert.equal(result.status, 0, `a missing tool is an answer, not a failure (stderr: ${result.stderr})`);
+  assert.ok(!/secret@example.com/.test(result.stdout + result.stderr), 'what claude auth status prints must not reach the ssh output, stdout or stderr');
   const facts = parseEnrol(result.stdout);
   assert.ok(facts, `unreadable answer: ${result.stdout}`);
   const { claude, claudeVersion, claudeDir, auth } = facts;
@@ -202,7 +203,7 @@ function fakeClaude({ status, hasAuthSub = true, version = '2.1.288 (Claude Code
   return `claude() { `
     + `if [ "$1" = --version ]; then echo '${version}'; return 0; fi; `
     + `if [ "$1" = auth ] && [ "$2" = --help ]; then printf '${authHelp}\\n'; return 0; fi; `
-    + `if [ "$1" = auth ] && [ "$2" = status ]; then echo "$*" >> ${shQuote(log)}; echo '{"email":"secret@example.com"}'; return ${status}; fi; `
+    + `if [ "$1" = auth ] && [ "$2" = status ]; then echo "$*" >> ${shQuote(log)}; echo '{"email":"secret@example.com"}'; echo secret@example.com >&2; return ${status}; fi; `
     + `echo "unexpected: $*" >> ${shQuote(log)}; return 99; }; `;
 }
 
@@ -224,6 +225,19 @@ test('ENROL_COMMAND answers each fact through a real shell, and discards what cl
 
     const calls = fs.readFileSync(log, 'utf8').trim().split('\n');
     assert.ok(calls.every(c => c === 'auth status'), `only auth status was ever run, got ${calls}`);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('ENROL_COMMAND never runs claude auth status when auth --help has no status line (older CLI)', { skip: SH_SKIP }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'enrol-home-'));
+  const log = path.join(home, 'calls.log');
+  try {
+    fs.mkdirSync(path.join(home, '.claude'));
+    const facts = runEnrol({ home, prelude: fakeClaude({ status: 0, hasAuthSub: false, log }) });
+    assert.equal(facts.auth, null);
+    assert.ok(!fs.existsSync(log), 'auth status was run on a CLI that does not list it');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

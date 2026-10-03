@@ -323,7 +323,6 @@ function createSshTransport(opts = {}) {
     if (res.code === SSH_CONNECT_FAILED_EXIT || res.code === -1) {
       return { reachable: false, facts: null, detail: oneLine(res.stderr) || `ssh failed (exit ${res.code})` };
     }
-    if (res.truncated) return { reachable: true, facts: null, detail: 'the answer exceeded the size cap' };
     if (res.code !== 0) {
       return { reachable: true, facts: null, detail: `the check failed on the host (exit ${res.code}): ${oneLine(res.stderr) || 'no stderr'}` };
     }

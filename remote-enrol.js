@@ -4,6 +4,7 @@
 const { isValidAlias } = require('./remote-hosts');
 
 const UNKNOWN_AUTH_TEXT = 'unknown — run `claude` on the host once to log in';
+const INSPECT_FIRST_HINT = ' Inspect the script first (download it, read it, then run it) if you do not run piped installers blindly.';
 const INSTALL_CLAUDE_COMMAND = 'curl -fsSL https://claude.ai/install.sh | bash';
 const INSTALL_TMUX_COMMAND = 'sudo apt install tmux';
 const LOGIN_COMMAND = 'claude auth login';
@@ -27,7 +28,7 @@ function unreachableItems(alias, detail) {
 }
 
 function noFactsItems(detail) {
-  const why = `${detail || 'no answer'} — only Linux hosts are checked`;
+  const why = `${detail || 'no answer'} — the check needs a POSIX login shell on the host (not fish or csh), and a Linux host`;
   return [
     item('ssh', 'ssh reachable', 'ok', 'connected'),
     item('claude', 'claude CLI', 'unknown', why),
@@ -59,7 +60,7 @@ function buildChecklist(alias, result) {
     facts.claude
       ? item('claude', 'claude CLI', 'ok', facts.claudeVersion ? `version ${facts.claudeVersion}` : 'present, version unreadable')
       : item('claude', 'claude CLI', 'missing',
-        'not found on the PATH of an ssh command. Install it on the host, or make it visible to non-interactive shells.',
+        'not found on the PATH of an ssh command. Install it on the host, or make it visible to non-interactive shells.' + INSPECT_FIRST_HINT,
         INSTALL_CLAUDE_COMMAND),
     facts.tmux
       ? item('tmux', 'tmux', 'ok', 'installed', null, 'host', true)

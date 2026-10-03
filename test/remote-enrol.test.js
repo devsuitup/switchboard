@@ -39,6 +39,7 @@ test('a host that connected but gave no facts says so and does not claim anythin
   assert.equal(items.ssh.status, 'ok');
   for (const id of ['claude', 'tmux', 'claude-dir', 'auth']) assert.equal(items[id].status, 'unknown', id);
   assert.match(items.claude.detail, /exit 127/);
+  assert.match(items.claude.detail, /POSIX login shell/);
   assert.match(items.claude.detail, /Linux/);
 });
 
@@ -49,6 +50,7 @@ test('a missing claude hands the install command, and auth waits on it', () => {
   assert.equal(items.claude.status, 'missing');
   assert.equal(items.claude.where, 'host');
   assert.equal(items.claude.command, 'curl -fsSL https://claude.ai/install.sh | bash');
+  assert.match(items.claude.detail, /Inspect the script first/);
   assert.equal(items.auth.status, 'unknown');
   assert.equal(items.auth.command, null);
 });

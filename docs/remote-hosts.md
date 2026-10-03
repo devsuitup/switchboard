@@ -88,7 +88,7 @@ a **Copy** button and where to run it:
 | `~/.claude` | whether the directory exists |
 | account logged in | the exit status of `claude auth status` (0 logged in, 1 not) |
 
-The check only reads. It installs nothing, logs nothing in and fixes nothing: the
+The check does not install, log in or write anything itself: the
 commands it hands you are for you to run on the host (`ssh -t <alias>`).
 Switchboard never copies or reads credentials. The login check does not open the
 credentials file or test that it exists: it asks the CLI, throws away what the
@@ -97,9 +97,14 @@ state cannot be told (an older CLI without `claude auth status`, no `~/.claude`
 yet, `claude` missing, an unusual exit status) the line says *unknown — run
 `claude` on the host once to log in*, never "not logged in".
 
+Not verified: whether `claude auth status` itself refreshes or rewrites an
+expired token, or makes network calls, when the CLI runs it on the host. The
+check neither asks for nor sees any of that; it only receives the exit status.
+
 Limits: the host must be saved first (the button checks the hosts in the saved
-settings); a Linux host with a POSIX shell is required, so a Windows host is
-reported as not checked; only `tmux` is looked for. If the CLI is logged in only
+settings); a Linux host whose login shell is POSIX is required (the command is
+not wrapped in `sh -c`), so a Windows host, or a host whose login shell is fish
+or csh, is reported as not checked; only `tmux` is looked for. If the CLI is logged in only
 through an environment variable set by an interactive profile, the check, which
 runs in a non-interactive shell, reads "not logged in".
 
