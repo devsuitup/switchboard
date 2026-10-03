@@ -942,9 +942,7 @@ state was the cause.
   sessionExited, waited_ms, lastStatus, waitingSeen }`. `lastStatus` is the
   status at the last sample; `waitingSeen` is true when `waiting` was sampled
   within the last settle window before the end.
-- **Single triggers have the same exposure and it is not addressed here.**
-  They keep their own `wait` field (`idle` by the level probe, or `none`) and
-  no descriptor wait; they can still be typed into a busy composer.
+- **Single triggers: see "Readiness before a single trigger" below.**
 - **Busy-fall authority (#360).** `waitForBusyFall` receives the Enter's
   timestamp. A descriptor `idle` with `statusUpdatedAt >= enterAt`, held for the
   settle window, ends the wait even when `_cliBusy` is stuck true. An idle
@@ -979,6 +977,53 @@ within `windowMs` (the busy-fall settle window, as in `waitForCliIdleAfter`).
   `chain timeout`.
 
 Tests: `test/trigger-blocked-session.test.js`.
+
+### Readiness before a single trigger (issue #379)
+
+The two `wait` values keep their documented meaning; only the dialog is new
+for `none`.
+
+- **`wait: "idle"`**: the same `waitForCliIdleAfter` as a chain step (afterMs
+  `-Infinity`, the trigger's own deadline `timeout_ms`), after `waitForIdle`,
+  `waitForComposerFree` and the liveness re-check, right before
+  `submitWithVerify`. No parallel mechanism: the not-ready results map to the
+  chain reasons (`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`)
+  plus `REASON_IDLE_UNSETTLED` when the last read was `idle` but it never held
+  long enough to settle (a fresh idle at the deadline, or one that kept
+  restarting), never "never reported idle" for an idle descriptor. `error` is
+  `not sent`, `submitted` `no`. A session whose descriptor is held `busy` by
+  background agents (#360, a CLI limit) fails at the deadline; `none` is the
+  value for it.
+- **Settle.** `waitForCliIdleAfter(…, trustIdleStamp)` is off by default, so
+  chains behave exactly as before: a stale idle read after a step whose Enter
+  drew no reaction must still pay the settle (the #407 family). The single path
+  passes `true`: an `idle` first read counts from its `statusUpdatedAt`, so one
+  older than the settle window is ready on that read (no flat +300 ms on every
+  trigger; a later new stamp still counts from when it was seen). The single path caps the settle at the time left to the
+  deadline, so a `timeout_ms` under the settle on an idle session writes.
+  Poll granularity is 100 ms, so a fresh idle with a very short deadline can
+  still end `REASON_IDLE_UNSETTLED`.
+- **`wait: "none"`** writes now, the CLI queues a prompt written while busy.
+  `waitForNoDialog(sessionId, ctx, deadline)` holds only while the descriptor
+  reads `waiting` (a descriptor lost after it read `waiting` keeps the hold),
+  with no settle once it stops, and fails `not sent` + `REASON_DIALOG_OPEN` at
+  the deadline. `busy`, `idle` or no descriptor write at once. This closes the
+  hole `waitForIdle` leaves: it samples the descriptor only while `_cliBusy` is
+  true, so a dialog shown while `_cliBusy` reads false was written into.
+- **Deadline.** Both paths refuse to write once `Date.now() >= commandDeadline`
+  (`REASON_DEADLINE_BEFORE_WRITE`), descriptor or not, as chains do.
+
+Typed input (`sendInput`, IPC `terminal-input`) is deliberately NOT held back.
+The channel is fire-and-forget (`ipcMain.on`, no reply to carry an error), is
+fed only by the renderer, and carries keystrokes, pastes, drops and the
+context-menu paste on the same call with no marker telling a person from a
+driver. A driver acting through the renderer (devtools, CDP) is the same call.
+Holding it on `waiting` would also block the keystrokes that answer the
+dialog. The only programmatic path that can be told apart is the trigger
+watcher, which is held above. `handleTerminalInput` has no descriptor access
+either (the descriptor is read through the trigger context).
+
+Tests: `test/trigger-single-readiness.test.js`.
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
