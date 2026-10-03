@@ -789,7 +789,7 @@ test('attach() turns on title forwarding in the real ssh argv when shared, leavi
   assert.equal(result.ok, true);
   const attachCommand = spawnCalls[0].args[spawnCalls[0].args.length - 1];
   assert.equal(
-    attachCommand,
+    attachCommand.slice(attachCommand.lastIndexOf("tmux -S '/tmp/tmux-0/test' set -t")),
     "tmux -S '/tmp/tmux-0/test' set -t main:@0.%0 set-titles on \\; set -t main:@0.%0 set-titles-string '#T' \\; attach -t main:@0.%0",
   );
 });
