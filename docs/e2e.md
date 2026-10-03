@@ -57,8 +57,10 @@ it unconditional, so the journey checks what the panel says instead (see
   something jsdom cannot see.
 - **Isolated.** The `launch` fixture in `e2e/fixtures.js` gives each test its
   own temporary `HOME` (and `USERPROFILE`), its own `SWITCHBOARD_DATA_DIR` and
-  `SWITCHBOARD_TRIGGERS_DIR`, a git identity, and no inherited `CLAUDE*`
-  variable. Build the fixture projects with `makeRepo` / `makePlainDir` before
+  `SWITCHBOARD_TRIGGERS_DIR`, and a git identity. It drops every inherited
+  `CLAUDE*` and `GIT_*` variable (`GIT_DIR`, `GIT_WORK_TREE` or
+  `GIT_INDEX_FILE` would point git at another repository), plus `HISTFILE`
+  and `ELECTRON_RUN_AS_NODE`. Build the fixture projects with `makeRepo` / `makePlainDir` before
   calling `launch()`, because the app reads them at startup. See
   [Live testing](live-testing.md) for why each of these is needed.
 - **Plain terminals only.** Open a session with `openPlainTerminal`, the
@@ -70,8 +72,19 @@ it unconditional, so the journey checks what the panel says instead (see
 - **No `waitForTimeout`.** Wait on a locator assertion (`toBeVisible`,
   `toHaveCount`) or on `expect.poll`. A journey that needs a sleep is written
   wrong.
-- **Bounded teardown.** The fixture closes the app, and kills the whole process
-  tree if it does not exit within 10 s. Then it deletes the temporary `HOME`.
+- **Bounded teardown.** The fixture asks the app to close and waits up to
+  10 s for it to exit. If it has not exited, the fixture kills it:
+  - On Linux and macOS, Playwright starts Electron as the leader of a new
+    process group (`detached` on every platform but Windows). The fixture sends
+    `SIGKILL` to that group. This reaches every process still in the group.
+    It does not reach a process that has moved to another group or session.
+    If the group signal fails, the fixture sends `SIGKILL` to the main process
+    only.
+  - On Windows, Playwright starts Electron through `cmd.exe`. The fixture runs
+    `taskkill /T /F` on that pid, which kills the process and its descendants.
+
+  Then it deletes the temporary `HOME`. If the app exits within the 10 s, no
+  kill is sent.
 
 ## Proving a journey can fail
 

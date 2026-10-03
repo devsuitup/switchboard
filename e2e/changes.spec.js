@@ -79,6 +79,7 @@ test('an edit saved in the panel editor reaches disk, and the file stays changed
   const host = page.locator('#changes-diff-host');
   const editors = host.locator('.cm-editor');
   await expect(editors.first()).toBeVisible();
+  expect(await rowCounts(row)).toEqual({ added: 1, deleted: 0 });
 
   const hostBox = await box(host);
   for (const editor of await editors.all()) {
@@ -95,5 +96,5 @@ test('an edit saved in the panel editor reaches disk, and the file stays changed
 
   await expect.poll(() => fs.readFileSync(target, 'utf8')).toContain('edited-in-panel');
   await expect(save).toBeDisabled();
-  await expect(row).toBeVisible();
+  await expect.poll(() => rowCounts(row)).toEqual({ added: 2, deleted: 0 });
 });

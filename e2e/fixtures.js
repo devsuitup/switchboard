@@ -17,10 +17,12 @@ const GIT_IDENTITY = {
   GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
 };
 
+const DROPPED_ENV = /^(CLAUDE|GIT_)|^(ELECTRON_RUN_AS_NODE|HISTFILE)$/;
+
 function isolatedEnv(home) {
   const data = path.join(home, '.switchboard-e2e');
   const inherited = Object.fromEntries(Object.entries(process.env)
-    .filter(([k]) => !k.startsWith('CLAUDE') && k !== 'ELECTRON_RUN_AS_NODE'));
+    .filter(([k]) => !DROPPED_ENV.test(k)));
   return {
     ...inherited,
     HOME: home,
@@ -87,12 +89,24 @@ function waitForExit(proc, ms) {
   });
 }
 
+function killTree(proc) {
+  if (!Number.isInteger(proc.pid) || proc.pid <= 0) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(-proc.pid, 'SIGKILL');
+  } catch {
+    proc.kill('SIGKILL');
+  }
+}
+
 async function closeApp(app) {
   const proc = app.process();
   await bounded(app.close(), CLOSE_TIMEOUT_MS);
   if (await waitForExit(proc, CLOSE_TIMEOUT_MS)) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
-  else proc.kill('SIGKILL');
+  killTree(proc);
   await waitForExit(proc, CLOSE_TIMEOUT_MS);
 }
 
