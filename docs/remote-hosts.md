@@ -230,6 +230,15 @@ works, read-only, by running git over ssh in the session's directory.
 
 ## Send a prompt
 
+[Remote triggers](automation.md#remote-trigger-targets) can use the same socket
+adapter when the global `remoteTriggers` setting is enabled (default off, no
+Settings control yet). They share the Send dialog's 30-second dedupe and the
+per-host-session bucket of 30 prompts, refilling one every two seconds. Only
+single commands to unattached sessions use the socket; attached terminals keep
+their existing trigger behavior. Results say `assumed` on success and
+`send unconfirmed` when a write may have happened. Remote idle waits read two
+completed pulls passively; they never request a refresh.
+
 A live session that is not attached in a terminal has a **Send a prompt…**
 button next to Stop. It opens a small dialog; Send (or Ctrl+Enter) writes the
 text to the running session as a new prompt. The dialog says *Sent*, never

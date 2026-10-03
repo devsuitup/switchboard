@@ -439,6 +439,14 @@ function createRemoteIndexer(ctx) {
     return null;
   }
 
+  function findSessionAliases(sessionId, isEnabled) {
+    const aliases = [];
+    for (const [alias, list] of remoteSessions) {
+      if (isEnabled(alias) && list.some(s => s && s.sessionId === sessionId)) aliases.push(alias);
+    }
+    return aliases;
+  }
+
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   function dropRemoteSession(alias, sessionId) {
     const list = remoteSessions.get(alias);
@@ -457,6 +465,7 @@ function createRemoteIndexer(ctx) {
     getPlaceholderSessions,
     getAllPlaceholderSessions,
     findSessionAlias,
+    findSessionAliases,
     dropRemoteSession,
     getRemoteHostState,
   };

@@ -488,7 +488,7 @@ const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCache
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./remote-hosts');
 const { handleEnrolRequest } = require('./remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
@@ -3215,7 +3215,19 @@ if (!gotSingleInstanceLock) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR }));
+      require('./trigger-watcher').start(createTriggerContext({
+        activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
+        get remote() {
+          const settings = getSetting('global') || {};
+          if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) return {
+            indexer: remoteIndexer,
+            adapter: remoteSendAdapter,
+            isEnabled: alias => enabledHosts((getSetting('global') || {}).remoteHosts).some(host => host.alias === alias),
+            maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
+          };
+          return undefined;
+        },
+      }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }

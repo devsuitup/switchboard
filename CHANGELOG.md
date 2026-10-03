@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Single triggers can send prompts to unattached remote sessions when the global `remoteTriggers` setting is enabled; it defaults to off and has no Settings control yet. (#437)
 - A session's **Touched** tab, next to Changes in the terminal header, lists the files its file tools (Edit, Write, MultiEdit, NotebookEdit) touched, its subagents' included, with what is on disk now (present, gone, unreadable) and the tools and agents behind each. It works outside any git repository. It is not the complete set of files the session changed: files changed through Bash commands or scripts are not listed, and the tab says so. Local sessions only. (#309)
 - With Debug mode on, the activity trace now records how hard each terminal is being drawn: once a second per session, how many writes reached it, how large they were and how often its glyph atlas was rebuilt, to tell a legitimately busy terminal from a runaway one. (#175)
 - On a remote host with `tmux`, the project's `+` now starts a new Claude session there: pick or type a directory on the host, choose a permission mode, and Switchboard starts it in a tmux session and attaches to it. The directory must already exist on the host, `claude` must be on the PATH of an ssh command, and signing in is done on the host. (#218, #222)

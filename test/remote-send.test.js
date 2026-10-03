@@ -47,6 +47,63 @@ function makeAdapter(runRemoteCommand, now = () => 1_000_000) {
   return createRemoteSendAdapter({ runRemoteCommand, now, log: silentLog });
 }
 
+test('U16: adapter failure codes and ambiguity flags preserve the success shape', async () => {
+  const cases = [
+    ['invalid', {}, '', { code: 0 }],
+    ['invalid', { messagingSocketPath: null }, 'hello', { code: 0 }],
+    ['invalid', { messagingSocketPath: '/tmp/../bad.sock' }, 'hello', { code: 0 }],
+    ['invalid', { pid: null }, 'hello', { code: 0 }],
+    ['invalid', { sessionId: '' }, 'hello', { code: 0 }],
+    ['invalid', {}, 'x'.repeat(MAX_LINE_BYTES), { code: 0 }],
+    ['windows', { messagingSocketPath: '\\\\.\\pipe\\session' }, 'hello', { code: 0 }],
+    ['not-claude', {}, 'hello', { code: 7 }],
+    ['no-socket', {}, 'hello', { code: 8 }],
+    ['nc-missing', {}, 'hello', { code: 127 }],
+    ['timeout', {}, 'hello', { timedOut: true }],
+    ['exit', {}, 'hello', { code: 1, stderr: 'broken' }],
+    ['runner', {}, 'hello', null],
+    ['runner', {}, 'hello', () => { throw new Error('broken'); }],
+  ];
+  for (const [code, overrides, content, outcome] of cases) {
+    const r = await makeAdapter(makeRunner(outcome)).send('vps', descriptor(overrides), content);
+    assert.equal(r.code, code); assert.equal(r.maybeWritten, ['timeout', 'exit'].includes(code) ? true : undefined);
+  }
+  const a = makeAdapter(makeRunner());
+  assert.deepEqual(await a.send('vps', descriptor(), 'hello'), { ok: true });
+  assert.equal((await a.send('vps', descriptor(), 'hello')).code, 'dedupe');
+});
+
+test('U17: shared per-host-session bucket caps at 30 and refills one token in 2 s', async () => {
+  let clock = 1000000; const runner = makeRunner(); const a = makeAdapter(runner, () => clock);
+  for (let i = 0; i < 30; i++) assert.deepEqual(await a.send('vps', descriptor(), 'text ' + i), { ok: true });
+  assert.equal((await a.send('vps', descriptor(), 'overflow')).code, 'rate'); assert.equal(runner.calls.length, 30);
+  clock += 1000;
+  assert.equal((await a.send('vps', descriptor(), 'too soon')).code, 'rate'); assert.equal(runner.calls.length, 30);
+  clock += 1000;
+  assert.deepEqual(await a.send('vps', descriptor(), 'refilled'), { ok: true });
+  assert.equal((await a.send('vps', descriptor(), 'empty again')).code, 'rate');
+  assert.deepEqual(await a.send('other', descriptor(), 'new host'), { ok: true });
+  assert.deepEqual(await a.send('vps', descriptor({ sessionId: 'other' }), 'new session'), { ok: true });
+  assert.equal(runner.calls.length, 33);
+});
+
+test('U17: definite failures refund tokens, ambiguous failures retain tokens, timeout retains dedupe', async () => {
+  for (const result of [{ code: 7 }, { code: 8 }, { code: 127 }, null, () => { throw new Error('broken'); }]) {
+    const runner = makeRunner(n => n === 1 ? (typeof result === 'function' ? result() : result) : { code: 0 });
+    const a = makeAdapter(runner);
+    await a.send('vps', descriptor(), 'failed');
+    for (let i = 0; i < 30; i++) assert.equal((await a.send('vps', descriptor(), 'pass ' + i)).ok, true);
+    assert.equal(runner.calls.length, 31);
+  }
+  for (const result of [{ timedOut: true }, { code: 1 }]) {
+    const runner = makeRunner(n => n === 1 ? result : { code: 0 }); const a = makeAdapter(runner);
+    await a.send('vps', descriptor(), 'uncertain');
+    if (result.timedOut) assert.equal((await a.send('vps', descriptor(), 'uncertain')).code, 'dedupe');
+    for (let i = 0; i < 29; i++) assert.equal((await a.send('vps', descriptor(), 'pass ' + i)).ok, true);
+    assert.equal((await a.send('vps', descriptor(), 'overflow')).code, 'rate'); assert.equal(runner.calls.length, 30);
+  }
+});
+
 // --- buildPromptLine -------------------------------------------------------
 
 test('buildPromptLine: one NDJSON user message carrying the session id, ending in exactly one newline', () => {

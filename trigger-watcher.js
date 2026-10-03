@@ -102,6 +102,105 @@ function reasonNoOwnEntry(ms) {
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
+const REMOTE_SLASH_COMMANDS = ['/compact', '/clear'];
+const REASON_REMOTE_NO_FRESH_PULL = 'fewer than two pulls of the session descriptors of this host completed after the wait began, before the deadline; nothing was written';
+const REASON_REMOTE_SHELL = 'the session reports a shell command running (shell); nothing was written';
+const REASON_REMOTE_UNKNOWN_STATUS = 'the descriptor of this host carries no readable status; whether the session is idle is unknown; nothing was written';
+const REASON_REMOTE_ATTACHED = 'the session was attached in a terminal while waiting; nothing was written';
+const REASON_REMOTE_SLASH = 'a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written';
+
+function remoteLookupFailure(snapshot, sessionId, duringWait) {
+  if (!snapshot) return { ok: false, submitted: SUBMITTED_NO, error: duringWait ? 'session exited during wait' : 'session not found', sessionId };
+  if (snapshot.aliases) return { ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: `the session id is listed by more than one host (${snapshot.aliases.join(', ')}); nothing was written`, sessionId };
+  return null;
+}
+
+function normalizeRemoteCwd(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const cwd = path.posix.normalize(value);
+  return cwd.length > 1 && cwd.endsWith('/') ? cwd.slice(0, -1) : cwd;
+}
+
+function remoteCwdFailure(snapshot, expectedCwd, sessionId) {
+  if (expectedCwd === undefined) return null;
+  const observedCwd = normalizeRemoteCwd(snapshot.descriptor.cwd);
+  if (observedCwd === null) return {
+    ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT,
+    reason: "this session's cwd could not be determined; refusing rather than risk targeting the wrong session",
+    targetCwdUnknown: true, expectedCwd, observedCwd: null, sessionId,
+  };
+  if (normalizeRemoteCwd(expectedCwd) !== observedCwd) return {
+    ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT,
+    reason: "expectedCwd does not match this session's actual cwd",
+    targetMismatch: true, expectedCwd, observedCwd: snapshot.descriptor.cwd, sessionId,
+  };
+  return null;
+}
+
+async function processRemoteTrigger(ctx, initial, { sessionId, command, chain, wait, expectedCwd, timeoutMs }) {
+  const started = Date.now();
+  const refuse = reason => ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId });
+  if (chain !== undefined) return refuse('a chain cannot be sent to a remote session through the messaging socket; nothing was written');
+  const trimmed = command.trim();
+  let text = command;
+  if (trimmed.startsWith('/')) {
+    text = REMOTE_SLASH_COMMANDS.find(value => value === trimmed);
+    if (!text) return refuse(REASON_REMOTE_SLASH);
+  }
+  let snapshot = initial;
+  const cwdFailure = remoteCwdFailure(snapshot, expectedCwd, sessionId);
+  if (cwdFailure) return cwdFailure;
+  let firstPull = null;
+  let lastStatus = null;
+  if (wait === 'idle') {
+    const deadline = started + (timeoutMs !== undefined ? timeoutMs : getIdleTimeout());
+    const waiting = await pollLoop((resolve, scheduleNext) => {
+      if (ctx.getPtyForSession(sessionId)) return resolve(refuse(REASON_REMOTE_ATTACHED));
+      snapshot = ctx.remote?.lookup(sessionId);
+      const lookupFailure = remoteLookupFailure(snapshot, sessionId, true);
+      if (lookupFailure) return resolve(lookupFailure);
+      if (snapshot.alias !== initial.alias) return resolve(refuse('the session moved to another host while waiting; nothing was written'));
+      if (Date.now() >= deadline) {
+        const reason = lastStatus === 'waiting' ? REASON_DIALOG_OPEN : lastStatus === 'busy' ? REASON_CLI_BUSY : lastStatus === 'shell' ? REASON_REMOTE_SHELL : REASON_REMOTE_NO_FRESH_PULL;
+        return resolve(refuse(reason));
+      }
+      if (snapshot.at != null && snapshot.at >= started) {
+        if (firstPull === null) firstPull = snapshot.at;
+        else if (snapshot.at > firstPull) {
+          lastStatus = snapshot.descriptor.status;
+          if (lastStatus === 'idle') return resolve(null);
+          if (!['busy', 'waiting', 'shell'].includes(lastStatus)) return resolve(refuse(REASON_REMOTE_UNKNOWN_STATUS));
+        }
+      }
+      scheduleNext();
+    });
+    if (waiting) return { ...waiting, waited_ms: Date.now() - started };
+  }
+  if (ctx.getPtyForSession(sessionId)) return refuse(REASON_REMOTE_ATTACHED);
+  const latest = ctx.remote?.lookup(sessionId);
+  const lookupFailure = remoteLookupFailure(latest, sessionId, true);
+  if (lookupFailure) return lookupFailure;
+  if (latest.alias !== snapshot.alias) return refuse('the session moved to another host while waiting; nothing was written');
+  if (wait === 'none') snapshot = latest;
+  const finalCwdFailure = remoteCwdFailure(snapshot, expectedCwd, sessionId);
+  if (finalCwdFailure) return finalCwdFailure;
+  if (wait === 'none' && (snapshot.at == null || Date.now() - snapshot.at > snapshot.maxAgeMs)) {
+    return refuse(`the descriptors of this host are older than twice its refresh interval (last refresh error: ${snapshot.error || 'none'}); nothing was written`);
+  }
+  const descriptor = {
+    status: snapshot.descriptor.status ?? null,
+    status_updated_at: snapshot.descriptor.statusUpdatedAt ?? null,
+    pulled_at: snapshot.at,
+  };
+  const sentAtMs = Date.now();
+  const result = await ctx.remote.send(snapshot.alias, snapshot.descriptor, text);
+  if (!result.ok) return {
+    ...refuse(result.error),
+    error: result.maybeWritten ? 'send unconfirmed' : result.code === 'not-claude' ? 'target process not running' : ERROR_NOT_SENT,
+    ...(result.maybeWritten ? { written: 'unknown' } : {}),
+  };
+  return { ok: true, submitted: SUBMITTED_ASSUMED, sessionId, command: text, sent_at: new Date(sentAtMs).toISOString(), waited_ms: sentAtMs - started, submit_retries: 0, steps_total: 1, channel: 'socket', host: snapshot.alias, descriptor };
+}
 
 function weakestSubmitted(a, b) {
   return SUBMITTED_RANK[a] <= SUBMITTED_RANK[b] ? a : b;
@@ -1134,6 +1233,15 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   // ── 4. Look up session ────────────────────────────────────────────────────
   const sessionEntry = ctx.getPtyForSession(sessionId);
   if (!sessionEntry) {
+    const remote = ctx.remote;
+    if (remote) {
+      const snapshot = remote.lookup(sessionId);
+      const failure = remoteLookupFailure(snapshot, sessionId, false);
+      if (snapshot) {
+        await writeResult(failure || await processRemoteTrigger(ctx, snapshot, { sessionId, command, chain, wait, expectedCwd, timeoutMs: resolvedTimeoutMs }));
+        return;
+      }
+    }
     ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
     await writeResult({ ok: false, error: 'session not found', sessionId });
     return;
@@ -1826,4 +1934,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand };
+module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };

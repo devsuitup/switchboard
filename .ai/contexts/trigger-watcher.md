@@ -54,9 +54,9 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
   local handle: `write` calls `ptyProcess.write`, `isAlive` is the same
   signal-0 probe (`process.kill(pid, 0)`, `EPERM` counts as alive) that used
   to live inline in `trigger-watcher.js` as `defaultIsPtyAlive`. `getPtyForSession`
-  uses it whenever `session.host == null`; a non-null host would instead take
-  `session.handle` as given — nothing currently sets that, since no remote
-  session type exists yet.
+  uses it whenever `session.host == null`; a non-null host takes
+  `session.handle` from the tmux-attach entry. Unattached remote targets use
+  the separate socket branch described below and do not construct a handle.
 - `trigger-watcher.js` deduces the same local handle itself
   (`resolveHandle(entry)`, wrapping `entry.ptyProcess`) whenever a ctx doesn't
   supply `entry.handle` — this keeps every ctx implementation that predates
@@ -69,6 +69,79 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
 Was a seam only: as of issue #221, `main.js`'s tmux-attach branch is the
 first production caller to set a non-null `host` and a real `session.handle`
 — see `.ai/contexts/session-cache.md`, "Remote hosts — tmux attach".
+
+### Remote socket targets (issue #437)
+
+Live local and tmux-attached entries retain precedence over `ctx.remote`, so
+terminal input still respects the composer. An exited pane returns no entry
+and may resolve to a remote socket. The optional context dependency is a
+getter: the global `remoteTriggers` setting defaults to false in
+`SETTING_DEFAULTS`, and is read at trigger time rather than startup. There is
+no UI. Remote reach is opt-in because a writer with access to the triggers
+directory may otherwise gain access to unattached sessions; the sandbox bind
+policy is owned separately.
+
+`findSessionAliases` filters the cached descriptors using the enabled-host
+predicate on every lookup. Disabled hosts can remain in the cache, so a pull's
+listing alone is insufficient authorization. No aliases means not found;
+multiple aliases means a refusal naming them all. Neither alias nor descriptor,
+pid or socket path comes from a trigger field. The shared adapter validates
+the main-side path, refuses Windows pipes without reading key files, probes
+the pid and puts the session id in the NDJSON line. Prompt text is stdin only;
+these modules add no process-spawn site.
+
+Remote targets support a single command, `none`/`idle`, `timeout_ms` and
+`expectedCwd`. The cwd guard uses `path.posix.normalize`, is case-sensitive
+on all platforms, strips a trailing slash except at root, and refuses a missing
+cwd. Chains are refused because a complete turn can occur between pulls and
+no inter-step readiness proof is available. The session lock already acquired
+by the watcher is held for the entire idle wait and adapter call.
+
+Idle polling uses `pollLoop` and its unref'd timers. It never refreshes a host.
+The indexer stores its descriptor list before recording completed-pull `at`;
+therefore `at >= start` alone can describe a pre-start fetch. Remember the first
+post-start `at`, and accept status only from a later, strictly larger one.
+The second pull started after the first completed. It proves a fetch after
+the wait began, with a read up to a refresh cycle plus latency and one poll
+old; it does not prove idle now. It costs about two cycles, up to ten minutes
+at the default interval before latency; the 600000 ms cap can still expire.
+No settle window compares the host clock with local time. A change of resolved
+host during the wait is refused; pulls from different hosts cannot establish
+freshness for one target.
+
+Fresh idle permits the send; busy, waiting and shell keep waiting with distinct
+deadline reasons. Unknown or absent fresh status refuses immediately. Fewer
+than two post-start pulls gives `REASON_REMOTE_NO_FRESH_PULL`; shell uses
+`REASON_REMOTE_SHELL`. Missing descriptors or a disabled host end the wait as
+`session exited during wait`. Attachment is checked on each poll and immediately
+before writing, so a user who attaches during the wait prevents a socket send.
+`none` bounds descriptor age to twice `normalizeRefreshMs(remoteRefreshMs)`;
+null `at` or an older pull refuses with the last backoff error. A newly started
+id is not found until a pull lists it.
+
+The queue channel does not type into a composer: no politeness wait, dialog
+hold, Enter retry, busy edge, transcript fallback or post-send confirmation.
+Success records `channel: socket`, host and the pre-write descriptor's status,
+host `statusUpdatedAt` and local pull time, with absent status fields explicitly
+null. Submission is assumed only, with zero retries and no confirmed field.
+The adapter's definite failures map to not sent, a dead target maps to target
+process not running, and `maybeWritten` maps to send unconfirmed with written
+unknown. Callers must not treat an ambiguous write as a safe retry.
+
+One adapter is shared by Send and triggers. It reserves the existing dedupe key
+and a token from an alias/session bucket of 30 at 0.5 tokens/s before spawning.
+Definite failures refund tokens; timeouts and unknown exits retain them. A
+timeout retains dedupe; other non-zero exits preserve the earlier release
+behavior. Slash commands use a case-sensitive fixed allow-list after trimming:
+only `/compact` and `/clear`, sent from the constants, without arguments.
+Their effect over the socket is UNVERIFIED, as is queuing during a permission
+dialog. L1-L7 require a real host and isolated running instance.
+
+Tests exercise the real file watcher with a fake descriptor source and the
+real context/indexer for host enablement. Polling tests keep a ref'd interval
+in `finally`-protected test scope for Node 20/22; production timers stay unref'd.
+U4 and U20 are guard-only tests. Mutation artifacts and commands are recorded
+in the local PR body.
 
 ## The submission contract
 

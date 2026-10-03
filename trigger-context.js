@@ -32,7 +32,8 @@ function createLocalSessionHandle(ptyProcess) {
  * @param {string} [deps.projectsDir]  root of the CLI's transcript folders (~/.claude/projects)
  * @returns {object} ctx
  */
-function createTriggerContext({ activeSessions, log, isPtyAlive, getCliStatus, projectsDir }) {
+function createTriggerContext(deps) {
+  const { activeSessions, log, isPtyAlive, getCliStatus, projectsDir } = deps;
   const ctx = {
     log,
     getPtyForSession(sessionId) {
@@ -56,6 +57,27 @@ function createTriggerContext({ activeSessions, log, isPtyAlive, getCliStatus, p
     },
   };
   if (isPtyAlive) ctx.isPtyAlive = isPtyAlive;
+  if ('remote' in deps) Object.defineProperty(ctx, 'remote', {
+    get() {
+      const remote = deps.remote;
+      if (!remote) return undefined;
+      return {
+        lookup(sessionId) {
+          const current = deps.remote;
+          if (!current) return null;
+          const aliases = current.indexer.findSessionAliases(sessionId, current.isEnabled);
+          if (!aliases.length) return null;
+          if (aliases.length > 1) return { aliases };
+          const alias = aliases[0];
+          const { sessions, at, error } = current.indexer.getRemoteSessions(alias);
+          const descriptor = sessions.find(s => s && s.sessionId === sessionId);
+          if (!descriptor) return null;
+          return { alias, descriptor, at, error, maxAgeMs: current.maxAgeMs };
+        },
+        send(alias, descriptor, text) { return remote.adapter.send(alias, descriptor, text); },
+      };
+    },
+  });
   // see .ai/contexts/trigger-watcher.md, "Transcript fallback while the descriptor stays busy"
   if (projectsDir) {
     const reader = createTranscriptTurnReader();

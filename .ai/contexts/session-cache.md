@@ -856,6 +856,17 @@ also returns `blocked` (why nothing could be read, or null) and the normalised `
 
 ## Remote hosts — sending a prompt (issue #219)
 
+The trigger entry point also uses the one `remoteSendAdapter` instance when
+`remoteTriggers` is enabled. Its global default is in `SETTING_DEFAULTS`; the
+context getter checks it without requiring a restart. Send and triggers share
+the 30-second dedupe and a bucket per alias/session id: 30 tokens, refill 0.5/s,
+reserved before running the command, refunded on definite failures, retained
+on ambiguous writes. Failure codes distinguish pre-write refusals from
+`timeout`/`exit` with `maybeWritten: true`; success remains exactly `{ ok: true }`.
+`findSessionAliases(id, isEnabled)` returns all enabled matching hosts without
+changing the older singular lookup. See `trigger-watcher.md`, "Remote socket
+targets", for trigger guards and the two-pull rule.
+
 `remote-send.js` writes one prompt to a live, unattached remote session through
 the CLI's own messaging socket. Send only: nothing is read back, the state comes
 from the descriptor the refresh cycle already pulls.

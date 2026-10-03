@@ -13,6 +13,10 @@ const espree = require('espree');
 const eslintScope = require('eslint-scope');
 
 const ROOT = path.join(__dirname, '..');
+
+test('U20 GUARD: both trigger modules are included in the spawn-site inventory', () => {
+  for (const file of ['trigger-watcher.js', 'trigger-context.js']) assert.ok(mainProcessFiles().includes(file));
+});
 const RESOLVER_MODULE = './remote-ssh-binary';
 const RESOLVER_EXPORTS = new Set(['resolveSshPath', 'resolveScpPath']);
 const CP_FUNCS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']);

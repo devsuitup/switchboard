@@ -396,6 +396,72 @@ The comparison is by directory: two sessions in the same directory are not told
 apart. 8.3 short names, `subst` drives, junctions and symbolic links are not
 resolved; two spellings of one directory count as a mismatch.
 
+### Remote trigger targets
+
+Set the global `remoteTriggers` setting to `true` to allow a single trigger to
+send a prompt to an unattached remote session. It defaults to `false`, has no
+Settings control yet, and changes take effect without a restart. With it off,
+an unattached remote id gives `session not found`.
+
+Use the same `sessionId`, `command`, `wait` (`none` or `idle`), `timeout_ms`
+and optional `expectedCwd` fields. A live local or tmux-attached terminal takes
+precedence and follows the existing terminal path. An exited pane can fall
+through to the socket. Enabled hosts are checked at trigger time and on every
+poll; an id listed by more than one enabled host is refused with both aliases
+in the reason. Trigger fields such as `host` cannot choose a host. An id
+started since the last pull is not found until the next pull. A remote chain
+is refused, with `steps_total` set to its length. `expectedCwd` compares the
+descriptor's cwd using POSIX normalization, including on Windows: case matters,
+a trailing slash does not, and a missing cwd refuses the write.
+
+`wait: none` needs a completed pull no older than twice the host's refresh
+interval; a missing or older pull refuses the write and the reason includes
+the last refresh error. It does not require a readable status.
+
+`wait: idle` polls the descriptors from the normal refresh cycle; it never
+forces a refresh. Only the second distinct completed pull after the wait began
+can establish readiness: the first may have fetched its descriptors before the
+wait began. `idle` permits the send, `busy`, `waiting` and `shell` keep waiting,
+and an absent or unknown fresh status refuses the send. At the deadline the
+reason distinguishes busy, a dialog, a shell command and fewer than two fresh
+pulls. Losing the descriptor or disabling the host during the wait gives
+`session exited during wait`. Attaching a terminal during the wait aborts it.
+
+This may need about two refresh cycles: about two minutes at the 60-second
+floor or ten minutes at the default 300 seconds, plus pull latency. At the
+default interval, use `timeout_ms: 600000` (the cap); it can still expire before
+two pulls finish. The idle read is at most one cycle plus pull latency and one
+poll old, and does not prove the session is idle at the moment of sending.
+Host status timestamps are never compared with the local clock. A target
+also cannot move to another host during the wait; that change refuses
+the send rather than combining pulls from different hosts. The per-session
+lock remains held throughout the idle wait and the bounded 15-second send;
+another trigger for that id queues behind it.
+
+The socket queues text without typing into the composer, so no composer check,
+dialog hold, Enter retry or transcript confirmation runs on this path. Windows
+hosts are refused with the key-file reason. Only exact `/compact` and `/clear`
+after trimming are allowed slash commands; their constant text is sent. Other
+leading-slash commands, arguments and case variants are refused before any
+wait. **The effect of `/compact` and `/clear` over the socket is UNVERIFIED**;
+they may execute as commands or arrive as plain text. Whether a prompt during
+a permission dialog is queued or lost is also unverified.
+
+Successful socket results add `channel: "socket"`, `host` and
+`descriptor: { status, status_updated_at, pulled_at }`, captured before the
+write; absent status fields are `null`. `pulled_at` is local epoch milliseconds,
+while `status_updated_at` is the host's timestamp. Success is always
+`submitted: "assumed"`, `submit_retries: 0`, with no `submit_confirmed`: the
+channel has no reply and can silently drop a prompt. Compare a later status
+timestamp from the same host to confirm the effect yourself.
+
+The Send dialog and triggers share the adapter's 30-second dedupe and a bucket
+of 30 prompts per host and session, refilling one token every two seconds.
+Identical text repeated within 30 seconds is refused before any send; a timeout
+also holds that dedupe reservation. A definite failure refunds its bucket token;
+an uncertain write keeps it. Other non-zero exits retain the existing dedupe
+release behavior. The server can still silently drop a prompt.
+
 ### Reading a result
 
 Every outcome — success, refusal, timeout, missing session — writes
@@ -444,6 +510,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 | `error` | What it promises | What to do |
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
+| `send unconfirmed` | a socket write timed out or returned an unclassified non-zero exit; the line may have reached the session; `written` is `unknown` and `submitted` is `no` | check the session before retrying; a timeout reserves identical text for 30 seconds |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
 | `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed. For a local session whose descriptor reads `busy`, the chain first waits for the step to show in the session transcript with its turn finished: up to 30 s for the step to show at all (up to the step's deadline for `/compact`, which shows only when compaction ends), then up to the step's deadline for its turn to finish; `reason` says which wait ran out | after a dialog or input of your own, the step may sit unsubmitted in the composer: look before sending again. After a wait under `busy`, the step may still be running or queued in the CLI: look at the session before sending again |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |

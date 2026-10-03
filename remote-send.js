@@ -12,6 +12,8 @@ const {
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_SOCKET_PATH_BYTES = 107;
 const DEDUPE_WINDOW_MS = 30000;
+const RATE_CAPACITY = 30;
+const RATE_REFILL_PER_MS = 0.5 / 1000;
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const NOT_CLAUDE_EXIT_CODE = 7;
 const NO_SOCKET_EXIT_CODE = 8;
@@ -61,6 +63,18 @@ function createRemoteSendAdapter(opts = {}) {
   const now = opts.now || Date.now;
   const log = opts.log || { info() {}, warn() {}, error() {} };
   const recent = new Map();
+  const buckets = new Map();
+
+  function reserveToken(alias, sessionId, at) {
+    const key = `${alias}\u0000${sessionId}`;
+    const bucket = buckets.get(key) || { tokens: RATE_CAPACITY, at };
+    bucket.tokens = Math.min(RATE_CAPACITY, bucket.tokens + Math.max(0, at - bucket.at) * RATE_REFILL_PER_MS);
+    bucket.at = at;
+    buckets.set(key, bucket);
+    if (bucket.tokens < 1) return null;
+    bucket.tokens--;
+    return () => { bucket.tokens = Math.min(RATE_CAPACITY, bucket.tokens + 1); };
+  }
 
   function dedupeKey(alias, sessionId, content) {
     return `${alias}\u0000${sessionId}\u0000${crypto.createHash('sha256').update(content).digest('hex')}`;
@@ -73,27 +87,29 @@ function createRemoteSendAdapter(opts = {}) {
   }
 
   async function send(alias, descriptor, content) {
-    if (typeof content !== 'string' || !content.trim()) return { ok: false, error: 'nothing to send' };
+    if (typeof content !== 'string' || !content.trim()) return { ok: false, code: 'invalid', error: 'nothing to send' };
     const socketPath = descriptor && descriptor.messagingSocketPath;
     if (socketPath == null || socketPath === '') {
-      return { ok: false, error: 'session carries no messaging socket — a prompt cannot be sent to it' };
+      return { ok: false, code: 'invalid', error: 'session carries no messaging socket — a prompt cannot be sent to it' };
     }
     const checked = validateSocketPath(socketPath);
-    if (!checked.ok) return { ok: false, error: checked.error };
-    if (!isValidPid(descriptor.pid)) return { ok: false, error: 'session carries no readable pid — cannot send to it' };
+    if (!checked.ok) return { ok: false, code: typeof socketPath === 'string' && socketPath.startsWith(WINDOWS_PIPE_PREFIX) ? 'windows' : 'invalid', error: checked.error };
+    if (!isValidPid(descriptor.pid)) return { ok: false, code: 'invalid', error: 'session carries no readable pid — cannot send to it' };
     if (typeof descriptor.sessionId !== 'string' || !descriptor.sessionId) {
-      return { ok: false, error: 'session carries no session id — cannot send to it' };
+      return { ok: false, code: 'invalid', error: 'session carries no session id — cannot send to it' };
     }
 
     const line = buildPromptLine(content, descriptor.sessionId);
-    if (Buffer.byteLength(line) > MAX_LINE_BYTES) return { ok: false, error: 'the prompt is over 1 MiB once encoded' };
+    if (Buffer.byteLength(line) > MAX_LINE_BYTES) return { ok: false, code: 'invalid', error: 'the prompt is over 1 MiB once encoded' };
 
     const at = now();
     pruneRecent(at);
     const key = dedupeKey(alias, descriptor.sessionId, content);
     if (recent.has(key)) {
-      return { ok: false, error: 'the same text was sent to this session less than 30 s ago — the session drops it' };
+      return { ok: false, code: 'dedupe', error: 'the same text was sent to this session less than 30 s ago — the session drops it' };
     }
+    const refund = reserveToken(alias, descriptor.sessionId, at);
+    if (!refund) return { ok: false, code: 'rate', error: 'too many prompts sent to this session; it drops them above 30, refilling one every 2 s' };
     recent.set(key, at);
 
     let result;
@@ -104,27 +120,32 @@ function createRemoteSendAdapter(opts = {}) {
       });
     } catch (err) {
       recent.delete(key);
-      return { ok: false, error: `send failed: ${err.message}` };
+      refund();
+      return { ok: false, code: 'runner', error: `send failed: ${err.message}` };
     }
     if (!result) {
       recent.delete(key);
-      return { ok: false, error: 'send failed: no response' };
+      refund();
+      return { ok: false, code: 'runner', error: 'send failed: no response' };
     }
 
-    if (result.timedOut) return { ok: false, error: 'send failed: no confirmation that the line was written — it may have been sent (timed out)' };
+    if (result.timedOut) return { ok: false, code: 'timeout', maybeWritten: true, error: 'send failed: no confirmation that the line was written — it may have been sent (timed out)' };
     if (result.code !== 0) recent.delete(key);
+    if ([NOT_CLAUDE_EXIT_CODE, NO_SOCKET_EXIT_CODE, NC_MISSING_EXIT_CODE].includes(result.code)) {
+      refund();
+    }
     if (result.code === NOT_CLAUDE_EXIT_CODE) {
-      return { ok: false, error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
+      return { ok: false, code: 'not-claude', error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
     }
     if (result.code === NO_SOCKET_EXIT_CODE) {
-      return { ok: false, error: 'the session\'s messaging socket is gone — it has exited or restarted' };
+      return { ok: false, code: 'no-socket', error: 'the session\'s messaging socket is gone — it has exited or restarted' };
     }
     if (result.code === NC_MISSING_EXIT_CODE) {
-      return { ok: false, error: 'nc with -U (unix socket) support was not found on the host — install netcat-openbsd or ncat' };
+      return { ok: false, code: 'nc-missing', error: 'nc with -U (unix socket) support was not found on the host — install netcat-openbsd or ncat' };
     }
     if (result.code !== 0) {
       const reason = (result.stderr || '').trim() || 'no stderr';
-      return { ok: false, error: `send failed (exit ${result.code}): ${reason}` };
+      return { ok: false, code: 'exit', maybeWritten: true, error: `send failed (exit ${result.code}): ${reason}` };
     }
 
     log.info(`[remote-send:${alias}] wrote ${Buffer.byteLength(line)} bytes to pid ${descriptor.pid}`);
@@ -161,6 +182,8 @@ module.exports = {
   validateSocketPath,
   MAX_LINE_BYTES,
   DEDUPE_WINDOW_MS,
+  RATE_CAPACITY,
+  RATE_REFILL_PER_MS,
   NOT_CLAUDE_EXIT_CODE,
   NO_SOCKET_EXIT_CODE,
   NC_MISSING_EXIT_CODE,
