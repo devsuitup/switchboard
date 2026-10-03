@@ -13,6 +13,7 @@ function stampOf(entry) {
 }
 
 const MAX_PROMPTS = 50;
+const COMMAND_ELEMENTS_ONLY = /^(?:\s*<(command-message|command-name|command-args|command-contents)>[\s\S]*?<\/\1>)+\s*$/;
 
 function isLocalCommandOutput(entry) {
   const content = entry.message && entry.message.content;
@@ -72,7 +73,13 @@ function promptMatches(text, command) {
   if (!want) return false;
   const got = text.trim();
   if (got === want) return true;
-  const name = got.match(/^<command-name>([^<]*)<\/command-name>/);
+  if (want.startsWith('!')) {
+    const bash = got.match(/^<bash-input>([\s\S]*)<\/bash-input>$/);
+    const typed = want.slice(1).trim();
+    return !!bash && !!typed && bash[1].trim() === typed;
+  }
+  if (!COMMAND_ELEMENTS_ONLY.test(got)) return false;
+  const name = got.match(/<command-name>([^<]*)<\/command-name>/);
   return !!name && name[1].trim() === want.split(/\s/)[0];
 }
 
@@ -134,6 +141,9 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
       const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs };
       cache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, turn });
       return { ...turn };
+    },
+    forget(filePath) {
+      cache.delete(filePath);
     },
   };
 }

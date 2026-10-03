@@ -192,6 +192,24 @@ test('promptMatches: the step\'s own text, trimmed, or the <command-name> of a s
   assert.equal(promptMatches(undefined, 'first step'), false);
 });
 
+test('promptMatches: a skill or custom command written <command-message> first still matches its <command-name> element', () => {
+  const skill = '<command-message>update-config</command-message>\n<command-name>/update-config</command-name>\n<command-args>x</command-args>';
+  assert.equal(promptMatches(skill, '/update-config x'), true);
+  assert.equal(promptMatches('<command-message>loop</command-message>\n<command-name>/loop</command-name>', '/loop'), true);
+  assert.equal(promptMatches(skill, '/update'), false);
+  assert.equal(promptMatches('<command-message>x</command-message> then <command-name>/loop</command-name>', '/loop'), false);
+  assert.equal(promptMatches('<command-name>/compact</command-name> and more text', '/compact'), false);
+});
+
+test('promptMatches: a !cmd step matches its <bash-input> element, and nothing else', () => {
+  assert.equal(promptMatches('<bash-input>ls -la</bash-input>', '!ls -la'), true);
+  assert.equal(promptMatches('<bash-input> ls -la</bash-input>', '! ls -la'), true);
+  assert.equal(promptMatches('<bash-input>ls</bash-input>', '!rm'), false);
+  assert.equal(promptMatches('<bash-input>ls</bash-input>', 'ls'), false);
+  assert.equal(promptMatches('<bash-input>ls</bash-input> more', '!ls'), false);
+  assert.equal(promptMatches('<bash-input></bash-input>', '!'), false);
+});
+
 test('reader: the tail cache is kept per path, so alternating sessions do not re-read', () => {
   const dir = mkTmp('sw-transcript-cache-');
   const realOpen = fs.openSync;
@@ -453,6 +471,7 @@ function transcriptSession(sessionId, { onEnter }) {
   const append = (entries) => {
     if (fs.existsSync(projectsDir)) fs.appendFileSync(file, jsonl(entries));
   };
+  const sessions = new Map();
   const session = {
     pty: {
       pid: process.pid,
@@ -466,14 +485,15 @@ function transcriptSession(sessionId, { onEnter }) {
     _cliBusy: true,
     composerState: { pending: 0, lastInputAt: 0 },
   };
+  sessions.set(sessionId, session);
   const ctx = createTriggerContext({
-    activeSessions: new Map([[sessionId, session]]),
+    activeSessions: sessions,
     log: { info() {}, warn() {}, error() {}, debug() {} },
     isPtyAlive: () => true,
     getCliStatus: () => ({ ...desc }),
     projectsDir,
   });
-  return { ctx, written, desc, file, session, cleanup: () => fs.rmSync(projectsDir, { recursive: true, force: true }) };
+  return { ctx, written, desc, file, session, sessions, cleanup: () => fs.rmSync(projectsDir, { recursive: true, force: true }) };
 }
 
 async function runChain(chain, session, uuid, timeoutMs) {
@@ -519,6 +539,7 @@ test('chain: a descriptor held busy by background agents, the turn closed and qu
     assert.equal(result.steps[0].ready_source, 'transcript');
     assert.equal(result.steps[1].ready_source, 'transcript');
     assert.equal(result.steps[0].submit_confirmed, true);
+    assert.equal(result.steps[0].confirm_source, 'transcript');
   } finally {
     s.cleanup();
   }
@@ -602,24 +623,231 @@ test('chain: a closed turn followed by sidechain entries still releases step 1',
   }
 });
 
-test('chain: /compact as step 0 with the descriptor held busy -> step 1 is written once the compaction output is quiet', async () => {
+// The CLI writes everything /compact leaves, its <command-name> entry
+// included, only when compaction ends: here 3 s after the Enter, far beyond
+// the verify window (400 ms in this file, 2 s in production).
+const COMPACTION_MS = 3000;
+
+test('chain: /compact as step 0 with the descriptor held busy -> confirmed from the transcript when compaction ends, then step 1', async () => {
   const uuid = 'sess-tx-compact-' + Date.now();
+  let outputAt = null;
   const s = transcriptSession(uuid, {
     onEnter: ({ append, n, command }) => {
       const enterAt = Date.now();
-      if (n === 1) setTimeout(() => append(compactWrites(enterAt, Date.now())), 100);
+      if (n === 1) setTimeout(() => { outputAt = Date.now(); append(compactWrites(enterAt, Date.now())); }, COMPACTION_MS);
       else closedTurnAfter(100)({ append, command });
     },
   });
   try {
-    const result = await runChain([{ command: '/compact' }, { command: 'second step' }], s, uuid, 6000);
+    const result = await runChain([{ command: '/compact' }, { command: 'second step' }], s, uuid, 10000);
 
-    assert.ok(s.written.some((w) => w.data === 'second step'), 'step 1 was never written after /compact: ' + JSON.stringify(result));
+    const second = s.written.find((w) => w.data === 'second step');
+    assert.ok(second, 'step 1 was never written after /compact: ' + JSON.stringify(result));
+    assert.ok(second.at > outputAt, 'step 1 was typed before the compaction output appeared');
+    assert.equal(s.written.filter((w) => w.data === '\r').length, 2, 'a recovery Enter was typed into the busy CLI');
     assert.equal(result.ok, true);
+    assert.equal(result.steps[0].submit_confirmed, true);
+    assert.equal(result.steps[0].confirm_source, 'transcript');
+    assert.equal(result.steps[0].submitted, 'confirmed');
     assert.equal(result.steps[0].idle_source, 'transcript');
     assert.equal(result.steps[1].ready_source, 'transcript');
+    assert.equal(result.unconfirmed_steps, undefined);
   } finally {
     s.cleanup();
+  }
+});
+
+test('chain: /compact as the only step with the descriptor held busy -> confirmed when compaction ends', async () => {
+  const uuid = 'sess-tx-compact-last-' + Date.now();
+  const s = transcriptSession(uuid, {
+    onEnter: ({ append }) => {
+      const enterAt = Date.now();
+      setTimeout(() => append(compactWrites(enterAt, Date.now())), COMPACTION_MS);
+    },
+  });
+  try {
+    const result = await runChain([{ command: '/compact' }], s, uuid, 10000);
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.steps[0].submit_confirmed, true);
+    assert.equal(result.steps[0].confirm_source, 'transcript');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: a swallowed Enter under a busy descriptor fails at the step deadline with its own reason, the next step never typed', async () => {
+  const uuid = 'sess-tx-swallowed-busy-' + Date.now();
+  const s = transcriptSession(uuid, { onEnter: () => {} });
+  const forgotten = [];
+  const forget = s.ctx.forgetTranscriptTurn;
+  s.ctx.forgetTranscriptTurn = (id) => { forgotten.push(id); return forget(id); };
+  const startedAt = Date.now();
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 2000 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'step not confirmed');
+    assert.match(result.reason, /before the step deadline/);
+    assert.equal(result.steps[0].submit_confirmed, false);
+    assert.equal(result.steps_completed, 0);
+    assert.ok(Date.now() - startedAt >= 1900, 'failed before the step deadline');
+    assert.ok(!s.written.some((w) => w.data === 'second step'));
+    assert.equal(s.written.filter((w) => w.data === '\r').length, 1, 'a recovery Enter was typed into the busy CLI');
+    assert.deepEqual(forgotten, [uuid]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: the step\'s own entry under a busy descriptor with the turn still running fails at the deadline, the next step never typed', async () => {
+  const uuid = 'sess-tx-pending-open-' + Date.now();
+  const s = transcriptSession(uuid, {
+    onEnter: ({ append, command }) => setTimeout(() => append([ownPrompt(Date.now(), command), assistant(Date.now(), 'tool_use')]), 800),
+  });
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /before the step deadline/);
+    assert.ok(!s.written.some((w) => w.data === 'second step'));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: under a busy descriptor, another turn closing after the Enter without the step\'s own entry never confirms it', async () => {
+  const uuid = 'sess-tx-pending-foreign-' + Date.now();
+  const s = transcriptSession(uuid, {
+    onEnter: ({ append }) => setTimeout(() => append([
+      userPrompt(Date.now(), { message: { role: 'user', content: '<task-notification>done</task-notification>' } }),
+      assistant(Date.now(), 'end_turn'), turnDuration(Date.now()),
+    ]), 300),
+  });
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /before the step deadline/);
+    assert.ok(!s.written.some((w) => w.data === 'second step'));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: under a busy descriptor, a turn that closed before the step\'s own entry does not confirm it', async () => {
+  const uuid = 'sess-tx-pending-before-own-' + Date.now();
+  const s = transcriptSession(uuid, {
+    onEnter: ({ append, command }) => {
+      setTimeout(() => append([assistant(Date.now(), 'end_turn'), turnDuration(Date.now())]), 200);
+      setTimeout(() => append([{ ...queueOp(Date.now(), 'enqueue'), content: command }, { ...queueOp(Date.now(), 'remove'), content: command }]), 700);
+    },
+  });
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 2500 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /before the step deadline/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: a session that exits while its step is pending ends on session exited', async () => {
+  const uuid = 'sess-tx-pending-exit-' + Date.now();
+  let s;
+  s = transcriptSession(uuid, { onEnter: () => setTimeout(() => s.sessions.delete(uuid), 1000) });
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 4000 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'session exited during wait', JSON.stringify(result));
+    assert.ok(!s.written.some((w) => w.data === 'second step'));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: a pending step confirmed by the descriptor reacting later reports the descriptor as its source', async () => {
+  const uuid = 'sess-tx-pending-desc-' + Date.now();
+  let s;
+  s = transcriptSession(uuid, {
+    onEnter: ({ desc, n, command, append }) => {
+      if (n === 1) {
+        setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 800);
+      } else {
+        append([ownPrompt(Date.now(), command)]);
+      }
+    },
+  });
+  try {
+    const result = await runChain([{ command: 'first step' }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.steps[0].submit_confirmed, true, JSON.stringify(result));
+    assert.equal(result.steps[0].confirm_source, 'descriptor');
+    assert.ok(s.written.some((w) => w.data === 'second step'));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: without a readable transcript a busy unconfirmed step stops at once, as before', async () => {
+  const uuid = 'sess-tx-no-transcript-' + Date.now();
+  const s = transcriptSession(uuid, { onEnter: ({ desc }) => { desc.status = 'busy'; } });
+  s.desc.status = 'idle';
+  s.ctx.getTranscriptTurn = () => null;
+  const startedAt = Date.now();
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 4000 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /recovery Enter was withheld/);
+    assert.ok(Date.now() - startedAt < 3000, 'waited for the deadline without a transcript');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('chain: a dialog right after the Enter stops the step at once, it is never pending', async () => {
+  const uuid = 'sess-tx-pending-dialog-' + Date.now();
+  const s = transcriptSession(uuid, { onEnter: ({ desc }) => { desc.status = 'waiting'; } });
+  const startedAt = Date.now();
+  try {
+    const result = await runChain([{ command: 'first step', timeout_ms: 4000 }, { command: 'second step' }], s, uuid, 6000);
+
+    assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
+    assert.match(result.reason, /recovery Enter was withheld/);
+    assert.ok(Date.now() - startedAt < 3000, 'waited for the deadline on a dialog');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('trigger context: forgetTranscriptTurn drops the cached tail of a session, even once it left activeSessions', () => {
+  const dir = mkTmp('sw-transcript-forget-');
+  const realOpen = fs.openSync;
+  const opened = [];
+  fs.openSync = (p, ...rest) => { opened.push(String(p)); return realOpen(p, ...rest); };
+  try {
+    fs.mkdirSync(path.join(dir, 'C--proj'));
+    const file = path.join(dir, 'C--proj', 'sid.jsonl');
+    fs.writeFileSync(file, jsonl([userPrompt(1000)]));
+    const sessions = new Map([['sid', { pty: { pid: process.pid, write() {} }, projectFolder: 'C--proj' }]]);
+    const ctx = createTriggerContext({ activeSessions: sessions, log: { info() {}, warn() {}, error() {} }, projectsDir: dir });
+    ctx.getTranscriptTurn('sid');
+    ctx.getTranscriptTurn('sid');
+    assert.equal(opened.filter((p) => p === file).length, 1);
+    ctx.forgetTranscriptTurn('sid');
+    ctx.getTranscriptTurn('sid');
+    assert.equal(opened.filter((p) => p === file).length, 2);
+    sessions.delete('sid');
+    ctx.forgetTranscriptTurn('sid');
+    sessions.set('sid', { pty: { pid: process.pid, write() {} }, projectFolder: 'C--proj' });
+    ctx.getTranscriptTurn('sid');
+    assert.equal(opened.filter((p) => p === file).length, 3);
+    ctx.forgetTranscriptTurn('unknown');
+  } finally {
+    fs.openSync = realOpen;
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -734,6 +962,7 @@ test('chain: an idle descriptor keeps the descriptor path, the transcript is not
     assert.equal(result.ok, true);
     assert.equal(result.steps[0].ready_source, 'descriptor');
     assert.equal(result.steps[0].idle_source, 'descriptor');
+    assert.equal(result.steps[0].confirm_source, 'descriptor');
     assert.equal(result.steps[1].ready_source, 'descriptor');
   } finally {
     s.cleanup();

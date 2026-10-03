@@ -59,11 +59,20 @@ function createTriggerContext({ activeSessions, log, isPtyAlive, getCliStatus, p
   // see .ai/contexts/trigger-watcher.md, "Transcript fallback while the descriptor stays busy"
   if (projectsDir) {
     const reader = createTranscriptTurnReader();
+    const readPaths = new Map();
     ctx.getTranscriptTurn = (sessionId) => {
       const session = activeSessions.get(sessionId);
       if (!session || session.exited || session.host != null || !session.projectFolder) return null;
       const id = session.realSessionId || sessionId;
-      return reader.read(path.join(projectsDir, session.projectFolder, id + '.jsonl'));
+      const filePath = path.join(projectsDir, session.projectFolder, id + '.jsonl');
+      readPaths.set(sessionId, filePath);
+      return reader.read(filePath);
+    };
+    ctx.forgetTranscriptTurn = (sessionId) => {
+      const filePath = readPaths.get(sessionId);
+      if (filePath === undefined) return;
+      readPaths.delete(sessionId);
+      reader.forget(filePath);
     };
   }
   if (getCliStatus) {

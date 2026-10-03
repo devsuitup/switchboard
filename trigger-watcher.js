@@ -95,6 +95,7 @@ const REASON_DIALOG_OPEN_AFTER_WRITE = 'the CLI reports a dialog open (waiting) 
 const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could be written; nothing was written';
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
+const REASON_UNCONFIRMED_BEFORE_DEADLINE = 'the step was written while the CLI reported busy; neither the CLI nor the transcript (the step\'s own entry, then a closed turn) confirmed it before the step deadline; nothing more was typed';
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
@@ -332,12 +333,47 @@ function transcriptShowsTurnOver(ctx, sessionId, desc, afterMs, now, dialogSeen)
   return now - turn.mtimeMs >= getTranscriptQuietMs();
 }
 
-function transcriptReactedSince(ctx, sessionId, sinceMs, command) {
-  const desc = readCliStatusRaw(ctx, sessionId);
-  if (!desc || !TRANSCRIPT_FALLBACK_STATUSES.includes(desc.status)) return false;
+function transcriptOwnEntryAt(ctx, sessionId, sinceMs, command) {
   const turn = readTranscriptTurn(ctx, sessionId);
-  if (!turn || !Array.isArray(turn.prompts)) return false;
-  return turn.prompts.some((p) => Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command));
+  if (!turn || !Array.isArray(turn.prompts)) return null;
+  const own = turn.prompts.find((p) => Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command));
+  return own ? own.at : null;
+}
+
+function cliReadsBusyOrShell(ctx, sessionId) {
+  const desc = readCliStatusRaw(ctx, sessionId);
+  return !!desc && TRANSCRIPT_FALLBACK_STATUSES.includes(desc.status);
+}
+
+function transcriptReactedSince(ctx, sessionId, sinceMs, command) {
+  if (!cliReadsBusyOrShell(ctx, sessionId)) return false;
+  return transcriptOwnEntryAt(ctx, sessionId, sinceMs, command) !== null;
+}
+
+// see .ai/contexts/trigger-watcher.md, "A chain step written while the CLI stays busy"
+function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadlineMs) {
+  const start = Date.now();
+  const dialog = createDialogProbe(ctx, sessionId, getBusyFallSettleMs());
+  return pollLoop((resolve, scheduleNext) => {
+    const now = Date.now();
+    const waited_ms = now - start;
+    if (!ctx.getPtyForSession(sessionId)) {
+      return resolve({ confirmed: false, sessionExited: true, timedOut: false, waited_ms });
+    }
+    dialog.sample(now);
+    if (cliReactedSince(ctx, sessionId, enterAtMs)) {
+      return resolve({ confirmed: true, source: 'descriptor', sessionExited: false, timedOut: false, waited_ms });
+    }
+    const ownAt = transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command);
+    if (ownAt !== null
+      && transcriptShowsTurnOver(ctx, sessionId, readCliStatusRaw(ctx, sessionId), ownAt, now, dialog.seen(now))) {
+      return resolve({ confirmed: true, source: 'transcript', sessionExited: false, timedOut: false, waited_ms });
+    }
+    if (now >= deadlineMs) {
+      return resolve({ confirmed: false, sessionExited: false, timedOut: true, waited_ms });
+    }
+    scheduleNext();
+  });
 }
 
 // see .ai/contexts/trigger-watcher.md, "waitForBusyFall waits for the rise too"
@@ -554,9 +590,13 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   // must fire on window expiry, so the deadline must NOT coincide with it.
   const effectiveDeadline = (deadlineMs !== undefined) ? deadlineMs : Infinity;
 
+  let confirmSource = null;
   const probe = edgeMode
-    ? () => cliReactedSince(ctx, sessionId, enterAt)
-      || (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command))
+    ? () => {
+      if (cliReactedSince(ctx, sessionId, enterAt)) { confirmSource = 'descriptor'; return true; }
+      if (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command)) { confirmSource = 'transcript'; return true; }
+      return false;
+    }
     : undefined;
   const first = await pollForBusyObserved(sessionId, ctx, windowMs, effectiveDeadline, probe);
   if (first.sawBusy || first.sessionExited || first.timedOut) {
@@ -571,6 +611,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
       sessionExited: first.sessionExited,
       timedOut: first.timedOut,
       waited_ms: first.waited_ms,
+      confirmSource: first.sawBusy ? confirmSource : null,
     };
   }
 
@@ -634,6 +675,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
     sessionExited: second.sessionExited,
     timedOut: second.timedOut,
     waited_ms: first.waited_ms + second.waited_ms,
+    confirmSource: second.sawBusy ? confirmSource : null,
   };
 }
 
@@ -866,6 +908,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   let releaseSessionLock;
+  let forgetTranscript = null;
   let stepsTotal = 0;
 
   try {
@@ -1290,6 +1333,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // ── 6. Chain path ─────────────────────────────────────────────────────────
+  if (typeof ctx.forgetTranscriptTurn === 'function') forgetTranscript = () => ctx.forgetTranscriptTurn(sessionId);
   // Global deadline for the whole chain
   const globalTimeout = (resolvedTimeoutMs !== undefined) ? resolvedTimeoutMs : getIdleTimeout();
   const globalDeadline = Date.now() + globalTimeout;
@@ -1495,6 +1539,22 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     submitRetries = verify.submit_retries;
     stepWaitedMs += verify.waited_ms;
     totalWaitedMs += verify.waited_ms;
+
+    if (verify.confirmed === false && verify.recoverySkipped && !verify.timedOut && !verify.sessionExited
+      && cliReadsBusyOrShell(ctx, sessionId) && readTranscriptTurn(ctx, sessionId) !== null) {
+      ctx.log.info(`[trigger-watcher] Chain step ${i} written while the CLI reads busy, waiting for its confirmation:`, sessionId);
+      const pending = await waitForPendingConfirmation(sessionId, ctx, verify.enterAt, step.command, stepDeadline);
+      stepWaitedMs += pending.waited_ms;
+      totalWaitedMs += pending.waited_ms;
+      if (pending.confirmed) {
+        verify = { ...verify, confirmed: true, composerConfirmed: true, sawBusy: true, recoverySkipped: false, confirmSource: pending.source };
+      } else if (pending.sessionExited) {
+        verify = { ...verify, sessionExited: true };
+      } else {
+        verify = { ...verify, pendingTimedOut: true };
+      }
+    }
+    if (verify.confirmSource) sources.confirm_source = verify.confirmSource;
     // This step's own submitted -- same classification the chain fold below
     // uses, attached to the step itself so a consumer can ask "was THIS step
     // (e.g. the last one) confirmed?" instead of only the chain's weakest.
@@ -1535,7 +1595,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         ok: false,
         submitted: chainSubmitted,
         error: ERROR_UNCONFIRMED,
-        reason: `chain step ${i} was typed but its submission was not confirmed and the recovery Enter was withheld (${verify.recoveryReason}); nothing more was typed`,
+        reason: verify.pendingTimedOut
+          ? `chain step ${i}: ${REASON_UNCONFIRMED_BEFORE_DEADLINE}`
+          : `chain step ${i} was typed but its submission was not confirmed and the recovery Enter was withheld (${verify.recoveryReason}); nothing more was typed`,
         partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps,
         total_waited_ms: totalWaitedMs,
       });
@@ -1595,6 +1657,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       name, err && err.message);
     await writeResult({ ok: false, error: 'internal error: ' + (err && err.message), internal: true });
   } finally {
+    if (forgetTranscript) {
+      try { forgetTranscript(); } catch (_) { /* swallow */ }
+    }
     if (releaseSessionLock) releaseSessionLock();
   }
 }

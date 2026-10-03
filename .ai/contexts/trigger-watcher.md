@@ -1052,11 +1052,42 @@ pass it), while the descriptor reads `busy` or `shell`, the step's own entry
 stamped at or after the Enter also counts as the CLI's reaction
 (`transcriptReactedSince`): a non-meta main-thread `user` entry with string
 content, or an `enqueue` `queue-operation`, whose text equals the step's
-command once trimmed, or, for a slash command, whose `<command-name>` equals
-the command's first word (`promptMatches`). Attachments, `system` entries,
-meta entries and other texts (another agent's notice) never confirm. The
-reader keeps the last 50 such entries of the tail (`prompts`). The recovery
-Enter rules are unchanged.
+command once trimmed (`promptMatches`). Two shapes are matched besides:
+
+- a slash command: content made only of `<command-message>`,
+  `<command-name>`, `<command-args>` and `<command-contents>` elements, whose
+  `<command-name>` element, wherever it sits, equals the command's first word.
+  Measured (2026-10-03, read only): of 116 main-thread entries holding a
+  `<command-name>`, the 111 command entries are made only of those elements,
+  99 with `<command-name>` first and 12 with `<command-message>` first (skills
+  and custom commands); the 5 others are compaction summaries quoting them;
+- a `!cmd` step: content that is one `<bash-input>` element whose text,
+  trimmed, equals the command without its `!` (23 of 23 such entries are one
+  whole element).
+
+Attachments, `system` entries, meta entries and other texts (another agent's
+notice) never confirm. The reader keeps the last 50 such entries of the tail
+(`prompts`). Each step records `confirm_source` (`descriptor` or
+`transcript`) when its submission was confirmed in edge mode.
+
+**A chain step written while the CLI stays busy.** The CLI writes the
+`<command-name>/compact` entry only when compaction ends, one to three
+minutes after the Enter although it is stamped at the Enter, and a descriptor
+held `busy` writes no new stamp. The 2 s verify window cannot see either, so
+an unconfirmed chain step whose recovery Enter was withheld is not a failure
+when the descriptor reads `busy` or `shell` and the session's transcript is
+readable: it is pending (`waitForPendingConfirmation`), up to the step's own
+deadline, and no Enter is written meanwhile. The step is confirmed when the
+descriptor reacts after the Enter (`confirm_source` `descriptor`), or when
+the step's own entry, stamped at or after the Enter, appears and the turn is
+closed after that entry under the rules above, quiet window and no dialog
+included (`confirm_source` `transcript`). A turn closed before the step's own
+entry, or another turn with no own entry, does not count. At the deadline the
+chain stops: `error` `step not confirmed`, `reason`
+`REASON_UNCONFIRMED_BEFORE_DEADLINE`, nothing more typed. A dialog, a remote
+session or a missing transcript keep the immediate `step not confirmed`. Once
+confirmed, the step goes on as any other: for a non-final step the busy-fall
+wait reads the same closed turn and ends at once.
 
 **The result records the signal.** Each chain step carries `ready_source`
 (`descriptor` or `transcript`: what released the readiness wait before it;
@@ -1071,7 +1102,10 @@ transcript also logs one info line.
 key>.jsonl`, local sessions only (a remote session returns `null`). The reader
 stats the file and re-reads only when its mtime or size changed, the last
 256 KB, so a poll costs a `stat`. The cache holds one entry per path, so
-two chains on two sessions do not re-read each other's files. A missing file, a read error, or a tail
+two chains on two sessions do not re-read each other's files. A chain
+evicts its session's entry when it ends, whatever the outcome
+(`ctx.forgetTranscriptTurn`, which remembers the path read for the session,
+so it works after the session left `activeSessions`). A missing file, a read error, or a tail
 with no message entry is never "closed".
 
 **Known limits.**
