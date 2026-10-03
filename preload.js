@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld('api', {
   gitChangesWatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-watch', sessionId, filePath),
   gitChangesUnwatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-unwatch', sessionId, filePath),
   // see .ai/contexts/touched-files.md
-  sessionTouchedFiles: (sessionId) => ipcRenderer.invoke('session-touched-files', sessionId),
+  sessionTouchedFiles: (sessionId, options) => ipcRenderer.invoke('session-touched-files', sessionId, options),
   onGitChangesFileChanged: (callback) => {
     ipcRenderer.on('git-changes-file-changed', (_event, sessionId, filePath) => callback(sessionId, filePath));
   },

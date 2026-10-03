@@ -48,7 +48,7 @@ function result(over = {}) {
   };
 }
 
-function setupDom({ touchedImpl, readImpl } = {}) {
+function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const calls = { touched: [], readFile: [], viewerOpen: [] };
@@ -68,15 +68,16 @@ function setupDom({ touchedImpl, readImpl } = {}) {
       return Promise.resolve((readImpl || (() => ({ ok: true, content: 'file body' })))(filePath));
     },
   };
-  window.confirm = () => true;
+  window.confirm = confirmImpl || (() => true);
   window.loadCodeMirrorBundle = () => Promise.resolve();
   Object.defineProperty(window, 'ViewerPanel', {
     value: function ViewerPanelStub() {
       return {
         open(label, filePath, content) { calls.viewerOpen.push({ label, filePath, content }); },
         destroy() {},
-        hasUnsavedEdits: () => false,
-        snapshot: () => null,
+        hasUnsavedEdits: () => viewerDirty,
+        snapshot: () => viewerDirty ? { filePath: '/work/a.txt', content: 'edited', agreedBase: 'file body' } : null,
+        snapshotHasUnsavedEdits: () => viewerDirty,
       };
     },
     writable: true,
@@ -137,7 +138,7 @@ test('the header carries a Touched toggle that opens the tab for the session and
     await openTab(ctx);
     assert.deepEqual(ctx.calls.touched, ['s1']);
     assert.equal(btn.getAttribute('aria-pressed'), 'true');
-    assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.equal(rows(ctx).length, 2);
     const first = rows(ctx)[0];
     assert.match(first.textContent, /\/work\/a\.txt/);
@@ -203,6 +204,109 @@ test('a present file opens through readFileForPanel and the file viewer', async 
   } finally { ctx.destroy(); }
 });
 
+test('back and Escape restore the same Touched rows, scroll and selection without another request', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    const list = ctx.document.getElementById('touched-list');
+    const first = rows(ctx)[0];
+    list.scrollTop = 123;
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const back = ctx.document.getElementById('file-panel-back-btn');
+    assert.ok(back, 'a shared panel back button');
+    back.click();
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
+    assert.equal(rows(ctx)[0], first);
+    assert.equal(list.scrollTop, 123);
+    assert.ok(first.classList.contains('selected'));
+    assert.equal(ctx.calls.touched.length, 1);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.document.getElementById('file-panel-viewer').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
+    assert.equal(rows(ctx)[0], first);
+    assert.equal(ctx.calls.touched.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('time formatting uses the injected clock and switches at the named threshold', () => {
+  const ctx = setupDom();
+  try {
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    assert.equal(ctx.window.formatTouchedTime(now - 12 * 60000, now), '12 min ago');
+    assert.equal(ctx.window.formatTouchedTime(now - 86400000 + 1, now), '23 hr ago');
+    assert.equal(ctx.window.formatTouchedTime(now - 86400000, now), new ctx.window.Date(now - 86400000).toLocaleString());
+  } finally { ctx.destroy(); }
+});
+
+test('a Touched return target survives another session using the shared list', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx, 's1');
+    const first = rows(ctx)[0];
+    ctx.document.getElementById('touched-list').scrollTop = 123;
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    await openTab(ctx, 's2');
+    ctx.window.switchPanel('s1');
+    ctx.document.getElementById('file-panel-back-btn').click();
+    assert.equal(rows(ctx)[0], first);
+    assert.equal(ctx.document.getElementById('touched-list').scrollTop, 123);
+    assert.equal(ctx.calls.touched.length, 2);
+  } finally { ctx.destroy(); }
+});
+
+test('Back keeps a dirty file on refusal and discards it without holding it after confirmation', async () => {
+  let agree = false;
+  const ctx = setupDom({ viewerDirty: true, confirmImpl: () => agree });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const back = ctx.document.getElementById('file-panel-back-btn');
+    back.click();
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'file');
+    agree = true;
+    back.click();
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
+    assert.equal(ctx.stateOf('s1').heldFileTabs?.size || 0, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('cached time windows extend twice locally, count hidden files, retain window on back and sort by path', async () => {
+  const now = Date.now();
+  const ctx = setupDom({ touchedImpl: () => result({ windowStart: now - 86400000, loadedWindowStart: now - 21 * 86400000, hasOlder: false, files: [
+    row({ path: '/z', lastTouched: now, diskMtime: now - 1000 }),
+    row({ path: '/a', lastTouched: now - 5 * 86400000 }),
+    row({ path: '/b', lastTouched: now - 15 * 86400000 }),
+  ] }) });
+  try {
+    await openTab(ctx);
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/z']);
+    assert.match(ctx.document.getElementById('touched-summary').textContent, /2 older files/);
+    assert.match(rows(ctx)[0].title, /Modified:/);
+    ctx.document.getElementById('touched-more-btn').click();
+    await flush();
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/z', '/a']);
+    ctx.document.getElementById('touched-more-btn').click();
+    await flush();
+    assert.equal(rows(ctx).length, 3);
+    assert.equal(ctx.document.getElementById('touched-more-btn'), null);
+    assert.equal(ctx.calls.touched.length, 1);
+    const sort = ctx.document.getElementById('touched-sort');
+    sort.value = 'path';
+    sort.dispatchEvent(new ctx.window.Event('change'));
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/a', '/b', '/z']);
+    clickRow(ctx, '/z');
+    await flush();
+    ctx.document.getElementById('file-panel-back-btn').click();
+    assert.equal(rows(ctx).length, 3);
+    assert.equal(ctx.stateOf('s1').currentTab.windowDays, 21);
+    assert.equal(ctx.calls.touched.length, 1);
+  } finally { ctx.destroy(); }
+});
+
 test('a gone, refused, unreadable or non-file row says so and a click reads nothing', async () => {
   const ctx = setupDom({
     touchedImpl: () => result({
@@ -223,14 +327,14 @@ test('a gone, refused, unreadable or non-file row says so and a click reads noth
       '/work/locked.txt': 'unreadable',
       '/work/dir': 'not a file',
     });
-    assert.match(rows(ctx)[0].title, /no longer exists/i);
+    assert.match(rows(ctx).find(r => r.dataset.path === '/work/gone.txt').title, /no longer exists/i);
     for (const r of rows(ctx)) {
       assert.equal(r.classList.contains('touched-openable'), false);
       r.dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
     }
     await flush();
     assert.deepEqual(ctx.calls.readFile, []);
-    assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
   } finally { ctx.destroy(); }
 });
 
@@ -311,7 +415,7 @@ test('a refused read stays on the tab and shows the reason', async () => {
     await openTab(ctx);
     clickRow(ctx, '/work/a.txt');
     await flush();
-    assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.match(ctx.document.getElementById('touched-summary').textContent, /access to sensitive path denied/);
     assert.deepEqual(ctx.calls.viewerOpen, []);
   } finally { ctx.destroy(); }

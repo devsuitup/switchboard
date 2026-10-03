@@ -35,10 +35,9 @@ pins it. The empty state reads "No files touched by the file tools", never
 The transcript records intent, not outcome: a refused `Write` is listed. Each
 row is checked against the disk when the list is built (`state`): `present`,
 `gone` (`ENOENT`/`ENOTDIR`), `not-file`, `unreadable` (any other error, or no
-answer in 3 s), or `refused` (see below). The list is not live: it is built on
-open and on the refresh button, not on every busy-to-idle edge, because a
-build reads every transcript of the session (up to 256 MiB in total, then
-`coverage.truncated`) and stats up to 500 paths.
+answer in 3 s), or `refused` (see below). The list is not live: it is built on open and on the refresh button, not on
+every busy-to-idle edge. A build stats up to 500 paths; transcript reads use
+the incremental, time-window cache described below.
 
 ## Trust: the paths are attacker-influenced
 
@@ -97,6 +96,66 @@ listing *does* with it.
   `unreadable` without being checked: 500 planted paths on an offline mapped
   drive hold at most about 16 threads, not 500.
 
+## Incremental time-window cache (#444)
+
+The main-side singleton `mainTouchedCache` uses `touched-transcript-cache.js`.
+Its LRU holds at most `TOUCHED_CACHE_SESSIONS` (32) sessions keyed by folder
+and session ID. Each has at most 1024 transcript records, 1000 path/tool
+summaries per transcript and 4000 summaries in total. Cached raw paths are
+bounded to 4097 characters, preserving the invalid-path guard. Requests are
+serialized so an append or extension cannot be counted twice by concurrent
+opens. The disk guard and stat still run on every request; cached transcript
+content never caches permission to open a file.
+
+A transcript record is keyed by path, size and mtime. It holds its verified
+cwd, per-path/tool counts and latest timestamps, the beginning of the scanned
+range and the last complete newline at its end. Unchanged files incur no
+transcript read or parse. Growth validates a bounded prefix and an anchor
+before the old complete end, then parses only the added complete lines.
+Shrinking, same-size mtime changes, or a changed prefix/anchor discard the
+record and rebuild the requested window. Enumeration drops deleted transcript
+records, and the delete-session handler calls `dropSession`. A failed or
+budget-exhausted read is discarded so a later request can retry.
+
+The initial window is `TOUCHED_WINDOW_DAYS` (1), extended in
+`TOUCHED_WINDOW_STEP_DAYS` (10) steps. Each transcript is scanned from its end
+in 64 KiB chunks, on byte newline boundaries before UTF-8 decoding. An
+incomplete tail is ignored until its newline arrives. Scanning stops before
+the first entry whose top-level timestamp precedes the window; that offset is
+retained for the next extension. A never-loaded transcript whose mtime is
+older than the window is skipped entirely. Timestamp-less entries have
+unknown time and are retained within the range actually scanned. This follows
+the transcript's chronological order, as required by the stop-at-first-old
+contract. The bounded cwd header lookup runs once on a new or invalidated
+record, only after the mtime skip.
+
+The response carries visible `files`, guarded `cachedFiles`, the requested
+and loaded window starts, `hasOlder` for unread history and `olderFiles`.
+The renderer extends locally with no IPC or parse when its cached range
+covers the new window. An uncached extension needs an incremental IPC and
+parse: prohibiting both would require reading all history on initial open,
+contradicting the backward-window requirement. The exact hidden-file count
+is available for cached history. While history is unread, the list says
+“Older files not counted yet”; an exact distinct-file count cannot be derived
+from unread bytes. No transcript-size estimate is presented as a count.
+
+Every row shows its latest touch across parent and subagent transcripts.
+`TOUCHED_RELATIVE_THRESHOLD_MS` is one day: younger entries show minutes or
+hours ago; older ones use `toLocaleString` in local time. The formatter accepts
+an injected clock. Present-file tooltips also show `diskMtime`; the existing
+gone/unreadable/refused states and opening guards still apply.
+
+The shared file-panel Back button and Escape inside the file viewer restore
+the original list DOM, selection, scroll, sort and window without requesting
+transcripts again. List snapshots also survive another session using the
+shared DOM. The panel shell remains outside this navigation.
+
+`test/session-touched-cache.test.js` uses real disposable transcripts, read
+counters, partial UTF-8 appends, rewrites, deletion, LRU and repeated window
+extensions. Its large fixture is about 26.6 MB; the one-day read counter
+includes chunk reads and validation probes. The measured full-read comparison
+is recorded in the test diagnostic and `.work-files/pr-body.md`.
+
 ## Decisions that were open in the issue
 
 - **Placement**: its own tab and header toggle (`Touched`, after `Changes`),
@@ -106,8 +165,9 @@ listing *does* with it.
   `reason: 'remote'` and the tab shows the message. Remote transcripts are
   mirrored copies, but their paths name the host's disk, which cannot be stat-ed
   from here.
-- **Ordering**: first touch, parent transcript first, then subagents by file
-  name; no timestamps.
+- **Ordering**: latest file-tool timestamp first, with a path tie-breaker;
+  the toolbar can sort by path instead. Unknown timestamps are displayed
+  explicitly and sort after dated entries.
 - **Open**: a row opens the plain file viewer. It does not route to the Changes
   diff when the file is also changed in the working tree (`openFileInPanel` does,
   for terminal links); doing so needs a Changes target, which a file outside any

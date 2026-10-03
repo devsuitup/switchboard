@@ -28,6 +28,7 @@ let currentPanelSessionId = null;
 let fpViewerPanel = null;
 let fpViewerOwner = null;
 let heldBarEl = null;
+let panelBackBtn = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -118,6 +119,21 @@ function initFilePanel() {
   filePanelContentEl = document.createElement('div');
   filePanelContentEl.id = 'file-panel-content';
   filePanelEl.appendChild(filePanelContentEl);
+
+  panelBackBtn = document.createElement('button');
+  panelBackBtn.id = 'file-panel-back-btn';
+  panelBackBtn.className = 'viewer-toolbar-btn';
+  panelBackBtn.textContent = '← Back to list';
+  panelBackBtn.style.display = 'none';
+  panelBackBtn.addEventListener('click', returnToPanelList);
+  filePanelContentEl.appendChild(panelBackBtn);
+  filePanelContentEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !event.target.closest('#file-panel-viewer, #changes-diff-view')) return;
+    if (returnToPanelList()) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
 
   heldBarEl = document.createElement('div');
   heldBarEl.id = 'file-panel-held';
@@ -324,6 +340,49 @@ function handleClose() {
   endCurrentTab(currentPanelSessionId, state);
 }
 
+function returnToPanelList() {
+  if (!currentPanelSessionId) return false;
+  const state = getSessionState(currentPanelSessionId);
+  const tab = state.currentTab;
+  if (tab?.type === 'changes' && tab.selectedFile) {
+    closeChangesDiff(currentPanelSessionId);
+    return !tab.selectedFile;
+  }
+  if (!tab?.returnList) return false;
+  if (fileTabHasUnsavedEdits(tab) && !window.confirm('This file has unsaved edits. Discard them?')) return false;
+  const previous = tab.returnList;
+  destroyCurrentTab(state, { stash: false, discardFile: true });
+  state.currentTab = previous;
+  renderPanel(currentPanelSessionId);
+  return true;
+}
+
+function reusePanelList(list, summary, tab, signature, detail = null) {
+  const previous = list._owner;
+  if (previous && previous !== tab) {
+    previous.listView = {
+      signature: list._signature,
+      nodes: [...list.childNodes],
+      summaryNodes: [...summary.childNodes],
+      detail: detail?.textContent,
+      scrollTop: list.scrollTop,
+    };
+  }
+  const same = values => values && signature.every((value, i) => value === values[i]);
+  if (previous === tab && same(list._signature)) return true;
+  list._owner = tab;
+  list._signature = signature;
+  if (previous !== tab && same(tab.listView?.signature)) {
+    list.replaceChildren(...tab.listView.nodes);
+    summary.replaceChildren(...tab.listView.summaryNodes);
+    if (detail) detail.textContent = tab.listView.detail || '';
+    list.scrollTop = tab.listView.scrollTop;
+    tab.listView = null;
+    return true;
+  }
+  return false;
+}
+
 async function handleDiffSave() {
   const state = currentPanelSessionId ? getSessionState(currentPanelSessionId) : null;
   const tab = state?.currentTab;
@@ -510,6 +569,7 @@ function openFileTab(sessionId, data) {
     return reopenFileTab(sessionId, state, current, data);
   }
   const held = takeHeldFileTab(state, data.filePath);
+  const returnList = data.returnList || null;
 
   // Destroy previous
   destroyCurrentTab(state);
@@ -521,6 +581,7 @@ function openFileTab(sessionId, data) {
     content: data.content,
     pendingLine: null,
   };
+  state.currentTab.returnList = returnList;
   if (Number.isInteger(data.line) && data.line > 0) state.currentTab.pendingLine = data.line;
 
   state.panelVisible = true;
@@ -778,7 +839,7 @@ function restoreChangesEdits(sessionId, state, tab) {
   return true;
 }
 
-function destroyCurrentTab(state, { stash = true } = {}) {
+function destroyCurrentTab(state, { stash = true, discardFile = false } = {}) {
   const tab = state.currentTab;
   if (!tab) return;
   if (stash) stashChangesEdits(state, tab);
@@ -795,7 +856,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
-  if (tab.type === 'file') holdFileTabIfDirty(state, tab);
+  if (tab.type === 'file' && !discardFile) holdFileTabIfDirty(state, tab);
   if (tab.type === 'file' && fpViewerOwner === tab) {
     fpViewerPanel.destroy();
     fpViewerOwner = null;
@@ -945,6 +1006,7 @@ function showFileTabInViewer(tab) {
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
+  panelBackBtn.style.display = tab && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
   // see .ai/contexts/panel-terminal.md ("Layout")
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
@@ -1244,6 +1306,7 @@ async function openChangesDiff(sessionId, file, line = null) {
 
   tab.pendingLine = Number.isInteger(line) && line > 0 ? line : null;
   tab.selectedFile = file;
+  tab.listSelection = file;
   tab.diffError = null;
   tab.diffContent = null;
   tab.diffTruncated = false;
@@ -1346,6 +1409,7 @@ function applyUntrackedCounts(tab, expectedData, filePath, added, deleted, count
     if (typeof f.added !== 'number') uncounted += 1;
   }
   tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted, uncounted };
+  tab.listRevision = (tab.listRevision || 0) + 1;
 }
 
 function closeChangesDiff(sessionId) {
@@ -1398,7 +1462,12 @@ function renderChangesContent(sessionId, tab) {
 }
 
 function renderChangesList(sessionId, tab) {
+  const signature = [tab.data, tab.loading, tab.error, tab.listRevision];
   const branchInfoEl = document.getElementById('changes-branch-info');
+  if (reusePanelList(changesListEl, changesSummaryEl, tab, signature, branchInfoEl)) {
+    updateChangesListSelection(tab);
+    return;
+  }
 
   if (tab.loading && !tab.data) {
     changesSummaryEl.textContent = 'Loading changes…';
@@ -1460,6 +1529,15 @@ function renderChangesList(sessionId, tab) {
     more.className = 'changes-more-note';
     more.textContent = `+${data.subagentsOmitted} more subagent worktrees not shown`;
     changesListEl.appendChild(more);
+  }
+  updateChangesListSelection(tab);
+}
+
+function updateChangesListSelection(tab) {
+  const selected = tab.selectedFile || tab.listSelection;
+  for (const row of changesListEl.querySelectorAll('.changes-file-row')) {
+    row.classList.toggle('selected', !!selected && row.dataset.path === selected.path
+      && (row.dataset.subagent || null) === (selected.subSessionId || null));
   }
 }
 

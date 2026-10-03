@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { StringDecoder } = require('string_decoder');
+const { createTouchedFilesCache } = require('./touched-transcript-cache');
 const { enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
 const { isValidChangesSessionId } = require('./git-changes-target');
 const { extractCwdFromJsonl } = require('./derive-project-path');
@@ -16,7 +16,9 @@ const MAX_PATH_LENGTH = 4096;
 const MAX_RAW_DISPLAY = 300;
 const MAX_FILES = 500;
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
-const MAX_LINE_CHARS = 32 * 1024 * 1024;
+const TOUCHED_WINDOW_DAYS = 1;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const mainTouchedCache = createTouchedFilesCache();
 const MAX_TOOL_LINE_CHARS = 4 * 1024 * 1024;
 const STAT_CONCURRENCY = 8;
 const STAT_TIMEOUT_MS = 3000;
@@ -49,10 +51,11 @@ function extractTouches(line) {
   }
   if (!entry || entry.type !== 'assistant' || !entry.message || !Array.isArray(entry.message.content)) return none;
   const touches = [];
+  const timestamp = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
   for (const block of entry.message.content) {
     if (!block || block.type !== 'tool_use' || !TOUCH_TOOLS.includes(block.name)) continue;
     const target = touchTarget(block);
-    if (target !== null) touches.push({ tool: block.name, path: target });
+    if (target !== null) touches.push({ tool: block.name, path: target, ...(Number.isFinite(timestamp) ? { timestamp } : {}) });
   }
   return { touches, malformed: false };
 }
@@ -93,43 +96,6 @@ function resolveTouchedPath(raw, { cwd = null, pathOps = path } = {}) {
   return { path: resolved };
 }
 
-// see .ai/contexts/touched-files.md ("Bounds")
-async function* readTranscriptLines(filePath, budget) {
-  const decoder = new StringDecoder('utf8');
-  const stream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024 });
-  let pending = '';
-  let skipping = false;
-  let cut = false;
-  try {
-    for await (const chunk of stream) {
-      if (budget.remaining <= 0) { budget.truncated = true; cut = true; break; }
-      let buf = chunk;
-      if (buf.length > budget.remaining) {
-        buf = buf.subarray(0, budget.remaining);
-        budget.truncated = true;
-        cut = true;
-      }
-      budget.remaining -= buf.length;
-      pending += decoder.write(buf);
-      let nl = pending.indexOf('\n');
-      while (nl !== -1) {
-        const line = pending.slice(0, nl);
-        pending = pending.slice(nl + 1);
-        if (skipping) skipping = false;
-        else yield line;
-        nl = pending.indexOf('\n');
-      }
-      if (pending.length > MAX_LINE_CHARS) { pending = ''; skipping = true; budget.skipped += 1; }
-      if (cut) break;
-    }
-  } catch {
-    return;
-  } finally {
-    stream.destroy();
-  }
-  if (!cut && !skipping && pending !== '') yield pending;
-}
-
 async function mapLimit(items, limit, fn) {
   let next = 0;
   const workers = [];
@@ -158,7 +124,7 @@ async function inspectPath(filePath, deps) {
   if (sensitive) return 'refused';
   try {
     const stat = await deps.statPath(filePath);
-    return stat && stat.isFile() ? 'present' : 'not-file';
+    return { state: stat && stat.isFile() ? 'present' : 'not-file', diskMtime: Number.isFinite(stat?.mtimeMs) ? stat.mtimeMs : null };
   } catch (err) {
     return err && (err.code === 'ENOENT' || err.code === 'ENOTDIR') ? 'gone' : 'unreadable';
   }
@@ -197,15 +163,21 @@ function tally(map, key, make, touch, label) {
     map.set(key, row);
   }
   row.tools.add(touch.tool);
-  row.count += 1;
+  row.count += touch.count || 1;
+  if (touch.lastTouched != null) row.lastTouched = Math.max(row.lastTouched ?? -Infinity, touch.lastTouched);
   row.sources.add(label);
 }
 
 function present(row) {
-  return { tools: [...row.tools].sort(), count: row.count, sources: [...row.sources] };
+  return { tools: [...row.tools].sort(), count: row.count, sources: [...row.sources], lastTouched: row.lastTouched ?? null };
 }
 
 async function collectSessionTouchedFiles(options) {
+  const cache = options.cache || createTouchedFilesCache();
+  return cache.run(options.sessionId, options.folderPath, session => collectCachedTouches(options, cache, session));
+}
+
+async function collectCachedTouches(options, cache, session) {
   const {
     folderPath,
     sessionId,
@@ -222,9 +194,16 @@ async function collectSessionTouchedFiles(options) {
   } = options;
   if (typeof isSensitive !== 'function') throw new TypeError('isSensitive is required');
 
+  const windowDays = options.windowDays ?? TOUCHED_WINDOW_DAYS;
+  const windowStart = windowDays === Infinity ? -Infinity : (options.now || Date.now)() - windowDays * DAY_MS;
   const all = enumerate(folderPath);
+  const livePaths = new Set(all.filter(e => e.sessionId === sessionId || e.parentSessionId === sessionId).map(e => e.filePath));
+  for (const p of session.files.keys()) if (!livePaths.has(p)) session.files.delete(p);
   const parent = all.find((e) => e.parentSessionId === null && e.sessionId === sessionId);
-  if (!parent) return { ok: false, reason: 'no-transcript', error: 'this session has no transcript on disk' };
+  if (!parent) {
+    cache.dropSession(sessionId);
+    return { ok: false, reason: 'no-transcript', error: 'this session has no transcript on disk' };
+  }
   const subagents = all
     .filter((e) => e.parentSessionId === sessionId)
     .sort((a, b) => (a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0));
@@ -238,42 +217,56 @@ async function collectSessionTouchedFiles(options) {
   let malformedLines = 0;
   let oversizedLines = 0;
 
+  let hasOlder = false;
+  let loadedWindowStart = -Infinity;
   for (const entry of entries) {
-    let cwd = null;
-    try { cwd = cwdOf(entry); } catch { cwd = null; }
+    const snapshot = await cache.load(session, entry, windowStart, budget, extractTouches, cwdOf);
+    if (!snapshot) continue;
+    hasOlder ||= snapshot.hasOlder;
+    loadedWindowStart = Math.max(loadedWindowStart, snapshot.windowStart);
+    malformedLines += snapshot.malformed;
+    oversizedLines += snapshot.skipped;
+    omitted += snapshot.omitted;
+    const cwd = snapshot.cwd;
     let label;
     try { label = safeLabel(labelOf(entry)); } catch { label = defaultLabel(entry); }
-
-    for await (const line of readTranscriptLines(entry.filePath, budget)) {
-      const { touches, malformed, oversized } = extractTouches(line);
-      if (malformed) malformedLines += 1;
-      if (oversized) oversizedLines += 1;
-      for (const touch of touches) {
-        const resolved = resolveTouchedPath(touch.path, { cwd, pathOps });
-        if (resolved.path !== undefined) {
-          const key = caseFold ? resolved.path.toLowerCase() : resolved.path;
-          if (!resolvedRows.has(key) && resolvedRows.size >= maxFiles) { omitted += 1; continue; }
-          tally(resolvedRows, key, () => ({ path: resolved.path, tools: new Set(), count: 0, sources: new Set() }), touch, label);
-        } else {
-          const raw = escapeUnsafe(touch.path.slice(0, MAX_RAW_DISPLAY));
-          if (!unresolvedRows.has(raw) && unresolvedRows.size >= maxFiles) { omitted += 1; continue; }
-          tally(unresolvedRows, raw, () => ({ raw, reason: resolved.unresolved, tools: new Set(), count: 0, sources: new Set() }), touch, label);
-        }
+    for (const touch of snapshot.rows) {
+      const resolved = resolveTouchedPath(touch.path, { cwd, pathOps });
+      if (resolved.path !== undefined) {
+        const key = caseFold ? resolved.path.toLowerCase() : resolved.path;
+        tally(resolvedRows, key, () => ({ path: resolved.path, tools: new Set(), count: 0, sources: new Set() }), touch, label);
+      } else {
+        const raw = escapeUnsafe(touch.path.slice(0, MAX_RAW_DISPLAY));
+        tally(unresolvedRows, raw, () => ({ raw, reason: resolved.unresolved, tools: new Set(), count: 0, sources: new Set() }), touch, label);
       }
     }
   }
 
-  const files = [...resolvedRows.values()].map((row) => ({ path: row.path, state: 'unknown', openable: false, ...present(row) }));
+  const newest = (a, b) => (b.lastTouched ?? -Infinity) - (a.lastTouched ?? -Infinity)
+    || (a.path || a.raw).localeCompare(b.path || b.raw);
+  const resolved = [...resolvedRows.values()].sort(newest);
+  const unresolved = [...unresolvedRows.values()].sort(newest);
+  omitted += [...resolved.slice(maxFiles), ...unresolved.slice(maxFiles)].reduce((n, row) => n + row.count, 0);
+  const files = resolved.slice(0, maxFiles).map((row) => ({ path: row.path, state: 'unknown', openable: false, ...present(row) }));
+  const cachedUnresolved = unresolved.slice(0, maxFiles).map(row => ({ raw: row.raw, reason: row.reason, ...present(row) }));
   const gate = { timedOut: 0 };
   await mapLimit(files, STAT_CONCURRENCY, async (file) => {
-    file.state = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
+    const inspection = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
+    file.state = typeof inspection === 'string' ? inspection : inspection.state;
+    file.diskMtime = typeof inspection === 'string' ? null : inspection.diskMtime;
     file.openable = file.state === 'present';
   });
 
   return {
     ok: true,
-    files,
-    unresolved: [...unresolvedRows.values()].map((row) => ({ raw: row.raw, reason: row.reason, ...present(row) })),
+    files: files.filter(f => f.lastTouched == null || f.lastTouched >= windowStart),
+    cachedFiles: files,
+    windowStart,
+    loadedWindowStart: hasOlder ? loadedWindowStart : null,
+    hasOlder,
+    olderFiles: hasOlder ? null : files.filter(f => f.lastTouched != null && f.lastTouched < windowStart).length,
+    unresolved: cachedUnresolved.filter(f => f.lastTouched == null || f.lastTouched >= windowStart),
+    cachedUnresolved,
     omitted,
     coverage: {
       transcripts: entries.length,
@@ -281,6 +274,7 @@ async function collectSessionTouchedFiles(options) {
       malformedLines,
       skippedLines: oversizedLines + budget.skipped,
       truncated: budget.truncated,
+      bytesRead: maxBytes - budget.remaining,
     },
   };
 }
@@ -309,9 +303,11 @@ async function listSessionTouchedFiles(sessionId, deps) {
     folderPath: path.join(deps.projectsDir, folder),
     sessionId,
     isSensitive: deps.isSensitive,
+    cache: deps.cache || mainTouchedCache,
+    windowDays: deps.windowDays,
     cwdOf: (entry) => verifiedTranscriptCwd(extractCwdFromJsonl(entry.filePath), folder),
     labelOf: (entry) => (entry.parentSessionId ? subagentLabel(entry) : 'session'),
   });
 }
 
-module.exports = { TOUCH_TOOLS, extractTouches, resolveTouchedPath, collectSessionTouchedFiles, listSessionTouchedFiles };
+module.exports = { createTouchedFilesCache, mainTouchedCache, TOUCH_TOOLS, extractTouches, resolveTouchedPath, collectSessionTouchedFiles, listSessionTouchedFiles };

@@ -823,6 +823,15 @@ A **remote** session, and any file the main process refuses to open for editing 
 
 ### The list and the editor
 
+The panel has one shared **Back to list** button for Touched and Changes
+(#444). Escape with focus inside either viewer uses the same control. For
+Changes it closes the selected diff through the existing dirty-buffer guard
+and unwatch/editor cleanup; it makes no git status or content request. The
+list DOM is reused while its data, loading/error state and count revision are
+unchanged. Selection and scroll remain; an explicit refresh still rebuilds
+the list. Per-tab DOM snapshots survive session switches. The existing editor
+Close button remains available.
+
 The list is never hidden. A selected file opens *below* it — summary, list, a drag handle, then the editor region — and the current row carries `.selected`. Reviewing a set of files is then click, read, click, which is the whole point of the layout; there is no navigation step to undo, so the editor's first button is **Close** (close the file, keep the list) rather than Back.
 
 The split uses `createSplitter` (`public/splitter.js`, shared with the panel's shell region) and the height model that region settled on: `changesListDesiredHeight` stores what the drag asked for, `clampChangesListHeight` narrows it only for display against the space actually available, and only the desired value is persisted (`localStorage.changesListHeight`). A transient shrink — a short panel, the shell open — therefore never ratchets the stored height down. The list has a floor of its own (`MIN_CHANGES_LIST_HEIGHT`, 96px, about four rows) so it cannot collapse to nothing, and the editor keeps `MIN_CHANGES_EDITOR_HEIGHT` (120px, the same floor the shell region uses for the content above it). Below that the list scrolls; nothing overlaps and nothing is clipped out of reach.

@@ -5042,6 +5042,32 @@ body { display: flex; flex-direction: column; }
   color: #d0d0e0;
 }
 
+#file-panel-back-btn {
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin: 4px 8px;
+}
+
+.touched-file-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.touched-file-row.selected {
+  background: rgba(120, 130, 255, 0.14);
+}
+
+.touched-file-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.touched-file-row .touched-file-meta {
+  grid-column: 2 / -1;
+  max-width: 100%;
+}
+
 .touched-file-meta {
   flex-shrink: 0;
   max-width: 45%;

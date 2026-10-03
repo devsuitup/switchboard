@@ -388,7 +388,7 @@ test('more distinct files than the cap are counted as omitted, not silently drop
   } finally { w.cleanup(); }
 });
 
-test('a transcript read past the byte budget is flagged truncated and keeps what it read', async () => {
+test('a transcript read past the byte budget is flagged truncated without parsing a partial line', async () => {
   const w = makeWorld();
   try {
     const first = w.write('work/first.txt', 'x');
@@ -398,7 +398,7 @@ test('a transcript read past the byte budget is flagged truncated and keeps what
     w.write('projects/-proj/S1.jsonl', lines(l1, l2));
     const result = await collectSessionTouchedFiles(deps(w, { maxBytes: Buffer.byteLength(l1) + 1 }));
     assert.equal(result.coverage.truncated, true);
-    assert.deepEqual(result.files.map((f) => f.path), [path.resolve(first)]);
+    assert.deepEqual(result.files, []);
 
     const full = await collectSessionTouchedFiles(deps(w));
     assert.equal(full.coverage.truncated, false);

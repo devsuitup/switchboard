@@ -23,7 +23,7 @@ test('main.js serves session-touched-files through the sensitive-path guard and 
 
 test('preload.js exposes sessionTouchedFiles on the same channel and nothing that reads a path', () => {
   const src = read('preload.js');
-  assert.match(src, /sessionTouchedFiles:\s*\(sessionId\)\s*=>\s*ipcRenderer\.invoke\('session-touched-files',\s*sessionId\)/);
+  assert.match(src, /sessionTouchedFiles:\s*\(sessionId, options\)\s*=>\s*ipcRenderer\.invoke\('session-touched-files',\s*sessionId, options\)/);
 });
 
 test('index.html loads the touched tab after the file panel it hooks into', () => {

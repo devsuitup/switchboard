@@ -224,6 +224,33 @@ function closeEditorBtn(ctx) {
   return ctx.document.getElementById('changes-diff-close-btn');
 }
 
+test('shared back and Escape restore the Changes list DOM, scroll and selection without git calls', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    const list = ctx.document.getElementById('changes-list');
+    const first = list.firstChild;
+    list.scrollTop = 94;
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    const counts = [ctx.calls.status.length, ctx.calls.file.length, ctx.calls.diff.length];
+    const back = ctx.document.getElementById('file-panel-back-btn');
+    assert.ok(back);
+    back.click();
+    assert.equal(list.firstChild, first);
+    assert.equal(list.scrollTop, 94);
+    assert.ok(first.classList.contains('selected'));
+    assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'none');
+    assert.deepEqual([ctx.calls.status.length, ctx.calls.file.length, ctx.calls.diff.length], counts);
+    clickRow(ctx, 'src/a.js');
+    await flush();
+    ctx.document.getElementById('changes-diff-view').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal(ctx.document.getElementById('changes-diff-view').style.display, 'none');
+    assert.equal(list.firstChild, first);
+  } finally { ctx.destroy(); }
+});
+
 async function openFile(ctx, sessionId, filePath) {
   ctx.window.switchPanel(sessionId);
   await ctx.window.openChangesTab(sessionId);

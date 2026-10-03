@@ -92,7 +92,7 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
-const { listSessionTouchedFiles } = require('./session-touched-files');
+const { listSessionTouchedFiles, mainTouchedCache } = require('./session-touched-files');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
@@ -1923,13 +1923,14 @@ ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
 });
 
 // see .ai/contexts/touched-files.md
-ipcMain.handle('session-touched-files', async (_event, sessionId) => {
+ipcMain.handle('session-touched-files', async (_event, sessionId, options = {}) => {
   try {
     return await listSessionTouchedFiles(sessionId, {
       projectsDir: PROJECTS_DIR,
       getCachedFolder,
       isRemoteFolder,
       isSensitive: isSensitivePathAsync,
+      windowDays: Number.isFinite(options?.windowDays) && options.windowDays >= 1 ? options.windowDays : undefined,
     });
   } catch (err) {
     return { ok: false, error: err.message };
@@ -2162,6 +2163,7 @@ ipcMain.handle('delete-session', (_event, sessionId) => {
   }
 
   for (const sid of [id, ...subagentIds]) {
+    mainTouchedCache.dropSession(sid);
     try { deleteCachedSession(sid); } catch {}
     try { deleteSearchSession(sid); } catch {}
   }
