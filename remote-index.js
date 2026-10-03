@@ -19,6 +19,10 @@ const NOOP_LOG = { info() {}, warn() {}, error() {} };
 // see .ai/contexts/session-cache.md ("Remote hosts backoff")
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
+// see .ai/contexts/session-cache.md ("Remote hosts — capability tiers", the probe)
+const PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PROBE_RETRY_MS = 30 * 60 * 1000;
+
 // see .ai/contexts/session-cache.md ("Remote hosts backoff")
 function backoffDelayMs(failures, intervalMs) {
   if (failures <= 0) return 0;
@@ -106,6 +110,7 @@ function createRemoteIndexer(ctx) {
   const remoteSessionsAt = new Map(); // alias -> epoch ms of the last cycle that did not throw
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
   const hostInFlight = new Set();
+  const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
 
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
@@ -177,6 +182,9 @@ function createRemoteIndexer(ctx) {
     for (const alias of [...remoteSessionsAt.keys()]) {
       if (!known.has(alias)) remoteSessionsAt.delete(alias);
     }
+    for (const alias of [...hostTools.keys()]) {
+      if (!known.has(alias)) hostTools.delete(alias);
+    }
     for (const alias of [...hostBackoff.keys()]) {
       if (!known.has(alias)) hostBackoff.delete(alias);
     }
@@ -191,6 +199,26 @@ function createRemoteIndexer(ctx) {
     } catch {
       return [];
     }
+  }
+
+  function rearmProbe(alias) {
+    const entry = hostTools.get(alias);
+    if (entry) entry.nextProbeAt = 0;
+  }
+
+  async function probeHostTools(alias) {
+    if (!ctx.transport || typeof ctx.transport.probeTools !== 'function') return false;
+    const prev = hostTools.get(alias);
+    if (prev && now() < prev.nextProbeAt) return false;
+    let tools = null;
+    try {
+      tools = await ctx.transport.probeTools(alias);
+    } catch (err) {
+      log.warn(`[remote:${alias}] tool probe failed: ${err.message}`);
+    }
+    const kept = tools || (prev ? prev.tools : null);
+    hostTools.set(alias, { tools: kept, nextProbeAt: now() + (tools ? PROBE_INTERVAL_MS : PROBE_RETRY_MS) });
+    return !!tools && (!prev || !prev.tools || prev.tools.tmux !== tools.tmux || prev.tools.inotifywait !== tools.inotifywait);
   }
 
   async function refreshHost(host) {
@@ -254,7 +282,8 @@ function createRemoteIndexer(ctx) {
     log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
       `${result.removed} removed, ${result.failed} failed, ${toScan.size} folders indexed`);
 
-    return toScan.size > 0;
+    const toolsChanged = await probeHostTools(host.alias);
+    return toScan.size > 0 || toolsChanged;
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
@@ -276,6 +305,7 @@ function createRemoteIndexer(ctx) {
         if (force) {
           state.failures = 0;
           state.nextAttemptAt = 0;
+          rearmProbe(host.alias);
         } else if (now() < state.nextAttemptAt) {
           continue; // still backing off: no attempt, no log, no ssh
         }
@@ -308,6 +338,7 @@ function createRemoteIndexer(ctx) {
     if (force) {
       state.failures = 0;
       state.nextAttemptAt = 0;
+      rearmProbe(alias);
     } else if (now() < state.nextAttemptAt) {
       return { skipped: true };
     }
@@ -378,7 +409,8 @@ function createRemoteIndexer(ctx) {
   // see .ai/contexts/session-cache.md ("Remote hosts — capability tiers")
   function getRemoteHostProfile(alias) {
     const { sessions, at, error } = getRemoteSessions(alias);
-    return computeHostProfile({ at, error, descriptors: sessions });
+    const known = hostTools.get(alias);
+    return computeHostProfile({ at, error, descriptors: sessions, tools: known ? known.tools : null });
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
@@ -430,4 +462,4 @@ function createRemoteIndexer(ctx) {
   };
 }
 
-module.exports = { createRemoteIndexer, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };
+module.exports = { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };

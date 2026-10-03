@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { computeHostProfile, attachBlockReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
 
 const root = path.join(__dirname, '..');
 
@@ -38,7 +38,7 @@ function makeAnnotate(mocks) {
   const source = extractAnnotateRemoteAttachableSource();
   const factory = new Function(
     'remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker', 'cliSessionState',
-    'attachBlockReason',
+    'attachBlockReason', 'sendBlockReason',
     source + '\nreturn annotateRemoteAttachable;'
   );
   return factory(
@@ -50,7 +50,7 @@ function makeAnnotate(mocks) {
     mocks.remoteAttachAdapter || { supports: () => false },
     mocks.remoteActivityTracker || { activeAt: () => null },
     mocks.cliSessionState || { getStatus: () => undefined },
-    attachBlockReason
+    attachBlockReason, sendBlockReason
   );
 }
 
