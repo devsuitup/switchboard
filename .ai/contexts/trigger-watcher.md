@@ -82,7 +82,11 @@ directory may otherwise gain access to unattached sessions; the sandbox bind
 policy is owned separately.
 
 `findSessionAliases` filters the cached descriptors using the enabled-host
-predicate on every lookup. Disabled hosts can remain in the cache, so a pull's
+predicate on every lookup. Each poll obtains a fresh remote dependency from
+the getter, reads the global settings once and builds one enabled-alias set.
+The context passes the predicate over that set to the indexer without reading
+the settings a second time or once per alias. Disabled hosts can remain in
+the cache, so a pull's
 listing alone is insufficient authorization. No aliases means not found;
 multiple aliases means a refusal naming them all. Neither alias nor descriptor,
 pid or socket path comes from a trigger field. The shared adapter validates
@@ -132,8 +136,18 @@ One adapter is shared by Send and triggers. It reserves the existing dedupe key
 and a token from an alias/session bucket of 30 at 0.5 tokens/s before spawning.
 Definite failures refund tokens; timeouts and unknown exits retain them. A
 timeout retains dedupe; other non-zero exits preserve the earlier release
-behavior. Slash commands use a case-sensitive fixed allow-list after trimming:
+behavior. Pruning also removes buckets whose elapsed refill makes them full
+and which have no pending send. Depleted buckets retain their rate history;
+pending sends retain the bucket referenced by their refund callback.
+The remote command check strips leading whitespace and U+200B–U+200D, U+2060
+and U+FEFF, then trailing whitespace. This exposes the first visible prefix
+without changing plain prompt text. A case-sensitive fixed allow-list accepts
 only `/compact` and `/clear`, sent from the constants, without arguments.
+First-visible `!` and `#` are refused before waiting, with
+`REASON_REMOTE_BASH` and `REASON_REMOTE_MEMORY`; unsupported `/` retains
+`REASON_REMOTE_SLASH`. The three exact strings are documented in
+`docs/automation.md`, "Remote trigger targets". Invisible characters elsewhere
+are preserved rather than banned globally, and mid-prompt `!`/`#` remain text.
 Their effect over the socket is UNVERIFIED, as is queuing during a permission
 dialog. L1-L7 require a real host and isolated running instance.
 

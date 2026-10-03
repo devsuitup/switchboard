@@ -47,6 +47,56 @@ function makeAdapter(runRemoteCommand, now = () => 1_000_000) {
   return createRemoteSendAdapter({ runRemoteCommand, now, log: silentLog });
 }
 
+function trackedAdapter(runRemoteCommand, now) {
+  const maps = [];
+  class TrackedMap extends Map {
+    constructor() { super(); maps.push(this); }
+  }
+  const filename = path.join(__dirname, '..', 'remote-send.js');
+  const module = { exports: {} };
+  require('vm').runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, require: require('module').createRequire(filename), Buffer, Map: TrackedMap,
+  }, { filename });
+  const adapter = module.exports.createRemoteSendAdapter({ runRemoteCommand, now, log: silentLog });
+  return { adapter, buckets: maps[1] };
+}
+
+test('U17: pruning removes fully refilled idle buckets and retains depleted ones', async () => {
+  let clock = 0;
+  const { adapter, buckets } = trackedAdapter(makeRunner(), () => clock);
+  await adapter.send('vps', descriptor(), 'one');
+  for (let i = 0; i < 30; i++) await adapter.send('depleted', descriptor(), 'text ' + i);
+  const fullKey = `vps\u0000${SESSION_ID}`; const depletedKey = `depleted\u0000${SESSION_ID}`;
+  clock = 1999; await adapter.send('tick', descriptor(), 'before full');
+  assert.equal(buckets.has(fullKey), true); assert.equal(buckets.has(depletedKey), true);
+  clock = 2000; assert.equal((await adapter.send('tick', descriptor(), 'before full')).code, 'dedupe');
+  assert.equal(buckets.has(fullKey), false); assert.equal(buckets.has(depletedKey), true);
+  clock = 59999; await adapter.send('tick', descriptor(), 'before depleted full');
+  assert.equal(buckets.has(depletedKey), true);
+  clock = 60000; await adapter.send('tick', descriptor(), 'depleted full');
+  assert.equal(buckets.has(depletedKey), false);
+  for (let i = 0; i < 30; i++) assert.equal((await adapter.send('depleted', descriptor(), 'new ' + i)).ok, true);
+  assert.equal((await adapter.send('depleted', descriptor(), 'overflow')).code, 'rate');
+});
+
+test('U17: pruning retains a fully refilled bucket while its send is pending', async () => {
+  let clock = 0; let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { adapter, buckets } = trackedAdapter(async alias => {
+    if (alias === 'pending') await gate;
+    return { code: 0 };
+  }, () => clock);
+  const key = `pending\u0000${SESSION_ID}`;
+  const pending = adapter.send('pending', descriptor(), 'one');
+  try {
+    clock = 60000; await adapter.send('tick', descriptor(), 'during pending');
+    assert.equal(buckets.has(key), true);
+    release(); await pending;
+    await adapter.send('tick', descriptor(), 'after pending');
+    assert.equal(buckets.has(key), false);
+  } finally { release(); await pending; }
+});
+
 test('U16: adapter failure codes and ambiguity flags preserve the success shape', async () => {
   const cases = [
     ['invalid', {}, '', { code: 0 }],

@@ -67,13 +67,17 @@ function createRemoteSendAdapter(opts = {}) {
 
   function reserveToken(alias, sessionId, at) {
     const key = `${alias}\u0000${sessionId}`;
-    const bucket = buckets.get(key) || { tokens: RATE_CAPACITY, at };
+    const bucket = buckets.get(key) || { tokens: RATE_CAPACITY, at, pending: 0 };
     bucket.tokens = Math.min(RATE_CAPACITY, bucket.tokens + Math.max(0, at - bucket.at) * RATE_REFILL_PER_MS);
     bucket.at = at;
     buckets.set(key, bucket);
     if (bucket.tokens < 1) return null;
     bucket.tokens--;
-    return () => { bucket.tokens = Math.min(RATE_CAPACITY, bucket.tokens + 1); };
+    bucket.pending++;
+    return {
+      refund() { bucket.tokens = Math.min(RATE_CAPACITY, bucket.tokens + 1); },
+      release() { bucket.pending--; },
+    };
   }
 
   function dedupeKey(alias, sessionId, content) {
@@ -83,6 +87,9 @@ function createRemoteSendAdapter(opts = {}) {
   function pruneRecent(at) {
     for (const [key, sentAt] of recent) {
       if (at - sentAt >= DEDUPE_WINDOW_MS) recent.delete(key);
+    }
+    for (const [key, bucket] of buckets) {
+      if (bucket.pending === 0 && bucket.tokens + Math.max(0, at - bucket.at) * RATE_REFILL_PER_MS >= RATE_CAPACITY) buckets.delete(key);
     }
   }
 
@@ -108,8 +115,9 @@ function createRemoteSendAdapter(opts = {}) {
     if (recent.has(key)) {
       return { ok: false, code: 'dedupe', error: 'the same text was sent to this session less than 30 s ago — the session drops it' };
     }
-    const refund = reserveToken(alias, descriptor.sessionId, at);
-    if (!refund) return { ok: false, code: 'rate', error: 'too many prompts sent to this session; it drops them above 30, refilling one every 2 s' };
+    const reservation = reserveToken(alias, descriptor.sessionId, at);
+    if (!reservation) return { ok: false, code: 'rate', error: 'too many prompts sent to this session; it drops them above 30, refilling one every 2 s' };
+    const { refund, release } = reservation;
     recent.set(key, at);
 
     let result;
@@ -122,6 +130,8 @@ function createRemoteSendAdapter(opts = {}) {
       recent.delete(key);
       refund();
       return { ok: false, code: 'runner', error: `send failed: ${err.message}` };
+    } finally {
+      release();
     }
     if (!result) {
       recent.delete(key);

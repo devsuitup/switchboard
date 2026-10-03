@@ -16,6 +16,8 @@ const NO_FRESH = 'fewer than two pulls of the session descriptors of this host c
 const UNKNOWN = 'the descriptor of this host carries no readable status; whether the session is idle is unknown; nothing was written';
 const SHELL = 'the session reports a shell command running (shell); nothing was written';
 const SLASH = 'a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written';
+const BASH = 'a bash-mode command cannot be sent to a remote session; nothing was written';
+const MEMORY = 'a memory command cannot be sent to a remote session; nothing was written';
 
 function fixture(lookup, outcome = { ok: true }) {
   const calls = [];
@@ -166,6 +168,30 @@ for (const command of ['/compact now', '/Compact', '/model', '//x']) test(`U21: 
   const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
   assert.equal(r.error, 'not sent'); assert.equal(r.reason, SLASH); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
 });
+for (const prefix of ['\u200b', '\u200c', '\u200d', '\u2060', '\ufeff', ' \u200b\t\u2060 ']) {
+  test(`U21: invisible prefix ${JSON.stringify(prefix)} cannot hide a slash command`, async () => {
+    const s = fixture(); const r = await run(s, { command: prefix + '/model', wait: 'idle', timeout_ms: 1500 });
+    assert.equal(r.error, 'not sent'); assert.equal(r.reason, SLASH); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+  });
+}
+for (const [command, reason] of [['!ls', BASH], [' !ls', BASH], ['\u200b!ls', BASH], ['#note', MEMORY], [' \u2060#note', MEMORY]]) {
+  test(`U21: mode prefix ${JSON.stringify(command)} is refused before waiting`, async () => {
+    const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
+    assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+  });
+}
+for (const command of ['say hello! and describe #note', '  keep ! and # in the middle  ', '\u200bsay hello']) {
+  test(`U21: plain prompt ${JSON.stringify(command)} is sent unchanged`, async () => {
+    const s = fixture(); assert.equal((await run(s, { command })).ok, true); assert.equal(s.calls[0].args[2], command);
+  });
+}
+test('U21: invisible whitespace before an allowed slash sends the constant', async () => {
+  const s = fixture(); assert.equal((await run(s, { command: ' \u200b\u2060 /clear  ' })).ok, true);
+  assert.equal(s.calls[0].args[2], '/clear');
+});
+test('U21: slash, bash and memory refusals have distinct reasons', () => {
+  assert.equal(new Set([SLASH, BASH, MEMORY]).size, 3);
+});
 test('U22: main uses a dynamic opt-in getter and the central default', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(source, /get remote\(\)/); assert.match(source, /remoteTriggers\s*\?\?\s*SETTING_DEFAULTS\.remoteTriggers/);
@@ -184,6 +210,29 @@ test('U22: main uses a dynamic opt-in getter and the central default', () => {
   assert.equal(deps.remote.maxAgeMs, 120000); assert.equal(deps.remote.isEnabled('vps'), true);
   settings.remoteHosts[0].enabled = false; assert.equal(deps.remote.isEnabled('vps'), false);
   settings.remoteTriggers = false; assert.equal(deps.remote, undefined);
+});
+test('U22: each remote lookup reads global settings once for all aliases and rereads on the next poll', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const start = source.indexOf('get remote()'); const end = source.indexOf('\n      }));', start);
+  const descriptor = { sessionId: 'remote' };
+  const hosts = [{ alias: 'vps' }, { alias: 'other', enabled: false }, { alias: 'third', enabled: false }];
+  let settings = { remoteTriggers: true, remoteHosts: hosts }; let reads = 0;
+  const indexer = {
+    findSessionAliases: (id, isEnabled) => hosts.filter(host => isEnabled(host.alias)).map(host => host.alias),
+    getRemoteSessions: () => ({ sessions: [descriptor], at: 42, error: null }),
+  };
+  const { SETTING_DEFAULTS } = require('../public/setting-defaults');
+  const { enabledHosts, normalizeRefreshMs } = require('../remote-hosts');
+  const deps = new Function('getSetting', 'SETTING_DEFAULTS', 'remoteIndexer', 'remoteSendAdapter', 'enabledHosts', 'normalizeRefreshMs', 'return ({' + source.slice(start, end) + '});')(
+    key => { assert.equal(key, 'global'); reads++; return settings; }, SETTING_DEFAULTS, indexer, {}, enabledHosts, normalizeRefreshMs);
+  const ctx = createTriggerContext({ activeSessions: new Map(), log, get remote() { return deps.remote; } });
+  for (const alias of ['vps', 'other']) {
+    hosts.forEach(host => { host.enabled = host.alias === alias; });
+    reads = 0;
+    assert.equal(ctx.remote.lookup('remote').alias, alias); assert.equal(reads, 1);
+  }
+  settings = { ...settings, remoteTriggers: false }; reads = 0;
+  assert.equal(ctx.remote, undefined); assert.equal(reads, 1);
 });
 for (const at of [null, 1]) test(`U24: stale pull ${at} carries the backoff reason`, async () => {
   const s = fixture((n, snap) => ({ ...snap, at, error: 'ssh backoff' })); const r = await run(s);
@@ -222,6 +271,7 @@ test('U26: the first post-start idle pull is insufficient, including repeated re
 });
 test('U27: a second trigger waits for the first remote idle wait and send', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-remote-lock-'));
+  const old = process.env.SWITCHBOARD_TRIGGERS_DIR;
   process.env.SWITCHBOARD_TRIGGERS_DIR = dir;
   const hold = setInterval(() => {}, 20); let release; let entered;
   const started = new Promise(r => { entered = r; }); const pending = new Promise(r => { release = r; });
@@ -238,5 +288,11 @@ test('U27: a second trigger waits for the first remote idle wait and send', asyn
     const deadline = Date.now() + 3000;
     while (!fs.existsSync(path.join(dir, 'processed', 'second.result.json'))) { assert.ok(Date.now() < deadline); await new Promise(r => setTimeout(r, 10)); }
     assert.deepEqual(s.calls.map(c => c.args[2]), ['first', 'second']);
-  } finally { release(); watcher.close(); clearInterval(hold); delete process.env.SWITCHBOARD_TRIGGERS_DIR; fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    release(); watcher.close(); clearInterval(hold);
+    if (old === undefined) delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+    else process.env.SWITCHBOARD_TRIGGERS_DIR = old;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(process.env.SWITCHBOARD_TRIGGERS_DIR, old);
 });

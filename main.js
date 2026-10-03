@@ -3219,12 +3219,15 @@ if (!gotSingleInstanceLock) {
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         get remote() {
           const settings = getSetting('global') || {};
-          if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) return {
-            indexer: remoteIndexer,
-            adapter: remoteSendAdapter,
-            isEnabled: alias => enabledHosts((getSetting('global') || {}).remoteHosts).some(host => host.alias === alias),
-            maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
-          };
+          if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
+            const aliases = new Set(enabledHosts(settings.remoteHosts).map(host => host.alias));
+            return {
+              indexer: remoteIndexer,
+              adapter: remoteSendAdapter,
+              isEnabled: alias => aliases.has(alias),
+              maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
+            };
+          }
           return undefined;
         },
       }));

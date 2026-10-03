@@ -108,6 +108,8 @@ const REASON_REMOTE_SHELL = 'the session reports a shell command running (shell)
 const REASON_REMOTE_UNKNOWN_STATUS = 'the descriptor of this host carries no readable status; whether the session is idle is unknown; nothing was written';
 const REASON_REMOTE_ATTACHED = 'the session was attached in a terminal while waiting; nothing was written';
 const REASON_REMOTE_SLASH = 'a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written';
+const REASON_REMOTE_BASH = 'a bash-mode command cannot be sent to a remote session; nothing was written';
+const REASON_REMOTE_MEMORY = 'a memory command cannot be sent to a remote session; nothing was written';
 
 function remoteLookupFailure(snapshot, sessionId, duringWait) {
   if (!snapshot) return { ok: false, submitted: SUBMITTED_NO, error: duringWait ? 'session exited during wait' : 'session not found', sessionId };
@@ -141,7 +143,9 @@ async function processRemoteTrigger(ctx, initial, { sessionId, command, chain, w
   const started = Date.now();
   const refuse = reason => ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId });
   if (chain !== undefined) return refuse('a chain cannot be sent to a remote session through the messaging socket; nothing was written');
-  const trimmed = command.trim();
+  const trimmed = command.replace(/^[\s\u200b-\u200d\u2060\ufeff]+/u, '').trimEnd();
+  if (trimmed.startsWith('!')) return refuse(REASON_REMOTE_BASH);
+  if (trimmed.startsWith('#')) return refuse(REASON_REMOTE_MEMORY);
   let text = command;
   if (trimmed.startsWith('/')) {
     text = REMOTE_SLASH_COMMANDS.find(value => value === trimmed);

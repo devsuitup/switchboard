@@ -399,9 +399,13 @@ resolved; two spellings of one directory count as a mismatch.
 ### Remote trigger targets
 
 Set the global `remoteTriggers` setting to `true` to allow a single trigger to
-send a prompt to an unattached remote session. It defaults to `false`, has no
-Settings control yet, and changes take effect without a restart. With it off,
-an unattached remote id gives `session not found`.
+send a prompt to an unattached remote session. It defaults to `false` and has
+no UI yet; enabling it is maintainer-only for now. The value is the JSON
+property `"remoteTriggers": true` in the SQLite `settings` table's row whose
+`key` is `global`; the row's `value` holds the global settings object
+(`db.js`, `getSetting`/`setSetting`). Preserve its other properties when
+changing it. Changes take effect without a restart. With it off, an unattached
+remote id gives `session not found`.
 
 Use the same `sessionId`, `command`, `wait` (`none` or `idle`), `timeout_ms`
 and optional `expectedCwd` fields. A live local or tmux-attached terminal takes
@@ -441,9 +445,21 @@ another trigger for that id queues behind it.
 The socket queues text without typing into the composer, so no composer check,
 dialog hold, Enter retry or transcript confirmation runs on this path. Windows
 hosts are refused with the key-file reason. Only exact `/compact` and `/clear`
-after trimming are allowed slash commands; their constant text is sent. Other
-leading-slash commands, arguments and case variants are refused before any
-wait. **The effect of `/compact` and `/clear` over the socket is UNVERIFIED**;
+after prefix normalization are allowed slash commands; their constant text is
+sent. Normalization removes leading whitespace and U+200B–U+200D, U+2060 and
+U+FEFF, then trailing whitespace. Other leading-slash commands, arguments and
+case variants are refused before any wait. A first visible `!` (bash mode) or
+`#` (memory) is also refused. Plain prompts retain their original text,
+including `!` and `#` in the middle and invisible characters outside the
+prefix check. Each refusal returns `error: "not sent"` with its own reason:
+
+| Prefix | `reason` |
+|---|---|
+| Unsupported `/` | `a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written` |
+| `!` | `a bash-mode command cannot be sent to a remote session; nothing was written` |
+| `#` | `a memory command cannot be sent to a remote session; nothing was written` |
+
+**The effect of `/compact` and `/clear` over the socket is UNVERIFIED**;
 they may execute as commands or arrive as plain text. Whether a prompt during
 a permission dialog is queued or lost is also unverified.
 

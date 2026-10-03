@@ -63,16 +63,14 @@ function createTriggerContext(deps) {
       if (!remote) return undefined;
       return {
         lookup(sessionId) {
-          const current = deps.remote;
-          if (!current) return null;
-          const aliases = current.indexer.findSessionAliases(sessionId, current.isEnabled);
+          const aliases = remote.indexer.findSessionAliases(sessionId, remote.isEnabled);
           if (!aliases.length) return null;
           if (aliases.length > 1) return { aliases };
           const alias = aliases[0];
-          const { sessions, at, error } = current.indexer.getRemoteSessions(alias);
+          const { sessions, at, error } = remote.indexer.getRemoteSessions(alias);
           const descriptor = sessions.find(s => s && s.sessionId === sessionId);
           if (!descriptor) return null;
-          return { alias, descriptor, at, error, maxAgeMs: current.maxAgeMs };
+          return { alias, descriptor, at, error, maxAgeMs: remote.maxAgeMs };
         },
         send(alias, descriptor, text) { return remote.adapter.send(alias, descriptor, text); },
       };
