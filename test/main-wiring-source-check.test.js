@@ -167,20 +167,19 @@ test('main-wiring source check: no PTY method is called bare on a session', () =
   );
 });
 
-test('main-wiring source check: terminal-resize goes through resizePty, nudge included', () => {
+test('main-wiring source check: terminal-resize delegates all resizes to the guarded handler', () => {
   const args = argsOf("ipcMain.on('terminal-resize'", 'ipcMain.on');
   assert.match(
-    args, /resizePty\(\s*session\s*,\s*cols\s*,\s*rows\s*,\s*sessionId\s*\)/,
-    'the primary resize must go through resizePty(session, cols, rows, sessionId)',
+    args, /handleTerminalResize\(\s*sessionId\s*,\s*cols\s*,\s*rows\s*,\s*refresh\s*\)/,
+    'the primary resize and refresh must reach the shared handler',
   );
   assert.match(
-    args, /resizePty\(\s*session\s*,\s*cols\s*\+\s*1\s*,\s*rows\s*,\s*sessionId\s*\)/,
-    'the first-resize nudge must go through resizePty too',
+    mainSrc, /createTerminalResizeHandler\(activeSessions\)/,
+    'the shared handler must use the current session registry',
   );
-  assert.equal(
-    (args.match(/resizePty\(/g) || []).length, 3,
-    'all three resizes on this path must be guarded',
-  );
+  const resizeSrc = fs.readFileSync(path.join(__dirname, '..', 'terminal-resize.js'), 'utf8');
+  assert.match(resizeSrc, /require\('\.\/pty-ops'\)/);
+  assert.doesNotMatch(resizeSrc, /\bsession\.pty\.(resize|kill|write)\s*\(/);
 });
 
 test('main-wiring source check: stop-session kills through killPty', () => {

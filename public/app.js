@@ -926,6 +926,14 @@ terminalStopBtn.addEventListener('click', () => {
   if (activeSessionId) confirmAndStopSession(activeSessionId, terminalStopBtn);
 });
 
+function initTerminalRefreshControl() {
+  const button = document.getElementById('terminal-refresh-btn');
+  button.addEventListener('click', () => {
+    if (activeSessionId) requestTerminalRefresh(activeSessionId);
+  });
+}
+initTerminalRefreshControl();
+
 
 // --- Poll for active PTY sessions ---
 // Adaptive cadence: poll fast (3s) only while PTYs are running; when idle, back

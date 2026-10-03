@@ -53,6 +53,7 @@ function setupCombinedDom() {
     replayHiddenBuffer: () => {},
     updateRunningIndicators: () => {},
     fitAndScroll: () => {},
+    refreshRemoteTerminalOnReturn: () => {},
 
     statsContent: window.document.getElementById('stats-content'),
     memoryContent: window.document.getElementById('memory-content'),

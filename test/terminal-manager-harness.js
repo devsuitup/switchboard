@@ -236,7 +236,7 @@ function setupTerminalDom(opts = {}) {
   if (opts.filePanel) window.initFilePanel();
 
   const inCtx = (code) => vm.runInContext(code, ctx);
-  return { window, spies, inCtx, destroy: () => window.close() };
+  return { window, spies, inCtx, context: ctx, destroy: () => window.close() };
 }
 
 module.exports = { setupTerminalDom, PUBLIC_DIR };

@@ -78,6 +78,7 @@ function setupGridDom({ stored = null } = {}) {
 
   const noop = () => {};
   const stubGlobals = {
+    refreshRemoteTerminalOnReturn: noop,
     sidebarContent,
     terminalsEl,
     openSessions,

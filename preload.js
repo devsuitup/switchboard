@@ -104,7 +104,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Send (fire-and-forget)
   sendInput: (id, data) => ipcRenderer.send('terminal-input', id, data),
-  resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal-resize', id, cols, rows),
+  resizeTerminal: (id, cols, rows, options) => ipcRenderer.send('terminal-resize', id, cols, rows, options?.refresh === true),
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
 
   // Listeners (main → renderer)

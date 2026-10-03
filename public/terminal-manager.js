@@ -333,6 +333,38 @@ function syncPtySizeAfterOpen(entry) {
 // without being perceptible.
 const CONTAINER_RESIZE_DEBOUNCE_MS = 80;
 
+// see .ai/contexts/terminal-refresh.md
+function scheduleTerminalFit(entry) {
+  clearTimeout(entry.fitTimer);
+  entry.fitTimer = setTimeout(() => {
+    entry.fitTimer = null;
+    if (entry.closed || !entry.element.isConnected || entry.element.clientHeight === 0) return;
+    safeFit(entry);
+    if (!entry.refreshRequested) return;
+    entry.refreshRequested = false;
+    forceRepaint(entry);
+    const { cols, rows } = entry.terminal;
+    entry.lastPtySize = { cols, rows };
+    window.api.resizeTerminal(entry.session.sessionId, cols, rows, { refresh: true });
+  }, CONTAINER_RESIZE_DEBOUNCE_MS);
+}
+
+function requestTerminalRefresh(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed) return;
+  entry.refreshRequested = true;
+  if (entry.element.clientHeight === 0) showSession(sessionId);
+  scheduleTerminalFit(entry);
+}
+
+function refreshRemoteTerminalOnReturn(sessionId, previousSessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed) return;
+  const firstReveal = !entry.hasBeenShown;
+  entry.hasBeenShown = true;
+  if ((previousSessionId !== sessionId || firstReveal) && entry.session.remoteAlias) requestTerminalRefresh(sessionId);
+}
+
 // Watch the terminal container's own geometry. This is the piece that covers
 // the cases no existing hook did (wake-from-sleep, DPI change, monitor change,
 // sidebar drag): the browser only calls back when the box really changed, so
@@ -340,21 +372,11 @@ const CONTAINER_RESIZE_DEBOUNCE_MS = 80;
 // a leaked observer would be exactly the recurring cost we are avoiding.
 function observeContainerResize(entry) {
   if (typeof ResizeObserver !== 'function') return; // jsdom / very old runtimes
-  let timer = 0;
-  const observer = new ResizeObserver(() => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = 0;
-      // Cheap guard before any measuring call: a hidden container (inactive
-      // tab, grid card scrolled out) has nothing to fit.
-      if (!entry.element.isConnected || entry.element.clientHeight === 0) return;
-      safeFit(entry);
-    }, CONTAINER_RESIZE_DEBOUNCE_MS);
-  });
+  const observer = new ResizeObserver(() => scheduleTerminalFit(entry));
   observer.observe(entry.element);
   entry.stopObservingResize = () => {
-    clearTimeout(timer);
-    timer = 0;
+    clearTimeout(entry.fitTimer);
+    entry.fitTimer = null;
     try { observer.disconnect(); } catch {}
     entry.stopObservingResize = null;
   };
@@ -1157,6 +1179,8 @@ function restoreTerminalWebgl(sessionId) {
 function destroySession(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
+  clearTimeout(entry.fitTimer);
+  entry.refreshRequested = false;
   // see .ai/contexts/panel-terminal.md
   if (typeof destroyPanelTerminalFor === 'function') destroyPanelTerminalFor(sessionId);
   if (typeof forgetSessionExit === 'function') forgetSessionExit(sessionId);
@@ -1258,6 +1282,7 @@ function showSession(sessionId) {
       entry.terminal.focus();
       fitAndScroll(entry);
     }
+    refreshRemoteTerminalOnReturn(sessionId, previousActiveSessionId);
   }
 }
 

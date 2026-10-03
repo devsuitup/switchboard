@@ -418,9 +418,9 @@ function createTmuxAttachAdapter(opts = {}) {
 
     const ptyProcess = {
       write(data) { if (alive) raw.write(data); },
-      resize(cols, rows) {
-        if (!solo || !alive) return;
-        try { raw.resize(cols, rows); } catch {}
+      resize(cols, rows, options) {
+        if ((!solo && options?.refresh !== true) || !alive) return;
+        try { raw.resize(cols, rows); } catch (err) { if (options?.refresh === true) throw err; }
       },
       kill: detach,
       onData(cb) { return raw.onData(cb); },

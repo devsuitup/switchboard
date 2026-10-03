@@ -42,6 +42,7 @@ test('the row is declared once: indicators, then panel toggles, then Stop last',
     ['panel-terminal-toggle-btn', 'toggle'],
     ['changes-toggle-btn', 'toggle'],
     ['touched-toggle-btn', 'toggle'],
+    ['terminal-refresh-btn', 'action'],
     ['terminal-stop-btn', 'action'],
   ]);
   const ranks = HEADER_CONTROLS.map((c) => KIND_RANK[c.kind]);
@@ -55,7 +56,7 @@ test('index.html carries its static controls in the declared order, marked with 
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-stop-btn']);
+  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-refresh-btn', 'terminal-stop-btn']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -65,8 +66,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['terminal-stop-btn', 'touched-toggle-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
-    ['touched-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
+    ['terminal-stop-btn', 'terminal-refresh-btn', 'touched-toggle-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
+    ['touched-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {

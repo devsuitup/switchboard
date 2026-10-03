@@ -1277,6 +1277,12 @@ function rebindSidebarEvents(projects) {
     // Subagent items are read-only: skip pin, rename, stop, fork, archive, jsonl, launchConfig
     if (item.dataset.subagent) return;
 
+    item.oncontextmenu = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showSessionContextMenu(event, sessionId);
+    };
+
     const pin = item.querySelector('.session-pin');
     if (pin) {
       pin.onclick = async (e) => {
@@ -1416,6 +1422,51 @@ function rebindSidebarEvents(projects) {
       saveExpandedSlugs();
     }
   }
+}
+
+const SESSION_MENU_EDGE_MARGIN = 4;
+let activeSessionContextMenu = null;
+
+function closeSessionContextMenu() {
+  activeSessionContextMenu?.remove();
+  activeSessionContextMenu = null;
+  document.removeEventListener('mousedown', onSessionMenuOutside, true);
+  document.removeEventListener('keydown', onSessionMenuKey, true);
+  document.removeEventListener('scroll', closeSessionContextMenu, true);
+}
+
+function onSessionMenuOutside(event) {
+  if (!activeSessionContextMenu?.contains(event.target)) closeSessionContextMenu();
+}
+
+function onSessionMenuKey(event) {
+  if (event.key === 'Escape') closeSessionContextMenu();
+}
+
+function showSessionContextMenu(event, sessionId) {
+  closeSessionContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'popover terminal-context-menu session-context-menu';
+  menu.setAttribute('role', 'menu');
+  const button = document.createElement('button');
+  button.className = 'popover-option session-refresh-btn';
+  button.setAttribute('role', 'menuitem');
+  button.textContent = 'Refresh screen';
+  const entry = openSessions.get(sessionId);
+  button.disabled = !entry || entry.closed;
+  if (button.disabled) button.title = 'Open this session in a terminal to refresh its screen';
+  button.onclick = () => {
+    closeSessionContextMenu();
+    requestTerminalRefresh(sessionId);
+  };
+  menu.appendChild(button);
+  document.body.appendChild(menu);
+  menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - SESSION_MENU_EDGE_MARGIN)) + 'px';
+  menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - SESSION_MENU_EDGE_MARGIN)) + 'px';
+  activeSessionContextMenu = menu;
+  document.addEventListener('mousedown', onSessionMenuOutside, true);
+  document.addEventListener('keydown', onSessionMenuKey, true);
+  document.addEventListener('scroll', closeSessionContextMenu, true);
 }
 
 // see .ai/contexts/session-state.md ("Descriptor-owned attention")

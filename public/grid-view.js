@@ -305,6 +305,7 @@ function unwrapGridCards() {
 }
 
 function focusGridCard(sessionId) {
+  const previousSessionId = gridFocusedSessionId;
   gridFocusedSessionId = sessionId;
   setActiveSession(sessionId);
   clearNotifications(sessionId);
@@ -322,6 +323,7 @@ function focusGridCard(sessionId) {
   }
   const entry = openSessions.get(sessionId);
   if (entry) entry.terminal.focus();
+  refreshRemoteTerminalOnReturn(sessionId, previousSessionId);
 }
 
 // Wraps one card per open session in sidebar order, emitting a project heading

@@ -7,6 +7,7 @@ const HEADER_CONTROLS = Object.freeze([
   Object.freeze({ id: 'panel-terminal-toggle-btn', kind: 'toggle' }),
   Object.freeze({ id: 'changes-toggle-btn', kind: 'toggle' }),
   Object.freeze({ id: 'touched-toggle-btn', kind: 'toggle' }),
+  Object.freeze({ id: 'terminal-refresh-btn', kind: 'action' }),
   Object.freeze({ id: 'terminal-stop-btn', kind: 'action' }),
 ]);
 

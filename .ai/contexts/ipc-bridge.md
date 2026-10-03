@@ -218,6 +218,11 @@ Fail closed: if **either** realpath fails for a reason other than `ENOENT`/`ENOT
 
 ### PTY operations race the exit
 
+`terminal-resize` accepts `(sessionId, cols, rows, refresh)`. The preload
+`resizeTerminal` takes `{refresh: true}` as its optional fourth argument and
+sends the boolean in a single message. The main resize handler owns the nudge
+and final-size restoration; see [terminal-refresh](terminal-refresh.md).
+
 `session.exited` is set from `ptyProcess.onExit`, which fires on a later tick
 than the child's actual death. So `if (!session.exited) session.pty.resize(...)`
 is a check-then-act: node-pty can still throw `Cannot resize a pty that has

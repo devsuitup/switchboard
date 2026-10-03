@@ -76,7 +76,8 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
-const { setPtyOpLogger, resizePty, killPty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, killPty, ptyExitSignalName } = require('./pty-ops');
+const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
@@ -2886,26 +2887,18 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
 });
 
 // --- IPC: terminal-resize (fire-and-forget) ---
-ipcMain.on('terminal-resize', (_event, sessionId, cols, rows) => {
+const handleTerminalResize = createTerminalResizeHandler(activeSessions);
+ipcMain.on('terminal-resize', (_event, sessionId, cols, rows, refresh) => {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     // For plain terminals, suppress buffering during resize to avoid
     // accumulating prompt redraws that pollute reattach replay
     if (session.isPlainTerminal) session._suppressBuffer = true;
 
-    resizePty(session, cols, rows, sessionId);
+    handleTerminalResize(sessionId, cols, rows, refresh);
 
     if (session.isPlainTerminal) {
       setTimeout(() => { session._suppressBuffer = false; }, 200);
-    }
-
-    // First resize: nudge to force TUI redraw on reattach (skip for plain terminals — causes duplicate prompts)
-    if (session.firstResize && !session.isPlainTerminal) {
-      session.firstResize = false;
-      setTimeout(() => {
-        if (!resizePty(session, cols + 1, rows, sessionId)) return;
-        setTimeout(() => resizePty(session, cols, rows, sessionId), 50);
-      }, 50);
     }
   }
 });

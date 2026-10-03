@@ -290,6 +290,8 @@ const rendererCrossFileGlobals = {
   handleSessionNavKey: 'readonly',
   isSessionNavKey: 'readonly',
   fitAndScroll: 'readonly',
+  requestTerminalRefresh: 'readonly',
+  refreshRemoteTerminalOnReturn: 'readonly',
   safeFit: 'readonly',
   proposeFittedDimensions: 'readonly',
   refitOpenTerminals: 'readonly',
@@ -628,6 +630,7 @@ module.exports = [
       'schedule-runner.js',
       'shell-profiles.js',
       'terminal-input.js',
+      'terminal-resize.js',
       'trigger-context.js',
       'workers/**/*.js',
     ],
@@ -672,6 +675,8 @@ module.exports = [
       globals: {
         ...globals.node,
         ...globals.browser,
+        activeSessionId: 'readonly',
+        openSessions: 'readonly',
       },
     },
     rules: {
