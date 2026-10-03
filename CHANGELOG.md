@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - Back to list and Escape from a file or diff restore Touched and Changes with their scroll position and selection. (#444)
+- **Restore Sessions on Startup** has a new **Restore on click** option: the sessions open when Switchboard last closed are marked in the sidebar with an outlined dot, and each one is resumed only when you click it, instead of starting a `claude` process for every one at launch. (#441)
 ### Changed
 - Touched opens on the last day's files, shows when each was last touched, and sorts by time or path. Show 10 more days extends the history, and reopening the tab reuses unchanged transcripts. (#444)
 

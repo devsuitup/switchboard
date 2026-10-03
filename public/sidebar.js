@@ -685,14 +685,15 @@ function renderProjects(projects, resort) {
     const allItems = [];
     for (const session of ungrouped) {
       const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
-      allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
+      allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: isDormantSession(session.sessionId), element: buildSessionItem(session) });
     }
     for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
+      const hasDormant = sessions.some(s => isDormantSession(s.sessionId));
       const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex);
-      allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
+      allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, dormant: hasDormant, element });
     }
 
     // Sort render items
@@ -725,7 +726,7 @@ function renderProjects(projects, resort) {
       let count = 0;
       const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
       for (const item of allItems) {
-        if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
+        if (item.running || item.pinned || item.dormant || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
           visible.push(item);
           count++;
         } else {
@@ -1427,6 +1428,10 @@ function remoteAttentionSnapshot(sessionId) {
   return !snapshot.attached && snapshot.attention ? snapshot : null;
 }
 
+function isDormantSession(sessionId) {
+  return typeof dormantWorkingSet !== 'undefined' && dormantWorkingSet.has(sessionId);
+}
+
 function buildSessionItem(session) {
   const item = document.createElement('div');
   item.className = 'session-item js-stateful';
@@ -1434,6 +1439,7 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
+  if (isDormantSession(session.sessionId)) item.classList.add('dormant');
   const remoteAttention = remoteAttentionSnapshot(session.sessionId);
   setNeedsAttention(item, attentionSessions.has(session.sessionId) || !!remoteAttention);
   setResponseReady(item, responseReadySessions.has(session.sessionId));

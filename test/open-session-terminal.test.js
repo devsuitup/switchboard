@@ -24,6 +24,7 @@ async function withHarness(setup, fn) {
       sessionOpenedOutsideRestore: false,
       openSessions: new Map(),
       skippedWorkingSetEntries: new Set(),
+      dormantWorkingSet: new Map(),
       destroySession: (id) => calls.destroyed.push(id),
       showSession: (id) => calls.shown.push(id),
       guardResume: async () => true,

@@ -87,7 +87,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
-  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex'])
+  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'dormantWorkingSet'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
   for (const name of ['persistWorkingSet', 'runRestore', 'openSession']) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
