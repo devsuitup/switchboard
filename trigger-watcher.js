@@ -94,7 +94,7 @@ const REASON_DIALOG_OPEN_AFTER_WRITE = 'the CLI reports a dialog open (waiting) 
 const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could be written; nothing was written';
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
-const REASON_IDLE_UNSETTLED = 'the CLI reported idle only at the deadline, too late to settle; nothing was written';
+const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
 
@@ -414,7 +414,7 @@ function cliForbidsRecoveryEnter(ctx, sessionId) {
 }
 
 // see .ai/contexts/trigger-watcher.md, "Readiness before every step" (return shape, descriptor loss, deadline)
-function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) {
+function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, trustIdleStamp = false) {
   const start = Date.now();
   let idleSince = null;
   let idleStamp = null;
@@ -441,7 +441,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
       lastStatus = s.status;
       if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
         if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
-          idleSince = firstIdleRead ? Math.min(now, s.statusUpdatedAt) : now;
+          idleSince = (trustIdleStamp && firstIdleRead) ? Math.min(now, s.statusUpdatedAt) : now;
           idleStamp = s.statusUpdatedAt;
         }
         firstIdleRead = false;
@@ -1149,7 +1149,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // see .ai/contexts/trigger-watcher.md, "Readiness before a single trigger"
     if (wait === 'idle') {
       const settleMs = Math.max(0, Math.min(getBusyFallSettleMs(), commandDeadline - Date.now() - 1));
-      const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, settleMs);
+      const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, settleMs, true);
       waited_ms += ready.waited_ms;
       if (ready.sessionExited) {
         ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);

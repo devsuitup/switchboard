@@ -988,15 +988,18 @@ for `none`.
   `waitForComposerFree` and the liveness re-check, right before
   `submitWithVerify`. No parallel mechanism: the not-ready results map to the
   chain reasons (`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`)
-  plus `REASON_IDLE_UNSETTLED` when the last read was `idle` but too late to
-  settle, never "never reported idle" for an idle descriptor. `error` is
+  plus `REASON_IDLE_UNSETTLED` when the last read was `idle` but it never held
+  long enough to settle (a fresh idle at the deadline, or one that kept
+  restarting), never "never reported idle" for an idle descriptor. `error` is
   `not sent`, `submitted` `no`. A session whose descriptor is held `busy` by
   background agents (#360, a CLI limit) fails at the deadline; `none` is the
   value for it.
-- **Settle.** `waitForCliIdleAfter` counts an `idle` first read from its
-  `statusUpdatedAt`, so one older than the settle window is ready on that read
-  (no flat +300 ms on every trigger; a later new stamp still counts from when
-  it was seen). The single path caps the settle at the time left to the
+- **Settle.** `waitForCliIdleAfter(…, trustIdleStamp)` is off by default, so
+  chains behave exactly as before: a stale idle read after a step whose Enter
+  drew no reaction must still pay the settle (the #407 family). The single path
+  passes `true`: an `idle` first read counts from its `statusUpdatedAt`, so one
+  older than the settle window is ready on that read (no flat +300 ms on every
+  trigger; a later new stamp still counts from when it was seen). The single path caps the settle at the time left to the
   deadline, so a `timeout_ms` under the settle on an idle session writes.
   Poll granularity is 100 ms, so a fresh idle with a very short deadline can
   still end `REASON_IDLE_UNSETTLED`.

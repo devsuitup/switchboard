@@ -71,6 +71,7 @@ async function run(payload, s) {
 }
 
 const trig = (id, extra = {}) => ({ sessionId: id, command: 'hello', timeout_ms: 800, ...extra });
+const STALE = Date.now() - 5000;
 const DIALOG = /dialog open \(waiting\); nothing was written into it/;
 
 async function withSettle(ms, fn) {
@@ -245,7 +246,7 @@ test('idle, an idle that keeps restarting never settles: the unsettled reason, n
   const r = await run(trig(id, { wait: 'idle', timeout_ms: 500 }), s);
   assert.deepEqual(s.written, []);
   assert.equal(r.error, 'not sent');
-  assert.match(r.reason, /idle only at the deadline, too late to settle/);
+  assert.match(r.reason, /idle only briefly before the deadline; it never held long enough to settle/);
 });
 
 test('the deadline passed before the write: nothing is written, with or without a descriptor', async () => {
@@ -263,9 +264,19 @@ test('the deadline passed before the write: nothing is written, with or without 
 test('waitForCliIdleAfter: an idle stamped before the settle window is ready on the first read', async () => {
   const ctx = {
     getPtyForSession: () => ({}),
-    getCliStatus: () => ({ status: 'idle', statusUpdatedAt: Date.now() - 5000 }),
+    getCliStatus: () => ({ status: 'idle', statusUpdatedAt: STALE }),
   };
-  const r = await waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 2000);
+  const r = await waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 2000, true);
   assert.equal(r.ready, true);
   assert.ok(r.waited_ms < 500);
+});
+
+test('waitForCliIdleAfter: without trustIdleStamp (chains) an old idle still pays the settle', async () => {
+  const ctx = {
+    getPtyForSession: () => ({}),
+    getCliStatus: () => ({ status: 'idle', statusUpdatedAt: STALE }),
+  };
+  const r = await waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 400);
+  assert.equal(r.ready, true);
+  assert.ok(r.waited_ms >= 380, 'ready after ' + r.waited_ms + ' ms, before the settle');
 });

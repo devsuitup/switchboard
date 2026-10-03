@@ -462,8 +462,8 @@ The two reserved values mean opposite things:
   *the CLI still reported a turn running (busy) at the deadline; nothing was
   written*, and a session whose background agents keep the parent descriptor
   `busy` (#360) always ends so: use `wait: "none"` for it. An `idle` that
-  appeared only at the deadline gives *the CLI reported idle only at the
-  deadline, too late to settle; nothing was written*. Without a readable
+  never held long enough to settle gives *the CLI was idle only briefly before
+  the deadline; it never held long enough to settle; nothing was written*. Without a readable
   descriptor at the first read nothing is waited for.
 - A single `command` with `wait: "none"` keeps its write-now meaning: `busy`,
   `idle` or an unreadable descriptor write at once, with no settle. The only
