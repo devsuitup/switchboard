@@ -248,19 +248,80 @@ proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
 
 node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
-(microsoft/node-pty#922: the exit thread no longer erases an entry while
-`PtyKill` / `PtyResize` run), but it does not make a second kill safe: `PtyKill`
-still leaves the handle registered with its `hpc`, and `WindowsTerminal.kill`
-has no once-only guard. Measured 2026-10-03 with the child above against the
-beta: two raw `term.kill()` still exit 3221226356, two `killPty` exit 0. The
-guard stays.
+(microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
+entry, and frees it, without a lock, while the main thread may be inside
+`PtyKill` or `PtyResize` holding a pointer to that entry, or walking the table
+while the erase shifts it. The beta takes `g_ptyHandlesMutex` on both sides.
+It does not make a second kill safe: `PtyKill` still leaves the handle
+registered with its `hpc`, and `WindowsTerminal.kill` has no once-only guard.
+Measured 2026-10-03 with the child above against the beta: two raw
+`term.kill()` still exit 3221226356, two `killPty` exit 0. The guard stays.
 
-The beta's bundled OpenConsole also sends a plain DSR (`CSI 6n`) after start
-and after a resize, retried about every 500 ms until answered. xterm.js answers
-it with a plain CPR (`CSI row;col R`), which `composer-state.js` does not treat
-as a report (see `.ai/contexts/trigger-watcher.md`, CPR), so each answer pushes
-the quiet clock once. With an answer it is one query per resize, measured on an
-isolated pty; the rate in the app is not measured.
+The race itself was measured with a scratch stress script, not kept in the
+suite (each run takes about a minute, and a pass proves nothing). One child
+process per run, so a crash is an exit status: 20 iterations, each starting 4
+`cmd.exe /c exit` ptys plus one long-lived pty, then 300 ms of resize calls
+straight into the binding while the short shells exit, and in kill mode one
+agent-level kill per short pty at a random moment in the first 150 ms.
+Results, 2026-10-03, `useConptyDll`, plain node 24:
+
+| Mode | 1.1.0 | 1.2.0-beta.15 |
+| --- | --- | --- |
+| kill | 5 of 8 runs died, 0xc0000005 | 0 of 8 died |
+| resize | 0 of 3 died | 0 of 3 died |
+
+One beta kill run completed its 20 iterations and then never exited (killed
+after 600 s); not explained. The crash is not deterministic: it needs the exit
+thread's erase to land inside the few instructions between the main thread's
+lookup and its last use of the entry, and reading or writing freed memory only
+crashes when the allocator has already reused or unmapped it. A kill holds
+the pointer across `ClosePseudoConsole`, which can wait for OpenConsole, and then
+writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
+
+### Cursor-position queries
+
+The beta's bundled OpenConsole asks the terminal where its cursor is: a plain
+DSR (`CSI 6n`). 1.1.0 sent none in the same runs. Measured 2026-10-03 on an
+isolated pty under Electron 41 with `useConptyDll` (`cmd.exe`, then a raw-mode
+node reader as the shell):
+
+- With no resize, no query in 10 s.
+- A resize within about the first 3 s of the pty brings one query about 3.3 to
+  4 s after spawn. Unanswered, it is repeated about every 520 ms and dropped
+  after 3 (`cmd.exe`) or 4 (node) queries. Answered, it is sent once. A resize
+  at 4 s or later brought none, and a second resize no second series.
+- OpenConsole keeps waiting after the last repeat: the first CPR that arrives
+  later, even seconds later, is consumed. Every other CPR it receives, a reply
+  it is not waiting for, is passed to the shell's application as typed input,
+  verbatim (`ESC [ 24 ; 1 R` read by the child's stdin). 1.1.0 passes such a
+  reply through the same way.
+
+A visible session answers at once: xterm.js replies with a plain CPR
+(`CSI row;col R`), which `composer-state.js` does not treat as a report (see
+`.ai/contexts/trigger-watcher.md`, CPR), so the answer pushes the quiet clock
+once.
+
+A hidden single-view session cannot answer: its output goes to the hidden
+accumulator, not to xterm. A session with no renderer attached cannot either.
+Both replay paths drop the query instead of keeping it:
+
+- `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
+  remove `CSI 6n` from what they keep, including a query split across two
+  chunks and one left in the live write buffer when the session was hidden.
+- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes it
+  on the way in, a split query included. That buffer also holds the queries a
+  visible renderer already answered.
+
+Kept, each query would be answered by xterm.js at reveal or reattach: one reply
+consumed by an OpenConsole still waiting, every other one typed into Claude or
+the shell. Answering once at reveal instead was rejected: the reply would give
+the cursor of a replay that happened after the output OpenConsole had already
+moved on from, and nothing tells the renderer whether OpenConsole is still
+waiting or a reply was already sent. Left unanswered, OpenConsole keeps its own
+idea of the cursor, as it did on 1.1.0 where it never asked; the next query it
+sends while the session is visible is answered live. Other terminal queries
+in a replay (`CSI c`, `CSI > q`, OSC colour queries) are not filtered; their
+replay is older than this change and not addressed here.
 
 Swallowed errors are not silent: `setPtyOpLogger(log)` in `main.js` routes them
 to `log.debug` as `[pty] <op> skipped session=<id> reason=<message>`. Debug level

@@ -15,7 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A trigger that gave up waiting for a session now says, in its result file's `reason`, when the session was blocked on a dialog such as a permission prompt or a question: for a single trigger, a chain's first wait, and a chain step whose turn never finished. Without a dialog the result is as before. (#379)
 ### Fixed
 - The Changes panel no longer shows `fatal: .git/index: index file open failed: Permission denied` now and then on Windows: a session's local changes are read one git call at a time instead of three at once. (#421)
-- On Windows, closing or resizing a terminal at the moment its shell exits can no longer crash the whole app: the terminal library moves to node-pty 1.2.0-beta.15, a pre-release, which fixes that race. (#409)
+- On Windows, closing or resizing a terminal at the moment its shell exits should no longer crash the whole app: a known cause is fixed in the terminal library. (#409)
 
 ## v0.0.87 — 2026-10-02
 

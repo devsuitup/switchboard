@@ -716,3 +716,83 @@ test('grid-open sync guard: same deferral on a plain showSession reveal of a ses
     destroy();
   }
 });
+
+// Cursor-position queries (CSI 6n) while hidden. node-pty 1.2's ConPTY asks
+// one after an early resize and repeats it until answered; a hidden session
+// cannot answer, and xterm answering a replayed query on reveal sends a reply
+// nobody is waiting for, which ConPTY hands to the application as typed input.
+// See .ai/contexts/ipc-bridge.md, "Cursor-position queries".
+
+test('GIVEN a hidden session WHEN ConPTY cursor-position queries arrive, even split across chunks, THEN the accumulator does not keep them', () => {
+  const { window, inCtx, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'active' });
+    window.createTerminalEntry({ sessionId: 'hidden' });
+    window.activeSessionId = 'active';
+    window.gridViewActive = false;
+
+    window.handleTerminalData('hidden', 'A\x1b[6n');
+    window.handleTerminalData('hidden', 'B\x1b[6n\x1b[6n');
+    window.handleTerminalData('hidden', 'C\x1b');
+    window.handleTerminalData('hidden', '[6nD');
+
+    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'ABCD');
+  } finally {
+    destroy();
+  }
+});
+
+test('GIVEN a query left in the live buffer when the session was hidden WHEN it is revealed THEN the replay carries no cursor-position query', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'a' });
+    window.createTerminalEntry({ sessionId: 'b' });
+    window.activeSessionId = 'a';
+    window.gridViewActive = false;
+
+    window.handleTerminalData('a', 'OLD\x1b[6n');
+    window.showSession('b');
+    window.activeSessionId = 'b';
+    window.handleTerminalData('a', 'NEW');
+
+    window.showSession('a');
+
+    assert.strictEqual(spies.write, 1);
+    assert.strictEqual(spies.writes[0], 'OLDNEW');
+  } finally {
+    destroy();
+  }
+});
+
+test('GIVEN a hidden session WHEN it receives other escape sequences THEN they are replayed untouched', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'active' });
+    window.createTerminalEntry({ sessionId: 'hidden' });
+    window.activeSessionId = 'active';
+    window.gridViewActive = false;
+
+    window.handleTerminalData('hidden', '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+    window.showSession('hidden');
+
+    assert.strictEqual(spies.writes[0], '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+  } finally {
+    destroy();
+  }
+});
+
+test('GIVEN a hidden session WHEN a query arrives wrapped around another one THEN removing the inner one leaves no query behind', () => {
+  const { window, inCtx, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'active' });
+    window.createTerminalEntry({ sessionId: 'hidden' });
+    window.activeSessionId = 'active';
+    window.gridViewActive = false;
+
+    window.handleTerminalData('hidden', 'A[[6n6nB');
+
+    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'AB');
+  } finally {
+    destroy();
+  }
+});

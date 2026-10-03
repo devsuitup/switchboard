@@ -39,7 +39,9 @@
 //   The reattach loop in main.js iterates `for (const chunk of outputBuffer)`
 //   and forwards each chunk verbatim to xterm.js.  Because we only ever
 //   remove bytes from the front of the conceptual stream (never insert, split,
-//   or reorder), xterm.js sees a consistent terminal state.  The line-boundary
+//   or reorder), xterm.js sees a consistent terminal state.  (Cursor-position
+//   queries are the one exception: dropped on the way in, they draw nothing.)
+//   The line-boundary
 //   trim means the replay starts at a newline (not mid-escape), so cursor/color
 //   state from before the trim window is simply absent — same trade-off the
 //   original whole-chunk front-trim had, just at a byte-accurate boundary.
@@ -63,6 +65,35 @@
 const COALESCE_THRESHOLD = 64;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
+// Cursor-position query (DSR 6). Never replayed: see .ai/contexts/ipc-bridge.md,
+// "Cursor-position queries".
+const CURSOR_POSITION_QUERY = '\x1b[6n';
+
+function removeCursorPositionQueries(data) {
+  const parts = data.split(CURSOR_POSITION_QUERY);
+  return parts.length === 1 ? data : removeCursorPositionQueries(parts.join(''));
+}
+
+// Length of the query prefix `prev` ends with that `next` completes, 0 if none.
+function splitQueryPrefixLength(prev, next) {
+  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
+    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
+  }
+  return 0;
+}
+
+function dropSplitQuery(state, data) {
+  const last = state.outputBuffer.length - 1;
+  if (last < 0) return data;
+  const k = splitQueryPrefixLength(state.outputBuffer[last], data);
+  if (k === 0) return data;
+  const kept = state.outputBuffer[last].slice(0, -k);
+  state.outputBufferSize -= k;
+  if (kept) state.outputBuffer[last] = kept;
+  else state.outputBuffer.pop();
+  return data.slice(CURSOR_POSITION_QUERY.length - k);
+}
+
 /**
  * Push `data` into `state.outputBuffer` and maintain the two invariants:
  *   1. `state.outputBufferSize` ≤ `max` (the 256 KB ceiling by default)
@@ -74,10 +105,12 @@ const MAX_BUFFER_SIZE = 256 * 1024;
  * `state`.  Designed to be unit-testable in isolation from main.js / Electron.
  *
  * @param {{ outputBuffer: string[], outputBufferSize: number }} state
- * @param {string} data
+ * @param {string} chunk
  * @param {number} max  Maximum retained UTF-16 code units (normally MAX_BUFFER_SIZE)
  */
-function appendToOutputBuffer(state, data, max) {
+function appendToOutputBuffer(state, chunk, max) {
+  if (!chunk) return;
+  const data = removeCursorPositionQueries(dropSplitQuery(state, chunk));
   if (!data) return;
 
   state.outputBuffer.push(data);
