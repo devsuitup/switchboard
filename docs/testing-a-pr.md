@@ -6,7 +6,9 @@ quitting it and without touching its database or triggers.
 
 Use `task test-pr PR=<number> ISOLATED=1` for an instance with synthetic
 sessions under a throwaway HOME, suitable for driving with a script.
-The default mode keeps your real HOME and transcript history.
+The default mode keeps your real HOME and transcript history. `ISOLATED` takes
+`1` for fixture mode or `0` for the default mode; unset or empty also selects
+the default. Other values produce a usage error before any git command.
 
 ## From source, not a build
 

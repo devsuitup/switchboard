@@ -6,6 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const { createRequire } = require('node:module');
+const vm = require('node:vm');
 
 const tooling = () => require('../scripts/test-pr');
 
@@ -193,6 +196,7 @@ function workflow(t) {
   const run = (file, args, options) => {
     calls.push({ file, args, cwd: options.cwd });
     if (args[0] === 'rev-parse') return 'fixture-sha\n';
+    if (args[0] === 'ls-tree') return 'package-lock.json\n';
     if (args[0] === 'show') return JSON.stringify(lock());
     if (args[0] === 'worktree' && args[1] === 'add') fs.mkdirSync(args[3], { recursive: true });
     return '';
@@ -270,3 +274,116 @@ test('invalid options prevent even the first git command', async () => {
     await assert.rejects(tooling().main({ env, run: () => assert.fail('git must not run') }));
   }
 });
+
+test('invalid ISOLATED values fail with a usage error before any git call', async (t) => {
+  for (const value of ['true', 'yes', 'on', '2', ' 1', null]) {
+    for (const clean of [false, true]) {
+      const setup = workflow(t);
+      await assert.rejects(tooling().main({ ...setup, clean, env: { ...setup.env, ISOLATED: value },
+        launch: async () => assert.fail('invalid ISOLATED must not launch') }), /ISOLATED must be 1 or 0/);
+      assert.equal(setup.calls.length, 0);
+    }
+  }
+});
+
+test('ISOLATED accepts 1, 0, empty and unset with the intended HOME', async (t) => {
+  for (const value of ['1', '0', '', undefined]) {
+    const setup = workflow(t);
+    const env = { ...setup.env };
+    if (value === undefined) delete env.ISOLATED;
+    else env.ISOLATED = value;
+    let launchedHome;
+    const status = await tooling().main({ ...setup, env, fixtures: () => {},
+      launch: async (file, args, options) => {
+        launchedHome = options.env.HOME;
+        assert.equal(args.some(arg => arg.startsWith('--remote-debugging-port=')), value === '1');
+        assert.equal(launchedHome === setup.home, value !== '1');
+        return 0;
+      } });
+    assert.equal(status, 0);
+    assert.equal(fs.existsSync(launchedHome), value !== '1');
+  }
+});
+
+test('missing lock contents on either side count as changed, and both missing are unchanged', () => {
+  assert.equal(tooling().lockChanged('', '{}'), true);
+  assert.equal(tooling().lockChanged('{}', ''), true);
+  assert.equal(tooling().lockChanged('', ''), false);
+});
+
+test('missing lock files warn only when one side is missing and never prevent launch', async (t) => {
+  for (const missing of [['origin/main'], ['fixture-sha'], ['origin/main', 'fixture-sha']]) {
+    const setup = workflow(t);
+    let launches = 0;
+    const status = await tooling().main({ ...setup,
+      run: (file, args, options) => {
+        if (args[0] === 'ls-tree' && missing.includes(args[2])) return '';
+        if (args[0] === 'show' && missing.includes(args[1].split(':')[0])) {
+          throw new Error('fatal: package-lock.json does not exist in this revision');
+        }
+        return setup.run(file, args, options);
+      },
+      launch: async () => { launches++; return 0; } });
+    assert.equal(status, 0);
+    assert.equal(launches, 1);
+    assert.equal(setup.messages.some(message => message.startsWith('WARNING: package-lock.json')), missing.length === 1);
+  }
+});
+
+function signalWorkflow(t, platform) {
+  const setup = workflow(t);
+  const child = new EventEmitter();
+  child.pid = 123;
+  const stops = [];
+  child.kill = signal => { stops.push(signal); };
+  const fakeProcess = Object.assign(new EventEmitter(), { platform, env: setup.env });
+  const script = path.join(__dirname, '../scripts/test-pr.js');
+  const scriptRequire = createRequire(script);
+  const module = { exports: {} };
+  let createdHome;
+  let cleanups = 0;
+  const fakeFs = { ...fs, rmSync: (target, options) => {
+    if (target === createdHome) cleanups++;
+    fs.rmSync(target, options);
+  } };
+  const fakeChildProcess = {
+    spawn: () => child,
+    execFileSync: (file, args) => { stops.push([file, ...args]); },
+  };
+  vm.runInNewContext(fs.readFileSync(script, 'utf8'), { module, __dirname: path.dirname(script),
+    process: fakeProcess, console, require: name => {
+      if (name === 'node:fs') return fakeFs;
+      if (name === 'node:child_process') return fakeChildProcess;
+      return scriptRequire(name);
+    } }, { filename: script, timeout: 1000 });
+  const result = module.exports.main({ ...setup, env: { ...setup.env, ISOLATED: '1' },
+    fixtures: home => { createdHome = home; } });
+  t.after(async () => { child.emit('close', 0); await result; });
+  return { child, fakeProcess, stops, result, home: () => createdHome, cleanups: () => cleanups };
+}
+
+for (const platform of ['linux', 'win32']) {
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    test(`repeated ${signal} on ${platform} keeps forwarding until child exit and cleans HOME once`, async (t) => {
+      const setup = signalWorkflow(t, platform);
+      assert.equal(fs.existsSync(setup.home()), true);
+      for (let i = 0; i < 2; i++) {
+        assert.equal(setup.fakeProcess.emit(signal), true);
+        assert.equal(setup.stops.length, i + 1);
+        assert.equal(fs.existsSync(setup.home()), true);
+        assert.equal(setup.cleanups(), 0);
+      }
+      if (platform === 'linux') assert.deepEqual(setup.stops, ['SIGTERM', 'SIGTERM']);
+      else assert.deepEqual(setup.stops, [
+        ['taskkill', '/pid', '123', '/T', '/F'], ['taskkill', '/pid', '123', '/T', '/F'],
+      ]);
+      setup.child.emit('close', 7);
+      assert.equal(await setup.result, 7);
+      setup.child.emit('close', 7);
+      assert.equal(fs.existsSync(setup.home()), false);
+      assert.equal(setup.cleanups(), 1);
+      assert.equal(setup.fakeProcess.listenerCount('SIGINT'), 0);
+      assert.equal(setup.fakeProcess.listenerCount('SIGTERM'), 0);
+    });
+  }
+}

@@ -10,6 +10,11 @@ function validatePr(pr) {
   if (!/^\d+$/.test(String(pr ?? ''))) throw new Error('PR must be numeric: task test-pr PR=<number>');
 }
 
+function validateIsolated(value) {
+  if (![undefined, '', '0', '1'].includes(value)) throw new Error('ISOLATED must be 1 or 0: task test-pr PR=<number> ISOLATED=<1|0>');
+  return value === '1';
+}
+
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
   isolated = false, tempHome, port = 9223 }) {
   validatePr(pr);
@@ -62,6 +67,7 @@ function prepareFixtures(home, env) {
 }
 
 function lockChanged(base, head) {
+  if (base === '' || head === '') return base !== head;
   const normalize = (text) => {
     const lock = JSON.parse(text);
     delete lock.version;
@@ -118,8 +124,8 @@ function runElectron(executable, args, options) {
         child.kill('SIGTERM');
       }
     };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
     const detach = () => {
       process.off('SIGINT', stop);
       process.off('SIGTERM', stop);
@@ -134,13 +140,13 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   log = console.log, warn = console.error } = {}) {
   const pr = env.PR;
   validatePr(pr);
+  const isolated = validateIsolated(env.ISOLATED);
   const home = env.HOME || os.homedir();
   if (clean) {
     cleanWorktree({ checkout, pr, home, run });
     log(`Cleaned up worktree and data dir for PR #${pr}`);
     return 0;
   }
-  const isolated = env.ISOLATED === '1';
   buildLaunch({ pr, home, env, isolated, tempHome: os.tmpdir(), port: env.DEBUG_PORT || 9223 });
   const worktree = path.join(checkout, '.worktrees', `pr-${pr}-test`);
   const git = (args, cwd = checkout) => run('git', args, { cwd });
@@ -152,7 +158,9 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     git(['worktree', 'add', '--detach', worktree, sha]);
   }
   git(['fetch', 'origin', 'main']);
-  if (lockChanged(git(['show', 'origin/main:package-lock.json']), git(['show', `${sha}:package-lock.json`]))) {
+  const readLock = ref => git(['ls-tree', '--name-only', ref, '--', 'package-lock.json']).trim()
+    ? git(['show', `${ref}:package-lock.json`]) : '';
+  if (lockChanged(readLock('origin/main'), readLock(sha))) {
     warn('WARNING: package-lock.json differs on this PR - shared node_modules may be invalid.');
     warn(`Stop and install the reviewed dependencies in ${worktree} before launching.`);
   }
