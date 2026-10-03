@@ -71,6 +71,11 @@ async function run(payload, s) {
 }
 
 const trig = (id, extra = {}) => ({ sessionId: id, command: 'hello', timeout_ms: 800, ...extra });
+async function holdingLoop(fn) {
+  const hold = setInterval(() => {}, 50);
+  try { return await fn(); } finally { clearInterval(hold); }
+}
+
 const STALE = Date.now() - 5000;
 const DIALOG = /dialog open \(waiting\); nothing was written into it/;
 
@@ -266,7 +271,7 @@ test('waitForCliIdleAfter: an idle stamped before the settle window is ready on 
     getPtyForSession: () => ({}),
     getCliStatus: () => ({ status: 'idle', statusUpdatedAt: STALE }),
   };
-  const r = await waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 2000, true);
+  const r = await holdingLoop(() => waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 2000, true));
   assert.equal(r.ready, true);
   assert.ok(r.waited_ms < 500);
 });
@@ -276,7 +281,7 @@ test('waitForCliIdleAfter: without trustIdleStamp (chains) an old idle still pay
     getPtyForSession: () => ({}),
     getCliStatus: () => ({ status: 'idle', statusUpdatedAt: STALE }),
   };
-  const r = await waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 400);
+  const r = await holdingLoop(() => waitForCliIdleAfter('x', ctx, -Infinity, Date.now() + 5000, 400));
   assert.equal(r.ready, true);
   assert.ok(r.waited_ms >= 380, 'ready after ' + r.waited_ms + ' ms, before the settle');
 });
