@@ -8,6 +8,7 @@
 |---|---|---|
 | `trigger-watcher.js` | ~1050 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
 | `trigger-context.js` | ~35 | `createTriggerContext({ activeSessions, log })` — builds the whole `ctx` object out of `main.js`'s session map. |
+| `transcript-turn.js` | ~80 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `terminal-input.js` | ~20 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `main.js` (wiring) | 3 | `require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
@@ -948,12 +949,113 @@ state was the cause.
   settle window, ends the wait even when `_cliBusy` is stuck true. An idle
   older than the Enter proves nothing (the Enter may have been absorbed) and
   leaves the `_cliBusy` logic in charge, as it does when no usable descriptor
-  exists. Not measured as fixed for sessions with background agents: the
-  descriptor stays `busy` until the last agent ends, so the busy-fall still
-  waits for it.
+  exists. For sessions with background agents the descriptor stays `busy`
+  until the last agent ends; the transcript fallback below covers that case.
 
 Tests: `test/trigger-every-step-readiness.test.js` (the real watcher with a
 fake descriptor, plus the wait helpers under mocked timers).
+
+### Transcript fallback while the descriptor stays busy (issue #360)
+
+Measured: the descriptor keeps `status: "busy"` while background agents
+(`run_in_background`) run, even when the prompt is free and the user can type,
+and `shell` while background shell jobs run. A chain then waited out its
+whole deadline after step 0 (issue comment of 2026-10-02: `steps_completed`
+0, `waited_ms` 599959). Maintainer decision (2026-10-03): when the descriptor
+says `busy` or `shell` but the transcript shows the turn is over, the prompt
+is treated as free.
+
+**Where it applies.** Chains only: the readiness wait before every step
+(`waitForCliIdleAfter`, 7th argument `{ transcriptAfterMs }`) and the
+busy-fall wait after a non-final step (`waitForBusyFall`). Single triggers do
+not pass the option and are unchanged. An `idle` descriptor never reaches the
+fallback: its own path decides, including an idle older than the `/compact`
+anchor, and the transcript is not even read. `waiting` (a dialog) never
+reaches it either.
+
+**All of these must hold** (`transcriptShowsTurnOver`):
+
+- The descriptor reads `busy` or `shell`.
+- No dialog: `waiting` was not sampled within the settle window
+  (`createDialogProbe`, the same detection as everywhere else).
+- The last main-thread message entry of the transcript closes a turn and
+  has a parseable `timestamp` (`transcript-turn.js`, `classifyTranscriptTail`).
+  Three entries close one: an `assistant` entry with `stop_reason` `end_turn`
+  or `stop_sequence` (the synthetic error message uses the latter); a `user`
+  entry whose string content is one `<local-command-stdout>` block, start to
+  end (the output of `/compact`, `/clear`, `/model`, …); a `user` entry with
+  `isCompactSummary: true`. Any other `user` entry (a prompt, a meta prompt
+  such as a scheduled task or the `<local-command-caveat>`, a
+  `<command-name>` entry, a `tool_result`) means a turn is in progress, and so
+  does a `tool_use` stop. A slash command that expands into a prompt writes
+  its `<command-name>` entry and then a model turn, so it is closed only by
+  that turn's `end_turn`.
+  Entries with `isSidechain` are skipped. Bookkeeping entries (`system`,
+  `attachment`, `last-prompt`, `file-history-*`, …) are skipped. A
+  `queue-operation` after the closed turn counts: any `dequeue`, or more
+  `enqueue` than `remove`, means a queued prompt is about to run.
+- The closed turn is stamped at or after the anchor: the Enter of the step
+  just written (busy-fall), or the Enter of the previous step (readiness; no
+  anchor before step 0). A turn that closed before our Enter says nothing
+  about our step.
+- The transcript file has not changed for `SWITCHBOARD_TRANSCRIPT_QUIET_MS`
+  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). Measured on real
+  transcripts (2026-10-03): the `end_turn` entry is followed by the
+  `stop_hook_summary` and `turn_duration` entries 0.8 to 1.3 s later, and a
+  queued prompt's `enqueue`/`dequeue` lands in the same burst. 3 s is more
+  than twice the longest observed gap and costs 3 s per step against chain
+  budgets of minutes.
+
+**What `/compact` leaves.** Measured on a real transcript (CLI of
+2026-10-03, two compactions), in file order once compaction ends: a `system`
+`compact_boundary`; the summary, a `user` entry with `isCompactSummary` and
+`isVisibleInTranscriptOnly`, stamped about 0.8 s before the boundary; the
+`<local-command-caveat>` (`isMeta`) and the `<command-name>/compact` entries,
+both stamped at the command's Enter; the `<local-command-stdout>` entry,
+stamped last; then `attachment` entries and bookkeeping. The stdout entry is
+the last message entry, so a `compact-now.sh` chain's step after `/compact`
+is released from the transcript while background agents hold the descriptor
+busy. The summary alone (read before the stdout lands) also closes, and the
+quiet window covers the gap. The test fixture copies this shape with
+synthetic text.
+
+**Proof of submission.** In edge mode a busy descriptor that does not change
+status writes no new `statusUpdatedAt`, so our Enter would never count as
+seen and the chain would stop on `step not confirmed`. While the descriptor
+reads `busy` or `shell`, a main-thread transcript entry stamped at or after
+the Enter (the prompt, or its `queue-operation`) also counts as the CLI's
+reaction (`transcriptReactedSince`). The recovery Enter rules are unchanged.
+
+**The result records the signal.** Each chain step carries `ready_source`
+(`descriptor` or `transcript`: what released the readiness wait before it;
+absent when no descriptor was available) and, for a non-final step,
+`idle_source` (`descriptor`, `transcript`, `busy_flag` for the `_cliBusy`
+level probe, `no_rise` when no turn was ever observed). A step ended from the
+transcript also logs one info line.
+
+**Reading the transcript.** `trigger-context.js` builds
+`ctx.getTranscriptTurn(sessionId)` when `main.js` passes `projectsDir`
+(`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
+key>.jsonl`, local sessions only (a remote session returns `null`). The reader
+stats the file and re-reads only when its mtime or size changed, the last
+256 KB, so a poll costs a `stat`. A missing file, a read error, or a tail
+with no message entry is never "closed".
+
+**Known limits.**
+
+- A long stop hook that writes nothing for 3 s after `end_turn` reads as
+  free; if it then continues the turn, the next step is queued by the CLI.
+- An interrupted turn ends on a `user` entry and never reads closed.
+- A background agent's completion notification written into the main
+  transcript within the verify window after our Enter can be taken as the
+  reaction to it.
+- The anchors compare the CLI's transcript timestamps with this process's
+  clock; both are the same machine's clock.
+
+Tests: `test/trigger-transcript-fallback.test.js` (the classification on
+JSONL text, the reader on real files, the wait helpers under mocked timers,
+and the chain through the real watcher and the real trigger context over a
+real transcript file).
 
 ### A blocked session tells its driver (issue #379)
 
@@ -1623,4 +1725,5 @@ observation layer.
 - If you rename `session.composerState` or stop feeding it from `terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
 - If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `terminal-input.js`.
 - If you rename `session.cwd` in `main.js`, update `getPtyForSession` in `trigger-context.js` — the target guard silently falls back to "indeterminate" (refuses every guarded trigger) rather than throwing, so this one fails quiet, not loud.
+- If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `getTranscriptTurn` in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).
 - Tests live in `test/trigger-watcher.test.js`.  They use `SWITCHBOARD_TRIGGERS_DIR` env override — do not hardcode paths there.
