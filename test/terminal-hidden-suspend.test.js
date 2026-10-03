@@ -735,8 +735,13 @@ test('GIVEN a hidden session WHEN ConPTY cursor-position queries arrive, even sp
     window.handleTerminalData('hidden', 'B\x1b[6n\x1b[6n');
     window.handleTerminalData('hidden', 'C\x1b');
     window.handleTerminalData('hidden', '[6nD');
+    window.handleTerminalData('hidden', 'E\x1b');
+    window.handleTerminalData('hidden', '[');
+    window.handleTerminalData('hidden', '6nF');
+    window.handleTerminalData('hidden', 'G\x1b[6');
+    window.handleTerminalData('hidden', 'nH');
 
-    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'ABCD');
+    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'ABCDEFGH');
   } finally {
     destroy();
   }
@@ -781,7 +786,7 @@ test('GIVEN a hidden session WHEN it receives other escape sequences THEN they a
   }
 });
 
-test('GIVEN a hidden session WHEN a query arrives wrapped around another one THEN removing the inner one leaves no query behind', () => {
+test('GIVEN a hidden session WHEN a query arrives inside an unfinished sequence THEN the query is removed once and the bytes around it are kept', () => {
   const { window, inCtx, destroy } = setupTerminalDom();
   try {
     window.createTerminalEntry({ sessionId: 'active' });
@@ -789,9 +794,9 @@ test('GIVEN a hidden session WHEN a query arrives wrapped around another one THE
     window.activeSessionId = 'active';
     window.gridViewActive = false;
 
-    window.handleTerminalData('hidden', 'A[[6n6nB');
+    window.handleTerminalData('hidden', 'A\x1b[\x1b[6n6nB');
 
-    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'AB');
+    assert.strictEqual(inCtx(`hiddenAccumulators.get('hidden').raw`), 'A\x1b[6nB');
   } finally {
     destroy();
   }

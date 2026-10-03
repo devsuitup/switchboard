@@ -69,9 +69,9 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // "Cursor-position queries".
 const CURSOR_POSITION_QUERY = '\x1b[6n';
 
+// One pass: a query re-formed by the removal is left alone, see the doc above.
 function removeCursorPositionQueries(data) {
-  const parts = data.split(CURSOR_POSITION_QUERY);
-  return parts.length === 1 ? data : removeCursorPositionQueries(parts.join(''));
+  return data.includes(CURSOR_POSITION_QUERY) ? data.split(CURSOR_POSITION_QUERY).join('') : data;
 }
 
 // Length of the query prefix `prev` ends with that `next` completes, 0 if none.
@@ -82,16 +82,42 @@ function splitQueryPrefixLength(prev, next) {
   return 0;
 }
 
-function dropSplitQuery(state, data) {
-  const last = state.outputBuffer.length - 1;
-  if (last < 0) return data;
-  const k = splitQueryPrefixLength(state.outputBuffer[last], data);
-  if (k === 0) return data;
-  const kept = state.outputBuffer[last].slice(0, -k);
-  state.outputBufferSize -= k;
-  if (kept) state.outputBuffer[last] = kept;
-  else state.outputBuffer.pop();
-  return data.slice(CURSOR_POSITION_QUERY.length - k);
+// The last n code units of the buffer, across entries.
+function bufferTail(state, n) {
+  const parts = [];
+  let size = 0;
+  for (let i = state.outputBuffer.length - 1; i >= 0 && size < n; i--) {
+    const part = state.outputBuffer[i].slice(-(n - size));
+    parts.unshift(part);
+    size += part.length;
+  }
+  return parts.join('');
+}
+
+function dropBufferEnd(state, count) {
+  let left = count;
+  while (left > 0) {
+    const last = state.outputBuffer.length - 1;
+    const entry = state.outputBuffer[last];
+    if (entry.length <= left) {
+      state.outputBuffer.pop();
+      state.outputBufferSize -= entry.length;
+      left -= entry.length;
+    } else {
+      state.outputBuffer[last] = entry.slice(0, -left);
+      state.outputBufferSize -= left;
+      left = 0;
+    }
+  }
+}
+
+// Only a chunk starting with '[', '6' or 'n' can complete a split query.
+function dropSplitQuery(state, chunk) {
+  if (!'[6n'.includes(chunk[0])) return chunk;
+  const k = splitQueryPrefixLength(bufferTail(state, CURSOR_POSITION_QUERY.length - 1), chunk);
+  if (k === 0) return chunk;
+  dropBufferEnd(state, k);
+  return chunk.slice(CURSOR_POSITION_QUERY.length - k);
 }
 
 /**

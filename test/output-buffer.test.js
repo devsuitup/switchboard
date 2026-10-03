@@ -258,8 +258,10 @@ test('GIVEN a cursor-position query split across two chunks WHEN both are append
   appendToOutputBuffer(state, '6nB', MAX);
   appendToOutputBuffer(state, 'C\x1b', MAX);
   appendToOutputBuffer(state, '[6nD', MAX);
-  assert.equal(joined(state), 'ABCD');
-  assert.equal(state.outputBufferSize, 4);
+  appendToOutputBuffer(state, 'E\x1b[6', MAX);
+  appendToOutputBuffer(state, 'nF', MAX);
+  assert.equal(joined(state), 'ABCDEF');
+  assert.equal(state.outputBufferSize, 6);
 });
 
 test('GIVEN other sequences that look like the query WHEN appended THEN they are kept byte for byte', () => {
@@ -285,8 +287,17 @@ test('GIVEN a chunk that is only the first half of a query WHEN the second half 
   assert.equal(state.outputBufferSize, 1);
 });
 
-test('GIVEN a query wrapped around another one WHEN appended THEN removing the inner one leaves no query behind', () => {
+test('GIVEN a query inside an unfinished sequence WHEN appended THEN the query is removed once and the bytes around it are kept', () => {
   const state = makeState();
-  appendToOutputBuffer(state, 'A[[6n6nB', MAX);
+  appendToOutputBuffer(state, 'A\x1b[\x1b[6n6nB', MAX);
+  assert.equal(joined(state), 'A\x1b[6nB');
+});
+
+test('GIVEN a cursor-position query split across three chunks WHEN all are appended THEN none of it stays in the replay buffer', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A\x1b', MAX);
+  appendToOutputBuffer(state, '[', MAX);
+  appendToOutputBuffer(state, '6nB', MAX);
   assert.equal(joined(state), 'AB');
+  assert.equal(state.outputBufferSize, 2);
 });

@@ -714,14 +714,19 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
 // .ai/contexts/ipc-bridge.md, "Cursor-position queries".
 const CURSOR_POSITION_QUERY = '\x1b[6n';
 
-// Removes the queries from str[from..], `from` being where the newest chunk
-// starts, minus room for a query split across the two chunks.
-function removeCursorPositionQueries(str, from = 0) {
-  const start = Math.max(0, from - (CURSOR_POSITION_QUERY.length - 1));
-  let tail = str.slice(start);
-  if (!tail.includes(CURSOR_POSITION_QUERY)) return str;
-  while (tail.includes(CURSOR_POSITION_QUERY)) tail = tail.split(CURSOR_POSITION_QUERY).join('');
-  return str.slice(0, start) + tail;
+// One pass: a query re-formed by the removal is left alone, see the doc above.
+function removeCursorPositionQueries(str) {
+  return str.includes(CURSOR_POSITION_QUERY) ? str.split(CURSOR_POSITION_QUERY).join('') : str;
+}
+
+// Length of the query prefix `prev` ends with that `next` completes, 0 if
+// none. Only a chunk starting with '[', '6' or 'n' can complete one.
+function splitQueryPrefixLength(prev, next) {
+  if (!'[6n'.includes(next[0])) return 0;
+  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
+    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
+  }
+  return 0;
 }
 
 function appendToHiddenAccumulator(sessionId, data) {
@@ -730,8 +735,9 @@ function appendToHiddenAccumulator(sessionId, data) {
     acc = { raw: '', reset: false };
     hiddenAccumulators.set(sessionId, acc);
   }
-  const from = acc.raw.length;
-  acc.raw = removeCursorPositionQueries(acc.raw + data, from);
+  const k = splitQueryPrefixLength(acc.raw, data);
+  const head = k ? acc.raw.slice(0, -k) : acc.raw;
+  acc.raw = head + removeCursorPositionQueries(k ? data.slice(CURSOR_POSITION_QUERY.length - k) : data);
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
     const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
     acc.raw = trimmed.data;

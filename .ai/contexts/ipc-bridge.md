@@ -306,11 +306,26 @@ accumulator, not to xterm. A session with no renderer attached cannot either.
 Both replay paths drop the query instead of keeping it:
 
 - `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
-  remove `CSI 6n` from what they keep, including a query split across two
-  chunks and one left in the live write buffer when the session was hidden.
+  remove `CSI 6n` from what they keep, including a query split across chunks
+  and one left in the live write buffer when the session was hidden.
 - `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes it
-  on the way in, a split query included. That buffer also holds the queries a
-  visible renderer already answered.
+  on the way in, a query split across several chunks included (the last
+  three code units of the buffer are checked, across entries). That buffer also
+  holds the queries a visible renderer already answered.
+
+The filter is not specific to Windows or to OpenConsole: it runs on every
+platform and removes any `CSI 6n` in a session's output, including one an
+application asked itself (a shell's line editor measuring the cursor, for
+example). Such an application gets its answer while its session is visible; a
+query it sent while the session was hidden or detached goes unanswered, where
+it used to be answered late, at reveal or reattach, with a stale position.
+
+The removal is a single pass. Removing a query can join the bytes around it
+into a new one (`ESC [ ESC [6n 6n` becomes `ESC [6n`); that one is kept, so
+such input is replayed with one query. The earlier version repeated the pass
+until no query was left: it removed bytes that are not a query (xterm.js shows
+the trailing `6n` of that input as text) and was quadratic, and on a crafted
+64 KB chunk the main-side version, which recursed, overflowed the stack.
 
 Kept, each query would be answered by xterm.js at reveal or reattach: one reply
 consumed by an OpenConsole still waiting, every other one typed into Claude or
