@@ -247,6 +247,21 @@ closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
 proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
 
+node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
+(microsoft/node-pty#922: the exit thread no longer erases an entry while
+`PtyKill` / `PtyResize` run), but it does not make a second kill safe: `PtyKill`
+still leaves the handle registered with its `hpc`, and `WindowsTerminal.kill`
+has no once-only guard. Measured 2026-10-03 with the child above against the
+beta: two raw `term.kill()` still exit 3221226356, two `killPty` exit 0. The
+guard stays.
+
+The beta's bundled OpenConsole also sends a plain DSR (`CSI 6n`) after start
+and after a resize, retried about every 500 ms until answered. xterm.js answers
+it with a plain CPR (`CSI row;col R`), which `composer-state.js` does not treat
+as a report (see `.ai/contexts/trigger-watcher.md`, CPR), so each answer pushes
+the quiet clock once. With an answer it is one query per resize, measured on an
+isolated pty; the rate in the app is not measured.
+
 Swallowed errors are not silent: `setPtyOpLogger(log)` in `main.js` routes them
 to `log.debug` as `[pty] <op> skipped session=<id> reason=<message>`. Debug level
 is deliberate — the file transport is at `info` in packaged builds, so a resize
