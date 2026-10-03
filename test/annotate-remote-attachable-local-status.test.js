@@ -175,7 +175,7 @@ test('a session on a healthy host carries no blocking reason and the project car
   const session = projects[0].sessions[0];
   assert.equal(session.remoteAttachable, true);
   assert.equal(session.remoteAttachBlocked, null);
-  assert.equal(projects[0].remoteHostProfile.tier, 'attach');
+  assert.equal(projects[0].remoteHostProfile.tier, 'launch');
 });
 
 test('a remote session carries the descriptor waitingFor, and null when the descriptor has none or is gone', () => {

@@ -794,7 +794,7 @@ also returns `blocked` (why nothing could be read, or null) and the normalised `
 - `liveness`: at least one live descriptor. `inject`: a live descriptor with a `messagingSocketPath` that is a POSIX
   absolute path. `attach`: a live descriptor naming a tmux pane with a valid pid (the adapter's own test).
   The tiers are independent requirements: the reported tier is the highest available one, not the highest contiguous one.
-- `launch` is never available: starting a session from here is not implemented.
+- `launch`: available under the same rule as attach (probe `tmux: true`, or a live descriptor naming a tmux pane, and not `tmux: false`); its reason otherwise starts with "needs tmux on the host". See "Remote hosts — launching a session".
 - A tier that needs a live session reads as missing on an idle host; that is "nothing to read it from", not "unsupported".
 - `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`). After 3 consecutive failed
   cycles (`attachBlockReason`), it sets `remoteAttachable: false` plus `remoteAttachBlocked` (the last error) on the
@@ -827,6 +827,18 @@ also returns `blocked` (why nothing could be read, or null) and the normalised `
   session without its own socket on a host where another one has one is still offered Send and fails at the click.
   `session.remoteSendBlocked` disables the button with the reason in its title.
 - Stop has no gate (`test/annotate-remote-tier-gates.test.js` and `test/dom-sidebar-remote-tier-gates.test.js` pin it).
+
+## Remote hosts — launching a session (issues #218, #222)
+
+`remote-launch.js` builds the one ssh command and orchestrates launch then attach; the renderer side is `showRemoteLaunchDialog` (dialogs.js) and `launchRemoteSession` (app.js), the IPC is `remote-launch-session`.
+
+- **The command is `sh -c '<script>'`** (`shellSingleQuote`, as `remote-send.js`), so a fish or csh login shell never parses it. The script checks `[ -d "$cwd" ]`, `command -v tmux`, `command -v claude` with exit codes 9, 10, 11 (each mapped to its own message), then `exec tmux new-session -d -P -F '#{session_name}:#{window_id}.#{pane_id} #{pane_pid}' -s switchboard-<uuid8> -c "$cwd" 'claude --session-id <uuid> [flags]'`. The exact string is pinned in `test/remote-launch.test.js`.
+- **Validation, not escaping, is the guard.** The cwd must match `CWD_RE` (absolute; letters, digits, space, `. _ + @ : , = / -`; no `..` segment; at most 4096 bytes). That set has no quote, `$`, backtick, backslash, newline or leading `-`, so the single-quoting is a second layer, not the only one. The uuid is matched by regex, the tmux name derives from it, the permission mode is checked against an allow-list. The same checks run in the renderer (UX), in `handleLaunchRequest` and in the adapter.
+- **Why attach straight to the created pane.** `-P -F` prints the pane's `session:@window.%pane` and `pane_pid`. `handleLaunchRequest` hands `{ pid, tmux, sessionId, cwd }` to the existing `remoteAttachAdapter.attach`, which discovers the socket from `/proc/<pid>/environ` and runs the same pid-reuse guard (the pane's command line contains `claude`). No wait for the descriptor to show up in the next refresh; `refreshHostNow` is fired afterwards so the row's real descriptor replaces the pending one.
+- **The id is generated locally** (`crypto.randomUUID` in the renderer, validated again in main) and passed as `--session-id`, so the pending sidebar row and the later descriptor share one id.
+- **Stop is unchanged.** The pane target we created has a pane component, so `buildStopCommand` emits `kill-pane` (pinned for this exact target shape in `remote-launch.test.js`); never `kill-session`. Killing the only pane of the only window ends the tmux session as a side effect of tmux itself.
+- **A failed attach after a successful launch** leaves the tmux session running on the host; the error names it, and it appears in the sidebar at the next refresh.
+- Not verified here: a real host (the tests use a fake runner, plus a real `sh` with stubbed `tmux`/`claude`), tmux older than the `-P -F` form, and a `claude` that exits at once (the pane then closes and attach fails with the probe error).
 
 ## Remote hosts — sending a prompt (issue #219)
 

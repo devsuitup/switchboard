@@ -53,7 +53,40 @@ test('the new-session button is disabled and its title gives the launch tier rea
     const btn = header.querySelector('.project-new-btn');
     assert.equal(btn.disabled, true);
     assert.match(btn.title, /planificator/);
-    assert.ok(btn.title.includes('new sessions cannot be started from here; they must be started on the host'), btn.title);
+    assert.match(btn.title, /needs tmux on the host/);
+  } finally { ctx.destroy(); }
+});
+
+test('with tmux on the host the new-session button is enabled and opens the remote launch dialog, not the local popover', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const profile = computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: true, inotifywait: true } });
+    const { header } = render(ctx, profile, session());
+    const btn = header.querySelector('.project-new-btn');
+    assert.equal(btn.disabled, false);
+    assert.equal(btn.title, 'New session on planificator');
+    const dialogs = [];
+    const popovers = [];
+    ctx.window.showRemoteLaunchDialog = (p) => dialogs.push(p.remoteAlias + ':' + p.projectPath);
+    ctx.window.showNewSessionPopover = (p) => popovers.push(p.projectPath);
+    btn.click();
+    assert.deepEqual(dialogs, ['planificator:/srv/supervision']);
+    assert.deepEqual(popovers, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a host without tmux keeps the button disabled and a click opens nothing', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const profile = computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: false, inotifywait: true } });
+    const { header } = render(ctx, profile, session());
+    const btn = header.querySelector('.project-new-btn');
+    assert.equal(btn.disabled, true);
+    assert.match(btn.title, /needs tmux on the host/);
+    const dialogs = [];
+    ctx.window.showRemoteLaunchDialog = (p) => dialogs.push(p.projectPath);
+    btn.onclick({ stopPropagation: () => {} });
+    assert.deepEqual(dialogs, []);
   } finally { ctx.destroy(); }
 });
 

@@ -911,7 +911,7 @@ test('getRemoteHostProfile follows the last cycle: never synced, then live tmux 
 
     assert.equal(indexer.getRemoteHostProfile('box').tier, 'none', 'never synced');
     await indexer.refreshNow();
-    assert.equal(indexer.getRemoteHostProfile('box').tier, 'attach');
+    assert.equal(indexer.getRemoteHostProfile('box').tier, 'launch');
     outcome = 'fail';
     await indexer.refreshNow({ force: true });
     const failed = indexer.getRemoteHostProfile('box');

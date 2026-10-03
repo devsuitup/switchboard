@@ -104,6 +104,7 @@ function setupSidebarDom() {
     confirmAndStopSession: () => {},
     pollActiveSessions: () => {},
     showNewSessionPopover: () => {},
+    showRemoteLaunchDialog: () => {},
     openSettingsViewer: () => {},
     showResumeSessionDialog: () => {},
     showJsonlViewer: () => {},

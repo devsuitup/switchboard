@@ -82,7 +82,8 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
-const { attachBlockReason, sendBlockReason } = require('./remote-host-profile');
+const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./remote-host-profile');
+const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
 const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./run-to-exit');
@@ -563,6 +564,9 @@ const remoteStopAdapter = createRemoteStopAdapter({ log });
 
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
 const remoteSendAdapter = createRemoteSendAdapter({ log });
+
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+const remoteLaunchAdapter = createRemoteLaunchAdapter({ log });
 
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
@@ -1693,6 +1697,26 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   return result;
 });
 
+// --- IPC: remote-launch-session ---
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+ipcMain.handle('remote-launch-session', async (_event, payload) => {
+  if (!mainWindow) return { ok: false, error: 'no window' };
+  const sessionId = payload && payload.sessionId;
+  if (typeof sessionId === 'string' && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
+  const result = await handleLaunchRequest(payload, {
+    hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
+    launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),
+    adapter: remoteLaunchAdapter,
+    attach: (alias, descriptor, size) => remoteAttachAdapter.attach(alias, descriptor, size),
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  const session = registerRemoteAttachSession(result.descriptor.sessionId, {
+    alias: payload.alias, projectPath: result.descriptor.cwd, cwd: result.descriptor.cwd, ptyProcess: result.attachResult.ptyProcess,
+  });
+  remoteIndexer.refreshHostNow(payload.alias, { force: true }).catch(() => {});
+  return { ok: true, remote: true, generation: session.generation };
+});
+
 // --- IPC: remote-send-prompt ---
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
 ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payload, {
@@ -2315,6 +2339,24 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 }
 
 // --- IPC: open-terminal ---
+function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyProcess }) {
+  const remoteSession = {
+    pty: ptyProcess,
+    // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
+    handle: ptyProcess,
+    host: alias, kind: 'remote-attach',
+    rendererAttached: true, exited: false,
+    outputBuffer: [], outputBufferSize: 0, altScreen: false,
+    projectPath, firstResize: true,
+    cwd,
+    isPlainTerminal: false,
+    _openedAt: Date.now(),
+  };
+  activeSessions.set(sessionId, remoteSession);
+  wireSessionPty(remoteSession, sessionId, ptyProcess);
+  return remoteSession;
+}
+
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
 
@@ -2365,20 +2407,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (!attachResult.ok) return { ok: false, error: attachResult.error || REMOTE_READ_ONLY };
 
       const remoteCwd = (descriptor && typeof descriptor.cwd === 'string') ? descriptor.cwd : null;
-      const remoteSession = {
-        pty: attachResult.ptyProcess,
-        // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
-        handle: attachResult.ptyProcess,
-        host: alias, kind: 'remote-attach',
-        rendererAttached: true, exited: false,
-        outputBuffer: [], outputBufferSize: 0, altScreen: false,
-        projectPath, firstResize: true,
-        cwd: remoteCwd,
-        isPlainTerminal: false,
-        _openedAt: Date.now(),
-      };
-      activeSessions.set(sessionId, remoteSession);
-      wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
+      const remoteSession = registerRemoteAttachSession(sessionId, {
+        alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult.ptyProcess,
+      });
       return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
     }
   }

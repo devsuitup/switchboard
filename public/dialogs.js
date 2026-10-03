@@ -317,6 +317,107 @@ async function showNewSessionDialog(project) {
   document.addEventListener('keydown', onKey);
 }
 
+const REMOTE_LAUNCH_PATH_RE = /^\/[A-Za-z0-9._+@:,=/ -]*$/;
+
+function knownRemotePaths(alias) {
+  const paths = new Set();
+  for (const p of cachedProjects) {
+    if (p.remoteAlias === alias && p.projectPath) paths.add(p.projectPath);
+  }
+  return [...paths].sort();
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+function showRemoteLaunchDialog(project) {
+  const alias = project.remoteAlias;
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog';
+
+  let selectedMode = null;
+  let dangerousSkip = false;
+
+  function renderModeGrid() {
+    return PERMISSION_MODES.map(m => {
+      const isSelected = !dangerousSkip && selectedMode === m.value;
+      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
+    }).join('') +
+    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
+  }
+
+  const pathOptions = knownRemotePaths(alias).map(p => `<option value="${escapeHtml(p)}"></option>`).join('');
+  dialog.innerHTML = `
+    <h3>New Session on ${escapeHtml(alias)}</h3>
+    <div class="new-session-body">
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Directory on ${escapeHtml(alias)}</span>
+        <div class="settings-description">Pick a known project or type an absolute path. It must exist on the host.</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="rld-path" list="rld-paths" value="${escapeHtml(project.projectPath || '')}">
+        <datalist id="rld-paths">${pathOptions}</datalist>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-label">Permission Mode</div>
+      <div class="permission-grid" id="rld-mode-grid">${renderModeGrid()}</div>
+    </div>
+    <div class="new-session-error" id="rld-error"></div>
+    </div>
+    <div class="new-session-actions">
+      <button class="new-session-cancel-btn">Cancel</button>
+      <button class="new-session-start-btn">Start</button>
+    </div>
+  `;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const modeGrid = dialog.querySelector('#rld-mode-grid');
+  modeGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.permission-option');
+    if (!btn) return;
+    const mode = btn.dataset.mode;
+    if (mode === 'dangerous-skip') {
+      dangerousSkip = !dangerousSkip;
+      if (dangerousSkip) selectedMode = null;
+    } else {
+      dangerousSkip = false;
+      selectedMode = mode === 'null' ? null : mode;
+    }
+    modeGrid.innerHTML = renderModeGrid();
+  });
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  function start() {
+    const cwd = dialog.querySelector('#rld-path').value.trim();
+    if (!REMOTE_LAUNCH_PATH_RE.test(cwd)) {
+      dialog.querySelector('#rld-error').textContent = 'Enter an absolute path made of letters, digits, space and . _ + @ : , = / -';
+      return;
+    }
+    const options = {};
+    if (dangerousSkip) options.dangerouslySkipPermissions = true;
+    else if (selectedMode) options.permissionMode = selectedMode;
+    close();
+    launchRemoteSession(project, { cwd, options });
+  }
+
+  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  dialog.querySelector('.new-session-start-btn').onclick = start;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && e.target.matches('input')) start();
+  }
+  document.addEventListener('keydown', onKey);
+}
+
 async function showResumeSessionDialog(session) {
   const effective = await window.api.getEffectiveSettings(session.projectPath);
 

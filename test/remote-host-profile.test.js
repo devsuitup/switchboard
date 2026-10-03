@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { computeHostProfile, attachBlockReason, sendBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason, launchBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS } = require('../remote-host-profile');
 
 const AT = Date.parse('2026-10-01T10:00:00Z');
 const tmuxDescriptor = { pid: 101, sessionId: 'a', tmux: 'main:@0.%0' };
@@ -57,15 +57,15 @@ test('a messagingSocketPath that is not a POSIX absolute path does not count', (
   }
 });
 
-test('a descriptor naming a tmux pane makes attach available even without a socket', () => {
+test('a descriptor naming a tmux pane makes attach and launch available even without a socket', () => {
   const profile = computeHostProfile({ at: AT, error: null, descriptors: [tmuxDescriptor] });
-  assert.equal(profile.tier, 'attach');
-  assert.deepEqual(profile.missing.map(m => m.tier), ['launch']);
+  assert.equal(profile.tier, 'launch');
+  assert.deepEqual(profile.missing, []);
 });
 
 test('the highest tier wins when several sessions bring different capabilities', () => {
   const profile = computeHostProfile({ at: AT, error: null, descriptors: [socketDescriptor, tmuxDescriptor] });
-  assert.equal(profile.tier, 'attach');
+  assert.equal(profile.tier, 'launch');
   assert.equal(profile.tiers.find(t => t.tier === 'inject').available, true);
 });
 
@@ -74,9 +74,26 @@ test('a tmux descriptor with an invalid pid does not count', () => {
   assert.equal(profile.tier, 'liveness');
 });
 
-test('launch is never available in this build and says to start the session on the host', () => {
-  const profile = computeHostProfile({ at: AT, error: null, descriptors: [tmuxDescriptor, socketDescriptor] });
-  assert.match(reasonFor(profile, 'launch'), /started on the host/);
+test('launch is available when the probe found tmux, with no live session at all', () => {
+  const profile = computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: true, inotifywait: false } });
+  assert.equal(profile.tiers.find(t => t.tier === 'launch').available, true);
+  assert.equal(profile.tier, 'launch');
+});
+
+test('launch is unavailable without tmux and says the host needs it', () => {
+  const missing = computeHostProfile({ at: AT, error: null, descriptors: [tmuxDescriptor], tools: { tmux: false, inotifywait: true } });
+  assert.equal(missing.tiers.find(t => t.tier === 'launch').available, false);
+  assert.match(reasonFor(missing, 'launch'), /needs tmux on the host.*not installed/);
+  const unknown = computeHostProfile({ at: AT, error: null, descriptors: [socketDescriptor] });
+  assert.equal(unknown.tiers.find(t => t.tier === 'launch').available, false);
+  assert.match(reasonFor(unknown, 'launch'), /needs tmux on the host/);
+});
+
+test('launchBlockReason refuses a host with no profile, a blocked one and one without tmux', () => {
+  assert.match(launchBlockReason(null), /not yet synced/);
+  assert.match(launchBlockReason(computeHostProfile({ at: AT, error: 'connect timed out', descriptors: [] })), /connect timed out/);
+  assert.match(launchBlockReason(computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: false } })), /needs tmux/);
+  assert.equal(launchBlockReason(computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: true } })), null);
 });
 
 test('garbage input never throws and yields no tier', () => {
@@ -109,7 +126,7 @@ test('an idle synced host with tmux installed offers attach and no longer lists 
   const profile = computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: true, inotifywait: true } });
   assert.equal(profile.tiers.find(t => t.tier === 'attach').available, true);
   assert.equal(reasonFor(profile, 'attach'), undefined);
-  assert.equal(profile.tier, 'attach');
+  assert.equal(profile.tier, 'launch');
 });
 
 test('an idle host with tmux installed still says liveness needs a live descriptor', () => {

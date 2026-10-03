@@ -4186,6 +4186,12 @@ body { display: flex; flex-direction: column; }
   word-break: break-word;
 }
 
+.new-session-error {
+  color: #e8a838;
+  font-size: 12px;
+  min-height: 16px;
+}
+
 .new-session-actions {
   display: flex;
   justify-content: flex-end;

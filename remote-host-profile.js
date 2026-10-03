@@ -5,6 +5,7 @@ const { parseTmuxField, isValidPid } = require('./remote-attach');
 
 const ATTACH_BLOCK_AFTER_FAILURES = 3;
 const TIERS = ['observe', 'liveness', 'inject', 'attach', 'launch'];
+const LAUNCH_NEEDS_TMUX_REASON = 'needs tmux on the host';
 const TMUX_MISSING_REASON = 'tmux is not installed on this host (command -v tmux found nothing)';
 
 function hasPosixSocketPath(descriptor) {
@@ -58,7 +59,9 @@ function computeHostProfile(input) {
     if (tools.tmux === false) reasons.attach = TMUX_MISSING_REASON;
     else if (tools.tmux === true || descriptors.some(namesTmuxPane)) reasons.attach = null;
     else reasons.attach = 'no live session names a tmux pane in its descriptor (start it inside tmux)';
-    reasons.launch = 'new sessions cannot be started from here; they must be started on the host';
+    if (tools.tmux === false) reasons.launch = LAUNCH_NEEDS_TMUX_REASON + ': ' + TMUX_MISSING_REASON;
+    else if (tools.tmux === true || descriptors.some(namesTmuxPane)) reasons.launch = null;
+    else reasons.launch = LAUNCH_NEEDS_TMUX_REASON + ' (not confirmed: no probe answer yet and no live session names a tmux pane)';
   }
 
   const tiers = TIERS.map(tier => ({ tier, available: reasons[tier] === null, reason: reasons[tier] }));
@@ -84,11 +87,16 @@ function attachBlockReason(profile, consecutiveFailures) {
   return null;
 }
 
+function launchBlockReason(profile) {
+  if (!profile) return 'not yet synced with this host';
+  return tierReason(profile, 'launch');
+}
+
 function sendBlockReason(profile) {
   if (!profile || profile.blocked) return null;
   return tierReason(profile, 'inject');
 }
 
 module.exports = {
-  computeHostProfile, attachBlockReason, sendBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS, TMUX_MISSING_REASON,
+  computeHostProfile, attachBlockReason, sendBlockReason, launchBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS, TMUX_MISSING_REASON,
 };
