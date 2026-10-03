@@ -18,7 +18,7 @@ async function promotionFixture(t, { initialCount = 1 } = {}) {
   let clients = '9000\t/dev/pts/2\t\n';
   let apply = async () => ({ code: 0, stdout: '' });
   const adapter = createTmuxAttachAdapter({
-    machineId: 'fixture', instanceId: 'current', createAttachId: () => 'attach',
+    profileId: 'fixture', instanceId: 'current', createAttachId: () => 'attach',
     resolveSshPath: () => 'fake-ssh',
     spawnPty: () => ({ onExit(cb) { exits.push(cb); }, resize() {}, kill() {} }),
     setTimeoutFn(cb) { const timer = { unref() {} }; timers.set(timer, cb); return timer; },

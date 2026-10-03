@@ -1041,11 +1041,20 @@ Launching a new remote session (#222) and injection over the messaging socket
   ClientAliveInterval 60 and ClientAliveCountMax 3: an abruptly cut connection
   can remain listed for approximately three minutes.
   - Every solo and shared attach uses exec env
-    SWITCHBOARD_ATTACH=<machine>:<instance>:<attach> tmux -S ... with the
-    existing option segments. The machine id is a SHA-256 hash of os.hostname();
-    the instance id is generated once when the main process loads the adapter
-    module, and the attach id is generated for each attach. All components must
-    match [A-Za-z0-9_-] and have 1–128 characters. Using the env executable avoids
+    SWITCHBOARD_ATTACH=<profile>:<instance>:<attach> tmux -S ... with the
+    existing option segments. The profile id is 24 random bytes encoded as
+    base64url, persisted in app.getPath('userData')/remote-attach-profile-id.
+    With SWITCHBOARD_DATA_DIR, this is <data-dir>/electron/remote-attach-profile-id;
+    otherwise it is under Electron's installed-app userData directory. The
+    file is created exclusively with wx on first use; an existing valid file
+    is read without rewriting it, including when another creator wins the race.
+    A corrupt or unreadable file, or failed creation, is logged and produces a
+    random in-memory identity for this run only. The untrusted file is never
+    overwritten. The instance id is generated once when the main process loads
+    the adapter module, and the attach id is generated for each attach. All
+    tag components must match [A-Za-z0-9_-] and have 1–128 characters; persisted
+    profile ids have 22–128 characters. Invalid identities return ok:false from
+    attach before any remote command. Using the env executable avoids
     login-shell-specific variable assignments and shell-pid assumptions.
   - When the discovery count is nonzero or unknown, one additional bounded
     command lists client_pid and client_tty and reads each client's tag from
@@ -1060,20 +1069,23 @@ Launching a new remote session (#222) and injection over the messaging socket
     | Client evidence | Action |
     | --- | --- |
     | No tag, malformed tag or unreadable environment | Real client; shared |
-    | Tag from another machine | Real client; shared |
-    | This machine and another instance, with validated /dev/pts/N tty | Detach that client by tty; solo immediately if no real clients remain and a valid local size is known |
-    | This machine and this instance, another attach id | Real client; shared; never detach |
+    | Tag from another profile, including a live dev/test-pr instance on this machine | Real client; shared; never detach |
+    | This profile and another instance, with validated /dev/pts/N tty | Detach that client by tty; solo immediately if no real clients remain and a valid local size is known |
+    | This profile and this instance, another attach id | Real client; shared; never detach |
     | Invalid tty or unsuccessful detach | Remain shared |
 
-    The single-instance lock establishes that another instance on this machine
-    is dead; idle time is not the proof. Untagged clients, other machines and
-    unreadable environments are never detached. No client_activity threshold
+    The single-instance lock is keyed on userData, not the machine. It proves
+    that another instance of this profile is dead; idle time is not the proof.
+    Installed, dev and test-pr instances can run beside each other with distinct
+    data directories. Hostnames neither establish ownership nor distinguish
+    computers. Untagged clients, other profiles and unreadable environments
+    are never detached. No client_activity threshold
     is used. The three-second attach-time retry and session-option markers
     are removed; no marker cleanup is needed.
   - A shared attach polls list-clients every SHARED_MODE_POLL_INTERVAL_MS
     (3 s after the preceding evaluation finishes), using the same bounded
     environment discovery. It promotes only when the single listed client has
-    this exact machine, instance and attach id. The poll never detaches clients.
+    this exact profile, instance and attach id. The poll never detaches clients.
     Recursive timeouts avoid overlapping requests; timers are unref'd and
     cancelled on detach/exit, and start only once a valid local size is known.
     ptyProcess.reevaluateMode() shares the in-flight operation and remains

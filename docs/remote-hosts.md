@@ -208,16 +208,25 @@ answered. A session open in a tab keeps the terminal's own signals.
   `ssh -tt` (badge tooltip: *Live session on &lt;alias&gt; — click to attach*).
   Switchboard finds the tmux socket from the process's own `TMUX` variable.
   When no other client is attached, it hides tmux's status bar, turns the mouse
-  on and follows the window's size. Every attach carries a tag identifying this
-  computer, this app instance and this attach. Switchboard detaches a listed
-  client only when its readable tag identifies this computer and a different
-  app instance, and its tty is a validated /dev/pts/N. The single-instance lock
-  proves that older instance is no longer running; idle time is not evidence.
+  on and follows the window's size. Every attach carries a tag identifying its
+  data-directory profile, this app instance and this attach. The profile is a
+  random id created once in `app.getPath('userData')/remote-attach-profile-id`
+  and reused after a restart. With `SWITCHBOARD_DATA_DIR`, the file lives in
+  `<data-dir>/electron/remote-attach-profile-id`. Creation is exclusive; a
+  corrupt or unreadable file remains intact and is logged, with a fresh
+  in-memory id used for this run only.
+  Switchboard detaches a listed client only when its readable tag identifies
+  this profile and a different app instance, and its tty is a validated
+  /dev/pts/N. The single-instance lock is per userData directory, so it proves
+  that older instance of this profile is no longer running. Dev and test-pr
+  instances with separate data directories can run beside the installed app;
+  their live clients must remain attached. Hostnames are not used; idle time
+  is not evidence.
   Once those clients are detached, the terminal opens solo immediately if no
   real clients remain. There is no three-second attach-time delay. The measured
   host sshd timeout is 60 seconds × 3: a cut connection can linger for about
   three minutes without this classification.
-  Untagged clients, clients from another computer, unreadable environments,
+  Untagged clients, clients from another profile, unreadable environments,
   invalid ttys and another attach of this running instance are never detached.
   They keep shared mode and its fixed size. Shared terminals check every three
   seconds and follow the current local size once this exact attach is the only
@@ -225,6 +234,13 @@ answered. A session open in a tab keeps the terminal's own signals.
   Leaving the session ends the local ssh client only: the remote session keeps
   running, and opening it again reattaches.
 - **Any other session** opens its transcript in the read-only viewer.
+
+| Listed client's identity | Action |
+| --- | --- |
+| Same profile, different instance, validated /dev/pts/N tty | Detach; open solo if no real client remains and local size is valid |
+| Different profile, including dev/test-pr on the same computer | Never detach; remain shared |
+| Same instance, another attach | Never detach; remain shared |
+| Missing, malformed or unreadable tag; invalid tty; failed detach | Remain shared |
 
 Remote sessions get no [IDE emulation](ide-emulation.md), no
 [panel shell](terminal.md#panel-shell) and no

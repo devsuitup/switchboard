@@ -82,6 +82,7 @@ const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
+const { loadAttachProfileId } = require('./remote-attach-profile');
 const { createRemoteStopAdapter } = require('./remote-stop');
 const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./remote-host-profile');
 const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
@@ -557,6 +558,7 @@ function restartWatcherForAlias(alias) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 const remoteAttachAdapter = createTmuxAttachAdapter({
+  profileId: loadAttachProfileId(app.getPath('userData'), log),
   spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanPtyEnv }),
   log,
 });

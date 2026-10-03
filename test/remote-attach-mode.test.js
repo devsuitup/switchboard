@@ -16,6 +16,22 @@ const STALE = '9000\t/dev/pts/2\tworkstation:previous:old\n';
 const TEST_SHELL = process.platform === 'win32' && existsSync('C:/Program Files/Git/bin/bash.exe')
   ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 
+test('a dev profile on the same machine never detaches the installed profile live client', async t => {
+  const installed = fixture({ initialCount: 0, identity: { profileId: 'installed', instanceId: 'live' } });
+  await installed.attach();
+  t.after(() => installed.events.emit('exit'));
+  const tag = /SWITCHBOARD_ATTACH=([A-Za-z0-9_:-]+)/.exec(installed.spawns[0].args.at(-1))[1];
+  const peer = `9000\t/dev/pts/2\t${tag}\n`;
+  const dev = fixture({ initialClients: peer, identity: { profileId: 'dev', instanceId: 'dev-live' } });
+  const attached = await dev.attach();
+  t.after(() => dev.events.emit('exit'));
+  assert.equal(attached.ok, true);
+  assert.equal(attached.remoteResizeAllowed, false, 'a different live profile must keep shared mode');
+  assert.ok(dev.commands.every(c => !c.command.includes('detach-client')), 'the installed profile client must remain attached');
+  attached.ptyProcess.resize(120, 50, { refresh: true });
+  assert.deepEqual(dev.resizes, [], 'refresh must never resize a shared attach');
+});
+
 test('the client discovery script reads environment tags and treats unreadable or oversized environments as real', async t => {
   const script = String.raw`
 tmux() { printf '9000\t/dev/pts/2\n9001\t/dev/pts/3\n9002\t/dev/pts/4\n'; }
@@ -57,7 +73,7 @@ test('a failed tmux list in the discovery script cannot masquerade as an empty l
 
 for (const [name, client] of [
   ['untagged client', PEER],
-  ['another machine', '9000\t/dev/pts/2\telsewhere:previous:old\n'],
+  ['another profile on the same machine', '9000\t/dev/pts/2\telsewhere:previous:old\n'],
   ['unreadable environment', '9000\t/dev/pts/2\t\n'],
   ['invalid tty', '9000\t/dev/pts/2;touch unsafe\tworkstation:previous:old\n'],
   ['same instance another attach', '9000\t/dev/pts/2\tworkstation:current:other\n'],
@@ -144,17 +160,21 @@ test('oversized poll output cannot promote an otherwise matching attach', async 
 });
 
 test('environment identity validates every component before any remote command', async () => {
-  for (const identity of [{ machineId: 'bad:host' }, { instanceId: 'bad;instance' }, { createAttachId: () => 'bad attach' }, { machineId: '' }]) {
-    let f;
-    await assert.rejects(async () => { f = fixture({ identity }); await f.attach(); }, /identity/i);
-    if (f) assert.equal(f.commands.length, 0);
+  for (const identity of [{ profileId: 'bad:profile' }, { instanceId: 'bad;instance' }, { createAttachId: () => 'bad attach' }, { profileId: '' }, { profileId: 'valid\n' }, { createAttachId: () => { throw new Error('generator failed'); } }]) {
+    const f = fixture({ identity });
+    let result;
+    await assert.doesNotReject(async () => { result = await f.attach(); }, 'invalid identity must return an error result');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /identity/i);
+    assert.equal(f.commands.length, 0);
+    assert.equal(f.spawns.length, 0);
   }
 });
 
-test('default machine and app-instance identities persist across adapters while attach ids differ', async t => {
+test('default run-only profile and app-instance identities persist across adapters while attach ids differ', async t => {
   const tags = [];
   for (let i = 0; i < 2; i++) {
-    const f = fixture({ initialCount: 0, identity: { machineId: undefined, instanceId: undefined, createAttachId: undefined } });
+    const f = fixture({ initialCount: 0, identity: { profileId: undefined, instanceId: undefined, createAttachId: undefined } });
     await f.attach();
     t.after(() => f.events.emit('exit'));
     const tag = /SWITCHBOARD_ATTACH=([A-Za-z0-9_-]+):([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)/.exec(f.spawns[0].args.at(-1));
@@ -193,7 +213,7 @@ function fixture({ initialCount = 1, initialClients = PEER, inherited = false, l
   const adapter = createTmuxAttachAdapter({
     spawnPty(file, args, options) { spawns.push({ file, args, options }); return raw; },
     resolveSshPath: () => 'fake-ssh',
-    machineId: 'workstation', instanceId: 'current', createAttachId: () => 'attach', ...identity,
+    profileId: 'workstation', instanceId: 'current', createAttachId: () => 'attach', ...identity,
     waitForClientRetry: async ms => { retryDelays.push(ms); },
     setTimeoutFn(cb, ms) {
       const timer = { id: ++nextTimer, unref() {} };
@@ -283,7 +303,7 @@ test('a genuine client that remains keeps shared sizing and bounded polling', as
   assert.ok(f.commands.filter(c => c.command.includes('client_pid')).every(c => c.options.timeoutMs > 0 && c.options.timeoutMs <= 15000));
 });
 
-test('a previous instance client is detached by validated tty and opens solo immediately', async t => {
+test('a previous instance client of the same profile is detached by validated tty and opens solo immediately', async t => {
   const f = fixture({ initialClients: STALE });
   const result = await f.attach();
   t.after(() => f.events.emit('exit'));
