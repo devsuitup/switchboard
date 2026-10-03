@@ -585,11 +585,18 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
   async function status() {
     let results;
     try {
-      results = await Promise.all([
-        invoke(['status', '--porcelain=v2', '--branch', '-uall', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
-        invoke(['diff', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
-        invoke(['diff', '--cached', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
-      ]);
+      // see .ai/contexts/changes-view.md ("Local reads run one at a time")
+      const calls = [
+        () => invoke(['status', '--porcelain=v2', '--branch', '-uall', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+        () => invoke(['diff', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+        () => invoke(['diff', '--cached', '--numstat', '-z'], { maxStdoutBytes: STATUS_MAX_STDOUT_BYTES }),
+      ];
+      if (kind === 'local') {
+        results = [];
+        for (const call of calls) results.push(await call());
+      } else {
+        results = await Promise.all(calls.map((call) => call()));
+      }
     } catch (err) {
       return { ok: false, error: err.message };
     }

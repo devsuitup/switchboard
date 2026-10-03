@@ -932,3 +932,17 @@ working directory busy for a moment after the call has returned, as above.
 `fs.rmSync`'s `maxRetries` does not cover this failure on Node 20 and 22: their
 recursive removal retries only after emptying a directory (`ENOTEMPTY`,
 `EPERM`); an `EBUSY` on the first `rmdir` of a directory is thrown at once.
+
+## Local reads run one at a time
+
+A local `status()` runs its `git status` and two `git diff` calls one after the
+other. Run together, each may refresh the index and rename a new `.git/index`
+over the old one while another git has it open; on Windows the loser fails
+with `fatal: .git/index: index file open failed: Permission denied`, and the
+panel showed that as an error (the flake behind `test/git-changes-runner-real-git.test.js`,
+issue #421). `GIT_OPTIONAL_LOCKS=0` does not help: measured, `git diff` still
+rewrites a stale index with it set. The remote transport keeps its parallel
+calls: the host is not Windows, and a round trip per call is the cost there.
+Measured 2026-10-03 on a scratch repo, four processes at once, a commit and an
+edit before every round: 4 failing rounds in 400 with the three calls
+parallel.

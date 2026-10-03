@@ -1681,3 +1681,19 @@ test('runner: a root lookup that prints something other than an absolute path is
   await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
   assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'x.txt'");
 });
+
+test('local runner .status(): never two git calls in flight at once — a refresh renames .git/index and a concurrent reader fails on Windows (mutation target: Promise.all)', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const exec = async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight -= 1;
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+  assert.equal(result.ok, true);
+  assert.equal(peak, 1);
+});
