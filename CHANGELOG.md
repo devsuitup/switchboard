@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.88 — 2026-10-03
+
 ### New
 - Single triggers can send prompts to unattached remote sessions when the global `remoteTriggers` setting is enabled; it defaults to off and has no Settings control yet. (#437)
 - A session's **Touched** tab, next to Changes in the terminal header, lists the files its file tools (Edit, Write, MultiEdit, NotebookEdit) touched, its subagents' included, with what is on disk now (present, gone, unreadable) and the tools and agents behind each. It works outside any git repository. It is not the complete set of files the session changed: files changed through Bash commands or scripts are not listed, and the tab says so. Local sessions only. (#309)
