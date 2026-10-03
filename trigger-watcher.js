@@ -1124,6 +1124,25 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       return;
     }
 
+    // see .ai/contexts/trigger-watcher.md, "Readiness before a single trigger"
+    const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, getBusyFallSettleMs());
+    waited_ms += ready.waited_ms;
+    if (ready.sessionExited) {
+      ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);
+      await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
+      return;
+    }
+    if (!ready.available) {
+      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
+    }
+    if (ready.timedOut) {
+      const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
+      const reason = dialog ? REASON_DIALOG_OPEN : (ready.lastStatus === 'busy' ? REASON_CLI_BUSY : REASON_CLI_NOT_IDLE);
+      ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
+      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
+      return;
+    }
+
     // Write to PTY: text, then Enter as a discrete keypress (see submitToPty),
     // then verify the submission actually started a turn — retrying the Enter
     // once if busy is never observed (the 2026-06-04 "text stuck in

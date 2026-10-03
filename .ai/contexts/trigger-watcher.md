@@ -846,7 +846,8 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   the CLI reacted. `idle` alone covers a turn too fast for a poll to see
   `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
   level probe, or a status that began earlier, proves nothing. Otherwise the
-  existing recovery applies (one bare ``, only into a free composer, same
+  existing recovery applies (one bare `
+`, only into a free composer, same
   window), and the reaction is looked for again. Still nothing:
   `confirmed: false`.
 - **The recovery Enter is never written while the descriptor reads `waiting`
@@ -942,9 +943,7 @@ state was the cause.
   sessionExited, waited_ms, lastStatus, waitingSeen }`. `lastStatus` is the
   status at the last sample; `waitingSeen` is true when `waiting` was sampled
   within the last settle window before the end.
-- **Single triggers have the same exposure and it is not addressed here.**
-  They keep their own `wait` field (`idle` by the level probe, or `none`) and
-  no descriptor wait; they can still be typed into a busy composer.
+- **Single triggers: see "Readiness before a single trigger" below.**
 - **Busy-fall authority (#360).** `waitForBusyFall` receives the Enter's
   timestamp. A descriptor `idle` with `statusUpdatedAt >= enterAt`, held for the
   settle window, ends the wait even when `_cliBusy` is stuck true. An idle
@@ -979,6 +978,37 @@ within `windowMs` (the busy-fall settle window, as in `waitForCliIdleAfter`).
   `chain timeout`.
 
 Tests: `test/trigger-blocked-session.test.js`.
+
+### Readiness before a single trigger (issue #379)
+
+A single `command` goes through the same `waitForCliIdleAfter` as a chain
+step (afterMs `-Infinity`, the busy-fall settle window, the trigger's own
+deadline `timeout_ms`), after `waitForIdle` and `waitForComposerFree` and the
+liveness re-check, right before `submitWithVerify`. There is no parallel
+mechanism: the not-ready results map to the same reasons
+(`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`), `error` is
+`not sent`, `submitted` `no`.
+
+- It applies with `wait: "none"` too, like chain step 0. This closes the hole
+  `waitForIdle` leaves: it samples the descriptor only while `_cliBusy` is true,
+  so a dialog shown while `_cliBusy` reads false was written into.
+- No usable descriptor at the first read: no wait (`available: false`), as
+  before.
+- A session whose descriptor is held `busy` by delegated agents (#360, a CLI
+  limit) now fails a single trigger at its deadline instead of typing into a
+  busy composer, like a chain.
+
+Typed input (`sendInput`, IPC `terminal-input`) is deliberately NOT held back.
+The channel is fire-and-forget (`ipcMain.on`, no reply to carry an error), is
+fed only by the renderer, and carries keystrokes, pastes, drops and the
+context-menu paste on the same call with no marker telling a person from a
+driver. A driver acting through the renderer (devtools, CDP) is the same call.
+Holding it on `waiting` would also block the keystrokes that answer the
+dialog. The only programmatic path that can be told apart is the trigger
+watcher, which is held above. `handleTerminalInput` has no descriptor access
+either (the descriptor is read through the trigger context).
+
+Tests: `test/trigger-single-readiness.test.js`.
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
