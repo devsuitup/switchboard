@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('api', {
   remoteHostsApply: () => ipcRenderer.invoke('remote-hosts-apply'),
   remoteHostsRefresh: () => ipcRenderer.invoke('remote-hosts-refresh'),
   remoteHostRefresh: (alias) => ipcRenderer.invoke('remote-host-refresh', alias),
+  remoteHostEnrolCheck: (alias) => ipcRenderer.invoke('remote-host-enrol-check', alias),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),

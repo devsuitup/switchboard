@@ -436,13 +436,18 @@
             <label class="settings-toggle"><input type="checkbox" class="rh-enabled" ${h.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
             <input type="text" class="settings-input rh-alias" placeholder="ssh alias" value="${escapeHtml(h.alias)}">
             <input type="text" class="settings-input rh-label" placeholder="label (optional)" value="${escapeHtml(h.label)}">
+            <button class="settings-check-updates-btn rh-check" title="Check this host: ssh, claude, tmux, ~/.claude and the login. Read-only.">Check host</button>
             <button class="settings-remove-btn rh-remove" title="Remove host">Remove</button>
-          </div>`).join('');
+          </div>
+          <div class="remote-host-enrol" data-i="${i}"></div>`).join('');
         listEl.querySelectorAll('.remote-host-row').forEach(row => {
           const i = Number(row.dataset.i);
           row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; });
           row.querySelector('.rh-label').addEventListener('input', e => { remoteHosts[i].label = e.target.value; });
           row.querySelector('.rh-enabled').addEventListener('change', e => { remoteHosts[i].enabled = e.target.checked; });
+          if (typeof wireRemoteEnrolControls === 'function') {
+            wireRemoteEnrolControls(row.querySelector('.rh-check'), listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`), () => remoteHosts[i].alias);
+          }
           row.querySelector('.rh-remove').addEventListener('click', () => {
             remoteHosts.splice(i, 1);
             renderRemoteHosts();

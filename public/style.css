@@ -4482,6 +4482,52 @@ body { display: flex; flex-direction: column; }
   min-width: 0;
 }
 
+.remote-host-enrol:empty {
+  display: none;
+}
+
+.remote-host-enrol {
+  margin: 0 0 10px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--control-surface);
+}
+
+.enrol-item {
+  margin-bottom: 8px;
+}
+
+.enrol-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.enrol-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.enrol-item[data-status="ok"] .enrol-status { color: #3ecf5a; }
+.enrol-item[data-status="missing"] .enrol-status { color: #e5534b; }
+.enrol-item[data-status="unknown"] .enrol-status { color: #d4a72c; }
+
+.enrol-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.enrol-command code {
+  user-select: all;
+}
+
+.enrol-error {
+  color: #e5534b;
+}
+
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-icon.running {
   background: #3ecf5a;

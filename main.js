@@ -488,7 +488,8 @@ const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCache
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts } = require('./remote-hosts');
+const { handleEnrolRequest } = require('./remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 require('./remote-ssh-binary').setResolverLog(log);
@@ -1586,6 +1587,12 @@ ipcMain.handle('remote-hosts-refresh', async () => {
     return { ok: false, error: err.message };
   }
 });
+
+// see .ai/contexts/session-cache.md ("Remote hosts — enrolment")
+ipcMain.handle('remote-host-enrol-check', (_event, alias) => handleEnrolRequest({ alias }, {
+  isDeclared: (a) => normalizeHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === a),
+  transport: remoteTransport,
+}));
 
 ipcMain.handle('remote-host-refresh', async (_event, alias) => {
   try {

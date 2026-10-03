@@ -73,6 +73,36 @@ The search through the `PATH` and the system locations also runs once. An
 `ssh` or `scp` it found that is later removed is searched for again at its
 next use; one installed after nothing was found is seen after a restart.
 
+### Check host
+
+Each host row in Settings has a **Check host** button. It runs one read-only
+`ssh` to the host and shows a checklist, one line per item with its status (ok,
+missing or unknown), and for a missing or unknown item the command to run, with
+a **Copy** button and where to run it:
+
+| Item | What is read |
+|---|---|
+| ssh reachable | whether the connection (same `ssh`, `BatchMode=yes`) succeeded |
+| claude CLI | whether `claude` is on the `PATH` of an ssh command, and its `--version` |
+| tmux | whether `tmux` is installed; without it the host is observed but cannot launch or attach (optional) |
+| `~/.claude` | whether the directory exists |
+| account logged in | the exit status of `claude auth status` (0 logged in, 1 not) |
+
+The check only reads. It installs nothing, logs nothing in and fixes nothing: the
+commands it hands you are for you to run on the host (`ssh -t <alias>`).
+Switchboard never copies or reads credentials. The login check does not open the
+credentials file or test that it exists: it asks the CLI, throws away what the
+CLI prints (which includes your email), and keeps only the exit status. When the
+state cannot be told (an older CLI without `claude auth status`, no `~/.claude`
+yet, `claude` missing, an unusual exit status) the line says *unknown — run
+`claude` on the host once to log in*, never "not logged in".
+
+Limits: the host must be saved first (the button checks the hosts in the saved
+settings); a Linux host with a POSIX shell is required, so a Windows host is
+reported as not checked; only `tmux` is looked for. If the CLI is logged in only
+through an environment variable set by an interactive profile, the check, which
+runs in a non-interactive shell, reads "not logged in".
+
 ## Requirements on the host
 
 - A Linux host (`/proc` is read for liveness, attach and stop), a POSIX shell

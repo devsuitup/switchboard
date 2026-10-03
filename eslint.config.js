@@ -118,6 +118,7 @@ const rendererCrossFileGlobals = {
   openSettingsViewer: 'readonly',
   wireActivityTraceToggle: 'readonly',
   wireActivityReportingToggle: 'readonly',
+  wireRemoteEnrolControls: 'readonly',
   renderActivityReportingStatus: 'readonly',
   renderActivityTraceFiles: 'readonly',
   openActivityTraceFile: 'readonly',
@@ -434,6 +435,21 @@ module.exports = [
         findTerminalPathCandidates: 'off',
         readTerminalLogicalLine: 'off',
       },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Producer of the host checklist global that settings-panel.js consumes.
+  {
+    files: ['public/remote-enrol-panel.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: { ...globals.browser, wireRemoteEnrolControls: 'off' },
     },
     rules: {
       'no-undef': 'error',
