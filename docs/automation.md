@@ -191,11 +191,16 @@ JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
   Any open session qualifies, plain terminals included.
 - `command` — written to the terminal, followed by a separate Enter keypress. At
   most 4 KB, and no CR, LF, NUL or ESC.
-- `wait` — `"none"` (the default) does not wait for the session to stop being
-  busy; `"idle"` does. Neither writes into a prompt that holds unsubmitted
-  input — see [Politeness](#politeness-switchboard-never-types-over-you) — so
-  `"none"` can still wait, up to `timeout_ms`. Use `"idle"` for anything that
-  must not interrupt a response being written.
+- `wait` — `"none"` (the default) writes now: it does not wait for the session
+  to stop being busy, and a prompt written while the CLI is busy is queued by
+  the CLI. It holds in two cases only, each up to `timeout_ms`: the prompt holds
+  unsubmitted input — see
+  [Politeness](#politeness-switchboard-never-types-over-you) — or the CLI shows
+  a dialog (a permission prompt, a question), which would swallow the text. At
+  the deadline it fails `not sent`. `"idle"` waits for the CLI to be at its
+  prompt first, and is the value for anything that must not interrupt a
+  response being written; a session held busy by background agents never gets
+  there, so it fails `not sent` at the deadline.
 - `timeout_ms` — optional bound on all the waiting: idle **and** politeness. A
   positive integer up to 600 000; default 300 000. On a `chain` it is the
   deadline for the **whole chain** — see below.
@@ -344,8 +349,9 @@ sends when no turn started — on a half-typed sentence, that Enter would submit
 it. When politeness never allows a write, the result is `{ "ok": false,
 "submitted": "no", "error": "not sent", "reason": "…" }`.
 
-**What this costs `wait: "none"`.** It does not mean "write now": against a
-non-empty prompt it waits, bounded only by `timeout_ms`. All that time the
+**What this costs `wait: "none"`.** It writes now unless the prompt is
+non-empty or the CLI shows a dialog; in those cases it waits, bounded only by
+`timeout_ms`. All that time the
 trigger holds one of the watcher's 8 concurrent slots (`MAX_INFLIGHT`), so a few
 triggers aimed at sessions whose user walked away mid-sentence can stall the
 queue for everyone. Give triggers that would rather give up a short
@@ -447,7 +453,27 @@ The two reserved values mean opposite things:
   `partial: false` for a `chain`. A session reports itself busy for as long as
   any subagent runs, so `idle` is often unreachable; `not sent` there tells the
   caller the payload never left.
-- A single `command` is held the same way, with or without `wait`: after any `wait: "idle"` and the politeness wait, it is not written until the descriptor reads `idle`, up to `timeout_ms`. If it still reads `waiting` then, the result is `not sent` with `reason` *the CLI reports a dialog open (waiting); nothing was written into it*; `busy` gives *the CLI still reported a turn running (busy) at the deadline; nothing was written*. Without a readable descriptor at the first read nothing is waited for. Keystrokes typed in the terminal are never held back: they are how a dialog is answered.
+- A single `command` with `wait: "idle"` is held like a chain step: after the idle
+  wait and the politeness wait, it is not written until the CLI's descriptor
+  reads `idle`, up to `timeout_ms`. An `idle` stamped before the settle window
+  is ready at once; a more recent one settles for at most the time left. If it
+  still reads `waiting` then, the result is `not sent` with `reason` *the CLI
+  reports a dialog open (waiting); nothing was written into it*; `busy` gives
+  *the CLI still reported a turn running (busy) at the deadline; nothing was
+  written*, and a session whose background agents keep the parent descriptor
+  `busy` (#360) always ends so: use `wait: "none"` for it. An `idle` that
+  appeared only at the deadline gives *the CLI reported idle only at the
+  deadline, too late to settle; nothing was written*. Without a readable
+  descriptor at the first read nothing is waited for.
+- A single `command` with `wait: "none"` keeps its write-now meaning: `busy`,
+  `idle` or an unreadable descriptor write at once, with no settle. The only
+  hold is a dialog: while the descriptor reads `waiting`, nothing is written,
+  and at `timeout_ms` the result is `not sent` with the dialog reason above. A
+  descriptor lost after it read `waiting` keeps the hold.
+- Every single `command` is also never written once its `timeout_ms` has passed
+  (`not sent`, *the step deadline passed before it could be written; nothing
+  was written*). Keystrokes typed in the terminal are never held back: they are
+  how a dialog is answered.
 - A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
 - When the wait ends because the session never got there and the CLI's
   descriptor read `waiting` (a dialog is open: a permission prompt or a
@@ -469,6 +495,8 @@ Both count every wait the trigger spent, at different scopes:
 
 - A `command` result carries `waited_ms`: the `wait: "idle"` wait (0 with
   `wait: "none"` or an idle session), plus the politeness wait, plus the
+  readiness wait (for `wait: "idle"`, the time spent until the descriptor read
+  idle; for `wait: "none"`, the time a dialog held it, else 0), plus the
   submission verification and its retry, if any.
 - A `chain` result carries `total_waited_ms` for the whole chain, and a
   `waited_ms` in each `steps[]` entry: that step's politeness wait, its

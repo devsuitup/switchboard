@@ -846,8 +846,7 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   the CLI reacted. `idle` alone covers a turn too fast for a poll to see
   `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
   level probe, or a status that began earlier, proves nothing. Otherwise the
-  existing recovery applies (one bare `
-`, only into a free composer, same
+  existing recovery applies (one bare ``, only into a free composer, same
   window), and the reaction is looked for again. Still nothing:
   `confirmed: false`.
 - **The recovery Enter is never written while the descriptor reads `waiting`
@@ -981,22 +980,35 @@ Tests: `test/trigger-blocked-session.test.js`.
 
 ### Readiness before a single trigger (issue #379)
 
-A single `command` goes through the same `waitForCliIdleAfter` as a chain
-step (afterMs `-Infinity`, the busy-fall settle window, the trigger's own
-deadline `timeout_ms`), after `waitForIdle` and `waitForComposerFree` and the
-liveness re-check, right before `submitWithVerify`. There is no parallel
-mechanism: the not-ready results map to the same reasons
-(`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`), `error` is
-`not sent`, `submitted` `no`.
+The two `wait` values keep their documented meaning; only the dialog is new
+for `none`.
 
-- It applies with `wait: "none"` too, like chain step 0. This closes the hole
-  `waitForIdle` leaves: it samples the descriptor only while `_cliBusy` is true,
-  so a dialog shown while `_cliBusy` reads false was written into.
-- No usable descriptor at the first read: no wait (`available: false`), as
-  before.
-- A session whose descriptor is held `busy` by delegated agents (#360, a CLI
-  limit) now fails a single trigger at its deadline instead of typing into a
-  busy composer, like a chain.
+- **`wait: "idle"`**: the same `waitForCliIdleAfter` as a chain step (afterMs
+  `-Infinity`, the trigger's own deadline `timeout_ms`), after `waitForIdle`,
+  `waitForComposerFree` and the liveness re-check, right before
+  `submitWithVerify`. No parallel mechanism: the not-ready results map to the
+  chain reasons (`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`)
+  plus `REASON_IDLE_UNSETTLED` when the last read was `idle` but too late to
+  settle, never "never reported idle" for an idle descriptor. `error` is
+  `not sent`, `submitted` `no`. A session whose descriptor is held `busy` by
+  background agents (#360, a CLI limit) fails at the deadline; `none` is the
+  value for it.
+- **Settle.** `waitForCliIdleAfter` counts an `idle` first read from its
+  `statusUpdatedAt`, so one older than the settle window is ready on that read
+  (no flat +300 ms on every trigger; a later new stamp still counts from when
+  it was seen). The single path caps the settle at the time left to the
+  deadline, so a `timeout_ms` under the settle on an idle session writes.
+  Poll granularity is 100 ms, so a fresh idle with a very short deadline can
+  still end `REASON_IDLE_UNSETTLED`.
+- **`wait: "none"`** writes now, the CLI queues a prompt written while busy.
+  `waitForNoDialog(sessionId, ctx, deadline)` holds only while the descriptor
+  reads `waiting` (a descriptor lost after it read `waiting` keeps the hold),
+  with no settle once it stops, and fails `not sent` + `REASON_DIALOG_OPEN` at
+  the deadline. `busy`, `idle` or no descriptor write at once. This closes the
+  hole `waitForIdle` leaves: it samples the descriptor only while `_cliBusy` is
+  true, so a dialog shown while `_cliBusy` reads false was written into.
+- **Deadline.** Both paths refuse to write once `Date.now() >= commandDeadline`
+  (`REASON_DEADLINE_BEFORE_WRITE`), descriptor or not, as chains do.
 
 Typed input (`sendInput`, IPC `terminal-input`) is deliberately NOT held back.
 The channel is fire-and-forget (`ipcMain.on`, no reply to carry an error), is

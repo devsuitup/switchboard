@@ -94,6 +94,7 @@ const REASON_DIALOG_OPEN_AFTER_WRITE = 'the CLI reports a dialog open (waiting) 
 const REASON_DEADLINE_BEFORE_WRITE = 'the step deadline passed before it could be written; nothing was written';
 const REASON_CLI_BUSY     = 'the CLI still reported a turn running (busy) at the deadline; nothing was written';
 const REASON_CLI_NOT_IDLE = 'the CLI never reported idle before the deadline; nothing was written';
+const REASON_IDLE_UNSETTLED = 'the CLI reported idle only at the deadline, too late to settle; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
 
@@ -377,6 +378,25 @@ function createDialogProbe(ctx, sessionId, windowMs) {
   };
 }
 
+// see .ai/contexts/trigger-watcher.md, "Readiness before a single trigger"
+function waitForNoDialog(sessionId, ctx, deadlineMs) {
+  const start = Date.now();
+  let held = false;
+  return pollLoop((resolve, scheduleNext) => {
+    const now = Date.now();
+    const waited_ms = now - start;
+    if (!ctx.getPtyForSession(sessionId)) {
+      return resolve({ clear: false, timedOut: false, sessionExited: true, waited_ms });
+    }
+    const s = readCliStatus(ctx, sessionId);
+    if (s && s.status === 'waiting') held = true;
+    else if (s) held = false;
+    if (!held) return resolve({ clear: true, timedOut: false, sessionExited: false, waited_ms });
+    if (now >= deadlineMs) return resolve({ clear: false, timedOut: true, sessionExited: false, waited_ms });
+    scheduleNext();
+  });
+}
+
 const CLI_REACTION_STATUSES = ['busy', 'idle', 'waiting'];
 
 function isCompactCommand(command) {
@@ -401,6 +421,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
   let lastStatus = null;
   const dialog = createDialogProbe(ctx, sessionId, settleMs);
   let everRead = false;
+  let firstIdleRead = true;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
@@ -420,9 +441,10 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0) 
       lastStatus = s.status;
       if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
         if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
-          idleSince = now;
+          idleSince = firstIdleRead ? Math.min(now, s.statusUpdatedAt) : now;
           idleStamp = s.statusUpdatedAt;
         }
+        firstIdleRead = false;
         idleHeld = now - idleSince >= settleMs;
       } else {
         idleSince = null;
@@ -1125,21 +1147,45 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
 
     // see .ai/contexts/trigger-watcher.md, "Readiness before a single trigger"
-    const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, getBusyFallSettleMs());
-    waited_ms += ready.waited_ms;
-    if (ready.sessionExited) {
-      ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);
-      await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
-      return;
+    if (wait === 'idle') {
+      const settleMs = Math.max(0, Math.min(getBusyFallSettleMs(), commandDeadline - Date.now() - 1));
+      const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, settleMs);
+      waited_ms += ready.waited_ms;
+      if (ready.sessionExited) {
+        ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);
+        await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
+        return;
+      }
+      if (!ready.available) {
+        ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
+      }
+      if (ready.timedOut) {
+        const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
+        let reason = REASON_CLI_NOT_IDLE;
+        if (dialog) reason = REASON_DIALOG_OPEN;
+        else if (ready.lastStatus === 'busy') reason = REASON_CLI_BUSY;
+        else if (ready.lastStatus === 'idle') reason = REASON_IDLE_UNSETTLED;
+        ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
+        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
+        return;
+      }
+    } else {
+      const clear = await waitForNoDialog(sessionId, ctx, commandDeadline);
+      waited_ms += clear.waited_ms;
+      if (clear.sessionExited) {
+        ctx.log.warn('[trigger-watcher] Session exited waiting for a dialog to close:', sessionId);
+        await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
+        return;
+      }
+      if (clear.timedOut) {
+        ctx.log.warn('[trigger-watcher] Dialog still open at the deadline, nothing sent:', sessionId);
+        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DIALOG_OPEN, sessionId, waited_ms });
+        return;
+      }
     }
-    if (!ready.available) {
-      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
-    }
-    if (ready.timedOut) {
-      const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
-      const reason = dialog ? REASON_DIALOG_OPEN : (ready.lastStatus === 'busy' ? REASON_CLI_BUSY : REASON_CLI_NOT_IDLE);
-      ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
-      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
+    if (Date.now() >= commandDeadline) {
+      ctx.log.warn('[trigger-watcher] Deadline passed before the command could be written:', sessionId);
+      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DEADLINE_BEFORE_WRITE, sessionId, waited_ms });
       return;
     }
 
