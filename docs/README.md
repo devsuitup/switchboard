@@ -38,6 +38,7 @@ links are in the [README](../README.md#download).
 | [Development](development.md) | Prerequisites, `task` commands, running from source next to an installed copy, building, project layout |
 | [Testing a PR live](testing-a-pr.md) | `task test-pr`: a PR's code in an isolated instance next to your own, and its pitfalls |
 | [Live testing with a throwaway HOME](live-testing.md) | An instance that cannot see your sessions at all, driven by Playwright |
+| [End-to-end journeys](e2e.md) | The Playwright journeys run against the real app in CI, and how to add one |
 | [Releasing](releasing.md) | Version bump, tag, draft release, publishing |
 | [Changelog](changelog.md) | Writing a `CHANGELOG.md` entry, the CI check, the What's new dialog |
 | [Decisions](decisions/README.md) | Architecture decision records |

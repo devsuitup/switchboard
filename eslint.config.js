@@ -663,6 +663,23 @@ module.exports = [
     },
   },
 
+  // Playwright journeys: Node, plus the renderer callbacks passed to page.evaluate
+  {
+    files: ['e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+    },
+  },
+
   // ESLint config self-check
   {
     files: ['eslint.config.js'],

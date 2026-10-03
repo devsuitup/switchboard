@@ -26,6 +26,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the window frame, the strip that replaces the title bar, its drag regions or the menu's accelerators | [contexts/window-frame.md](contexts/window-frame.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
+| Check something only a running app shows (layout, a full IPC round trip), in CI | [../docs/e2e.md](../docs/e2e.md) — Playwright journeys in `e2e/` |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
 | Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |

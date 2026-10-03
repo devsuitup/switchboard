@@ -53,6 +53,17 @@ tasks:
     cmds:
       - npm run coverage
 
+  e2e:
+    desc: Run the Playwright journeys against the real Electron app (Linux; see docs/e2e.md)
+    cmds:
+      - npm run bundle:codemirror
+      - |
+        if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && command -v xvfb-run >/dev/null 2>&1; then
+          xvfb-run -a -s "-screen 0 1920x1080x24" npm run e2e
+        else
+          npm run e2e
+        fi
+
   lint:
     desc: Run ESLint across the codebase
     cmds:
