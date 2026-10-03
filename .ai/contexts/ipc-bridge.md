@@ -361,6 +361,21 @@ does not claim the distinction: the sidebar tints the busy spinner violet when
 subagents are live, which asserts only that both things are true at once — see
 `docs/subagents.md`, "Live status".
 
+### Activity trace: render-path counters
+
+`render.stats` (renderer, `public/terminal-manager.js`) answers "is this
+terminal's CPU legitimate": writes, batch size and glyph-atlas rebuilds per
+session per second. It aggregates instead of tracing each write, because a
+per-chunk line would itself be the load at 30 writes a second. The counters sit
+in `renderStats`, created on the first event while `window.ATRACE` is true;
+one `setTimeout` per window, armed by that first event, emits and clears them,
+and drops them if the trace was switched off meanwhile. Nothing is armed while
+the trace is off or the session is silent. `maxBatch*` is per write, not per
+second; `atlasChanges` / `atlasCanvases` are the events that make
+`loadTerminalWebgl` repaint every visible row. Test:
+`test/terminal-render-stats.test.js`. It reports; it does not change the flush
+cap or the WebGL policy.
+
 ### Activity trace: why the main process is the only writer
 
 `activity-trace.js` + `public/activity-trace.js` + `public/activity-trace-panel.js`,
