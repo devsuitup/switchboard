@@ -11,8 +11,13 @@ const { loadAppFunctions } = require('./app-source');
 
 function setup(opts = {}) {
   const refreshes = [];
+  const resizes = [];
   const ctx = setupTerminalDom({ proposeDimensions: () => ({ cols: 120, rows: 40 }), ...opts,
-    api: { resizeTerminal(id, cols, rows, options) { if (options?.refresh) refreshes.push({ id, cols, rows }); } } });
+    api: { resizeTerminal(id, cols, rows, options) {
+      resizes.push({ id, cols, rows });
+      if (options?.refresh) refreshes.push({ id, cols, rows });
+      opts.resizeTerminal?.(id, cols, rows, options);
+    } } });
   let now = 0;
   let token = 0;
   const timers = new Map();
@@ -34,11 +39,12 @@ function setup(opts = {}) {
   ctx.window.setActiveSession = (id) => { ctx.window.activeSessionId = id; };
   const entry = (id, remote = false) => {
     const e = ctx.window.createTerminalEntry({ sessionId: id, ...(remote ? { remoteAlias: 'fixture' } : {}) });
-    Object.defineProperty(e.element, 'clientHeight', { value: 800 });
+    Object.defineProperty(e.element, 'clientHeight', { value: 800, configurable: true });
+    if (remote) e.remoteResizeAllowed = true;
     ctx.window.sessionMap.set(id, e.session);
     return e;
   };
-  return { ...ctx, entry, refreshes, advance, pendingTimers: () => timers.size };
+  return { ...ctx, entry, refreshes, resizes, advance, pendingTimers: () => timers.size };
 }
 
 async function flush(ctx) {
@@ -196,4 +202,108 @@ test('destroying or hiding a terminal prevents a pending refresh', async () => {
     await flush(ctx);
     assert.equal(ctx.refreshes.length, 0);
   } finally { ctx.destroy(); }
+});
+
+test('shared attach return skips refresh in single and grid views, including unknown sizing', () => {
+  let dims = { cols: 120, rows: 40 };
+  const ctx = setup({ proposeDimensions: () => dims });
+  try {
+    const e = ctx.entry('shared', true);
+    ctx.entry('local');
+    e.remoteResizeAllowed = false;
+    dims = { cols: 150, rows: 35 };
+    const requests = [];
+    const request = ctx.window.requestTerminalRefresh;
+    ctx.window.requestTerminalRefresh = (id) => { requests.push(id); request(id); };
+    ctx.window.showSession('local');
+    ctx.window.showSession('shared');
+    ctx.advance(160);
+    ctx.window.gridViewActive = true;
+    ctx.window.HTMLElement.prototype.scrollIntoView = () => {};
+    ctx.window.focusGridCard('local');
+    ctx.window.focusGridCard('shared');
+    ctx.advance(160);
+    delete e.remoteResizeAllowed;
+    ctx.window.focusGridCard('local');
+    ctx.window.focusGridCard('shared');
+    ctx.advance(160);
+    assert.deepEqual(requests, []);
+    assert.deepEqual(ctx.refreshes, []);
+    assert.deepEqual(ctx.resizes.filter(({ id }) => id === 'shared'), []);
+  } finally { ctx.destroy(); }
+});
+
+test('shared explicit Refresh redraws locally without fitting, IPC, raw resize or ssh commands', async () => {
+  const { createTmuxAttachAdapter } = require('../remote-attach');
+  const { createTerminalResizeHandler } = require('../terminal-resize');
+  const rawResizes = [];
+  const commands = [];
+  const tasks = [];
+  const adapter = createTmuxAttachAdapter({
+    spawnPty: () => ({ resize: (...args) => rawResizes.push(args), onExit() {}, onData() {}, write() {}, kill() {} }),
+    runRemoteCommand: async (_alias, command) => {
+      commands.push(command);
+      return { code: 0, stdout: ['/tmp/tmux-0/fixture', '200x50', 'status off', '', '', '', '', '1', '1'].join('\u0001') };
+    },
+  });
+  const attached = await adapter.attach('fixture', { pid: 42, tmux: 'main:@0.%0' }, { cols: 120, rows: 40 });
+  assert.equal(attached.ok, true);
+  const resize = createTerminalResizeHandler(new Map([['shared', { pty: attached.ptyProcess }]]), {
+    setTimeout(cb) { tasks.push(cb); return tasks.length; }, clearTimeout() {},
+  });
+  const ctx = setup({ proposeDimensions: () => ({ cols: 150, rows: 35 }), resizeTerminal: (id, cols, rows, options) => resize(id, cols, rows, options?.refresh) });
+  try {
+    const e = ctx.entry('shared', true);
+    ctx.window.syncPtySizeAfterOpen(e, attached);
+    ctx.resizes.length = 0;
+    commands.length = 0;
+    const paints = [];
+    let atlases = 0;
+    e.terminal.refresh = (...args) => paints.push(args);
+    e.webglAddon.clearTextureAtlas = () => { atlases++; };
+    ctx.window.requestTerminalRefresh('shared');
+    ctx.advance(160);
+    while (tasks.length) tasks.shift()();
+    assert.deepEqual(paints, [[0, e.terminal.rows - 1]]);
+    assert.equal(atlases, 1);
+    assert.deepEqual(ctx.resizes, []);
+    assert.deepEqual(rawResizes, []);
+    assert.deepEqual(commands, []);
+  } finally { ctx.destroy(); }
+});
+
+test('remote sizing capability from open results gates return refresh and fails closed', () => {
+  const ctx = setup();
+  try {
+    const e = ctx.entry('remote', true);
+    ctx.entry('local');
+    for (const result of [{ remoteResizeAllowed: false }, {}, { remoteResizeAllowed: true }]) {
+      const previousResizes = ctx.resizes.length;
+      ctx.window.syncPtySizeAfterOpen(e, result);
+      assert.equal(ctx.resizes.length - previousResizes, result.remoteResizeAllowed === true ? 1 : 0);
+      ctx.window.showSession('local');
+      ctx.window.showSession('remote');
+      ctx.advance(160);
+      assert.equal(ctx.refreshes.length, result.remoteResizeAllowed === true ? 1 : 0);
+    }
+  } finally { ctx.destroy(); }
+});
+
+test('a hidden or disconnected fit discards refresh before a later unrelated geometry fit', () => {
+  for (const hidden of [true, false]) {
+    const ctx = setup();
+    try {
+      const e = ctx.entry('local');
+      const parent = e.element.parentElement;
+      ctx.window.requestTerminalRefresh('local');
+      if (hidden) Object.defineProperty(e.element, 'clientHeight', { value: 0, configurable: true });
+      else e.element.remove();
+      ctx.advance(80);
+      if (hidden) Object.defineProperty(e.element, 'clientHeight', { value: 800, configurable: true });
+      else parent.append(e.element);
+      ctx.spies.resizeObservers[0].trigger();
+      ctx.advance(80);
+      assert.deepEqual(ctx.refreshes, [], hidden ? 'hidden terminal' : 'disconnected terminal');
+    } finally { ctx.destroy(); }
+  }
 });

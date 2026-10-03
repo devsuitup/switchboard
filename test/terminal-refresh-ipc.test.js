@@ -6,6 +6,46 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createTerminalResizeHandler } = require('../terminal-resize');
+const { extractFunction } = require('./app-source');
+
+test('remote open, reattach and launch preserve the adapter sizing capability in IPC results', async () => {
+  const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  for (const remoteResizeAllowed of [false, true]) {
+    const activeSessions = new Map();
+    const handlers = new Map();
+    const descriptor = { sessionId: 'fixture', cwd: '/fixture' };
+    const attachResult = { ok: true, ptyProcess: {}, remoteResizeAllowed };
+    const context = vm.createContext({
+      activeSessions,
+      mainWindow: { webContents: { send() {} } },
+      ipcMain: { handle: (name, cb) => handlers.set(name, cb) },
+      getCachedFolder: () => 'remote-folder',
+      isRemoteFolder: () => true,
+      parseFolderKey: () => ({ alias: 'fixture' }),
+      remoteIndexer: { getRemoteSessions: () => ({ sessions: [descriptor] }), refreshHostNow: async () => {} },
+      normalizePtySize: require('../pty-size').normalizePtySize,
+      remoteAttachAdapter: { attach: async () => attachResult },
+      remoteLaunchAdapter: {},
+      handleLaunchRequest: async () => ({ ok: true, descriptor, attachResult }),
+      wireSessionPty() {},
+      getMcpState: () => null,
+    });
+    vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);
+    for (const channel of ['open-terminal', 'remote-launch-session']) {
+      const start = main.indexOf(`ipcMain.handle('${channel}'`);
+      const end = main.indexOf('\n});', start) + 4;
+      assert.ok(start >= 0 && end > start);
+      vm.runInContext(main.slice(start, end), context);
+    }
+    const open = handlers.get('open-terminal');
+    const result = await open(null, 'fixture', '/fixture', false, {}, { cols: 120, rows: 40 });
+    assert.equal(result.remoteResizeAllowed, remoteResizeAllowed, 'new attach');
+    assert.equal((await open(null, 'fixture', '/fixture', false)).remoteResizeAllowed, remoteResizeAllowed, 'renderer reattach');
+    activeSessions.clear();
+    const launched = await handlers.get('remote-launch-session')(null, { alias: 'fixture', sessionId: 'fixture' });
+    assert.equal(launched.remoteResizeAllowed, remoteResizeAllowed, 'launch attach');
+  }
+});
 
 test('the shipped preload and main resize registration forward one refresh and restore its size', () => {
   const calls = [];

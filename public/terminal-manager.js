@@ -311,17 +311,11 @@ function ptySizeChanged(entry, cols, rows) {
   return true;
 }
 
-// Send one resize to the PTY unconditionally, right after open-terminal
-// resolved. Two reasons this is not deduplicated:
-//   - the main process arms its reattach "nudge" (cols+1 then cols, which
-//     forces a TUI repaint) on the FIRST terminal-resize it receives for a
-//     session; with the spawn size now already correct, no organic resize may
-//     ever arrive and a resumed session would never repaint;
-//   - it is the acknowledgement that the size we asked to spawn with is the
-//     size xterm actually ended up with.
-// Cost: exactly one fire-and-forget IPC per session open.
-function syncPtySizeAfterOpen(entry) {
+// see .ai/contexts/terminal-refresh.md
+function syncPtySizeAfterOpen(entry, result) {
   if (!entry || !entry.terminal) return;
+  if (entry.session.remoteAlias) entry.remoteResizeAllowed = result?.remoteResizeAllowed === true;
+  if (entry.session.remoteAlias && !entry.remoteResizeAllowed) return;
   const { cols, rows } = entry.terminal;
   if (!cols || !rows) return;
   entry.lastPtySize = { cols, rows };
@@ -338,7 +332,15 @@ function scheduleTerminalFit(entry) {
   clearTimeout(entry.fitTimer);
   entry.fitTimer = setTimeout(() => {
     entry.fitTimer = null;
-    if (entry.closed || !entry.element.isConnected || entry.element.clientHeight === 0) return;
+    if (entry.closed || !entry.element.isConnected || entry.element.clientHeight === 0) {
+      entry.refreshRequested = false;
+      return;
+    }
+    if (entry.refreshRequested && entry.session.remoteAlias && entry.remoteResizeAllowed !== true) {
+      entry.refreshRequested = false;
+      forceRepaint(entry);
+      return;
+    }
     safeFit(entry);
     if (!entry.refreshRequested) return;
     entry.refreshRequested = false;
@@ -362,7 +364,7 @@ function refreshRemoteTerminalOnReturn(sessionId, previousSessionId) {
   if (!entry || entry.closed) return;
   const firstReveal = !entry.hasBeenShown;
   entry.hasBeenShown = true;
-  if ((previousSessionId !== sessionId || firstReveal) && entry.session.remoteAlias) requestTerminalRefresh(sessionId);
+  if ((previousSessionId !== sessionId || firstReveal) && entry.session.remoteAlias && entry.remoteResizeAllowed === true) requestTerminalRefresh(sessionId);
 }
 
 // Watch the terminal container's own geometry. This is the piece that covers
@@ -1115,6 +1117,7 @@ function createTerminalEntry(session, opts = {}) {
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
+    if (entry.session.remoteAlias && entry.remoteResizeAllowed !== true) return;
     // Only tell the PTY when the size really moved — see ptySizeChanged.
     if (!ptySizeChanged(entry, cols, rows)) return;
     window.api.resizeTerminal(entry.session.sessionId, cols, rows);

@@ -218,11 +218,14 @@ Remote sessions get no [IDE emulation](ide-emulation.md), no
 [path links](terminal.md#clickable-paths). The [Changes view](changes-view.md)
 works, read-only, by running git over ssh in the session's directory.
 
-Returning to an attached terminal refreshes its screen automatically.
+Returning to an attached terminal refreshes its screen automatically only
+when no other client was attached at discovery time.
 **Refresh screen**, beside Stop in the terminal header and in the sidebar
 session context menu, also refreshes on demand. The control works for open
 local terminals too. Refreshing a hidden terminal reveals it to fit its size;
-the sidebar control is disabled when no terminal is open.
+the sidebar control is disabled when no terminal is open. The header control
+is disabled when the session is not running. For shared attachments, explicit
+Refresh only redraws the local buffer; it never resizes the ssh PTY.
 
 ## Stop, archive, delete
 

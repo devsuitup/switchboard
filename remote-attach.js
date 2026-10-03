@@ -419,7 +419,7 @@ function createTmuxAttachAdapter(opts = {}) {
     const ptyProcess = {
       write(data) { if (alive) raw.write(data); },
       resize(cols, rows, options) {
-        if ((!solo && options?.refresh !== true) || !alive) return;
+        if (!solo || !alive) return;
         try { raw.resize(cols, rows); } catch (err) { if (options?.refresh === true) throw err; }
       },
       kill: detach,
@@ -439,7 +439,7 @@ function createTmuxAttachAdapter(opts = {}) {
           : 'no local size supplied';
       log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (fixed at attach time — ${reason})`);
     }
-    return { ok: true, ptyProcess, cols: openCols, rows: openRows };
+    return { ok: true, ptyProcess, cols: openCols, rows: openRows, remoteResizeAllowed: solo };
   }
 
   return { supports, attach };

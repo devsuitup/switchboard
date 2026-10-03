@@ -921,9 +921,10 @@ from the descriptor the refresh cycle already pulls.
 
 ## Remote hosts — tmux attach (issue #221)
 
-Screen refresh (#446) uses the same attach PTY with an explicit refresh option
-that permits a fitted-size nudge even for shared clients. Ordinary geometry
-resizes keep the solo-client rule below; see
+Screen refresh (#446) uses a fitted-size nudge only for solo attachments.
+Shared attachments skip automatic return refresh and explicitly repaint the
+local buffer without resizing their ssh PTY. All geometry resizes retain
+the solo-client rule below; see
 [terminal-refresh](terminal-refresh.md) for restoration and measurement limits.
 
 `open-terminal` no longer refuses every remote session outright. When

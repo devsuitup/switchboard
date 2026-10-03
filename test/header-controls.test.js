@@ -19,12 +19,44 @@ const {
 const { terminalStatusLabel } = require('../public/process-exit');
 const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
+const { loadAppFunctions } = require('./app-source');
 
 const HTML = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 const RAW_CSS = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
 const CSS = RAW_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const KIND_RANK = { indicator: 0, toggle: 1, action: 2 };
+
+test('header Refresh is disabled with an accessible reason until the session is running', () => {
+  const ctx = setupTerminalDom();
+  try {
+    const { window } = ctx;
+    const holder = window.document.createElement('div');
+    holder.innerHTML = HTML;
+    const button = holder.querySelector('#terminal-refresh-btn');
+    window.document.querySelector('#terminal-header-controls').append(button);
+    window.activeSessionId = 's';
+    window.terminalHeaderStatus = window.document.createElement('span');
+    window.terminalStopBtn = window.document.getElementById('terminal-stop-btn');
+    window.terminalStatusLabel = terminalStatusLabel;
+    window.forgetSessionExit = () => {};
+    window.lastSessionExit = () => null;
+    const calls = [];
+    window.requestTerminalRefresh = (id) => calls.push(id);
+    const { initTerminalRefreshControl, updateTerminalHeader } = loadAppFunctions(ctx.context, { functions: ['initTerminalRefreshControl', 'updateTerminalHeader'] });
+    initTerminalRefreshControl();
+    for (const running of [false, true, false]) {
+      if (running) window.activePtyIds.add('s');
+      else window.activePtyIds.delete('s');
+      updateTerminalHeader();
+      assert.equal(button.disabled, !running);
+      assert.equal(button.getAttribute('aria-disabled'), String(!running));
+      assert.equal(button.title, running ? 'Refresh screen' : 'Open this session in a terminal to refresh its screen');
+      button.click();
+    }
+    assert.deepEqual(calls, ['s']);
+  } finally { ctx.destroy(); }
+});
 
 function emptyRow() {
   const dom = new JSDOM('<!DOCTYPE html><body><div id="terminal-header-controls"></div></body>');

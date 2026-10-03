@@ -1048,6 +1048,10 @@ function updateTerminalHeader() {
   terminalHeaderStatus.title = status;
   terminalHeaderStatus.setAttribute('aria-label', status);
   terminalStopBtn.style.display = running ? '' : 'none';
+  const refreshButton = document.getElementById('terminal-refresh-btn');
+  refreshButton.disabled = !running;
+  refreshButton.setAttribute('aria-disabled', String(!running));
+  refreshButton.title = running ? 'Refresh screen' : 'Open this session in a terminal to refresh its screen';
   updatePtyTitle();
 }
 
@@ -1207,7 +1211,7 @@ async function launchNewSession(project, sessionOptions) {
     showSession(sessionId);
     return;
   }
-  syncPtySizeAfterOpen(entry);
+  syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
@@ -1255,7 +1259,7 @@ async function launchRemoteSession(project, { cwd, options }) {
     showSession(sessionId);
     return;
   }
-  syncPtySizeAfterOpen(entry);
+  syncPtySizeAfterOpen(entry, result);
   showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
@@ -1334,7 +1338,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
     return;
   }
   skippedWorkingSetEntries.delete(sessionId);
-  syncPtySizeAfterOpen(entry);
+  syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 

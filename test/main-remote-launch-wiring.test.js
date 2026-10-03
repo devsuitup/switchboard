@@ -36,7 +36,7 @@ test('remote-launch-session lowercases the id before the activeSessions guard', 
 });
 
 test('remote-launch-session registers the pty under the launched session id, the payload alias and the descriptor cwd', () => {
-  assert.match(launch, /registerRemoteAttachSession\(result\.descriptor\.sessionId, \{\s*alias: payload\.alias, projectPath: result\.descriptor\.cwd, cwd: result\.descriptor\.cwd, ptyProcess: result\.attachResult\.ptyProcess,\s*\}\)/);
+  assert.match(launch, /registerRemoteAttachSession\(result\.descriptor\.sessionId, \{\s*alias: payload\.alias, projectPath: result\.descriptor\.cwd, cwd: result\.descriptor\.cwd, ptyProcess: result\.attachResult\.ptyProcess,\s*remoteResizeAllowed: result\.attachResult\.remoteResizeAllowed,\s*\}\)/);
   assert.match(launch, /refreshHostNow\(payload\.alias, \{ force: true \}\)/);
 });
 
@@ -45,5 +45,5 @@ test('registerRemoteAttachSession records a remote-attach session on its host an
   assert.match(reg, /host: alias, kind: 'remote-attach'/);
   assert.match(reg, /activeSessions\.set\(sessionId, remoteSession\);/);
   assert.match(reg, /wireSessionPty\(remoteSession, sessionId, ptyProcess\);/);
-  assert.match(mainSrc, /registerRemoteAttachSession\(sessionId, \{\s*alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult\.ptyProcess,\s*\}\)/);
+  assert.match(mainSrc, /registerRemoteAttachSession\(sessionId, \{\s*alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult\.ptyProcess,\s*remoteResizeAllowed: attachResult\.remoteResizeAllowed,\s*\}\)/);
 });

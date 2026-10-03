@@ -125,7 +125,7 @@ test('plain terminals skip the automatic first nudge but accept an explicit refr
   assert.deepEqual(ctx.calls.slice(1), [{ cols: 120, rows: 40 }, { cols: 119, rows: 40 }, { cols: 120, rows: 40 }]);
 });
 
-test('remote refresh reaches the attach PTY for both solo and shared clients', async () => {
+test('remote refresh nudges solo attach and never resizes shared attach', async () => {
   for (const clientCount of [0, 1]) {
     const calls = [];
     const raw = { resize(cols, rows) { calls.push({ cols, rows }); }, onExit() {}, onData() {}, write() {}, kill() {} };
@@ -139,7 +139,7 @@ test('remote refresh reaches the attach PTY for both solo and shared clients', a
     const resize = handler()(new Map([['s', { pty: attached.ptyProcess }]]), { setTimeout: (cb) => { tasks.push(cb); return tasks.length; }, clearTimeout() {} });
     resize('s', 120, 40, true);
     tasks.shift()();
-    assert.deepEqual(calls, [{ cols: 120, rows: 40 }, { cols: 119, rows: 40 }, { cols: 120, rows: 40 }], `clientCount=${clientCount}`);
+    assert.deepEqual(calls, clientCount === 0 ? [{ cols: 120, rows: 40 }, { cols: 119, rows: 40 }, { cols: 120, rows: 40 }] : [], `clientCount=${clientCount}`);
   }
 });
 
@@ -151,7 +151,7 @@ test('a thrown remote restoration reaches the guarded retry and restores the att
     size = { cols, rows };
   }, onExit() {}, onData() {}, write() {}, kill() {} };
   const adapter = createTmuxAttachAdapter({ spawnPty: () => raw,
-    runRemoteCommand: async () => ({ code: 0, stdout: ['/tmp/tmux-0/fixture', '200x50', 'status off', '', '', '', '', '1', '1'].join('\u0001') }),
+    runRemoteCommand: async () => ({ code: 0, stdout: ['/tmp/tmux-0/fixture', '200x50', 'status off', '', '', '', '', '0', '1'].join('\u0001') }),
   });
   const attached = await adapter.attach('fixture', { pid: 42, tmux: 'main:@0.%0' }, { cols: 120, rows: 40 });
   assert.equal(attached.ok, true);
@@ -161,4 +161,42 @@ test('a thrown remote restoration reaches the guarded retry and restores the att
   tasks.shift()();
   assert.equal(attempts, 4);
   assert.deepEqual(size, { cols: 120, rows: 40 });
+});
+
+test('PTY resize rejects dimensions above the existing allocation bounds', () => {
+  const { MAX_COLS, MAX_ROWS } = require('../pty-size');
+  const ctx = fixture();
+  for (const refresh of [false, true]) {
+    ctx.resize('s', MAX_COLS + 1, 40, refresh);
+    ctx.resize('s', 120, MAX_ROWS + 1, refresh);
+    ctx.resize('s', Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, refresh);
+  }
+  assert.deepEqual(ctx.calls, []);
+  assert.equal(ctx.tasks.size, 0);
+  ctx.resize('s', MAX_COLS, MAX_ROWS, true);
+  ctx.flush();
+  assert.deepEqual(ctx.calls.at(-1), { cols: MAX_COLS, rows: MAX_ROWS });
+});
+
+test('the first-open nudge stays inside the PTY column upper bound', () => {
+  const { MAX_COLS, MAX_ROWS } = require('../pty-size');
+  const ctx = fixture();
+  ctx.session.firstResize = true;
+  ctx.resize('s', MAX_COLS, MAX_ROWS);
+  ctx.flush();
+  ctx.flush();
+  assert.ok(ctx.calls.every(({ cols, rows }) => cols <= MAX_COLS && rows <= MAX_ROWS));
+  assert.deepEqual(ctx.calls, [{ cols: MAX_COLS, rows: MAX_ROWS }, { cols: MAX_COLS - 1, rows: MAX_ROWS }, { cols: MAX_COLS, rows: MAX_ROWS }]);
+});
+
+test('only boolean true requests a refresh nudge and forced retry', () => {
+  for (const refresh of [1, 'true', {}, [], false, null, undefined]) {
+    const ctx = fixture();
+    ctx.resize('s', 120, 40, refresh);
+    assert.deepEqual(ctx.calls, [{ cols: 120, rows: 40 }]);
+    assert.equal(ctx.tasks.size, 0);
+    ctx.resize('s', 150, 35, true);
+    ctx.flush();
+    assert.deepEqual(ctx.calls.slice(1), [{ cols: 150, rows: 35 }, { cols: 149, rows: 35 }, { cols: 150, rows: 35 }]);
+  }
 });

@@ -1721,9 +1721,10 @@ ipcMain.handle('remote-launch-session', async (_event, payload) => {
   if (!result.ok) return { ok: false, error: result.error };
   const session = registerRemoteAttachSession(result.descriptor.sessionId, {
     alias: payload.alias, projectPath: result.descriptor.cwd, cwd: result.descriptor.cwd, ptyProcess: result.attachResult.ptyProcess,
+    remoteResizeAllowed: result.attachResult.remoteResizeAllowed,
   });
   remoteIndexer.refreshHostNow(payload.alias, { force: true }).catch(() => {});
-  return { ok: true, remote: true, generation: session.generation };
+  return { ok: true, remote: true, remoteResizeAllowed: session.remoteResizeAllowed, generation: session.generation };
 });
 
 // --- IPC: remote-send-prompt ---
@@ -2350,12 +2351,13 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 }
 
 // --- IPC: open-terminal ---
-function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyProcess }) {
+function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyProcess, remoteResizeAllowed }) {
   const remoteSession = {
     pty: ptyProcess,
     // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
     handle: ptyProcess,
     host: alias, kind: 'remote-attach',
+    remoteResizeAllowed: remoteResizeAllowed === true,
     rendererAttached: true, exited: false,
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
@@ -2397,6 +2399,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       ok: true, reattached: true, sandbox: !!session.sandbox,
       mcpState: session.mcpError ? 'failed' : getMcpState(session.realSessionId || sessionId),
       mcpError: session.mcpError || null,
+      remoteResizeAllowed: session.remoteResizeAllowed,
       generation: session.generation,
     };
   }
@@ -2420,8 +2423,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       const remoteCwd = (descriptor && typeof descriptor.cwd === 'string') ? descriptor.cwd : null;
       const remoteSession = registerRemoteAttachSession(sessionId, {
         alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult.ptyProcess,
+        remoteResizeAllowed: attachResult.remoteResizeAllowed,
       });
-      return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
+      return { ok: true, reattached: false, remote: true, sandbox: false, remoteResizeAllowed: remoteSession.remoteResizeAllowed, generation: remoteSession.generation };
     }
   }
 
