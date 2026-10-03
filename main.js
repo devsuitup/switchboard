@@ -82,7 +82,7 @@ const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
 const { createRemoteStopAdapter } = require('./remote-stop');
-const { attachBlockReason } = require('./remote-host-profile');
+const { attachBlockReason, sendBlockReason } = require('./remote-host-profile');
 const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./run-to-exit');
@@ -594,6 +594,7 @@ function annotateRemoteAttachable(projects) {
         const supportsAttach = !!(descriptor && remoteAttachAdapter.supports(descriptor));
         session.remoteAttachable = supportsAttach && !hostBlocked;
         session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
+        session.remoteSendBlocked = sendBlockReason(info.profile);
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;

@@ -17,6 +17,8 @@ const MAX_SESSION_DESCRIPTOR_BYTES = 8192;
 const DEFAULT_CONNECT_TIMEOUT_S = 10;
 const DEFAULT_LIST_TIMEOUT_MS = 60_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
+const MAX_PROBE_BYTES = 1024;
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
 // see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
@@ -39,6 +41,23 @@ const LIST_COMMAND =
   `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
   `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +
   `pid=$(basename "$f" .json); printf '\\002ALIVE:%s\\n' "$( [ -d "/proc/$pid" ] && echo 1 || echo 0 )"; done`;
+
+// see .ai/contexts/session-cache.md ("Remote hosts — capability tiers", the probe)
+const PROBE_COMMAND =
+  'if command -v tmux >/dev/null 2>&1; then echo tmux=1; else echo tmux=0; fi; ' +
+  'if command -v inotifywait >/dev/null 2>&1; then echo inotifywait=1; else echo inotifywait=0; fi';
+
+function parseProbe(stdout) {
+  const lines = String(stdout).split('\n').map(l => l.replace(/\r$/, '')).filter(l => l !== '');
+  if (lines.length !== 2) return null;
+  const out = {};
+  for (const name of ['tmux', 'inotifywait']) {
+    const line = lines.find(l => l.startsWith(name + '='));
+    if (line !== name + '=1' && line !== name + '=0') return null;
+    out[name] = line === name + '=1';
+  }
+  return out;
+}
 
 function parseInventory(stdout) {
   const out = [];
@@ -131,6 +150,7 @@ function createSshTransport(opts = {}) {
   const resolveScpPath = opts.resolveScpPath || defaultResolveScpPath;
   const log = opts.log || { info() {}, warn() {}, error() {} };
   const listTimeoutMs = opts.listTimeoutMs || DEFAULT_LIST_TIMEOUT_MS;
+  const probeTimeoutMs = opts.probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS;
   const fetchTimeoutMs = opts.fetchTimeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
   const concurrency = Math.max(1, Math.min(8, opts.concurrency || DEFAULT_CONCURRENCY));
 
@@ -233,6 +253,19 @@ function createSshTransport(opts = {}) {
     const transcriptIds = transcriptSessionIds(files);
     const sessions = rawSessions.map(s => ({ ...s, descriptorOnly: !transcriptIds.has(s.sessionId) }));
     return { files, sessions };
+  }
+
+  async function probeTools(alias) {
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, PROBE_COMMAND], {
+      timeoutMs: probeTimeoutMs,
+      maxBytes: MAX_PROBE_BYTES,
+    });
+    if (res.timedOut) throw new Error(`ssh probe timed out after ${probeTimeoutMs} ms`);
+    if (res.truncated) throw new Error('ssh probe output exceeded the size cap');
+    if (res.code !== 0) throw new Error(`ssh probe failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
+    const tools = parseProbe(res.stdout);
+    if (!tools) throw new Error('ssh probe returned unexpected output');
+    return tools;
   }
 
   async function fetchOne(alias, rel, destRoot) {
@@ -351,7 +384,7 @@ function createSshTransport(opts = {}) {
     cancelInFlight();
   }
 
-  return { listFiles, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
+  return { listFiles, probeTools, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
 module.exports = {
@@ -361,6 +394,8 @@ module.exports = {
   splitListOutput,
   transcriptSessionIds,
   LIST_COMMAND,
+  PROBE_COMMAND,
+  parseProbe,
   ALIVE_MARKER_PREFIX,
   REMOTE_PROJECTS_REL,
   REMOTE_SESSIONS_REL,

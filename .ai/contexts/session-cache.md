@@ -781,12 +781,13 @@ created the `.jsonl`; a manual host refresh did not help.
     rel path, not its own, because `readSubagentMeta()` in the transcript's
     row is what actually needs re-deriving.
 
-### Remote hosts — capability tiers (issue #218, first slice)
+### Remote hosts — capability tiers (issue #218, first and second slice)
 
 `remote-host-profile.js` is a pure function: `computeHostProfile({ at, error, descriptors })` returns
 `{ tier, tiers, missing }`, the highest of `observe < liveness < inject < attach < launch` that is
 available plus, for every tier above it, the reason it is not. The indexer's `getRemoteHostProfile(alias)`
-feeds it the last cycle's own data (`at`, `error`, live descriptors), so there is no probe and no extra ssh.
+feeds it the last cycle's own data (`at`, `error`, live descriptors) and the probe result (`tools`), and the profile
+also returns `blocked` (why nothing could be read, or null) and the normalised `tools`.
 
 - `none`: never synced, or the last cycle failed. A failed `find ~/.claude/projects` fails the whole
   cycle, so an unreadable projects directory and an unreachable host are not told apart; the ssh error is the reason.
@@ -801,8 +802,31 @@ feeds it the last cycle's own data (`at`, `error`, live descriptors), so there i
   Stop is never blocked, it runs its own ssh. The renderer only shows the strings: the host dot's tooltip (which states
   the last error from the first failure), the row and badge titles.
 - The new-session button was already disabled for every remote host; it is unchanged.
-- Not done: the probe for what the descriptors cannot tell (multiplexer installed but no session in it, `inotifywait`),
-  the inject affordance (issue #219), the launch tier.
+- The new-session button was already disabled for every remote host; its title now carries the launch tier's reason.
+- Not done: the launch tier itself (issue #222), multiplexers other than tmux (`parseTmuxField` is the only recogniser).
+
+#### The probe and the gates (second slice)
+
+- `PROBE_COMMAND` (remote-transport.js) is its own ssh command, pinned exactly in `test/remote-transport-probe.test.js`;
+  `LIST_COMMAND` is not widened. It prints `tmux=0|1` and `inotifywait=0|1`; `parseProbe` accepts exactly those two
+  lines and `probeTools` throws on a timeout (15 s), a cap overrun (1 KiB), a non-zero exit or any other output. It goes
+  through the same `run()`, so the same ssh binary, `BatchMode` and `ConnectTimeout` apply and no new spawn site exists.
+- The indexer probes at the end of `refreshHost`, after a successful sync only, at most every `PROBE_INTERVAL_MS` (6 h);
+  a failed probe is retried after `PROBE_RETRY_MS` (30 min), keeps the previous answer, and never fails the cycle. A
+  forced reconnect re-arms it without forgetting the answer. A removed alias drops its answer. A transport without
+  `probeTools` is skipped.
+- `tools.<name>` is `true`, `false` or `null` (unknown). Only `false` withholds anything. `tmux === false` makes the attach tier
+  unavailable even when a descriptor names a pane, because the attach adapter runs a bare `tmux` over the same
+  non-interactive ssh, so a failing `command -v tmux` there is a failing attach. `tmux === true` makes attach available on
+  an idle host. Liveness is unchanged: it needs a descriptor, which the probe cannot tell.
+- `attachBlockReason(profile, failures)` returns the observe reason from the third failure on (the fallback for a host
+  whose ssh keeps failing, which wins), else the tmux reason when tmux is known missing, else null. The session carries it in
+  `remoteAttachBlocked`; the renderer already opens the transcript and puts it in the row and badge titles.
+- `sendBlockReason(profile)` is the inject tier's reason on a host that was read (`blocked` null), else null: a failing host
+  does not disable Send, which runs its own ssh. The tier is host-level, "some live session reports a socket", so a
+  session without its own socket on a host where another one has one is still offered Send and fails at the click.
+  `session.remoteSendBlocked` disables the button with the reason in its title.
+- Stop has no gate (`test/annotate-remote-tier-gates.test.js` and `test/dom-sidebar-remote-tier-gates.test.js` pin it).
 
 ## Remote hosts — sending a prompt (issue #219)
 

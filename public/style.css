@@ -1205,6 +1205,14 @@ body { display: flex; flex-direction: column; }
   background: rgba(62,207,90,0.1);
 }
 
+.session-send-btn:disabled,
+.session-send-btn:disabled:hover {
+  color: #5a7a6a;
+  background: none;
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .session-launch-config-btn {
   color: #5a7a6a;
   outline: none;

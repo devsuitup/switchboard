@@ -58,8 +58,11 @@ function formatNextAttemptIn(epochMs) {
 // session right now. See .ai/contexts/session-cache.md.
 function remoteHostTierLines(profile) {
   if (!profile || typeof profile.tier !== 'string' || !Array.isArray(profile.missing)) return '';
+  const watch = profile.tools && profile.tools.inotifywait === false
+    ? '\nlive updates: inotifywait is not installed: only the periodic pull runs' : '';
   return '\nCapability: ' + profile.tier
-    + profile.missing.map(m => '\n' + m.tier + ' unavailable: ' + m.reason).join('');
+    + profile.missing.map(m => '\n' + m.tier + ' unavailable: ' + m.reason).join('')
+    + watch;
 }
 
 function remoteHostState(project) {
@@ -888,7 +891,11 @@ function renderProjects(projects, resort) {
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
     if (project.remoteAlias) {
       newBtn.disabled = true;
-      newBtn.title = 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
+      const launch = project.remoteHostProfile && Array.isArray(project.remoteHostProfile.tiers)
+        && project.remoteHostProfile.tiers.find(t => t.tier === 'launch');
+      newBtn.title = launch && launch.reason
+        ? 'New session unavailable on ' + project.remoteAlias + ': ' + launch.reason
+        : 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
     } else {
       newBtn.title = 'New session';
     }
@@ -1290,6 +1297,7 @@ function rebindSidebarEvents(projects) {
     if (sendBtn) {
       sendBtn.onclick = (e) => {
         e.stopPropagation();
+        if (session.remoteSendBlocked) return;
         showSendPromptDialog(session);
       };
     }
@@ -1515,6 +1523,10 @@ function buildSessionItem(session) {
   sendBtn.className = 'session-send-btn';
   sendBtn.title = 'Send a prompt…';
   sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>';
+  if (session.remoteSendBlocked) {
+    sendBtn.disabled = true;
+    sendBtn.title = 'Send unavailable: ' + session.remoteSendBlocked;
+  }
 
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';

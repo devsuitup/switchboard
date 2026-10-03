@@ -81,7 +81,7 @@ next use; one installed after nothing was found is seen after a restart.
   `~/.claude/sessions/<pid>.json` descriptors.
 - For live updates: `inotifywait` (inotify-tools). Without it, only the periodic
   pull runs, and a warning is logged.
-- For attach: sessions started inside tmux.
+- For attach: `tmux` installed, and sessions started inside it.
 - For the [Changes view](changes-view.md): `git`.
 
 ## What is copied
@@ -122,10 +122,31 @@ The project header carries a dot for the host's state, with a tooltip:
 
 Hovering the dot also lists the host's capability: the highest of observe,
 liveness, inject, attach and launch that its last refresh could confirm, and for
-each one above it why it is missing (for example no live session names a tmux
-pane). A tier that needs a live session reads as missing on an idle host. After
-three failed refreshes in a row, a row that would attach opens its transcript,
-with the reason in its tooltip; **Stop** is never disabled, it runs its own ssh.
+each one above it why it is missing (for example no live session reports a
+messaging socket). Liveness and inject need a live session to read, so they read
+as missing on an idle host.
+
+Once per host, at its first successful refresh and then every six hours (and on
+**Reconnect**), one extra ssh asks whether `tmux` and `inotifywait` are
+installed and nothing else; while one of them is missing it asks again every 30 minutes, so an install is noticed. A host with `tmux` and no session offers attach; a
+host without it does not, even when a descriptor names a pane, and the dot says
+so. A host without `inotifywait` says that only the periodic pull runs. When the
+probe fails (timeout after 15 seconds, refused, unreadable answer), the host
+stays as it was and the probe is tried again 30 minutes later: an unknown answer
+is never shown as missing.
+
+What the tier gates:
+
+- **Attach.** A row attaches only when the host has `tmux` (as far as the probe
+  knows) and the descriptor names a pane. Otherwise it opens its transcript, with
+  the reason in its tooltip. After three failed refreshes in a row it also opens
+  its transcript, whatever the probe said.
+- **New session** stays disabled on a remote host; its tooltip gives the launch
+  tier's reason: starting a session from here is not implemented.
+- **Send a prompt…** is disabled, with the inject reason in its tooltip, while no
+  live session on the host reports a messaging socket. A host whose refresh
+  failed does not disable it: it runs its own ssh.
+- **Stop** is never disabled, it runs its own ssh.
 
 A failing host is retried with a doubling delay, up to 30 minutes, and never
 dropped; one success resets it. **Reconnect** on the header retries at once and
