@@ -6,12 +6,14 @@ const HEADER_CONTROLS = Object.freeze([
   Object.freeze({ id: 'ide-emulation-indicator', kind: 'indicator' }),
   Object.freeze({ id: 'panel-terminal-toggle-btn', kind: 'toggle' }),
   Object.freeze({ id: 'changes-toggle-btn', kind: 'toggle' }),
+  Object.freeze({ id: 'touched-toggle-btn', kind: 'toggle' }),
   Object.freeze({ id: 'terminal-stop-btn', kind: 'action' }),
 ]);
 
 const HEADER_TOGGLE_ICONS = Object.freeze({
   shell: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3l-3 3"/><path d="M13 15h3"/><path d="M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-14a2 2 0 0 1-2-2z"/></svg>',
   changes: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M11 6h5a2 2 0 0 1 2 2v8"/><path d="M14 9l-3-3l3-3"/><path d="M13 18h-5a2 2 0 0 1-2-2v-8"/><path d="M10 15l3 3l-3 3"/></svg>',
+  touched: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1-2-2v-14a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M9 15l2 2l4-4"/></svg>',
 });
 
 function headerControlSpec(id) {

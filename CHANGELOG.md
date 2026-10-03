@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- A session's **Touched** tab, next to Changes in the terminal header, lists the files its file tools (Edit, Write, MultiEdit, NotebookEdit) touched, its subagents' included, with what is on disk now (present, gone, unreadable) and the tools and agents behind each. It works outside any git repository. It is not the complete set of files the session changed: files changed through Bash commands or scripts are not listed, and the tab says so. Local sessions only. (#309)
 - With Debug mode on, the activity trace now records how hard each terminal is being drawn: once a second per session, how many writes reached it, how large they were and how often its glyph atlas was rebuilt, to tell a legitimately busy terminal from a runaway one. (#175)
 ### Changed
 - A single trigger is no longer typed into a dialog such as a permission prompt or a question: with `wait: "none"` (write now, the default) it holds while the CLI shows a dialog, and with `wait: "idle"` until the CLI is at its prompt, up to its `timeout_ms`; then it fails `not sent` with a `reason` that says a dialog is open instead of being written into it. `wait: "none"` still writes at once while the CLI is busy. Without a readable CLI descriptor it is written as before. Input you type yourself in the terminal is never held back. (#379)

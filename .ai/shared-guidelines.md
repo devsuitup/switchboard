@@ -17,6 +17,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Read the Claude CLI's own session state files | [contexts/cli-session-state.md](contexts/cli-session-state.md) |
 | Change Memory/.work-files panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
 | Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
+| Change the Touched tab (files a session's file tools touched, from transcripts) | [contexts/touched-files.md](contexts/touched-files.md) |
 | Change the shell inside the file panel (mount point, hidden-write exemption, splitter) | [contexts/panel-terminal.md](contexts/panel-terminal.md) |
 | Change how a plain terminal's shell starts (the `claude` shim, generated rcfile / `ZDOTDIR`, the typed fallback) | [contexts/plain-terminal.md](contexts/plain-terminal.md) |
 | Change what a path in terminal output links to (matcher, openability check, `path:line`) | [contexts/terminal-path-links.md](contexts/terminal-path-links.md) |

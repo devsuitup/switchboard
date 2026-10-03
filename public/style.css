@@ -4894,6 +4894,105 @@ body { display: flex; flex-direction: column; }
   border-top: 1px solid var(--hairline);
 }
 
+/* --- Touched files tab (issue #309) --- */
+#file-panel-touched {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#touched-coverage {
+  margin: 8px 8px 0;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #c8a24a;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+}
+
+#touched-summary {
+  margin: 8px 8px 0;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--hairline);
+  border-radius: 10px 10px 0 0;
+}
+
+#touched-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0 8px 8px;
+  padding: 4px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--hairline);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+}
+
+.touched-file-row,
+.touched-unresolved-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.touched-file-row.touched-openable {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.touched-file-row.touched-openable:hover {
+  background: var(--hairline);
+}
+
+.touched-file-state {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.touched-state-present { color: #3ecf5a; }
+.touched-state-gone,
+.touched-state-refused { color: #e05070; }
+.touched-state-unreadable,
+.touched-state-not-file { color: #e0a030; }
+
+.touched-file-path {
+  flex: 1;
+  min-width: 0;
+  unicode-bidi: isolate;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d0d0e0;
+}
+
+.touched-file-meta {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* The list keeps its explicit height while the editor is open; it is the
    editor that takes the remaining space. */
 #changes-list.changes-list-split {

@@ -370,6 +370,31 @@ module.exports = [
     },
   },
 
+  // see .ai/contexts/touched-files.md
+  {
+    files: ['public/file-panel.js'],
+    languageOptions: {
+      globals: { initTouchedView: 'readonly', renderTouchedTab: 'readonly', hideTouchedView: 'readonly' },
+    },
+  },
+  {
+    files: ['public/touched-files-view.js'],
+    languageOptions: {
+      globals: {
+        FP_ICONS: 'readonly',
+        currentPanelSessionId: 'readonly',
+        handleClose: 'readonly',
+        getSessionState: 'readonly',
+        endCurrentTab: 'readonly',
+        destroyCurrentTab: 'readonly',
+        showPanel: 'readonly',
+        renderPanel: 'readonly',
+        filePanelState: 'readonly',
+        openFileTab: 'readonly',
+      },
+    },
+  },
+
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
@@ -575,6 +600,7 @@ module.exports = [
       'git-changes.js',
       'git-changes-runner.js',
       'git-changes-target.js',
+      'session-touched-files.js',
       'panel-terminal-target.js',
       'folder-index-state.js',
       'pty-size.js',
