@@ -105,8 +105,9 @@ growing delay when it fails.
 ## In the sidebar
 
 A remote host's projects are listed like local ones, with the alias as a badge
-on each session. Their `+` is disabled (*Read-only mirror of &lt;alias&gt; — new
-sessions must be started on that host*).
+on each session. Their `+` starts a new session on the host when it has
+`tmux` (see [Launch a session](#launch-a-session)); without it the button is
+disabled and its tooltip says the host needs tmux.
 
 ### Status
 
@@ -141,8 +142,9 @@ What the tier gates:
   knows) and the descriptor names a pane. Otherwise it opens its transcript, with
   the reason in its tooltip. After three failed refreshes in a row it also opens
   its transcript, whatever the probe said.
-- **New session** stays disabled on a remote host; its tooltip gives the launch
-  tier's reason: starting a session from here is not implemented.
+- **New session** is enabled when the host has `tmux` (probe answer, or a live
+  session naming a tmux pane). Otherwise it is disabled and its tooltip gives the
+  launch tier's reason: the host needs tmux.
 - **Send a prompt…** is disabled, with the inject reason in its tooltip, while no
   live session on the host reports a messaging socket. A host whose refresh
   failed does not disable it: it runs its own ssh.
@@ -216,6 +218,35 @@ travels on ssh's standard input only, never on a command line.
 - A host running Windows is refused: its channel needs the session's key file,
   which Switchboard does not read.
 - A session attached in a terminal is refused: type in the terminal.
+
+## Launch a session
+
+The `+` of a remote project opens a dialog: the directory (a list of the host's
+known project paths, or any absolute path typed) and the permission mode, with
+Dangerous Skip as locally. Start runs one `ssh` that checks the directory
+exists (`test -d`), that `tmux` and `claude` are found, then starts
+`claude --session-id <uuid>` in a new detached tmux session named
+`switchboard-<first 8 of the uuid>`, in that directory. The uuid is generated
+by Switchboard. Switchboard then attaches to the new pane the way it attaches to
+any running session, so you land in it.
+
+- Only tmux hosts can launch. There is no launch without a multiplexer. A failed
+  last refresh does not disable it: it runs its own ssh.
+- A directory that does not exist on the host refuses the launch, and the
+  terminal tab says so.
+- Authentication is done on the host, by you. Switchboard copies no credential;
+  a CLI that is not logged in shows its own login prompt in the pane.
+- `claude` must be on the `PATH` of a non-interactive ssh command. When it is
+  only added by an interactive shell profile, the launch says it was not found.
+- The directory may only contain letters, digits, space and `. _ + @ : , = / -`,
+  must be absolute and must not contain a `..` segment. Anything else is refused
+  before ssh runs.
+- Only the permission mode maps to a CLI flag. The local dialog's worktree, Chrome,
+  sandbox, pre-launch command and additional directories do not apply to a remote
+  launch.
+- Stop works as for any remote session: it kills the pane, never the tmux
+  session. Closing the only pane of a session ends that session.
+- Linux hosts only, as for attach.
 
 ## Known limits
 

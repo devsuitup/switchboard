@@ -1115,10 +1115,12 @@ async function loadProjects({ resort = false } = {}) {
       hasReinjected = true;
       // Still pending — re-inject into cached data
       for (const projList of [cachedProjects, cachedAllProjects]) {
-        let proj = projList.find(p => p.projectPath === pending.projectPath);
+        const pendingAlias = pending.session.remoteAlias || null;
+        let proj = projList.find(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias);
         if (!proj) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
+          if (pendingAlias) proj.remoteAlias = pendingAlias;
           projList.unshift(proj);
         }
         if (!proj.sessions.some(s => s.sessionId === sid)) {
@@ -1201,6 +1203,51 @@ async function launchNewSession(project, sessionOptions) {
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
+  showSession(sessionId);
+  schedulePersistWorkingSet();
+  pollActiveSessions();
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+async function launchRemoteSession(project, { cwd, options }) {
+  const alias = project.remoteAlias;
+  const sessionId = crypto.randomUUID();
+  const session = {
+    sessionId,
+    summary: 'New session',
+    firstPrompt: '',
+    projectPath: cwd,
+    name: null,
+    starred: 0,
+    archived: 0,
+    messageCount: 0,
+    modified: new Date().toISOString(),
+    created: new Date().toISOString(),
+    remoteAlias: alias,
+  };
+
+  const folder = alias + '::' + encodeProjectPath(cwd);
+  pendingSessions.set(sessionId, { session, projectPath: cwd, folder });
+  sessionMap.set(sessionId, session);
+  for (const projList of [cachedProjects, cachedAllProjects]) {
+    let proj = projList.find(p => p.remoteAlias === alias && p.projectPath === cwd);
+    if (!proj) {
+      proj = { folder, projectPath: cwd, remoteAlias: alias, sessions: [] };
+      projList.unshift(proj);
+    }
+    proj.sessions.unshift(session);
+  }
+  refreshSidebar();
+
+  const entry = createTerminalEntry(session);
+  const result = await window.api.remoteLaunchSession({ alias, sessionId, cwd, options, initialSize: entry.initialSize });
+  if (!result.ok) {
+    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+    entry.closed = true;
+    showSession(sessionId);
+    return;
+  }
+  syncPtySizeAfterOpen(entry);
   showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();

@@ -6,7 +6,7 @@
 // sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive (app.js)
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
-// showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
+// showNewSessionPopover, showRemoteLaunchDialog, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js)
 
 function slugId(slug) {
@@ -890,12 +890,16 @@ function renderProjects(projects, resort) {
     newBtn.className = 'project-new-btn';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
     if (project.remoteAlias) {
-      newBtn.disabled = true;
       const launch = project.remoteHostProfile && Array.isArray(project.remoteHostProfile.tiers)
         && project.remoteHostProfile.tiers.find(t => t.tier === 'launch');
-      newBtn.title = launch && launch.reason
-        ? 'New session unavailable on ' + project.remoteAlias + ': ' + launch.reason
-        : 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
+      if (launch && launch.available) {
+        newBtn.title = 'New session on ' + project.remoteAlias;
+      } else {
+        newBtn.disabled = true;
+        newBtn.title = launch && launch.reason
+          ? 'New session unavailable on ' + project.remoteAlias + ': ' + launch.reason
+          : 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
+      }
     } else {
       newBtn.title = 'New session';
     }
@@ -1064,7 +1068,10 @@ function rebindSidebarEvents(projects) {
     const newBtn = header.querySelector('.project-new-btn');
     if (newBtn) {
       if (project.remoteAlias) {
-        newBtn.onclick = (e) => e.stopPropagation();
+        newBtn.onclick = (e) => {
+          e.stopPropagation();
+          if (!newBtn.disabled) showRemoteLaunchDialog(project);
+        };
       } else {
         newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
       }

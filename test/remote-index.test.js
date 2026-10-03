@@ -911,12 +911,12 @@ test('getRemoteHostProfile follows the last cycle: never synced, then live tmux 
 
     assert.equal(indexer.getRemoteHostProfile('box').tier, 'none', 'never synced');
     await indexer.refreshNow();
-    assert.equal(indexer.getRemoteHostProfile('box').tier, 'attach');
+    assert.equal(indexer.getRemoteHostProfile('box').tier, 'launch');
     outcome = 'fail';
     await indexer.refreshNow({ force: true });
     const failed = indexer.getRemoteHostProfile('box');
-    assert.equal(failed.tier, 'none');
-    assert.match(failed.missing[0].reason, /connect timed out/);
+    assert.equal(failed.tier, 'launch');
+    assert.match(failed.tiers.find(t => t.tier === 'observe').reason, /connect timed out/);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
