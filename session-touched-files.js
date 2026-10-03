@@ -39,16 +39,19 @@ function touchTarget(block) {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
-function extractTouches(line) {
+function extractTouches(line, parsedEntry = undefined) {
   const none = { touches: [], malformed: false };
   if (typeof line !== 'string' || !line.includes('tool_use') || !PREFILTER_TOOL.test(line)) return none;
   if (line.length > MAX_TOOL_LINE_CHARS) return { touches: [], malformed: false, oversized: true };
-  let entry;
-  try {
-    entry = JSON.parse(line);
-  } catch {
-    return { touches: [], malformed: true };
+  let entry = parsedEntry;
+  if (entry === undefined) {
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return { touches: [], malformed: true };
+    }
   }
+  if (entry === null) return { touches: [], malformed: true };
   if (!entry || entry.type !== 'assistant' || !entry.message || !Array.isArray(entry.message.content)) return none;
   const touches = [];
   const timestamp = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
@@ -218,11 +221,13 @@ async function collectCachedTouches(options, cache, session) {
   let oversizedLines = 0;
 
   let hasOlder = false;
+  let nextOlderTimestamp = null;
   let loadedWindowStart = -Infinity;
   for (const entry of entries) {
     const snapshot = await cache.load(session, entry, windowStart, budget, extractTouches, cwdOf);
     if (!snapshot) continue;
     hasOlder ||= snapshot.hasOlder;
+    if (Number.isFinite(snapshot.nextOlderTimestamp)) nextOlderTimestamp = Math.max(nextOlderTimestamp ?? -Infinity, snapshot.nextOlderTimestamp);
     loadedWindowStart = Math.max(loadedWindowStart, snapshot.windowStart);
     malformedLines += snapshot.malformed;
     oversizedLines += snapshot.skipped;
@@ -264,6 +269,7 @@ async function collectCachedTouches(options, cache, session) {
     windowStart,
     loadedWindowStart: hasOlder ? loadedWindowStart : null,
     hasOlder,
+    nextOlderTimestamp,
     olderFiles: hasOlder ? null : files.filter(f => f.lastTouched != null && f.lastTouched < windowStart).length,
     unresolved: cachedUnresolved.filter(f => f.lastTouched == null || f.lastTouched >= windowStart),
     cachedUnresolved,

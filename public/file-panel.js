@@ -129,11 +129,14 @@ function initFilePanel() {
   filePanelContentEl.appendChild(panelBackBtn);
   filePanelContentEl.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || !event.target.closest('#file-panel-viewer, #changes-diff-view')) return;
+    if (event.defaultPrevented || event.isComposing) return;
+    if (event.target.closest('.cm-panels, .cm-search, .cm-tooltip')) return;
+    if (event.target.closest('input, textarea') && !event.target.closest('.cm-content')) return;
     if (returnToPanelList()) {
       event.preventDefault();
       event.stopPropagation();
     }
-  }, true);
+  });
 
   heldBarEl = document.createElement('div');
   heldBarEl.id = 'file-panel-held';
@@ -357,6 +360,16 @@ function returnToPanelList() {
   return true;
 }
 
+function snapshotPanelList(list, tab) {
+  if (list?._owner === tab) tab.listScrollTop = list.scrollTop;
+}
+
+function restorePanelListScroll(list, tab) {
+  if (tab.listScrollTop == null) return;
+  list.scrollTop = tab.listScrollTop;
+  tab.listScrollTop = null;
+}
+
 function reusePanelList(list, summary, tab, signature, detail = null) {
   const previous = list._owner;
   if (previous && previous !== tab) {
@@ -570,6 +583,7 @@ function openFileTab(sessionId, data) {
   }
   const held = takeHeldFileTab(state, data.filePath);
   const returnList = data.returnList || null;
+  if (returnList?.type === 'touched' && currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
 
   // Destroy previous
   destroyCurrentTab(state);
@@ -1305,6 +1319,7 @@ async function openChangesDiff(sessionId, file, line = null) {
   if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
 
   tab.pendingLine = Number.isInteger(line) && line > 0 ? line : null;
+  if (!tab.selectedFile && currentPanelSessionId === sessionId) snapshotPanelList(changesListEl, tab);
   tab.selectedFile = file;
   tab.listSelection = file;
   tab.diffError = null;
@@ -1459,6 +1474,7 @@ function renderChangesContent(sessionId, tab) {
 
   renderChangesList(sessionId, tab);
   if (editorOpen) renderChangesDiff(sessionId, tab);
+  else restorePanelListScroll(changesListEl, tab);
 }
 
 function renderChangesList(sessionId, tab) {

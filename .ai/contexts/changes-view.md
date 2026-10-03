@@ -828,8 +828,11 @@ The panel has one shared **Back to list** button for Touched and Changes
 Changes it closes the selected diff through the existing dirty-buffer guard
 and unwatch/editor cleanup; it makes no git status or content request. The
 list DOM is reused while its data, loading/error state and count revision are
-unchanged. Selection and scroll remain; an explicit refresh still rebuilds
-the list. Per-tab DOM snapshots survive session switches. The existing editor
+unchanged. Selection and scroll are captured before the diff opens, so a
+hidden or resized list reporting zero cannot overwrite the return position.
+Escape bubbles after editor handlers and ignores prevented/composing events,
+search panels, autocomplete tooltips and non-editor input fields.
+An explicit refresh still rebuilds the list. Per-tab DOM snapshots survive session switches. The existing editor
 Close button remains available.
 
 The list is never hidden. A selected file opens *below* it — summary, list, a drag handle, then the editor region — and the current row carries `.selected`. Reviewing a set of files is then click, read, click, which is the whole point of the layout; there is no navigation step to undo, so the editor's first button is **Close** (close the file, keep the list) rather than Back.

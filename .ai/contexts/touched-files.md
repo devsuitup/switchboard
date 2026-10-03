@@ -111,7 +111,10 @@ A transcript record is keyed by path, size and mtime. It holds its verified
 cwd, per-path/tool counts and latest timestamps, the beginning of the scanned
 range and the last complete newline at its end. Unchanged files incur no
 transcript read or parse. Growth validates a bounded prefix and an anchor
-before the old complete end, then parses only the added complete lines.
+before the old complete end, then parses only the added complete lines. At the
+per-transcript ceiling, a newer touch evicts the oldest retained summary;
+older incoming touches are counted as omitted. This keeps an append and a
+fresh backward scan equivalent beyond the ceiling.
 Shrinking, same-size mtime changes, or a changed prefix/anchor discard the
 record and rebuild the requested window. Enumeration drops deleted transcript
 records, and the delete-session handler calls `dropSession`. A failed or
@@ -120,17 +123,30 @@ budget-exhausted read is discarded so a later request can retry.
 The initial window is `TOUCHED_WINDOW_DAYS` (1), extended in
 `TOUCHED_WINDOW_STEP_DAYS` (10) steps. Each transcript is scanned from its end
 in 64 KiB chunks, on byte newline boundaries before UTF-8 decoding. An
-incomplete tail is ignored until its newline arrives. Scanning stops before
+final unterminated line is included when it is complete valid JSON. Its
+touches are combined with a copy of the complete-line summaries, while the
+cached end remains at the last newline. A later append therefore rereads the
+tail without duplicating its counts; invalid partial JSON is ignored.
+Scanning stops before
 the first entry whose top-level timestamp precedes the window; that offset is
 retained for the next extension. A never-loaded transcript whose mtime is
 older than the window is skipped entirely. Timestamp-less entries have
-unknown time and are retained within the range actually scanned. This follows
-the transcript's chronological order, as required by the stop-at-first-old
-contract. The bounded cwd header lookup runs once on a new or invalidated
+unknown time and are retained within the range actually scanned. The backward
+stop assumes top-level timestamps are in chronological order within each
+transcript. With out-of-order timestamps, a recent entry before the first old
+entry can be missed until the window is extended; the scan deliberately does
+not search beyond that boundary. Each backward line is parsed once and its
+object is shared by timestamp extraction and touch extraction.
+The bounded cwd header lookup runs once on a new or invalidated
 record, only after the mtime skip.
 
 The response carries visible `files`, guarded `cachedFiles`, the requested
 and loaded window starts, `hasOlder` for unread history and `olderFiles`.
+`nextOlderTimestamp` is the newest skipped transcript mtime or older scan
+boundary timestamp. When a ten-day extension would cover no known activity,
+the renderer jumps directly to that timestamp (or the newest cached older
+touch), rounding the age up to whole days. Exhausting the older history
+removes the button.
 The renderer extends locally with no IPC or parse when its cached range
 covers the new window. An uncached extension needs an incremental IPC and
 parse: prohibiting both would require reading all history on initial open,
@@ -147,8 +163,14 @@ gone/unreadable/refused states and opening guards still apply.
 
 The shared file-panel Back button and Escape inside the file viewer restore
 the original list DOM, selection, scroll, sort and window without requesting
-transcripts again. List snapshots also survive another session using the
-shared DOM. The panel shell remains outside this navigation.
+transcripts again. Scroll and selection are captured when a file opens,
+before the list is hidden; a later session switch uses that saved position.
+Escape bubbles after the editor's handlers and ignores prevented or composing
+events, search/panel/tooltip targets, and inputs outside editor content.
+Pending refresh results are stored on their original tab even while a file or
+another session is visible, and are rendered when the tab returns, without
+another IPC. List snapshots also survive another session using the shared
+DOM. The panel shell remains outside this navigation.
 
 `test/session-touched-cache.test.js` uses real disposable transcripts, read
 counters, partial UTF-8 appends, rewrites, deletion, LRU and repeated window

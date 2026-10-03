@@ -138,7 +138,10 @@ function renderTouchedTab(sessionId, tab) {
   const shown = !!tab && tab.type === 'touched';
   touchedContainerEl.style.display = shown ? 'flex' : 'none';
   setHeaderToggle(touchedToggleBtn, shown);
-  if (shown) renderTouchedContent(sessionId, tab);
+  if (shown) {
+    renderTouchedContent(sessionId, tab);
+    window.restorePanelListScroll(touchedListEl, tab);
+  }
 }
 
 function toggleTouchedTab(sessionId) {
@@ -191,7 +194,6 @@ async function refreshTouched(sessionId) {
   }
 
   tab.loading = false;
-  if (state.currentTab !== tab) return;
   if (!result || result.ok === false) {
     tab.error = (result && result.error) || 'failed to read the transcripts';
     tab.data = null;
@@ -200,7 +202,7 @@ async function refreshTouched(sessionId) {
     tab.data = result;
     if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
   }
-  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+  if (currentPanelSessionId === sessionId && state.currentTab === tab) renderPanel(sessionId);
 }
 
 async function openTouchedFile(sessionId, tab, filePath) {
@@ -353,6 +355,14 @@ function extendTouchedWindow(sessionId, tab) {
   if (tab.loading || filePanelState.get(sessionId)?.currentTab !== tab) return;
   tab.windowDays += TOUCHED_WINDOW_STEP_DAYS;
   tab.windowStart -= TOUCHED_WINDOW_STEP_DAYS * TOUCHED_DAY_MS;
+  const older = [tab.data?.nextOlderTimestamp, ...(tab.data?.cachedFiles || tab.data?.files || []).map(f => f.lastTouched), ...(tab.data?.cachedUnresolved || []).map(f => f.lastTouched)]
+    .filter(value => Number.isFinite(value) && value < tab.windowStart + TOUCHED_WINDOW_STEP_DAYS * TOUCHED_DAY_MS);
+  const newestOlder = older.length ? Math.max(...older) : null;
+  if (newestOlder != null && newestOlder < tab.windowStart) {
+    const anchor = tab.windowStart + tab.windowDays * TOUCHED_DAY_MS;
+    tab.windowDays = Math.ceil((anchor - newestOlder) / TOUCHED_DAY_MS);
+    tab.windowStart = anchor - tab.windowDays * TOUCHED_DAY_MS;
+  }
   const loaded = tab.data?.loadedWindowStart;
   if (tab.data?.hasOlder && (loaded == null || tab.windowStart < loaded)) return refreshTouched(sessionId);
   renderTouchedContent(sessionId, tab);

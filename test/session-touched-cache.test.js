@@ -174,13 +174,58 @@ test('only the entry timestamp counts, never a nested tool input timestamp', asy
   assert.equal(result.files.find(f => f.path === '/a').lastTouched, null);
 });
 
-test('the row ceiling keeps the latest appended path rather than an old cached path', async (t) => {
+test('the transcript cache ceiling keeps the latest appended path and equals a fresh parse past 1000 touches', async (t) => {
   const w = world(t);
-  fs.writeFileSync(w.transcript, line('/older', 5) + line('/recent', 0.5));
-  await w.get({ windowDays: 11, maxFiles: 1 });
+  fs.writeFileSync(w.transcript, Array.from({ length: 1000 }, (_, i) => line(`/old-${i}`, 0.9 - i / 2000)).join(''));
+  await w.get();
   fs.appendFileSync(w.transcript, line('/latest', 0));
-  const result = await w.get({ maxFiles: 1 });
-  assert.deepEqual(result.files.map(f => f.path), ['/latest']);
+  const result = await w.get({ maxFiles: 1000 });
+  assert.ok(result.files.some(f => f.path === '/latest'));
+  assert.ok(!result.files.some(f => f.path === '/old-0'));
+  const fresh = await w.get({ maxFiles: 1000, cache: touched.createTouchedFilesCache() });
+  assert.deepEqual(result.files, fresh.files);
+  assert.equal(result.omitted, fresh.omitted);
+});
+
+test('an mtime-skipped transcript exposes its newest unread activity for a one-click extension', async (t) => {
+  const w = world(t);
+  fs.writeFileSync(w.transcript, line('/sixty-days', 60));
+  fs.utimesSync(w.transcript, new Date(NOW - 60 * DAY), new Date(NOW - 60 * DAY));
+  const initial = await w.get();
+  assert.equal(initial.nextOlderTimestamp, NOW - 60 * DAY);
+  assert.equal(w.reads.length, 0);
+  const extended = await w.get({ windowDays: Math.ceil((NOW - initial.nextOlderTimestamp) / DAY) });
+  assert.deepEqual(extended.files.map(f => f.path), ['/sixty-days']);
+  assert.equal(extended.hasOlder, false);
+});
+
+test('a valid unterminated final line yields one touch and is reread without duplicates on append', async (t) => {
+  const w = world(t);
+  fs.writeFileSync(w.transcript, line('/single').trimEnd());
+  assert.equal((await w.get()).files.find(f => f.path === '/single')?.count, 1);
+  assert.equal((await w.get()).files.find(f => f.path === '/single')?.count, 1);
+  fs.appendFileSync(w.transcript, '\n' + line('/half').slice(0, 40));
+  assert.equal((await w.get()).files.find(f => f.path === '/single')?.count, 1);
+  fs.appendFileSync(w.transcript, line('/half').slice(40).trimEnd());
+  const result = await w.get();
+  assert.equal(result.files.find(f => f.path === '/half')?.count, 1);
+  fs.appendFileSync(w.transcript, '\n');
+  assert.deepEqual((await w.get()).files, result.files);
+});
+
+test('each backward transcript line is JSON parsed once', async (t) => {
+  const w = world(t);
+  fs.writeFileSync(w.transcript, line('/a') + line('/b'));
+  const original = JSON.parse;
+  let parses = 0;
+  JSON.parse = (text, ...args) => {
+    if (typeof text === 'string' && text.includes('"tool_use"')) parses++;
+    return original(text, ...args);
+  };
+  try {
+    assert.equal((await w.get()).files.length, 2);
+    assert.equal(parses, 2);
+  } finally { JSON.parse = original; }
 });
 
 test('deleted subagent records are removed even when recreated with the same size and mtime', async (t) => {

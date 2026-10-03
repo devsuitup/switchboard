@@ -37,7 +37,7 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
     let stat;
     try { stat = await fs.promises.stat(filePath); } catch { session.files.delete(filePath); return null; }
     let cached = session.files.get(filePath);
-    if (stat.mtimeMs < windowStart && !cached) return { rows: [], cwd: null, hasOlder: stat.size > 0, windowStart, malformed: 0, skipped: 0, omitted: 0 };
+    if (stat.mtimeMs < windowStart && !cached) return { rows: [], cwd: null, hasOlder: stat.size > 0, nextOlderTimestamp: stat.size > 0 ? stat.mtimeMs : null, windowStart, malformed: 0, skipped: 0, omitted: 0 };
     let sessionTouches = [...session.files.values()].reduce((n, file) => n + file.rows.size, 0);
     let handle;
     async function read(start, length) {
@@ -50,9 +50,7 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
       onRead(filePath, start, bytesRead);
       return buf.subarray(0, bytesRead);
     }
-    function add(line) {
-      onParse(filePath);
-      const result = parse(line);
+    function addResult(result) {
       if (result.malformed) cached.malformed++;
       if (result.oversized) cached.skipped++;
       for (const touch of result.touches) {
@@ -60,7 +58,14 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
         const key = raw + '\0' + touch.tool;
         let row = cached.rows.get(key);
         if (!row) {
-          if (cached.rows.size >= MAX_CACHED_TOUCHES || sessionTouches >= MAX_SESSION_TOUCHES) { cached.omitted++; continue; }
+          if (cached.rows.size >= MAX_CACHED_TOUCHES) {
+            const oldest = [...cached.rows.entries()].reduce((a, b) => compareTouch(a[1], b[1]) <= 0 ? a : b);
+            if (compareTouch({ ...touch, path: raw, lastTouched: touch.timestamp }, oldest[1]) <= 0) { cached.omitted++; continue; }
+            cached.rows.delete(oldest[0]);
+            cached.omitted += oldest[1].count;
+            sessionTouches--;
+          }
+          if (sessionTouches >= MAX_SESSION_TOUCHES) { cached.omitted++; continue; }
           row = { ...touch, path: raw, count: 0, lastTouched: null };
           cached.rows.set(key, row);
           sessionTouches++;
@@ -68,6 +73,10 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
         row.count++;
         if (touch.timestamp != null) row.lastTouched = Math.max(row.lastTouched ?? -Infinity, touch.timestamp);
       }
+    }
+    function add(line, entry) {
+      onParse(filePath);
+      addResult(parse(line, entry));
     }
     async function backwards(end, lower, stopAtWindow) {
       let cursor = end;
@@ -87,9 +96,10 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
           const buf = pending.subarray(nl + 1);
           if (!skipping && buf.length) {
             const line = buf.toString('utf8');
-            const timestamp = timestampOf(line);
-            if (stopAtWindow && timestamp != null && timestamp < windowStart) return lineEnd;
-            add(line);
+            const entry = parseLine(line);
+            const timestamp = timestampOf(entry);
+            if (stopAtWindow && timestamp != null && timestamp < windowStart) { cached.nextOlderTimestamp = timestamp; return lineEnd; }
+            add(line, entry);
           }
           skipping = false;
           lineEnd = lineStart;
@@ -100,10 +110,12 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
       }
       if (!skipping && pending.length) {
         const line = pending.toString('utf8');
-        const timestamp = timestampOf(line);
-        if (stopAtWindow && timestamp != null && timestamp < windowStart) return lineEnd;
-        add(line);
+        const entry = parseLine(line);
+        const timestamp = timestampOf(entry);
+        if (stopAtWindow && timestamp != null && timestamp < windowStart) { cached.nextOlderTimestamp = timestamp; return lineEnd; }
+        add(line, entry);
       }
+      if (stopAtWindow) cached.nextOlderTimestamp = null;
       return lower;
     }
     async function completeEnd(size, lower) {
@@ -149,13 +161,26 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
         }
       }
       if (cached.size !== stat.size || cached.mtime !== stat.mtimeMs) {
+        cached.tailResult = null;
+        const tailSize = stat.size - cached.end;
+        if (tailSize > 0 && tailSize <= MAX_LINE_BYTES && budget.remaining >= tailSize) {
+          const tail = (await read(cached.end, tailSize)).toString('utf8');
+          const entry = parseLine(tail);
+          if (entry !== null) {
+            onParse(filePath);
+            cached.tailResult = parse(tail, entry);
+          }
+        }
         cached.anchorStart = Math.max(0, cached.end - VALIDATION_BYTES);
         cached.anchor = await read(cached.anchorStart, cached.end - cached.anchorStart);
       }
       cached.size = stat.size;
       cached.mtime = stat.mtimeMs;
       if (budget.truncated) session.files.delete(filePath);
-      return { rows: [...cached.rows.values()], cwd: cached.cwd, hasOlder: cached.start > 0, windowStart: cached.start > 0 ? cached.windowStart : -Infinity, malformed: cached.malformed, skipped: cached.skipped, omitted: cached.omitted };
+      const complete = cached;
+      cached = { ...complete, rows: new Map([...complete.rows].map(([key, row]) => [key, { ...row }])) };
+      if (cached.tailResult) addResult(cached.tailResult);
+      return { rows: [...cached.rows.values()], cwd: cached.cwd, hasOlder: cached.start > 0, nextOlderTimestamp: cached.nextOlderTimestamp ?? null, windowStart: cached.start > 0 ? cached.windowStart : -Infinity, malformed: cached.malformed, skipped: cached.skipped, omitted: cached.omitted };
     } catch {
       session.files.delete(filePath);
       return null;
@@ -167,13 +192,19 @@ function createTouchedFilesCache({ maxSessions = TOUCHED_CACHE_SESSIONS, onRead 
   return { run, load, dropSession };
 }
 
-function timestampOf(line) {
-  if (!line.includes('"timestamp"') || line.length > MAX_LINE_BYTES) return null;
-  try {
-    const entry = JSON.parse(line);
-    const value = typeof entry?.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
-    return Number.isFinite(value) ? value : null;
-  } catch { return null; }
+function parseLine(line) {
+  if (line.length > MAX_LINE_BYTES) return null;
+  try { return JSON.parse(line); } catch { return null; }
+}
+
+function timestampOf(entry) {
+  const value = typeof entry?.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
+function compareTouch(a, b) {
+  return (a.lastTouched ?? -Infinity) - (b.lastTouched ?? -Infinity)
+    || a.path.localeCompare(b.path) || a.tool.localeCompare(b.tool);
 }
 
 module.exports = { createTouchedFilesCache, timestampOf };
