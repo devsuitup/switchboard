@@ -67,7 +67,8 @@ function buildLaunchCommand(request) {
 
 function parseLaunchOutput(stdout) {
   if (typeof stdout !== 'string') return null;
-  const m = LAUNCH_OUTPUT_RE.exec(stdout.trim());
+  const lines = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const m = LAUNCH_OUTPUT_RE.exec(lines.length ? lines[lines.length - 1] : '');
   if (!m || !parseTmuxField(m[1])) return null;
   const pid = Number.parseInt(m[2], 10);
   return isValidPid(pid) ? { tmux: m[1], pid } : null;

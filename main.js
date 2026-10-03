@@ -1701,8 +1701,9 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
 // see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
 ipcMain.handle('remote-launch-session', async (_event, payload) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
-  const sessionId = payload && payload.sessionId;
-  if (typeof sessionId === 'string' && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
+  const rawId = payload && payload.sessionId;
+  const sessionId = typeof rawId === 'string' ? rawId.toLowerCase() : null;
+  if (sessionId && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
   const result = await handleLaunchRequest(payload, {
     hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
     launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),

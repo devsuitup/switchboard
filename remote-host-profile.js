@@ -21,6 +21,12 @@ function toolFlag(value) {
   return value === true || value === false ? value : null;
 }
 
+function launchReason(tools, descriptors) {
+  if (tools.tmux === false) return LAUNCH_NEEDS_TMUX_REASON + ': ' + TMUX_MISSING_REASON;
+  if (tools.tmux === true || descriptors.some(namesTmuxPane)) return null;
+  return LAUNCH_NEEDS_TMUX_REASON + ' (not confirmed: no probe answer yet and no live session names a tmux pane)';
+}
+
 function normalizeTools(tools) {
   const t = tools && typeof tools === 'object' ? tools : {};
   return { tmux: toolFlag(t.tmux), inotifywait: toolFlag(t.inotifywait) };
@@ -50,6 +56,7 @@ function computeHostProfile(input) {
   const reasons = {};
   if (blocked) {
     for (const tier of TIERS) reasons[tier] = blocked;
+    if (error) reasons.launch = launchReason(tools, descriptors);
   } else {
     reasons.observe = null;
     reasons.liveness = descriptors.length > 0 ? null
@@ -59,9 +66,7 @@ function computeHostProfile(input) {
     if (tools.tmux === false) reasons.attach = TMUX_MISSING_REASON;
     else if (tools.tmux === true || descriptors.some(namesTmuxPane)) reasons.attach = null;
     else reasons.attach = 'no live session names a tmux pane in its descriptor (start it inside tmux)';
-    if (tools.tmux === false) reasons.launch = LAUNCH_NEEDS_TMUX_REASON + ': ' + TMUX_MISSING_REASON;
-    else if (tools.tmux === true || descriptors.some(namesTmuxPane)) reasons.launch = null;
-    else reasons.launch = LAUNCH_NEEDS_TMUX_REASON + ' (not confirmed: no probe answer yet and no live session names a tmux pane)';
+    reasons.launch = launchReason(tools, descriptors);
   }
 
   const tiers = TIERS.map(tier => ({ tier, available: reasons[tier] === null, reason: reasons[tier] }));

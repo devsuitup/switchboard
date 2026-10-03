@@ -24,10 +24,10 @@ test('a host never synced has no tier and every tier says it was not synced', ()
   assert.match(reasonFor(profile, 'observe'), /not yet synced/);
 });
 
-test('a host whose last cycle failed has no tier and the ssh error is the reason of every tier', () => {
+test('a host whose last cycle failed reads nothing and the ssh error is the reason of every tier but launch', () => {
   const profile = computeHostProfile({ at: AT, error: 'connect timed out', descriptors: [tmuxDescriptor] });
-  assert.equal(profile.tier, 'none');
-  for (const tier of TIERS) assert.match(reasonFor(profile, tier), /connect timed out/);
+  assert.equal(profile.tier, 'launch');
+  for (const tier of TIERS.filter(t => t !== 'launch')) assert.match(profile.tiers.find(x => x.tier === tier).reason, /connect timed out/);
 });
 
 test('a synced host with no live descriptor stops at observe and says why liveness is missing', () => {
@@ -91,7 +91,7 @@ test('launch is unavailable without tmux and says the host needs it', () => {
 
 test('launchBlockReason refuses a host with no profile, a blocked one and one without tmux', () => {
   assert.match(launchBlockReason(null), /not yet synced/);
-  assert.match(launchBlockReason(computeHostProfile({ at: AT, error: 'connect timed out', descriptors: [] })), /connect timed out/);
+  assert.match(launchBlockReason(computeHostProfile({ at: null, error: null, descriptors: [] })), /not yet synced/);
   assert.match(launchBlockReason(computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: false } })), /needs tmux/);
   assert.equal(launchBlockReason(computeHostProfile({ at: AT, error: null, descriptors: [], tools: { tmux: true } })), null);
 });
@@ -185,4 +185,20 @@ test('send is never withheld by a failed or unsynced host: it runs its own ssh',
   assert.equal(sendBlockReason(computeHostProfile({ at: AT, error: 'down', descriptors: [] })), null);
   assert.equal(sendBlockReason(computeHostProfile({ at: null, error: null, descriptors: [] })), null);
   assert.equal(sendBlockReason(undefined), null);
+});
+
+test('a failed last refresh does not disable launch: it runs its own ssh, like send', () => {
+  const failed = { at: AT, error: 'connect timed out', descriptors: [] };
+  const withTmux = computeHostProfile({ ...failed, tools: { tmux: true, inotifywait: true } });
+  assert.equal(withTmux.tiers.find(t => t.tier === 'launch').available, true);
+  assert.equal(launchBlockReason(withTmux), null);
+  assert.match(withTmux.tiers.find(t => t.tier === 'observe').reason, /connect timed out/);
+  assert.equal(computeHostProfile({ ...failed, descriptors: [tmuxDescriptor] }).tiers.find(t => t.tier === 'launch').available, true);
+  assert.match(launchBlockReason(computeHostProfile({ ...failed, tools: { tmux: false } })), /needs tmux/);
+  assert.match(launchBlockReason(computeHostProfile(failed)), /needs tmux/);
+});
+
+test('a host never synced still refuses launch with the not-synced reason', () => {
+  const profile = computeHostProfile({ at: null, error: null, descriptors: [], tools: { tmux: true } });
+  assert.match(launchBlockReason(profile), /not yet synced/);
 });

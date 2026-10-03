@@ -230,7 +230,8 @@ exists (`test -d`), that `tmux` and `claude` are found, then starts
 by Switchboard. Switchboard then attaches to the new pane the way it attaches to
 any running session, so you land in it.
 
-- Only tmux hosts can launch. There is no launch without a multiplexer.
+- Only tmux hosts can launch. There is no launch without a multiplexer. A failed
+  last refresh does not disable it: it runs its own ssh.
 - A directory that does not exist on the host refuses the launch, and the
   terminal tab says so.
 - Authentication is done on the host, by you. Switchboard copies no credential;

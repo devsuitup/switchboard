@@ -794,7 +794,7 @@ also returns `blocked` (why nothing could be read, or null) and the normalised `
 - `liveness`: at least one live descriptor. `inject`: a live descriptor with a `messagingSocketPath` that is a POSIX
   absolute path. `attach`: a live descriptor naming a tmux pane with a valid pid (the adapter's own test).
   The tiers are independent requirements: the reported tier is the highest available one, not the highest contiguous one.
-- `launch`: available under the same rule as attach (probe `tmux: true`, or a live descriptor naming a tmux pane, and not `tmux: false`); its reason otherwise starts with "needs tmux on the host". See "Remote hosts — launching a session".
+- `launch`: available under the same rule as attach (probe `tmux: true`, or a live descriptor naming a tmux pane, and not `tmux: false`), and unlike the other tiers it is not withdrawn by a failed last refresh (launch runs its own ssh, as Send does); its reason otherwise starts with "needs tmux on the host". See "Remote hosts — launching a session".
 - A tier that needs a live session reads as missing on an idle host; that is "nothing to read it from", not "unsupported".
 - `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`). After 3 consecutive failed
   cycles (`attachBlockReason`), it sets `remoteAttachable: false` plus `remoteAttachBlocked` (the last error) on the

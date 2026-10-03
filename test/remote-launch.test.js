@@ -262,3 +262,46 @@ test('real sh: with tmux and claude stubbed on PATH the script runs the exact tm
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a directory of 4096 bytes is accepted and one of 4097 is refused', () => {
+  assert.deepEqual(validateLaunchCwd('/' + 'a'.repeat(4095)), { ok: true });
+  assert.equal(validateLaunchCwd('/' + 'a'.repeat(4096)).ok, false);
+});
+
+test('only a boolean true adds the skip-permissions flag', () => {
+  assert.deepEqual(buildClaudeArgs({ dangerouslySkipPermissions: true }), { ok: true, args: ['--dangerously-skip-permissions'] });
+  for (const value of ['true', 1, 'false', 0, null, {}]) {
+    assert.deepEqual(buildClaudeArgs({ dangerouslySkipPermissions: value }), { ok: true, args: [] }, JSON.stringify(value));
+  }
+});
+
+test('the launch output is read from its last non-empty line, so rc-file noise before it is ignored', () => {
+  const target = 'switchboard-3f2a9c10:@3.%5 4242';
+  assert.deepEqual(parseLaunchOutput(`Welcome to box\nmotd line\n${target}\n\n`), { tmux: 'switchboard-3f2a9c10:@3.%5', pid: 4242 });
+  assert.deepEqual(parseLaunchOutput(`${target}\r\n`), { tmux: 'switchboard-3f2a9c10:@3.%5', pid: 4242 });
+  assert.equal(parseLaunchOutput(`${target}\ntrailing noise\n`), null);
+});
+
+test('real sh: buildLaunchCommand itself, run through sh -c, executes the exact tmux argv', { skip: !HAVE_SH }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const cwd = path.join(dir, 'work dir');
+    fs.mkdirSync(cwd);
+    const posixCwd = toPosix(cwd);
+    if (!validateLaunchCwd(posixCwd).ok) { t.skip('the temporary directory path is outside the accepted character set'); return; }
+    const argvFile = path.join(dir, 'argv.txt');
+    fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'tmux'),
+      `#!/bin/sh\nfor a in "$@"; do printf '%s\n' "$a"; done > '${toPosix(argvFile)}'\necho 'noise'\necho 'switchboard-3f2a9c10:@3.%5 4242'\n`, { mode: 0o755 });
+    const command = buildLaunchCommand({ sessionId: UUID, cwd: posixCwd, options: { dangerouslySkipPermissions: true } });
+    const res = spawnSync('sh', ['-c', `PATH='${toPosix(bin)}':"$PATH"; ${command}`], { encoding: 'utf8' });
+    assert.equal(res.status, 0, `${res.stderr} / ${res.stdout}`);
+    assert.deepEqual(parseLaunchOutput(res.stdout), { tmux: 'switchboard-3f2a9c10:@3.%5', pid: 4242 });
+    const argv = fs.readFileSync(argvFile, 'utf8').split('\n').slice(0, -1);
+    assert.deepEqual(argv.slice(-3), ['-c', posixCwd, `claude --session-id ${UUID} --dangerously-skip-permissions`]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
