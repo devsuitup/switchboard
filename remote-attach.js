@@ -2,7 +2,8 @@
 'use strict';
 
 const { resolveSshPath: defaultResolveSshPath } = require('./remote-ssh-binary');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
+const { hostname } = require('node:os');
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 
@@ -12,7 +13,13 @@ const DEFAULT_PROBE_TIMEOUT_MS = 15000;
 const DETACH_CLIENT_COUNT_TIMEOUT_MS = 5000;
 const SHARED_MODE_POLL_INTERVAL_MS = 3000;
 const SHARED_MODE_PROBE_TIMEOUT_MS = 5000;
-const RESTART_CLIENT_RETRY_DELAY_MS = 3000;
+const MACHINE_ID = createHash('sha256').update(hostname()).digest('hex');
+const INSTANCE_ID = randomUUID();
+const IDENTITY_COMPONENT_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const CLIENT_TTY_RE = /^\/dev\/pts\/\d+$/;
+const MAX_CLIENTS = 200;
+const MAX_CLIENT_LIST_BYTES = 128 * 1024;
+const MAX_CLIENT_ENV_BYTES = 64 * 1024;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
 const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
@@ -158,12 +165,14 @@ function shellSingleQuote(value) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
 function buildAttachCommand(socket, target, opts = {}) {
+  const identity = buildAttachIdentity(opts.machineId ?? MACHINE_ID, opts.instanceId ?? INSTANCE_ID, opts.attachId ?? randomUUID());
+  const prefix = `exec env ${shellSingleQuote(`SWITCHBOARD_ATTACH=${identity}`)} `;
   const titleSegments = [
     `set -t ${target} set-titles on`,
     `set -t ${target} set-titles-string '#T'`,
   ];
   if (!opts.solo) {
-    return `tmux -S '${socket}' ${[...titleSegments, `attach -t ${target}`].join(' \\; ')}`;
+    return `${prefix}tmux -S ${shellSingleQuote(socket)} ${[...titleSegments, `attach -t ${target}`].join(' \\; ')}`;
   }
   const segments = [
     `set -t ${target} status off`,
@@ -172,7 +181,7 @@ function buildAttachCommand(socket, target, opts = {}) {
     ...titleSegments,
     `attach -t ${target}`,
   ];
-  return `tmux -S '${socket}' ${segments.join(' \\; ')}`;
+  return `${prefix}tmux -S ${shellSingleQuote(socket)} ${segments.join(' \\; ')}`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", solo attach parity, issue #253)
@@ -216,15 +225,40 @@ function buildClientCountProbeCommand(socket, target) {
   return `tmux -S '${socket}' list-clients -t ${target} 2>/dev/null | wc -l`;
 }
 
-function buildClientListProbeCommand(socket, target, clientTag) {
-  return `tmux -S ${shellSingleQuote(socket)} list-clients -t ${shellSingleQuote(target)} -F ${shellSingleQuote(`#{client_pid}:#{${clientTag}}`)}`;
+function buildAttachIdentity(machineId, instanceId, attachId) {
+  if (![machineId, instanceId, attachId].every(value => typeof value === 'string' && IDENTITY_COMPONENT_RE.test(value))) {
+    throw new Error('invalid attach identity');
+  }
+  return `${machineId}:${instanceId}:${attachId}`;
 }
 
-function isOnlyAttachedClient(stdout) {
-  if (typeof stdout !== 'string') return false;
-  const clients = stdout.trim().split(/\r?\n/);
-  const match = /^([1-9]\d*):([1-9]\d*)$/.exec(clients[0]);
-  return clients.length === 1 && match != null && match[1] === match[2];
+function buildClientListProbeCommand(socket, target) {
+  const script = `clients=$(tmux -S ${shellSingleQuote(socket)} list-clients -t ${shellSingleQuote(target)} -F ${shellSingleQuote('#{client_pid}\t#{client_tty}')} 2>/dev/null) || exit $?; ` +
+    `if [ -z "$clients" ]; then exit 0; fi; ` +
+    `printf '%s\n' "$clients" | head -n ${MAX_CLIENTS + 1} | while IFS='\t' read -r pid tty; do ` +
+    `tag=''; case "$pid" in ''|*[!0-9]*) exit 1;; esac; ` +
+    `environment=$(head -c ${MAX_CLIENT_ENV_BYTES + 1} "/proc/$pid/environ" 2>/dev/null | tr '\\0' '\\n'; printf '.'); ` +
+    `if [ "${'$'}{#environment}" -le ${MAX_CLIENT_ENV_BYTES} ]; then ` +
+    `tag=$(printf '%s' "$environment" | grep -m1 '^SWITCHBOARD_ATTACH=' | cut -d= -f2-); fi; ` +
+    `printf '%s\t%s\t%s\n' "$pid" "$tty" "$tag"; done`;
+  return `sh -c ${shellSingleQuote(script)}`;
+}
+
+function parseClientList(stdout) {
+  if (typeof stdout !== 'string' || Buffer.byteLength(stdout) > MAX_CLIENT_LIST_BYTES) return null;
+  if (stdout === '') return [];
+  if (!stdout.endsWith('\n')) return null;
+  const lines = stdout.replace(/\r?\n$/, '').split(/\r?\n/);
+  if (lines.length > MAX_CLIENTS) return null;
+  const clients = [];
+  for (const line of lines) {
+    const fields = line.split('\t');
+    if (fields.length !== 3 || !/^[1-9]\d*$/.test(fields[0]) || !isValidPid(Number(fields[0]))) return null;
+    const parts = fields[2].split(':');
+    const identity = parts.length === 3 && parts.every(part => IDENTITY_COMPONENT_RE.test(part)) ? parts : null;
+    clients.push({ pid: Number(fields[0]), tty: fields[1], identity });
+  }
+  return clients;
 }
 
 function buildSoloOptionsCommand(socket, target) {
@@ -338,7 +372,9 @@ function createTmuxAttachAdapter(opts = {}) {
   const log = opts.log || { info() {}, warn() {}, error() {}, debug() {} };
   const setTimeoutFn = opts.setTimeoutFn || setTimeout;
   const clearTimeoutFn = opts.clearTimeoutFn || clearTimeout;
-  const waitForClientRetry = opts.waitForClientRetry || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const machineId = opts.machineId ?? MACHINE_ID;
+  const instanceId = opts.instanceId ?? INSTANCE_ID;
+  const createAttachId = opts.createAttachId || randomUUID;
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
   function logDebug(msg) {
     if (typeof log.debug === 'function') log.debug(msg);
@@ -362,6 +398,8 @@ function createTmuxAttachAdapter(opts = {}) {
       return { ok: false, error: 'session carries no readable pid — cannot discover its tmux socket' };
     }
 
+    const attachId = createAttachId();
+    buildAttachIdentity(machineId, instanceId, attachId);
     let probe;
     try {
       probe = await runRemoteCommand(alias, buildProbeCommand(descriptor.pid, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
@@ -378,7 +416,7 @@ function createTmuxAttachAdapter(opts = {}) {
       const reason = (probe.stderr || '').trim() || 'no stderr';
       return { ok: false, error: `size probe failed (exit ${probe.code}): ${reason}` };
     }
-    let discovery = parseDiscoveryProbeOutput(probe.stdout);
+    const discovery = parseDiscoveryProbeOutput(probe.stdout);
     if (!discovery) {
       return { ok: false, error: 'could not parse the remote window size' };
     }
@@ -392,30 +430,31 @@ function createTmuxAttachAdapter(opts = {}) {
     const hasLocalSize = !!localSize
       && Number.isInteger(localSize.cols) && localSize.cols > 0
       && Number.isInteger(localSize.rows) && localSize.rows > 0;
-    if (discovery.clientCount > 0 && hasLocalSize) {
-      await waitForClientRetry(RESTART_CLIENT_RETRY_DELAY_MS);
+    let otherClientCount = discovery.clientCount;
+    if (discovery.clientCount !== 0) {
+      otherClientCount = null;
       try {
-        const retry = await runRemoteCommand(alias, buildProbeCommand(descriptor.pid, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
-        const refreshed = retry && retry.code === 0 && parseDiscoveryProbeOutput(retry.stdout);
-        if (refreshed) discovery = refreshed;
+        const listed = await runRemoteCommand(alias, buildClientListProbeCommand(discovery.socket, parsed.target), { timeoutMs: SHARED_MODE_PROBE_TIMEOUT_MS, maxStdoutBytes: MAX_CLIENT_LIST_BYTES });
+        const clients = listed && listed.code === 0 && parseClientList(listed.stdout);
+        if (clients) {
+          otherClientCount = clients.length;
+          for (const client of clients) {
+            if (!hasLocalSize || !client.identity || client.identity[0] !== machineId || client.identity[1] === instanceId || !CLIENT_TTY_RE.test(client.tty)) continue;
+            const detached = await runRemoteCommand(alias, `tmux -S ${shellSingleQuote(discovery.socket)} detach-client -t ${shellSingleQuote(client.tty)}`, { timeoutMs: SHARED_MODE_PROBE_TIMEOUT_MS });
+            if (detached && detached.code === 0) otherClientCount--;
+          }
+        }
       } catch {
         // see .ai/contexts/session-cache.md ("Mode re-evaluation, issue #452")
       }
-      if (discovery.cmdlineHasClaude === false) {
-        return { ok: false, error: `pid ${descriptor.pid} now belongs to a process that is not a claude CLI — the session is gone` };
-      }
     }
-    let solo = discovery.clientCount === 0 && hasLocalSize;
+    let solo = otherClientCount === 0 && hasLocalSize;
     let currentSize = hasLocalSize ? { cols: localSize.cols, rows: localSize.rows } : null;
     let restoreBase = solo;
-    const clientTag = solo ? null : `@switchboard-attach-${randomUUID()}`;
     const openCols = solo ? localSize.cols : discovery.cols;
     const openRows = solo ? localSize.rows : discovery.rows;
 
-    let attachCommand = buildAttachCommand(discovery.socket, parsed.target, { solo, pre: discovery.pre });
-    if (clientTag) {
-      attachCommand = `tmux -S ${shellSingleQuote(discovery.socket)} set-option -t ${shellSingleQuote(parsed.target)} ${shellSingleQuote(clientTag)} "$$" && exec ${attachCommand}`;
-    }
+    const attachCommand = buildAttachCommand(discovery.socket, parsed.target, { solo, machineId, instanceId, attachId });
     const argv = ['-tt', '-o', 'BatchMode=yes', alias, attachCommand];
 
     let raw;
@@ -452,8 +491,11 @@ function createTmuxAttachAdapter(opts = {}) {
       stopPolling();
       inFlight = (async () => {
         try {
-          const clients = await runRemoteCommand(alias, buildClientListProbeCommand(discovery.socket, parsed.target, clientTag), { timeoutMs: SHARED_MODE_PROBE_TIMEOUT_MS });
-          if (!alive || detaching || !clients || clients.code !== 0 || !isOnlyAttachedClient(clients.stdout)) return;
+          const listed = await runRemoteCommand(alias, buildClientListProbeCommand(discovery.socket, parsed.target), { timeoutMs: SHARED_MODE_PROBE_TIMEOUT_MS, maxStdoutBytes: MAX_CLIENT_LIST_BYTES });
+          const clients = listed && listed.code === 0 && parseClientList(listed.stdout);
+          if (!alive || detaching || !clients || clients.length !== 1) return;
+          const ownIdentity = clients[0].identity;
+          if (!ownIdentity || ownIdentity[0] !== machineId || ownIdentity[1] !== instanceId || ownIdentity[2] !== attachId) return;
           restoreBase = true;
           optionApplication = runRemoteCommand(alias, buildSoloOptionsCommand(discovery.socket, parsed.target), { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
           const applied = await optionApplication;
@@ -497,17 +539,11 @@ function createTmuxAttachAdapter(opts = {}) {
       }
       try { raw.kill(); } catch {}
       const restoreCmd = buildRestoreCommand(discovery.socket, parsed.target, discovery.pre, { includeBase: restoreBase, includeTitles });
-      try {
-        if (restoreCmd) {
-          const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
-          if (!result || result.code !== 0) {
-            const reason = result ? `exit ${result.code}: ${(result.stderr || '').trim() || 'no stderr'}` : 'no response';
-            log.warn(`[remote-attach:${alias}] restore-on-detach failed (${reason})`);
-          }
-        }
-      } finally {
-        if (clientTag) {
-          await runRemoteCommand(alias, `tmux -S ${shellSingleQuote(discovery.socket)} set -u -t ${shellSingleQuote(parsed.target)} ${shellSingleQuote(clientTag)}`, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+      if (restoreCmd) {
+        const result = await runRemoteCommand(alias, restoreCmd, { timeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+        if (!result || result.code !== 0) {
+          const reason = result ? `exit ${result.code}: ${(result.stderr || '').trim() || 'no stderr'}` : 'no response';
+          log.warn(`[remote-attach:${alias}] restore-on-detach failed (${reason})`);
         }
       }
     }
@@ -538,10 +574,10 @@ function createTmuxAttachAdapter(opts = {}) {
     if (solo) {
       log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (solo — following local resizes)`);
     } else {
-      const reason = discovery.clientCount == null
+      const reason = otherClientCount == null
         ? 'attached client count unknown, failing closed'
-        : discovery.clientCount > 0
-          ? `${discovery.clientCount} other client(s) already attached`
+        : otherClientCount > 0
+          ? `${otherClientCount} other client(s) already attached`
           : 'no local size supplied';
       log.info(`[remote-attach:${alias}] attached ${parsed.target} at ${openCols}x${openRows} (fixed at attach time — ${reason})`);
     }

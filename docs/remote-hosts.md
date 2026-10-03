@@ -208,13 +208,20 @@ answered. A session open in a tab keeps the terminal's own signals.
   `ssh -tt` (badge tooltip: *Live session on &lt;alias&gt; — click to attach*).
   Switchboard finds the tmux socket from the process's own `TMUX` variable.
   When no other client is attached, it hides tmux's status bar, turns the mouse
-  on and follows the window's size. If other clients are found, it checks again
-  after three seconds before opening. A shared terminal keeps its fixed size
-  while other clients remain; it checks every three seconds and starts following
-  the current local size once its own client is the only one left. A lingering
-  client after a restart counts until tmux removes it: even an old tagged client
-  is never kicked merely for being idle. Leaving a solo terminal restores the
-  tmux options that were present before attaching.
+  on and follows the window's size. Every attach carries a tag identifying this
+  computer, this app instance and this attach. Switchboard detaches a listed
+  client only when its readable tag identifies this computer and a different
+  app instance, and its tty is a validated /dev/pts/N. The single-instance lock
+  proves that older instance is no longer running; idle time is not evidence.
+  Once those clients are detached, the terminal opens solo immediately if no
+  real clients remain. There is no three-second attach-time delay. The measured
+  host sshd timeout is 60 seconds × 3: a cut connection can linger for about
+  three minutes without this classification.
+  Untagged clients, clients from another computer, unreadable environments,
+  invalid ttys and another attach of this running instance are never detached.
+  They keep shared mode and its fixed size. Shared terminals check every three
+  seconds and follow the current local size once this exact attach is the only
+  client left. Leaving a solo terminal restores the prior tmux options.
   Leaving the session ends the local ssh client only: the remote session keeps
   running, and opening it again reattaches.
 - **Any other session** opens its transcript in the read-only viewer.

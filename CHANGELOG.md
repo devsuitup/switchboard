@@ -10,7 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - Touched opens on the last day's files, shows when each was last touched, and sorts by time or path. Show 10 more days extends the history, and reopening the tab reuses unchanged transcripts. (#444)
 ### Fixed
-- Remote terminals recover normal resizing when a lingering client from before a restart disappears, without closing and reopening the session. (#452)
+- Remote terminals recover normal resizing after other clients leave and immediately clear lingering connections from a previous app instance on the same computer after a restart. (#452)
 
 ## v0.0.88 — 2026-10-03
 

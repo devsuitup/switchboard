@@ -27,6 +27,16 @@ const {
 } = require('../remote-attach');
 const { classifyTitleActivity } = require('../classify-title-activity');
 
+function createTestAdapter(opts) {
+  return createTmuxAttachAdapter({
+    waitForClientRetry: async () => {},
+    setTimeoutFn: () => ({ unref() {} }),
+    clearTimeoutFn() {},
+    ...opts,
+  });
+}
+
+const stripIdentity = command => command.replace(/^exec env 'SWITCHBOARD_ATTACH=[A-Za-z0-9_:-]+' /, '');
 const PROBE_SEP = '';
 const silentLog = { info() {}, warn() {}, error() {} };
 // Flushes every pending microtask (any depth of chained awaits), unlike a
@@ -55,6 +65,7 @@ const FAKE_SOCKET = '/tmp/tmux-0/test';
 
 function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactory, socket = FAKE_SOCKET, probeCalls, log = silentLog } = {}) {
   const runRemoteCommand = async (alias, command) => {
+    if (command.includes('client_pid')) return { code: 0, stdout: '9000\t/dev/pts/2\t\n' };
     if (probeCalls) probeCalls.push(command);
     return {
       code: probeCode,
@@ -66,7 +77,7 @@ function makeAdapter({ probeStdout, probeCode = 0, spawnCalls = [], rawPtyFactor
     spawnCalls.push({ file, args, ptyOpts });
     return (rawPtyFactory || (() => fakeRawPty().pty))();
   };
-  return createTmuxAttachAdapter({ spawnPty, runRemoteCommand, log });
+  return createTestAdapter({ spawnPty, runRemoteCommand, log });
 }
 
 test('parseTmuxField accepts the CLI-written format and rejects the rest', () => {
@@ -196,7 +207,7 @@ test('attach() refuses a descriptor with no tmux field, before any ssh call', as
   const spawnCalls = [];
   let probeCalls = 0;
   const runRemoteCommand = async () => { probeCalls++; return { code: 0, stdout: '' }; };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
     runRemoteCommand,
     log: silentLog,
@@ -236,9 +247,9 @@ test('attach() discovers the socket from the process TMUX env var, not the descr
     // What a real /proc/<pid>/environ TMUX line yields once the remote
     // shell does `cut -d, -f1` on it -- measured on the host 2026-09-08.
     const socket = 'TMUX=/tmp/tmux-0/orchestration,4085772,0'.slice('TMUX='.length).split(',')[0];
-    return { code: 0, stdout: `${socket}${PROBE_SEP}200x50${PROBE_SEP}status on`, stderr: '' };
+    return { code: 0, stdout: `${socket}${PROBE_SEP}200x50${PROBE_SEP}status on${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}${PROBE_SEP}0`, stderr: '' };
   };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: (file, args, ptyOpts) => { spawnCalls.push({ file, args, ptyOpts }); return fakeRawPty().pty; },
     runRemoteCommand,
     log: silentLog,
@@ -264,7 +275,7 @@ test('attach() refuses when the remote process has no readable TMUX env var, wit
   const spawnCalls = [];
   let probeCalls = 0;
   const runRemoteCommand = async () => { probeCalls++; return { code: 3, stdout: '', stderr: 'NO_TMUX_ENV\n' }; };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
     runRemoteCommand,
     log: silentLog,
@@ -284,7 +295,7 @@ test('attach() refuses a descriptor with no readable pid, before any ssh call', 
   const spawnCalls = [];
   let probeCalls = 0;
   const runRemoteCommand = async () => { probeCalls++; return { code: 0, stdout: '' }; };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
     runRemoteCommand,
     log: silentLog,
@@ -489,7 +500,7 @@ test('parseProbeOutput: pre.windowSize follows the same starred/unstarred rule a
 test('buildAttachCommand: solo prefixes session-scoped option sets before attach, in order', () => {
   const cmd = buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: true });
   assert.equal(
-    cmd,
+    stripIdentity(cmd),
     "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 status off \\; " +
       'set -t main:@0.%0 mouse on \\; ' +
       'set -t main:@0.%0 window-size latest \\; ' +
@@ -517,12 +528,12 @@ test('buildAttachCommand: solo prefixes session-scoped option sets before attach
 test('buildAttachCommand: shared still turns on title forwarding, quoting #T so the shell does not treat it as a comment', () => {
   const cmd = buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0', { solo: false });
   assert.equal(
-    cmd,
+    stripIdentity(cmd),
     "tmux -S '/tmp/tmux-0/main' set -t main:@0.%0 set-titles on \\; " +
       "set -t main:@0.%0 set-titles-string '#T' \\; " +
       'attach -t main:@0.%0',
   );
-  assert.equal(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0'), cmd, 'solo omitted behaves like solo: false');
+  assert.equal(stripIdentity(buildAttachCommand('/tmp/tmux-0/main', 'main:@0.%0')), stripIdentity(cmd), 'solo omitted behaves like solo: false');
   assert.ok(!cmd.includes('status'), 'shared attach must never touch status');
   assert.ok(!cmd.includes('mouse'), 'shared attach must never touch mouse');
   assert.ok(!cmd.includes('window-size'), 'shared attach must never touch window-size');
@@ -810,7 +821,7 @@ test('detach() runs a best-effort restore call with the probed pre-attach values
       stderr: '',
     };
   };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: () => raw.pty,
     runRemoteCommand,
     log: silentLog,
@@ -853,7 +864,7 @@ test('detach() restores only set-titles/set-titles-string on a shared detach, le
       stderr: '',
     };
   };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: () => raw.pty,
     runRemoteCommand,
     log: silentLog,
@@ -917,7 +928,7 @@ for (const count of [0, 1]) {
   test(`detach() still restores the title options when the detach-time client count is ${count} ("ours may still be counted")`, async () => {
     const raw = fakeRawPty();
     const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: count });
-    const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+    const adapter = createTestAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
     const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
     assert.equal(result.ok, true);
 
@@ -941,7 +952,7 @@ test('detach() skips the title restore, but still restores status/mouse/window-s
   const logLines = [];
   const log = { info() {}, warn() {}, error() {}, debug: (msg) => logLines.push(msg) };
   const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: 2 });
-  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log });
+  const adapter = createTestAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
   assert.equal(result.ok, true);
 
@@ -986,7 +997,7 @@ test('detach() sends no restore call at all on a shared detach when another clie
       stderr: '',
     };
   };
-  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+  const adapter = createTestAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
   const result = await adapter.attach(
     'vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 },
   );
@@ -1007,7 +1018,7 @@ test('detach() sends no restore call at all on a shared detach when another clie
 test('detach() falls back to restoring the title options when the detach-time client-count probe fails', async () => {
   const raw = fakeRawPty();
   const { runRemoteCommand, restoreCalls, clientCountProbeCalls, killedCountAtProbeTime } = makeDetachClientCountFake({ raw, clientCountAtDetach: 0, clientCountProbeFails: true });
-  const adapter = createTmuxAttachAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
+  const adapter = createTestAdapter({ spawnPty: () => raw.pty, runRemoteCommand, log: silentLog });
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
   assert.equal(result.ok, true);
 
@@ -1039,7 +1050,7 @@ test('detach() swallows a failing restore call without throwing', async () => {
       stderr: '',
     };
   };
-  const adapter = createTmuxAttachAdapter({
+  const adapter = createTestAdapter({
     spawnPty: () => raw.pty,
     runRemoteCommand,
     log: silentLog,

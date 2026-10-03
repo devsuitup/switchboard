@@ -3,13 +3,170 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const { spawnSync } = require('node:child_process');
+const { existsSync } = require('node:fs');
 const { createTmuxAttachAdapter } = require('../remote-attach');
 
 const SEP = '\u0001';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const descriptor = { pid: 4242, tmux: 'main:@0.%0' };
+const OWN = '4242\t/dev/pts/1\tworkstation:current:attach\n';
+const PEER = '9000\t/dev/pts/2\t\n';
+const STALE = '9000\t/dev/pts/2\tworkstation:previous:old\n';
+const TEST_SHELL = process.platform === 'win32' && existsSync('C:/Program Files/Git/bin/bash.exe')
+  ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 
-function fixture({ initialCount = 1, retryCount = initialCount, localSize = { cols: 100, rows: 40 } } = {}) {
+test('the client discovery script reads environment tags and treats unreadable or oversized environments as real', async t => {
+  const script = String.raw`
+tmux() { printf '9000\t/dev/pts/2\n9001\t/dev/pts/3\n9002\t/dev/pts/4\n'; }
+head() {
+  if [ "$1" != '-c' ]; then command head "$@"; return; fi
+  case "$3" in
+    /proc/9000/environ) printf 'SWITCHBOARD_ATTACH=workstation:previous:old\000OTHER=value\000';;
+    /proc/9001/environ) return 1;;
+    /proc/9002/environ) printf 'SWITCHBOARD_ATTACH=workstation:previous:old\000'; printf '%*s' "$2" 'x';;
+    *) return 1;;
+  esac
+}
+export -f tmux head
+`;
+  const f = fixture({ initialCount: 3, clientListRunner: command => {
+    const result = spawnSync(TEST_SHELL, ['-c', script + command], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, STALE + '9001\t/dev/pts/3\t\n9002\t/dev/pts/4\t\n');
+    return { code: result.status, stdout: result.stdout };
+  } });
+  const result = await f.attach();
+  t.after(() => f.events.emit('exit'));
+  assert.equal(result.cols, 200);
+  assert.equal(f.commands.filter(c => c.command.includes('detach-client')).length, 1);
+});
+
+test('a failed tmux list in the discovery script cannot masquerade as an empty list', async t => {
+  const f = fixture({ clientListRunner: command => {
+    const result = spawnSync(TEST_SHELL, ['-c', 'tmux() { return 1; }; export -f tmux; ' + command], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    assert.ifError(result.error);
+    return { code: result.status, stdout: result.stdout };
+  } });
+  const result = await f.attach();
+  t.after(() => f.events.emit('exit'));
+  assert.equal(result.cols, 200);
+  assert.ok(f.commands.every(c => !c.command.includes('detach-client')));
+});
+
+for (const [name, client] of [
+  ['untagged client', PEER],
+  ['another machine', '9000\t/dev/pts/2\telsewhere:previous:old\n'],
+  ['unreadable environment', '9000\t/dev/pts/2\t\n'],
+  ['invalid tty', '9000\t/dev/pts/2;touch unsafe\tworkstation:previous:old\n'],
+  ['same instance another attach', '9000\t/dev/pts/2\tworkstation:current:other\n'],
+  ['malformed tag', '9000\t/dev/pts/2\tworkstation:previous\n'],
+  ['invalid pid', 'oops\t/dev/pts/2\tworkstation:previous:old\n'],
+]) {
+  test(`client classification never detaches ${name}`, async t => {
+    const f = fixture({ initialClients: client });
+    const result = await f.attach();
+    t.after(() => f.events.emit('exit'));
+    assert.equal(result.ok, true);
+    assert.equal(result.cols, 200);
+    assert.ok(f.commands.every(c => !c.command.includes('detach-client')));
+    f.clients(OWN + client);
+    await f.tick();
+    assert.deepEqual(f.resizes, []);
+  });
+}
+
+test('client discovery batches all pid/tty environment reads with bounded quoted output', async t => {
+  const f = fixture({ initialCount: 2, initialClients: STALE + PEER });
+  const result = await f.attach();
+  t.after(() => f.events.emit('exit'));
+  const lists = f.commands.filter(c => c.command.includes('client_pid'));
+  assert.equal(lists.length, 1);
+  const { command, options } = lists[0];
+  assert.match(command, /^sh -c '/);
+  assert.match(command, /#\{client_pid\}.*#\{client_tty\}/);
+  assert.match(command, /\/proc\/.*\/environ/);
+  assert.match(command, /SWITCHBOARD_ATTACH=/);
+  assert.match(command, /head -c/);
+  assert.match(command, /head -n/);
+  assert.ok(!command.includes('`'));
+  assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15000);
+  assert.ok(options.maxStdoutBytes > 0 && options.maxStdoutBytes <= 128 * 1024);
+  assert.equal(f.commands.filter(c => c.command.includes('detach-client')).length, 1);
+  assert.equal(result.cols, 200, 'a genuine peer still requires shared sizing');
+});
+
+test('failed stale detach stays shared without retry delay', async t => {
+  const f = fixture({ initialClients: STALE });
+  f.staleDetachAnswer(() => ({ code: 1, stderr: 'detach failed' }));
+  const result = await f.attach();
+  t.after(() => f.events.emit('exit'));
+  assert.equal(f.commands.filter(c => c.command.includes('detach-client')).length, 1);
+  assert.equal(result.cols, 200);
+  assert.deepEqual(f.retryDelays, []);
+});
+
+test('client discovery refuses overflow and truncated records rather than assuming solitude', async t => {
+  for (const client of [STALE.repeat(201), `9000\t/dev/pts/2\t${'x'.repeat(128 * 1024)}\n`, '9000\t/dev/pts/2', '9000\t/dev/pts/2\tworkstation:previous:old']) {
+    const f = fixture({ initialClients: client });
+    const result = await f.attach();
+    t.after(() => f.events.emit('exit'));
+    assert.equal(result.cols, 200);
+    assert.ok(f.commands.every(c => !c.command.includes('detach-client')));
+  }
+});
+
+test('a lone tagged peer never impersonates this attach on a later poll', async t => {
+  for (const client of [
+    '9000\t/dev/pts/2\tworkstation:current:other\n',
+    '9000\t/dev/pts/2\telsewhere:current:attach\n',
+    '9000\t/dev/pts/2\tworkstation:previous:attach\n',
+  ]) {
+    const f = fixture();
+    await f.attach();
+    t.after(() => f.events.emit('exit'));
+    f.clients(client);
+    await f.tick();
+    assert.deepEqual(f.resizes, []);
+    assert.equal(f.timers.size, 1);
+  }
+});
+
+test('oversized poll output cannot promote an otherwise matching attach', async t => {
+  const f = fixture();
+  await f.attach();
+  t.after(() => f.events.emit('exit'));
+  f.clients(`4242\t${'x'.repeat(128 * 1024)}\tworkstation:current:attach\n`);
+  await f.tick();
+  assert.deepEqual(f.resizes, []);
+  assert.equal(f.timers.size, 1);
+});
+
+test('environment identity validates every component before any remote command', async () => {
+  for (const identity of [{ machineId: 'bad:host' }, { instanceId: 'bad;instance' }, { createAttachId: () => 'bad attach' }, { machineId: '' }]) {
+    let f;
+    await assert.rejects(async () => { f = fixture({ identity }); await f.attach(); }, /identity/i);
+    if (f) assert.equal(f.commands.length, 0);
+  }
+});
+
+test('default machine and app-instance identities persist across adapters while attach ids differ', async t => {
+  const tags = [];
+  for (let i = 0; i < 2; i++) {
+    const f = fixture({ initialCount: 0, identity: { machineId: undefined, instanceId: undefined, createAttachId: undefined } });
+    await f.attach();
+    t.after(() => f.events.emit('exit'));
+    const tag = /SWITCHBOARD_ATTACH=([A-Za-z0-9_-]+):([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)/.exec(f.spawns[0].args.at(-1));
+    assert.ok(tag);
+    tags.push(tag.slice(1));
+  }
+  assert.equal(tags[0][0], tags[1][0]);
+  assert.equal(tags[0][1], tags[1][1]);
+  assert.notEqual(tags[0][2], tags[1][2]);
+});
+
+function fixture({ initialCount = 1, initialClients = PEER, inherited = false, localSize = { cols: 100, rows: 40 }, identity = {}, clientListRunner } = {}) {
   const events = new EventEmitter();
   const commands = [];
   const resizes = [];
@@ -17,14 +174,14 @@ function fixture({ initialCount = 1, retryCount = initialCount, localSize = { co
   const retryDelays = [];
   const timers = new Map();
   let nextTimer = 0;
-  let discoveries = 0;
   let polls = 0;
   let killed = 0;
-  let clients = '4242:4242\n9000:4242\n';
+  let clients = OWN + PEER;
   let answer;
   let applyAnswer;
-  let retryAnswer;
+  let discoveryAnswer;
   let detachAnswer;
+  let staleDetachAnswer;
   const raw = {
     pid: 4242,
     onData: cb => events.on('data', cb),
@@ -36,6 +193,7 @@ function fixture({ initialCount = 1, retryCount = initialCount, localSize = { co
   const adapter = createTmuxAttachAdapter({
     spawnPty(file, args, options) { spawns.push({ file, args, options }); return raw; },
     resolveSshPath: () => 'fake-ssh',
+    machineId: 'workstation', instanceId: 'current', createAttachId: () => 'attach', ...identity,
     waitForClientRetry: async ms => { retryDelays.push(ms); },
     setTimeoutFn(cb, ms) {
       const timer = { id: ++nextTimer, unref() {} };
@@ -45,12 +203,13 @@ function fixture({ initialCount = 1, retryCount = initialCount, localSize = { co
     clearTimeoutFn: timer => timers.delete(timer),
     runRemoteCommand: async (alias, command, options) => {
       commands.push({ command, options });
+      if (command.includes('detach-client')) return staleDetachAnswer ? staleDetachAnswer() : { code: 0, stdout: '' };
       if (command.includes('/proc/4242/environ')) {
-        if (discoveries > 0 && retryAnswer) return retryAnswer();
-        const count = discoveries++ === 0 ? initialCount : retryCount;
-        return { code: 0, stdout: ['/tmp/tmux-0/test', '200x50', 'status on', 'mouse off', 'window-size manual', 'set-titles off', 'set-titles-string plain', count, '1'].join(SEP) };
+        return { code: 0, stdout: ['/tmp/tmux-0/test', '200x50', `status${inherited ? '*' : ''} on`, `mouse${inherited ? '*' : ''} off`, `window-size${inherited ? '*' : ''} manual`, 'set-titles off', 'set-titles-string plain', initialCount, '1'].join(SEP) };
       }
       if (command.includes('list-clients') && command.includes('client_pid')) {
+        if (clientListRunner) return clientListRunner(command);
+        if (spawns.length === 0) return discoveryAnswer ? discoveryAnswer() : { code: 0, stdout: initialClients };
         polls++;
         if (answer) return answer();
         return { code: 0, stdout: clients };
@@ -65,8 +224,9 @@ function fixture({ initialCount = 1, retryCount = initialCount, localSize = { co
     clients: value => { clients = value; },
     answer: value => { answer = value; },
     applyAnswer: value => { applyAnswer = value; },
-    retryAnswer: value => { retryAnswer = value; },
+    discoveryAnswer: value => { discoveryAnswer = value; },
     detachAnswer: value => { detachAnswer = value; },
+    staleDetachAnswer: value => { staleDetachAnswer = value; },
     polls: () => polls, killed: () => killed,
     async tick() {
       const entry = timers.entries().next().value;
@@ -86,7 +246,7 @@ test('shared attach becomes solo once, sends the latest size, and restores all o
   t.after(() => f.events.emit('exit'));
   result.ptyProcess.resize(120, 50);
   assert.deepEqual(f.resizes, []);
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   await f.tick();
   assert.deepEqual(f.resizes, [{ cols: 120, rows: 50 }], 'the current local size must reach the pty after the peer leaves');
   assert.equal(f.timers.size, 0);
@@ -123,12 +283,15 @@ test('a genuine client that remains keeps shared sizing and bounded polling', as
   assert.ok(f.commands.filter(c => c.command.includes('client_pid')).every(c => c.options.timeoutMs > 0 && c.options.timeoutMs <= 15000));
 });
 
-test('a previous instance client gone at the retry opens directly in solo mode', async t => {
-  const f = fixture({ retryCount: 0 });
+test('a previous instance client is detached by validated tty and opens solo immediately', async t => {
+  const f = fixture({ initialClients: STALE });
   const result = await f.attach();
   t.after(() => f.events.emit('exit'));
-  assert.equal(f.commands.filter(c => c.command.includes('/proc/4242/environ')).length, 2);
-  assert.ok(f.retryDelays[0] > 0 && f.retryDelays[0] <= 15000);
+  const detaches = f.commands.filter(c => c.command.includes('detach-client'));
+  assert.equal(detaches.length, 1);
+  assert.equal(detaches[0].command, "tmux -S '/tmp/tmux-0/test' detach-client -t '/dev/pts/2'");
+  assert.deepEqual(f.retryDelays, []);
+  assert.equal(f.commands.filter(c => c.command.includes('/proc/4242/environ')).length, 1);
   assert.deepEqual(f.spawns[0].options, { name: 'xterm-256color', cols: 100, rows: 40 });
   assert.match(f.spawns[0].args.at(-1), /status off/);
   result.ptyProcess.resize(120, 50);
@@ -162,7 +325,7 @@ test('detach and exit cancel polling and reevaluation cannot spawn more commands
 });
 
 test('failed, rejected and malformed polls remain shared and retry later', async t => {
-  for (const response of [() => ({ code: 1, stdout: '4242:4242\n' }), () => { throw new Error('ssh failed'); }, () => ({ code: 0, stdout: '' }), () => ({ code: 0, stdout: 'garbage' })]) {
+  for (const response of [() => ({ code: 1, stdout: OWN }), () => { throw new Error('ssh failed'); }, () => ({ code: 0, stdout: '' }), () => ({ code: 0, stdout: 'garbage' })]) {
     const f = fixture();
     const result = await f.attach();
     t.after(() => f.events.emit('exit'));
@@ -171,7 +334,7 @@ test('failed, rejected and malformed polls remain shared and retry later', async
     assert.deepEqual(f.resizes, []);
     assert.equal(f.timers.size, 1);
     f.answer(null);
-    f.clients('4242:4242\n');
+    f.clients(OWN);
     await f.tick();
     result.ptyProcess.resize(120, 50);
     assert.deepEqual(f.resizes.at(-1), { cols: 120, rows: 50 });
@@ -190,7 +353,7 @@ test('polls and manual reevaluation share one in-flight request', async t => {
   await flush();
   assert.equal(f.polls(), 1);
   assert.equal(f.timers.size, 0);
-  finish({ code: 0, stdout: '4242:4242\n9000:4242\n' });
+  finish({ code: 0, stdout: OWN + PEER });
   await Promise.all([one, two]);
   await flush();
   assert.equal(f.timers.size, 1);
@@ -205,7 +368,7 @@ test('detach during a pending poll cannot apply solo options after it settles', 
   result.ptyProcess.kill();
   await flush();
   const calls = f.commands.length;
-  finish({ code: 0, stdout: '4242:4242\n' });
+  finish({ code: 0, stdout: OWN });
   await flush();
   assert.equal(f.commands.length, calls);
   assert.deepEqual(f.resizes, []);
@@ -216,7 +379,7 @@ test('detach during solo option application waits and restores the applied optio
   const f = fixture();
   const result = await f.attach();
   let finish;
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   f.applyAnswer(() => new Promise(resolve => { finish = resolve; }));
   await f.tick();
   result.ptyProcess.kill();
@@ -233,7 +396,7 @@ test('a failed option command retries while remembering a possibly partial resto
   const f = fixture();
   const result = await f.attach();
   t.after(() => f.events.emit('exit'));
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   f.applyAnswer(() => ({ code: 1, stdout: '', stderr: 'partial failure' }));
   await f.tick();
   assert.deepEqual(f.resizes, []);
@@ -248,7 +411,7 @@ test('no valid local size prevents solo promotion until a valid resize arrives',
   const result = await f.attach();
   t.after(() => f.events.emit('exit'));
   assert.equal(typeof result.ptyProcess.reevaluateMode, 'function');
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   await result.ptyProcess.reevaluateMode();
   assert.deepEqual(f.resizes, []);
   result.ptyProcess.resize(0, 20);
@@ -265,57 +428,50 @@ test('a lone other client is not mistaken for our still-connecting attach', asyn
   const result = await f.attach();
   assert.equal(result.ok, true);
   t.after(() => f.events.emit('exit'));
-  f.clients('9000:4242\n');
+  f.clients(PEER);
   await f.tick();
   assert.deepEqual(f.resizes, []);
   assert.equal(f.commands.filter(c => c.command.includes('status off')).length, 0);
   assert.equal(f.timers.size, 1);
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   await f.tick();
   assert.deepEqual(f.resizes, [{ cols: 100, rows: 40 }]);
 });
 
-test('our attach is tagged by remote process identity and removes only its own marker on detach', async () => {
-  const f = fixture();
-  const result = await f.attach();
-  const command = f.spawns[0].args.at(-1);
-  assert.match(command, /set-option -t 'main:@0\.%0' '@switchboard-attach-[a-f0-9-]+' "\$\$" && exec tmux/);
-  await f.tick();
-  assert.match(f.commands.find(c => c.command.includes('client_pid')).command, /#\{client_pid\}:#\{@switchboard-attach-[a-f0-9-]+\}/);
-  result.ptyProcess.kill();
-  await flush();
-  const tag = command.match(/@switchboard-attach-[a-f0-9-]+/)[0];
-  assert.equal(f.commands.filter(c => c.command.includes('set -u') && c.command.includes(tag)).length, 1);
+test('solo and shared attaches carry portable environment identity without session markers', async () => {
+  for (const initialCount of [0, 1]) {
+    const f = fixture({ initialCount });
+    const result = await f.attach();
+    assert.match(f.spawns[0].args.at(-1), /^exec env 'SWITCHBOARD_ATTACH=workstation:current:attach' tmux -S /);
+    result.ptyProcess.kill();
+    await flush();
+    assert.ok(f.commands.every(c => !c.command.includes('@switchboard-attach-')));
+    assert.ok(!f.spawns[0].args.at(-1).includes('$$'));
+  }
 });
 
-test('a failed restart retry keeps the last known shared mode and recovers by polling', async t => {
-  for (const response of [() => ({ code: 1 }), () => { throw new Error('ssh failed'); }, () => ({ code: 0, stdout: 'bad probe' })]) {
+test('failed, unreadable and malformed client discovery stays shared and recovers by polling', async t => {
+  for (const response of [() => ({ code: 1 }), () => { throw new Error('ssh failed'); }, () => ({ code: 0, stdout: 'bad clients' })]) {
     const f = fixture();
-    f.retryAnswer(response);
+    f.discoveryAnswer(response);
     const result = await f.attach();
     t.after(() => f.events.emit('exit'));
     assert.equal(result.ok, true);
     assert.equal(result.cols, 200);
-    f.clients('4242:4242\n');
+    assert.ok(f.commands.every(c => !c.command.includes('detach-client')));
+    f.clients(OWN);
     await f.tick();
     assert.deepEqual(f.resizes, [{ cols: 100, rows: 40 }]);
   }
 });
 
-test('a restart retry that detects pid reuse refuses before spawning the attach', async () => {
-  const f = fixture();
-  f.retryAnswer(() => ({ code: 0, stdout: ['/tmp/tmux-0/test', '200x50', 'status on', '', '', '', '', '0', '0'].join(SEP) }));
-  const result = await f.attach();
-  assert.equal(result.ok, false);
-  assert.match(result.error, /not a claude CLI/);
-  assert.equal(f.spawns.length, 0);
-});
+
 
 test('a rejected option command retries and the latest size during application is used', async t => {
   const f = fixture();
   const result = await f.attach();
   t.after(() => f.events.emit('exit'));
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   f.applyAnswer(() => { throw new Error('ssh failed'); });
   await f.tick();
   assert.equal(f.timers.size, 1);
@@ -338,7 +494,7 @@ test('exit during a pending poll cannot spawn an option command or restart polli
   await f.tick();
   f.events.emit('exit');
   const calls = f.commands.length;
-  finish({ code: 0, stdout: '4242:4242\n' });
+  finish({ code: 0, stdout: OWN });
   await flush();
   assert.equal(f.commands.length, calls);
   assert.equal(f.timers.size, 0);
@@ -356,7 +512,7 @@ test('a pending detach probe cannot let a simultaneous poll promote the still-al
   result.ptyProcess.kill();
   await flush();
   assert.equal(result.ptyProcess.isAlive(), true);
-  finishPoll({ code: 0, stdout: '4242:4242\n' });
+  finishPoll({ code: 0, stdout: OWN });
   await flush();
   assert.equal(f.commands.filter(c => c.command.includes('status off')).length, 0);
   assert.equal(f.timers.size, 0);
@@ -366,10 +522,9 @@ test('a pending detach probe cannot let a simultaneous poll promote the still-al
 });
 
 test('a promoted attach restores inherited base options by unsetting session overrides', async () => {
-  const f = fixture();
-  f.retryAnswer(() => ({ code: 0, stdout: ['/tmp/tmux-0/test', '200x50', 'status* on', 'mouse* off', 'window-size* manual', '', '', '1', '1'].join(SEP) }));
+  const f = fixture({ inherited: true });
   const result = await f.attach();
-  f.clients('4242:4242\n');
+  f.clients(OWN);
   await f.tick();
   result.ptyProcess.kill();
   await flush();

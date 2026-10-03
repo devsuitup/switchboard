@@ -1022,7 +1022,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   descriptor, localSize)` takes the caller's locally-measured `{cols, rows}`
   (`main.js`'s `open-terminal` handler passes the same `normalizePtySize
   (initialSize)` result a local spawn uses) and treats the session as
-  **solo** only when the probed client count is exactly `0` *and* a valid
+  **solo** when there are no real clients after classification *and* a valid
   `localSize` was supplied. Solo: the PTY opens at `localSize`, and the
   returned `ptyProcess.resize(cols, rows)` forwards to the underlying ssh
   PTY — a live terminal like any local one. Not solo (one or more other
@@ -1033,47 +1033,62 @@ Launching a new remote session (#222) and injection over the messaging socket
   at is the failure this refuses; an unparseable count is treated the same
   as "someone's there" rather than guessed.
 
-- **Mode re-evaluation, issue #452.** On v0.0.88, the maintainer measured three
-  restart-time attaches at 316x94 with one other client each (2026-10-03,
-  22:06:38–22:06:41). Each socket later had only the current instance's client,
-  but the attach-time shared decision kept resize disabled permanently.
-  If discovery finds peers and a local size is available, discovery is retried
-  once after `RESTART_CLIENT_RETRY_DELAY_MS` (3 s), before spawning the PTY.
-  The refreshed probe supplies the option baseline and repeats the pid-reuse
-  check. A failed retry retains the last successful discovery.
-  - A shared attach polls `list-clients` every `SHARED_MODE_POLL_INTERVAL_MS`
-    (3 s after the preceding evaluation finishes), with a 5 s SSH timeout.
-    Recursive timeouts avoid overlapping requests. The timers are unref'd,
+- **Mode re-evaluation and stale clients, issue #452.** On v0.0.88, the
+  maintainer measured three restart-time attaches at 316x94 with one other
+  client each (2026-10-03, 22:06:38–22:06:41). Each socket later had only the
+  current instance's client, but the attach-time shared decision kept resize
+  disabled permanently. The host's measured sshd settings are
+  ClientAliveInterval 60 and ClientAliveCountMax 3: an abruptly cut connection
+  can remain listed for approximately three minutes.
+  - Every solo and shared attach uses exec env
+    SWITCHBOARD_ATTACH=<machine>:<instance>:<attach> tmux -S ... with the
+    existing option segments. The machine id is a SHA-256 hash of os.hostname();
+    the instance id is generated once when the main process loads the adapter
+    module, and the attach id is generated for each attach. All components must
+    match [A-Za-z0-9_-] and have 1–128 characters. Using the env executable avoids
+    login-shell-specific variable assignments and shell-pid assumptions.
+  - When the discovery count is nonzero or unknown, one additional bounded
+    command lists client_pid and client_tty and reads each client's tag from
+    /proc/<client_pid>/environ. A quoted sh -c isolates its POSIX control flow
+    from the login shell. The command emits at most 201 records, reads at most
+    64 KiB plus one overflow byte per environment, and has a 5 s timeout and
+    128 KiB output cap. More than 200 clients, incomplete records, invalid pids,
+    failed commands and unreadable environments fail closed. Oversized
+    environments supply no trusted tag.
+  - **Classification:**
+
+    | Client evidence | Action |
+    | --- | --- |
+    | No tag, malformed tag or unreadable environment | Real client; shared |
+    | Tag from another machine | Real client; shared |
+    | This machine and another instance, with validated /dev/pts/N tty | Detach that client by tty; solo immediately if no real clients remain and a valid local size is known |
+    | This machine and this instance, another attach id | Real client; shared; never detach |
+    | Invalid tty or unsuccessful detach | Remain shared |
+
+    The single-instance lock establishes that another instance on this machine
+    is dead; idle time is not the proof. Untagged clients, other machines and
+    unreadable environments are never detached. No client_activity threshold
+    is used. The three-second attach-time retry and session-option markers
+    are removed; no marker cleanup is needed.
+  - A shared attach polls list-clients every SHARED_MODE_POLL_INTERVAL_MS
+    (3 s after the preceding evaluation finishes), using the same bounded
+    environment discovery. It promotes only when the single listed client has
+    this exact machine, instance and attach id. The poll never detaches clients.
+    Recursive timeouts avoid overlapping requests; timers are unref'd and
     cancelled on detach/exit, and start only once a valid local size is known.
-    `ptyProcess.reevaluateMode()` uses the same in-flight operation; it is
+    ptyProcess.reevaluateMode() shares the in-flight operation and remains
     exposed for a future control, without adding a control here.
-  - The shared attach stores its remote shell pid in a unique session option
-    `@switchboard-attach-<uuid>` and then uses `exec tmux`, preserving that pid
-    as `client_pid`. The poll formats both `client_pid` and that option. It
-    promotes only when exactly one client is listed and both pids match, so a
-    slow SSH attach cannot mistake a remaining peer for itself. Normal detach
-    removes only this attach's marker, even when no option restore is needed.
-    An abrupt connection loss can leave its marker until the session ends;
-    the unique key prevents a later attach from trusting an older marker.
-  - Promotion applies session-scoped `status off`, `mouse on`, and
-    `window-size latest`, enrolls the existing full restore once, and sends
-    the latest valid local size once. Subsequent resizes are forwarded. A
-    confirmed solo attach never silently downgrades. Titles keep the #290 rule.
-    Failed or malformed polls remain shared and retry. A failed option command
-    may have applied some options, so detach still restores the base options;
-    detach waits for an in-flight option application before restoring them.
-  - **Stale-client rule:** a tag or old `client_activity` alone does not prove
-    a dead connection. No client is ignored or kicked. The restart-time retry
-    and shared-mode poll recover once tmux actually removes the old client,
-    including clients from older versions without a tag. A still-registered
-    tagged or untagged client counts as a genuine peer. SSH keepalive detection
-    remains the host's responsibility; an idle live client must remain safe.
-  - Polling avoids installing session-wide tmux hooks that could collide with
-    host configuration or survive a lost SSH connection. It uses no shell
-    pipeline, so a failing `list-clients` cannot masquerade as a zero count.
-    Tests inject the SSH/PTY ports and clocks; the real state machine runs,
-    with ref'd `setImmediate` flushing rather than awaits on unref'd timers.
-    A real host and tmux's marker-format expansion remain unverified locally.
+  - Promotion applies session-scoped status off, mouse on and window-size
+    latest, enrolls the existing full restore once, and sends the latest valid
+    local size once. Subsequent resizes are forwarded. A confirmed solo attach
+    never silently downgrades. Titles keep the #290 rule. Failed polls and
+    option applications retry conservatively. Detach remembers a potentially
+    partial option application and waits for it before restoring.
+  - Polling avoids session-wide hooks that could conflict with host hooks or
+    survive connection loss. A failed list-clients exits before producing a
+    usable empty list. Tests exercise the production adapter with fake SSH/PTY
+    ports and injected clocks; a real host and the SSH/tmux chain have not been
+    exercised here.
 
 - **Solo attach parity, issue #253.** A solo attach now makes the remote
   tmux session look and behave like a local terminal instead of a plain
