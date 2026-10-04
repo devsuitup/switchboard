@@ -26,5 +26,4 @@ coverage/
 .worktrees/
 
 # Playwright output (docs/e2e.md)
-e2e/test-results/
 e2e/playwright-report/
