@@ -302,7 +302,44 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
   return { ok: true, savedPath: target.path, version: versionOf(bytes) };
 }
 
+
+// see .ai/contexts/touched-files.md ("Shared editor")
+async function resolveTouchedRepo(absolutePath, deps) {
+  const { resolveTouchedPath } = require('./session-touched-files');
+  const resolved = resolveTouchedPath(absolutePath);
+  if (!resolved.path) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  if (isSensitivePath(resolved.path)) return { ok: false, error: 'access to sensitive path denied', reason: 'sensitive' };
+  let probe;
+  const runGit = deps.runGit || defaultRunGit;
+  const repo = await resolveRepoDirs(path.dirname(resolved.path), {
+    ...deps,
+    runGit: async (args, options) => { probe = await runGit(args, options); return probe; },
+  });
+  if (!repo) {
+    if (probe?.code === NOT_IN_TREE_EXIT_CODE) return { ok: true, git: false };
+    return { ok: false, error: probe?.stderr || 'could not locate the repository', reason: 'git' };
+  }
+  const relPath = path.relative(repo.root, resolved.path).split(path.sep).join('/');
+  return { ok: true, git: true, cwd: repo.root, relPath };
+}
+
+async function readTouchedChangesFile({ absolutePath, maxBytes }, deps = {}) {
+  const target = await resolveTouchedRepo(absolutePath, deps);
+  if (!target.ok || !target.git) return target;
+  const pair = await readChangesFile({ cwd: target.cwd, relPath: target.relPath, staged: true, maxBytes }, deps);
+  return { ...pair, git: true };
+}
+
+async function writeTouchedChangesFile({ absolutePath, content, version, maxBytes }, deps = {}) {
+  const target = await resolveTouchedRepo(absolutePath, deps);
+  if (!target.ok) return target;
+  if (!target.git) return { ok: false, error: 'not a git repository', reason: 'repo' };
+  return writeChangesFile({ cwd: target.cwd, relPath: target.relPath, content, version, maxBytes }, deps);
+}
+
 module.exports = {
+  readTouchedChangesFile,
+  writeTouchedChangesFile,
   readChangesFile,
   writeChangesFile,
   locateChangesFile,

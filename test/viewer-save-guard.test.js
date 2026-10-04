@@ -81,11 +81,13 @@ test('refuseIfMoved: unchanged is null, moved is stale with the disk text', (t) 
 test('main registers the module handlers for both channels, and writes no panel file itself', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
   assert.match(src, /const panelSaves = createMainPanelSaves\(/);
-  assert.match(src, /ipcMain\.handle\('save-file-for-panel', \(_event, filePath, content, expected\) => panelSaves\.saveFileForPanel\(filePath, content, expected\)\)/);
+  assert.match(src, /ipcMain\.handle\('save-file-for-panel', async \(_event, filePath, content, expected, opts\) =>/);
+  assert.match(src, /if \(!opts\?\.git\) return panelSaves\.saveFileForPanel\(filePath, content, expected\)/);
+  assert.match(src, /gitChangesFile\.writeTouchedChangesFile\(/);
   assert.match(src, /ipcMain\.handle\('save-memory', \(_event, filePath, content, expected\) => panelSaves\.saveMemory\(filePath, content, expected\)\)/);
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
   assert.match(preload, /ipcRenderer\.invoke\('save-memory', filePath, content, expected\)/);
-  assert.match(preload, /ipcRenderer\.invoke\('save-file-for-panel', filePath, content, expected\)/);
+  assert.match(preload, /ipcRenderer\.invoke\('save-file-for-panel', filePath, content, expected, opts\)/);
 });
 
 test("main's save handlers: a sensitive path is refused, a memory path outside the allowlist is refused, a save invalidates the FTS signature", (t) => {

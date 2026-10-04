@@ -160,3 +160,35 @@ test('git-changes-locate is the one handler that takes an absolute path, and it 
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
   assert.match(preload, /gitChangesLocate: \(sessionId, filePath\) => ipcRenderer\.invoke\('git-changes-locate', sessionId, filePath\)/);
 });
+
+test('Touched rejects invalid absolute paths before asking git', async () => {
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  const deps = { runGit: () => { throw new Error('git must not run'); } };
+  for (const absolutePath of ['', 'relative.txt', null, path.resolve(ROOT, 'control\nfile')]) {
+    const read = await readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
+    assert.equal(read.reason, 'invalid-path');
+    const write = await writeTouchedChangesFile({ absolutePath, content: 'x', version: 'v1', maxBytes: 1024 }, deps);
+    assert.equal(write.reason, 'invalid-path');
+  }
+});
+
+test('Touched does not treat a failed git probe as a plain file', async () => {
+  const { readTouchedChangesFile } = require('../git-changes-file');
+  for (const code of [-1, 1]) {
+    const result = await readTouchedChangesFile({ absolutePath: path.join(ROOT, 'example.txt'), maxBytes: 1024 }, {
+      runGit: async () => ({ code, stdout: '', stderr: 'probe failed' }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'git');
+  }
+});
+
+test('Touched refuses a sensitive path before asking git', async () => {
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  const absolutePath = path.join(ROOT, '.ssh', 'credential');
+  let calls = 0;
+  const deps = { runGit: async () => { calls++; return { code: 128 }; } };
+  assert.equal((await readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps)).reason, 'sensitive');
+  assert.equal((await writeTouchedChangesFile({ absolutePath, content: 'x', version: 'v1', maxBytes: 1024 }, deps)).reason, 'sensitive');
+  assert.equal(calls, 0);
+});

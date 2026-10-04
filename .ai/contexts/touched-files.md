@@ -64,13 +64,13 @@ listing *does* with it.
   or a check that throws, gives `state: 'refused'` and the path is never
   stat-ed. The row stays in the list so the user sees the session reached for
   it.
-- **Listing is not opening.** The renderer opens a row with `readFileForPanel`
-  (`read-file-for-panel`, its own `isSensitivePath`, regular-file, size and
-  binary checks) and then the ordinary file tab. Only a row with
-  `openable === true` **and** `state === 'present'` has a click handler; a source
-  check (`test/touched-files-wiring.test.js`) pins that the view calls no other
-  `window.api` method than `sessionTouchedFiles` and `readFileForPanel`. The
-  absolute path the renderer passes is one the main process returned.
+- **Listing is not opening.** Only a row with `openable === true` and
+  `state === 'present'` has a click handler. It calls `readFileForPanel`
+  with `{editor: true}`; the main handler retains its sensitive-path,
+  regular-file, size and binary guards. An unsuccessful read leaves the list
+  visible with the refusal. Gone, unreadable, refused and non-file rows keep
+  their existing state and cannot be opened. The absolute path is one main
+  returned in the list.
 - **The folder** comes from `getCachedFolder` and must be a plain name (no
   separator, not `.` or `..`) before it is joined to the projects directory; a
   `sub:` session id and a remote folder are refused.
@@ -190,10 +190,7 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 - **Ordering**: latest file-tool timestamp first, with a path tie-breaker;
   the toolbar can sort by path instead. Unknown timestamps are displayed
   explicitly and sort after dated entries.
-- **Open**: a row opens the plain file viewer. It does not route to the Changes
-  diff when the file is also changed in the working tree (`openFileInPanel` does,
-  for terminal links); doing so needs a Changes target, which a file outside any
-  repository does not have.
+- **Open**: a present row opens the shared Changes editor described below.
 
 ## Not covered
 
@@ -206,3 +203,43 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 - `test/session-touched-files.test.js` (extraction, resolution, walk, target resolution), `test/dom-file-panel-touched.test.js`, `test/touched-files-wiring.test.js`
 - `public/header-controls.js` (`HEADER_CONTROLS`, the icon) and `test/header-controls.test.js`
 - the guard row in `.ai/contexts/ipc-bridge.md`
+
+## Shared editor (#450)
+
+`openTouchedEditor` in `public/file-panel.js` creates the same Changes tab
+state and uses `renderChangesDiff`, `ensureChangesEditor`, the existing
+`#changes-diff-view` toolbar and `#changes-diff-host`. It retains the Touched
+list as `returnList`, snapshots scroll before hiding it and hides the Changes
+list and splitter. Back, Escape and the editor close button restore that
+original list through the shared discard guard. They do not fetch transcripts,
+status or file content again. Selection, sort, window and DOM identity survive.
+
+`read-file-for-panel` with `{editor: true}` discovers the repository from the
+file's own directory, including a file outside the session's repository.
+`readTouchedChangesFile` in `git-changes-file.js` reuses `readChangesFile` with
+`staged: true`, so the original is HEAD even when the index differs. An
+untracked file has an empty original. Repository files keep the existing
+containment, link, size, binary, encoding and line-ending checks. A Git probe
+failure other than the not-in-tree exit code is reported instead of becoming
+a plain-file fallback. If there is no repository, main returns the existing
+guarded file content as both sides of the pair, with line endings folded.
+
+A pair with identical sides, or `git: false`, uses `createEditableViewer`
+inside that same host with no diff gutter; the mode toggle is hidden without
+changing the stored Changes diff preference. Modified and untracked files use
+that preference and the same merge factories as Changes.
+
+`save-file-for-panel` accepts an optional `{git, version}` argument. A Git
+file uses `writeTouchedChangesFile`, which rediscovers its repository and
+reuses `writeChangesFile` and its byte-version check. Other files retain the
+existing expected-content save guard. Refresh, Save and Reload reread this
+absolute file, without fetching either list. Watching uses the existing
+absolute-path `watch-file` registry and `file-changed` event; closing the
+editor releases that watch. Dirty buffers and their return list survive a
+temporary file open through the Changes stash. Active Touched editors retain
+the existing unsaved-file close prompt.
+
+Tests load shipped renderer files in jsdom. `test/touched-editor-ipc.test.js`
+evaluates the shipped IPC handlers over disposable files and a fixture Git
+repository. The Touched journey in `e2e/changes.spec.js` checks the actual
+merge editor, width and Back navigation; it requires a separate live run.

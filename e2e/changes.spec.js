@@ -98,3 +98,37 @@ test('an edit saved in the panel editor reaches disk, and the file stays changed
   await expect(save).toBeDisabled();
   await expect.poll(() => rowCounts(row)).toEqual({ added: 2, deleted: 0 });
 });
+
+test('a Touched modified file shows the shared diff and Back restores its list', async ({ home, env, launch }) => {
+  const repo = makeRepo(home, env, TRACKED);
+  const target = path.join(repo, 'alpha.txt');
+  fs.appendFileSync(target, 'four\n');
+  const projects = path.join(home, '.claude', 'projects');
+  const folder = path.join(projects, fs.readdirSync(projects)[0]);
+  const transcript = path.join(folder, fs.readdirSync(folder).find(name => name.endsWith('.jsonl')));
+  const header = JSON.parse(fs.readFileSync(transcript, 'utf8').split('\n')[0]);
+  fs.appendFileSync(transcript, JSON.stringify({
+    type: 'assistant', sessionId: header.sessionId, cwd: repo, timestamp: new Date().toISOString(),
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'touch-fixture', name: 'Edit', input: { file_path: target } }] },
+  }) + '\n');
+
+  const { page } = await launch();
+  await openPlainTerminal(page);
+  await page.evaluate(id => window.switchPanel(id), header.sessionId);
+  await page.locator('#touched-toggle-btn').click();
+  const list = page.locator('#touched-list');
+  const row = list.locator('.touched-openable').filter({ hasText: 'alpha.txt' });
+  await expect(row).toHaveCount(1);
+  await row.click();
+  const diff = page.locator('#changes-diff-view');
+  await expect(diff).toBeVisible();
+  await expect(diff.locator('.cm-editor')).toHaveCount(1);
+  await expect(diff.locator('.cm-changedLine').first()).toBeVisible();
+  await expect(diff.locator('#changes-diff-save-btn')).toBeVisible();
+  const hostBox = await box(page.locator('#changes-diff-host'));
+  expect((await box(diff.locator('.cm-editor'))).width).toBeGreaterThan(hostBox.width * 0.8);
+  await page.locator('#file-panel-back-btn').click();
+  await expect(list).toBeVisible();
+  await expect(row).toHaveClass(/\bselected\b/);
+  await expect(diff).toBeHidden();
+});

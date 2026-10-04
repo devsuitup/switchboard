@@ -1121,3 +1121,54 @@ test('real git: an unpaired surrogate in the content is refused rather than writ
     assert.equal(fs.readFileSync(target, 'utf8'), 'emoji \uD83D\uDE00 fine\n');
   } finally { cleanup(tmp); }
 });
+
+for (const [name, current, original] of [
+  ['modified', 'worktree\n', 'committed\n'],
+  ['clean', 'committed\n', 'committed\n'],
+  ['untracked', 'new\n', ''],
+]) {
+  test('Touched reads ' + name + ' from the file repository against HEAD', async () => {
+    const tmp = mkTmp();
+    try {
+      const repo = path.join(tmp, 'repo');
+      initRepo(repo);
+      const target = path.join(repo, name === 'untracked' ? 'new.txt' : 'f.txt');
+      fs.writeFileSync(target, current);
+      const api = require('../git-changes-file');
+      const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
+      assert.equal(pair.ok, true, pair.error);
+      assert.equal(pair.git, true);
+      assert.equal(pair.original, original);
+      assert.equal(pair.current, current);
+      const saved = await api.writeTouchedChangesFile({ absolutePath: target, content: 'saved\n', version: pair.version, maxBytes: MAX_BYTES });
+      assert.equal(saved.ok, true, saved.error);
+      assert.equal(fs.readFileSync(target, 'utf8'), 'saved\n');
+      const stale = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: pair.version, maxBytes: MAX_BYTES });
+      assert.equal(stale.reason, 'stale');
+      assert.equal(fs.readFileSync(target, 'utf8'), 'saved\n');
+    } finally { cleanup(tmp); }
+  });
+}
+
+test('Touched only falls back to a plain editor outside a repository', async () => {
+  const tmp = mkTmp();
+  try {
+    const target = path.join(tmp, 'plain.txt');
+    fs.writeFileSync(target, 'plain');
+    const api = require('../git-changes-file');
+    const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
+    assert.equal(pair.ok, true);
+    assert.equal(pair.git, false);
+    const write = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES });
+    assert.equal(write.ok, false);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'plain');
+    const repo = path.join(tmp, 'repo');
+    initRepo(repo);
+    fs.unlinkSync(path.join(repo, 'f.txt'));
+    const missing = await api.readTouchedChangesFile({ absolutePath: path.join(repo, 'f.txt'), maxBytes: MAX_BYTES });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.reason, 'missing');
+    const gitDir = await api.readTouchedChangesFile({ absolutePath: path.join(repo, '.git', 'config'), maxBytes: MAX_BYTES });
+    assert.equal(gitDir.ok, false);
+  } finally { cleanup(tmp); }
+});

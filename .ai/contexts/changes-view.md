@@ -958,3 +958,19 @@ calls: the host is not Windows, and a round trip per call is the cost there.
 Measured 2026-10-03 on a scratch repo, four processes at once, a commit and an
 edit before every round: 4 failing rounds in 400 with the three calls
 parallel.
+
+## Opening the shared editor from Touched (#450)
+
+Touched uses the same `createChangesTab`, diff chrome, editor factories,
+dirty-buffer checks and save/reload flow as Changes. Its editor tab carries
+`absolutePath` and `returnList`; it renders only the shared editor and routes
+Back, Escape and the editor close button to the saved Touched list. It does
+not request a Changes list. Details and the absolute-path IPC contract:
+`.ai/contexts/touched-files.md`, "Shared editor".
+
+Changes rows retain their existing index/HEAD comparison and session-relative
+read, save and watch IPCs. Touched explicitly compares to HEAD from the file's
+own repository through `readTouchedChangesFile` / `writeTouchedChangesFile`.
+Both helpers reuse the existing repository file guards and byte-version save
+contract. When the pair is identical or there is no repository, the same
+editor host uses its plain factory without changing the stored diff mode.

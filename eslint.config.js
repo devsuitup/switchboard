@@ -397,7 +397,7 @@ module.exports = [
         showPanel: 'readonly',
         renderPanel: 'readonly',
         filePanelState: 'readonly',
-        openFileTab: 'readonly',
+        openTouchedEditor: 'readonly',
       },
     },
   },

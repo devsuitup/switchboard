@@ -980,7 +980,7 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
-ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
+ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
   try {
     const resolved = path.resolve(filePath);
     if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
@@ -993,7 +993,14 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     }
     const buf = fs.readFileSync(resolved);
     if (buf.includes(0)) return { ok: false, error: 'binary file' };
-    return { ok: true, content: buf.toString('utf8') };
+    const content = buf.toString('utf8');
+    if (opts?.editor) {
+      const pair = await gitChangesFile.readTouchedChangesFile({ absolutePath: resolved, maxBytes: PANEL_FILE_MAX_BYTES });
+      if (!pair.ok || pair.git) return pair;
+      const current = gitChangesFile.toLf(content);
+      return { ok: true, git: false, original: current, current };
+    }
+    return { ok: true, content };
   } catch (err) {
     return { ok: false, error: err.message, code: err.code };
   }
@@ -1006,7 +1013,18 @@ const panelSaves = createMainPanelSaves({
   onError: (err) => console.error('Error saving memory file:', err),
 });
 
-ipcMain.handle('save-file-for-panel', (_event, filePath, content, expected) => panelSaves.saveFileForPanel(filePath, content, expected));
+ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected, opts) => {
+  if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
+  try {
+    const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
+    if (!result.ok) return result;
+    if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file');
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    return { ok: true, version: result.version };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 // ── File Watching (for viewer panels) ────────────────────────────────
 const fileWatchers = createViewerWatchRegistry({
