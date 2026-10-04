@@ -91,7 +91,7 @@ for (const inGit of [true, false]) {
   });
 }
 
-test('shipped Touched read keeps missing, oversized, directory and unreadable refusals', async t => {
+test('shipped Touched read keeps missing, binary, oversized, directory and unreadable refusals', async t => {
   const { dir } = fixture(t);
   const api = panelHandlers();
   const target = path.join(dir, 'file.txt');
@@ -100,15 +100,61 @@ test('shipped Touched read keeps missing, oversized, directory and unreadable re
   fs.writeFileSync(target, Buffer.from([0, 1]));
   assert.match((await api.read(target)).error, /binary/);
   const binaryPair = await api.read(target, { editor: true });
-  assert.equal(binaryPair.ok, true, binaryPair.error);
-  assert.equal(binaryPair.git, false);
-  assert.equal(binaryPair.current, '\u0000\u0001');
+  assert.equal(binaryPair.ok, false);
+  assert.match(binaryPair.error, /binary file/);
   fs.writeFileSync(target, 'x'.repeat(MAX_BYTES + 1));
   assert.match((await api.read(target, { editor: true })).error, /large/);
   const unreadable = panelHandlers({ realpathSync: fs.realpathSync, statSync: fs.statSync, readFileSync: () => { throw new Error('unreadable fixture'); } });
   fs.writeFileSync(target, 'text');
   assert.match((await unreadable.read(target, { editor: true })).error, /unreadable fixture/);
 });
+
+for (const inGit of [true, false]) {
+  test('round 3: refusing a binary Touched open preserves its exact bytes (git=' + inGit + ')', async t => {
+    const { dir, git } = fixture(t);
+    if (inGit) git('init', '-q');
+    const target = path.join(dir, 'bin.dat');
+    const before = Buffer.from([0x41, 0x00, 0xff, 0x42]);
+    fs.writeFileSync(target, before);
+    const api = panelHandlers();
+    const pair = await api.read(target, { editor: true });
+    if (pair.ok) await api.save(target, pair.current, pair.current, { git: pair.git, version: pair.version });
+    assert.deepEqual(fs.readFileSync(target), before, 'opening and attempting to save must preserve binary bytes');
+    assert.equal(pair.ok, false);
+    assert.equal(pair.error, 'binary file');
+    if (inGit) {
+      const direct = await fixtureGitFiles.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
+      assert.equal(direct.ok, false);
+      assert.equal(direct.reason, 'binary');
+    }
+  });
+
+  test('round 3: a final file symlink opens read-only and every save refuses the link (git=' + inGit + ')', async t => {
+    const { dir, git } = fixture(t);
+    if (inGit) git('init', '-q');
+    const target = path.join(dir, 'target.txt');
+    const link = path.join(dir, 'link.txt');
+    fs.writeFileSync(target, 'target bytes\n');
+    fs.symlinkSync(target, link, 'file');
+    const api = panelHandlers();
+    const ordinary = await api.read(link);
+    assert.equal(ordinary.ok, true, ordinary.error);
+    assert.equal(ordinary.content, 'target bytes\n');
+    const pair = await api.read(link, { editor: true });
+    assert.equal(pair.ok, true, pair.error);
+    assert.equal(pair.readOnly, true);
+    assert.equal(pair.current, 'target bytes\n');
+    for (const opts of [undefined, { git: false }, { git: true, version: pair.version }]) {
+      const saved = await api.save(link, 'overwrite', pair.current, opts);
+      assert.equal(saved.ok, false);
+      assert.equal(saved.reason, 'symlink');
+    }
+    const direct = await fixtureGitFiles.writeTouchedChangesFile({ absolutePath: link, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES });
+    assert.equal(direct.reason, 'symlink');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'target bytes\n');
+  });
+}
 
 for (const [name, body] of [['dash name', 'text\n'], ['mixed EOL', 'one\r\ntwo\n']]) {
   test('round 2: shipped IPC opens and saves plain content for ' + name, async t => {
@@ -151,18 +197,27 @@ test('round 2: real git opens and saves a Touched path through an internal junct
   assert.equal(fs.readFileSync(target, 'utf8'), 'saved\n');
 });
 
-test('round 2: real git opens and saves a Windows 8.3 Touched path', { skip: process.platform !== 'win32' }, async t => {
+test('round 3: real git preserves HEAD and saves a modified Windows 8.3 Touched path', { skip: process.platform !== 'win32' }, async t => {
   const { dir, git } = fixture(t);
   git('init', '-q');
   const target = path.join(dir, 'long-file-name.txt');
+  fs.writeFileSync(target, 'base\n');
+  git('config', 'user.name', 'Fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
+  git('add', 'long-file-name.txt');
+  git('commit', '-qm', 'fixture');
   fs.writeFileSync(target, 'current\n');
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: dir, USERPROFILE: dir };
-  const short = execFileSync('cmd.exe', ['/d', '/c', 'for %I in ("' + target + '") do @echo %~sI'], { env, encoding: 'utf8', timeout: 10_000 }).trim();
-  if (!short.includes('~')) { t.skip('8.3 aliases are disabled on this fixture volume'); return; }
+  const longDir = fs.realpathSync.native(dir);
+  const shortDir = execFileSync('cmd.exe', ['/d', '/c', 'for %I in ("' + longDir + '") do @echo %~sI'], { env, encoding: 'utf8', timeout: 10_000, windowsVerbatimArguments: true }).trim();
+  if (shortDir.toLowerCase() === longDir.toLowerCase()) { t.skip('the derived directory spelling equals its long spelling'); return; }
+  const short = path.join(shortDir, 'long-file-name.txt');
+  assert.notEqual(short.toLowerCase(), fs.realpathSync.native(target).toLowerCase());
   const api = panelHandlers();
   const pair = await api.read(short, { editor: true });
   assert.equal(pair.ok, true, pair.error);
   assert.equal(pair.git, true);
+  assert.equal(pair.original, 'base\n');
   assert.equal(pair.current, 'current\n');
   const saved = await api.save(short, 'saved\n', pair.current, { git: pair.git, version: pair.version });
   assert.equal(saved.ok, true, saved.error);
@@ -259,12 +314,18 @@ test('round 2: a git-directory junction is refused before probing on every panel
 });
 
 for (const [name, bytes] of [['binary', Buffer.from([0, 1])], ['encoding', Buffer.from([0xff])]]) {
-  test('round 2: real Git ' + name + ' refusal opens plain content through shipped IPC', async t => {
+  test('round 3: real Git ' + name + ' refusal retains its panel policy', async t => {
     const { dir, git } = fixture(t);
     git('init', '-q');
     const target = path.join(dir, 'file.txt');
     fs.writeFileSync(target, bytes);
     const pair = await panelHandlers().read(target, { editor: true });
+    if (name === 'binary') {
+      assert.equal(pair.ok, false);
+      assert.equal(pair.error, 'binary file');
+      assert.deepEqual(fs.readFileSync(target), bytes);
+      return;
+    }
     assert.equal(pair.ok, true, pair.error);
     assert.equal(pair.git, false);
     assert.equal(pair.current, bytes.toString('utf8'));
@@ -295,3 +356,20 @@ for (const phase of ['repository reread', 'blob read']) {
     });
   }
 }
+
+test('round 3: a binary HEAD blob is refused without plain fallback or writes', async t => {
+  const { dir, git } = fixture(t);
+  git('init', '-q');
+  git('config', 'user.name', 'Fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
+  const target = path.join(dir, 'file.txt');
+  fs.writeFileSync(target, Buffer.from([0x41, 0x00, 0xff, 0x42]));
+  git('add', 'file.txt');
+  git('commit', '-qm', 'fixture');
+  const before = Buffer.from('now text\n');
+  fs.writeFileSync(target, before);
+  const pair = await panelHandlers().read(target, { editor: true });
+  assert.equal(pair.ok, false);
+  assert.equal(pair.reason, 'binary');
+  assert.deepEqual(fs.readFileSync(target), before);
+});

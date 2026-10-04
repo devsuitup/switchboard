@@ -1262,6 +1262,7 @@ function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
 function applyChangesPair(tab, pair) {
   tab.diffLoading = false;
   tab.editable = true;
+  tab.readOnly = !!pair.readOnly;
   tab.original = pair.original;
   tab.current = pair.current;
   tab.savedContent = pair.current;
@@ -1345,7 +1346,7 @@ async function syncOpenChangesFile(sessionId, tab) {
 
   tab.version = result.version;
   tab.externalChange = false;
-  if (result.current === tab.current && result.original === tab.original) {
+  if (result.current === tab.current && result.original === tab.original && !!result.readOnly === !!tab.readOnly) {
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
@@ -1838,7 +1839,7 @@ function renderChangesDiff(sessionId, tab) {
   changesDiffModeBtn.style.display = tab.editable && !tab.noDiff ? '' : 'none';
   const nextMode = CHANGES_DIFF_MODES[(CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length];
   setModeButton(changesDiffModeBtn, changesDiffMode, nextMode);
-  changesDiffSaveBtn.style.display = tab.editable ? '' : 'none';
+  changesDiffSaveBtn.style.display = tab.editable && !tab.readOnly ? '' : 'none';
   updateChangesSaveButton(sessionId, tab);
   changesDiffReloadBtn.style.display = tab.editable ? '' : 'none';
 
@@ -1872,7 +1873,7 @@ function renderChangesDiff(sessionId, tab) {
 function updateChangesSaveButton(sessionId, tab) {
   const state = filePanelState.get(sessionId);
   if (!state || state.currentTab !== tab) return;
-  changesDiffSaveBtn.disabled = !!tab.saving || !isChangesBufferDirty(tab);
+  changesDiffSaveBtn.disabled = !!tab.readOnly || !!tab.saving || !isChangesBufferDirty(tab);
   changesDiffSaveBtn.classList.toggle('active', !changesDiffSaveBtn.disabled);
 }
 
@@ -1881,6 +1882,7 @@ function renderChangesNotice(tab) {
   const listFailed = !!tab.error && !tab.notARepo;
   const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
+  if (tab.readOnly) notes.push('Symbolic link — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.pendingLine && !tab.editable && !tab.diffLoading) notes.push(`Line ${tab.pendingLine} was not reached — a read-only diff has no line to jump to.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
@@ -1922,7 +1924,9 @@ function ensureChangesEditor(sessionId, tab) {
 
     const filename = tab.selectedFile.path;
     const onChange = () => updateChangesSaveButton(sessionId, tab);
-    if (mode === 'plain') {
+    if (tab.readOnly) {
+      tab.editorView = window.createReadOnlyViewer(changesDiffHostEl, tab.current, filename);
+    } else if (mode === 'plain') {
       tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename, { onChange });
     } else if (mode === 'inline') {
       // mergeControls: false — this panel is not a git client, see .ai/contexts/changes-view.md
@@ -2013,7 +2017,7 @@ function handleChangesDiffModeToggle() {
 async function handleChangesSave(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
-  if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile || tab.saving) return;
+  if (!tab || tab.type !== 'changes' || !tab.editable || tab.readOnly || !tab.selectedFile || tab.saving) return;
   if (!isChangesBufferDirty(tab)) return;
 
   const content = readChangesEditorContent(tab);

@@ -137,7 +137,7 @@ function renderTouchedTab(sessionId, tab) {
   if (!touchedContainerEl) return;
   const shown = !!tab && tab.type === 'touched';
   touchedContainerEl.style.display = shown ? 'flex' : 'none';
-  setHeaderToggle(touchedToggleBtn, shown);
+  setHeaderToggle(touchedToggleBtn, shown || tab?.returnList?.type === 'touched');
   if (shown) {
     renderTouchedContent(sessionId, tab);
     window.restorePanelListScroll(touchedListEl, tab);
@@ -146,7 +146,9 @@ function renderTouchedTab(sessionId, tab) {
 
 function toggleTouchedTab(sessionId) {
   const state = getSessionState(sessionId);
-  if (state.currentTab && state.currentTab.type === 'touched') {
+  if (state.currentTab && (state.currentTab.type === 'touched' || state.currentTab.returnList?.type === 'touched')) {
+    if (!confirmDiscardChangesEdits(state.currentTab)) return;
+    destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
     endCurrentTab(sessionId, state);
     return;

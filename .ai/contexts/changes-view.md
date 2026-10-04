@@ -982,9 +982,16 @@ Changes header toggle and busy-to-idle refresh apply only to a Changes tab
 without a return list. Touched continues to reread on watcher events, Reload
 and Save, rather than on each session idle.
 
-The Touched read canonicalizes the file and repository root before deriving
-the Git operand. A Git content refusal or transport failure uses plain mode;
-repository-boundary and link refusals still fail closed. Literal and resolved
-.git segments are blocked before probing and on both plain and Git panel save
-paths. A probe exit 128 is a non-repository result only with the matching
-stderr diagnostic.
+The Touched read canonicalizes the file and repository root with
+fs.realpathSync.native before deriving the Git operand, expanding Windows 8.3
+names. Containment ignores case on Windows. Filename, line-ending and encoding
+refusals or transport failures use guarded plain mode; binary files and binary
+HEAD blobs remain refusals. A final file symlink opens through the shared host's
+read-only factory; both plain and Git save paths refuse the link. Watcher rereads
+also update read-only state when identical text changes between a link and a file.
+Repository-boundary refusals still fail closed. Literal and resolved .git
+segments are blocked on read-file-for-panel and save-file-for-panel for every
+caller, including terminal links. This is an intended change from the earlier
+ordinary viewer policy. A probe exit 128 is a non-repository result only with
+the matching stderr diagnostic. The Touched header toggle keys on returnList
+and uses the Changes discard guard when closing its editor.

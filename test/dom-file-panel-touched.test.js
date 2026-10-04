@@ -92,6 +92,7 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl } = 
   window.createMergeViewer = (parent, original, current, _name, options) => editor(parent, original, current, 'side-by-side', options);
   window.createUnifiedMergeViewer = (parent, original, current, _name, options) => editor(parent, original, current, 'inline', options);
   window.createEditableViewer = (parent, current, _name, options) => editor(parent, null, current, 'plain', options);
+  window.createReadOnlyViewer = (parent, current) => editor(parent, null, current, 'read-only', { onChange() {} });
   window.loadCodeMirrorBundle = () => Promise.resolve();
   Object.defineProperty(window, 'ViewerPanel', {
     value: function ViewerPanelStub() {
@@ -679,6 +680,61 @@ test('the touched toggle sits after Changes and before Stop in the header', () =
   } finally { ctx.destroy(); }
 });
 
+test('round 3: the Touched header toggles its dirty editor with the Changes discard guard', async () => {
+  let agree = false;
+  let prompts = 0;
+  const ctx = setupDom({ confirmImpl: () => { prompts++; return agree; } });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    const view = ctx.editors.at(-1);
+    view.setText('unsaved');
+    const btn = ctx.document.getElementById('touched-toggle-btn');
+    assert.equal(btn.getAttribute('aria-pressed'), 'true');
+    btn.click();
+    await flush();
+    assert.equal(prompts, 1);
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.equal(ctx.editors.at(-1), view);
+    assert.equal(view.current, 'unsaved');
+    agree = true;
+    btn.click();
+    await flush();
+    assert.equal(prompts, 2);
+    assert.equal(ctx.stateOf('s1').currentTab, null);
+    assert.equal(ctx.stateOf('s1').touchedStash ?? null, null);
+    assert.deepEqual(ctx.watchCalls.at(-1), ['unwatch', '/work/a.txt']);
+    assert.equal(btn.getAttribute('aria-pressed'), 'false');
+    assert.equal(ctx.calls.touched.length, 1);
+    assert.equal(ctx.calls.readFile.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('round 3: a symlink Touched pair uses the shared chrome read-only and cannot save', async () => {
+  const ctx = setupDom({ readImpl: () => ({ ok: true, git: false, readOnly: true, original: 'target', current: 'target' }) });
+  try {
+    await openTab(ctx);
+    const list = ctx.stateOf('s1').currentTab;
+    const row = rows(ctx)[0];
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    assert.equal(ctx.editors.at(-1).mode, 'read-only');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, 'none');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /read-only/);
+    ctx.editors.at(-1).setText('injected edit');
+    ctx.window.updateChangesSaveButton('s1', ctx.stateOf('s1').currentTab);
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').disabled, true);
+    await ctx.window.handleChangesSave('s1');
+    assert.equal(ctx.calls.save.length, 0);
+    ctx.document.getElementById('file-panel-back-btn').click();
+    assert.equal(ctx.stateOf('s1').currentTab, list);
+    assert.equal(rows(ctx)[0], row);
+    assert.equal(ctx.calls.touched.length, 1);
+  } finally { ctx.destroy(); }
+});
+
 function editorChrome(ctx) {
   const view = ctx.document.getElementById('changes-diff-view');
   return [...view.querySelectorAll('.viewer-toolbar, .viewer-toolbar-controls button')].map(el => [el.id, el.className, el.style.display]);
@@ -848,8 +904,6 @@ test('round 2: Changes and Touched retain separate unsaved files through the tog
     clickRow(ctx, '/work/b.txt');
     await flush();
     ctx.editors.at(-1).setText('unsaved B');
-    ctx.document.getElementById('touched-toggle-btn').click();
-    await flush();
     ctx.document.getElementById('changes-toggle-btn').click();
     await flush();
     assert.ok(ctx.stateOf('s1').currentTab, 'Changes opens a tab');
@@ -892,5 +946,27 @@ test('round 2: unchanged Touched editor makes no file or git call on session idl
     ctx.document.getElementById('changes-diff-reload-btn').click();
     await flush();
     assert.equal(ctx.calls.readFile.length, 2);
+  } finally { ctx.destroy(); }
+});
+
+test('round 3: watcher switches identical Touched text between a file and a read-only symlink', async () => {
+  let readOnly = false;
+  const ctx = setupDom({ readImpl: () => ({ ok: true, git: false, readOnly, original: 'same', current: 'same' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    assert.equal(ctx.editors.at(-1).mode, 'plain');
+    readOnly = true;
+    ctx.changed('/work/a.txt');
+    await flush();
+    assert.equal(ctx.editors.at(-1).mode, 'read-only');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, 'none');
+    readOnly = false;
+    ctx.changed('/work/a.txt');
+    await flush();
+    assert.equal(ctx.editors.at(-1).mode, 'plain');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, '');
+    assert.equal(ctx.calls.touched.length, 1);
   } finally { ctx.destroy(); }
 });

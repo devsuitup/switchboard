@@ -213,11 +213,13 @@ test('round 2: a not-a-repository diagnostic permits plain fallback', async () =
   assert.equal(result.git, false);
 });
 
-test('round 2: canonicalizing a Touched path retains the final file-symlink refusal', async () => {
+test('round 3: a Touched file symlink selects read-only plain content before probing git', async () => {
   const absolutePath = path.join(ROOT, 'git-changes-file.js');
   const deps = { fs: { lstatSync: () => ({ isSymbolicLink: () => true }) }, runGit: () => { throw new Error('git must not run'); } };
   const read = await require('../git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
-  assert.equal(read.reason, 'symlink');
+  assert.equal(read.ok, true);
+  assert.equal(read.git, false);
+  assert.equal(read.readOnly, true);
 });
 
 test('round 2: a vanished repository root is refused without plain fallback', async () => {

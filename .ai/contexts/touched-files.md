@@ -220,17 +220,27 @@ file's own directory, including a file outside the session's repository.
 `staged: true`, so the original is HEAD even when the index differs. An
 untracked file has an empty original. Repository files keep the existing
 containment and link checks. Both the file and repository root are resolved
-on disk before computing the relative Git path, preserving HEAD content through
-directory junctions, short paths and system temporary-directory aliases.
+on disk with fs.realpathSync.native before computing the relative Git path,
+expanding 8.3 names and preserving HEAD content through directory junctions and
+system temporary-directory aliases. Containment compares case-insensitively on
+Windows. Changes fixtures canonicalize temporary roots; Touched fixtures retain
+their spelling so aliases remain exercised. The Windows short-path regression
+derives the directory spelling, including existing parent aliases, and compares
+it to the native long spelling before deciding whether to skip. Injected Windows
+file/root resolution tests cover the mismatch on every platform.
 A literal or resolved path containing a .git segment is refused before probing,
 including ordinary read and plain-save IPCs. Exit 128 permits a non-repository
 fallback only when stderr says "not a git repository"; other Git probe errors
 remain errors. A missing or timed-out Git process during discovery, repository reread or
 blob read, or a diff read refused for
-its filename, mixed line endings, binary data or encoding, uses the guarded
-file content as both sides of the pair, with line endings folded. Binary data
-uses plain mode only for this editor request; ordinary viewer reads still
-refuse it. The display size cap and unreadable/non-file refusals still apply.
+its filename, mixed line endings or encoding, uses the guarded file content
+as both sides of the pair, with line endings folded. Binary files are refused
+for both ordinary viewer and editor requests; a binary HEAD blob also remains
+a refusal. The display size cap and unreadable/non-file refusals still apply.
+A final file symlink opens plain content read-only in the shared host through
+createReadOnlyViewer, with no Save control. Every panel save refuses that link,
+including plain saves, and the repository helper refuses writes independently.
+Sensitive-path, metadata, size and binary checks still apply before opening it.
 
 A pair with identical sides, or `git: false`, uses `createEditableViewer`
 inside that same host with no diff gutter; the mode toggle is hidden without
@@ -248,7 +258,11 @@ temporary file open through a dedicated Touched stash. Changes has its own
 stash; each list restores only its own edits, and restored Save controls are
 updated after the editor mounts. The Changes header toggle is active only
 for a Changes list/editor without a return list, and opens Changes when a
-Touched editor is visible. Session idle refreshes only Changes; Touched uses
+Touched editor is visible. The Touched header is pressed for its list or an
+editor carrying its returnList. Clicking it closes that tab through the Changes
+discard confirmation instead of stashing and immediately reopening the editor.
+Switching to the other list continues to stash unsaved edits. Session idle
+refreshes only Changes; Touched uses
 its watcher and explicit Reload/Save to reread content. Active Touched editors
 retain the existing unsaved-file close prompt.
 

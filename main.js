@@ -995,13 +995,13 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
       return { ok: false, error: 'file too large to display' };
     }
     const buf = fs.readFileSync(resolved);
-    if (buf.includes(0) && !opts?.editor) return { ok: false, error: 'binary file' };
+    if (buf.includes(0)) return { ok: false, error: 'binary file' };
     const content = buf.toString('utf8');
     if (opts?.editor) {
       const pair = await gitChangesFile.readTouchedChangesFile({ absolutePath: resolved, maxBytes: PANEL_FILE_MAX_BYTES });
       if (!pair.ok || pair.git) return pair;
       const current = gitChangesFile.toLf(content);
-      return { ok: true, git: false, original: current, current };
+      return { ok: true, git: false, original: current, current, readOnly: !!pair.readOnly };
     }
     return { ok: true, content };
   } catch (err) {
@@ -1021,6 +1021,7 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected
     if (gitChangesFile.hasGitSegment(filePath) || gitChangesFile.hasGitSegment(fs.realpathSync(filePath))) {
       return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
     }
+    if (fs.lstatSync(filePath).isSymbolicLink()) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
     if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
     const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
     if (!result.ok) return result;

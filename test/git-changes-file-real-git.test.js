@@ -21,7 +21,11 @@ process.env.LANGUAGE = 'C';
 const MAX_BYTES = 1024 * 1024;
 
 function mkTmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-'));
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-')));
+}
+
+function mkTouchedTmp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-touched-real-'));
 }
 
 // see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
@@ -1128,7 +1132,7 @@ for (const [name, current, original] of [
   ['untracked', 'new\n', ''],
 ]) {
   test('Touched reads ' + name + ' from the file repository against HEAD', async () => {
-    const tmp = mkTmp();
+    const tmp = mkTouchedTmp();
     try {
       const repo = path.join(tmp, 'repo');
       initRepo(repo);
@@ -1151,7 +1155,7 @@ for (const [name, current, original] of [
 }
 
 test('Touched falls back outside a repository and refuses missing files and git metadata', async () => {
-  const tmp = mkTmp();
+  const tmp = mkTouchedTmp();
   try {
     const target = path.join(tmp, 'plain.txt');
     fs.writeFileSync(target, 'plain');

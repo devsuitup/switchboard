@@ -17,7 +17,7 @@ const TOPLEVEL_MAX_BUFFER = 64 * 1024;
 const STATUS_MAX_BUFFER = 1024 * 1024;
 const NOT_IN_TREE_EXIT_CODE = 128;
 const GIT_RUN_FAILED_CODE = -1;
-const TOUCHED_PLAIN_REASONS = new Set(['invalid-path', 'mixed-eol', 'binary', 'encoding', 'too-large', 'git', 'repo']);
+const TOUCHED_PLAIN_REASONS = new Set(['invalid-path', 'mixed-eol', 'encoding', 'too-large', 'git', 'repo']);
 
 // Guards for a repo-relative path from the renderer — see .ai/contexts/changes-view.md ("Editing a changed file")
 function isSafeRepoRelativePath(p) {
@@ -317,7 +317,7 @@ async function resolveTouchedRepo(absolutePath, deps) {
   if (hasGitSegment(realPath)) return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
   try {
     if ((deps.fs || realFs).lstatSync(resolved.path).isSymbolicLink()) {
-      return { ok: false, error: 'this row is a symbolic link, not a file', reason: 'symlink' };
+      return { ok: true, git: false, readOnly: true };
     }
   } catch {}
   let probe;
@@ -361,6 +361,7 @@ async function readTouchedChangesFile({ absolutePath, maxBytes }, deps = {}) {
 async function writeTouchedChangesFile({ absolutePath, content, version, maxBytes }, deps = {}) {
   const target = await resolveTouchedRepo(absolutePath, deps);
   if (!target.ok) return target;
+  if (target.readOnly) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
   if (!target.git) return { ok: false, error: 'not a git repository', reason: 'repo' };
   return writeChangesFile({ cwd: target.cwd, relPath: target.relPath, content, version, maxBytes }, deps);
 }

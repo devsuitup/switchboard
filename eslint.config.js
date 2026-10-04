@@ -394,6 +394,7 @@ module.exports = [
         getSessionState: 'readonly',
         endCurrentTab: 'readonly',
         destroyCurrentTab: 'readonly',
+        confirmDiscardChangesEdits: 'readonly',
         showPanel: 'readonly',
         renderPanel: 'readonly',
         filePanelState: 'readonly',
