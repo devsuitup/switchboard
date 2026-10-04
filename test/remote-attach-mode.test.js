@@ -4,7 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
+const path = require('node:path');
 const { createTmuxAttachAdapter } = require('../remote-attach');
 
 const SEP = '\u0001';
@@ -13,8 +14,38 @@ const descriptor = { pid: 4242, tmux: 'main:@0.%0' };
 const OWN = '4242\t/dev/pts/1\tworkstation:current:attach\n';
 const PEER = '9000\t/dev/pts/2\t\n';
 const STALE = '9000\t/dev/pts/2\tworkstation:previous:old\n';
-const TEST_SHELL = process.platform === 'win32' && existsSync('C:/Program Files/Git/bin/bash.exe')
-  ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+const TEST_SHELL = process.env.TEST_SHELL || (process.platform === 'win32' && existsSync('C:/Program Files/Git/usr/bin/sh.exe')
+  ? 'C:/Program Files/Git/usr/bin/sh.exe' : '/bin/sh');
+
+function shellPath(value) {
+  return process.platform === 'win32'
+    ? value.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`)
+    : value;
+}
+
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function discoveryRunner(t, scripts) {
+  mkdirSync(path.join(__dirname, '../.work-files'), { recursive: true });
+  const dir = mkdtempSync(path.join(__dirname, '../.work-files/discovery-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const prefix = process.platform === 'win32' ? 'PATH=/usr/bin:$PATH; export PATH; ' : '';
+  const resolved = spawnSync(TEST_SHELL, ['-c', prefix + 'command -v "$0"', shellPath(TEST_SHELL)], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+  assert.ifError(resolved.error);
+  assert.equal(resolved.status, 0, resolved.stderr);
+  for (const [name, script] of Object.entries({
+    ...scripts, sh: `exec ${shellQuote(resolved.stdout.trim())} "$@"\n`,
+  })) {
+    writeFileSync(path.join(dir, name), '#!/bin/sh\n' + script, { mode: 0o755 });
+  }
+  return command => spawnSync(TEST_SHELL, ['-c', prefix + `PATH=${shellQuote(shellPath(dir))}:$PATH; export PATH; ` + command], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+}
 
 test('a dev profile on the same machine never detaches the installed profile live client', async t => {
   const installed = fixture({ initialCount: 0, identity: { profileId: 'installed', instanceId: 'live' } });
@@ -33,21 +64,19 @@ test('a dev profile on the same machine never detaches the installed profile liv
 });
 
 test('the client discovery script reads environment tags and treats unreadable or oversized environments as real', async t => {
-  const script = String.raw`
-tmux() { printf '9000\t/dev/pts/2\n9001\t/dev/pts/3\n9002\t/dev/pts/4\n'; }
-head() {
-  if [ "$1" != '-c' ]; then command head "$@"; return; fi
+  const run = discoveryRunner(t, {
+    tmux: String.raw`printf '9000\t/dev/pts/2\n9001\t/dev/pts/3\n9002\t/dev/pts/4\n'`,
+    head: 'if [ "$1" != \'-c\' ]; then PATH="${PATH#*:}" exec head "$@"; fi\n' + String.raw`
   case "$3" in
     /proc/9000/environ) printf 'SWITCHBOARD_ATTACH=workstation:previous:old\000OTHER=value\000';;
-    /proc/9001/environ) return 1;;
+    /proc/9001/environ) exit 1;;
     /proc/9002/environ) printf 'SWITCHBOARD_ATTACH=workstation:previous:old\000'; printf '%*s' "$2" 'x';;
-    *) return 1;;
+    *) exit 1;;
   esac
-}
-export -f tmux head
-`;
+`,
+  });
   const f = fixture({ initialCount: 3, clientListRunner: command => {
-    const result = spawnSync(TEST_SHELL, ['-c', script + command], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const result = run(command);
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, STALE + '9001\t/dev/pts/3\t\n9002\t/dev/pts/4\t\n');
@@ -60,8 +89,9 @@ export -f tmux head
 });
 
 test('a failed tmux list in the discovery script cannot masquerade as an empty list', async t => {
+  const run = discoveryRunner(t, { tmux: 'exit 1\n' });
   const f = fixture({ clientListRunner: command => {
-    const result = spawnSync(TEST_SHELL, ['-c', 'tmux() { return 1; }; export -f tmux; ' + command], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const result = run(command);
     assert.ifError(result.error);
     return { code: result.status, stdout: result.stdout };
   } });
