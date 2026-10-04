@@ -144,8 +144,11 @@ create two projects: a committed fixture git repository and a plain directory,
 each with a synthetic transcript. It does not copy your database or history.
 
 Inherited `CLAUDE*`, `GIT_*`, `ANTHROPIC_*` and `AWS_*` variables are removed
-case-insensitively in both `ALLOW_CLAUDE` modes, along with `ORIGINAL_PATH`
-and `ELECTRON_RUN_AS_NODE`. Git uses an empty
+case-insensitively in both `ALLOW_CLAUDE` modes, along with `GH_TOKEN`,
+`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`,
+`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `OPENAI_API_KEY`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `ORIGINAL_PATH` and `ELECTRON_RUN_AS_NODE`.
+Git uses an empty
 global configuration in the temporary HOME and skips the system config;
 fixture commits receive a synthetic identity only during setup.
 
@@ -164,6 +167,11 @@ HOME and deleted on exit. On macOS, the CLI's OAuth login lives in the Keychain,
 independent of HOME, so an existing login can remain available. No credentials
 file is copied from your real HOME. The launch banner states
 whether the real command is enabled and explains the temporary login when it is.
+
+Managed settings are system-wide: on Windows, the file is
+`C:\ProgramData\ClaudeCode\managed-settings.json`. It sits outside `HOME`, so
+if present its settings still apply to the isolated instance. This interaction,
+including the logged-out behavior with managed settings present, is unverified.
 
 On Windows, both launch modes treat PATH names case-insensitively and pass a
 single `PATH` key to the child. If both `Path` and `PATH` exist, the exact `PATH`
