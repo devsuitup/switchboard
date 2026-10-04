@@ -18,6 +18,7 @@ const SHELL = 'the session reports a shell command running (shell); nothing was 
 const SLASH = 'a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written';
 const BASH = 'a bash-mode command cannot be sent to a remote session; nothing was written';
 const MEMORY = 'a memory command cannot be sent to a remote session; nothing was written';
+const FORMAT = 'format-char';
 
 function fixture(lookup, outcome = { ok: true }) {
   const calls = [];
@@ -171,27 +172,61 @@ for (const command of ['/compact now', '/Compact', '/model', '//x']) test(`U21: 
 for (const prefix of ['\u200b', '\u200c', '\u200d', '\u2060', '\ufeff', ' \u200b\t\u2060 ']) {
   test(`U21: invisible prefix ${JSON.stringify(prefix)} cannot hide a slash command`, async () => {
     const s = fixture(); const r = await run(s, { command: prefix + '/model', wait: 'idle', timeout_ms: 1500 });
-    assert.equal(r.error, 'not sent'); assert.equal(r.reason, SLASH); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+    assert.equal(r.error, 'not sent'); assert.equal(r.reason, FORMAT); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
   });
 }
-for (const [command, reason] of [['!ls', BASH], [' !ls', BASH], ['\u200b!ls', BASH], ['#note', MEMORY], [' \u2060#note', MEMORY]]) {
+for (const [command, reason] of [['!ls', BASH], [' !ls', BASH], ['\u200b!ls', FORMAT], ['#note', MEMORY], [' \u2060#note', FORMAT]]) {
   test(`U21: mode prefix ${JSON.stringify(command)} is refused before waiting`, async () => {
     const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
     assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
   });
 }
-for (const command of ['say hello! and describe #note', '  keep ! and # in the middle  ', '\u200bsay hello']) {
+for (const command of ['say hello! and describe #note', '  keep ! and # in the middle  ', 'hello 😀']) {
   test(`U21: plain prompt ${JSON.stringify(command)} is sent unchanged`, async () => {
     const s = fixture(); assert.equal((await run(s, { command })).ok, true); assert.equal(s.calls[0].args[2], command);
   });
 }
-test('U21: invisible whitespace before an allowed slash sends the constant', async () => {
-  const s = fixture(); assert.equal((await run(s, { command: ' \u200b\u2060 /clear  ' })).ok, true);
-  assert.equal(s.calls[0].args[2], '/clear');
+test('U21: format characters before an allowed slash are refused', async () => {
+  const s = fixture(); const r = await run(s, { command: ' \u200b\u2060 /clear  ' });
+  assert.equal(r.reason, FORMAT); assert.equal(s.calls.length, 0);
 });
-test('U21: slash, bash and memory refusals have distinct reasons', () => {
-  assert.equal(new Set([SLASH, BASH, MEMORY]).size, 3);
+
+test('U21: slash, bash, memory and format refusals have distinct reasons', () => {
+  assert.equal(new Set([SLASH, BASH, MEMORY, FORMAT]).size, 4);
 });
+
+const formatCodePoints = [0x00ad, 0x034f, 0x061c, 0x180e, 0x2060, 0xfeff, 0x0600, 0x0890, 0x110bd, 0x13430, 0x1bca0];
+for (const [first, last] of [[0x200b, 0x200f], [0x202a, 0x202e], [0x2061, 0x2064], [0x2066, 0x2069], [0xfe00, 0xfe0f], [0xe0000, 0xe007f], [0xe0100, 0xe01ef]]) {
+  for (let codePoint = first; codePoint <= last; codePoint++) formatCodePoints.push(codePoint);
+}
+for (const codePoint of formatCodePoints) {
+  const character = String.fromCodePoint(codePoint);
+  test(`U28: U+${codePoint.toString(16).toUpperCase()} is refused at the start, middle and end of a remote prompt`, async () => {
+    for (const command of [character + 'hello', 'he' + character + 'llo', 'hello' + character]) {
+      const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
+      assert.equal(r.ok, false); assert.equal(r.error, 'not sent'); assert.equal(r.submitted, 'no');
+      assert.equal(r.reason, FORMAT); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+    }
+  });
+}
+for (const command of ['\u202e/model', '/compact\u034f', '/cl\ufe0fear', '\u200d/compact', '👩\u200d💻']) {
+  test(`U28: ${JSON.stringify(command)} is refused with the format reason before prefix handling`, async () => {
+    const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
+    assert.equal(r.error, 'not sent'); assert.equal(r.submitted, 'no'); assert.equal(r.reason, FORMAT);
+    assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+  });
+}
+for (const host of [null, 'vps']) test(`U28: ${host ? 'attached' : 'local'} delivery preserves format characters and ZWJ emoji`, async () => {
+  const s = fixture(); const writes = [];
+  const pty = { pid: process.pid, write: data => writes.push(data) };
+  const local = createTriggerContext({ activeSessions: new Map([['remote', { pty, host, handle: { write: pty.write, isAlive: () => true }, composerState: { pending: 0, lastInputAt: 0 } }]]), log, isPtyAlive: () => true });
+  Object.assign(s.ctx, local);
+  const command = formatCodePoints.map(codePoint => String.fromCodePoint(codePoint)).join('') + '👩\u200d💻';
+  const r = await run(s, { command });
+  assert.equal(r.ok, true); assert.equal(r.channel, undefined); assert.equal(s.reads(), 0); assert.equal(s.calls.length, 0);
+  assert.equal(writes[0], command); assert.ok(writes.slice(1).every(value => value === '\r'));
+});
+
 test('U22: main uses a dynamic opt-in getter and the central default', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(source, /get remote\(\)/); assert.match(source, /remoteTriggers\s*\?\?\s*SETTING_DEFAULTS\.remoteTriggers/);
