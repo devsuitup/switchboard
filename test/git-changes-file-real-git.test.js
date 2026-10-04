@@ -13,6 +13,7 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
 const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment, locateChangesFile } = require('../git-changes-file');
+const { resolveOnDisk } = require('../resolve-path-on-disk');
 
 // git translates its diagnostics; the assertions below match its English text.
 process.env.LC_ALL = 'C';
@@ -1162,7 +1163,7 @@ test('Touched falls back outside a repository and refuses missing files and git 
     const api = require('../git-changes-file');
     const runGit = async (args, options) => {
       const { runToExit } = require('../run-to-exit');
-      const result = await runToExit('git', args, { ...options, env: { ...scratchGitEnv(), GIT_CEILING_DIRECTORIES: fs.realpathSync(os.tmpdir()) } });
+      const result = await runToExit('git', args, { ...options, env: { ...scratchGitEnv(), GIT_CEILING_DIRECTORIES: resolveOnDisk(os.tmpdir()) } });
       return { ...result, tooLarge: result.overflow };
     };
     const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES }, { runGit });

@@ -43,7 +43,7 @@ const realpathJs = promisify((p, cb) => fs.realpath(p, cb));
  */
 function resolveOnDisk(filePath) {
   try {
-    return fs.realpathSync.native(path.resolve(filePath));
+    return fs.realpathSync(path.resolve(filePath));
   } catch {
     return null;
   }
@@ -170,8 +170,8 @@ async function sensitiveCandidatesAsync(filePath) {
  */
 function isInsideDir(child, parent) {
   if (!child || !parent) return false;
-  const c = process.platform === 'win32' ? path.resolve(child).toLowerCase() : path.resolve(child);
-  const p = process.platform === 'win32' ? path.resolve(parent).toLowerCase() : path.resolve(parent);
+  const c = path.resolve(child);
+  const p = path.resolve(parent);
   return c === p || c.startsWith(p + path.sep);
 }
 

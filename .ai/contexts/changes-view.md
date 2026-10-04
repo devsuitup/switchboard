@@ -982,10 +982,14 @@ Changes header toggle and busy-to-idle refresh apply only to a Changes tab
 without a return list. Touched continues to reread on watcher events, Reload
 and Save, rather than on each session idle.
 
-The Touched read canonicalizes the file and repository root with
+The Touched repository check canonicalizes the file and repository root with
 fs.realpathSync.native before deriving the Git operand, expanding Windows 8.3
-names. Containment ignores case on Windows. Filename, line-ending and encoding
-refusals or transport failures use guarded plain mode; binary files and binary
+names. That local containment check ignores case on Windows and protects both
+read and save. Discovery and the shared Changes guards retain the shared
+resolver's original spelling; the native paths are used only for comparison
+and deriving the relative operand. The shared resolver is unchanged. A missing
+repository file is refused before deriving that operand. Filename, line-ending
+and encoding refusals or transport failures use guarded plain mode; binary files and binary
 HEAD blobs remain refusals. A final file symlink opens through the shared host's
 read-only factory; both plain and Git save paths refuse the link. Watcher rereads
 also update read-only state when identical text changes between a link and a file.

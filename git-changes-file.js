@@ -304,6 +304,14 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
   return { ok: true, savedPath: target.path, version: versionOf(bytes) };
 }
 
+function resolveTouchedOnDisk(filePath, deps) {
+  try {
+    return (deps.fs || realFs).realpathSync.native(filePath);
+  } catch {
+    return null;
+  }
+}
+
 // see .ai/contexts/touched-files.md ("Shared editor")
 async function resolveTouchedRepo(absolutePath, deps) {
   const { resolveTouchedPath } = require('./session-touched-files');
@@ -339,7 +347,18 @@ async function resolveTouchedRepo(absolutePath, deps) {
   }
   const realRoot = resolveOnDisk(repo.root);
   if (!realRoot) return { ok: false, error: 'the repository directory no longer exists', reason: 'repo' };
-  const relPath = path.relative(realRoot, realPath).split(path.sep).join('/');
+  const canonicalPath = resolveTouchedOnDisk(realPath, deps);
+  if (!canonicalPath) return { ok: false, error: 'file is not in the working tree', reason: 'missing' };
+  if (hasGitSegment(canonicalPath)) return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+  const canonicalRoot = resolveTouchedOnDisk(realRoot, deps);
+  if (!canonicalRoot) return { ok: false, error: 'the repository directory no longer exists', reason: 'repo' };
+  const comparisonPath = process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
+  const comparisonRoot = process.platform === 'win32' ? canonicalRoot.toLowerCase() : canonicalRoot;
+  const rootPrefix = comparisonRoot.endsWith(path.sep) ? comparisonRoot : comparisonRoot + path.sep;
+  if (comparisonPath !== comparisonRoot && !comparisonPath.startsWith(rootPrefix)) {
+    return { ok: false, error: 'path resolves outside the repository', reason: 'outside' };
+  }
+  const relPath = path.relative(canonicalRoot, canonicalPath).split(path.sep).join('/');
   return { ok: true, git: true, cwd: realRoot, relPath };
 }
 

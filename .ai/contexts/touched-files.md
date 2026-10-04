@@ -219,12 +219,18 @@ file's own directory, including a file outside the session's repository.
 `readTouchedChangesFile` in `git-changes-file.js` reuses `readChangesFile` with
 `staged: true`, so the original is HEAD even when the index differs. An
 untracked file has an empty original. Repository files keep the existing
-containment and link checks. Both the file and repository root are resolved
-on disk with fs.realpathSync.native before computing the relative Git path,
-expanding 8.3 names and preserving HEAD content through directory junctions and
-system temporary-directory aliases. Containment compares case-insensitively on
-Windows. Changes fixtures canonicalize temporary roots; Touched fixtures retain
-their spelling so aliases remain exercised. The Windows short-path regression
+containment and link checks. Only the Touched repository check resolves both
+the file and repository root with fs.realpathSync.native before computing the
+relative Git path, expanding 8.3 names and preserving HEAD content through
+directory junctions and system temporary-directory aliases. Its containment
+check ignores case on Windows and refuses sibling prefixes. The native paths
+are comparison inputs only: repository discovery and shared read/write guards
+retain the shared resolver's spelling. The shared path resolver and its other
+callers keep their existing behavior. A missing repository file is refused
+before deriving a Git operand, so mismatched temporary-directory spellings
+cannot turn that refusal into plain editing. Changes fixtures canonicalize
+temporary roots; Touched fixtures retain their spelling so aliases remain
+exercised. The Windows short-path regression
 derives the directory spelling, including existing parent aliases, and compares
 it to the native long spelling before deciding whether to skip. Injected Windows
 file/root resolution tests cover the mismatch on every platform.
