@@ -18,7 +18,7 @@ const SHELL = 'the session reports a shell command running (shell); nothing was 
 const SLASH = 'a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written';
 const BASH = 'a bash-mode command cannot be sent to a remote session; nothing was written';
 const MEMORY = 'a memory command cannot be sent to a remote session; nothing was written';
-const FORMAT = 'format-char';
+const FORMAT = 'the command contains an invisible format character or blank that cannot be sent to a remote session; nothing was written';
 
 function fixture(lookup, outcome = { ok: true }) {
   const calls = [];
@@ -224,6 +224,45 @@ for (const host of [null, 'vps']) test(`U28: ${host ? 'attached' : 'local'} deli
   const command = formatCodePoints.map(codePoint => String.fromCodePoint(codePoint)).join('') + '👩\u200d💻';
   const r = await run(s, { command });
   assert.equal(r.ok, true); assert.equal(r.channel, undefined); assert.equal(s.reads(), 0); assert.equal(s.calls.length, 0);
+  assert.equal(writes[0], command); assert.ok(writes.slice(1).every(value => value === '\r'));
+});
+
+const additionalInvisibleCodePoints = [0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180c, 0x180d, 0x180f, 0x2065, 0x3164, 0xffa0, 0x2800];
+for (const codePoint of additionalInvisibleCodePoints) {
+  const character = String.fromCodePoint(codePoint);
+  test(`U29: U+${codePoint.toString(16).toUpperCase()} is refused anywhere and cannot hide a remote slash command`, async () => {
+    for (const command of [character + 'hello', 'he' + character + 'llo', 'hello' + character, character + '/model']) {
+      const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
+      assert.equal(r.ok, false); assert.equal(r.error, 'not sent'); assert.equal(r.submitted, 'no');
+      assert.equal(r.reason, FORMAT); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+    }
+  });
+}
+for (const [prefix, suffix, reason] of [['\uff0f', 'model', SLASH], ['\uff01', 'ls', BASH], ['\uff03', 'note', MEMORY]]) {
+  test(`U30: fullwidth U+${prefix.codePointAt(0).toString(16).toUpperCase()} prefix uses the ASCII refusal before waiting`, async () => {
+    for (const leading of ['', '  ', '\t\u3000']) {
+      const s = fixture(); const r = await run(s, { command: leading + prefix + suffix, wait: 'idle', timeout_ms: 1500 });
+      assert.equal(r.ok, false); assert.equal(r.error, 'not sent'); assert.equal(r.submitted, 'no');
+      assert.equal(r.reason, reason); assert.equal(s.reads(), 1); assert.equal(s.calls.length, 0);
+    }
+  });
+}
+for (const command of ['\uff0fcompact', '\uff0fclear']) test(`U30: fullwidth ${JSON.stringify(command)} is not an allowed slash constant`, async () => {
+  const s = fixture(); const r = await run(s, { command });
+  assert.equal(r.error, 'not sent'); assert.equal(r.reason, SLASH); assert.equal(s.calls.length, 0);
+});
+test('U30: fullwidth punctuation inside a remote prompt is sent unchanged', async () => {
+  const s = fixture(); const command = 'Discuss \uff0fmodel, \uff01ls and \uff03note; keep \uff21 unchanged';
+  assert.equal((await run(s, { command })).ok, true); assert.equal(s.calls[0].args[2], command);
+});
+for (const host of [null, 'vps']) test(`U29/U30: ${host ? 'attached' : 'local'} delivery preserves invisible blanks and fullwidth prefixes`, async () => {
+  const s = fixture(); const writes = [];
+  const pty = { pid: process.pid, write: data => writes.push(data) };
+  const local = createTriggerContext({ activeSessions: new Map([['remote', { pty, host, handle: { write: pty.write, isAlive: () => true }, composerState: { pending: 0, lastInputAt: 0 } }]]), log, isPtyAlive: () => true });
+  Object.assign(s.ctx, local);
+  const command = '\uff0fmodel \uff01ls \uff03note ' + additionalInvisibleCodePoints.map(codePoint => String.fromCodePoint(codePoint)).join('');
+  const r = await run(s, { command });
+  assert.equal(r.ok, true); assert.equal(s.reads(), 0); assert.equal(s.calls.length, 0);
   assert.equal(writes[0], command); assert.ok(writes.slice(1).every(value => value === '\r'));
 });
 

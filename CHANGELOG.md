@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Remote triggers refuse commands containing invisible format characters, variation selectors or tag characters, including joined emoji, before sending them. (#440)
+- Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 
 ## v0.0.89 — 2026-10-04
 

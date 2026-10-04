@@ -444,20 +444,32 @@ another trigger for that id queues behind it.
 
 The socket queues text without typing into the composer, so no composer check,
 dialog hold, Enter retry or transcript confirmation runs on this path. Windows
-hosts are refused with the key-file reason. Only exact `/compact` and `/clear`
-after prefix normalization are allowed slash commands; their constant text is
-sent. Normalization removes leading whitespace and U+200B–U+200D, U+2060 and
-U+FEFF, then trailing whitespace. Other leading-slash commands, arguments and
-case variants are refused before any wait. A first visible `!` (bash mode) or
-`#` (memory) is also refused. Plain prompts retain their original text,
-including `!` and `#` in the middle and invisible characters outside the
-prefix check. Each refusal returns `error: "not sent"` with its own reason:
+hosts are refused with the key-file reason. Before prefix handling or waiting,
+the whole command is refused if it contains a Unicode format character
+(`\p{Cf}`), a default-ignorable code point (`\p{Default_Ignorable_Code_Point}`),
+U+2800 (braille blank), U+034F (combining grapheme joiner), a variation selector
+(U+FE00–U+FE0F or U+E0100–U+E01EF), or a tag-block character (U+E0000–U+E007F),
+anywhere in the text. These characters are refused rather than stripped. This
+includes Hangul fillers, joined emoji, emoji with variation selectors such as
+hearts, soft hyphens and right-to-left marks.
 
-| Prefix | `reason` |
+For remaining commands, only leading and trailing whitespace is trimmed for
+the prefix check. Only exact `/compact` and `/clear` are allowed slash commands;
+their constant text is sent. Other leading-slash commands, arguments and case
+variants are refused. A first non-whitespace `!` (bash mode) or `#` (memory) is
+also refused. Fullwidth `／` (U+FF0F), `！` (U+FF01) and `＃` (U+FF03) prefixes
+receive the corresponding ASCII refusal; `／compact` and `／clear` are refused
+too. Plain prompts retain their original text, including ASCII and fullwidth
+punctuation in the middle. Plain emoji without refused characters still pass.
+Local PTY and live tmux-attached delivery keep their existing behavior. Each
+refusal returns `error: "not sent"`, `submitted: "no"` and its own reason:
+
+| Command content or prefix | `reason` |
 |---|---|
-| Unsupported `/` | `a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written` |
-| `!` | `a bash-mode command cannot be sent to a remote session; nothing was written` |
-| `#` | `a memory command cannot be sent to a remote session; nothing was written` |
+| Refused invisible character or blank anywhere | `the command contains an invisible format character or blank that cannot be sent to a remote session; nothing was written` |
+| Unsupported `/` or any `／` | `a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written` |
+| `!` or `！` | `a bash-mode command cannot be sent to a remote session; nothing was written` |
+| `#` or `＃` | `a memory command cannot be sent to a remote session; nothing was written` |
 
 **The effect of `/compact` and `/clear` over the socket is UNVERIFIED**;
 they may execute as commands or arrive as plain text. Whether a prompt during

@@ -140,26 +140,35 @@ behavior. Pruning also removes buckets whose elapsed refill makes them full
 and which have no pending send. Depleted buckets retain their rate history;
 pending sends retain the bucket referenced by their refund callback.
 The remote command check first refuses any command containing a Unicode
-format character (\p{Cf}), a variation selector (U+FE00–U+FE0F or
-U+E0100–U+E01EF), U+034F (combining grapheme joiner), or a tag character
-(U+E0000–U+E007F), anywhere in the string. The distinct result reason is
-`format-char`, with `error: not sent` and `submitted: no`, before prefix
+format character (\p{Cf}), a default-ignorable code point
+(\p{Default_Ignorable_Code_Point}), U+2800 (braille blank), a variation selector
+(U+FE00–U+FE0F or U+E0100–U+E01EF), U+034F (combining grapheme joiner), or a
+tag-block character (U+E0000–U+E007F), anywhere in the string. This covers Hangul
+fillers, U+17B4/U+17B5, U+180B–U+180F and U+2065 too. `REASON_REMOTE_FORMAT` is
+`the command contains an invisible format character or blank that cannot be sent to a remote session; nothing was written`,
+with `error: not sent` and `submitted: no`, before prefix
 handling or idle waiting. The whole command is refused rather than stripped.
 This includes ZWJ (U+200D), so remote prompts containing joined emoji such as
-👩‍💻 are refused; plain emoji without these characters still pass. Local
-PTY and live tmux-attached delivery are unchanged. Whether the CLI strips
+👩‍💻 are refused, as are emoji with variation selectors such as hearts,
+soft hyphens and right-to-left marks; plain emoji without these characters still
+pass. Local PTY and live tmux-attached delivery are unchanged. Whether the CLI strips
 these characters before parsing socket input remains UNVERIFIED; this guard
 does not depend on that behavior.
 
 For remaining commands, leading and trailing whitespace is trimmed for the
 prefix check without changing plain prompt text. A case-sensitive fixed
 allow-list accepts only `/compact` and `/clear`, sent from the constants,
-without arguments. First-visible `!` and `#` are refused before waiting, with
-`REASON_REMOTE_BASH` and `REASON_REMOTE_MEMORY`; unsupported `/` retains
-`REASON_REMOTE_SLASH`. The three prefix refusal strings are documented in
+without arguments. First-non-whitespace `!` and `#` are refused before waiting,
+with `REASON_REMOTE_BASH` and `REASON_REMOTE_MEMORY`; unsupported `/` retains
+`REASON_REMOTE_SLASH`. Their fullwidth counterparts U+FF01, U+FF03 and U+FF0F
+use the same respective refusal reasons because NFKC folds them to the ASCII
+prefixes. The prompt itself is not normalized. `／compact` and `／clear` are
+refused because they are not exact allow-list constants.
+All four refusal strings are documented in
 `docs/automation.md`, "Remote trigger targets". Mid-prompt `!`/`#` remain
-text. Their effect over the socket is UNVERIFIED, as is queuing during a
-permission dialog. L1-L7 require a real host and isolated running instance.
+text, as do their fullwidth counterparts. Their effect over the socket is
+UNVERIFIED, as is queuing during a permission dialog. L1-L7 require a real host
+and isolated running instance.
 
 Tests exercise the real file watcher with a fake descriptor source and the
 real context/indexer for host enablement. Polling tests keep a ref'd interval
