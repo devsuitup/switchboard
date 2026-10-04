@@ -774,12 +774,13 @@ test('chain: under a busy descriptor, a turn that closed before the step\'s own 
   }
 });
 
-test('chain: a session that exits while its step is pending ends on session exited', async () => {
+test('chain: a session that exits while its step is pending ends on session exited', async (t) => {
+  fakeClock(t);
   const uuid = 'sess-tx-pending-exit-' + Date.now();
   let s;
   s = transcriptSession(uuid, { onEnter: () => setTimeout(() => s.sessions.delete(uuid), 1000) });
   try {
-    const result = await runChain([{ command: 'first step', timeout_ms: 4000 }, { command: 'second step' }], s, uuid, 6000);
+    const result = await settleRun(t, runChain([{ command: 'first step', timeout_ms: 4000 }, { command: 'second step' }], s, uuid, 6000));
 
     assert.equal(result.error, 'session exited during wait', JSON.stringify(result));
     assert.ok(!s.written.some((w) => w.data === 'second step'));
