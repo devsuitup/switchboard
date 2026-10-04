@@ -104,6 +104,29 @@ function runCommand(file, args, options = {}) {
   return execFileSync(file, args, { encoding: 'utf8', timeout: 180000, ...options });
 }
 
+function parseBundleScript(script) {
+  const [command, ...args] = typeof script === 'string' ? script.trim().split(/\s+/) : [];
+  if (command !== 'esbuild') throw new Error('Unsupported bundle command: expected esbuild');
+  const options = { entryPoints: [] };
+  for (const arg of args) {
+    if (arg === '--bundle' || arg === '--minify') {
+      const key = arg.slice(2);
+      if (Object.hasOwn(options, key)) throw new Error(`Unsupported duplicate bundle argument: ${arg}`);
+      options[key] = true;
+    } else if (/^--(outfile|format|platform)=[\w./\\-]+$/.test(arg)) {
+      const [key, value] = arg.slice(2).split('=');
+      if (Object.hasOwn(options, key)) throw new Error(`Unsupported duplicate bundle argument: ${arg}`);
+      options[key] = value;
+    } else if (!arg.startsWith('-') && /^[\w./\\-]+$/.test(arg)) {
+      options.entryPoints.push(arg);
+    } else {
+      throw new Error(`Unsupported bundle argument: ${arg}`);
+    }
+  }
+  if (!options.entryPoints.length) throw new Error('Bundle script requires an entry point');
+  return options;
+}
+
 function cleanWorktree({ checkout, pr, home = process.env.HOME || os.homedir(), run = runCommand }) {
   validatePr(pr);
   const worktree = path.join(checkout, '.worktrees', `pr-${pr}-test`);
@@ -165,6 +188,14 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     warn(`Stop and install the reviewed dependencies in ${worktree} before launching.`);
   }
   linkNodeModules(worktree, path.join(checkout, 'node_modules'));
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(worktree, 'package.json'), 'utf8'));
+    const options = parseBundleScript(pkg.scripts?.['bundle:codemirror']);
+    run(process.execPath, ['-e', 'require(process.argv[1]).buildSync(JSON.parse(process.argv[2]))',
+      path.join(worktree, 'node_modules', 'esbuild'), JSON.stringify(options)], { cwd: worktree, stdio: 'inherit' });
+  } catch (error) {
+    throw new Error(`Failed to build CodeMirror bundle in ${worktree}: ${error.message}`);
+  }
   let tempHome;
   try {
     if (isolated) tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
@@ -190,4 +221,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildLaunch, prepareFixtures, lockChanged, linkNodeModules, unlinkNodeModules, cleanWorktree, main };
+module.exports = { buildLaunch, prepareFixtures, lockChanged, linkNodeModules, unlinkNodeModules, cleanWorktree, parseBundleScript, main };

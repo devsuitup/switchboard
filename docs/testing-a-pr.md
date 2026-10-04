@@ -12,9 +12,18 @@ the default. Other values produce a usage error before any git command.
 
 ## From source, not a build
 
-`npx electron . --no-sandbox` runs the checked-out source directly. `task
-test-pr` never builds: a build rebuilds the checkout's native modules, which
-other instances may have loaded (see
+`npx electron . --no-sandbox` runs the checked-out source directly. In both
+modes, `task test-pr` first rebuilds `public/codemirror-bundle.js` in the
+worktree using esbuild's JavaScript API, resolved from that worktree's
+`node_modules`. Build options come from the worktree's `package.json`
+`bundle:codemirror` script: entry points, `--bundle`, `--minify`, and
+`--outfile=`, `--format=`, `--platform=` values. Unsupported arguments stop
+the launch with an error. It rebuilds even when a bundle already exists,
+so the file viewers use the PR's current inputs. A failed bundle build stops
+the launch and reports the worktree path and build error.
+
+The task does not package the app or rebuild native modules, which other
+instances may have loaded (see
 [Development](development.md#building-and-replacing-while-an-installed-copy-runs)).
 
 ## How two instances coexist
@@ -114,7 +123,8 @@ It:
    `version` and `packages[""].version`, and warns on other changes;
 3. links the checkout's `node_modules` into the worktree: a junction on
    Windows, a directory symlink on Linux/macOS, without copying dependencies;
-4. runs the worktree's local Electron binary with `. --no-sandbox`, with
+4. rebuilds the CodeMirror bundle in the worktree, stopping if the build fails;
+5. runs the worktree's local Electron binary with `. --no-sandbox`, with
    `SWITCHBOARD_DATA_DIR` and
    `SWITCHBOARD_TRIGGERS_DIR` set to `~/.switchboard-dev-pr122` and
    `~/.switchboard-dev-pr122/triggers`.
