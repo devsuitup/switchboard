@@ -22,11 +22,11 @@ function validateAllowClaude(value, isolated) {
 }
 
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
-  isolated = false, allowClaude = false, tempHome, port = 9223 }) {
+  isolated = false, allowClaude = false, tempHome, port = 9223, platform = process.platform }) {
   validatePr(pr);
   const pathKeys = Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort();
-  if (pathKeys.length) {
-    const originalPath = env[Object.hasOwn(env, 'PATH') ? 'PATH' : pathKeys[0]];
+  if (platform === 'win32' && pathKeys.length) {
+    const originalPath = env[pathKeys[0]];
     env = { ...Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== 'PATH')), PATH: originalPath };
   }
   const data = path.join(home, `.switchboard-dev-pr${pr}`);
@@ -37,7 +37,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   if (!Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('Debug port must be an integer from 1 to 65535');
   if (!tempHome) throw new Error('Isolated mode requires a temporary home');
   const inherited = Object.fromEntries(Object.entries(env).filter(([key]) =>
-    !/^(CLAUDE|GIT_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|PATH|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE)$/i.test(key)));
+    key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE)$/i.test(key)));
   const originalPath = env.PATH || '';
   const fixtureData = path.join(tempHome, '.switchboard-test-pr');
   return {

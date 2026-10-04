@@ -77,7 +77,7 @@ test('isolated launch moves every home and app directory under its temporary roo
 
 test('isolated launch drops inherited session and git overrides case-insensitively', (t) => {
   const root = temp(t);
-  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: {
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, platform: 'win32', env: {
     CLAUDE_CODE_SSE_PORT: 'real', CLAUDE_CONFIG_DIR: 'real', claudeOther: 'real',
     GIT_DIR: 'real', git_work_tree: 'real', GIT_CONFIG_COUNT: '2', ORIGINAL_PATH: 'real',
     ELECTRON_RUN_AS_NODE: '1', KEEP_ME: 'ok', Path: 'tools', home: 'real', userprofile: 'real', appdata: 'real',
@@ -436,9 +436,8 @@ for (const value of ['0', '', undefined, '1']) {
     const enabled = value === '1';
     const originalPath = setup.env.PATH || setup.env.Path;
     const env = { ...setup.env, ISOLATED: '1', ALLOW_CLAUDE: value,
-      Path: originalPath, ORIGINAL_PATH: 'must-not-be-used', original_path: 'must-not-be-used',
+      PATH: originalPath, ORIGINAL_PATH: 'must-not-be-used', original_path: 'must-not-be-used',
       CLAUDE_CONFIG_DIR: setup.home, claudeOther: 'inherited', GIT_DIR: setup.home, git_work_tree: setup.home };
-    delete env.PATH;
     fs.mkdirSync(path.join(setup.home, '.claude'));
     fs.writeFileSync(path.join(setup.home, '.claude', '.credentials.json'), 'private sentinel');
     fs.writeFileSync(path.join(setup.home, '.claude.json'), 'private sentinel');
@@ -475,6 +474,26 @@ for (const value of ['0', '', undefined, '1']) {
   });
 }
 
+for (const allowClaude of [false, true]) {
+  test(`isolated ALLOW_CLAUDE=${allowClaude} drops every authentication override case-insensitively`, (t) => {
+    const root = temp(t);
+    const credentials = {
+      ANTHROPIC_API_KEY: 'api-key-sentinel', ANTHROPIC_AUTH_TOKEN: 'auth-token-sentinel',
+      ANTHROPIC_BASE_URL: 'base-url-sentinel', anthropic_other: 'lowercase-sentinel',
+      AnThRoPiC_Custom: 'mixed-case-sentinel', AWS_BEARER_TOKEN_BEDROCK: 'bedrock-sentinel',
+      AWS_ACCESS_KEY_ID: 'access-key-sentinel', AWS_SECRET_ACCESS_KEY: 'secret-key-sentinel',
+      AWS_SESSION_TOKEN: 'session-token-sentinel', aws_other: 'lowercase-sentinel',
+      AwS_Custom: 'mixed-case-sentinel',
+    };
+    const env = { ...credentials, PATH: 'original-tools', KEEP_ME: 'keep-sentinel' };
+    const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
+    for (const key of Object.keys(credentials)) assert.equal(launch.env[key], undefined, key);
+    assert.equal(launch.env.KEEP_ME, 'keep-sentinel');
+    assert.equal(launch.env.HOME, root);
+    assert.deepEqual(env, { ...credentials, PATH: 'original-tools', KEEP_ME: 'keep-sentinel' });
+  });
+}
+
 test('enabled isolated mode resolves the original PATH command without a stub', (t) => {
   const root = temp(t);
   const fallback = path.join(root, 'original-tools');
@@ -492,18 +511,30 @@ test('enabled isolated mode resolves the original PATH command without a stub', 
   assert.equal(result.stderr, '');
 });
 
-for (const isolated of [false, true]) {
-  for (const allowClaude of isolated ? [false, true] : [false]) {
-    test(`ISOLATED=${isolated} ALLOW_CLAUDE=${allowClaude} prefers exact PATH and removes case variants`, (t) => {
-      const root = temp(t);
-      const env = { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' };
-      const launch = tooling().buildLaunch({ pr: '122', isolated, allowClaude, tempHome: root, env });
-      assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
-      assert.equal(launch.env.PATH, isolated && !allowClaude
-        ? path.join(root, 'bin') + path.delimiter + env.PATH : env.PATH);
-      assert.equal(launch.env.KEEP_ME, 'ok');
-      assert.deepEqual(env, { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' });
-    });
+for (const platform of ['win32', 'linux', 'darwin']) {
+  for (const isolated of [false, true]) {
+    for (const allowClaude of isolated ? [false, true] : [false]) {
+      test(`${platform} ISOLATED=${isolated} ALLOW_CLAUDE=${allowClaude} preserves exact PATH with platform-specific casing`, (t) => {
+        const root = temp(t);
+        const env = { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' };
+        const options = { pr: '122', platform, isolated, allowClaude, tempHome: root };
+        const launch = tooling().buildLaunch({ ...options, env });
+        assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'),
+          platform === 'win32' ? ['PATH'] : ['Path', 'path', 'PATH']);
+        for (const key of ['Path', 'path']) assert.equal(launch.env[key], platform === 'win32' ? undefined : env[key], key);
+        assert.equal(launch.env.PATH, isolated && !allowClaude
+          ? path.join(root, 'bin') + path.delimiter + env.PATH : env.PATH);
+        assert.equal(launch.env.KEEP_ME, 'ok');
+        assert.deepEqual(env, { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' });
+
+        const aliases = { path: 'lowercase-tools', Path: 'inherited-tools' };
+        const withoutExact = tooling().buildLaunch({ ...options, env: aliases });
+        const originalPath = platform === 'win32' ? aliases.Path : isolated ? '' : undefined;
+        assert.equal(withoutExact.env.PATH, isolated && !allowClaude
+          ? path.join(root, 'bin') + path.delimiter + originalPath : originalPath);
+        for (const key of ['Path', 'path']) assert.equal(withoutExact.env[key], platform === 'win32' ? undefined : aliases[key], key);
+      });
+    }
   }
 }
 
@@ -518,7 +549,7 @@ test('mixed-case inherited PATH resolves only the fake command from exact PATH',
   fs.writeFileSync(path.join(decoy, 'claude.cmd'), '@echo decoy command\r\n@exit /b 3\r\n');
   fs.writeFileSync(path.join(decoy, 'claude'), '#!/bin/sh\necho decoy command\nexit 3\n', { mode: 0o755 });
   const safeEnv = shellEnv(tools);
-  const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root,
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root, platform: 'win32',
     env: { Path: shellEnv(decoy).PATH, ...safeEnv } });
   assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
   assert.equal(launch.env.PATH, safeEnv.PATH);

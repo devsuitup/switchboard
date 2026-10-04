@@ -143,8 +143,9 @@ triggers directories also live beneath it. It reuses `e2e/fixtures.js` to
 create two projects: a committed fixture git repository and a plain directory,
 each with a synthetic transcript. It does not copy your database or history.
 
-Inherited `CLAUDE*` and `GIT_*` variables are removed case-insensitively,
-along with `ORIGINAL_PATH` and `ELECTRON_RUN_AS_NODE`. Git uses an empty
+Inherited `CLAUDE*`, `GIT_*`, `ANTHROPIC_*` and `AWS_*` variables are removed
+case-insensitively in both `ALLOW_CLAUDE` modes, along with `ORIGINAL_PATH`
+and `ELECTRON_RUN_AS_NODE`. Git uses an empty
 global configuration in the temporary HOME and skips the system config;
 fixture commits receive a synthetic identity only during setup.
 
@@ -157,14 +158,17 @@ environment handling (issue #438).
 
 Set `ALLOW_CLAUDE=1` with `ISOLATED=1` to omit the stub and use the real
 `claude` from the original PATH. The temporary HOME, fixtures and environment
-sanitization remain in effect. The CLI starts logged out: its first launch asks
-for a login, which is stored in the temporary HOME and deleted on exit. No
-credentials file is copied from your real HOME. The launch banner states
+sanitization remain in effect. A logged-out start is guaranteed only on Windows
+and Linux: the first launch asks for a login, which is stored in the temporary
+HOME and deleted on exit. On macOS, the CLI's OAuth login lives in the Keychain,
+independent of HOME, so an existing login can remain available. No credentials
+file is copied from your real HOME. The launch banner states
 whether the real command is enabled and explains the temporary login when it is.
 
-In both modes, PATH names are treated case-insensitively and passed to the
-child as a single `PATH` key. If the environment contains both `Path` and
-`PATH`, the exact `PATH` value takes precedence.
+On Windows, both launch modes treat PATH names case-insensitively and pass a
+single `PATH` key to the child. If both `Path` and `PATH` exist, the exact `PATH`
+value takes precedence. On POSIX, the original `PATH` supplies command lookup
+(with the stub prepended when disabled); `Path` and `path` remain untouched.
 
 Both `ISOLATED` and `ALLOW_CLAUDE` accept only `0`, `1`, empty or unset;
 other values fail before any git command. `ALLOW_CLAUDE` defaults to `0`.
