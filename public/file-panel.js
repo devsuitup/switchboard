@@ -122,7 +122,7 @@ function initFilePanel() {
 
   panelBackBtn = document.createElement('button');
   panelBackBtn.id = 'file-panel-back-btn';
-  panelBackBtn.className = 'viewer-toolbar-btn';
+  panelBackBtn.className = 'viewer-toolbar-btn fp-toolbar-btn';
   panelBackBtn.textContent = '← Back to list';
   panelBackBtn.style.display = 'none';
   panelBackBtn.addEventListener('click', returnToPanelList);

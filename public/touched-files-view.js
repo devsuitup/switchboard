@@ -344,7 +344,7 @@ function renderTouchedContent(sessionId, tab) {
   if (hidden > 0 || data.hasOlder) {
     const more = document.createElement('button');
     more.id = 'touched-more-btn';
-    more.className = 'viewer-toolbar-btn';
+    more.className = 'viewer-toolbar-btn fp-toolbar-btn';
     more.textContent = `Show ${TOUCHED_WINDOW_STEP_DAYS} more days`;
     more.addEventListener('click', () => extendTouchedWindow(sessionId, tab));
     touchedListEl.appendChild(more);

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const source = name => fs.readFileSync(path.join(PUBLIC, name), 'utf8');
@@ -13,6 +14,13 @@ const css = source('style.css').replace(/\/\*[\s\S]*?\*\//g, '');
 const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, declarations]) => ({
   selector: selector.trim(), declarations,
 }));
+const BASE_STYLED_BUTTONS = new Set([
+  'sidebar-expand-btn', 'app-menu-btn', 'global-settings-btn', 'sidebar-collapse-btn',
+  'running-toggle', 'star-toggle', 'today-toggle', 'archive-toggle', 'resort-btn',
+  'add-project-btn', 'search-clear', 'search-titles-toggle', 'search-refresh-btn',
+  'indexing-banner-dismiss', 'terminal-refresh-btn', 'terminal-stop-btn',
+  'grid-group-toggle-btn', 'update-restart-btn', 'update-dismiss-btn',
+]);
 
 function rule(selector, property) {
   const found = rules.find(r => r.selector === selector && (!property || r.declarations.includes(property)));
@@ -28,6 +36,9 @@ function assertThemedButtons(root) {
       && !r.selector.includes('::') && !r.selector.includes(':hover')
       && button.matches(r.selector));
     assert.ok(backgrounds.length, `${button.id || button.className || button.textContent} has a background rule`);
+    const classStyled = backgrounds.some(r => [...button.classList].some(name => r.selector.includes(`.${name}`)));
+    assert.ok(classStyled || BASE_STYLED_BUTTONS.has(button.id),
+      `${button.id || button.className || button.textContent} needs a styled class or explicit base-style allowance`);
     assert.ok(button.matches(':where(button)'), 'the shared base also covers this button');
     for (const r of backgrounds) {
       assert.doesNotMatch(r.declarations, /background(?:-color)?:\s*(?:white|#fff(?:fff)?)\s*[;}]/i);
@@ -51,21 +62,36 @@ test('unclassified buttons have token-based surfaces and accessible interaction 
     /background:\s*transparent/);
 });
 
-test('all scrollers share theme tokens on both scrollbar APIs, including horizontal bars and corners', () => {
-  const standard = rule('*', 'scrollbar-width');
-  assert.match(standard, /scrollbar-width:\s*thin/);
-  assert.match(standard, /scrollbar-color:\s*var\(--hairline\) transparent/);
+test('all ordinary scrollers use the WebKit theme without overriding standard properties', () => {
+  for (const r of rules.filter(r => /(?:^|;)\s*scrollbar-(?:width|color)\s*:/.test(r.declarations))) {
+    assert.equal(r.selector, '.terminal-container .xterm-viewport',
+      `standard scrollbar properties override the WebKit theme: ${r.selector}`);
+  }
   assert.match(rule('::-webkit-scrollbar'), /width:\s*5px/);
   assert.match(rule('::-webkit-scrollbar'), /height:\s*5px/);
   assert.match(rule('::-webkit-scrollbar-track'), /background:\s*transparent/);
   assert.match(rule('::-webkit-scrollbar-thumb'), /background:\s*var\(--hairline\)/);
+  assert.match(rule('::-webkit-scrollbar-thumb'), /border-radius:\s*3px/);
   assert.match(rule('::-webkit-scrollbar-thumb:hover'), /background:\s*var\(--control-border\)/);
   assert.match(rule('::-webkit-scrollbar-corner'), /background:\s*transparent/);
   for (const r of rules.filter(r => /scrollbar/.test(r.selector + r.declarations))) {
-    assert.ok(r.selector === '*' || r.selector.startsWith('::-webkit-scrollbar')
+    assert.ok(r.selector.startsWith('::-webkit-scrollbar')
       || r.selector.startsWith('.terminal-container .xterm-viewport'), `duplicate scrollbar rule: ${r.selector}`);
   }
   assert.doesNotMatch(source('codemirror-setup.js'), /scrollbar(?:Width|Color)/);
+});
+
+test('worktree delete follows the sibling hover-reveal styling', () => {
+  const shared = rules.find(r => r.selector.split(',').some(s => s.trim() === '.worktree-delete-btn'));
+  assert.ok(shared, 'worktree delete needs its own styling');
+  assert.match(shared.declarations, /opacity:\s*0\s*;/);
+  assert.match(shared.declarations, /background:\s*transparent/);
+  assert.match(shared.declarations, /width:\s*16px/);
+  assert.match(shared.declarations, /height:\s*16px/);
+  const reveal = rules.find(r => r.selector.split(',').some(s => s.trim() === '.worktree-header:hover .worktree-delete-btn'));
+  assert.match(reveal?.declarations || '', /opacity:\s*0\.7/);
+  const hover = rules.find(r => r.selector.split(',').some(s => s.trim() === '.worktree-delete-btn:hover'));
+  assert.match(hover?.declarations || '', /opacity:\s*1\s*!important/);
 });
 
 test('Touched sort has a themed native menu and hover, focus and disabled states', () => {
@@ -142,6 +168,36 @@ async function flush() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
+test('panel-only selection lets active-session reselection hide Back; shared selection preserves it', async () => {
+  const { dom, window, evaluate } = setupPanel();
+  try {
+    window.reportActivityFocus = () => {};
+    loadAppFunctions(dom.getInternalVMContext(), { functions: ['setActiveSession'] });
+    window.setActiveSession('terminal');
+    window.switchPanel('transcript');
+    assert.equal(window.activeSessionId, 'terminal');
+    window.document.getElementById('touched-toggle-btn').click();
+    await flush();
+    window.document.querySelector('.touched-openable').click();
+    await flush();
+    const panel = window.document.getElementById('file-panel');
+    const back = window.document.getElementById('file-panel-back-btn');
+    assert.ok(panel.classList.contains('open'));
+    assert.notEqual(back.style.display, 'none');
+    evaluate('renderPanel("transcript")');
+    assert.notEqual(back.style.display, 'none', 'redrawing the file preserves Back');
+    window.setActiveSession(window.activeSessionId);
+    assert.ok(!panel.classList.contains('open'), 'reselection closes the mismatched panel');
+    window.setActiveSession('transcript');
+    window.setActiveSession(window.activeSessionId);
+    assert.ok(panel.classList.contains('open'));
+    assert.notEqual(back.style.display, 'none');
+    back.click();
+    assert.equal(back.style.display, 'none', 'returning to the list legitimately hides Back');
+    assert.equal(window.document.querySelectorAll('.touched-file-row').length, 1);
+  } finally { dom.window.close(); }
+});
+
 test('file panel, Touched and Changes controls are themed through their real creation paths', async () => {
   const ctx = setupPanel();
   const { window, evaluate } = ctx;
@@ -153,11 +209,13 @@ test('file panel, Touched and Changes controls are themed through their real cre
     const more = document.getElementById('touched-more-btn');
     assert.ok(more, 'older history creates the Show 10 more days button');
     assert.ok(more.classList.contains('viewer-toolbar-btn'));
+    assert.ok(more.classList.contains('fp-toolbar-btn'), 'older-history control matches the toolbar');
     assertThemedButtons(document.getElementById('file-panel'));
     document.querySelector('.touched-openable').click();
     await flush();
     const back = document.getElementById('file-panel-back-btn');
     assert.notEqual(back.style.display, 'none');
+    assert.ok(back.classList.contains('fp-toolbar-btn'), 'Back matches the toolbar');
     assertThemedButtons(document.getElementById('file-panel'));
     back.click();
     await window.openChangesTab('s1');

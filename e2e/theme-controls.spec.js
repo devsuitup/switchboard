@@ -38,7 +38,9 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   const sessionId = makeTouchedFixture(home, env);
   const { page } = await launch();
   await openPlainTerminal(page);
-  await page.evaluate(id => { window.switchPanel(id); }, sessionId);
+  await expect(page.locator('#terminal-header')).toBeVisible();
+  await page.evaluate(id => { window.setActiveSession(id); }, sessionId);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('activeSessionId'))).toBe(sessionId);
   await page.locator('#touched-toggle-btn').click();
   const panel = page.locator('#file-panel');
   const list = page.locator('#touched-list');
@@ -46,6 +48,11 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   await expect(list.locator('.touched-file-row')).toHaveCount(FILE_COUNT);
   await expect(page.locator('#touched-more-btn')).toBeVisible();
   await expect.poll(() => list.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await expect.poll(() => list.evaluate(el => ({
+    standardWidth: getComputedStyle(el).scrollbarWidth,
+    standardColor: getComputedStyle(el).scrollbarColor,
+    webkitWidth: getComputedStyle(el, '::-webkit-scrollbar').width,
+  }))).toEqual({ standardWidth: 'auto', standardColor: 'auto', webkitWidth: '5px' });
   await page.locator('#touched-sort').selectOption('path');
   await panel.screenshot({ path: testInfo.outputPath('touched-list.png') });
   await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
@@ -54,10 +61,16 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   await list.locator('.touched-openable').first().click();
   const scroller = page.locator('#file-panel-viewer .cm-scroller');
   await expect(scroller).toBeVisible();
-  await expect(page.locator('#file-panel-back-btn')).toBeVisible();
+  const back = page.locator('#file-panel-back-btn');
+  await expect(back).toBeVisible();
+  await expect(back).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(back).toHaveCSS('padding', '3px 10px');
+  await expect(back).toHaveCSS('border-radius', '5px');
   await expect.poll(() => scroller.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
   await expect.poll(() => scroller.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
   await panel.screenshot({ path: testInfo.outputPath('opened-file.png') });
-  await page.locator('#file-panel-back-btn').click();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('activeSessionId'))).toBe(sessionId);
+  await back.click();
   await expect(list.locator('.touched-file-row')).toHaveCount(FILE_COUNT);
+  await expect(back).toBeHidden();
 });
