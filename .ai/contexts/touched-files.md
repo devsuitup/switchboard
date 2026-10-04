@@ -234,15 +234,21 @@ exercised. The Windows short-path regression
 derives the directory spelling, including existing parent aliases, and compares
 it to the native long spelling before deciding whether to skip. Injected Windows
 file/root resolution tests cover the mismatch on every platform.
-A literal or resolved path containing a .git segment is refused before probing,
-including ordinary read and plain-save IPCs. Exit 128 permits a non-repository
+A literal or natively resolved path containing a .git segment is refused before
+probing, including ordinary read and plain-save IPCs. Both local IPC checks use
+fs.realpathSync.native so Windows 8.3 metadata aliases are refused too.
+Exit 128 permits a non-repository
 fallback only when stderr says "not a git repository"; other Git probe errors
 remain errors. A missing or timed-out Git process during discovery, repository reread or
 blob read, or a diff read refused for
-its filename, mixed line endings or encoding, uses the guarded file content
+its filename or mixed line endings, uses the guarded file content
 as both sides of the pair, with line endings folded. Binary files are refused
 for both ordinary viewer and editor requests; a binary HEAD blob also remains
-a refusal. The display size cap and unreadable/non-file refusals still apply.
+a refusal. Invalid UTF-8 is refused instead of decoded lossily, including in
+non-repository files and HEAD blobs; it never enables an editable fallback.
+Panel reads and every panel save use the existing strict UTF-8 decoder, so a
+refused open followed by a save attempt preserves the original bytes.
+The display size cap and unreadable/non-file refusals still apply.
 A final file symlink opens plain content read-only in the shared host through
 createReadOnlyViewer, with no Save control. Every panel save refuses that link,
 including plain saves, and the repository helper refuses writes independently.
@@ -256,7 +262,8 @@ that preference and the same merge factories as Changes.
 `save-file-for-panel` accepts an optional `{git, version}` argument. A Git
 file uses `writeTouchedChangesFile`, which rediscovers its repository and
 reuses `writeChangesFile` and its byte-version check. Other files retain the
-existing expected-content save guard. Refresh, Save and Reload reread this
+existing expected-content save guard. Saving after deletion returns
+"File does not exist" without recreating the file. Refresh, Save and Reload reread this
 absolute file, without fetching either list. Watching uses the existing
 absolute-path `watch-file` registry and `file-changed` event; closing the
 editor releases that watch. Dirty buffers and their return list survive a

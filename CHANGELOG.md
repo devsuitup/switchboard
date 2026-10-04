@@ -13,6 +13,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Buttons and scrollbars throughout the app now match the dark theme, including file panel lists, file contents, and the Touched history controls. (#448)
 - Touched opens on the last day's files, shows when each was last touched, and sorts by time or path. Show 10 more days extends the history, and reopening the tab reuses unchanged transcripts. (#444)
 ### Fixed
+- File panels refuse invalid UTF-8 without changing the file's bytes, block Windows short-name paths into `.git`, and show "File does not exist" when saving a deleted file. (#450)
 - Remote terminals recover normal resizing and refresh on return after other clients leave, and clear lingering connections after a restart within the same app profile. Separate dev and test instances keep each other's live terminals attached. (#452)
 
 ## v0.0.88 — 2026-10-03

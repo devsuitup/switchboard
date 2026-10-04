@@ -17,7 +17,7 @@ const TOPLEVEL_MAX_BUFFER = 64 * 1024;
 const STATUS_MAX_BUFFER = 1024 * 1024;
 const NOT_IN_TREE_EXIT_CODE = 128;
 const GIT_RUN_FAILED_CODE = -1;
-const TOUCHED_PLAIN_REASONS = new Set(['invalid-path', 'mixed-eol', 'encoding', 'too-large', 'git', 'repo']);
+const TOUCHED_PLAIN_REASONS = new Set(['invalid-path', 'mixed-eol', 'too-large', 'git', 'repo']);
 
 // Guards for a repo-relative path from the renderer — see .ai/contexts/changes-view.md ("Editing a changed file")
 function isSafeRepoRelativePath(p) {
@@ -401,5 +401,6 @@ module.exports = {
   resolveRepoDirs,
   lineEndingsOf,
   soleEol,
+  decodeUtf8,
   toLf,
 };

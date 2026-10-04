@@ -326,9 +326,9 @@ for (const [name, bytes] of [['binary', Buffer.from([0, 1])], ['encoding', Buffe
       assert.deepEqual(fs.readFileSync(target), bytes);
       return;
     }
-    assert.equal(pair.ok, true, pair.error);
-    assert.equal(pair.git, false);
-    assert.equal(pair.current, bytes.toString('utf8'));
+    assert.equal(pair.ok, false);
+    assert.equal(pair.reason, 'encoding');
+    assert.deepEqual(fs.readFileSync(target), bytes);
   });
 }
 
@@ -372,4 +372,125 @@ test('round 3: a binary HEAD blob is refused without plain fallback or writes', 
   assert.equal(pair.ok, false);
   assert.equal(pair.reason, 'binary');
   assert.deepEqual(fs.readFileSync(target), before);
+});
+
+for (const inGit of [true, false]) {
+  test('round 5: invalid UTF-8 open and every save preserve bytes (git=' + inGit + ')', async t => {
+    const { dir, git } = fixture(t);
+    const target = path.join(dir, 'file.txt');
+    const before = Buffer.from([0x41, 0xff, 0x42, 0x0a]);
+    fs.writeFileSync(target, before);
+    if (inGit) {
+      git('init', '-q');
+      git('add', 'file.txt');
+    }
+    const api = panelHandlers();
+    const pair = await api.read(target, { editor: true });
+    assert.deepEqual(fs.readFileSync(target), before, 'open preserves the original bytes');
+    for (const opts of [undefined, { git: false }, { git: true, version: gitChangesFile.versionOf(before) }]) {
+      const saved = await api.save(target, before.toString('utf8'), before.toString('utf8'), opts);
+      assert.deepEqual(fs.readFileSync(target), before, 'every save preserves the original bytes');
+      assert.equal(saved.ok, false);
+      assert.equal(saved.reason, 'encoding');
+    }
+    assert.equal(pair.ok, false);
+    assert.equal(pair.reason, 'encoding');
+    if (inGit) {
+      const direct = await fixtureGitFiles.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
+      assert.equal(direct.ok, false);
+      assert.equal(direct.reason, 'encoding');
+      const saved = await fixtureGitFiles.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: gitChangesFile.versionOf(before), maxBytes: MAX_BYTES });
+      assert.equal(saved.ok, false);
+      assert.deepEqual(fs.readFileSync(target), before);
+    }
+  });
+}
+
+test('round 5: invalid UTF-8 HEAD stays refused with valid working text', async t => {
+  const { dir, git } = fixture(t);
+  git('init', '-q');
+  git('config', 'user.name', 'Fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
+  const target = path.join(dir, 'file.txt');
+  fs.writeFileSync(target, Buffer.from([0x41, 0xff, 0x42, 0x0a]));
+  git('add', 'file.txt');
+  git('commit', '-qm', 'fixture');
+  const before = Buffer.from('valid text\n');
+  fs.writeFileSync(target, before);
+  const pair = await panelHandlers().read(target, { editor: true });
+  assert.equal(pair.ok, false);
+  assert.equal(pair.reason, 'encoding');
+  assert.deepEqual(fs.readFileSync(target), before);
+});
+
+for (const operation of ['read', 'save']) {
+  test('round 5: native realpath blocks injected short metadata spelling on ' + operation, async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'GIT~1', 'DESCRI~1');
+    fs.mkdirSync(path.dirname(target));
+    const before = Buffer.from('metadata bytes\n');
+    fs.writeFileSync(target, before);
+    const realpathSync = p => fs.realpathSync(p);
+    realpathSync.native = () => path.join(dir, '.git', 'description');
+    const api = panelHandlers({ ...fs, realpathSync });
+    const result = operation === 'read' ? await api.read(target) : await api.save(target, 'overwrite', before.toString('utf8'), { git: false });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'git-dir');
+    assert.deepEqual(fs.readFileSync(target), before);
+  });
+}
+
+test('round 5: real Windows short metadata spelling blocks plain read and every save', { skip: process.platform !== 'win32' }, async t => {
+  const { dir, git } = fixture(t);
+  git('init', '-q');
+  const target = path.join(dir, '.git', 'description');
+  const before = fs.readFileSync(target);
+  const long = fs.realpathSync.native(target);
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: dir, USERPROFILE: dir };
+  const short = execFileSync('cmd.exe', ['/d', '/c', 'for %I in ("' + long + '") do @echo %~sI'], { env, encoding: 'utf8', timeout: 10_000, windowsVerbatimArguments: true }).trim();
+  if (short.toLowerCase() === long.toLowerCase() || gitChangesFile.hasGitSegment(short)) {
+    t.skip('no short spelling hiding the .git segment is available');
+    return;
+  }
+  assert.equal(fs.realpathSync.native(short).toLowerCase(), long.toLowerCase());
+  const api = panelHandlers();
+  for (const opts of [undefined, { editor: true }]) {
+    assert.equal((await api.read(short, opts)).reason, 'git-dir');
+  }
+  for (const opts of [undefined, { git: false }, { git: true, version: 'v1' }]) {
+    assert.equal((await api.save(short, 'overwrite', before.toString('utf8'), opts)).reason, 'git-dir');
+    assert.deepEqual(fs.readFileSync(target), before);
+  }
+});
+
+test('round 5: saving a deleted file returns the friendly missing-file error', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, 'file.txt');
+  fs.writeFileSync(target, 'before\n');
+  const api = panelHandlers();
+  const pair = await api.read(target, { editor: true });
+  assert.equal(pair.ok, true, pair.error);
+  fs.unlinkSync(target);
+  for (const opts of [undefined, { git: false }, { git: true, version: 'v1' }]) {
+    const result = await api.save(target, 'overwrite', pair.current, opts);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'File does not exist');
+    assert.equal(fs.existsSync(target), false);
+  }
+});
+
+test('round 5: UTF-8 save validation keeps sensitive paths unread', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, '.env');
+  const before = Buffer.from('fixture-only bytes\n');
+  fs.writeFileSync(target, before);
+  let reads = 0;
+  const api = panelHandlers({ ...fs, readFileSync: () => { reads++; throw new Error('sensitive content must not be read'); } });
+  for (const opts of [undefined, { git: false }, { git: true, version: 'v1' }]) {
+    const result = await api.save(target, 'overwrite', before.toString('utf8'), opts);
+    assert.equal(reads, 0);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'access to sensitive path denied');
+    assert.deepEqual(fs.readFileSync(target), before);
+  }
 });

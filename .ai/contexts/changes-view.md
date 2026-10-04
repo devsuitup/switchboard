@@ -988,14 +988,19 @@ names. That local containment check ignores case on Windows and protects both
 read and save. Discovery and the shared Changes guards retain the shared
 resolver's original spelling; the native paths are used only for comparison
 and deriving the relative operand. The shared resolver is unchanged. A missing
-repository file is refused before deriving that operand. Filename, line-ending
-and encoding refusals or transport failures use guarded plain mode; binary files and binary
+repository file is refused before deriving that operand. Filename and line-ending
+refusals or transport failures use guarded plain mode; invalid UTF-8 in working
+text or HEAD remains refused. Non-repository panel reads and all panel saves
+also decode strictly, preserving bytes after an invalid-encoding refusal.
+Binary files and binary
 HEAD blobs remain refusals. A final file symlink opens through the shared host's
 read-only factory; both plain and Git save paths refuse the link. Watcher rereads
 also update read-only state when identical text changes between a link and a file.
 Repository-boundary refusals still fail closed. Literal and resolved .git
-segments are blocked on read-file-for-panel and save-file-for-panel for every
+segments are blocked with fs.realpathSync.native on read-file-for-panel and
+save-file-for-panel, including Windows 8.3 aliases, for every
 caller, including terminal links. This is an intended change from the earlier
-ordinary viewer policy. A probe exit 128 is a non-repository result only with
+ordinary viewer policy. A save after deletion returns "File does not exist".
+A probe exit 128 is a non-repository result only with
 the matching stderr diagnostic. The Touched header toggle keys on returnList
 and uses the Changes discard guard when closing its editor.
