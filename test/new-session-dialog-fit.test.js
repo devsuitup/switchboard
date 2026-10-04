@@ -84,10 +84,10 @@ for (const [name, show, arg] of [
   });
 }
 
-test('style.css: .new-session-body carries the app\'s dark scrollbar', () => {
-  const sel = '.new-session-dialog .new-session-body::-webkit-scrollbar';
+test('style.css: .new-session-body shares the app\'s global dark scrollbar', () => {
+  const sel = '::-webkit-scrollbar';
   assert.match(ruleFor(sel) || '', /width:\s*5px/);
   assert.match(ruleFor(`${sel}-track`) || '', /background:\s*transparent/);
   assert.match(ruleFor(`${sel}-thumb`) || '', /background:\s*var\(--hairline\)/);
-  assert.match(ruleFor(`${sel}-thumb:hover`) || '', /background:\s*rgba\(255,\s*255,\s*255,\s*0\.1\)/);
+  assert.match(ruleFor(`${sel}-thumb:hover`) || '', /background:\s*var\(--control-border\)/);
 });

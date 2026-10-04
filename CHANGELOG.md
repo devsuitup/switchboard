@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Refresh a session's screen from the terminal header or its sidebar context menu. Returning to a solo tmux attachment refreshes it automatically; shared attachments redraw locally on demand without changing another client's window size. (#446)
 - Back to list and Escape from a file or diff restore Touched and Changes with their scroll position and selection. (#444)
 ### Changed
+- Buttons and scrollbars throughout the app now match the dark theme, including file panel lists, file contents, and the Touched history controls. (#448)
 - Touched opens on the last day's files, shows when each was last touched, and sorts by time or path. Show 10 more days extends the history, and reopening the tab reuses unchanged transcripts. (#444)
 
 ## v0.0.88 — 2026-10-03
