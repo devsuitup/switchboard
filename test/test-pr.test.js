@@ -12,6 +12,11 @@ const vm = require('node:vm');
 
 const tooling = () => require('../scripts/test-pr');
 
+const credentialKeys = [
+  'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN',
+  'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'OPENAI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS',
+];
+
 function temp(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-test-pr-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -471,6 +476,46 @@ for (const value of ['0', '', undefined, '1']) {
     const banner = setup.messages.join('\n');
     assert.match(banner, enabled ? /Real claude enabled/ : /Real claude disabled/);
     if (enabled) assert.match(banner, /starts logged out.*login.*temporary HOME.*deleted on exit/i);
+  });
+}
+
+for (const platform of ['win32', 'linux', 'darwin']) {
+  for (const allowClaude of [false, true]) {
+    for (const credential of credentialKeys) {
+      test(`${platform} isolated ALLOW_CLAUDE=${allowClaude} drops ${credential} without mutating caller env`, (t) => {
+        const root = temp(t);
+        const mixedCase = credential.replace(/[A-Z]/g, (letter, index) => index % 2 ? letter.toLowerCase() : letter);
+        for (const key of [credential, credential.toLowerCase(), mixedCase]) {
+          const env = { [key]: `${key}-sentinel`, [`${key}_EXTRA`]: 'keep-sentinel', Path: 'original-tools' };
+          const original = { ...env };
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, platform, tempHome: root, env });
+          assert.deepEqual(env, original);
+          assert.equal(Object.hasOwn(launch.env, key), false, key);
+          assert.equal(launch.env[`${key}_EXTRA`], 'keep-sentinel');
+          assert.equal(launch.env.HOME, root);
+        }
+      });
+    }
+  }
+}
+
+for (const allowClaude of ['0', '1']) {
+  test(`isolated ALLOW_CLAUDE=${allowClaude} prepares fixtures and passes no credential sentinels to launch`, async (t) => {
+    const setup = workflow(t);
+    const credentials = Object.fromEntries(credentialKeys.map(key => [key, `${key}-sentinel`]));
+    const env = { ...setup.env, ...credentials, ISOLATED: '1', ALLOW_CLAUDE: allowClaude };
+    const original = { ...env };
+    let launchedHome;
+    assert.equal(await tooling().main({ ...setup, env,
+      launch: async (file, args, options) => {
+        launchedHome = options.env.HOME;
+        assert.equal(fs.readdirSync(path.join(launchedHome, '.claude', 'projects')).length, 2);
+        for (const key of credentialKeys) assert.equal(Object.hasOwn(options.env, key), false, key);
+        return 0;
+      } }), 0);
+    assert.ok(launchedHome);
+    assert.equal(fs.existsSync(launchedHome), false);
+    assert.deepEqual(env, original);
   });
 }
 
