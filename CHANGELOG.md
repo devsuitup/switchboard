@@ -8,12 +8,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Refresh a session's screen from the terminal header or its sidebar context menu. Returning to a solo tmux attachment refreshes it automatically; shared attachments redraw locally on demand without changing another client's window size. (#446)
 - Back to list and Escape from a file or diff restore Touched and Changes with their scroll position and selection. (#444)
 ### Changed
-- File panels refuse to open or save paths inside `.git`, including files reached from terminal links. (#450)
+- File panels refuse to open or save paths inside `.git` (Windows short names included) and files that are not valid UTF-8, instead of rewriting their bytes, and no longer save through a symlink. This applies to files opened from terminal links too. (#450)
 - Touched files open in the same editor as Changes, with a diff against HEAD when available and the same layout without a diff otherwise. Back and Escape restore the Touched list, and switching between Touched and Changes keeps each file's unsaved edits. (#450)
 - Buttons and scrollbars throughout the app now match the dark theme, including file panel lists, file contents, and the Touched history controls. (#448)
 - Touched opens on the last day's files, shows when each was last touched, and sorts by time or path. Show 10 more days extends the history, and reopening the tab reuses unchanged transcripts. (#444)
 ### Fixed
-- File panels refuse invalid UTF-8 without changing the file's bytes, block Windows short-name paths into `.git`, and show "File does not exist" when saving a deleted file. (#450)
 - Remote terminals recover normal resizing and refresh on return after other clients leave, and clear lingering connections after a restart within the same app profile. Separate dev and test instances keep each other's live terminals attached. (#452)
 
 ## v0.0.88 — 2026-10-03
