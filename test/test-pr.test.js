@@ -17,6 +17,22 @@ const credentialKeys = [
   'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'OPENAI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS',
 ];
 
+const credentialNameGuards = [
+  ['suffix _TOKEN', ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'HF_TOKEN', 'SERVICE_TOKEN']],
+  ['suffix _API_KEY', ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'SERVICE_API_KEY']],
+  ['suffix _APIKEY', ['SERVICE_APIKEY']],
+  ['suffix _SECRET', ['SERVICE_SECRET']],
+  ['suffix _SECRET_KEY', ['SERVICE_SECRET_KEY']],
+  ['suffix _PASSWORD', ['SERVICE_PASSWORD']],
+  ['suffix _PAT', ['SERVICE_PAT']],
+  ['prefix GLAB_', ['GLAB_HOST', 'GLAB_TOKEN']],
+  ['prefix GITLAB_', ['GITLAB_HOST', 'GITLAB_TOKEN']],
+  ['prefix AZURE_', ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET']],
+  ['exact DOCKER_AUTH_CONFIG', ['DOCKER_AUTH_CONFIG']],
+];
+
+const proxyKeys = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'];
+
 function temp(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-test-pr-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -515,6 +531,107 @@ for (const allowClaude of ['0', '1']) {
       } }), 0);
     assert.ok(launchedHome);
     assert.equal(fs.existsSync(launchedHome), false);
+    assert.deepEqual(env, original);
+  });
+}
+
+for (const allowClaude of [false, true]) {
+  for (const [guard, keys] of credentialNameGuards) {
+    test(`isolated ALLOW_CLAUDE=${allowClaude} drops credential names matching ${guard}`, (t) => {
+      const root = temp(t);
+      for (const credential of keys) {
+        const mixedCase = credential.replace(/[A-Z]/g, (letter, index) => index % 2 ? letter.toLowerCase() : letter);
+        for (const key of [credential, credential.toLowerCase(), mixedCase]) {
+          const env = { [key]: 'credential-sentinel', KEEP_ME: 'keep-sentinel' };
+          const original = { ...env };
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, platform: 'win32', tempHome: root, env });
+          assert.deepEqual(env, original);
+          assert.equal(Object.hasOwn(launch.env, key), false, key);
+          assert.equal(launch.env.KEEP_ME, 'keep-sentinel');
+        }
+      }
+    });
+  }
+
+  for (const proxy of proxyKeys) {
+    test(`isolated ALLOW_CLAUDE=${allowClaude} drops credential-bearing ${proxy}`, (t) => {
+      const root = temp(t);
+      for (const key of [proxy, proxy.toLowerCase(), proxy.replace('PROXY', 'Proxy')]) {
+        for (const value of ['http://user:pass@proxy.invalid:8080', 'https://user:p%40ss@proxy.invalid',
+          'socks5://user:pass@proxy.invalid:1080', 'HTTP://user:pass@proxy.invalid', 'http://user:@proxy.invalid']) {
+          const env = { [key]: value, KEEP_ME: 'keep-sentinel' };
+          const original = { ...env };
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, platform: 'win32', tempHome: root, env });
+          assert.deepEqual(env, original);
+          assert.equal(Object.hasOwn(launch.env, key), false, key);
+          assert.equal(launch.env.KEEP_ME, 'keep-sentinel');
+        }
+      }
+    });
+
+    test(`isolated ALLOW_CLAUDE=${allowClaude} preserves credential-free ${proxy}`, (t) => {
+      const root = temp(t);
+      for (const key of [proxy, proxy.toLowerCase(), proxy.replace('PROXY', 'Proxy')]) {
+        for (const value of ['http://proxy.invalid:8080', 'https://proxy.invalid', 'socks5://proxy.invalid:1080',
+          'proxy.invalid:8080', '', 'http://proxy.invalid/user:pass@path']) {
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env: { [key]: value } });
+          assert.equal(launch.env[key], value, key);
+        }
+      }
+    });
+  }
+
+  test(`isolated ALLOW_CLAUDE=${allowClaude} preserves names outside credential rules`, (t) => {
+    const root = temp(t);
+    const env = Object.fromEntries(['TOKEN', 'API_KEY', 'APIKEY', 'SECRET', 'SECRET_KEY', 'PASSWORD', 'PAT',
+      'SERVICE_TOKEN_EXTRA', 'SERVICE_API_KEY_EXTRA', 'SERVICE_APIKEY_EXTRA', 'SERVICE_SECRET_EXTRA',
+      'SERVICE_SECRET_KEY_EXTRA', 'SERVICE_PASSWORD_EXTRA', 'SERVICE_PAT_EXTRA', 'SERVICE_NOTOKEN',
+      'XGLAB_HOST', 'XGITLAB_HOST', 'XAZURE_CLIENT_ID', 'DOCKER_AUTH_CONFIG_EXTRA', 'NO_PROXY',
+      'HTTP_PROXY_EXTRA', 'CUSTOM_URL'].map(key => [key, 'http://user:pass@sentinel.invalid']));
+    const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
+    for (const [key, value] of Object.entries(env)) assert.equal(launch.env[key], value, key);
+  });
+}
+
+for (const allowClaude of ['0', '1']) {
+  test(`isolated ALLOW_CLAUDE=${allowClaude} filters new credentials through fixture setup and launch`, async (t) => {
+    const setup = workflow(t);
+    const names = credentialNameGuards.flatMap(([, keys]) => keys);
+    const credentials = Object.fromEntries(names.map(key => [key, 'credential-sentinel']));
+    const proxies = Object.fromEntries(proxyKeys.map(key => [key, 'http://user:pass@proxy.invalid']));
+    const runtime = { SystemRoot: 'C:\\Windows', ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+      PATHEXT: '.COM;.EXE;.BAT;.CMD', TEMP: setup.home, TMP: setup.home, SHELL: '/bin/sh',
+      TERM: 'xterm-256color', LANG: 'C', LC_ALL: 'C', DISPLAY: ':99', WAYLAND_DISPLAY: 'wayland-test',
+      XDG_RUNTIME_DIR: setup.home, NODE_OPTIONS: '', NO_PROXY: 'localhost,127.0.0.1' };
+    const env = { ...setup.env, ...runtime, ...credentials, ...proxies, ISOLATED: '1', ALLOW_CLAUDE: allowClaude,
+      DEBUG_PORT: '9334' };
+    const original = { ...env };
+    let launched = false;
+    assert.equal(await tooling().main({ ...setup, env,
+      launch: async (file, args, options) => {
+        launched = true;
+        assert.equal(file, 'fixture-executable');
+        assert.ok(args.includes('--remote-debugging-port=9334'));
+        const launchEnv = options.env;
+        for (const key of [...names, ...proxyKeys]) assert.equal(Object.hasOwn(launchEnv, key), false, key);
+        for (const [key, value] of Object.entries(runtime)) assert.equal(launchEnv[key], value, key);
+        for (const key of ['PR', 'ISOLATED', 'ALLOW_CLAUDE', 'DEBUG_PORT']) assert.equal(launchEnv[key], env[key], key);
+        assert.equal(launchEnv.PATH, allowClaude === '1' ? env.PATH : path.join(launchEnv.HOME, 'bin') + path.delimiter + env.PATH);
+        for (const key of ['HOME', 'USERPROFILE']) assert.equal(launchEnv[key], launchEnv.HOME, key);
+        for (const key of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+          'SWITCHBOARD_DATA_DIR', 'SWITCHBOARD_TRIGGERS_DIR', 'GIT_CONFIG_GLOBAL']) {
+          assert.ok(launchEnv[key].startsWith(launchEnv.HOME + path.sep), key);
+        }
+        assert.equal(launchEnv.GIT_CONFIG_NOSYSTEM, '1');
+        assert.equal(fs.readdirSync(path.join(launchEnv.HOME, '.claude', 'projects')).length, 2);
+        const git = spawnSync('git', ['log', '-1', '--format=%s'], { cwd: path.join(launchEnv.HOME, 'work', 'repo'),
+          env: launchEnv, encoding: 'utf8', timeout: 180000 });
+        assert.ifError(git.error);
+        assert.equal(git.status, 0, git.stderr);
+        assert.equal(git.stdout.trim(), 'fixture');
+        return 0;
+      } }), 0);
+    assert.equal(launched, true);
     assert.deepEqual(env, original);
   });
 }

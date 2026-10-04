@@ -36,8 +36,11 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   }
   if (!Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('Debug port must be an integer from 1 to 65535');
   if (!tempHome) throw new Error('Isolated mode requires a temporary home');
-  const inherited = Object.fromEntries(Object.entries(env).filter(([key]) =>
-    key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|SSH_AUTH_SOCK|SSH_AGENT_PID|OPENAI_API_KEY|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(key)));
+  const inherited = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
+    key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|SSH_AUTH_SOCK|SSH_AGENT_PID|OPENAI_API_KEY|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(key) &&
+    !/_(TOKEN|API_KEY|APIKEY|SECRET|SECRET_KEY|PASSWORD|PAT)$/i.test(key) &&
+    !/^(GLAB_|GITLAB_|AZURE_)|^DOCKER_AUTH_CONFIG$/i.test(key) &&
+    !(/^(HTTP|HTTPS|ALL)_PROXY$/i.test(key) && /^[a-z][a-z\d+.-]*:\/\/[^/?#@]*:[^/?#@]*@/i.test(value))));
   const originalPath = env.PATH || '';
   const fixtureData = path.join(tempHome, '.switchboard-test-pr');
   return {
