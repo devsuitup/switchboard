@@ -185,7 +185,22 @@ test('invalid PR numbers and debug ports are rejected before side effects', () =
   }
 });
 
-function workflow(t) {
+const bundleScript = require('../package.json').scripts['bundle:codemirror'];
+const bundleOptions = { entryPoints: ['public/codemirror-setup.js'], bundle: true,
+  outfile: 'public/codemirror-bundle.js', format: 'iife', platform: 'browser', minify: true };
+
+function evaluateBuild(file, args, worktree, onBuild) {
+  assert.equal(file, process.execPath);
+  assert.equal(args[0], '-e');
+  assert.doesNotMatch(args.join(' '), /bin[\\/]esbuild|\.bin|\bnpm\b/);
+  vm.runInNewContext(args[1], { process: { argv: [file, ...args.slice(2)] },
+    require: name => {
+      assert.equal(name, path.join(worktree, 'node_modules', 'esbuild'));
+      return { buildSync: options => onBuild(JSON.parse(JSON.stringify(options))) };
+    } }, { timeout: 1000 });
+}
+
+function workflow(t, script = bundleScript) {
   const checkout = temp(t);
   const home = temp(t);
   const modules = path.join(checkout, 'node_modules');
@@ -198,7 +213,10 @@ function workflow(t) {
     if (args[0] === 'rev-parse') return 'fixture-sha\n';
     if (args[0] === 'ls-tree') return 'package-lock.json\n';
     if (args[0] === 'show') return JSON.stringify(lock());
-    if (args[0] === 'worktree' && args[1] === 'add') fs.mkdirSync(args[3], { recursive: true });
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      fs.mkdirSync(args[3], { recursive: true });
+      fs.writeFileSync(path.join(args[3], 'package.json'), JSON.stringify({ scripts: { 'bundle:codemirror': script } }));
+    }
     return '';
   };
   const env = { ...process.env, PR: '122', HOME: home, USERPROFILE: home, ISOLATED: '0' };
@@ -237,6 +255,56 @@ test('the complete default workflow retains the original HOME and adds no debug 
   assert.equal(fs.existsSync(setup.home), true);
   assert.equal(setup.messages.some(message => message.includes('remote-debugging-port')), false);
 });
+
+for (const isolated of ['0', '1']) {
+  test(`mode ISOLATED=${isolated} rebuilds CodeMirror before every launch, including a stale bundle`, async (t) => {
+    const setup = workflow(t);
+    const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
+    const bundle = path.join(worktree, 'public', 'codemirror-bundle.js');
+    const steps = [];
+    const run = (file, args, options) => {
+      if (file !== process.execPath) return setup.run(file, args, options);
+      evaluateBuild(file, args, worktree, options => assert.deepEqual(options, bundleOptions));
+      assert.equal(options.cwd, worktree);
+      assert.equal(options.stdio, 'inherit');
+      assert.equal(fs.realpathSync(path.join(worktree, 'node_modules')), fs.realpathSync(path.join(setup.checkout, 'node_modules')));
+      steps.push('bundle');
+      fs.mkdirSync(path.dirname(bundle), { recursive: true });
+      fs.writeFileSync(bundle, 'rebuilt');
+      return '';
+    };
+    const options = { ...setup, env: { ...setup.env, ISOLATED: isolated }, run, fixtures: () => {},
+      launch: async () => {
+        assert.equal(fs.readFileSync(bundle, 'utf8'), 'rebuilt');
+        steps.push('launch');
+        return 0;
+      } };
+
+    assert.equal(await tooling().main(options), 0);
+    fs.writeFileSync(bundle, 'stale');
+    assert.equal(await tooling().main(options), 0);
+    assert.deepEqual(steps, ['bundle', 'launch', 'bundle', 'launch']);
+  });
+
+  test(`mode ISOLATED=${isolated} aborts launch with a clear error when the CodeMirror build fails`, async (t) => {
+    const setup = workflow(t);
+    const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
+    const run = (file, args, options) => {
+      if (file !== process.execPath) return setup.run(file, args, options);
+      throw new Error('esbuild failed');
+    };
+
+    await assert.rejects(tooling().main({ ...setup, env: { ...setup.env, ISOLATED: isolated }, run,
+      fixtures: () => assert.fail('build failure must prevent fixture setup'),
+      launch: async () => assert.fail('build failure must prevent launch') }), error => {
+      assert.match(error.message, /Failed to build CodeMirror bundle/);
+      assert.ok(error.message.includes(worktree));
+      assert.match(error.message, /esbuild failed/);
+      return true;
+    });
+    assert.equal(setup.messages.some(message => message.startsWith('Launching')), false);
+  });
+}
 
 test('a failing fixture setup or launch still removes the temporary home', async (t) => {
   for (const failure of ['fixtures', 'launch']) {
@@ -336,7 +404,7 @@ function signalWorkflow(t, platform) {
   child.pid = 123;
   const stops = [];
   child.kill = signal => { stops.push(signal); };
-  const fakeProcess = Object.assign(new EventEmitter(), { platform, env: setup.env });
+  const fakeProcess = Object.assign(new EventEmitter(), { platform, env: setup.env, execPath: process.execPath });
   const script = path.join(__dirname, '../scripts/test-pr.js');
   const scriptRequire = createRequire(script);
   const module = { exports: {} };
@@ -386,4 +454,49 @@ for (const platform of ['linux', 'win32']) {
       assert.equal(setup.fakeProcess.listenerCount('SIGTERM'), 0);
     });
   }
+}
+
+
+test('the package bundle script parses into the expected esbuild API options', () => {
+  assert.deepEqual(tooling().parseBundleScript(bundleScript), bundleOptions);
+});
+
+test('the bundle parser supports multiple entries and refuses unsupported syntax', () => {
+  assert.deepEqual(tooling().parseBundleScript('esbuild first.js second.js --bundle --outfile=out.js'),
+    { entryPoints: ['first.js', 'second.js'], bundle: true, outfile: 'out.js' });
+  for (const script of [
+    'esbuild entry.js --unknown', 'esbuild entry.js --unknown=value',
+    'esbuild entry.js --outfile=', 'esbuild entry.js --outfile out.js',
+    'esbuild entry.js --bundle=false', 'esbuild entry.js --bundle --bundle',
+    'esbuild entry.js --format=iife --format=cjs', 'esbuild "entry with spaces.js"',
+    'esbuild entry.js && echo done', 'esbuild --bundle', '', 'npm run bundle:codemirror',
+  ]) assert.throws(() => tooling().parseBundleScript(script), /Unsupported|entry point/);
+});
+
+for (const isolated of ['0', '1']) {
+  test(`mode ISOLATED=${isolated} reads bundle options from the worktree package script`, async (t) => {
+    const setup = workflow(t, 'esbuild public/other.js --bundle --outfile=public/other-bundle.js --format=cjs --platform=node');
+    const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
+    let builds = 0;
+    await tooling().main({ ...setup, env: { ...setup.env, ISOLATED: isolated }, fixtures: () => {},
+      run: (file, args, options) => {
+        if (file !== process.execPath) return setup.run(file, args, options);
+        evaluateBuild(file, args, worktree, options => {
+          assert.deepEqual(options, { entryPoints: ['public/other.js'], bundle: true,
+            outfile: 'public/other-bundle.js', format: 'cjs', platform: 'node' });
+          builds++;
+        });
+      }, launch: async () => { assert.equal(builds, 1); return 0; } });
+  });
+
+  test(`mode ISOLATED=${isolated} rejects an unknown bundle flag before build or launch`, async (t) => {
+    const setup = workflow(t, bundleScript + ' --unknown');
+    await assert.rejects(tooling().main({ ...setup, env: { ...setup.env, ISOLATED: isolated },
+      run: (file, args, options) => {
+        assert.notEqual(file, process.execPath, 'unsupported options must prevent building');
+        return setup.run(file, args, options);
+      }, fixtures: () => assert.fail('unsupported options must prevent fixtures'),
+      launch: async () => assert.fail('unsupported options must prevent launch') }),
+    /Failed to build CodeMirror bundle.*Unsupported.*--unknown/);
+  });
 }
