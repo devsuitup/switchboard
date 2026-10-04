@@ -29,8 +29,9 @@ The `e2e` job of `.github/workflows/test.yml` runs on `ubuntu-latest` under
 Before the run, it checks that `better-sqlite3` and `node-pty` load under
 Electron's ABI. `postinstall` swallows a failed rebuild, and without that check
 a failed rebuild would show up as an app that does not start. When a journey
-fails, the job uploads `e2e/test-results/` (a `trace.zip` and a `failure.png`
-for each failed journey) and the HTML report as the `e2e-results` artifact.
+fails, the job uploads `switchboard-e2e-results/` under the runner's temporary
+directory (a `trace.zip` and a `failure.png` for each failed journey) and the
+HTML report as the `e2e-results` artifact.
 Open a trace with `npx playwright show-trace trace.zip`. It has the DOM and a
 screenshot for each step.
 
@@ -53,6 +54,13 @@ it unconditional, so the journey checks what the panel says instead (see
 `.ai/contexts/changes-view.md`, "Not a repository").
 
 ## Writing one
+
+The shared launch fixture sets `ELECTRON_IS_DEV=0` to disable the development
+reloader for every journey. Unpackaged Electron launches otherwise enable it,
+and writing screenshots inside the watched app directory can reload the renderer
+mid-test and discard the DOM a journey is interacting with. Playwright also
+writes test outputs to `switchboard-e2e-results/` under `RUNNER_TEMP` in CI or
+the OS temporary directory locally, outside the app directory.
 
 - **Few and coarse.** Each journey costs an Electron launch. Add one only for
   something jsdom cannot see.

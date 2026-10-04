@@ -132,7 +132,7 @@ const test = base.extend({
         executablePath: require('electron'),
         args: [APP_DIR, '--no-sandbox'],
         cwd: APP_DIR,
-        env,
+        env: { ...env, ELECTRON_IS_DEV: '0' },
       });
       await app.context().tracing.start({ screenshots: true, snapshots: true });
       page = await app.firstWindow();

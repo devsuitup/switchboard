@@ -83,7 +83,7 @@ jobs:
         with:
           name: e2e-results
           path: |
-            e2e/test-results/
+            ${{ runner.temp }}/switchboard-e2e-results/
             e2e/playwright-report/
           retention-days: 14
 

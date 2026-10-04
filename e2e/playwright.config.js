@@ -7,7 +7,7 @@ const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: '*.spec.js',
-  outputDir: path.join(__dirname, 'test-results'),
+  outputDir: path.join(process.env.RUNNER_TEMP || require('os').tmpdir(), 'switchboard-e2e-results'),
   timeout: 90_000,
   expect: { timeout: 20_000 },
   workers: 1,

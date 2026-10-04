@@ -39,6 +39,7 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   const { page } = await launch();
   await openPlainTerminal(page);
   await expect(page.locator('#terminal-header')).toBeVisible();
+  await expect(page.locator('.session-item.active')).toHaveCount(1);
   await page.evaluate(id => { window.setActiveSession(id); }, sessionId);
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('activeSessionId'))).toBe(sessionId);
   await page.locator('#touched-toggle-btn').click();
@@ -58,6 +59,7 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
   await panel.screenshot({ path: testInfo.outputPath('touched-list-older-control.png') });
   await list.evaluate(el => { el.scrollTop = 0; });
+  await expect(list.locator('.touched-openable')).toHaveCount(FILE_COUNT);
   await list.locator('.touched-openable').first().click();
   const scroller = page.locator('#file-panel-viewer .cm-scroller');
   await expect(scroller).toBeVisible();
