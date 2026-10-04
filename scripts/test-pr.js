@@ -15,9 +15,20 @@ function validateIsolated(value) {
   return value === '1';
 }
 
+function validateAllowClaude(value, isolated) {
+  if (![undefined, '', '0', '1'].includes(value)) throw new Error('ALLOW_CLAUDE must be 1 or 0: task test-pr PR=<number> ISOLATED=1 ALLOW_CLAUDE=<1|0>');
+  if (value === '1' && !isolated) throw new Error('ALLOW_CLAUDE=1 requires ISOLATED=1; default mode already uses the real claude');
+  return value === '1';
+}
+
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
-  isolated = false, tempHome, port = 9223 }) {
+  isolated = false, allowClaude = false, tempHome, port = 9223 }) {
   validatePr(pr);
+  const pathKeys = Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort();
+  if (pathKeys.length) {
+    const originalPath = env[Object.hasOwn(env, 'PATH') ? 'PATH' : pathKeys[0]];
+    env = { ...Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== 'PATH')), PATH: originalPath };
+  }
   const data = path.join(home, `.switchboard-dev-pr${pr}`);
   if (!isolated) {
     return { env: { ...env, SWITCHBOARD_DATA_DIR: data, SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers') },
@@ -27,7 +38,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   if (!tempHome) throw new Error('Isolated mode requires a temporary home');
   const inherited = Object.fromEntries(Object.entries(env).filter(([key]) =>
     !/^(CLAUDE|GIT_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|PATH|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE)$/i.test(key)));
-  const originalPath = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] || '';
+  const originalPath = env.PATH || '';
   const fixtureData = path.join(tempHome, '.switchboard-test-pr');
   return {
     env: {
@@ -39,7 +50,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
       XDG_CONFIG_HOME: path.join(tempHome, '.config'),
       XDG_DATA_HOME: path.join(tempHome, '.local', 'share'),
       XDG_CACHE_HOME: path.join(tempHome, '.cache'),
-      PATH: path.join(tempHome, 'bin') + path.delimiter + originalPath,
+      PATH: allowClaude ? originalPath : path.join(tempHome, 'bin') + path.delimiter + originalPath,
       SWITCHBOARD_DATA_DIR: fixtureData,
       SWITCHBOARD_TRIGGERS_DIR: path.join(fixtureData, 'triggers'),
       GIT_CONFIG_NOSYSTEM: '1',
@@ -49,16 +60,18 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   };
 }
 
-function prepareFixtures(home, env) {
+function prepareFixtures(home, env, { allowClaude = false } = {}) {
   const { makeRepo, makePlainDir } = require('../e2e/fixtures');
   for (const key of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
     'SWITCHBOARD_DATA_DIR', 'SWITCHBOARD_TRIGGERS_DIR']) fs.mkdirSync(env[key], { recursive: true });
-  const bin = path.join(home, 'bin');
-  fs.mkdirSync(bin, { recursive: true });
-  const message = 'claude is disabled in isolated test-pr mode';
-  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho '${message}' >&2\nexit 1\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'claude.cmd'), `@echo off\r\necho ${message} 1>&2\r\nexit /b 1\r\n`);
-  fs.writeFileSync(path.join(bin, 'claude.ps1'), `[Console]::Error.WriteLine('${message}')\nexit 1\n`);
+  if (!allowClaude) {
+    const bin = path.join(home, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const message = 'claude is disabled in isolated test-pr mode';
+    fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho '${message}' >&2\nexit 1\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'claude.cmd'), `@echo off\r\necho ${message} 1>&2\r\nexit /b 1\r\n`);
+    fs.writeFileSync(path.join(bin, 'claude.ps1'), `[Console]::Error.WriteLine('${message}')\nexit 1\n`);
+  }
   const gitEnv = { ...env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
     GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
   const repo = makeRepo(home, gitEnv, { 'README.md': '# Fixture repository\n' });
@@ -164,13 +177,14 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   const pr = env.PR;
   validatePr(pr);
   const isolated = validateIsolated(env.ISOLATED);
+  const allowClaude = validateAllowClaude(env.ALLOW_CLAUDE, isolated);
   const home = env.HOME || os.homedir();
   if (clean) {
     cleanWorktree({ checkout, pr, home, run });
     log(`Cleaned up worktree and data dir for PR #${pr}`);
     return 0;
   }
-  buildLaunch({ pr, home, env, isolated, tempHome: os.tmpdir(), port: env.DEBUG_PORT || 9223 });
+  buildLaunch({ pr, home, env, isolated, allowClaude, tempHome: os.tmpdir(), port: env.DEBUG_PORT || 9223 });
   const worktree = path.join(checkout, '.worktrees', `pr-${pr}-test`);
   const git = (args, cwd = checkout) => run('git', args, { cwd });
   git(['fetch', 'origin', `pull/${pr}/head`]);
@@ -199,10 +213,13 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   let tempHome;
   try {
     if (isolated) tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
-    const config = buildLaunch({ pr, home, env, isolated, tempHome, port: env.DEBUG_PORT || 9223 });
+    const config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223 });
     if (isolated) {
-      fixtures(tempHome, config.env);
+      fixtures(tempHome, config.env, { allowClaude });
       log(`Temporary HOME: ${tempHome}`);
+      log(allowClaude
+        ? 'Real claude enabled; starts logged out. Login is stored in the temporary HOME and deleted on exit.'
+        : 'Real claude disabled (refusing stub first on PATH).');
       log(`--remote-debugging-port=${env.DEBUG_PORT || 9223} (http://127.0.0.1:${env.DEBUG_PORT || 9223}/json)`);
     }
     log(`Launching PR #${pr} from ${worktree} (${isolated ? 'fixture HOME + DB + triggers' : 'isolated DB + triggers'})...`);

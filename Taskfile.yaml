@@ -121,6 +121,7 @@ tasks:
     env:
       PR: "{{.PR}}"
       ISOLATED: '{{.ISOLATED | default "0"}}'
+      ALLOW_CLAUDE: '{{.ALLOW_CLAUDE | default "0"}}'
       DEBUG_PORT: '{{.DEBUG_PORT | default "9223"}}'
     cmds:
       - node scripts/test-pr.js

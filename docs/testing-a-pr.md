@@ -134,6 +134,7 @@ It:
 ```bash
 task test-pr PR=122 ISOLATED=1
 task test-pr PR=122 ISOLATED=1 DEBUG_PORT=9334
+task test-pr PR=122 ISOLATED=1 ALLOW_CLAUDE=1
 ```
 
 This mode creates a fresh temporary directory for every run and sets both
@@ -153,6 +154,22 @@ through normal PATH lookup; it prints `claude is disabled in isolated test-pr
 mode` and exits. The rest of PATH remains available for git and shells.
 This guard belongs to test-pr; it does not change the end-to-end fixtures'
 environment handling (issue #438).
+
+Set `ALLOW_CLAUDE=1` with `ISOLATED=1` to omit the stub and use the real
+`claude` from the original PATH. The temporary HOME, fixtures and environment
+sanitization remain in effect. The CLI starts logged out: its first launch asks
+for a login, which is stored in the temporary HOME and deleted on exit. No
+credentials file is copied from your real HOME. The launch banner states
+whether the real command is enabled and explains the temporary login when it is.
+
+In both modes, PATH names are treated case-insensitively and passed to the
+child as a single `PATH` key. If the environment contains both `Path` and
+`PATH`, the exact `PATH` value takes precedence.
+
+Both `ISOLATED` and `ALLOW_CLAUDE` accept only `0`, `1`, empty or unset;
+other values fail before any git command. `ALLOW_CLAUDE` defaults to `0`.
+`ALLOW_CLAUDE=1` is refused when `ISOLATED` is unset, empty or `0`, because
+the default mode already uses the real command.
 
 The launch prints the temporary HOME and `--remote-debugging-port=9223`
 (or `DEBUG_PORT`), plus `http://127.0.0.1:<port>/json` for CDP clients. Choose

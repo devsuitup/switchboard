@@ -18,11 +18,35 @@ function temp(t) {
   return root;
 }
 
+function shellEnv(tools) {
+  if (process.platform !== 'win32') return { PATH: [tools, '/usr/bin', '/bin'].filter(Boolean).join(path.delimiter) };
+  const SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+  return {
+    SystemRoot,
+    ComSpec: path.join(SystemRoot, 'System32', 'cmd.exe'),
+    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    PATH: [tools, path.join(SystemRoot, 'System32')].filter(Boolean).join(path.delimiter),
+  };
+}
+
+function fixtureEnv() {
+  return { ...shellEnv(), PATH: process.env.PATH || process.env.Path };
+}
+
+function resolveFixtureCommand(root, env) {
+  const result = process.platform === 'win32'
+    ? spawnSync(env.ComSpec, ['/d', '/s', '/c', 'claude --resume fixture'], { cwd: root, env, encoding: 'utf8', timeout: 180000 })
+    : spawnSync('/bin/sh', ['-c', 'claude --resume fixture'], { cwd: root, env, encoding: 'utf8', timeout: 180000 });
+  assert.ifError(result.error);
+  return result;
+}
+
 test('the tasks delegate launch and cleanup to the cross-platform script', () => {
   const taskfile = fs.readFileSync(path.join(__dirname, '../Taskfile.yaml'), 'utf8');
   assert.match(taskfile, /node scripts\/test-pr\.js/);
   assert.match(taskfile, /node scripts\/test-pr\.js --clean/);
   assert.match(taskfile, /ISOLATED: /);
+  assert.match(taskfile, /ALLOW_CLAUDE: '\{\{\.ALLOW_CLAUDE \| default "0"\}\}'/);
   assert.doesNotMatch(taskfile, /ln -sfn/);
   assert.doesNotMatch(taskfile, /origin\/main\.\.\./);
 });
@@ -68,7 +92,7 @@ test('isolated launch drops inherited session and git overrides case-insensitive
 
 test('isolated fixtures contain two synthetic projects and a committed git repository', (t) => {
   const root = temp(t);
-  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: process.env });
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: fixtureEnv() });
   const fixture = tooling().prepareFixtures(root, launch.env);
   const projects = path.join(root, '.claude', 'projects');
   const folders = fs.readdirSync(projects);
@@ -87,19 +111,14 @@ test('isolated fixtures contain two synthetic projects and a committed git repos
 
 test('the first PATH entry refuses to launch the real command', (t) => {
   const root = temp(t);
-  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: process.env });
-  tooling().prepareFixtures(root, launch.env);
+  const fixtures = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: fixtureEnv() });
+  tooling().prepareFixtures(root, fixtures.env);
   const fallback = path.join(root, 'fallback');
   fs.mkdirSync(fallback);
   fs.writeFileSync(path.join(fallback, 'claude.cmd'), '@echo fallback\r\n@exit /b 0\r\n');
   fs.writeFileSync(path.join(fallback, 'claude'), '#!/bin/sh\necho fallback\nexit 0\n', { mode: 0o755 });
-  const safeEnv = { ...launch.env, PATH: launch.env.PATH.split(path.delimiter)[0] + path.delimiter + fallback };
-  const commandShell = path.win32.isAbsolute(process.env.ComSpec || '') ? process.env.ComSpec
-    : path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
-  const result = process.platform === 'win32'
-    ? spawnSync(commandShell, ['/d', '/s', '/c', 'claude --resume fixture'], { cwd: root, env: safeEnv, encoding: 'utf8', timeout: 180000 })
-    : spawnSync('/bin/sh', ['-c', 'claude --resume fixture'], { cwd: root, env: safeEnv, encoding: 'utf8', timeout: 180000 });
-  assert.ifError(result.error);
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, tempHome: root, env: shellEnv(fallback) });
+  const result = resolveFixtureCommand(root, launch.env);
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /disabled in isolated test-pr mode/);
   assert.equal(result.stdout, '');
@@ -219,7 +238,7 @@ function workflow(t, script = bundleScript) {
     }
     return '';
   };
-  const env = { ...process.env, PR: '122', HOME: home, USERPROFILE: home, ISOLATED: '0' };
+  const env = { ...fixtureEnv(), PR: '122', HOME: home, USERPROFILE: home, ISOLATED: '0' };
   return { checkout, home, env, run, calls, messages,
     log: message => messages.push(message), warn: message => messages.push(message) };
 }
@@ -371,6 +390,142 @@ test('ISOLATED accepts 1, 0, empty and unset with the intended HOME', async (t) 
     assert.equal(status, 0);
     assert.equal(fs.existsSync(launchedHome), value !== '1');
   }
+});
+
+test('invalid ALLOW_CLAUDE values fail before any git call, including cleanup', async (t) => {
+  for (const value of ['true', 'yes', 'on', '2', ' 1', '1 ', null, 1, false]) {
+    for (const clean of [false, true]) {
+      const setup = workflow(t);
+      await assert.rejects(tooling().main({ ...setup, clean,
+        env: { ...setup.env, ISOLATED: '1', ALLOW_CLAUDE: value },
+        launch: async () => assert.fail('invalid ALLOW_CLAUDE must not launch') }), /ALLOW_CLAUDE must be 1 or 0/);
+      assert.equal(setup.calls.length, 0);
+    }
+  }
+});
+
+test('ALLOW_CLAUDE=1 requires ISOLATED=1 before any git call', async (t) => {
+  for (const isolated of ['0', '', undefined]) {
+    for (const clean of [false, true]) {
+      const setup = workflow(t);
+      await assert.rejects(tooling().main({ ...setup, clean,
+        env: { ...setup.env, ISOLATED: isolated, ALLOW_CLAUDE: '1' },
+        launch: async () => assert.fail('ALLOW_CLAUDE outside isolated mode must not launch') }),
+      /ALLOW_CLAUDE=1 requires ISOLATED=1.*default mode already uses the real claude/);
+      assert.equal(setup.calls.length, 0);
+    }
+  }
+});
+
+test('default mode accepts disabled, empty and unset ALLOW_CLAUDE without changing PATH', async (t) => {
+  for (const value of ['0', '', undefined]) {
+    const setup = workflow(t);
+    assert.equal(await tooling().main({ ...setup, env: { ...setup.env, ALLOW_CLAUDE: value },
+      fixtures: () => assert.fail('default mode must not create fixtures'),
+      launch: async (file, args, options) => {
+        assert.equal(options.env.PATH, setup.env.PATH);
+        assert.equal(options.env.HOME, setup.home);
+        return 0;
+      } }), 0);
+  }
+});
+
+for (const value of ['0', '', undefined, '1']) {
+  test(`isolated ALLOW_CLAUDE=${value} preserves isolation and reports the command policy`, async (t) => {
+    const setup = workflow(t);
+    const enabled = value === '1';
+    const originalPath = setup.env.PATH || setup.env.Path;
+    const env = { ...setup.env, ISOLATED: '1', ALLOW_CLAUDE: value,
+      Path: originalPath, ORIGINAL_PATH: 'must-not-be-used', original_path: 'must-not-be-used',
+      CLAUDE_CONFIG_DIR: setup.home, claudeOther: 'inherited', GIT_DIR: setup.home, git_work_tree: setup.home };
+    delete env.PATH;
+    fs.mkdirSync(path.join(setup.home, '.claude'));
+    fs.writeFileSync(path.join(setup.home, '.claude', '.credentials.json'), 'private sentinel');
+    fs.writeFileSync(path.join(setup.home, '.claude.json'), 'private sentinel');
+    let launchedHome;
+    assert.equal(await tooling().main({ ...setup, env,
+      launch: async (file, args, options) => {
+        launchedHome = options.env.HOME;
+        assert.notEqual(launchedHome, setup.home);
+        assert.equal(options.env.USERPROFILE, launchedHome);
+        assert.equal(options.env.PATH, enabled ? originalPath : path.join(launchedHome, 'bin') + path.delimiter + originalPath);
+        for (const key of ['Path', 'ORIGINAL_PATH', 'original_path', 'CLAUDE_CONFIG_DIR', 'claudeOther', 'GIT_DIR', 'git_work_tree']) {
+          assert.equal(options.env[key], undefined, key);
+        }
+        assert.equal(options.env.GIT_CONFIG_NOSYSTEM, '1');
+        assert.equal(options.env.GIT_CONFIG_GLOBAL, path.join(launchedHome, '.gitconfig'));
+        for (const key of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+          'SWITCHBOARD_DATA_DIR', 'SWITCHBOARD_TRIGGERS_DIR']) {
+          assert.ok(options.env[key].startsWith(launchedHome + path.sep), key);
+        }
+        for (const stub of ['claude', 'claude.cmd', 'claude.ps1']) {
+          assert.equal(fs.existsSync(path.join(launchedHome, 'bin', stub)), !enabled, stub);
+        }
+        assert.equal(fs.readdirSync(path.join(launchedHome, '.claude', 'projects')).length, 2);
+        assert.equal(fs.existsSync(path.join(launchedHome, '.claude', '.credentials.json')), false);
+        assert.equal(fs.existsSync(path.join(launchedHome, '.claude.json')), false);
+        fs.writeFileSync(path.join(launchedHome, '.claude', '.credentials.json'), 'temporary login');
+        return 0;
+      } }), 0);
+    assert.equal(fs.existsSync(launchedHome), false);
+    assert.equal(fs.readFileSync(path.join(setup.home, '.claude', '.credentials.json'), 'utf8'), 'private sentinel');
+    const banner = setup.messages.join('\n');
+    assert.match(banner, enabled ? /Real claude enabled/ : /Real claude disabled/);
+    if (enabled) assert.match(banner, /starts logged out.*login.*temporary HOME.*deleted on exit/i);
+  });
+}
+
+test('enabled isolated mode resolves the original PATH command without a stub', (t) => {
+  const root = temp(t);
+  const fallback = path.join(root, 'original-tools');
+  fs.mkdirSync(fallback);
+  fs.writeFileSync(path.join(fallback, 'claude.cmd'), '@echo original command\r\n@exit /b 0\r\n');
+  fs.writeFileSync(path.join(fallback, 'claude'), '#!/bin/sh\necho original command\nexit 0\n', { mode: 0o755 });
+  const env = shellEnv(fallback);
+  const originalPath = env.PATH;
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root,
+    env: { ...env, ORIGINAL_PATH: 'must-not-be-used' } });
+  assert.equal(launch.env.PATH, originalPath);
+  const result = resolveFixtureCommand(root, launch.env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'original command');
+  assert.equal(result.stderr, '');
+});
+
+for (const isolated of [false, true]) {
+  for (const allowClaude of isolated ? [false, true] : [false]) {
+    test(`ISOLATED=${isolated} ALLOW_CLAUDE=${allowClaude} prefers exact PATH and removes case variants`, (t) => {
+      const root = temp(t);
+      const env = { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' };
+      const launch = tooling().buildLaunch({ pr: '122', isolated, allowClaude, tempHome: root, env });
+      assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
+      assert.equal(launch.env.PATH, isolated && !allowClaude
+        ? path.join(root, 'bin') + path.delimiter + env.PATH : env.PATH);
+      assert.equal(launch.env.KEEP_ME, 'ok');
+      assert.deepEqual(env, { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' });
+    });
+  }
+}
+
+test('mixed-case inherited PATH resolves only the fake command from exact PATH', (t) => {
+  const root = temp(t);
+  const tools = path.join(root, 'fake-tools');
+  fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'claude.cmd'), '@echo fake command\r\n@exit /b 0\r\n');
+  fs.writeFileSync(path.join(tools, 'claude'), '#!/bin/sh\necho fake command\nexit 0\n', { mode: 0o755 });
+  const decoy = path.join(root, 'decoy-tools');
+  fs.mkdirSync(decoy);
+  fs.writeFileSync(path.join(decoy, 'claude.cmd'), '@echo decoy command\r\n@exit /b 3\r\n');
+  fs.writeFileSync(path.join(decoy, 'claude'), '#!/bin/sh\necho decoy command\nexit 3\n', { mode: 0o755 });
+  const safeEnv = shellEnv(tools);
+  const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root,
+    env: { Path: shellEnv(decoy).PATH, ...safeEnv } });
+  assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
+  assert.equal(launch.env.PATH, safeEnv.PATH);
+  const result = resolveFixtureCommand(root, launch.env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'fake command');
+  assert.equal(result.stderr, '');
 });
 
 test('missing lock contents on either side count as changed, and both missing are unchanged', () => {
