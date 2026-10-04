@@ -823,6 +823,8 @@ A **remote** session, and any file the main process refuses to open for editing 
 
 ### The list and the editor
 
+Touched now shares the Changes list/editor splitter and sizing code. Its ratio is stored in `localStorage.touchedListRatio`; Changes retains its desired pixel height. The resize observer watches both list containers as well as the panel content, so opening the shell or dragging its splitter reapplies the split against the available height and preserves the editor's 120px minimum.
+
 The panel has one shared **Back to list** button for Touched and Changes
 (#444). Escape with focus inside either viewer uses the same control. For
 Changes it closes the selected diff through the existing dirty-buffer guard

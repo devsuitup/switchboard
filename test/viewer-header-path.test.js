@@ -52,10 +52,35 @@ test('Settings selects retain their alias and carry the shared select class when
   } finally { dom.window.close(); }
 });
 
-test('shared path CSS shrinks the head while keeping the filename tail visible', () => {
+for (const filePath of ['/work/deep/folder/', 'C:\\Users\\JB\\folder\\', '/work/folder///', 'folder/']) {
+  test(`shared viewer path uses the last non-empty segment for a separator-ending path: ${filePath}`, () => {
+    const dom = new JSDOM('<!DOCTYPE html>', { runScripts: 'outside-only' });
+    try {
+      vm.runInContext(source('viewer-toolbar.js'), dom.getInternalVMContext());
+      const toolbar = dom.window.createViewerToolbar();
+      toolbar.setPath(filePath);
+      assert.equal(toolbar.pathEl.title, filePath);
+      assert.equal(toolbar.pathEl.textContent, filePath.replace(/[\\/]+$/, ''));
+      assert.equal(toolbar.pathEl.querySelector('.viewer-path-tail').textContent, 'folder');
+      assert.equal(toolbar.pathEl.querySelectorAll('span').length, 2);
+    } finally { dom.window.close(); }
+  });
+}
+
+test('shared path CSS shrinks the head first and lets an oversized filename tail show an ellipsis', () => {
   const css = source('style.css');
-  assert.match(css, /\.viewer-path-head\s*\{[^}]*text-overflow:\s*ellipsis/s);
-  assert.match(css, /\.viewer-path-tail\s*\{[^}]*flex:\s*0 0 auto/s);
+  const head = css.match(/\.viewer-path-head\s*\{([^}]*)\}/s)[1];
+  const tail = css.match(/\.viewer-path-tail\s*\{([^}]*)\}/s)[1];
+  for (const rule of [head, tail]) {
+    assert.match(rule, /min-width:\s*0\s*;/);
+    assert.match(rule, /overflow:\s*hidden\s*;/);
+    assert.match(rule, /text-overflow:\s*ellipsis\s*;/);
+    assert.match(rule, /white-space:\s*nowrap\s*;/);
+  }
+  const headShrink = Number(head.match(/flex:\s*0\s+(\d+)\s+auto/)[1]);
+  const tailShrink = Number(tail.match(/flex:\s*0\s+(\d+)\s+auto/)[1]);
+  assert.ok(tailShrink > 0);
+  assert.ok(headShrink > tailShrink);
 });
 
 for (const storageKey of ['markdownPreviewMode', 'workFilesPreviewMode']) {

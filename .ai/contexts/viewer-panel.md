@@ -321,6 +321,8 @@ button style, and `icon-btn` and `info-btn` compose compact controls.
 `setViewerPath` in `public/viewer-toolbar.js` builds every file/diff header
 path: ViewerPanel (Memory, Work Files and file tabs), Changes/Touched editors
 and the MCP diff header. It keeps the complete path in `title` and two text
-spans: a shrinking head with ellipsis and a nonshrinking filename tail. CSS
+spans: the head shrinks first with ellipsis, and an oversized filename tail
+can also shrink with its own ellipsis. A separator-ending path displays its
+last non-empty segment as the tail; `title` retains the original path. CSS
 follows available width without measuring text or injecting path markup.
 jsdom checks structure and hover paths; visual width behavior needs a live run.

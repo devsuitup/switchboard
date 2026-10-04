@@ -61,9 +61,10 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
     window.Storage.prototype.setItem = () => { throw new Error('storage unavailable'); };
   }
   let resize;
+  const observed = new Set();
   window.ResizeObserver = class {
     constructor(callback) { resize = callback; }
-    observe() {}
+    observe(element) { observed.add(element); }
   };
   const calls = { touched: [], readFile: [], viewerOpen: [], readOptions: [], save: [], gitFile: [], status: [] };
 
@@ -135,7 +136,9 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
     calls,
     editors,
     watchCalls,
-    resize: () => resize(),
+    resize: element => {
+      if (!element || observed.has(element)) resize();
+    },
     changed: filePath => changeListeners.forEach(handler => handler(filePath)),
     stateOf: (sessionId) => vm.runInContext('filePanelState', ctx).get(sessionId),
     evalSource: source => vm.runInContext(source, ctx),
@@ -320,6 +323,30 @@ for (const [storedRatio, expected] of [['0.6', 0.6], ['broken', 0.4], ['2', 0.4]
       height = 800;
       ctx.resize();
       assert.equal(parseFloat(list.style.height), 800 * expected);
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const type of ['touched', 'changes']) {
+  test(`${type} container resize reapplies the split and preserves the editor minimum when the shell takes space`, async () => {
+    const ctx = setupDom({ storedRatio: '0.6' });
+    try {
+      await openTab(ctx);
+      if (type === 'changes') await ctx.window.openChangesTab('s1');
+      let height = 600;
+      const container = ctx.document.getElementById(`file-panel-${type}`);
+      Object.defineProperty(container, 'clientHeight', { get: () => height });
+      if (type === 'touched') clickRow(ctx, '/work/a.txt');
+      else await ctx.window.openChangesDiff('s1', { path: 'a.txt', staged: true });
+      await flush();
+      const list = ctx.document.getElementById(type === 'touched' ? 'touched-list' : 'changes-list');
+      height = 250;
+      ctx.resize(container);
+      assert.equal(parseFloat(list.style.height), 130);
+      assert.equal(height - parseFloat(list.style.height), 120);
+      height = 800;
+      ctx.resize(container);
+      assert.equal(parseFloat(list.style.height), type === 'touched' ? 480 : 200);
     } finally { ctx.destroy(); }
   });
 }

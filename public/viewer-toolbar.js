@@ -61,6 +61,23 @@ function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isP
   }
 }
 
+function setViewerPath(el, text) {
+  const value = String(text ?? '');
+  const display = value.replace(/[\\/]+$/, '') || value;
+  const split = Math.max(display.lastIndexOf('/'), display.lastIndexOf('\\')) + 1;
+  el.classList.add('viewer-header-path');
+  el.title = value;
+  const head = document.createElement('span');
+  head.className = 'viewer-path-head';
+  head.textContent = display.slice(0, split);
+  const tail = document.createElement('span');
+  tail.className = 'viewer-path-tail';
+  tail.textContent = display.slice(split);
+  el.replaceChildren(head, tail);
+}
+
+window.setViewerPath = setViewerPath;
+
 /**
  * Create a viewer toolbar.
  *
@@ -91,22 +108,6 @@ function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isP
  *   .flashSave()
  *   .on(event, handler)  - Attach event handlers
  */
-function setViewerPath(el, text) {
-  const value = String(text ?? '');
-  const split = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\')) + 1;
-  el.classList.add('viewer-header-path');
-  el.title = value;
-  const head = document.createElement('span');
-  head.className = 'viewer-path-head';
-  head.textContent = value.slice(0, split);
-  const tail = document.createElement('span');
-  tail.className = 'viewer-path-tail';
-  tail.textContent = value.slice(split);
-  el.replaceChildren(head, tail);
-}
-
-window.setViewerPath = setViewerPath;
-
 function createViewerToolbar(opts = {}) {
   const el = document.createElement('div');
   el.className = 'viewer-toolbar';

@@ -292,7 +292,6 @@ function initFilePanel() {
   changesContainerEl.appendChild(changesDiffEl);
 
   buildChangesDiffChrome();
-  setupChangesListSplitter();
   // Shell region below every tab type — see .ai/contexts/panel-terminal.md
   if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
 
@@ -304,6 +303,7 @@ function initFilePanel() {
   addMcpToggle();
   addChangesToggle();
   if (typeof initTouchedView === 'function') initTouchedView(filePanelContentEl);
+  setupChangesListSplitter();
 
   // see .ai/contexts/changes-view.md ("Refresh triggers")
   if (typeof onSessionIdle === 'function') {
@@ -1815,6 +1815,9 @@ function setupChangesListSplitter() {
       if (tab?.selectedFile) applyChangesListHeight();
     });
     observer.observe(filePanelContentEl);
+    const touched = document.getElementById('file-panel-touched');
+    if (touched) observer.observe(touched);
+    observer.observe(changesContainerEl);
   }
 }
 

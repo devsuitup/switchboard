@@ -5353,12 +5353,16 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
   text-overflow: clip;
 }
 .viewer-path-head {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .viewer-path-tail {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
