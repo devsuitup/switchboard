@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Remote triggers refuse commands containing invisible format characters, variation selectors or tag characters, including joined emoji, before sending them. (#440)
+
 ## v0.0.89 — 2026-10-04
 
 ### New

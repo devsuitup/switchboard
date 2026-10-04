@@ -103,6 +103,7 @@ const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline
 
 const ACCEPTED_WAITS = ['idle', 'none'];
 const REMOTE_SLASH_COMMANDS = ['/compact', '/clear'];
+const REMOTE_FORMAT_RE = /[\p{Cf}\u034f\ufe00-\ufe0f\u{e0100}-\u{e01ef}\u{e0000}-\u{e007f}]/u;
 const REASON_REMOTE_NO_FRESH_PULL = 'fewer than two pulls of the session descriptors of this host completed after the wait began, before the deadline; nothing was written';
 const REASON_REMOTE_SHELL = 'the session reports a shell command running (shell); nothing was written';
 const REASON_REMOTE_UNKNOWN_STATUS = 'the descriptor of this host carries no readable status; whether the session is idle is unknown; nothing was written';
@@ -143,7 +144,8 @@ async function processRemoteTrigger(ctx, initial, { sessionId, command, chain, w
   const started = Date.now();
   const refuse = reason => ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId });
   if (chain !== undefined) return refuse('a chain cannot be sent to a remote session through the messaging socket; nothing was written');
-  const trimmed = command.replace(/^[\s\u200b-\u200d\u2060\ufeff]+/u, '').trimEnd();
+  if (REMOTE_FORMAT_RE.test(command)) return refuse('format-char');
+  const trimmed = command.trim();
   if (trimmed.startsWith('!')) return refuse(REASON_REMOTE_BASH);
   if (trimmed.startsWith('#')) return refuse(REASON_REMOTE_MEMORY);
   let text = command;
