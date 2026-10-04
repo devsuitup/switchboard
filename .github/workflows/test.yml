@@ -75,7 +75,7 @@ jobs:
       - name: Run the journeys
         env:
           CI: "true"
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run e2e -- theme-controls.spec.js --repeat-each=10
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run e2e
 
       - name: Upload traces and screenshots
         if: failure()
