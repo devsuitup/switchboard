@@ -172,14 +172,15 @@ test('Touched rejects invalid absolute paths before asking git', async () => {
   }
 });
 
-test('Touched does not treat a failed git probe as a plain file', async () => {
+test('Touched falls back on a failed git transport but refuses other git errors', async () => {
   const { readTouchedChangesFile } = require('../git-changes-file');
-  for (const code of [-1, 1]) {
+  for (const code of [-1, 1, 128]) {
     const result = await readTouchedChangesFile({ absolutePath: path.join(ROOT, 'example.txt'), maxBytes: 1024 }, {
       runGit: async () => ({ code, stdout: '', stderr: 'probe failed' }),
     });
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'git');
+    assert.equal(result.ok, code === -1);
+    if (code === -1) assert.equal(result.git, false);
+    else assert.equal(result.reason, 'git');
   }
 });
 
@@ -191,4 +192,38 @@ test('Touched refuses a sensitive path before asking git', async () => {
   assert.equal((await readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps)).reason, 'sensitive');
   assert.equal((await writeTouchedChangesFile({ absolutePath, content: 'x', version: 'v1', maxBytes: 1024 }, deps)).reason, 'sensitive');
   assert.equal(calls, 0);
+});
+
+test('round 2: Touched refuses any literal git directory before probing on read and write', async () => {
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  for (const absolutePath of ['.git/config', '.GIT/config', 'sub/.Git/config'].map(name => path.join(ROOT, name)).concat(ROOT + '/.git/../example.txt')) {
+    let calls = 0;
+    const deps = { runGit: async () => { calls++; return { code: 128, stderr: 'fatal: not a git repository' }; } };
+    assert.equal((await readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps)).reason, 'git-dir');
+    assert.equal((await writeTouchedChangesFile({ absolutePath, content: 'overwrite', version: 'v1', maxBytes: 1024 }, deps)).reason, 'git-dir');
+    assert.equal(calls, 0);
+  }
+});
+
+test('round 2: a not-a-repository diagnostic permits plain fallback', async () => {
+  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: path.join(ROOT, 'example.txt'), maxBytes: 1024 }, {
+    runGit: async () => ({ code: 128, stderr: 'fatal: not a git repository (or any of the parent directories): .git' }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.git, false);
+});
+
+test('round 2: canonicalizing a Touched path retains the final file-symlink refusal', async () => {
+  const absolutePath = path.join(ROOT, 'git-changes-file.js');
+  const deps = { fs: { lstatSync: () => ({ isSymbolicLink: () => true }) }, runGit: () => { throw new Error('git must not run'); } };
+  const read = await require('../git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
+  assert.equal(read.reason, 'symlink');
+});
+
+test('round 2: a vanished repository root is refused without plain fallback', async () => {
+  const absolutePath = path.join(ROOT, 'git-changes-file.js');
+  const deps = { runGit: async () => ({ code: 0, stdout: path.join(ROOT, 'does-not-exist-round-two') + '\n', stderr: '' }) };
+  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'repo');
 });

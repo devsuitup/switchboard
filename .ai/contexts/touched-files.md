@@ -219,10 +219,18 @@ file's own directory, including a file outside the session's repository.
 `readTouchedChangesFile` in `git-changes-file.js` reuses `readChangesFile` with
 `staged: true`, so the original is HEAD even when the index differs. An
 untracked file has an empty original. Repository files keep the existing
-containment, link, size, binary, encoding and line-ending checks. A Git probe
-failure other than the not-in-tree exit code is reported instead of becoming
-a plain-file fallback. If there is no repository, main returns the existing
-guarded file content as both sides of the pair, with line endings folded.
+containment and link checks. Both the file and repository root are resolved
+on disk before computing the relative Git path, preserving HEAD content through
+directory junctions, short paths and system temporary-directory aliases.
+A literal or resolved path containing a .git segment is refused before probing,
+including ordinary read and plain-save IPCs. Exit 128 permits a non-repository
+fallback only when stderr says "not a git repository"; other Git probe errors
+remain errors. A missing or timed-out Git process during discovery, repository reread or
+blob read, or a diff read refused for
+its filename, mixed line endings, binary data or encoding, uses the guarded
+file content as both sides of the pair, with line endings folded. Binary data
+uses plain mode only for this editor request; ordinary viewer reads still
+refuse it. The display size cap and unreadable/non-file refusals still apply.
 
 A pair with identical sides, or `git: false`, uses `createEditableViewer`
 inside that same host with no diff gutter; the mode toggle is hidden without
@@ -236,8 +244,13 @@ existing expected-content save guard. Refresh, Save and Reload reread this
 absolute file, without fetching either list. Watching uses the existing
 absolute-path `watch-file` registry and `file-changed` event; closing the
 editor releases that watch. Dirty buffers and their return list survive a
-temporary file open through the Changes stash. Active Touched editors retain
-the existing unsaved-file close prompt.
+temporary file open through a dedicated Touched stash. Changes has its own
+stash; each list restores only its own edits, and restored Save controls are
+updated after the editor mounts. The Changes header toggle is active only
+for a Changes list/editor without a return list, and opens Changes when a
+Touched editor is visible. Session idle refreshes only Changes; Touched uses
+its watcher and explicit Reload/Save to reread content. Active Touched editors
+retain the existing unsaved-file close prompt.
 
 Tests load shipped renderer files in jsdom. `test/touched-editor-ipc.test.js`
 evaluates the shipped IPC handlers over disposable files and a fixture Git

@@ -398,6 +398,8 @@ module.exports = [
         renderPanel: 'readonly',
         filePanelState: 'readonly',
         openTouchedEditor: 'readonly',
+        createChangesTab: 'readonly',
+        restoreChangesEdits: 'readonly',
       },
     },
   },

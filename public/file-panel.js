@@ -306,7 +306,7 @@ function initFilePanel() {
   if (typeof onSessionIdle === 'function') {
     onSessionIdle((sessionId) => {
       const state = filePanelState.get(sessionId);
-      if (state && state.currentTab && state.currentTab.type === 'changes') {
+      if (state && state.currentTab && state.currentTab.type === 'changes' && !state.currentTab.returnList) {
         Promise.resolve(refreshChanges(sessionId)).catch(() => {});
       }
     });
@@ -846,7 +846,7 @@ function stashChangesEdits(state, tab) {
   if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
   const content = readChangesEditorContent(tab);
   if (content == null || content === tab.savedContent) return;
-  state.changesStash = {
+  state[tab.returnList ? 'touchedStash' : 'changesStash'] = {
     file: tab.selectedFile,
     content,
     original: tab.original,
@@ -859,10 +859,11 @@ function stashChangesEdits(state, tab) {
   };
 }
 
-function restoreChangesEdits(sessionId, state, tab) {
-  const stash = state.changesStash;
+function restoreChangesEdits(sessionId, state, tab, listType = 'changes') {
+  const key = listType === 'touched' ? 'touchedStash' : 'changesStash';
+  const stash = state[key];
   if (!stash) return false;
-  state.changesStash = null;
+  state[key] = null;
 
   tab.returnList = stash.returnList;
   tab.absolutePath = stash.absolutePath;
@@ -1052,7 +1053,7 @@ function renderTabContent(sessionId, tab) {
   // see .ai/contexts/panel-terminal.md ("Layout")
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
-  setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes');
+  setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes' && !tab.returnList);
   if (typeof renderTouchedTab === 'function') renderTouchedTab(sessionId, tab);
   renderHeldBar(sessionId, tab);
 
@@ -1181,7 +1182,7 @@ function handleDiffAction(sessionId, tab, action) {
 
 function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
-  if (state.currentTab && state.currentTab.type === 'changes') {
+  if (state.currentTab && state.currentTab.type === 'changes' && !state.currentTab.returnList) {
     if (!confirmDiscardChangesEdits(state.currentTab)) return;
     destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
@@ -1931,6 +1932,7 @@ function ensureChangesEditor(sessionId, tab) {
     }
     tab.editorKey = key;
     tab.editorMode = mode;
+    updateChangesSaveButton(sessionId, tab);
     consumeChangesPendingLine(tab);
   }).catch((err) => {
     tab.editorPending = null;

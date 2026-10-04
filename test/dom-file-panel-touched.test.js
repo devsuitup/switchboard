@@ -780,13 +780,14 @@ test('Touched dirty edits survive a temporary file open with their return list a
     await flush();
     ctx.editors.at(-1).setText('unsaved');
     ctx.window.openFileTab('s1', { filePath: '/work/other.txt', content: 'other' });
-    await ctx.window.openChangesTab('s1');
+    await ctx.window.openTouchedTab('s1');
     await flush();
     assert.equal(ctx.editors.at(-1).current, 'unsaved');
     assert.equal(ctx.stateOf('s1').currentTab.returnList, listTab);
     assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/a.txt');
     ctx.document.getElementById('changes-diff-save-btn').click();
     await flush();
+    assert.equal(ctx.calls.save.length, 1, 'the restored Save control is enabled');
     assert.equal(ctx.calls.save[0].filePath, '/work/a.txt');
     ctx.document.getElementById('file-panel-back-btn').click();
     assert.equal(ctx.stateOf('s1').currentTab, listTab);
@@ -834,3 +835,62 @@ for (const [dirty, git] of [[true, true], [false, true], [true, false], [false, 
     } finally { ctx.destroy(); }
   });
 }
+
+test('round 2: Changes and Touched retain separate unsaved files through the toggles', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ files: [row({ path: '/work/b.txt' })] }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await ctx.window.openChangesDiff('s1', { path: 'a.txt', staged: true });
+    await flush();
+    ctx.editors.at(-1).setText('unsaved A');
+    await openTab(ctx);
+    clickRow(ctx, '/work/b.txt');
+    await flush();
+    ctx.editors.at(-1).setText('unsaved B');
+    ctx.document.getElementById('touched-toggle-btn').click();
+    await flush();
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.ok(ctx.stateOf('s1').currentTab, 'Changes opens a tab');
+    assert.equal(ctx.stateOf('s1').currentTab.selectedFile.path, 'a.txt');
+    assert.equal(ctx.editors.at(-1).current, 'unsaved A');
+    assert.equal(ctx.stateOf('s1').currentTab.returnList, undefined);
+    ctx.document.getElementById('touched-toggle-btn').click();
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.txt');
+    assert.equal(ctx.editors.at(-1).current, 'unsaved B');
+  } finally { ctx.destroy(); }
+});
+
+test('round 2: Touched editor does not activate Changes and its toggle opens Changes', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    assert.equal(ctx.document.getElementById('changes-toggle-btn').getAttribute('aria-pressed'), 'false');
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.ok(ctx.stateOf('s1').currentTab, 'the Changes toggle opens its list');
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'changes');
+    assert.equal(ctx.stateOf('s1').currentTab.returnList, undefined);
+    assert.equal(ctx.calls.status.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('round 2: unchanged Touched editor makes no file or git call on session idle', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const before = JSON.stringify(ctx.calls);
+    ctx.window.notifySessionIdle('s1');
+    await flush();
+    assert.equal(JSON.stringify(ctx.calls), before);
+    ctx.document.getElementById('changes-diff-reload-btn').click();
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 2);
+  } finally { ctx.destroy(); }
+});

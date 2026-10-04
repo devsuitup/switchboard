@@ -974,3 +974,17 @@ own repository through `readTouchedChangesFile` / `writeTouchedChangesFile`.
 Both helpers reuse the existing repository file guards and byte-version save
 contract. When the pair is identical or there is no repository, the same
 editor host uses its plain factory without changing the stored diff mode.
+
+Changes and Touched keep separate unsaved-edit stashes. Opening Changes never
+restores a Touched target; opening Touched restores its own buffer and original
+return list. Save state is recalculated once a restored editor mounts. The
+Changes header toggle and busy-to-idle refresh apply only to a Changes tab
+without a return list. Touched continues to reread on watcher events, Reload
+and Save, rather than on each session idle.
+
+The Touched read canonicalizes the file and repository root before deriving
+the Git operand. A Git content refusal or transport failure uses plain mode;
+repository-boundary and link refusals still fail closed. Literal and resolved
+.git segments are blocked before probing and on both plain and Git panel save
+paths. A probe exit 128 is a non-repository result only with the matching
+stderr diagnostic.

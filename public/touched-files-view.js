@@ -157,6 +157,17 @@ function toggleTouchedTab(sessionId) {
 function openTouchedTab(sessionId) {
   const state = getSessionState(sessionId);
   destroyCurrentTab(state);
+  if (state.touchedStash) {
+    state.currentTab = createChangesTab();
+    state.currentTab.loading = false;
+    state.panelVisible = true;
+    restoreChangesEdits(sessionId, state, state.currentTab, 'touched');
+    if (currentPanelSessionId === sessionId) {
+      showPanel(state);
+      renderPanel(sessionId);
+    }
+    return;
+  }
   state.currentTab = {
     type: 'touched',
     label: 'Touched files',

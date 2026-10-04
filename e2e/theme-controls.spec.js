@@ -61,7 +61,7 @@ test('the themed file panel shows a long Touched list and scrollable file conten
   await list.evaluate(el => { el.scrollTop = 0; });
   await expect(list.locator('.touched-openable')).toHaveCount(FILE_COUNT);
   await list.locator('.touched-openable').first().click();
-  const scroller = page.locator('#file-panel-viewer .cm-scroller');
+  const scroller = page.locator('#changes-diff-host .cm-scroller');
   await expect(scroller).toBeVisible();
   const back = page.locator('#file-panel-back-btn');
   await expect(back).toBeVisible();

@@ -16,6 +16,8 @@ const MAX_PATH_LENGTH = 4096;
 const TOPLEVEL_MAX_BUFFER = 64 * 1024;
 const STATUS_MAX_BUFFER = 1024 * 1024;
 const NOT_IN_TREE_EXIT_CODE = 128;
+const GIT_RUN_FAILED_CODE = -1;
+const TOUCHED_PLAIN_REASONS = new Set(['invalid-path', 'mixed-eol', 'binary', 'encoding', 'too-large', 'git', 'repo']);
 
 // Guards for a repo-relative path from the renderer — see .ai/contexts/changes-view.md ("Editing a changed file")
 function isSafeRepoRelativePath(p) {
@@ -302,31 +304,57 @@ async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, de
   return { ok: true, savedPath: target.path, version: versionOf(bytes) };
 }
 
-
 // see .ai/contexts/touched-files.md ("Shared editor")
 async function resolveTouchedRepo(absolutePath, deps) {
   const { resolveTouchedPath } = require('./session-touched-files');
+  if (typeof absolutePath === 'string' && hasGitSegment(absolutePath)) {
+    return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+  }
   const resolved = resolveTouchedPath(absolutePath);
   if (!resolved.path) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   if (isSensitivePath(resolved.path)) return { ok: false, error: 'access to sensitive path denied', reason: 'sensitive' };
+  const realPath = resolveOnDisk(resolved.path) || resolved.path;
+  if (hasGitSegment(realPath)) return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+  try {
+    if ((deps.fs || realFs).lstatSync(resolved.path).isSymbolicLink()) {
+      return { ok: false, error: 'this row is a symbolic link, not a file', reason: 'symlink' };
+    }
+  } catch {}
   let probe;
+  let repo;
   const runGit = deps.runGit || defaultRunGit;
-  const repo = await resolveRepoDirs(path.dirname(resolved.path), {
-    ...deps,
-    runGit: async (args, options) => { probe = await runGit(args, options); return probe; },
-  });
+  try {
+    repo = await resolveRepoDirs(path.dirname(realPath), {
+      ...deps,
+      runGit: async (args, options) => { probe = await runGit(args, options); return probe; },
+    });
+  } catch {
+    return { ok: true, git: false };
+  }
   if (!repo) {
-    if (probe?.code === NOT_IN_TREE_EXIT_CODE) return { ok: true, git: false };
+    if (probe?.code === GIT_RUN_FAILED_CODE || (probe?.code === NOT_IN_TREE_EXIT_CODE && /not a git repository/i.test(probe.stderr || ''))) {
+      return { ok: true, git: false };
+    }
     return { ok: false, error: probe?.stderr || 'could not locate the repository', reason: 'git' };
   }
-  const relPath = path.relative(repo.root, resolved.path).split(path.sep).join('/');
-  return { ok: true, git: true, cwd: repo.root, relPath };
+  const realRoot = resolveOnDisk(repo.root);
+  if (!realRoot) return { ok: false, error: 'the repository directory no longer exists', reason: 'repo' };
+  const relPath = path.relative(realRoot, realPath).split(path.sep).join('/');
+  return { ok: true, git: true, cwd: realRoot, relPath };
 }
 
 async function readTouchedChangesFile({ absolutePath, maxBytes }, deps = {}) {
   const target = await resolveTouchedRepo(absolutePath, deps);
   if (!target.ok || !target.git) return target;
-  const pair = await readChangesFile({ cwd: target.cwd, relPath: target.relPath, staged: true, maxBytes }, deps);
+  const runGit = deps.runGit || defaultRunGit;
+  const pair = await readChangesFile({ cwd: target.cwd, relPath: target.relPath, staged: true, maxBytes }, {
+    ...deps,
+    runGit: async (args, options) => {
+      try { return await runGit(args, options); }
+      catch (err) { return { code: GIT_RUN_FAILED_CODE, stdout: '', stderr: err.message }; }
+    },
+  });
+  if (!pair.ok && TOUCHED_PLAIN_REASONS.has(pair.reason)) return { ok: true, git: false };
   return { ...pair, git: true };
 }
 

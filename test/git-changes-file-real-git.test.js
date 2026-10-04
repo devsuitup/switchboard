@@ -21,7 +21,7 @@ process.env.LANGUAGE = 'C';
 const MAX_BYTES = 1024 * 1024;
 
 function mkTmp() {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-')));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-'));
 }
 
 // see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
@@ -31,12 +31,12 @@ function cleanup(dir) {
 
 // Scratch repo only: drop the caller's GIT_* env (set when this suite runs under a hook) and its hooks.
 function scratchGitEnv() {
-  const env = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k.startsWith('GIT_') || k.startsWith('HUSKY')) continue;
-    env[k] = v;
-  }
-  return env;
+  return {
+    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+    HOME: os.tmpdir(), USERPROFILE: os.tmpdir(), TMP: os.tmpdir(), TEMP: os.tmpdir(),
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(os.tmpdir(), 'sb-gcf-no-global-config'),
+    LC_ALL: 'C', LANGUAGE: 'C',
+  };
 }
 
 function git(cwd, args) {
@@ -1150,16 +1150,21 @@ for (const [name, current, original] of [
   });
 }
 
-test('Touched only falls back to a plain editor outside a repository', async () => {
+test('Touched falls back outside a repository and refuses missing files and git metadata', async () => {
   const tmp = mkTmp();
   try {
     const target = path.join(tmp, 'plain.txt');
     fs.writeFileSync(target, 'plain');
     const api = require('../git-changes-file');
-    const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
-    assert.equal(pair.ok, true);
+    const runGit = async (args, options) => {
+      const { runToExit } = require('../run-to-exit');
+      const result = await runToExit('git', args, { ...options, env: { ...scratchGitEnv(), GIT_CEILING_DIRECTORIES: fs.realpathSync(os.tmpdir()) } });
+      return { ...result, tooLarge: result.overflow };
+    };
+    const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES }, { runGit });
+    assert.equal(pair.ok, true, pair.error);
     assert.equal(pair.git, false);
-    const write = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES });
+    const write = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES }, { runGit });
     assert.equal(write.ok, false);
     assert.equal(fs.readFileSync(target, 'utf8'), 'plain');
     const repo = path.join(tmp, 'repo');

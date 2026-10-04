@@ -2156,7 +2156,9 @@ test('Save follows the buffer in every mode, plain included (mutation target: th
     for (const expected of ['inline', 'plain', 'side-by-side']) {
       const editor = ctx.editors[ctx.editors.length - 1];
       assert.equal(editor.box.mode, expected);
-      assert.equal(saveBtn.disabled, true, `${expected}: nothing typed yet`);
+      assert.equal(saveBtn.disabled, expected === 'inline', `${expected}: mode switches retain the dirty buffer`);
+      editor.box.text = DEFAULT_PAIR.current;
+      assert.equal(saveBtn.disabled, true, `${expected}: restoring the saved text clears the dirty state`);
       assert.equal(saveBtn.classList.contains('active'), false, `${expected}: a clean buffer is not lit`);
 
       editor.box.text = 'typed in ' + expected + '\n';
