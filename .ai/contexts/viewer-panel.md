@@ -309,3 +309,18 @@ computed from that callback is therefore still right after an undo.
 - **CodeMirror state holds DOM references** — calling `destroy()` then immediately `open()` on the SAME container works because `_createEditor` rebuilds it, but if you reorder this, the editor can dangle.
 - **`format` swallows parse errors**: an invalid `.json` file shows a `!` flash on the button instead of an error message. By design (no toast system in this codebase yet).
 - **`onDelete` doesn't refresh the list automatically** — the workFilesPanel wires a manual `removeWorkFileFromCache(filePath)` call in its `onDelete` handler. If you wire `onDelete` to another panel, add the equivalent refresh.
+
+## Shared controls and header paths (#467)
+
+Keep the select, button, icon button, info button and modal styles together in
+`public/style.css`. `control-select` shares the unchanged `settings-select`
+look; the Settings alias remains supported. `control-btn` aliases the panel
+button style, and `icon-btn` and `info-btn` compose compact controls.
+`modal-overlay` and `modal-dialog` share the existing What's new dialog rules.
+
+`setViewerPath` in `public/viewer-toolbar.js` builds every file/diff header
+path: ViewerPanel (Memory, Work Files and file tabs), Changes/Touched editors
+and the MCP diff header. It keeps the complete path in `title` and two text
+spans: a shrinking head with ellipsis and a nonshrinking filename tail. CSS
+follows available width without measuring text or injecting path markup.
+jsdom checks structure and hover paths; visual width behavior needs a live run.

@@ -26,10 +26,12 @@ made nearly every changed file invisible here. Parsing shell commands was
 considered and rejected (redirections, pipes, `find -exec`, computed names: any
 coverage figure would be a guess).
 
-So the tab says what it is where it is read: `#touched-coverage`, a static
-string in the renderer (`TOUCHED_COVERAGE_TEXT`) that is in the DOM while the
-list loads, when it fails and when it is empty. `test/dom-file-panel-touched.test.js`
-pins it. The empty state reads "No files touched by the file tools", never
+The info button next to the Touched files title opens `TOUCHED_COVERAGE_TEXT`
+in `#touched-coverage` inside a modal, including while loading, on failure and
+on an empty list. It uses the shared modal styles and existing dialog pattern;
+Escape, the close button and an outside click dismiss it and restore focus to
+the info button. A capturing Escape handler prevents list/editor navigation.
+Tab stays on the modal close button. `test/dom-file-panel-touched.test.js` pins it. The empty state reads "No files touched by the file tools", never
 "nothing changed". Changes stays the authority on the working tree.
 
 The transcript records intent, not outcome: a refused `Write` is listed. Each
@@ -161,10 +163,11 @@ hours ago; older ones use `toLocaleString` in local time. The formatter accepts
 an injected clock. Present-file tooltips also show `diskMtime`; the existing
 gone/unreadable/refused states and opening guards still apply.
 
-The shared file-panel Back button and Escape inside the file viewer restore
-the original list DOM, selection, scroll, sort and window without requesting
-transcripts again. Scroll and selection are captured when a file opens,
-before the list is hidden; a later session switch uses that saved position.
+The editor close button and Escape inside the editor restore the full-height
+list without requesting transcripts again. The list stays visible above the
+editor; row switching replaces the editor after the existing dirty prompt.
+Selection, scroll, sort and time window survive closing, tab switches and
+session switches. Scroll is saved before a session hides the shared list.
 Escape bubbles after the editor's handlers and ignores prevented or composing
 events, search/panel/tooltip targets, and inputs outside editor content.
 Pending refresh results are stored on their original tab even while a file or
@@ -209,10 +212,21 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 `openTouchedEditor` in `public/file-panel.js` creates the same Changes tab
 state and uses `renderChangesDiff`, `ensureChangesEditor`, the existing
 `#changes-diff-view` toolbar and `#changes-diff-host`. It retains the Touched
-list as `returnList`, snapshots scroll before hiding it and hides the Changes
-list and splitter. Back, Escape and the editor close button restore that
-original list through the shared discard guard. They do not fetch transcripts,
-status or file content again. Selection, sort, window and DOM identity survive.
+list as `returnList` and mounts the shared splitter and editor beneath the
+visible Touched list. The panel header remains Touched files, and Touched has
+no Back control. Changes retains its existing Back behavior. Escape and the
+editor close button close the file through the shared discard guard, without
+fetching transcripts, status or file content again. Row switching uses that
+guard before reading and checks for edits made during the pending read.
+Selection, sort, window and DOM identity survive.
+
+`renderPanelListLayout`, `currentPanelListLayout`, `applyChangesListHeight` and
+the single `createSplitter` binding serve both lists. Changes keeps its stored
+pixel height; Touched stores `touchedListRatio` with a named default of 0.4,
+guarded localStorage access and the same minimum list/editor heights. The
+resize observer reapplies the ratio on panel resizing. The editor takes the
+remaining height, and closing it restores the list flex sizing. Sorting,
+refresh and older-window controls remain usable while the editor is open.
 
 `read-file-for-panel` with `{editor: true}` discovers the repository from the
 file's own directory, including a file outside the session's repository.
@@ -282,4 +296,5 @@ retain the existing unsaved-file close prompt.
 Tests load shipped renderer files in jsdom. `test/touched-editor-ipc.test.js`
 evaluates the shipped IPC handlers over disposable files and a fixture Git
 repository. The Touched journey in `e2e/changes.spec.js` checks the actual
-merge editor, width and Back navigation; it requires a separate live run.
+merge editor, width and close navigation with a visible list; it requires a
+separate live run.

@@ -58,6 +58,9 @@ const MAX_SUBAGENT_GROUP_ROWS = 100;
 
 const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
 const DEFAULT_CHANGES_LIST_HEIGHT = 200;
+const TOUCHED_LIST_RATIO_KEY = 'touchedListRatio';
+const DEFAULT_TOUCHED_LIST_RATIO = 0.4;
+let touchedListRatio = readStoredTouchedListRatio();
 // see .ai/contexts/changes-view.md ("The list and the editor")
 const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
@@ -381,7 +384,7 @@ function reusePanelList(list, summary, tab, signature, detail = null) {
       nodes: [...list.childNodes],
       summaryNodes: [...summary.childNodes],
       detail: detail?.textContent,
-      scrollTop: list.scrollTop,
+      scrollTop: previous.listScrollTop ?? list.scrollTop,
     };
   }
   const same = values => values && signature.every((value, i) => value === values[i]);
@@ -1049,7 +1052,7 @@ function showFileTabInViewer(tab) {
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
-  panelBackBtn.style.display = tab && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
+  panelBackBtn.style.display = tab && tab.returnList?.type !== 'touched' && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
   // see .ai/contexts/panel-terminal.md ("Layout")
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
@@ -1077,7 +1080,7 @@ function renderTabContent(sessionId, tab) {
   } else if (tab.type === 'changes') {
     vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
-    changesContainerEl.style.display = 'flex';
+    changesContainerEl.style.display = tab.returnList?.type === 'touched' ? 'none' : 'flex';
     renderChangesContent(sessionId, tab);
   } else if (tab.type === 'touched') {
     vpContainer.style.display = 'none';
@@ -1099,7 +1102,7 @@ function renderDiffContent(sessionId, tab) {
   const titleEl = diffToolbarEl.querySelector('#diff-title');
   const pathEl = diffToolbarEl.querySelector('#diff-path');
   if (titleEl) titleEl.textContent = tab.label;
-  if (pathEl) pathEl.textContent = tab.filePath || '';
+  if (pathEl) window.setViewerPath(pathEl, tab.filePath || '');
 
   updateDiffSaveButton(tab);
 
@@ -1242,9 +1245,10 @@ function openChangesTab(sessionId) {
 function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
   const state = getSessionState(sessionId);
   if (currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
-  destroyCurrentTab(state);
+  destroyCurrentTab(state, { stash: false });
   const tab = createChangesTab();
   tab.returnList = returnList;
+  tab.label = 'Touched files';
   tab.absolutePath = absolutePath;
   tab.filePath = absolutePath;
   tab.selectedFile = { path: absolutePath };
@@ -1541,21 +1545,14 @@ function confirmDiscardChangesEdits(tab) {
 
 function renderChangesContent(sessionId, tab) {
   if (tab.returnList) {
-    changesSummaryEl.style.display = 'none';
-    changesListEl.style.display = 'none';
-    changesListSplitterEl.style.display = 'none';
-    changesDiffEl.style.display = 'flex';
+    renderPanelListLayout(true);
     renderChangesDiff(sessionId, tab);
     return;
   }
   const editorOpen = !!tab.selectedFile;
   changesSummaryEl.style.display = 'block';
   changesListEl.style.display = 'block';
-  changesListSplitterEl.style.display = editorOpen ? 'block' : 'none';
-  changesDiffEl.style.display = editorOpen ? 'flex' : 'none';
-  changesListEl.classList.toggle('changes-list-split', editorOpen);
-  if (editorOpen) applyChangesListHeight();
-  else changesListEl.style.height = '';
+  renderPanelListLayout(editorOpen);
 
   renderChangesList(sessionId, tab);
   if (editorOpen) renderChangesDiff(sessionId, tab);
@@ -1743,22 +1740,82 @@ function clampChangesListHeight(height, available) {
 }
 
 function applyChangesListHeight() {
-  if (!changesListEl || !changesContainerEl) return;
-  const available = changesContainerEl.clientHeight - changesSummaryEl.offsetHeight;
-  changesListEl.style.height = clampChangesListHeight(changesListDesiredHeight, available) + 'px';
+  const layout = currentPanelListLayout();
+  const available = panelListAvailableHeight(layout);
+  const desired = layout.touched ? available * touchedListRatio : changesListDesiredHeight;
+  layout.list.style.height = clampChangesListHeight(desired, available) + 'px';
+}
+
+function readStoredTouchedListRatio() {
+  try {
+    const value = Number(localStorage.getItem(TOUCHED_LIST_RATIO_KEY));
+    if (value > 0 && value < 1) return value;
+  } catch {}
+  return DEFAULT_TOUCHED_LIST_RATIO;
+}
+
+function currentPanelListLayout() {
+  const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+  const touched = tab?.type === 'touched' || tab?.returnList?.type === 'touched';
+  return {
+    touched,
+    container: touched ? document.getElementById('file-panel-touched') : changesContainerEl,
+    summary: touched ? document.getElementById('touched-summary') : changesSummaryEl,
+    list: touched ? document.getElementById('touched-list') : changesListEl,
+  };
+}
+
+function panelListAvailableHeight(layout) {
+  const margins = layout.touched ? [layout.list, layout.summary].reduce((sum, el) => {
+    const style = getComputedStyle(el);
+    return sum + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+  }, 0) : 0;
+  return Math.max(0, layout.container.clientHeight - layout.summary.offsetHeight
+    - margins - (layout.touched ? layout.container.querySelector('.viewer-toolbar').offsetHeight + changesListSplitterEl.offsetHeight : 0));
+}
+
+function renderPanelListLayout(editorOpen) {
+  const layout = currentPanelListLayout();
+  if (changesDiffEl.parentElement !== layout.container) {
+    layout.container.append(changesListSplitterEl, changesDiffEl);
+  }
+  changesListSplitterEl.style.display = editorOpen ? 'block' : 'none';
+  changesDiffEl.style.display = editorOpen ? 'flex' : 'none';
+  layout.list.classList.toggle('changes-list-split', editorOpen);
+  if (editorOpen) applyChangesListHeight();
+  else layout.list.style.height = '';
 }
 
 function setupChangesListSplitter() {
   if (typeof createSplitter !== 'function') return;
   createSplitter(changesListSplitterEl, {
     axis: 'y',
-    getSize: () => changesListEl.offsetHeight || changesListDesiredHeight,
+    getSize: () => {
+      const layout = currentPanelListLayout();
+      return layout.list.offsetHeight || parseFloat(layout.list.style.height) || changesListDesiredHeight;
+    },
     onDrag: (startSize, delta) => {
-      changesListDesiredHeight = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(startSize + delta));
+      const layout = currentPanelListLayout();
+      const available = panelListAvailableHeight(layout);
+      if (layout.touched) {
+        if (available) touchedListRatio = Math.min(0.95, clampChangesListHeight(startSize + delta, available) / available);
+      } else changesListDesiredHeight = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(startSize + delta));
       applyChangesListHeight();
     },
-    onCommit: () => localStorage.setItem(CHANGES_LIST_HEIGHT_KEY, String(changesListDesiredHeight)),
+    onCommit: () => {
+      try {
+        const touched = currentPanelListLayout().touched;
+        localStorage.setItem(touched ? TOUCHED_LIST_RATIO_KEY : CHANGES_LIST_HEIGHT_KEY, String(touched ? touchedListRatio : changesListDesiredHeight));
+      } catch {}
+    },
   });
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => {
+      const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+      if (tab?.selectedFile) applyChangesListHeight();
+    });
+    observer.observe(filePanelContentEl);
+  }
 }
 
 // Built once: a render must never tear the open editor down — see .ai/contexts/changes-view.md
@@ -1834,7 +1891,7 @@ function buildChangesDiffChrome() {
 }
 
 function renderChangesDiff(sessionId, tab) {
-  changesDiffTitleEl.textContent = tab.selectedFile.path;
+  window.setViewerPath(changesDiffTitleEl, tab.selectedFile.path);
 
   changesDiffModeBtn.style.display = tab.editable && !tab.noDiff ? '' : 'none';
   const nextMode = CHANGES_DIFF_MODES[(CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length];

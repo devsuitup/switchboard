@@ -210,6 +210,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'header-controls.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'viewer-toolbar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'file-panel.js'));
 
   window.initFilePanel();

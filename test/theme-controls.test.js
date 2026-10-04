@@ -94,15 +94,16 @@ test('worktree delete follows the sibling hover-reveal styling', () => {
   assert.match(hover?.declarations || '', /opacity:\s*1\s*!important/);
 });
 
-test('Touched sort has a themed native menu and hover, focus and disabled states', () => {
-  const base = rule('#touched-sort');
-  assert.match(base, /background:\s*var\(--surface-chrome\)/);
-  assert.match(base, /border:\s*1px solid var\(--control-border\)/);
-  assert.match(base, /color:\s*var\(--text-muted\)/);
-  assert.match(base, /color-scheme:\s*dark/);
-  assert.match(rule('#touched-sort:enabled:hover'), /border-color:\s*var\(--accent-border\)/);
-  assert.match(rule('#touched-sort:focus-visible'), /outline:\s*2px solid var\(--accent\)/);
-  assert.match(rule('#touched-sort:disabled'), /opacity:\s*0\.4/);
+test('shared selects preserve the Settings look, themed menu and interaction states', () => {
+  const shared = rules.find(r => r.selector.split(',').some(s => s.trim() === '.settings-select'));
+  assert.ok(shared);
+  assert.match(shared.declarations, /background:\s*var\(--control-surface\)/);
+  assert.match(shared.declarations, /padding:\s*7px 32px 7px 12px/);
+  assert.match(shared.declarations, /border-radius:\s*8px/);
+  assert.match(rule('.control-select'), /color-scheme:\s*dark/);
+  assert.match(rule('.control-select:enabled:hover'), /border-color:\s*var\(--accent-border\)/);
+  assert.match(rule('.control-select:focus-visible'), /outline:\s*2px solid var\(--accent\)/);
+  assert.match(rules.find(r => r.selector.includes('.control-select:disabled')).declarations, /opacity:\s*0\.4/);
 });
 
 test('every declared index button and every optional viewer toolbar button has a background rule', () => {
@@ -131,7 +132,7 @@ function setupPanel() {
       ok: true, files: [{ path: '/work/a.txt', state: 'present', openable: true, tools: ['Write'], sources: ['session'] }],
       hasOlder: true, unresolved: [], coverage: { transcripts: 1 },
     }),
-    readFileForPanel: async () => ({ ok: true, content: 'file body' }),
+    readFileForPanel: async () => ({ ok: true, git: false, original: 'file body', current: 'file body' }),
     gitChangesStatus: async () => ({
       ok: true, kind: 'local', branch: { head: 'main' },
       files: [{ path: 'a.txt', staged: true, state: 'M', added: 1, deleted: 1 }],
@@ -168,7 +169,7 @@ async function flush() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-test('panel-only selection lets active-session reselection hide Back; shared selection preserves it', async () => {
+test('panel-only selection lets active-session reselection hide the Touched editor; shared selection preserves it', async () => {
   const { dom, window, evaluate } = setupPanel();
   try {
     window.reportActivityFocus = () => {};
@@ -181,7 +182,7 @@ test('panel-only selection lets active-session reselection hide Back; shared sel
     window.document.querySelector('.touched-openable').click();
     await flush();
     const panel = window.document.getElementById('file-panel');
-    const back = window.document.getElementById('file-panel-back-btn');
+    const back = window.document.getElementById('changes-diff-close-btn');
     assert.ok(panel.classList.contains('open'));
     assert.notEqual(back.style.display, 'none');
     evaluate('renderPanel("transcript")');
@@ -193,7 +194,7 @@ test('panel-only selection lets active-session reselection hide Back; shared sel
     assert.ok(panel.classList.contains('open'));
     assert.notEqual(back.style.display, 'none');
     back.click();
-    assert.equal(back.style.display, 'none', 'returning to the list legitimately hides Back');
+    assert.equal(window.document.getElementById('changes-diff-view').style.display, 'none');
     assert.equal(window.document.querySelectorAll('.touched-file-row').length, 1);
   } finally { dom.window.close(); }
 });
@@ -213,9 +214,9 @@ test('file panel, Touched and Changes controls are themed through their real cre
     assertThemedButtons(document.getElementById('file-panel'));
     document.querySelector('.touched-openable').click();
     await flush();
-    const back = document.getElementById('file-panel-back-btn');
+    const back = document.getElementById('changes-diff-close-btn');
     assert.notEqual(back.style.display, 'none');
-    assert.ok(back.classList.contains('fp-toolbar-btn'), 'Back matches the toolbar');
+    assert.ok(back.classList.contains('icon-btn'), 'Close uses the shared icon style');
     assertThemedButtons(document.getElementById('file-panel'));
     back.click();
     await window.openChangesTab('s1');

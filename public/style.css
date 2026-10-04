@@ -246,8 +246,6 @@ body { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
-
-
 /* ========== SIDEBAR ========== */
 #sidebar {
   width: 340px;
@@ -344,31 +342,6 @@ body { display: flex; flex-direction: column; }
 
 #loading-status.active {
   animation: loading-pulse 1.2s ease-in-out infinite;
-}
-
-#star-toggle, #archive-toggle, #running-toggle, #today-toggle, .icon-btn {
-  background: transparent;
-  border: 1px solid var(--control-border);
-  color: #7a7a90;
-  font-size: 11px;
-  padding: 0;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-  font-weight: 500;
-  line-height: 1;
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover, .icon-btn:hover {
-  background: var(--control-surface);
-  border-color: rgba(255,255,255,0.12);
-  color: #888;
 }
 
 #star-toggle.active {
@@ -2082,6 +2055,121 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Shared viewer toolbar (memory, work files, file panel) */
+/* Shared controls: select, button, icon button, info button, modal; see .ai/contexts/viewer-panel.md */
+#star-toggle, #archive-toggle, #running-toggle, #today-toggle, .icon-btn {
+  background: transparent;
+  border: 1px solid var(--control-border);
+  color: #7a7a90;
+  font-size: 11px;
+  padding: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#star-toggle:hover, #archive-toggle:hover, #running-toggle:hover, #today-toggle:hover, .icon-btn:hover {
+  background: var(--control-surface);
+  border-color: rgba(255,255,255,0.12);
+  color: #888;
+}
+
+.control-select,
+.settings-select {
+  background: var(--control-surface);
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  padding: 7px 32px 7px 12px;
+  font-size: 13px;
+  color: #c0c0d0;
+  outline: none;
+  font-family: inherit;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  min-width: 140px;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%237a7a90' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+.control-select:disabled,
+.settings-select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.control-select option,
+.settings-select option {
+  background-color: #1e1e2a;
+  color: #c0c0d0;
+}
+
+.control-btn,
+.fp-toolbar-btn {
+  background: transparent;
+  border: 1px solid var(--control-border);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.control-btn:hover,
+.fp-toolbar-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.control-btn.active,
+.fp-toolbar-btn.active {
+  border-color: var(--accent-border-strong);
+  color: var(--accent);
+  background: var(--accent-wash-strong);
+}
+
+.modal-overlay,
+.whats-new-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-dialog,
+.whats-new-dialog {
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.control-select { color-scheme: dark; }
+.control-select:enabled:hover { border-color: var(--accent-border); }
+.control-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.info-btn { border-radius: 50%; font-style: italic; flex-shrink: 0; }
+
 .viewer-toolbar {
   display: flex;
   align-items: center;
@@ -3438,27 +3526,6 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ========== WHAT'S NEW DIALOG ========== */
-.whats-new-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-
-.whats-new-dialog {
-  background: #1e1e2e;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 12px;
-  width: 560px;
-  max-width: 90vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-}
 
 .whats-new-header {
   display: flex;
@@ -3878,38 +3945,6 @@ body { display: flex; flex-direction: column; }
 .settings-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-.settings-select {
-  background: var(--control-surface);
-  border: 1px solid var(--control-border);
-  border-radius: 8px;
-  padding: 7px 32px 7px 12px;
-  font-size: 13px;
-  color: #c0c0d0;
-  outline: none;
-  font-family: inherit;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
-  min-width: 140px;
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%237a7a90' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  cursor: pointer;
-}
-
-.settings-select:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* The native option-list popup defaults to a white background in dark theme
-   (Chromium renders it from the OS palette, not the control's CSS). Force a
-   dark palette on the options so the dropdown matches the theme. */
-.settings-select option {
-  background-color: #1e1e2a;
-  color: #c0c0d0;
 }
 
 /* --- Wide input fields (full-width row below) --- */
@@ -4575,32 +4610,6 @@ body { display: flex; flex-direction: column; }
   border-left: 1px solid var(--hairline);
 }
 
-
-.fp-toolbar-btn {
-  background: transparent;
-  border: 1px solid var(--control-border);
-  color: var(--text-muted);
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: inherit;
-  font-weight: 500;
-}
-
-.fp-toolbar-btn:hover {
-  border-color: var(--accent-border);
-  color: var(--accent);
-  background: var(--accent-wash);
-}
-
-.fp-toolbar-btn.active {
-  border-color: var(--accent-border-strong);
-  color: var(--accent);
-  background: var(--accent-wash-strong);
-}
-
 .fp-save-btn:hover {
   border-color: rgba(62,207,90,0.3);
   color: #3ecf5a;
@@ -4950,17 +4959,6 @@ body { display: flex; flex-direction: column; }
   min-height: 0;
 }
 
-#touched-coverage {
-  margin: 8px 8px 0;
-  padding: 8px 12px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: #c8a24a;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-}
-
 #touched-summary {
   margin: 8px 8px 0;
   padding: 8px 12px;
@@ -5036,27 +5034,6 @@ body { display: flex; flex-direction: column; }
   margin: 4px 8px;
 }
 
-#touched-sort {
-  background: var(--surface-chrome);
-  border: 1px solid var(--control-border);
-  color: var(--text-muted);
-  color-scheme: dark;
-}
-
-#touched-sort:enabled:hover {
-  border-color: var(--accent-border);
-}
-
-#touched-sort:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-#touched-sort:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
 .touched-file-time {
   flex-shrink: 0;
   font-size: 11px;
@@ -5090,7 +5067,8 @@ body { display: flex; flex-direction: column; }
 
 /* The list keeps its explicit height while the editor is open; it is the
    editor that takes the remaining space. */
-#changes-list.changes-list-split {
+#changes-list.changes-list-split,
+#touched-list.changes-list-split {
   flex: 0 0 auto;
 }
 
@@ -5354,7 +5332,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
 body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path),
-body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
+body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .modal-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }
 
@@ -5366,4 +5344,21 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
   font-family: 'SF Mono', 'Fira Code', monospace;
   max-height: 160px;
   overflow-y: auto;
+}
+
+.viewer-header-path {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.viewer-path-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viewer-path-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }

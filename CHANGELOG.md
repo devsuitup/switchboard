@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Refresh a session's screen from the terminal header or its sidebar context menu. Returning to a solo tmux attachment refreshes it automatically; shared attachments redraw locally on demand without changing another client's window size. (#446)
 - Back to list and Escape from a file or diff restore Touched and Changes with their scroll position and selection. (#444)
 ### Changed
+- Touched keeps its file list above the editor with a resizable split, moves its explanation into an info dialog, and shares the Settings sort-control style. File and diff headers keep filenames visible when paths are shortened. (#467)
 - File panels refuse to open or save paths inside `.git` (Windows short names included) and files that are not valid UTF-8, instead of rewriting their bytes, and no longer save through a symlink. This applies to files opened from terminal links too. (#450)
 - Touched files open in the same editor as Changes, with a diff against HEAD when available and the same layout without a diff otherwise. Back and Escape restore the Touched list, and switching between Touched and Changes keeps each file's unsaved edits. (#450)
 - Buttons and scrollbars throughout the app now match the dark theme, including file panel lists, file contents, and the Touched history controls. (#448)

@@ -119,7 +119,7 @@
             <div class="settings-description">Permission mode passed to the <code>claude</code> command</div>
           </div>
           <div class="settings-field-control">
-            <select class="settings-select" id="sv-perm-mode" ${fieldDisabled('permissionMode')}>
+            <select class="settings-select control-select" id="sv-perm-mode" ${fieldDisabled('permissionMode')}>
               ${PERMISSION_MODES.map(m => m.value === null
                 ? '<option value="">Default (none)</option>'
                 : `<option value="${m.value}" ${permModeValue === m.value ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
@@ -220,7 +220,7 @@
             <div class="settings-description">Color theme for terminal sessions</div>
           </div>
           <div class="settings-field-control">
-            <select class="settings-select" id="sv-terminal-theme">
+            <select class="settings-select control-select" id="sv-terminal-theme">
               ${Object.entries(TERMINAL_THEMES).map(([key, t]) =>
                 `<option value="${key}" ${themeValue === key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`
               ).join('')}
@@ -234,7 +234,7 @@
             <div class="settings-description">What a right-click does in the terminal. "Context menu" offers file-link actions (open in panel / system editor, copy path), copy and paste. Takes effect on the next right-click.</div>
           </div>
           <div class="settings-field-control">
-            <select class="settings-select" id="sv-right-click">
+            <select class="settings-select control-select" id="sv-right-click">
               <option value="menu" ${rightClickValue === 'menu' ? 'selected' : ''}>Context menu (default)</option>
               <option value="paste" ${rightClickValue === 'paste' ? 'selected' : ''}>Paste clipboard</option>
               <option value="default" ${rightClickValue === 'default' ? 'selected' : ''}>Native (xterm)</option>
@@ -250,7 +250,7 @@
             <div class="settings-description">Re-open the sessions that were open when Switchboard last closed. Each is resumed in turn.</div>
           </div>
           <div class="settings-field-control">
-            <select class="settings-select" id="sv-restore-startup">
+            <select class="settings-select control-select" id="sv-restore-startup">
               <option value="off" ${restoreStartupValue === 'off' ? 'selected' : ''}>Don't restore</option>
               <option value="ask" ${restoreStartupValue === 'ask' ? 'selected' : ''}>Ask on startup (default)</option>
               <option value="auto" ${restoreStartupValue === 'auto' ? 'selected' : ''}>Restore automatically</option>
@@ -264,7 +264,7 @@
             <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
           </div>
           <div class="settings-field-control">
-            <select class="settings-select" id="sv-shell-profile">
+            <select class="settings-select control-select" id="sv-shell-profile">
               <option value="auto" ${shellProfileValue === 'auto' ? 'selected' : ''}>Auto (detect)</option>
               ${shellProfiles.map(p =>
                 `<option value="${escapeHtml(p.id)}" ${shellProfileValue === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`

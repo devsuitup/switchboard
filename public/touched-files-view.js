@@ -65,12 +65,21 @@ function initTouchedView(parentEl) {
   title.className = 'viewer-toolbar-title';
   title.textContent = 'Touched files';
   info.appendChild(title);
+  const infoBtn = document.createElement('button');
+  infoBtn.id = 'touched-info-btn';
+  infoBtn.className = 'icon-btn info-btn';
+  infoBtn.textContent = 'i';
+  infoBtn.title = 'About touched files';
+  infoBtn.setAttribute('aria-label', infoBtn.title);
+  infoBtn.addEventListener('click', () => showTouchedInfo(infoBtn));
+  info.appendChild(infoBtn);
   toolbar.appendChild(info);
 
   const controls = document.createElement('div');
   controls.className = 'viewer-toolbar-controls';
   const sort = document.createElement('select');
   sort.id = 'touched-sort';
+  sort.className = 'control-select';
   sort.setAttribute('aria-label', 'Sort touched files');
   for (const [value, label] of [['time', 'Last touch'], ['path', 'Path']]) {
     const option = document.createElement('option');
@@ -79,7 +88,8 @@ function initTouchedView(parentEl) {
     sort.appendChild(option);
   }
   sort.addEventListener('change', () => {
-    const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+    const current = filePanelState.get(currentPanelSessionId)?.currentTab;
+    const tab = current?.returnList || current;
     if (tab?.type !== 'touched') return;
     tab.sort = sort.value;
     renderTouchedContent(currentPanelSessionId, tab);
@@ -104,11 +114,6 @@ function initTouchedView(parentEl) {
   toolbar.appendChild(controls);
   touchedContainerEl.appendChild(toolbar);
 
-  const coverage = document.createElement('div');
-  coverage.id = 'touched-coverage';
-  coverage.textContent = TOUCHED_COVERAGE_TEXT;
-  touchedContainerEl.appendChild(coverage);
-
   touchedSummaryEl = document.createElement('div');
   touchedSummaryEl.id = 'touched-summary';
   touchedContainerEl.appendChild(touchedSummaryEl);
@@ -128,19 +133,57 @@ function initTouchedView(parentEl) {
   });
 }
 
+function showTouchedInfo(button) {
+  if (document.querySelector('.touched-info-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay touched-info-overlay';
+  overlay.innerHTML = '<div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="touched-info-title">'
+    + '<div class="whats-new-header"><h2 id="touched-info-title">About touched files</h2>'
+    + '<button class="icon-btn" type="button" aria-label="Close">×</button></div>'
+    + '<div class="whats-new-body" id="touched-coverage"></div></div>';
+  overlay.querySelector('#touched-coverage').textContent = TOUCHED_COVERAGE_TEXT;
+  const closeButton = overlay.querySelector('button');
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    button.focus();
+  };
+  function onKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      closeButton.focus();
+    }
+  }
+  closeButton.addEventListener('click', close);
+  overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', onKey, true);
+  closeButton.focus();
+}
+
 function hideTouchedView() {
+  if (touchedContainerEl?.style.display !== 'none' && touchedListEl?._owner) {
+    touchedListEl._owner.listScrollTop = touchedListEl.scrollTop;
+  }
   if (touchedContainerEl) touchedContainerEl.style.display = 'none';
   setHeaderToggle(touchedToggleBtn, false);
 }
 
 function renderTouchedTab(sessionId, tab) {
   if (!touchedContainerEl) return;
-  const shown = !!tab && tab.type === 'touched';
+  const listTab = tab?.returnList || tab;
+  const shown = listTab?.type === 'touched';
+  if (!shown) hideTouchedView();
   touchedContainerEl.style.display = shown ? 'flex' : 'none';
   setHeaderToggle(touchedToggleBtn, shown || tab?.returnList?.type === 'touched');
   if (shown) {
-    renderTouchedContent(sessionId, tab);
-    window.restorePanelListScroll(touchedListEl, tab);
+    renderTouchedContent(sessionId, listTab);
+    window.restorePanelListScroll(touchedListEl, listTab);
+    if (tab.type === 'touched') renderPanelListLayout(false);
   }
 }
 
@@ -192,8 +235,8 @@ function openTouchedTab(sessionId) {
 
 async function refreshTouched(sessionId) {
   const state = filePanelState.get(sessionId);
-  if (!state || !state.currentTab || state.currentTab.type !== 'touched') return;
-  const tab = state.currentTab;
+  const tab = state?.currentTab?.returnList || state?.currentTab;
+  if (tab?.type !== 'touched') return;
 
   tab.loading = true;
   tab.openError = null;
@@ -215,11 +258,16 @@ async function refreshTouched(sessionId) {
     tab.data = result;
     if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
   }
-  if (currentPanelSessionId === sessionId && state.currentTab === tab) renderPanel(sessionId);
+  if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
 }
 
 async function openTouchedFile(sessionId, tab, filePath) {
+  const current = filePanelState.get(sessionId)?.currentTab;
+  if (current !== tab && current?.returnList !== tab) return;
   if (tab.opening) return;
+  if (current.absolutePath === filePath) return;
+  if (!confirmDiscardChangesEdits(current)) return;
+  const agreedContent = readChangesEditorContent(current);
   tab.opening = true;
   let result;
   try {
@@ -229,14 +277,17 @@ async function openTouchedFile(sessionId, tab, filePath) {
   }
   tab.opening = false;
   const state = filePanelState.get(sessionId);
-  if (!state || state.currentTab !== tab) return;
+  if (!state || state.currentTab !== current) return;
   if (!result || !result.ok) {
     tab.openError = `${filePath}: ${(result && result.error) || 'could not read the file'}`;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
+  if (readChangesEditorContent(current) !== agreedContent && !confirmDiscardChangesEdits(current)) return;
   tab.selection = filePath;
-  for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', row.dataset.path === filePath);
+  if (currentPanelSessionId === sessionId) {
+    for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', row.dataset.path === filePath);
+  }
   openTouchedEditor(sessionId, filePath, result, tab);
 }
 
@@ -325,7 +376,10 @@ function buildTouchedUnresolvedRow(entry) {
 function renderTouchedContent(sessionId, tab) {
   const signature = [tab.data, tab.loading, tab.error, tab.openError, tab.sort, tab.windowStart];
   document.getElementById('touched-sort').value = tab.sort;
-  if (window.reusePanelList(touchedListEl, touchedSummaryEl, tab, signature)) return;
+  if (window.reusePanelList(touchedListEl, touchedSummaryEl, tab, signature)) {
+    for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', row.dataset.path === tab.selection);
+    return;
+  }
   touchedSummaryEl.textContent = touchedSummaryText(tab);
   if (tab.openError) {
     const err = document.createElement('div');
@@ -365,7 +419,8 @@ function renderTouchedContent(sessionId, tab) {
 }
 
 function extendTouchedWindow(sessionId, tab) {
-  if (tab.loading || filePanelState.get(sessionId)?.currentTab !== tab) return;
+  const current = filePanelState.get(sessionId)?.currentTab;
+  if (tab.loading || (current !== tab && current?.returnList !== tab)) return;
   tab.windowDays += TOUCHED_WINDOW_STEP_DAYS;
   tab.windowStart -= TOUCHED_WINDOW_STEP_DAYS * TOUCHED_DAY_MS;
   const older = [tab.data?.nextOlderTimestamp, ...(tab.data?.cachedFiles || tab.data?.files || []).map(f => f.lastTouched), ...(tab.data?.cachedUnresolved || []).map(f => f.lastTouched)]

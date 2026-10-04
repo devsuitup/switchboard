@@ -99,7 +99,7 @@ test('an edit saved in the panel editor reaches disk, and the file stays changed
   await expect.poll(() => rowCounts(row)).toEqual({ added: 2, deleted: 0 });
 });
 
-test('a Touched modified file shows the shared diff and Back restores its list', async ({ home, env, launch }) => {
+test('a Touched modified file shows the shared diff below its list and Close restores the full list', async ({ home, env, launch }) => {
   const repo = makeRepo(home, env, TRACKED);
   const target = path.join(repo, 'alpha.txt');
   fs.appendFileSync(target, 'four\n');
@@ -127,7 +127,10 @@ test('a Touched modified file shows the shared diff and Back restores its list',
   await expect(diff.locator('#changes-diff-save-btn')).toBeVisible();
   const hostBox = await box(page.locator('#changes-diff-host'));
   expect((await box(diff.locator('.cm-editor'))).width).toBeGreaterThan(hostBox.width * 0.8);
-  await page.locator('#file-panel-back-btn').click();
+  await expect(list).toBeVisible();
+  await expect(page.locator('#file-panel-back-btn')).toBeHidden();
+  expect((await box(list)).y + (await box(list)).height).toBeLessThanOrEqual((await box(diff)).y);
+  await page.locator('#changes-diff-close-btn').click();
   await expect(list).toBeVisible();
   await expect(row).toHaveClass(/\bselected\b/);
   await expect(diff).toBeHidden();
