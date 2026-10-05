@@ -14,6 +14,7 @@ const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
 
 const INDEX_HTML = `<!DOCTYPE html>
 <html>
@@ -55,7 +56,7 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
   if (storageThrows) {
     const getItem = window.Storage.prototype.getItem;
     window.Storage.prototype.getItem = function (key) {
-      if (key === 'touchedListRatio') throw new Error('storage unavailable');
+      if (key === 'touchedListRatio' || key === 'touchedMarkdownFormatted') throw new Error('storage unavailable');
       return getItem.call(this, key);
     };
     window.Storage.prototype.setItem = () => { throw new Error('storage unavailable'); };
@@ -124,6 +125,8 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
   });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
+  evalInWindow(dom, path.join(NODE_MODULES, 'marked', 'lib', 'marked.umd.js'));
+  evalInWindow(dom, path.join(NODE_MODULES, 'dompurify', 'dist', 'purify.min.js'));
   for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
@@ -1238,5 +1241,220 @@ test('round 3: watcher switches identical Touched text between a file and a read
     assert.equal(ctx.editors.at(-1).mode, 'plain');
     assert.equal(ctx.document.getElementById('changes-diff-save-btn').style.display, '');
     assert.equal(ctx.calls.touched.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+function markdownDom(paths, { content = '# Title\n', original = content, ...over } = {}) {
+  return setupDom({
+    touchedImpl: () => result({ files: paths.map(p => row({ path: p })) }),
+    readImpl: () => ({ ok: true, original, current: content, version: 'v1', git: true }),
+    ...over,
+  });
+}
+
+function markdownChrome(ctx) {
+  const byId = id => ctx.document.getElementById(id);
+  return { format: byId('changes-diff-format-btn'), preview: byId('changes-diff-preview'), host: byId('changes-diff-host'), mode: byId('changes-diff-mode-btn'), save: byId('changes-diff-save-btn') };
+}
+
+async function openRow(ctx, filePath) {
+  clickRow(ctx, filePath);
+  await flush();
+}
+
+function assertFormatted(ctx, heading) {
+  const { format, preview, host } = markdownChrome(ctx);
+  assert.equal(preview?.querySelector('h1')?.textContent, heading);
+  assert.equal(preview.style.display, '');
+  assert.equal(host.style.display, 'none');
+  assert.equal(format.getAttribute('aria-pressed'), 'true');
+}
+
+function assertSource(ctx) {
+  const { format, preview, host } = markdownChrome(ctx);
+  assert.equal(format?.getAttribute('aria-pressed'), 'false');
+  assert.equal(preview.style.display, 'none');
+  assert.equal(host.style.display, '');
+}
+
+test('markdown: a Touched markdown file opens formatted, its diff mode hidden', async () => {
+  const ctx = markdownDom(['/work/README.md'], { original: '# Old\n' });
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    assert.equal(markdownChrome(ctx).mode.style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a file that is not markdown has no format toggle and no preview', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/a.txt');
+    const { format, preview, host } = markdownChrome(ctx);
+    assert.equal(format?.style.display, 'none');
+    assert.equal(preview.style.display, 'none');
+    assert.equal(host.style.display, '');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: .markdown and upper-case .MDX open formatted', async () => {
+  const ctx = markdownDom(['/work/README.markdown', '/work/x.MDX']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.markdown');
+    assertFormatted(ctx, 'Title');
+    await openRow(ctx, '/work/x.MDX');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/x.MDX');
+    assertFormatted(ctx, 'Title');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: the source toggle is remembered for the next markdown file', async () => {
+  const ctx = markdownDom(['/work/README.md', '/work/b.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    markdownChrome(ctx).format.click();
+    await flush();
+    assertSource(ctx);
+    assert.equal(ctx.window.localStorage.getItem('touchedMarkdownFormatted'), 'false');
+    await openRow(ctx, '/work/b.md');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.md');
+    assertSource(ctx);
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: formatted shows the unsaved buffer, and Save stays available', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    markdownChrome(ctx).format.click();
+    await flush();
+    ctx.editors.at(-1).setText('# Edited\n');
+    markdownChrome(ctx).format.click();
+    await flush();
+    assertFormatted(ctx, 'Edited');
+    const { save } = markdownChrome(ctx);
+    assert.equal(save.style.display, '');
+    assert.equal(save.disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: the formatted view is sanitised', async () => {
+  const ctx = markdownDom(['/work/README.md'], { content: '[x](javascript:alert(1)) <img src=x onerror=alert(1)>\n' });
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    const { preview } = markdownChrome(ctx);
+    assert.ok(preview?.querySelector('p'), 'the document is rendered');
+    assert.equal(preview.querySelector('a[href^="javascript:"]'), null);
+    assert.equal(preview.querySelector('[onerror]'), null);
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a throwing storage opens formatted and the toggle still works', async () => {
+  const ctx = markdownDom(['/work/README.md'], { storageThrows: true });
+  const errors = [];
+  ctx.window.addEventListener('error', event => errors.push(event.error));
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    markdownChrome(ctx).format.click();
+    await flush();
+    assertSource(ctx);
+    assert.deepEqual(errors, []);
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: toggling keeps the same editor and its buffer', async () => {
+  const ctx = markdownDom(['/work/README.md'], { original: '# Old\n' });
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    const tab = ctx.stateOf('s1').currentTab;
+    const editor = tab.editorView;
+    assert.ok(editor, 'the editor exists while formatted');
+    editor.setText('# Kept\n');
+    const count = ctx.editors.length;
+    markdownChrome(ctx).format.click();
+    await flush();
+    assert.equal(markdownChrome(ctx).mode.style.display, '');
+    markdownChrome(ctx).format.click();
+    await flush();
+    assert.equal(tab.editorView, editor);
+    assert.equal(ctx.editors.length, count);
+    assert.equal(editor.current, '# Kept\n');
+    assert.ok(editor.dom.isConnected);
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a Changes list editor on a markdown file has no format toggle', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await ctx.window.openChangesDiff('s1', { path: 'README.md', staged: true });
+    await flush();
+    const { format, preview, host } = markdownChrome(ctx);
+    assert.equal(ctx.stateOf('s1').currentTab.selectedFile.path, 'README.md');
+    assert.equal(format?.style.display, 'none');
+    assert.equal(preview.style.display, 'none');
+    assert.equal(host.style.display, '');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: Escape from the formatted view closes the editor', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    ctx.document.getElementById('changes-diff-preview')?.focus();
+    ctx.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a formatted render that resolves late does not replace the file now open', async () => {
+  const ctx = markdownDom(['/work/a.md', '/work/b.md'], {
+    readImpl: filePath => ({ ok: true, original: '', current: filePath === '/work/a.md' ? '# A\n' : '# B\n', version: 'v1', git: false }),
+  });
+  try {
+    await openTab(ctx);
+    const pending = [];
+    ctx.window.loadCodeMirrorBundle = () => new Promise(resolve => pending.push(resolve));
+    await openRow(ctx, '/work/a.md');
+    await openRow(ctx, '/work/b.md');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.md');
+    pending.reverse().forEach(resolve => resolve());
+    await flush();
+    assertFormatted(ctx, 'B');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a restored Touched stash recomputes formatted from the preference', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    markdownChrome(ctx).format.click();
+    await flush();
+    ctx.editors.at(-1).setText('# Unsaved\n');
+    ctx.window.localStorage.setItem('touchedMarkdownFormatted', 'true');
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/work/other.js', oldContent: 'a\n', newContent: 'b\n' });
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    ctx.document.getElementById('touched-toggle-btn').click();
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab.absolutePath, '/work/README.md');
+    assert.equal(tab.restoredEdits, true);
+    assertFormatted(ctx, 'Unsaved');
   } finally { ctx.destroy(); }
 });

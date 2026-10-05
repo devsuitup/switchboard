@@ -38,6 +38,14 @@ A path that cannot be tied to a file is listed under **Not resolved to a file**
 with the reason: a relative path whose session directory could not be verified,
 a network path, or a path with unusable characters. It cannot be opened.
 
+## Markdown files
+
+A markdown file (`.md`, `.mdx`, `.markdown`) opens formatted. The toggle in the
+editor's toolbar switches to the source and back; the choice is remembered for
+the next markdown file Touched opens. The formatted view shows the editor's
+text, unsaved edits included, and Save and Reload stay available. The diff
+against HEAD is in the source view.
+
 ## Limits
 
 - At most 500 files are listed; the summary counts the rest.

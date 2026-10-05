@@ -46,10 +46,12 @@ let changesDiffEl = null;
 let changesToggleBtn = null;
 let changesDiffTitleEl = null;
 let changesDiffModeBtn = null;
+let changesDiffFormatBtn = null;
 let changesDiffSaveBtn = null;
 let changesDiffReloadBtn = null;
 let changesDiffNoticeEl = null;
 let changesDiffHostEl = null;
+let changesDiffPreviewEl = null;
 let changesListSplitterEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
@@ -61,6 +63,8 @@ const DEFAULT_CHANGES_LIST_HEIGHT = 200;
 const TOUCHED_LIST_RATIO_KEY = 'touchedListRatio';
 const DEFAULT_TOUCHED_LIST_RATIO = 0.4;
 let touchedListRatio = readStoredTouchedListRatio();
+const TOUCHED_MARKDOWN_FORMATTED_KEY = 'touchedMarkdownFormatted';
+const DEFAULT_TOUCHED_MARKDOWN_FORMATTED = true;
 // see .ai/contexts/changes-view.md ("The list and the editor")
 const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
@@ -96,6 +100,7 @@ const FP_ICONS = {
   'side-by-side': FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>'),
   inline: FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>'),
   plain: FP_STROKE_ICON('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/>'),
+  formatted: FP_STROKE_ICON('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
 };
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -871,6 +876,7 @@ function restoreChangesEdits(sessionId, state, tab, listType = 'changes') {
   tab.returnList = stash.returnList;
   tab.absolutePath = stash.absolutePath;
   tab.filePath = stash.absolutePath;
+  tab.formatted = touchedOpensFormatted(stash.absolutePath);
   tab.gitFile = stash.gitFile;
   tab.noDiff = stash.noDiff;
   tab.selectedFile = stash.file;
@@ -1253,6 +1259,7 @@ function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
   tab.filePath = absolutePath;
   tab.selectedFile = { path: absolutePath };
   tab.loading = false;
+  tab.formatted = touchedOpensFormatted(absolutePath);
   applyChangesPair(tab, pair);
   state.currentTab = tab;
   state.panelVisible = true;
@@ -1848,6 +1855,13 @@ function buildChangesDiffChrome() {
   });
   controls.appendChild(closeEditorBtn);
 
+  changesDiffFormatBtn = document.createElement('button');
+  changesDiffFormatBtn.className = 'icon-btn';
+  changesDiffFormatBtn.id = 'changes-diff-format-btn';
+  changesDiffFormatBtn.innerHTML = FP_ICONS.formatted;
+  changesDiffFormatBtn.addEventListener('click', handleChangesFormatToggle);
+  controls.appendChild(changesDiffFormatBtn);
+
   changesDiffModeBtn = document.createElement('button');
   changesDiffModeBtn.className = 'icon-btn';
   changesDiffModeBtn.id = 'changes-diff-mode-btn';
@@ -1888,6 +1902,13 @@ function buildChangesDiffChrome() {
   changesDiffHostEl.id = 'changes-diff-host';
   changesDiffEl.appendChild(changesDiffHostEl);
 
+  changesDiffPreviewEl = document.createElement('div');
+  changesDiffPreviewEl.id = 'changes-diff-preview';
+  changesDiffPreviewEl.className = 'markdown-preview';
+  changesDiffPreviewEl.tabIndex = 0;
+  changesDiffPreviewEl.style.display = 'none';
+  changesDiffEl.appendChild(changesDiffPreviewEl);
+
   changesDiffEl.addEventListener('cm-save', () => {
     if (currentPanelSessionId) handleChangesSave(currentPanelSessionId);
   });
@@ -1896,7 +1917,17 @@ function buildChangesDiffChrome() {
 function renderChangesDiff(sessionId, tab) {
   window.setViewerPath(changesDiffTitleEl, tab.selectedFile.path);
 
-  changesDiffModeBtn.style.display = tab.editable && !tab.noDiff ? '' : 'none';
+  const markdown = isMarkdownPath(tab.absolutePath);
+  const formatted = markdown && !!tab.formatted;
+  changesDiffFormatBtn.style.display = markdown ? '' : 'none';
+  changesDiffFormatBtn.setAttribute('aria-pressed', String(formatted));
+  changesDiffFormatBtn.title = formatted ? 'Formatted — click for the source' : 'Source — click for formatted';
+  changesDiffFormatBtn.setAttribute('aria-label', changesDiffFormatBtn.title);
+  changesDiffHostEl.style.display = formatted ? 'none' : '';
+  changesDiffPreviewEl.style.display = formatted ? '' : 'none';
+  if (formatted) renderChangesPreview(sessionId, tab);
+
+  changesDiffModeBtn.style.display = tab.editable && !tab.noDiff && !formatted ? '' : 'none';
   const nextMode = CHANGES_DIFF_MODES[(CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length];
   setModeButton(changesDiffModeBtn, changesDiffMode, nextMode);
   changesDiffSaveBtn.style.display = tab.editable && !tab.readOnly ? '' : 'none';
@@ -1927,6 +1958,37 @@ function renderChangesDiff(sessionId, tab) {
 
   changesDiffHostEl.innerHTML = '';
   changesDiffHostEl.appendChild(body);
+}
+
+// see .ai/contexts/touched-files.md ("Markdown, formatted")
+function renderChangesPreview(sessionId, tab) {
+  window.loadCodeMirrorBundle().then(() => {
+    if (filePanelState.get(sessionId)?.currentTab !== tab) return;
+    renderMarkdownPreview(changesDiffPreviewEl, readChangesEditorContent(tab) ?? tab.current);
+  }).catch((err) => {
+    console.error('[file-panel] Failed to load codemirror-bundle:', err);
+  });
+}
+
+function readStoredTouchedMarkdownFormatted() {
+  try {
+    const value = localStorage.getItem(TOUCHED_MARKDOWN_FORMATTED_KEY);
+    if (value != null) return value !== 'false';
+  } catch {}
+  return DEFAULT_TOUCHED_MARKDOWN_FORMATTED;
+}
+
+function touchedOpensFormatted(absolutePath) {
+  return isMarkdownPath(absolutePath) && readStoredTouchedMarkdownFormatted();
+}
+
+function handleChangesFormatToggle() {
+  const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+  if (!tab) return;
+  tab.formatted = !tab.formatted;
+  try { localStorage.setItem(TOUCHED_MARKDOWN_FORMATTED_KEY, String(tab.formatted)); } catch {}
+  renderPanel(currentPanelSessionId);
+  if (tab.formatted) changesDiffPreviewEl.focus();
 }
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
