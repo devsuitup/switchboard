@@ -473,6 +473,45 @@ test('sandbox wrapper: ~/.claude is a private tmpfs, its state bound back read-w
     }
   });
 
+test('sandbox wrapper: skills and agents are read-write only with SWITCHBOARD_SANDBOX_RW_SKILLS=1 and SWITCHBOARD_SANDBOX_RW_AGENTS=1',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(path.join(dir, 'skills'), { recursive: true });
+      const dot = path.join(rig.proj, '.claude');
+      for (const d of ['skills', 'agents']) fs.mkdirSync(path.join(dot, d), { recursive: true });
+      const deep = path.join(rig.proj, 'deep.md');
+      fs.writeFileSync(deep, '');
+      fs.symlinkSync(deep, path.join(dir, 'skills', 'x'));
+
+      const off = rig.run(['--version']);
+      assert.equal(off.status, 0, off.stderr);
+      let ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dir, 'skills'))?.op, '--ro-bind', 'skills must be read-only by default');
+      assert.equal(mountAt(ops, path.join(dot, 'agents')), undefined, 'project agents stay under the read-only .claude');
+      assert.equal(mountAt(ops, deep)?.op, '--ro-bind');
+
+      const skillsOnly = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' });
+      assert.equal(skillsOnly.status, 0, skillsOnly.stderr);
+      ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dir, 'skills'))?.op, '--bind');
+      assert.equal(mountAt(ops, path.join(dot, 'skills'))?.op, '--bind');
+      assert.notEqual(mountAt(ops, path.join(dir, 'agents'))?.op, '--bind', 'each flag covers only its own directory');
+      assert.equal(mountAt(ops, path.join(dot, 'agents')), undefined);
+      assert.equal(mountAt(ops, deep), undefined, 'links inside a writable entry are not followed');
+
+      const both = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1', SWITCHBOARD_SANDBOX_RW_AGENTS: '1' });
+      assert.equal(both.status, 0, both.stderr);
+      ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dir, 'agents'))?.op, '--bind');
+      assert.equal(mountAt(ops, path.join(dot, 'agents'))?.op, '--bind');
+      assert.ok(fs.statSync(path.join(dir, 'agents')).isDirectory(), 'a missing ~/.claude/agents is created on the host');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a symlinked ~/.claude entry is recreated as a link, and its target is read-only wherever the sandbox could write it',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });

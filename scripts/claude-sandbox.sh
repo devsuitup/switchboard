@@ -18,6 +18,8 @@
 #                entry of ~/.claude and of each bound directory's .claude
 #                that is not listed session state, a private copy of
 #                ~/.claude.json, each repository's config and hooks
+#                (skills and agents become session state with
+#                $SWITCHBOARD_SANDBOX_RW_SKILLS=1 / $SWITCHBOARD_SANDBOX_RW_AGENTS=1)
 #   network:     shared with the host — Claude needs the API, and the
 #                Switchboard IDE bridge listens on localhost
 #
@@ -104,6 +106,18 @@ PROJECT_STATE_ENTRIES=(worktrees agent-memory agent-memory-local)
 # Created in ~/.claude before launch when missing, so that they are mounted
 # from the host rather than left to the tmpfs.
 USER_PRECREATED_DIRS=(projects todos statsig file-history sessions plans tasks ide)
+# Opt-in: an unsandboxed claude later loads what is written there; see
+# docs/sandbox.md, "Writable skills and agents".
+if [ "${SWITCHBOARD_SANDBOX_RW_SKILLS:-0}" = "1" ]; then
+  USER_STATE_ENTRIES+=(skills)
+  PROJECT_STATE_ENTRIES+=(skills)
+  USER_PRECREATED_DIRS+=(skills)
+fi
+if [ "${SWITCHBOARD_SANDBOX_RW_AGENTS:-0}" = "1" ]; then
+  USER_STATE_ENTRIES+=(agents)
+  PROJECT_STATE_ENTRIES+=(agents)
+  USER_PRECREATED_DIRS+=(agents)
+fi
 
 # Project directory plus whatever Switchboard forwarded. These must already
 # exist — creating a mistyped "Additional Directory" on the host would be worse

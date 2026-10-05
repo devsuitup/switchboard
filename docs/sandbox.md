@@ -137,7 +137,8 @@ with its listed state mounted back read-write on top.
 Only the state the CLI writes during a session is read-write; every other
 entry is read-only, whatever it is — settings, hooks, commands, agents,
 skills, plugins, `keybindings.json`, `CLAUDE.md`, `rules`, `output-styles`, a
-status-line script with no extension, a directory a future CLI version adds.
+status-line script with no extension, a directory a future CLI version adds. Skills and agents can be made
+writable on request: see [Writable skills and agents](#writable-skills-and-agents).
 
 | Entry | Inside the sandbox |
 |---|---|
@@ -145,6 +146,7 @@ status-line script with no extension, a directory a future CLI version adds.
 | In `~/.claude`: `projects` | read-only, except the session's own transcript folder, `projects/<the working directory, every character but letters and digits replaced by ->`, which is read-write; see [Schedules](#schedules) |
 | In `~/.claude`: `shell-snapshots`, `session-env`, `backups`, `state` | an empty private tmpfs. Other sessions source the shell snapshots and session hooks kept there before each Bash command, and the CLI offers the backups there as what to copy back over a broken `~/.claude.json`; the session gets its own |
 | In a project's `.claude`: `worktrees`, `agent-memory`, `agent-memory-local` | read-write |
+| `skills` in `~/.claude` and in a project's `.claude`, only with `SWITCHBOARD_SANDBOX_RW_SKILLS=1`; `agents` likewise, only with `SWITCHBOARD_SANDBOX_RW_AGENTS=1` | read-write; see [Writable skills and agents](#writable-skills-and-agents) |
 | Any other file or directory | read-only |
 | A symbolic link to one of the read-write entries of `~/.claude` (`todos` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves — only when the target is a directory (a file, for `*.json`, `*.jsonl` and `.last-*`) of the same name, and neither `$HOME` nor a parent of it. Any other target is refused |
 | A symbolic link to one of the read-write entries of a project's `.claude` | left as it is and not followed: a repository can carry such a link, so it resolves only to what the sandbox sees anyway |
@@ -178,6 +180,27 @@ writing the file in place (it does so on `EBUSY`, `EXDEV`, `EPERM` and
 A `.claude` that is itself a symbolic link is refused: the link lives in a
 writable directory, and the session could replace it with a directory of its
 own.
+
+### Writable skills and agents
+
+Skills and agents are read-only by default: an unsandboxed `claude` started
+later loads them, and a skill can carry scripts it tells Claude to run. To
+write them from a sandboxed session, put `SWITCHBOARD_SANDBOX_RW_SKILLS=1`,
+`SWITCHBOARD_SANDBOX_RW_AGENTS=1` or both in the session's Pre-launch Command.
+Each makes that directory read-write in `~/.claude` and in every bound
+directory's `.claude`, as session state:
+
+- `~/.claude/skills` or `~/.claude/agents` is created before launch when
+  missing. In a project's `.claude`, which stays read-only, a missing one cannot
+  be created from inside the sandbox: create it once outside.
+- A `~/.claude/skills` or `~/.claude/agents` that is a symbolic link is
+  followed like the other state links: only to a directory of the same name,
+  elsewhere, and never to `$HOME` or a parent of it. Links inside it are no
+  longer followed and protected.
+
+This gives up part of the protection: what the session writes there is loaded,
+and its scripts run, by every later session outside the sandbox, other
+projects' included for `~/.claude`.
 
 ### `~/.claude.json`
 
@@ -341,6 +364,9 @@ whatever they hold.
   Pre-launch Command, the rootless podman API socket is bound, and through it
   the session can start a container with any host path mounted
   (`podman run -v $HOME:/h …`): enabling it gives up the filesystem boundary.
+- **Skills and agents, when enabled.** With `SWITCHBOARD_SANDBOX_RW_SKILLS=1`
+  or `SWITCHBOARD_SANDBOX_RW_AGENTS=1`, see
+  [Writable skills and agents](#writable-skills-and-agents).
 - **Session status.** `~/.claude/sessions` is read-write, and a sandboxed CLI
   records its PID as seen inside its PID namespace, so Switchboard's check of
   whether a session is live elsewhere can be misled for a sandboxed session.
