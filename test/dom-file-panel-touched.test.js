@@ -109,7 +109,6 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
   window.createUnifiedMergeViewer = (parent, original, current, _name, options) => editor(parent, original, current, 'inline', options);
   window.createEditableViewer = (parent, current, _name, options) => editor(parent, null, current, 'plain', options);
   window.createReadOnlyViewer = (parent, current) => editor(parent, null, current, 'read-only', { onChange() {} });
-  window.loadCodeMirrorBundle = () => Promise.resolve();
   Object.defineProperty(window, 'ViewerPanel', {
     value: function ViewerPanelStub() {
       return {
@@ -127,6 +126,9 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
 
   evalInWindow(dom, path.join(NODE_MODULES, 'marked', 'lib', 'marked.umd.js'));
   evalInWindow(dom, path.join(NODE_MODULES, 'dompurify', 'dist', 'purify.min.js'));
+  const bundledMarked = window.marked;
+  delete window.marked;
+  window.loadCodeMirrorBundle = () => { window.marked = bundledMarked; return Promise.resolve(); };
   for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
@@ -145,6 +147,7 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
     changed: filePath => changeListeners.forEach(handler => handler(filePath)),
     stateOf: (sessionId) => vm.runInContext('filePanelState', ctx).get(sessionId),
     evalSource: source => vm.runInContext(source, ctx),
+    bundledMarked,
     destroy: () => window.close(),
   };
 }
@@ -1287,6 +1290,50 @@ test('markdown: a Touched markdown file opens formatted, its diff mode hidden', 
   } finally { ctx.destroy(); }
 });
 
+test('markdown: a stored value other than false opens formatted', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    ctx.window.localStorage.setItem('touchedMarkdownFormatted', 'x');
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: a watcher reload re-renders the formatted view', async () => {
+  let content = '# One\n';
+  const ctx = markdownDom(['/work/README.md'], {
+    readImpl: () => ({ ok: true, original: content, current: content, version: content, git: true }),
+  });
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'One');
+    content = '# Two\n';
+    ctx.changed('/work/README.md');
+    await flush();
+    assertFormatted(ctx, 'Two');
+  } finally { ctx.destroy(); }
+});
+
+test('markdown: opening another file shows the formatted view from its top', async () => {
+  const ctx = markdownDom(['/work/a.md', '/work/b.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/a.md');
+    const { preview } = markdownChrome(ctx);
+    let scrollTop = 0;
+    Object.defineProperty(preview, 'scrollTop', { get: () => scrollTop, set: (value) => { scrollTop = value; }, configurable: true });
+    scrollTop = 500;
+    ctx.changed('/work/a.md');
+    await flush();
+    assert.equal(scrollTop, 500, 'a re-render of the same file keeps its position');
+    await openRow(ctx, '/work/b.md');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.md');
+    assert.equal(scrollTop, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('markdown: a file that is not markdown has no format toggle and no preview', async () => {
   const ctx = setupDom();
   try {
@@ -1415,7 +1462,11 @@ test('markdown: Escape from the formatted view closes the editor', async () => {
   try {
     await openTab(ctx);
     await openRow(ctx, '/work/README.md');
-    ctx.document.getElementById('changes-diff-preview')?.focus();
+    markdownChrome(ctx).format.click();
+    await flush();
+    markdownChrome(ctx).format.click();
+    await flush();
+    assertFormatted(ctx, 'Title');
     ctx.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
   } finally { ctx.destroy(); }
@@ -1428,7 +1479,7 @@ test('markdown: a formatted render that resolves late does not replace the file 
   try {
     await openTab(ctx);
     const pending = [];
-    ctx.window.loadCodeMirrorBundle = () => new Promise(resolve => pending.push(resolve));
+    ctx.window.loadCodeMirrorBundle = () => new Promise(resolve => pending.push(() => { ctx.window.marked = ctx.bundledMarked; resolve(); }));
     await openRow(ctx, '/work/a.md');
     await openRow(ctx, '/work/b.md');
     assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.md');

@@ -52,6 +52,7 @@ let changesDiffReloadBtn = null;
 let changesDiffNoticeEl = null;
 let changesDiffHostEl = null;
 let changesDiffPreviewEl = null;
+let changesPreviewTab = null;
 let changesListSplitterEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
@@ -1965,6 +1966,10 @@ function renderChangesPreview(sessionId, tab) {
   window.loadCodeMirrorBundle().then(() => {
     if (filePanelState.get(sessionId)?.currentTab !== tab) return;
     renderMarkdownPreview(changesDiffPreviewEl, readChangesEditorContent(tab) ?? tab.current);
+    if (changesPreviewTab !== tab) {
+      changesPreviewTab = tab;
+      changesDiffPreviewEl.scrollTop = 0;
+    }
   }).catch((err) => {
     console.error('[file-panel] Failed to load codemirror-bundle:', err);
   });

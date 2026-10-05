@@ -323,6 +323,9 @@ it.
   shown; toggling never destroys the editor; Save and Reload stay. Every
   `renderChangesDiff` re-renders the preview, after `loadCodeMirrorBundle`
   (it provides `window.marked`), so a watcher reload shows the new content.
+  The preview element is shared by every tab and session: a render for a tab
+  other than the last one rendered (`changesPreviewTab`) resets its
+  `scrollTop` to 0, a re-render of the same tab keeps it.
 - **Formatted wins over the diff**: the diff-mode button is hidden while
   formatted; toggling to source shows the stored `changesDiffMode` view.
 - **Escape**: the preview has `tabindex="0"` and takes focus on the toggle to
@@ -334,5 +337,6 @@ it.
 - **Sink**: the preview is written by `renderMarkdownPreview`, one of the
   sanitised markdown sinks listed in `.ai/contexts/viewer-panel.md`.
 
-Tests: the `markdown:` tests in `test/dom-file-panel-touched.test.js` load the
-real `marked` and `DOMPurify` builds.
+Tests: the `markdown:` tests in `test/dom-file-panel-touched.test.js` use the
+real `marked` and `DOMPurify` builds; `window.marked` is set only by the
+`loadCodeMirrorBundle` stub, as the bundle sets it in the app.
