@@ -1,9 +1,7 @@
 'use strict';
 
-// A path:line link carries its line into the panel, on both routes into it:
-// the plain viewer for an unchanged file, and the diff for a changed one.
-// When the diff is read-only there is no line to jump to, and the panel says
-// so instead of dropping the line silently.
+// A path:line link carries its line into the Touched editor, whether the file
+// is unchanged (plain editor) or changed against HEAD (diff editor).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -24,64 +22,43 @@ const INDEX_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
-const STATUS = {
-  ok: true,
-  kind: 'local',
-  branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
-  files: [{ path: 'src/a.js', origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 1, deleted: 0 }],
-  totals: { files: 1, added: 1, deleted: 0 },
-};
-
-function setup({ locateImpl, fileImpl } = {}) {
+function setup({ pair } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
-  const calls = { revealed: [], viewerOpened: [], viewerRevealed: [] };
+  const calls = { revealed: [], locate: [], modes: [] };
 
   window.api = {
     onMcpOpenDiff: () => {}, onMcpOpenFile: () => {}, onMcpCloseAllDiffs: () => {}, onMcpCloseTab: () => {},
     mcpDiffResponse: () => {},
-    gitChangesStatus: () => Promise.resolve(STATUS),
-    gitChangesDiff: () => Promise.resolve({ ok: true, content: '@@ -1 +1 @@\n-old\n+new\n', truncated: false }),
-    gitChangesFile: () => Promise.resolve((fileImpl || (() => ({ ok: true, original: 'a\n', current: 'b\n', version: 'v1' })))()),
-    gitChangesSave: () => Promise.resolve({ ok: true, version: 'v2' }),
-    gitChangesWatch: () => Promise.resolve({ ok: true }),
-    gitChangesUnwatch: () => Promise.resolve({ ok: true }),
-    onGitChangesFileChanged: () => {},
-    gitChangesLocate: (_s, filePath) => Promise.resolve((locateImpl || (() => ({ ok: false, reason: 'outside' })))(filePath)),
-    readFileForPanel: () => Promise.resolve({ ok: true, content: 'one\ntwo\nthree\n' }),
+    gitChangesLocate: (_s, filePath) => { calls.locate.push(filePath); return Promise.resolve({ ok: true, changed: true, relPath: 'src/a.js' }); },
+    resolveTerminalPaths: (_s, texts) => Promise.resolve(texts.map(p => ({ ok: true, path: p }))),
+    sessionTouchedFiles: () => Promise.resolve({ ok: true, files: [], unresolved: [], omitted: 0, coverage: {} }),
+    readFileForPanel: () => Promise.resolve(pair || { ok: true, git: false, original: 'one\ntwo\nthree\n', current: 'one\ntwo\nthree\n' }),
+    watchFile: () => Promise.resolve({ ok: true }),
+    unwatchFile: () => Promise.resolve({ ok: true }),
     saveFileForPanel: () => Promise.resolve({ ok: true }),
   };
   window.confirm = () => true;
   window.loadCodeMirrorBundle = () => Promise.resolve();
   window.cmRevealLine = (view, line) => calls.revealed.push({ view, line });
 
-  const makeView = (parent) => {
+  const makeView = (parent, mode) => {
+    calls.modes.push(mode);
     const el = window.document.createElement('div');
     parent.appendChild(el);
     return { dom: el, state: { doc: { toString: () => 'b\n' } }, destroy() { if (el.parentNode) el.parentNode.removeChild(el); } };
   };
-  window.createMergeViewer = (parent) => makeView(parent);
-  window.createUnifiedMergeViewer = (parent) => makeView(parent);
-  window.createEditableViewer = (parent) => makeView(parent);
-
-  Object.defineProperty(window, 'ViewerPanel', {
-    value: function ViewerPanelStub() {
-      return {
-        open: (title, filePath) => calls.viewerOpened.push(filePath),
-        revealLine: (line) => calls.viewerRevealed.push(line),
-        destroy() {},
-        hasUnsavedEdits: () => false,
-      };
-    },
-    writable: true, configurable: true,
-  });
+  window.createMergeViewer = (parent) => makeView(parent, 'side-by-side');
+  window.createUnifiedMergeViewer = (parent) => makeView(parent, 'inline');
+  window.createEditableViewer = (parent) => makeView(parent, 'plain');
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
-  for (const f of ['splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'viewer-toolbar.js', 'file-panel.js']) {
+  for (const f of ['splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
   }
   window.initFilePanel();
-  return { window, document: window.document, calls, destroy: () => window.close() };
+  const ctx = dom.getInternalVMContext();
+  return { window, document: window.document, calls, stateOf: id => vm.runInContext('filePanelState', ctx).get(id), destroy: () => window.close() };
 }
 
 function flush() {
@@ -90,14 +67,15 @@ function flush() {
   return p;
 }
 
-test('an unchanged file opens in the viewer and is scrolled to the line', async () => {
+test('an unchanged file opens in the Touched editor and is scrolled to the line', async () => {
   const ctx = setup();
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openFileInPanel('s1', '/repo/src/other.js', { line: 42 });
     await flush();
-    assert.deepStrictEqual(ctx.calls.viewerOpened, ['/repo/src/other.js']);
-    assert.deepStrictEqual(ctx.calls.viewerRevealed, [42]);
+    assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
+    assert.deepStrictEqual(ctx.calls.modes, ['plain']);
+    assert.deepStrictEqual(ctx.calls.revealed.map(r => r.line), [42]);
   } finally { ctx.destroy(); }
 });
 
@@ -107,34 +85,20 @@ test('no line means no jump', async () => {
     ctx.window.switchPanel('s1');
     await ctx.window.openFileInPanel('s1', '/repo/src/other.js');
     await flush();
-    assert.deepStrictEqual(ctx.calls.viewerRevealed, []);
+    assert.deepStrictEqual(ctx.calls.revealed, []);
   } finally { ctx.destroy(); }
 });
 
-test('a changed file opens its diff and the editor is scrolled to the line', async () => {
-  const ctx = setup({ locateImpl: () => ({ ok: true, changed: true, relPath: 'src/a.js', staged: false, untracked: false }) });
+test('a changed file opens its diff in the Touched editor and is scrolled to the line', async () => {
+  const ctx = setup({ pair: { ok: true, git: true, original: 'a\n', current: 'b\n', version: 'v1' } });
   try {
     ctx.window.switchPanel('s1');
     await ctx.window.openFileInPanel('s1', '/repo/src/a.js', { line: 7 });
     await flush();
+    assert.deepStrictEqual(ctx.calls.locate, []);
+    assert.notDeepStrictEqual(ctx.calls.modes, ['plain']);
     assert.strictEqual(ctx.calls.revealed.length, 1);
     assert.strictEqual(ctx.calls.revealed[0].line, 7);
-    assert.deepStrictEqual(ctx.calls.viewerRevealed, []);
-  } finally { ctx.destroy(); }
-});
-
-test('a read-only diff says the line was not reached rather than dropping it', async () => {
-  const ctx = setup({
-    locateImpl: () => ({ ok: true, changed: true, relPath: 'src/a.js', staged: false, untracked: false }),
-    fileImpl: () => ({ ok: false, reason: 'binary' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    await ctx.window.openFileInPanel('s1', '/repo/src/a.js', { line: 7 });
-    await flush();
-    assert.strictEqual(ctx.calls.revealed.length, 0);
-    const notice = ctx.document.querySelector('#changes-diff-notice');
-    assert.match(notice.textContent, /Line 7 was not reached/);
   } finally { ctx.destroy(); }
 });
 
@@ -144,6 +108,7 @@ test('a line of zero or below is ignored, not passed on', async () => {
     ctx.window.switchPanel('s1');
     await ctx.window.openFileInPanel('s1', '/repo/src/other.js', { line: 0 });
     await flush();
-    assert.deepStrictEqual(ctx.calls.viewerRevealed, []);
+    assert.deepStrictEqual(ctx.calls.revealed, []);
+    assert.equal(ctx.stateOf('s1').currentTab.pendingLine, null);
   } finally { ctx.destroy(); }
 });

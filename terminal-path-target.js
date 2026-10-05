@@ -95,7 +95,7 @@ function resolveTerminalPathsCwd(sessionId, deps) {
   const target = panelOwnerId
     ? deps.resolvePanelCwd(panelOwnerId, deps.resolveTarget)
     : deps.resolveTarget(sessionId);
-  if (target && target.ok && target.kind && target.kind !== 'local') {
+  if (target && target.kind === 'remote') {
     return { ok: false, reason: 'remote' };
   }
   if (!target || !target.ok || typeof target.cwd !== 'string' || target.cwd === '') {

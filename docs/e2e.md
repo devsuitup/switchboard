@@ -45,6 +45,7 @@ here.
 | A changed tracked file is listed with its counts, and the header total matches | `changes.spec.js` | status → rows → summary, through the real git and IPC |
 | Clicking an untracked file opens it and its line count appears | `changes.spec.js` | the row click, the editable content pair, the count on open |
 | An edit saved in the panel editor reaches disk, and the file stays changed | `changes.spec.js` | the editor gets the panel's width (not two 225 px columns), save writes the bytes |
+| A clicked markdown file opens formatted in Touched as an opened row, and its preview scrolls inside the panel | `changes.spec.js` | the click route into Touched, the opened row, the preview's `min-height: 0` (its box stays within `#file-panel-content`), the toggle back to the source editor |
 | The shell opened with no tab fills the panel and is not a sidebar row | `panel.spec.js` | the `.shell-only` layout, and `buildProjectsFromCache` skipping the panel shell |
 | Changes on a project with no git work tree says so, with no git output | `panel.spec.js` | the not-a-repository note instead of git's raw output |
 | Refresh beside Stop redraws a plain terminal and restores its fitted size | `terminal-refresh.spec.js` | visible header geometry, one refresh IPC, actual PTY size events, and final fitted size |

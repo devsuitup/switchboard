@@ -4,10 +4,10 @@
  * Manages a collapsible panel to the right of the terminal that shows
  * files and diffs received from the MCP bridge.
  *
- * For files: delegates to a ViewerPanel instance (shared component).
+ * Files open in the Touched tab (touched-files-view.js) and the Changes tab.
  * For diffs: uses its own MergeView rendering with accept/reject.
  *
- * Globals expected: window.api, window.ViewerPanel,
+ * Globals expected: window.api,
  *   window.createMergeViewer, window.createUnifiedMergeViewer,
  *   window.createViewerToolbar, openSessions (from app.js)
  */
@@ -21,15 +21,10 @@ const filePanelState = new Map();
 // ── DOM References ──────────────────────────────────────────────────
 
 let filePanelEl = null;
-let filePanelContentEl = null;  // container for ViewerPanel or diff content
+let filePanelContentEl = null;
 let filePanelResizeHandle = null;
 let terminalSplitEl = null;
 let currentPanelSessionId = null;
-
-// ViewerPanel instance for file-type tabs
-let fpViewerPanel = null;
-let fpViewerOwner = null;
-let heldBarEl = null;
 let panelBackBtn = null;
 
 // Diff-specific DOM
@@ -126,7 +121,6 @@ function initFilePanel() {
   filePanelEl = document.createElement('div');
   filePanelEl.id = 'file-panel';
 
-  // Content container — holds either ViewerPanel or diff UI
   filePanelContentEl = document.createElement('div');
   filePanelContentEl.id = 'file-panel-content';
   filePanelEl.appendChild(filePanelContentEl);
@@ -139,7 +133,7 @@ function initFilePanel() {
   panelBackBtn.addEventListener('click', returnToPanelList);
   filePanelContentEl.appendChild(panelBackBtn);
   filePanelContentEl.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || !event.target.closest('#file-panel-viewer, #changes-diff-view')) return;
+    if (event.key !== 'Escape' || !event.target.closest('#changes-diff-view')) return;
     if (event.defaultPrevented || event.isComposing) return;
     if (event.target.closest('.cm-panels, .cm-search, .cm-tooltip')) return;
     if (event.target.closest('input, textarea') && !event.target.closest('.cm-content')) return;
@@ -147,26 +141,6 @@ function initFilePanel() {
       event.preventDefault();
       event.stopPropagation();
     }
-  });
-
-  heldBarEl = document.createElement('div');
-  heldBarEl.id = 'file-panel-held';
-  heldBarEl.className = 'viewer-panel-notice';
-  heldBarEl.setAttribute('role', 'status');
-  heldBarEl.style.display = 'none';
-  filePanelContentEl.appendChild(heldBarEl);
-
-  // ── ViewerPanel for file-type tabs ──
-  const vpContainer = document.createElement('div');
-  vpContainer.id = 'file-panel-viewer';
-  vpContainer.style.display = 'none';
-  filePanelContentEl.appendChild(vpContainer);
-
-  fpViewerPanel = new ViewerPanel(vpContainer, {
-    language: 'auto',
-    onSave: (filePath, content, expected) => window.api.saveFileForPanel(filePath, content, expected),
-    onClose: handleClose,
-    onDetachedSave: dropSavedHeldTabs,
   });
 
   window.addEventListener('beforeunload', (event) => {
@@ -328,13 +302,16 @@ function handleClose() {
   if (!currentPanelSessionId) return;
   const state = getSessionState(currentPanelSessionId);
   const tab = state.currentTab;
+  let pending = null;
 
   if (tab) {
     if (!confirmDiscardChangesEdits(tab)) return;
-    if (tab.type === 'file' && fileTabHasUnsavedEdits(tab)
-      && !window.confirm('This file has unsaved edits. Discard them?')) return;
     if (tab.type === 'diff' && !tab.resolved) {
       window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
+    }
+    if (tab.type === 'diff') {
+      pending = state.pendingTouchedOpen || null;
+      state.pendingTouchedOpen = null;
     }
     if (tab.type === 'diff' && tab.editorView) {
       tab.editorView.destroy();
@@ -344,14 +321,10 @@ function handleClose() {
       unwatchChangesFile(currentPanelSessionId, tab);
       destroyChangesEditor(tab);
     }
-    if (tab.type === 'file' && fpViewerOwner === tab) {
-      fpViewerPanel.destroy();
-      fpViewerOwner = null;
-    }
     state.currentTab = null;
   }
 
-  endCurrentTab(currentPanelSessionId, state);
+  endCurrentTab(currentPanelSessionId, state, { pending });
 }
 
 function returnToPanelList() {
@@ -364,9 +337,8 @@ function returnToPanelList() {
   }
   if (!tab?.returnList) return false;
   if (!confirmDiscardChangesEdits(tab)) return false;
-  if (tab.type === 'file' && fileTabHasUnsavedEdits(tab) && !window.confirm('This file has unsaved edits. Discard them?')) return false;
   const previous = tab.returnList;
-  destroyCurrentTab(state, { stash: false, discardFile: true });
+  destroyCurrentTab(state, { stash: false });
   state.currentTab = previous;
   renderPanel(currentPanelSessionId);
   return true;
@@ -503,7 +475,7 @@ function wireIpcListeners() {
   });
 
   window.api.onMcpOpenFile((sessionId, data) => {
-    openFileTab(sessionId, data);
+    if (typeof openTouchedPath === 'function') openTouchedPath(sessionId, data.filePath, { origin: 'mcp' });
   });
 
   window.api.onMcpCloseAllDiffs((sessionId) => {
@@ -595,55 +567,12 @@ function openDiffTab(sessionId, diffId, data) {
   }
 }
 
-// see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
-function openFileTab(sessionId, data) {
-  const state = getSessionState(sessionId);
-  const current = state.currentTab;
-  if (current && current.type === 'file' && (fpViewerOwner === current || current.viewerState)
-    && filePathKey(current.filePath) === filePathKey(data.filePath)) {
-    return reopenFileTab(sessionId, state, current, data);
-  }
-  const held = takeHeldFileTab(state, data.filePath);
-  const returnList = data.returnList || null;
-  if (returnList?.type === 'touched' && currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
-
-  // Destroy previous
-  destroyCurrentTab(state);
-
-  state.currentTab = held || {
-    type: 'file',
-    label: basename(data.filePath),
-    filePath: data.filePath,
-    content: data.content,
-    pendingLine: null,
-  };
-  state.currentTab.returnList = returnList;
-  if (Number.isInteger(data.line) && data.line > 0) state.currentTab.pendingLine = data.line;
-
-  state.panelVisible = true;
-
-  if (currentPanelSessionId === sessionId) {
-    showPanel(state);
-    renderPanel(sessionId);
-  }
-}
-
-function reopenFileTab(sessionId, state, tab, data) {
-  if (Number.isInteger(data.line) && data.line > 0) tab.pendingLine = data.line;
-  if (fpViewerOwner === tab) fpViewerPanel.rereadFromDisk();
-  if (currentPanelSessionId === sessionId) {
-    showPanel(state);
-    renderPanel(sessionId);
-  }
-}
-
 function fileTabHasUnsavedEdits(tab) {
-  if (tab?.absolutePath && tab.type === 'changes') return hasUnsavedChangesEdits(tab);
-  if (fpViewerOwner === tab) return fpViewerPanel.hasUnsavedEdits();
-  return !!tab.viewerState && fpViewerPanel.snapshotHasUnsavedEdits(tab.viewerState);
+  if (tab.type === 'touched-stash') return tab.content !== tab.savedContent;
+  return hasUnsavedChangesEdits(tab);
 }
 
-// see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
+// see .ai/contexts/touched-files.md ("Stashed edits")
 function filePathKey(filePath) {
   const platform = window.api && window.api.platform;
   let key = String(filePath);
@@ -651,68 +580,39 @@ function filePathKey(filePath) {
   return key;
 }
 
-function holdFileTabIfDirty(state, tab) {
-  if (!fileTabHasUnsavedEdits(tab)) return;
-  if (fpViewerOwner === tab) tab.viewerState = fpViewerPanel.snapshot();
-  if (!state.heldFileTabs) state.heldFileTabs = new Map();
-  const key = filePathKey(tab.filePath);
-  state.heldFileTabs.set(key, tab);
-}
-
-function dropSavedHeldTabs() {
-  for (const [sessionId, state] of filePanelState) {
-    if (!state.heldFileTabs) continue;
-    for (const [key, tab] of state.heldFileTabs) {
-      if (!fileTabHasUnsavedEdits(tab)) {
-        state.heldFileTabs.delete(key);
-        if (sessionId === currentPanelSessionId) renderHeldBar(sessionId, state.currentTab);
-      }
-    }
-  }
-}
-
-function takeHeldFileTab(state, filePath) {
-  if (!state.heldFileTabs) return null;
-  const key = filePathKey(filePath);
-  const tab = state.heldFileTabs.get(key) || null;
-  state.heldFileTabs.delete(key);
-  return tab;
-}
-
 // see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
 let unloadApproved = false;
 let unsavedPrompt = null;
 
 function collectUnsavedFileTabs() {
-  if (!fpViewerPanel) return [];
-  const found = new Set();
+  const found = [];
   for (const state of filePanelState.values()) {
     const tabs = [];
-    if (state.currentTab && (state.currentTab.type === 'file' || state.currentTab.absolutePath)) tabs.push(state.currentTab);
-    if (state.heldFileTabs) tabs.push(...state.heldFileTabs.values());
-    for (const tab of tabs) if (fileTabHasUnsavedEdits(tab)) found.add(tab);
+    if (state.currentTab?.absolutePath) tabs.push(state.currentTab);
+    if (state.touchedStashes) tabs.push(...state.touchedStashes.values());
+    for (const tab of tabs) if (fileTabHasUnsavedEdits(tab)) found.push(tab);
   }
-  return [...found];
+  return found;
 }
 
-async function saveUnsavedFileTab(tab) {
-  if (tab.absolutePath && tab.type === 'changes') {
-    const owner = [...filePanelState].find(([, state]) => state.currentTab === tab);
-    if (owner) await handleChangesSave(owner[0]);
-    return hasUnsavedChangesEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
-  }
-  if (fpViewerOwner === tab) {
-    await fpViewerPanel.saveNow();
-    return fileTabHasUnsavedEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
-  }
-  const saved = tab.viewerState;
-  const result = await window.api.saveFileForPanel(tab.filePath, saved.content, saved.agreedBase);
-  if (result && result.ok !== false) {
-    tab.viewerState = { ...saved, agreedBase: saved.content, lastSeenDisk: saved.content };
+async function saveTouchedStash(entry) {
+  const result = await window.api.saveFileForPanel(entry.filePath, entry.content, entry.savedContent, { git: entry.gitFile, version: entry.version });
+  if (result && result.ok) {
+    const key = filePathKey(entry.filePath);
+    for (const state of filePanelState.values()) {
+      if (state.touchedStashes?.get(key) === entry) state.touchedStashes.delete(key);
+    }
     return null;
   }
   if (result && result.reason === 'stale') return 'not saved: it changed on disk since you opened it';
   return `not saved: ${(result && result.error) || 'unknown error'}`;
+}
+
+async function saveUnsavedFileTab(tab) {
+  if (tab.type === 'touched-stash') return saveTouchedStash(tab);
+  const owner = [...filePanelState].find(([, state]) => state.currentTab === tab);
+  if (owner) await handleChangesSave(owner[0]);
+  return hasUnsavedChangesEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
 }
 
 function showUnsavedEditsDialog(tabs) {
@@ -812,42 +712,12 @@ function askAboutUnsavedEdits() {
   return unsavedPrompt;
 }
 
-function endCurrentTab(sessionId, state) {
-  const held = state.heldFileTabs ? [...state.heldFileTabs.values()].at(-1) : null;
-  if (held) {
-    state.currentTab = takeHeldFileTab(state, held.filePath);
-    if (currentPanelSessionId === sessionId) {
-      showPanel(state);
-      renderPanel(sessionId);
-    }
-    return;
-  }
+// see .ai/contexts/viewer-panel.md ("An open that arrives over a diff")
+function endCurrentTab(sessionId, state, { pending = null, restoreStash = false } = {}) {
   state.panelVisible = false;
   if (currentPanelSessionId === sessionId) hidePanel();
-}
-
-function renderHeldBar(sessionId, tab) {
-  const held = tab && tab.type === 'file' ? getSessionState(sessionId).heldFileTabs : null;
-  heldBarEl.innerHTML = '';
-  if (!held || !held.size) {
-    heldBarEl.style.display = 'none';
-    return;
-  }
-  const text = document.createElement('span');
-  text.className = 'viewer-panel-notice-text';
-  text.textContent = 'Unsaved edits kept in:';
-  heldBarEl.appendChild(text);
-  const tabs = [...held.values()];
-  const labels = heldTabLabels(tabs);
-  tabs.forEach((heldTab, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'fp-toolbar-btn file-panel-held-btn';
-    btn.textContent = labels[i];
-    btn.title = `Show ${heldTab.filePath}`;
-    btn.addEventListener('click', () => openFileTab(sessionId, { filePath: heldTab.filePath }));
-    heldBarEl.appendChild(btn);
-  });
-  heldBarEl.style.display = '';
+  if (pending) openTouchedPath(sessionId, pending.filePath, { line: pending.line, origin: pending.origin, replay: true });
+  else if (restoreStash && state.touchedStashes?.size) openTouchedTab(sessionId);
 }
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
@@ -855,7 +725,7 @@ function stashChangesEdits(state, tab) {
   if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
   const content = readChangesEditorContent(tab);
   if (content == null || content === tab.savedContent) return;
-  state[tab.returnList ? 'touchedStash' : 'changesStash'] = {
+  const entry = {
     file: tab.selectedFile,
     content,
     original: tab.original,
@@ -866,15 +736,35 @@ function stashChangesEdits(state, tab) {
     gitFile: tab.gitFile,
     noDiff: tab.noDiff,
   };
+  if (!tab.returnList) {
+    state.changesStash = entry;
+    return;
+  }
+  // see .ai/contexts/touched-files.md ("Stashed edits")
+  if (!state.touchedStashes) state.touchedStashes = new Map();
+  const key = filePathKey(tab.absolutePath);
+  state.touchedStashes.delete(key);
+  state.touchedStashes.set(key, { ...entry, type: 'touched-stash', filePath: tab.absolutePath });
 }
 
-function restoreChangesEdits(sessionId, state, tab, listType = 'changes') {
-  const key = listType === 'touched' ? 'touchedStash' : 'changesStash';
-  const stash = state[key];
-  if (!stash) return false;
-  state[key] = null;
+function takeChangesStash(state, listType, key) {
+  if (listType !== 'touched') {
+    const stash = state.changesStash;
+    state.changesStash = null;
+    return stash;
+  }
+  const stashes = state.touchedStashes;
+  const wanted = key ?? (stashes ? [...stashes.keys()].at(-1) : undefined);
+  const stash = stashes?.get(wanted) || null;
+  if (stash) stashes.delete(wanted);
+  return stash;
+}
 
-  tab.returnList = stash.returnList;
+function restoreChangesEdits(sessionId, state, tab, listType = 'changes', { key, returnList } = {}) {
+  const stash = takeChangesStash(state, listType, key);
+  if (!stash) return false;
+
+  tab.returnList = returnList || stash.returnList;
   tab.absolutePath = stash.absolutePath;
   tab.filePath = stash.absolutePath;
   tab.formatted = touchedOpensFormatted(stash.absolutePath);
@@ -892,10 +782,11 @@ function restoreChangesEdits(sessionId, state, tab, listType = 'changes') {
   return true;
 }
 
-function destroyCurrentTab(state, { stash = true, discardFile = false } = {}) {
+function destroyCurrentTab(state, { stash = true } = {}) {
   const tab = state.currentTab;
   if (!tab) return;
   if (stash) stashChangesEdits(state, tab);
+  if (tab.type === 'diff') state.pendingTouchedOpen = null;
   if (tab.type === 'diff' && tab.editorView) {
     tab.editorView.destroy();
     tab.editorView = null;
@@ -909,52 +800,19 @@ function destroyCurrentTab(state, { stash = true, discardFile = false } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
-  if (tab.type === 'file' && !discardFile) holdFileTabIfDirty(state, tab);
-  if (tab.type === 'file' && fpViewerOwner === tab) {
-    fpViewerPanel.destroy();
-    fpViewerOwner = null;
-  }
 }
 
-// see .ai/contexts/changes-view.md ("File links") and .ai/contexts/terminal-path-links.md
-async function openFileInPanel(sessionId, filePath, opts = {}) {
+// see .ai/contexts/touched-files.md ("One route into Touched") and .ai/contexts/terminal-path-links.md
+function openFileInPanel(sessionId, filePath, opts = {}) {
   const line = Number.isInteger(opts.line) && opts.line > 0 ? opts.line : null;
-  const row = await locateChangesRow(sessionId, filePath);
-  if (row) return openChangesTabAt(sessionId, row, line);
-
-  const result = await window.api.readFileForPanel(filePath);
-  if (!result.ok) return;
-  openFileTab(sessionId, { filePath, content: result.content, line });
-}
-
-async function locateChangesRow(sessionId, filePath) {
-  if (!window.api.gitChangesLocate) return null;
-  let located;
-  try {
-    located = await window.api.gitChangesLocate(sessionId, filePath);
-  } catch {
-    return null;
-  }
-  if (!located || !located.ok || !located.changed) return null;
-  return { path: located.relPath, staged: !!located.staged, untracked: !!located.untracked };
-}
-
-async function openChangesTabAt(sessionId, file, line = null) {
-  const tab = getSessionState(sessionId).currentTab;
-  if (!tab || tab.type !== 'changes') await openChangesTab(sessionId);
-  // openChangesDiff owns the discard question for every route into it.
-  return openChangesDiff(sessionId, file, line);
+  if (typeof openTouchedPath === 'function') return openTouchedPath(sessionId, filePath, { line, origin: 'link' });
 }
 
 function closeAllDiffs(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state) return;
 
-  if (state.currentTab?.type === 'diff') {
-    destroyCurrentTab(state);
-    state.currentTab = null;
-    endCurrentTab(sessionId, state);
-  }
+  if (state.currentTab?.type === 'diff') endDiffTab(sessionId, state, { restoreStash: true });
 }
 
 function closeDiffByDiffId(sessionId, diffId) {
@@ -963,9 +821,16 @@ function closeDiffByDiffId(sessionId, diffId) {
   if (state.currentTab.type !== 'diff' || state.currentTab.diffId !== diffId) return;
 
   state.currentTab.resolved = true;
+  endDiffTab(sessionId, state, { restoreStash: true });
+}
+
+// see .ai/contexts/viewer-panel.md ("An open that arrives over a diff")
+function endDiffTab(sessionId, state, { restoreStash }) {
+  const pending = state.pendingTouchedOpen || null;
+  state.pendingTouchedOpen = null;
   destroyCurrentTab(state);
   state.currentTab = null;
-  endCurrentTab(sessionId, state);
+  endCurrentTab(sessionId, state, { pending, restoreStash });
 }
 
 // ── Panel Show/Hide ─────────────────────────────────────────────────
@@ -1043,21 +908,7 @@ function renderPanel(sessionId) {
   renderTabContent(sessionId, state.currentTab);
 }
 
-// see .ai/contexts/viewer-panel.md ("One viewer, several file tabs")
-function showFileTabInViewer(tab) {
-  if (fpViewerOwner === tab) return;
-  if (fpViewerOwner && fpViewerOwner.type === 'file') {
-    fpViewerOwner.viewerState = fpViewerPanel.snapshot();
-  }
-  fpViewerOwner = tab;
-  const saved = tab.viewerState && tab.viewerState.filePath === tab.filePath ? tab.viewerState : null;
-  tab.viewerState = null;
-  if (saved) fpViewerPanel.open(tab.label, tab.filePath, saved.content, saved);
-  else fpViewerPanel.open(tab.label, tab.filePath, tab.content);
-}
-
 function renderTabContent(sessionId, tab) {
-  const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
   panelBackBtn.style.display = tab && tab.returnList?.type !== 'touched' && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
   // see .ai/contexts/panel-terminal.md ("Layout")
@@ -1065,37 +916,22 @@ function renderTabContent(sessionId, tab) {
 
   setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes' && !tab.returnList);
   if (typeof renderTouchedTab === 'function') renderTouchedTab(sessionId, tab);
-  renderHeldBar(sessionId, tab);
 
   if (!tab) {
-    vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = 'none';
     return;
   }
 
-  if (tab.type === 'file') {
-    // Use ViewerPanel
-    diffContainer.style.display = 'none';
-    changesContainerEl.style.display = 'none';
-    vpContainer.style.display = 'flex';
-    showFileTabInViewer(tab);
-    if (tab.pendingLine) {
-      fpViewerPanel.revealLine(tab.pendingLine);
-      tab.pendingLine = null;
-    }
-  } else if (tab.type === 'changes') {
-    vpContainer.style.display = 'none';
+  if (tab.type === 'changes') {
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = tab.returnList?.type === 'touched' ? 'none' : 'flex';
     renderChangesContent(sessionId, tab);
   } else if (tab.type === 'touched') {
-    vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
     changesContainerEl.style.display = 'none';
   } else {
     // MCP diff mode
-    vpContainer.style.display = 'none';
     changesContainerEl.style.display = 'none';
     diffContainer.style.display = 'flex';
     renderDiffContent(sessionId, tab);
@@ -1186,6 +1022,8 @@ function handleDiffAction(sessionId, tab, action) {
   }
 
   diffActionsEl.style.display = 'none';
+  const state = getSessionState(sessionId);
+  if (state.currentTab === tab && state.pendingTouchedOpen) endDiffTab(sessionId, state, { restoreStash: true });
 }
 
 // ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────
@@ -1249,7 +1087,7 @@ function openChangesTab(sessionId) {
   return refreshChanges(sessionId);
 }
 
-function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
+function openTouchedEditor(sessionId, absolutePath, pair, returnList, { line = null } = {}) {
   const state = getSessionState(sessionId);
   if (currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
   destroyCurrentTab(state, { stash: false });
@@ -1260,7 +1098,8 @@ function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
   tab.filePath = absolutePath;
   tab.selectedFile = { path: absolutePath };
   tab.loading = false;
-  tab.formatted = touchedOpensFormatted(absolutePath);
+  tab.formatted = touchedOpensFormatted(absolutePath) && !line;
+  tab.pendingLine = line;
   applyChangesPair(tab, pair);
   state.currentTab = tab;
   state.panelVisible = true;

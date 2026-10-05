@@ -4638,7 +4638,6 @@ body { display: flex; flex-direction: column; }
   min-height: 0;
 }
 
-#file-panel-viewer,
 #file-panel-diff {
   flex: 1;
   display: flex;

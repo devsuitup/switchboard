@@ -24,9 +24,10 @@ A remote session's directory that is not a repository shows git's message too:
 telling the two cases apart needs a look at the directory, which Switchboard
 can only take on its own machine.
 
-A [path link](terminal.md#clickable-paths) to one of the session's changed files
-opens the panel on that file's row, at the line. A link to any other file opens
-the plain file viewer.
+A [path link](terminal.md#clickable-paths) opens the file in
+[Touched](touched-files.md#files-opened-from-elsewhere), changed or not. Its
+diff there is against HEAD: for a partially staged file it differs from the
+Changes diff, which compares an unstaged file with the index.
 
 ## The list
 

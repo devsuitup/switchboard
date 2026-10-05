@@ -304,11 +304,12 @@ function resolveGitChangesTarget(sessionId, deps, opts) {
     const { alias } = deps.parseFolderKey(folder);
     const descriptor = deps.getRemoteSessions(alias).sessions.find((s) => s.sessionId === id);
     const cwd = descriptor && typeof descriptor.cwd === 'string' ? descriptor.cwd : null;
-    if (!cwd) return { ok: false, error: 'remote session has no known working directory' };
+    if (!cwd) return { ok: false, kind: 'remote', error: 'remote session has no known working directory' };
     return { ok: true, kind: 'remote', alias, cwd };
   }
 
   const session = deps.activeSessions.get(id);
+  if (session && session.kind && session.kind !== 'local-pty') return { ok: false, kind: 'remote', error: 'remote session' };
   if (session && !session.exited && session.cwd) {
     return { ok: true, kind: 'local', cwd: session.cwd };
   }

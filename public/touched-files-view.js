@@ -1,5 +1,5 @@
 // touched-files-view.js — the "Touched" tab of the file panel — see .ai/contexts/touched-files.md
-/* exported initTouchedView, renderTouchedTab, hideTouchedView */
+/* exported initTouchedView, renderTouchedTab, hideTouchedView, openTouchedPath */
 
 let touchedContainerEl = null;
 let touchedSummaryEl = null;
@@ -15,6 +15,7 @@ const TOUCHED_WINDOW_STEP_DAYS = 10;
 const TOUCHED_DAY_MS = 24 * 60 * 60 * 1000;
 const TOUCHED_RELATIVE_THRESHOLD_MS = TOUCHED_DAY_MS;
 const TOUCHED_MINUTE_MS = 60 * 1000;
+const TOUCHED_OPENED_MAX = 50;
 
 function formatTouchedTime(timestamp, now = Date.now()) {
   if (!Number.isFinite(timestamp)) return 'Time unknown';
@@ -199,18 +200,11 @@ function toggleTouchedTab(sessionId) {
   return openTouchedTab(sessionId);
 }
 
-function openTouchedTab(sessionId) {
+function openTouchedTab(sessionId, { restoreStash = true } = {}) {
   const state = getSessionState(sessionId);
   destroyCurrentTab(state);
-  if (state.touchedStash) {
-    state.currentTab = createChangesTab();
-    state.currentTab.loading = false;
-    state.panelVisible = true;
-    restoreChangesEdits(sessionId, state, state.currentTab, 'touched');
-    if (currentPanelSessionId === sessionId) {
-      showPanel(state);
-      renderPanel(sessionId);
-    }
+  if (restoreStash && state.touchedStashes?.size) {
+    restoreTouchedStash(sessionId, state);
     return;
   }
   state.currentTab = {
@@ -261,12 +255,67 @@ async function refreshTouched(sessionId) {
   if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
 }
 
-async function openTouchedFile(sessionId, tab, filePath) {
-  const current = filePanelState.get(sessionId)?.currentTab;
+// see .ai/contexts/touched-files.md ("One route into Touched")
+async function openTouchedPath(sessionId, filePath, { line = null, origin = 'link', replay = false } = {}) {
+  const ownerId = (typeof panelTerminalOwnerOf === 'function' && panelTerminalOwnerOf(sessionId)) || sessionId;
+  if (origin === 'link') {
+    const [answer] = await window.api.resolveTerminalPaths(sessionId, [filePath]);
+    if (answer && answer.reason === 'remote') return;
+  }
+  const state = getSessionState(ownerId);
+  const current = state.currentTab;
+  if (current?.type === 'diff' && !current.resolved) {
+    state.pendingTouchedOpen = { filePath, line, origin };
+    return;
+  }
+  let listTab = current?.type === 'touched' ? current : current?.returnList;
+  if (listTab?.type !== 'touched') {
+    openTouchedTab(ownerId, { restoreStash: false });
+    listTab = state.currentTab;
+  }
+  return openTouchedFile(ownerId, listTab, filePath, { line, origin: replay ? 'mcp' : origin });
+}
+
+function restoreTouchedStash(sessionId, state, options) {
+  state.currentTab = createChangesTab();
+  state.currentTab.loading = false;
+  state.panelVisible = true;
+  restoreChangesEdits(sessionId, state, state.currentTab, 'touched', options);
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
+async function openTouchedFile(sessionId, tab, filePath, { line = null, origin = 'row' } = {}) {
+  const state = filePanelState.get(sessionId);
+  const current = state?.currentTab;
   if (current !== tab && current?.returnList !== tab) return;
   if (tab.opening) return;
-  if (current.absolutePath === filePath) return;
-  if (!confirmDiscardChangesEdits(current)) return;
+  if (current.absolutePath && filePathKey(current.absolutePath) === filePathKey(filePath)) {
+    if (line) {
+      current.pendingLine = line;
+      current.formatted = false;
+    }
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
+  }
+  const asks = origin !== 'mcp';
+  const stashKey = filePathKey(filePath);
+  if (state.touchedStashes?.has(stashKey)) {
+    if (!asks && hasUnsavedChangesEdits(current)) {
+      addTouchedOpened(state, filePath);
+      if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+      return;
+    }
+    if (!confirmDiscardChangesEdits(current)) return;
+    tab.selection = filePath;
+    if (currentPanelSessionId === sessionId) window.snapshotPanelList(touchedListEl, tab);
+    destroyCurrentTab(state, { stash: false });
+    restoreTouchedStash(sessionId, state, { key: stashKey, returnList: tab });
+    return;
+  }
+  if (asks && !confirmDiscardChangesEdits(current)) return;
   const agreedContent = readChangesEditorContent(current);
   tab.opening = true;
   let result;
@@ -276,19 +325,38 @@ async function openTouchedFile(sessionId, tab, filePath) {
     result = { ok: false, error: (err && err.message) || 'could not read the file' };
   }
   tab.opening = false;
-  const state = filePanelState.get(sessionId);
-  if (!state || state.currentTab !== current) return;
+  if (state.currentTab !== current) return;
   if (!result || !result.ok) {
-    tab.openError = `${filePath}: ${(result && result.error) || 'could not read the file'}`;
+    const reason = (result && result.error) || 'could not read the file';
+    tab.openError = origin === 'row' ? `${filePath}: ${reason}` : `Could not open the file: ${reason}`;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
-  if (readChangesEditorContent(current) !== agreedContent && !confirmDiscardChangesEdits(current)) return;
-  tab.selection = filePath;
-  if (currentPanelSessionId === sessionId) {
-    for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', row.dataset.path === filePath);
+  if (origin !== 'row') addTouchedOpened(state, filePath);
+  const keep = asks
+    ? readChangesEditorContent(current) !== agreedContent && !confirmDiscardChangesEdits(current)
+    : hasUnsavedChangesEdits(current);
+  if (keep) {
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
   }
-  openTouchedEditor(sessionId, filePath, result, tab);
+  tab.selection = filePath;
+  if (currentPanelSessionId === sessionId) markTouchedSelection(tab);
+  openTouchedEditor(sessionId, filePath, result, tab, { line });
+}
+
+function addTouchedOpened(state, filePath) {
+  const key = filePathKey(filePath);
+  state.touchedOpened = [filePath, ...(state.touchedOpened || []).filter(p => filePathKey(p) !== key)].slice(0, TOUCHED_OPENED_MAX);
+  state.touchedOpenedRevision = (state.touchedOpenedRevision || 0) + 1;
+}
+
+function isTouchedSelection(tab, filePath) {
+  return tab.selection != null && filePathKey(tab.selection) === filePathKey(filePath);
+}
+
+function markTouchedSelection(tab) {
+  for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', isTouchedSelection(tab, row.dataset.path));
 }
 
 function plural(n, one, many) {
@@ -334,7 +402,7 @@ function buildTouchedFileRow(sessionId, tab, file) {
   if (openable) rowEl.classList.add('touched-openable');
   rowEl.title = TOUCHED_STATE_TITLES[file.state] || 'State unknown.';
   if (Number.isFinite(file.diskMtime)) rowEl.title += ' Modified: ' + new Date(file.diskMtime).toLocaleString();
-  rowEl.classList.toggle('selected', tab.selection === file.path);
+  rowEl.classList.toggle('selected', isTouchedSelection(tab, file.path));
 
   const stateEl = document.createElement('span');
   stateEl.className = 'touched-file-state touched-state-' + String(file.state).replace(/[^a-z-]/g, '');
@@ -353,6 +421,38 @@ function buildTouchedFileRow(sessionId, tab, file) {
 
   if (openable) rowEl.addEventListener('click', () => openTouchedFile(sessionId, tab, file.path));
   return rowEl;
+}
+
+function buildTouchedOpenedRow(sessionId, tab, filePath) {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'touched-file-row touched-opened touched-openable';
+  rowEl.dataset.path = filePath;
+  rowEl.title = 'Opened from a link. The file tools did not touch it.';
+  rowEl.classList.toggle('selected', isTouchedSelection(tab, filePath));
+
+  const stateEl = document.createElement('span');
+  stateEl.className = 'touched-file-state touched-state-opened';
+  stateEl.textContent = 'opened';
+  rowEl.appendChild(stateEl);
+
+  const pathEl = document.createElement('span');
+  pathEl.className = 'touched-file-path';
+  pathEl.textContent = filePath;
+  rowEl.appendChild(pathEl);
+
+  rowEl.addEventListener('click', () => openTouchedFile(sessionId, tab, filePath));
+  return rowEl;
+}
+
+function appendTouchedOpenedRows(sessionId, tab, opened, files) {
+  const listed = new Set(files.map(f => filePathKey(f.path)));
+  const shown = opened.filter(p => !listed.has(filePathKey(p)));
+  if (!shown.length) return;
+  const header = document.createElement('div');
+  header.className = 'changes-subagent-header';
+  header.textContent = 'Opened, not touched by the file tools';
+  touchedListEl.appendChild(header);
+  for (const filePath of shown) touchedListEl.appendChild(buildTouchedOpenedRow(sessionId, tab, filePath));
 }
 
 function buildTouchedUnresolvedRow(entry) {
@@ -374,10 +474,11 @@ function buildTouchedUnresolvedRow(entry) {
 }
 
 function renderTouchedContent(sessionId, tab) {
-  const signature = [tab.data, tab.loading, tab.error, tab.openError, tab.sort, tab.windowStart];
+  const state = filePanelState.get(sessionId);
+  const signature = [tab.data, tab.loading, tab.error, tab.openError, tab.sort, tab.windowStart, state?.touchedOpenedRevision];
   document.getElementById('touched-sort').value = tab.sort;
   if (window.reusePanelList(touchedListEl, touchedSummaryEl, tab, signature)) {
-    for (const row of touchedListEl.querySelectorAll('.touched-file-row')) row.classList.toggle('selected', row.dataset.path === tab.selection);
+    markTouchedSelection(tab);
     return;
   }
   touchedSummaryEl.textContent = touchedSummaryText(tab);
@@ -390,6 +491,7 @@ function renderTouchedContent(sessionId, tab) {
 
   touchedListEl.innerHTML = '';
   const data = tab.data;
+  appendTouchedOpenedRows(sessionId, tab, state?.touchedOpened || [], data ? data.cachedFiles || data.files || [] : []);
   if (!data) return;
   const cachedFiles = data.cachedFiles || data.files || [];
   const visible = cachedFiles.filter(f => f.lastTouched == null || f.lastTouched >= tab.windowStart);

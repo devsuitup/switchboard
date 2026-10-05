@@ -66,8 +66,13 @@ remembered (`localStorage.filePanelDiffMode`):
 
 Files Claude opens, files you open from a terminal link (see
 [Terminal](terminal.md#clickable-paths)), and files opened with **Open in
-panel** show in the same panel with syntax highlighting, whether or not IDE
-Emulation is on. The panel refuses credential paths and files over 2 MB.
+panel** open in [Touched](touched-files.md#files-opened-from-elsewhere), in
+the editor below the list, whether or not IDE Emulation is on. Switchboard
+reads the file itself, with the panel's checks: credential paths, binary
+files, files that are not UTF-8 and files over 2 MB are refused. A file Claude
+opens never asks a question: over unsaved edits it is only listed, and while a
+diff waits for an answer it opens once the diff is answered or closed. Claude
+is answered `ok` either way.
 
 ### Windows drive letters
 

@@ -36,7 +36,7 @@ test('index.html loads the touched tab after the file panel it hooks into', () =
 test('the touched tab opens a file only through readFileForPanel', () => {
   const src = read('public/touched-files-view.js');
   const apis = [...src.matchAll(/window\.api\.(\w+)/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(apis)].sort(), ['readFileForPanel', 'sessionTouchedFiles']);
+  assert.deepEqual([...new Set(apis)].sort(), ['readFileForPanel', 'resolveTerminalPaths', 'sessionTouchedFiles']);
 });
 
 test('a path is shown in its own bidi isolate, so an override in it cannot reorder the row', () => {

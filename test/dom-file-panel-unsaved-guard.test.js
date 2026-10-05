@@ -1,6 +1,7 @@
 'use strict';
 
-// Quitting, reloading or closing a session with unsaved file edits asks first (#373).
+// Quitting, reloading or closing a session with unsaved file edits asks first (#373):
+// the Touched editor in the slot, and Touched edits stashed while something else shows.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -51,7 +52,7 @@ function setup() {
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
-    readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, content: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
+    readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, git: false, original: disk.get(p), current: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
     saveFileForPanel: (p, content, expected) => {
       calls.saves.push({ path: p, content, expected });
       if (disk.get(p) !== expected) return Promise.resolve({ ok: false, reason: 'stale', error: 'stale', disk: disk.get(p) });
@@ -66,7 +67,12 @@ function setup() {
     },
   });
   window.confirm = (msg) => { calls.confirms.push(msg); return false; };
-  window.createEditableViewer = (parent, content) => { editor = fakeEditor(content); return editor; };
+  window.createEditableViewer = (parent, content) => {
+    editor = fakeEditor(content);
+    editor.dom = window.document.createElement('div');
+    parent.appendChild(editor.dom);
+    return editor;
+  };
   window.createPlanEditor = () => { editor = fakeEditor(''); return editor; };
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
@@ -77,7 +83,7 @@ function setup() {
     return el;
   };
 
-  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js']) {
+  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
   window.initFilePanel();
@@ -92,7 +98,7 @@ const C = '/repo/c.md';
 async function dirtyTab(ctx, sessionId, file, text = 'mine') {
   ctx.disk.set(file, 'x0\n');
   ctx.window.switchPanel(sessionId);
-  ctx.calls.openFile(sessionId, { filePath: file, content: 'x0\n' });
+  ctx.calls.openFile(sessionId, { filePath: file });
   await flush();
   ctx.editor().type(text);
 }
@@ -111,7 +117,7 @@ test('with nothing unsaved the check is answered at once and no dialog shows', a
   try {
     ctx.disk.set(A, 'x0\n');
     ctx.window.switchPanel('s1');
-    ctx.calls.openFile('s1', { filePath: A, content: 'x0\n' });
+    ctx.calls.openFile('s1', { filePath: A });
     await flush();
     ctx.calls.check(1, 'quit');
     await flush();
@@ -121,7 +127,7 @@ test('with nothing unsaved the check is answered at once and no dialog shows', a
   } finally { ctx.destroy(); }
 });
 
-test('a dirty file tab holds the answer behind a dialog naming the file; Cancel answers no', async () => {
+test('a dirty Touched editor holds the answer behind a dialog naming the file; Cancel answers no', async () => {
   const ctx = setup();
   try {
     await dirtyTab(ctx, 's1', A);
@@ -185,18 +191,16 @@ test('a save the disk refuses keeps the dialog open and answers nothing', async 
   } finally { ctx.destroy(); }
 });
 
-test('a dirty tab of another session and a tab kept aside both count, and Save writes all of them', async () => {
+test('edits stashed in one session and a dirty editor in another both count, and Save writes all of them', async () => {
   const ctx = setup();
   try {
     await dirtyTab(ctx, 's1', A, 'one');
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/x.md', oldContent: 'a\n', newContent: 'b\n' });
     ctx.disk.set(B, 'x0\n');
-    ctx.calls.openFile('s1', { filePath: B, content: 'x0\n' });
+    ctx.window.switchPanel('s3');
+    ctx.calls.openFile('s3', { filePath: B });
     await flush();
-    ctx.window.switchPanel('s2');
-    ctx.disk.set(C, 'x0\n');
-    ctx.calls.openFile('s2', { filePath: C, content: 'x0\n' });
-    await flush();
-    ctx.editor().type('three');
+    await dirtyTab(ctx, 's2', C, 'three');
 
     ctx.calls.check(5, 'quit');
     await flush();
@@ -212,12 +216,12 @@ test('a dirty tab of another session and a tab kept aside both count, and Save w
   } finally { ctx.destroy(); }
 });
 
-test('beforeunload blocks while a tab is dirty and lets go once it is saved', async () => {
+test('beforeunload blocks while an editor is dirty and lets go once it is saved', async () => {
   const ctx = setup();
   try {
     await dirtyTab(ctx, 's1', A);
     assert.equal(beforeUnload(ctx).defaultPrevented, true);
-    ctx.window.document.getElementById('file-panel-viewer').dispatchEvent(new ctx.window.CustomEvent('cm-save'));
+    ctx.window.document.getElementById('changes-diff-view').dispatchEvent(new ctx.window.CustomEvent('cm-save'));
     await flush();
     assert.equal(beforeUnload(ctx).defaultPrevented, false);
   } finally { ctx.destroy(); }

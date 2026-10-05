@@ -1,6 +1,6 @@
 # Context: viewer-panel
 
-**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **2 callsites** in `public/app.js`: `memoryPanel` (Memory tab), `workFilesPanel` (.work-files tab). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
+**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **3 callsites**: `memoryPanel` (Memory tab) and `workFilesPanel` (.work-files tab) in `public/app.js`, and the Activity trace viewer in `public/activity-trace-panel.js`. The file panel does not use it: a file opened there goes to the Touched editor (`.ai/contexts/touched-files.md`). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
 
 ## Key files
 
@@ -123,91 +123,74 @@ Everything below is presentation; none of it carries the rule.
 - **An answered diff.** Once a diff is answered (Accept or Reject, `tab.resolved`), the session writes the file itself and the base no longer describes the disk. Save is refused, and the shared diff Save button is disabled with a title saying why, until the session closes the tab. The button's state is set on each render of a diff tab, so a diff opened after an answered one has Save enabled again.
 - **Other failures.** A save refused for any other reason, or whose IPC rejects, shows `Save failed: <reason>` in the notice.
 
-## One viewer, several file tabs
+## Snapshots and save tokens
 
-`file-panel.js` has one `ViewerPanel` (`fpViewerPanel`) for the `'file'` tabs of every session, and `fpViewerOwner` records the tab it is showing. `showFileTabInViewer` is the only way a file tab reaches it:
+`snapshot()` returns the buffer, `_agreedBase` and `_lastSeenDisk` of the file on screen, and `open(title, path, buffer, restore)` reopens a file from one. No caller restores a snapshot at present.
 
-- The owner being shown again is left as it is — not reopened — so a save in flight, the queue, the notice and the buffer are untouched by a re-render.
-- Another file tab taking the viewer first stores the owner's `snapshot()` (buffer, `_agreedBase`, `_lastSeenDisk`) on that tab as `viewerState`.
-- A tab with a `viewerState` for its path is reopened from it with `open(title, path, buffer, restore)`, then re-read at once, so a write made while it was away is treated like any other: a clean buffer reloads, a dirty one keeps its edits and says so. `tab.content`, the content first read when the tab opened, is used only for the tab's first showing.
-- Destroying a file tab destroys the viewer only if that tab is its owner; a tab that never reached the viewer, or no longer holds it, has nothing in it to tear down.
+Each showing of a file carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the snapshot, so the token names the showing, not the path. A save captures the token when it starts, and when it resolves:
 
-Each showing of a file in the viewer carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the tab's snapshot, so the token names the tab, not the path — two sessions' tabs on the same file have different tokens. A save captures the token when it starts, and when it resolves:
+- if the viewer holds that token, the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
+- otherwise the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`), reported through `opts.onDetachedSave`, and applied, once, when that snapshot is restored.
 
-- if the viewer holds that token — the tab never left, or came back while the save was in flight — the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
-- otherwise the tab is away, and the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`) and applied — once, then deleted — when that tab is restored.
+Keying by path would hand one showing's result to another on the same file, which would take the saving one's base while still showing the old content.
 
-Keying by path would hand one tab's result to another: a clean tab in another session on the same file would take the saving tab's base while still showing the old content, and its next save would pass main's check and replace the write. The file panel shows no dirty marker of its own, so without the record a failed save would go unreported.
+## An open aimed at the panel
 
-## An open aimed at a file tab
-
-**Nothing a session triggers shows a modal, and no route drops unsaved edits without the user saying so.** A session's panel has one tab slot (`state.currentTab`), and three routes replace what is in it: the MCP `openFile` tool and a terminal path link (`openFileTab`, via `openFileInPanel`), the MCP `openDiff` tool (`openDiffTab`), and a path link to a file git reports as changed, which opens the Changes tab (`openChangesTab`). All three go through `destroyCurrentTab`.
-
-### Held tabs
-
-When `destroyCurrentTab` removes a file tab with unsaved edits, it does not drop it: it keeps it in the session's `heldFileTabs`, a `Map` keyed by path. A tab the viewer shows is first snapshotted, as a switch to another session's tab snapshots it, then the viewer is destroyed; a tab away from the viewer already holds its `viewerState`. The tab keeps its token, so a save still in flight is recorded under it (`_detachedSaves`) and applied when the tab is shown again. `destroy()` clears the viewer's token for that reason: without it, a save resolving before the next `open()` would be applied to the destroyed editor and lost.
-
-A tab is dirty when the viewer's own `_isDirty` says so for the tab it shows (`hasUnsavedEdits`), and for a tab away from it when `snapshotHasUnsavedEdits` does. Both apply the same test — the buffer differs from `agreedBase` and from the disk last seen — so a tab reads the same shown and away; the snapshot test also counts as clean a buffer that a save finished while the tab was away wrote exactly. A save that failed while away leaves the buffer different from both, so the tab is held. A clean tab, or one that never reached the viewer, is dropped as before: it has nothing to lose.
-
-A held tab whose save finishes while it is held and leaves it clean is taken out of `heldFileTabs`: `ViewerPanel` reports every save it records for an away tab (`opts.onDetachedSave`), and the file panel drops each held tab that no longer has unsaved edits and redraws the bar. What it held is on disk.
-
-A held tab comes back:
-
-| When | What shows |
-|---|---|
-| the tab in the slot ends: the session closes its diff (`close_tab`, `closeAllDiffTabs`), the user closes the Changes tab or the panel | the tab held last |
-| an open names a held file (`openFileTab`) | that tab |
-| the user clicks its name in the bar above a file tab ("Unsaved edits kept in: …") | that tab |
-
-The bar (`#file-panel-held`) has `role="status"`, so a screen reader announces it without taking focus. Each name is set as `textContent`; names that collide are lengthened, one directory at a time, until each is distinct (`/a/x/a.md` and `/b/x/a.md` show as `a/x/a.md` and `b/x/a.md`), and a file at the root shows as `/a.md`.
-
-It is shown with `open(…, restore)` and re-read at once, like any return to the viewer: a write made while it was held — the diff the user just accepted, for instance — raises "changed on disk", and `_agreedBase` has not moved, so a save against that write is refused by main and asks. The bar is not shown over a diff: leaving an unanswered diff would leave the CLI waiting on it.
-
-### Unsaved edits on quit, reload and close
-
-Nothing ends the window with a dirty file tab without the user saying so. The scope is the file tabs of the file panel (the shown one and `heldFileTabs`, in every session of `filePanelState`); the Memory and Work Files panels, MCP diff tabs and Changes buffers are not covered.
-
-- **Main** (`unsaved-guard.js`, one guard, `attach(win)` per window, `beforeQuit(event, win)` for the app). `main.js`'s `before-quit` handler calls `beforeQuit` first: it prevents the quit, asks the renderer, and calls `app.quit()` again on a yes, so the cleanup that follows (PTYs killed, MCP servers, watchers) runs only once the quit is confirmed and a Cancel leaves the app intact. This covers every `app.quit()` caller (☰ Quit, the last window closing). `updater-install` asks first (`confirmQuit`), because electron-updater's `quitAndInstall()` starts the installer before it calls `app.quit()`: a Cancel must leave the installer unstarted, and a yes pre-approves the quit that follows. A Windows `query-session-end` or `session-end` approves the quit, so logoff and shutdown never wait on the dialog. A window close, a quit and an install share one question while it is open. The window's own `close` event is held the same way for a plain window close. The question is `unsaved-check` (`id`, `'quit'` or `'reload'`); the renderer's `unsaved-check-result` (`id`, `proceed`) approves it. A `will-prevent-unload` (the renderer's `beforeunload` veto, which a reload hits) asks with `'reload'`; on a yes the next unload is allowed once (`allowNextUnload`, answered with `preventDefault()`, which in Electron means "unload anyway") and `webContents.reload()` is called. Every close asks the renderer, even with nothing dirty; a main-side dirty flag would save that round trip and is not built.
-- **Bounded.** The renderer acknowledges (`unsaved-check-ack`) as soon as it receives the check, before any dialog. The 2.5 s bound (`DEFAULT_TIMEOUT_MS`) covers only send to ack: no ack answers yes, so a hung renderer never keeps the app from quitting. After the ack the guard waits for the answer without a limit, so a slow user or a slow save loses nothing, and answers yes only if the renderer process is gone (`render-process-gone`, `destroyed`) or a send fails. A late answer is ignored.
-- **Renderer** (`file-panel.js`). `askAboutUnsavedEdits()` lists the dirty tabs (`collectUnsavedFileTabs`) in the `#unsaved-edits-dialog` dialog, built on the add-project dialog's classes (already in the frameless no-drag list). Save writes every dirty tab: the shown one through the viewer's own save (`ViewerPanel.saveNow()`, with its stale-disk confirm), a tab kept aside through `saveFileForPanel` with its snapshot's `agreedBase`. A save that fails (including a disk that moved) keeps the dialog open with the reason, and nothing is answered. Discard answers yes. Cancel and Escape answer no. A second request while the dialog is open gets the same dialog's answer.
-- **`beforeunload`.** The renderer vetoes an unload while a file tab is dirty, unless `unloadApproved`, set for 10 s after the user answered yes. That is what stops a reload from the keyboard or devtools from slipping past, and what keeps the veto from asking a second time after an approved close.
-- **Closing a session** does not drop its file panel: `destroySession` leaves `filePanelState` alone, so the tabs, dirty or not, are still there when the session is opened again, and the quit check still sees them. Deleting a session leaves its state in memory too, so its edits are asked about at quit rather than lost.
-
-### A document not yet in the editor
-
-`open()` puts its document in the editor only once the CodeMirror bundle has loaded. Until then the panel holds it as `_pendingContent`, and that is the buffer: `_isDirty` and `snapshot()` read it, so a restored tab replaced again before its editor exists is held with its edits, whichever route replaces it.
-
-- A re-read asked for while the load is in flight (`rereadFromDisk`, from a same-file open or from the file watch) is queued (`_rereadQueued`) and runs once the document is in the editor. A new `open()` clears the queue. Reopening instead would call `open()` again, which clears the notice: a save failure just applied from a held tab's record would vanish.
-- Save does nothing, and the Save button is disabled, until the document is in the editor: the user has typed nothing yet, and `getContent()` would read the empty editor, which main would accept over a file still equal to `expected`. Copy copies `_pendingContent`. Format, wrap and go-to-line return while there is no editor.
-- If the bundle fails to load, the open is no longer in flight but the document is still not in the editor. The next re-read opens the panel again from its own snapshot (buffer, bases, token), and the load is retried: `loadCodeMirrorBundle` forgets a failed load.
+**Nothing a session triggers shows a modal, and no route drops unsaved edits without the user saying so.** A session's file panel has one tab slot (`state.currentTab`). Three routes fill it without the user choosing it in the panel: the MCP `openFile` tool and a file clicked in the terminal, both through `openTouchedPath` (`.ai/contexts/touched-files.md`, "One route into Touched"), and the MCP `openDiff` tool (`openDiffTab`). A replacement goes through `destroyCurrentTab`, which stashes a dirty Changes buffer (`changesStash`) or a dirty Touched editor (`touchedStashes`, "Stashed edits" in the Touched context) instead of dropping it.
 
 ### Per route
 
-| Route | Over a dirty file tab | Over a clean file tab |
+| Route | Over a dirty Touched editor on another file | Over a clean one |
 |---|---|---|
-| `openFile` / path link, same file, tab shown | kept in place, re-read (`rereadFromDisk`): edits kept, "changed on disk" if the session wrote; a line is revealed | kept in place and re-read: reloads quietly |
-| `openFile` / path link, same file, tab shown, its `open()` not yet applied (the CodeMirror bundle loading, or a restore still pending) | the re-read is queued; see "A document not yet in the editor" | the same |
-| `openFile` / path link, same file, tab away | kept with its snapshot and token, restored and re-read on return | the same |
-| `openFile` / path link, another file | tab held, the new file shown, the bar names the held one | replaced |
-| `openDiff` | tab held, restored when the session closes the diff | replaced; closing the diff closes the panel |
-| path link to a changed file (Changes) | tab held, restored when Changes is closed | replaced |
-| the panel's close button (the user's own click) | `confirm('This file has unsaved edits. Discard them?')`; a no keeps the tab; a yes shows the next held tab, if any | closed; the next held tab, if any, is shown |
+| a clicked file (`'link'`) | `confirm('This file has unsaved edits. Discard them?')`; a no keeps the editor and reads nothing | replaced |
+| `openFile` (`'mcp'`) | not replaced; the file is read and listed as opened | replaced, no question |
+| either, the file already in the editor | kept as it is, not re-read; a line is revealed | the same |
+| `openDiff` | the editor is stashed and comes back when the session closes the diff | replaced; closing the diff closes the panel |
+| the panel's close button (the user's own click) | the same confirm; a no keeps the editor | closed |
 
-An open only ever reads and replaces the tab of the session it is aimed at: another session's tab, shown in the viewer or away, is not touched.
+An open only ever touches the slot of the session it is aimed at (for a panel shell, the session that owns it).
+
+### An open that arrives over a diff
+
+An unanswered diff (`type 'diff'`, not `resolved`) is never replaced by an open: the CLI is waiting on its answer. The open is stored in `state.pendingTouchedOpen` (`{filePath, line, origin}`; a later one replaces it) and replayed when the diff ends:
+
+- the session closes it (`closeDiffByDiffId`, `closeAllDiffs`);
+- the user answers it with Accept or Reject while an open waits: the diff tab ends there;
+- the panel's close button on the diff, which answers reject.
+
+Each of these reads and clears `pendingTouchedOpen` before `destroyCurrentTab`, then calls `endCurrentTab(sessionId, state, {pending, restoreStash})` (`endDiffTab` for the first two, with `restoreStash: true`; the close button passes `{pending}` only). `endCurrentTab` hides the panel, then replays the pending open, or, with `restoreStash`, opens Touched on the newest stash; otherwise the panel stays hidden. A replay runs as origin `'mcp'`, so it never asks; the stored origin only decides whether the remote check runs. Any other route that takes the diff out of the slot (the Touched or Changes toggle, another `openDiff`) drops the stored open: `destroyCurrentTab` clears it for a diff tab. With no open waiting, Accept and Reject keep the answered diff in the slot until the session closes it; the session's close of a diff that has already ended is a no-op.
+
+### Unsaved edits on quit, reload and close
+
+Nothing ends the window with unsaved file-panel edits without the user saying so. The scope is the Touched editor in the slot (a tab with an `absolutePath`) and every `touchedStashes` entry, in every session of `filePanelState`; the Memory and Work Files panels, MCP diff tabs and Changes buffers are not covered.
+
+- **Main** (`unsaved-guard.js`, one guard, `attach(win)` per window, `beforeQuit(event, win)` for the app). `main.js`'s `before-quit` handler calls `beforeQuit` first: it prevents the quit, asks the renderer, and calls `app.quit()` again on a yes, so the cleanup that follows (PTYs killed, MCP servers, watchers) runs only once the quit is confirmed and a Cancel leaves the app intact. This covers every `app.quit()` caller (☰ Quit, the last window closing). `updater-install` asks first (`confirmQuit`), because electron-updater's `quitAndInstall()` starts the installer before it calls `app.quit()`: a Cancel must leave the installer unstarted, and a yes pre-approves the quit that follows. A Windows `query-session-end` or `session-end` approves the quit, so logoff and shutdown never wait on the dialog. A window close, a quit and an install share one question while it is open. The window's own `close` event is held the same way for a plain window close. The question is `unsaved-check` (`id`, `'quit'` or `'reload'`); the renderer's `unsaved-check-result` (`id`, `proceed`) approves it. A `will-prevent-unload` (the renderer's `beforeunload` veto, which a reload hits) asks with `'reload'`; on a yes the next unload is allowed once (`allowNextUnload`, answered with `preventDefault()`, which in Electron means "unload anyway") and `webContents.reload()` is called. Every close asks the renderer, even with nothing dirty; a main-side dirty flag would save that round trip and is not built.
+- **Bounded.** The renderer acknowledges (`unsaved-check-ack`) as soon as it receives the check, before any dialog. The 2.5 s bound (`DEFAULT_TIMEOUT_MS`) covers only send to ack: no ack answers yes, so a hung renderer never keeps the app from quitting. After the ack the guard waits for the answer without a limit, so a slow user or a slow save loses nothing, and answers yes only if the renderer process is gone (`render-process-gone`, `destroyed`) or a send fails. A late answer is ignored.
+- **Renderer** (`file-panel.js`). `askAboutUnsavedEdits()` lists the dirty tabs (`collectUnsavedFileTabs`) in the `#unsaved-edits-dialog` dialog, built on the add-project dialog's classes (already in the frameless no-drag list). Save writes every dirty entry: the editor in the slot through `handleChangesSave`, a stashed one through `saveFileForPanel(filePath, content, savedContent, {git, version})`, removed from its session once written. A save that fails (including a disk that moved) keeps the dialog open with the reason, and nothing is answered. Discard answers yes. Cancel and Escape answer no. A second request while the dialog is open gets the same dialog's answer.
+- **`beforeunload`.** The renderer vetoes an unload while an entry is dirty, unless `unloadApproved`, set for 10 s after the user answered yes. That is what stops a reload from the keyboard or devtools from slipping past, and what keeps the veto from asking a second time after an approved close.
+- **Closing a session** does not drop its file panel: `destroySession` leaves `filePanelState` alone, so the tab and the stashes, dirty or not, are still there when the session is opened again, and the quit check still sees them. Deleting a session leaves its state in memory too, so its edits are asked about at quit rather than lost.
+
+### A document not yet in the editor
+
+`open()` puts its document in the editor only once the CodeMirror bundle has loaded. Until then the panel holds it as `_pendingContent`, and that is the buffer: `_isDirty` and `snapshot()` read it, so a snapshot taken before its editor exists keeps the edits.
+
+- A re-read asked for while the load is in flight (`rereadFromDisk`, from the file watch) is queued (`_rereadQueued`) and runs once the document is in the editor. A new `open()` clears the queue. Reopening instead would call `open()` again, which clears the notice: a save failure just applied from a restored snapshot's record would vanish.
+- Save does nothing, and the Save button is disabled, until the document is in the editor: the user has typed nothing yet, and `getContent()` would read the empty editor, which main would accept over a file still equal to `expected`. Copy copies `_pendingContent`. Format, wrap and go-to-line return while there is no editor.
+- If the bundle fails to load, the open is no longer in flight but the document is still not in the editor. The next re-read opens the panel again from its own snapshot (buffer, bases, token), and the load is retried: `loadCodeMirrorBundle` forgets a failed load.
 
 ### Paths
 
-Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: on `win32`, separators folded to `/` and case folded; elsewhere, exactly. macOS is not folded: APFS can be case-sensitive, where `A.md` and `a.md` are two files, and holding one under the other's key would show the wrong buffer. A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
+Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: on `win32`, separators folded to `/` and case folded; elsewhere, exactly. macOS is not folded: APFS can be case-sensitive, where `A.md` and `a.md` are two files, and stashing one under the other's key would show the wrong buffer. A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
 
 ### The `ok` answer
 
-`openFile` without a non-empty string `filePath` is answered with a JSON-RPC error (`-32602`) and opens nothing. Otherwise it answers `ok` as soon as main has sent the file to the renderer, before the renderer acts. That stays accurate: no open is declined or deferred. The file is shown, in the slot of the session it is aimed at, whatever that slot held.
+`openFile` without a non-empty string `filePath` is answered with a JSON-RPC error (`-32602`) and opens nothing. Otherwise it answers `ok` as soon as main has sent the path to the renderer, before the renderer acts, whatever the renderer then does with it: the panel's guards may refuse the file, an editor with unsaved edits leaves it listed only, an unanswered diff defers it. `mcp-bridge.js` reads nothing; the only read is the panel's guarded one.
 
 ## Undo
 
 Undo steps only through the user's own edits to the file on screen. The two editors a `ViewerPanel` builds (`createPlanEditor`, `createEditableViewer`) hold `history()` in a compartment (`view._historyCompartment`). Whenever the panel puts content in the editor itself — `open()` of another file, `_createEditor`'s initial fill, a restored snapshot, a quiet reload, **Reload** — `_setDocument` replaces the document and then calls `cmResetHistory`. That helper, exported by `codemirror-setup.js`, reconfigures the compartment to nothing and back: removing the extension drops its state, and adding it back starts an empty history. Reconfiguring to `history()` in a single step would keep the old state, because the history field is the same.
 
-Keeping those replacements out of the history is not enough. The user's earlier entries are mapped through a whole-document replace and stay undoable: a deletion made in one file would be re-inserted into the next file the panel opens, or into the content a quiet reload brought, and the next save — whose `expected` is the disk — would write it. One viewer serves every session's file tabs, so the text could land in another session's file. A restored snapshot starts with an empty history for the same reason; the history is not part of the snapshot. `test/viewer-panel-undo.test.js` drives both cases, with deletions, against the real CodeMirror.
+Keeping those replacements out of the history is not enough. The user's earlier entries are mapped through a whole-document replace and stay undoable: a deletion made in one file would be re-inserted into the next file the panel opens, or into the content a quiet reload brought, and the next save — whose `expected` is the disk — would write it. One viewer opens file after file, so the text could land in another file. A restored snapshot starts with an empty history for the same reason; the history is not part of the snapshot. `test/viewer-panel-undo.test.js` drives both cases, with deletions, against the real CodeMirror.
 
 ## Watching the file
 
@@ -221,7 +204,7 @@ Keeping those replacements out of the history is not enough. The user's earlier 
 
 The renderer records a watch (`_watchedPath`) only once `watch-file` answers `ok`, so a failed watch is never released by a later `unwatch-file` that would take another panel's reference. A watch acknowledged after the panel has moved to another file is released at once.
 
-`createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a file tab showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
+`createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a Touched editor showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
 
 The Changes panel's registry (`git-changes-watch.js`) solves the same problem differently, by re-arming on the file after a `rename`. The two are not merged.
 
@@ -231,22 +214,20 @@ The Changes panel's registry (`git-changes-watch.js`) solves the same problem di
 - **Line-wrap default depends on file type**: markdown wraps, code doesn't. Wrap state is NOT persisted — resets per file.
 - **`format` for `.jsonl` is intentionally non-standard**: each line is pretty-printed and joined with `\n---\n`. This produces human-readable output but is no longer valid JSON. The button is for *viewing*, not for converting files to a different format.
 - **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally in `viewer-toolbar.js:256` (`keydown` listener with `preventDefault`).
-- **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the Work Files viewer, the panel's file tab, the MCP diff and the Changes editor share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
+- **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the Work Files viewer, the MCP diff and the Changes and Touched editors share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
 - **The toolbar API exposes button refs directly** (`toolbar.saveBtn`, `toolbar.formatBtn`, …). The ViewerPanel reads `null` checks instead of asking the toolbar — slightly leaky encapsulation, but harmless.
 
 ## If you change this, also check
 
-- `public/app.js` panel constructors (2 callsites) — adding a new opt may need wiring there
+- `public/app.js` and `public/activity-trace-panel.js` panel constructors (3 callsites) — adding a new opt may need wiring there
 - `eslint.config.js` if you expose a new cross-file global (e.g. `flashButtonText`, `toggleMarkdownPreview` are already declared)
 - `test/dom-work-files-view.test.js` — covers the panel render path for the .work-files tab
-- `public/file-panel.js` — has its own `fpViewerPanel = new ViewerPanel(...)` for the file-diff side panel; might need same opt
 - If you add a new file-type-aware button, mirror the `_isJsonish()` / `_isMarkdown()` pattern with an `_isXyz()` helper rather than inlining the extension check
 
 ## Changes mode (issue #251)
 
-`public/file-panel.js`'s side panel gained a third tab type, `'changes'`,
-alongside the pre-existing `'file'` and `'diff'` (MCP) types on the same
-per-session `filePanelState`. Full design (why it skips `ViewerPanel`, the
+`public/file-panel.js`'s side panel has three tab types on the same
+per-session `filePanelState`: `'changes'`, `'touched'` and the MCP `'diff'`. Full design (why it skips `ViewerPanel`, the
 entry point, the no-polling refresh trigger, editing): `.ai/contexts/changes-view.md`.
 User-facing behavior: `docs/changes-view.md`.
 
@@ -275,8 +256,9 @@ reuses, for the same reason: watching goes through `git-changes-watch` instead
 of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
 lives on the tab instead of the component. An MCP-driven open replaces whatever
 tab is showing, so a dirty Changes buffer is stashed on the session's panel
-state (`changesStash`) and restored when the tab is reopened; a dirty file tab
-is held the same way, in `heldFileTabs` (see "An open aimed at a file tab").
+state (`changesStash`) and restored when the tab is reopened; a dirty Touched
+editor is stashed the same way, in `touchedStashes` (see "An open aimed at the
+panel").
 
 `Cmd/Ctrl+S` arrives as the same `cm-save` DOM event the bundle dispatches, and
 the listener sits on `#changes-diff-view`, which is where `ViewerPanel` puts
@@ -319,7 +301,7 @@ button style, and `icon-btn` and `info-btn` compose compact controls.
 `modal-overlay` and `modal-dialog` share the existing What's new dialog rules.
 
 `setViewerPath` in `public/viewer-toolbar.js` builds every file/diff header
-path: ViewerPanel (Memory, Work Files and file tabs), Changes/Touched editors
+path: ViewerPanel (Memory, Work Files, Activity trace), Changes/Touched editors
 and the MCP diff header. It keeps the complete path in `title` and two text
 spans: the head shrinks first with ellipsis, and an oversized filename tail
 can also shrink with its own ellipsis. A separator-ending path displays its

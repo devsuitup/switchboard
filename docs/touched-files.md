@@ -28,7 +28,8 @@ itself.
 The transcript records what the session tried, not what happened, so every row is
 checked against the disk when the list is built:
 
-- **present**: the file is there. Click it to open it in the file viewer.
+- **present**: the file is there. Click it to open it in the editor below the
+  list, with its diff against HEAD when it has changed.
 - **gone**: the file no longer exists, or never did (a refused write).
 - **not a file**, **unreadable**: it is a directory, or it could not be read.
 - **refused**: the path is in a protected location, such as a credential
@@ -37,6 +38,31 @@ checked against the disk when the list is built:
 A path that cannot be tied to a file is listed under **Not resolved to a file**
 with the reason: a relative path whose session directory could not be verified,
 a network path, or a path with unusable characters. It cannot be opened.
+
+## Files opened from elsewhere
+
+A file you click in the terminal (a [path link](terminal.md#clickable-paths), a
+`file://` link, **Open in panel**) and a file Claude opens through
+[IDE Emulation](ide-emulation.md#file-viewer) open here too, in the same editor.
+When the file tools did not touch it, it is listed at the top under **Opened,
+not touched by the file tools**, marked **opened**. These rows are not counted
+in "N files touched". They stay while the session's panel exists, through
+Refresh and closing Touched, up to the 50 most recent.
+
+- A `path:line` link opens the source at that line, a markdown file included.
+- A file with unsaved edits in the editor is not replaced without asking when
+  you click another file. A file Claude opens over unsaved edits is only listed;
+  the editor keeps your text.
+- While Claude waits on an answer to a proposed diff, a clicked file opens once
+  the diff is answered or closed.
+- Unsaved edits to a file that another view replaced are kept and come back
+  when you open that file again, with a notice; quitting asks about them.
+- A symbolic link opens read-only.
+- The panel's checks apply to every file: credential paths, binary files, files
+  that are not UTF-8 and files over 2 MB are refused, with the reason above the
+  list.
+- In a remote session a clicked file opens nothing: the file is on another
+  machine.
 
 ## Markdown files
 
@@ -50,4 +76,4 @@ against HEAD is in the source view.
 
 - At most 500 files are listed; the summary counts the rest.
 - A very large transcript is read only in part, and the summary says so.
-- A row opens in the same file viewer as a [path link](terminal.md#clickable-paths); the list itself never writes.
+- A row opens in the same editor as a [path link](terminal.md#clickable-paths); the list itself never writes.

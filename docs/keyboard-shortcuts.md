@@ -42,7 +42,7 @@ They are global only, stored as `shortcuts`.
 
 ## Editors
 
-In Agent Files, the side-panel file viewer, the Changes editor and the diff
+In Agent Files, the Changes and Touched editors and the diff
 views (CodeMirror):
 
 | Keys | Effect |

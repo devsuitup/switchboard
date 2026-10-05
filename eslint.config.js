@@ -383,7 +383,7 @@ module.exports = [
   {
     files: ['public/file-panel.js'],
     languageOptions: {
-      globals: { initTouchedView: 'readonly', renderTouchedTab: 'readonly', hideTouchedView: 'readonly' },
+      globals: { initTouchedView: 'readonly', renderTouchedTab: 'readonly', hideTouchedView: 'readonly', openTouchedPath: 'readonly', openTouchedTab: 'readonly' },
     },
   },
   {
@@ -405,6 +405,9 @@ module.exports = [
         readChangesEditorContent: 'readonly',
         createChangesTab: 'readonly',
         restoreChangesEdits: 'readonly',
+        filePathKey: 'readonly',
+        hasUnsavedChangesEdits: 'readonly',
+        panelTerminalOwnerOf: 'readonly',
       },
     },
   },

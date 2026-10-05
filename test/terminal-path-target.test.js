@@ -148,6 +148,11 @@ test('a session whose working directory cannot be resolved is refused, not resol
   assert.deepStrictEqual(resolveTerminalPathsCwd('unknown', deps), { ok: false, reason: 'no-cwd' });
 });
 
+test('a remote session with no known working directory is refused as remote, not as no-cwd', () => {
+  const deps = cwdDeps({}, { r1: { ok: false, kind: 'remote', error: 'remote session has no known working directory' } });
+  assert.deepStrictEqual(resolveTerminalPathsCwd('r1', deps), { ok: false, reason: 'remote' });
+});
+
 test('an ok target with no usable cwd is refused', () => {
   const deps = cwdDeps({}, { s1: { ok: true, kind: 'local', cwd: '' } });
   assert.deepStrictEqual(resolveTerminalPathsCwd('s1', deps), { ok: false, reason: 'no-cwd' });

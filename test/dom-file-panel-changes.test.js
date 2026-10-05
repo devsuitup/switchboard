@@ -2,7 +2,7 @@
 
 // Renderer tests for the Changes mode in public/file-panel.js (issue #251).
 // Strategy mirrors test/dom-work-files-view.test.js: evaluate the real
-// renderer files in a jsdom window, stub window.api and ViewerPanel, drive
+// renderer files in a jsdom window, stub window.api, drive
 // the public tab functions, and assert on the resulting DOM plus call counts.
 //
 // session-state.js + session-activity-dom.js + session-activity.js load
@@ -162,8 +162,12 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     },
     readFileForPanel: (filePath) => {
       calls.readFile.push(filePath);
-      return Promise.resolve({ ok: true, content: 'plain content' });
+      return Promise.resolve({ ok: true, git: true, original: 'old\n', current: 'new\n', version: 'v1' });
     },
+    watchFile: () => Promise.resolve({ ok: true }),
+    unwatchFile: () => Promise.resolve({ ok: true }),
+    resolveTerminalPaths: (_sessionId, texts) => Promise.resolve(texts.map(p => ({ ok: true, path: p }))),
+    sessionTouchedFiles: () => Promise.resolve({ ok: true, files: [], unresolved: [], omitted: 0, coverage: {} }),
   };
 
   // jsdom's own window.confirm throws "not implemented"; the panel asks before
@@ -198,11 +202,6 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
     return view;
   };
 
-  Object.defineProperty(window, 'ViewerPanel', {
-    value: function ViewerPanelStub() { return { open() {}, destroy() {}, hasUnsavedEdits: () => false }; },
-    writable: true,
-    configurable: true,
-  });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   evalInWindow(dom, path.join(PUBLIC_DIR, 'splitter.js'));
@@ -212,6 +211,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   evalInWindow(dom, path.join(PUBLIC_DIR, 'header-controls.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'viewer-toolbar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'file-panel.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'touched-files-view.js'));
 
   window.initFilePanel();
 
@@ -233,6 +233,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
       const state = read('filePanelState').get(sessionId);
       return state ? state.changesStash : undefined;
     },
+    stateOf: (sessionId) => read('filePanelState').get(sessionId),
     destroy: () => window.close(),
   };
 }
@@ -842,8 +843,8 @@ test('the Changes toggle follows the session the header shows', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('the Changes toggle stays off while the panel shows a file or an MCP diff', async () => {
-  for (const takeover of ['file', 'diff']) {
+test('the Changes toggle stays off while the panel shows Touched or an MCP diff', async () => {
+  for (const takeover of ['touched', 'diff']) {
     const ctx = setupFilePanelDom();
     try {
       ctx.window.switchPanel('s1');
@@ -852,8 +853,8 @@ test('the Changes toggle stays off while the panel shows a file or an MCP diff',
       await flush();
       assert.equal(btn.classList.contains('active'), true);
 
-      if (takeover === 'file') {
-        ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      if (takeover === 'touched') {
+        ctx.window.openTouchedTab('s1');
       } else {
         ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
       }
@@ -1239,7 +1240,7 @@ test('a row switch confirmed by the user leaves no stash to resurrect (mutation 
     ctx.editors[0].box.text = 'I ASKED TO DISCARD THIS\n';
 
     // A live stash, the way the other exits are pinned.
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     assert.ok(ctx.stashOf('s1'), 'the stash is live before the switch');
     await ctx.window.openChangesTab('s1');
@@ -1250,7 +1251,7 @@ test('a row switch confirmed by the user leaves no stash to resurrect (mutation 
     assert.equal(ctx.calls.confirm.length, 1);
     assert.equal(ctx.stashOf('s1'), null, 'switching away from a discarded buffer must not stash it');
 
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     await ctx.window.openChangesTab('s1');
     await flush();
@@ -1468,7 +1469,7 @@ test('a session opening its own file keeps the unsaved buffer and restores it (m
     ctx.editors[0].box.text = 'work in progress\n';
 
     // The session — not the user — takes the panel over.
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     assert.equal(ctx.calls.confirm.length, 0, 'an IPC-driven swap cannot stop to ask');
 
@@ -1495,7 +1496,7 @@ for (const exit of ['toggle', 'panel-close', 'back']) {
 
       // A takeover puts the buffer in the stash; reopening restores it, so the
       // tab is dirty again and this exit is the one that must drop it.
-      ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
       await flush();
       assert.ok(ctx.stashOf('s1'), 'the stash is live before the exit');
       await ctx.window.openChangesTab('s1');
@@ -1527,7 +1528,7 @@ test('a confirmed discard also drops a buffer stashed by an earlier takeover', a
     await openFile(ctx, 's1', 'src/a.js');
     ctx.editors[0].box.text = 'stashed by the session\n';
 
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     assert.ok(ctx.stashOf('s1'), 'the takeover stashed it');
 
@@ -1557,14 +1558,14 @@ test('a declined discard keeps both the buffer and the tab', async () => {
 // The pair of questions this feature turns on: a buffer may only be dropped
 // when the user was asked about it, and must be dropped when they said yes.
 test('closing the panel over the session\'s own tab keeps the stash, because nothing was asked (mutation target: clearing without asking)', async () => {
-  for (const takeover of ['file', 'diff']) {
+  for (const takeover of ['touched', 'diff']) {
     const ctx = setupFilePanelDom();
     try {
       await openFile(ctx, 's1', 'src/a.js');
       ctx.editors[0].box.text = 'work the user never abandoned\n';
 
-      if (takeover === 'file') {
-        ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+      if (takeover === 'touched') {
+        ctx.window.openTouchedTab('s1');
       } else {
         ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/repo/other.js', oldContent: 'a\n', newContent: 'b\n' });
       }
@@ -1590,7 +1591,7 @@ test('an exit that asks nothing never drops a stash, even from the Changes tab i
   try {
     await openFile(ctx, 's1', 'src/a.js');
     ctx.editors[0].box.text = 'stashed\n';
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
 
     // Back in Changes, the restored buffer is saved, so the tab is clean: an
@@ -1601,7 +1602,7 @@ test('an exit that asks nothing never drops a stash, even from the Changes tab i
     await flush();
     assert.equal(ctx.calls.confirm.length, 0);
 
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     closeEditorBtn(ctx).click();
     assert.equal(ctx.calls.confirm.length, 0, 'a clean buffer is never asked about');
@@ -1613,7 +1614,7 @@ test('a clean buffer is not stashed, so reopening the tab shows the file list', 
   try {
     await openFile(ctx, 's1', 'src/a.js');
 
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     await ctx.window.openChangesTab('s1');
     await flush();
@@ -1630,7 +1631,7 @@ test('a restored buffer still refuses to save against a file that moved', async 
   try {
     await openFile(ctx, 's1', 'src/a.js');
     ctx.editors[0].box.text = 'work in progress\n';
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
+    ctx.window.openDiffTab('s1', 'd-other', { oldFilePath: '/repo/other.js', oldContent: 'other\n', newContent: 'other\n' });
     await flush();
     await ctx.window.openChangesTab('s1');
     await flush();
@@ -1809,80 +1810,31 @@ test('the panel close button destroys the editor too', async () => {
 
 // --- A file link from the terminal ----------------------------------------
 
-test('a link to a changed file opens the Changes editor on its row (mutation target: the link routing)', async () => {
-  const ctx = setupFilePanelDom({
-    locateImpl: () => ({ ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false }),
-    fileImpl: () => ({ ok: true, original: 'old\n', current: 'new\n', version: 'v1' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
-    await flush();
-
-    assert.deepEqual(ctx.calls.locate, [{ sessionId: 's1', filePath: '/repo/src/a.js' }],
-      'the absolute path goes to main, which answers with a row');
-    assert.deepEqual(ctx.calls.readFile, [], 'the plain viewer is not involved');
-    assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'flex');
-    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
-    assert.deepEqual(ctx.calls.file[0], { sessionId: 's1', filePath: 'src/a.js', staged: true },
-      'and the row it names is opened against the side the row says');
-    assert.equal(ctx.document.querySelector('.changes-file-row.selected').dataset.path, 'src/a.js');
-  } finally { ctx.destroy(); }
-});
-
-test('a link to an untracked file opens there too', async () => {
-  const ctx = setupFilePanelDom({
-    locateImpl: () => ({ ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true }),
-    fileImpl: () => ({ ok: true, original: '', current: 'brand new\n', version: 'v1' }),
-  });
-  try {
-    ctx.window.switchPanel('s1');
-    await ctx.window.openFileInPanel('s1', '/repo/new.txt');
-    await flush();
-
-    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'new.txt');
-    assert.equal(ctx.calls.file[0].staged, false);
-    assert.deepEqual(ctx.calls.readFile, []);
-  } finally { ctx.destroy(); }
-});
-
-test('a link to an unmodified file, or one outside the repo, keeps the plain viewer (mutation target: the changed check)', async () => {
-  for (const answer of [
-    { ok: true, relPath: 'clean.txt', changed: false },
-    { ok: false, reason: 'outside', error: 'path is outside this session\'s repository' },
-    { ok: false, reason: 'remote', error: 'editing is not available for a remote session' },
-  ]) {
+for (const answer of [
+  { ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false },
+  { ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true },
+  { ok: true, relPath: 'clean.txt', changed: false },
+  { ok: false, reason: 'outside', error: 'path is outside this session\'s repository' },
+]) {
+  test(`a link opens the file in Touched and never asks the Changes list (${answer.relPath || answer.reason})`, async () => {
     const ctx = setupFilePanelDom({ locateImpl: () => answer });
     try {
       ctx.window.switchPanel('s1');
-      await ctx.window.openFileInPanel('s1', '/somewhere/clean.txt');
+      await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
       await flush();
 
-      assert.deepEqual(ctx.calls.readFile, ['/somewhere/clean.txt'],
-        `${answer.reason || 'unmodified'} must fall back to the plain editor`);
-      assert.equal(ctx.calls.file.length, 0, 'and must not open a Changes editor');
-      assert.equal(ctx.document.getElementById('file-panel-viewer').style.display, 'flex');
+      assert.deepEqual(ctx.calls.locate, []);
+      assert.equal(ctx.calls.file.length, 0, 'no Changes editor is opened');
+      assert.deepEqual(ctx.calls.readFile, ['/repo/src/a.js']);
+      assert.equal(ctx.document.getElementById('file-panel-touched').style.display, 'flex');
+      assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'none');
+      assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
     } finally { ctx.destroy(); }
-  }
-});
-
-test('a link falls back to the plain viewer when the main process cannot answer at all', async () => {
-  const ctx = setupFilePanelDom({ locateImpl: () => { throw new Error('channel closed'); } });
-  try {
-    ctx.window.switchPanel('s1');
-    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
-    await flush();
-
-    assert.deepEqual(ctx.calls.readFile, ['/repo/src/a.js'], 'a link still opens something');
-    assert.equal(ctx.calls.file.length, 0);
-  } finally { ctx.destroy(); }
-});
-
-test('a link while another file is open with unsaved edits asks before switching', async () => {
-  const ctx = setupFilePanelDom({
-    confirmImpl: () => false,
-    locateImpl: () => ({ ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true }),
   });
+}
+
+test('a link over a dirty Changes editor asks nothing, and Changes gives the buffer back', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
   try {
     await openFile(ctx, 's1', 'src/a.js');
     ctx.editors[0].box.text = 'my edit\n';
@@ -1890,30 +1842,33 @@ test('a link while another file is open with unsaved edits asks before switching
     await ctx.window.openFileInPanel('s1', '/repo/new.txt');
     await flush();
 
-    assert.equal(ctx.calls.confirm.length, 1);
-    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js',
-      'a refused switch stays where it was, link or row click alike');
-    assert.equal(ctx.editors[0].box.text, 'my edit\n');
+    assert.equal(ctx.calls.confirm.length, 0);
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/repo/new.txt');
+    assert.ok(ctx.stashOf('s1'), 'the Changes buffer is stashed');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+    assert.equal(ctx.editors.at(-1).opened.modified, 'my edit\n');
   } finally { ctx.destroy(); }
 });
 
-test('a link is still honoured when the panel is closed or showing something else', async () => {
-  const ctx = setupFilePanelDom({
-    locateImpl: () => ({ ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false }),
+for (const before of ['closed', 'Changes list']) {
+  test(`a link is honoured when the panel is ${before}`, async () => {
+    const ctx = setupFilePanelDom();
+    try {
+      ctx.window.switchPanel('s1');
+      if (before === 'Changes list') {
+        await ctx.window.openChangesTab('s1');
+        await flush();
+      }
+      await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
+      await flush();
+
+      assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), true);
+      assert.equal(ctx.document.getElementById('file-panel-touched').style.display, 'flex');
+      assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/repo/src/a.js');
+    } finally { ctx.destroy(); }
   });
-  try {
-    ctx.window.switchPanel('s1');
-    ctx.window.openFileTab('s1', { filePath: '/repo/other.js', content: 'other' });
-    await flush();
-
-    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
-    await flush();
-
-    assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'flex');
-    assert.equal(ctx.document.getElementById('changes-diff-path').textContent, 'src/a.js');
-    assert.equal(ctx.calls.status.length, 1, 'the tab it opened loaded its list');
-  } finally { ctx.destroy(); }
-});
+}
 
 test('the list height is clamped for display only, and never ratcheted down (mutation target: the clamp)', () => {
   const ctx = setupFilePanelDom();

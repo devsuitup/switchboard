@@ -95,8 +95,23 @@ test('remote: refuses when the descriptor is gone or carries no cwd (mutation ta
   });
   const result = resolveGitChangesTarget('s1', deps);
   assert.equal(result.ok, false);
+  assert.equal(result.kind, 'remote');
   assert.match(result.error, /no known working directory/);
 });
+
+for (const exited of [false, true]) {
+  test(`remote: an attached remote session whose folder is not cached is refused as remote (exited=${exited})`, () => {
+    const deps = baseDeps({
+      getCachedFolder: () => null,
+      activeSessions: new Map([['r1', { kind: 'remote-attach', exited, cwd: '/srv/app' }]]),
+      resolveSessionRealCwd: () => '/srv/app',
+      existsSync: () => true,
+    });
+    const result = resolveGitChangesTarget('r1', deps);
+    assert.equal(result.ok, false);
+    assert.equal(result.kind, 'remote');
+  });
+}
 
 test('local: a live session in this app wins with its own recorded cwd, even without touching the disk scan', () => {
   let scanCalled = false;

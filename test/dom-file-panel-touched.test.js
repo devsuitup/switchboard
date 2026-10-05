@@ -49,7 +49,7 @@ function result(over = {}) {
   };
 }
 
-function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, storedRatio, storageThrows = false } = {}) {
+function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThrows = false, resolveImpl, ownerOf, locateImpl, saveImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   if (storedRatio != null) window.localStorage.setItem('touchedListRatio', storedRatio);
@@ -67,14 +67,20 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
     constructor(callback) { resize = callback; }
     observe(element) { observed.add(element); }
   };
-  const calls = { touched: [], readFile: [], viewerOpen: [], readOptions: [], save: [], gitFile: [], status: [] };
+  const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0, locate: [] };
+  let mcpOpenFile = null;
 
   window.api = {
     onMcpOpenDiff: () => {},
-    onMcpOpenFile: () => {},
+    onMcpOpenFile: (handler) => { mcpOpenFile = handler; },
     onMcpCloseAllDiffs: () => {},
     onMcpCloseTab: () => {},
-    mcpDiffResponse: () => {},
+    mcpDiffResponse: (...args) => { calls.diffResponse.push(args); },
+    resolveTerminalPaths: (sessionId, texts) => {
+      calls.resolve.push([sessionId, texts]);
+      return Promise.resolve((resolveImpl || ((_id, t) => t.map(p => ({ ok: true, path: p }))))(sessionId, texts));
+    },
+    gitChangesLocate: (sessionId, filePath) => { calls.locate.push(filePath); return Promise.resolve((locateImpl || (() => ({ ok: true, changed: false })))(filePath)); },
     sessionTouchedFiles: (sessionId, options) => {
       calls.touched.push(sessionId);
       return Promise.resolve((touchedImpl || (() => result()))(sessionId, options));
@@ -92,8 +98,13 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
   window.api.onFileChanged = handler => changeListeners.push(handler);
   window.api.gitChangesStatus = () => { calls.status.push('status'); return Promise.resolve({ ok: true, branch: {}, files: [], totals: {} }); };
   window.api.gitChangesFile = (id, filePath, options) => { calls.gitFile.push({ id, filePath, options }); return Promise.resolve({ ok: true, original: 'before\n', current: 'file body', version: 'v1' }); };
-  window.api.saveFileForPanel = (filePath, content, expected, options) => { calls.save.push({ filePath, content, expected, options }); return Promise.resolve({ ok: true, version: 'v2' }); };
-  window.confirm = confirmImpl || (() => true);
+  window.api.saveFileForPanel = (filePath, content, expected, options) => {
+    calls.save.push({ filePath, content, expected, options });
+    return Promise.resolve(saveImpl ? saveImpl(calls.save.length - 1) : { ok: true, version: 'v2' });
+  };
+  window.confirm = (...args) => { calls.confirm++; return (confirmImpl || (() => true))(...args); };
+  window.cmRevealLine = (_view, line) => calls.revealed.push(line);
+  if (ownerOf) window.panelTerminalOwnerOf = ownerOf;
   const editors = [];
   const editor = (parent, original, current, mode, options) => {
     const dom = window.document.createElement('div');
@@ -109,19 +120,6 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
   window.createUnifiedMergeViewer = (parent, original, current, _name, options) => editor(parent, original, current, 'inline', options);
   window.createEditableViewer = (parent, current, _name, options) => editor(parent, null, current, 'plain', options);
   window.createReadOnlyViewer = (parent, current) => editor(parent, null, current, 'read-only', { onChange() {} });
-  Object.defineProperty(window, 'ViewerPanel', {
-    value: function ViewerPanelStub() {
-      return {
-        open(label, filePath, content) { calls.viewerOpen.push({ label, filePath, content }); },
-        destroy() {},
-        hasUnsavedEdits: () => viewerDirty,
-        snapshot: () => viewerDirty ? { filePath: '/work/a.txt', content: 'edited', agreedBase: 'file body' } : null,
-        snapshotHasUnsavedEdits: () => viewerDirty,
-      };
-    },
-    writable: true,
-    configurable: true,
-  });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
   evalInWindow(dom, path.join(NODE_MODULES, 'marked', 'lib', 'marked.umd.js'));
@@ -145,6 +143,7 @@ function setupDom({ touchedImpl, readImpl, viewerDirty = false, confirmImpl, sto
       if (!element || observed.has(element)) resize();
     },
     changed: filePath => changeListeners.forEach(handler => handler(filePath)),
+    mcpOpenFile: (sessionId, data) => mcpOpenFile(sessionId, data),
     stateOf: (sessionId) => vm.runInContext('filePanelState', ctx).get(sessionId),
     evalSource: source => vm.runInContext(source, ctx),
     bundledMarked,
@@ -286,7 +285,7 @@ for (const exit of ['close', 'escape', 'switch']) {
       await flush();
       assert.equal(prompts, 2);
       assert.ok(!view.dom.isConnected);
-      assert.equal(ctx.stateOf('s1').touchedStash ?? null, null);
+      assert.equal(ctx.stateOf('s1').touchedStashes?.size ?? 0, 0);
       if (exit === 'switch') {
         assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/b.txt');
         assert.deepEqual(rows(ctx).filter(r => r.classList.contains('selected')).map(r => r.dataset.path), ['/work/b.txt']);
@@ -505,7 +504,6 @@ test('a present file opens through readFileForPanel and the shared Changes edito
     assert.deepEqual(ctx.calls.readFile, ['/work/a.txt']);
     assert.equal(ctx.stateOf('s1').currentTab.type, 'changes');
     assert.equal(ctx.editors.at(-1).current, 'hello');
-    assert.deepEqual(ctx.calls.viewerOpen, []);
     assert.equal(ctx.calls.readOptions[0].editor, true);
   } finally { ctx.destroy(); }
 });
@@ -722,9 +720,9 @@ test('a Touched return target survives another session using the shared list', a
   } finally { ctx.destroy(); }
 });
 
-test('Close keeps a dirty file on refusal and discards it without holding it after confirmation', async () => {
+test('Close keeps a dirty file on refusal and discards it without stashing it after confirmation', async () => {
   let agree = false;
-  const ctx = setupDom({ viewerDirty: true, confirmImpl: () => agree });
+  const ctx = setupDom({ confirmImpl: () => agree });
   try {
     await openTab(ctx);
     clickRow(ctx, '/work/a.txt');
@@ -736,7 +734,7 @@ test('Close keeps a dirty file on refusal and discards it without holding it aft
     agree = true;
     back.click();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
-    assert.equal(ctx.stateOf('s1').heldFileTabs?.size || 0, 0);
+    assert.equal(ctx.stateOf('s1').touchedStashes?.size ?? 0, 0);
   } finally { ctx.destroy(); }
 });
 
@@ -831,11 +829,11 @@ test('a file read that finishes after the tab was replaced does not take the pan
   try {
     await openTab(ctx);
     clickRow(ctx, '/work/a.txt');
-    ctx.window.openFileTab('s1', { filePath: '/work/other.txt', content: 'x' });
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/work/other.txt', oldContent: 'a\n', newContent: 'b\n' });
     release();
     await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
     assert.equal(ctx.stateOf('s1').currentTab.filePath, '/work/other.txt');
-    assert.deepEqual(ctx.calls.viewerOpen.map((o) => o.filePath), ['/work/other.txt']);
   } finally { ctx.destroy(); }
 });
 
@@ -843,12 +841,12 @@ test('opening the tab hides whatever the panel showed before', async () => {
   const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
-    for (const id of ['file-panel-viewer', 'file-panel-diff', 'file-panel-changes']) {
+    for (const id of ['file-panel-diff', 'file-panel-changes']) {
       ctx.document.getElementById(id).style.display = 'flex';
     }
     ctx.document.getElementById('touched-toggle-btn').click();
     await flush();
-    for (const id of ['file-panel-viewer', 'file-panel-diff', 'file-panel-changes']) {
+    for (const id of ['file-panel-diff', 'file-panel-changes']) {
       assert.equal(ctx.document.getElementById(id).style.display, 'none', id);
     }
     assert.equal(ctx.document.getElementById('file-panel-touched').style.display, 'flex');
@@ -883,7 +881,6 @@ test('a refused read stays on the tab and shows the reason', async () => {
     await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.match(ctx.document.getElementById('touched-summary').textContent, /access to sensitive path denied/);
-    assert.deepEqual(ctx.calls.viewerOpen, []);
   } finally { ctx.destroy(); }
 });
 
@@ -924,10 +921,10 @@ test('a response that arrives after the tab was replaced is dropped', async () =
   try {
     ctx.window.switchPanel('s1');
     ctx.document.getElementById('touched-toggle-btn').click();
-    ctx.window.openFileTab('s1', { filePath: '/work/other.txt', content: 'x' });
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/work/other.txt', oldContent: 'a\n', newContent: 'b\n' });
     release();
     await flush();
-    assert.equal(ctx.stateOf('s1').currentTab.type, 'file');
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
     assert.equal(rows(ctx).length, 0);
   } finally { ctx.destroy(); }
 });
@@ -980,7 +977,7 @@ test('round 3: the Touched header toggles its dirty editor with the Changes disc
     await flush();
     assert.equal(prompts, 2);
     assert.equal(ctx.stateOf('s1').currentTab, null);
-    assert.equal(ctx.stateOf('s1').touchedStash ?? null, null);
+    assert.equal(ctx.stateOf('s1').touchedStashes?.size ?? 0, 0);
     assert.deepEqual(ctx.watchCalls.at(-1), ['unwatch', '/work/a.txt']);
     assert.equal(btn.getAttribute('aria-pressed'), 'false');
     assert.equal(ctx.calls.touched.length, 1);
@@ -1035,7 +1032,6 @@ test('Touched and Changes build the same editor chrome and diff for a modified f
     assert.equal(touchedEditor.mode, changesEditor.mode);
     assert.equal(touchedEditor.original, changesEditor.original);
     assert.equal(touchedEditor.current, changesEditor.current);
-    assert.deepEqual(ctx.calls.viewerOpen, []);
   } finally { ctx.destroy(); }
 });
 
@@ -1103,7 +1099,7 @@ for (const git of [true, false]) {
   });
 }
 
-test('Touched dirty edits survive a temporary file open with their return list and save target', async () => {
+test('Touched dirty edits survive a diff the session opens and closes, with their return list and save target', async () => {
   const ctx = setupDom();
   try {
     await openTab(ctx);
@@ -1111,8 +1107,8 @@ test('Touched dirty edits survive a temporary file open with their return list a
     clickRow(ctx, '/work/a.txt');
     await flush();
     ctx.editors.at(-1).setText('unsaved');
-    ctx.window.openFileTab('s1', { filePath: '/work/other.txt', content: 'other' });
-    await ctx.window.openTouchedTab('s1');
+    ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/work/other.txt', oldContent: 'a\n', newContent: 'b\n' });
+    ctx.window.closeDiffByDiffId('s1', 'd1');
     await flush();
     assert.equal(ctx.editors.at(-1).current, 'unsaved');
     assert.equal(ctx.stateOf('s1').currentTab.returnList, listTab);
@@ -1518,11 +1514,602 @@ test('markdown: a restored Touched stash recomputes formatted from the preferenc
     ctx.window.localStorage.setItem('touchedMarkdownFormatted', 'true');
     ctx.window.openDiffTab('s1', 'd1', { oldFilePath: '/work/other.js', oldContent: 'a\n', newContent: 'b\n' });
     ctx.window.closeDiffByDiffId('s1', 'd1');
-    ctx.document.getElementById('touched-toggle-btn').click();
     await flush();
     const tab = ctx.stateOf('s1').currentTab;
     assert.equal(tab.absolutePath, '/work/README.md');
     assert.equal(tab.restoredEdits, true);
     assertFormatted(ctx, 'Unsaved');
+  } finally { ctx.destroy(); }
+});
+
+// --- Every clicked file opens in Touched — see .ai/contexts/touched-files.md ("Opened rows")
+
+async function openLink(ctx, filePath, opts, sessionId = 's1') {
+  await ctx.window.openFileInPanel(sessionId, filePath, opts);
+  await flush();
+}
+
+function openedRows(ctx) {
+  return rows(ctx).filter(r => r.classList.contains('touched-opened'));
+}
+
+function summaryText(ctx) {
+  return ctx.document.getElementById('touched-summary').textContent;
+}
+
+test('a link opens the file in Touched, listed first as opened and selected', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab.returnList?.type, 'touched');
+    assert.equal(tab.absolutePath, '/work/notes.txt');
+    const first = rows(ctx)[0];
+    assert.equal(first.dataset.path, '/work/notes.txt');
+    assert.ok(first.classList.contains('touched-opened'));
+    assert.ok(first.classList.contains('selected'));
+    assert.equal(first.querySelector('.touched-file-state').textContent, 'opened');
+    assert.ok(ctx.document.getElementById('file-panel').classList.contains('open'));
+  } finally { ctx.destroy(); }
+});
+
+test('an opened row is not counted as touched', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    assert.match(summaryText(ctx), /^1 file touched/);
+  } finally { ctx.destroy(); }
+});
+
+test('a link to a touched file selects its touched row and adds no opened row', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/a.txt');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/a.txt');
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/work/a.txt']);
+    assert.equal(openedRows(ctx).length, 0);
+    assert.ok(rows(ctx)[0].classList.contains('selected'));
+  } finally { ctx.destroy(); }
+});
+
+for (const [name, link] of [['another case', String.raw`c:\w\a.js`], ['mixed separators', 'c:/w\\a.js']]) {
+  test(`on Windows a link spelt with ${name} selects the touched row`, async () => {
+    const ctx = setupDom({ touchedImpl: () => result({ files: [row({ path: String.raw`C:\w\a.js` })] }) });
+    try {
+      ctx.window.api.platform = 'win32';
+      ctx.window.switchPanel('s1');
+      await openLink(ctx, link);
+      assert.equal(ctx.stateOf('s1').currentTab.absolutePath, link);
+      assert.equal(openedRows(ctx).length, 0);
+      assert.equal(rows(ctx).length, 1);
+      assert.ok(rows(ctx)[0].classList.contains('selected'));
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('opened rows survive Refresh and closing and reopening Touched', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    ctx.document.getElementById('touched-refresh-btn').click();
+    await flush();
+    const toggle = ctx.document.getElementById('touched-toggle-btn');
+    toggle.click();
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab, null);
+    toggle.click();
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+    assert.equal(rows(ctx)[0].dataset.path, '/work/notes.txt');
+    assert.ok(rows(ctx)[0].classList.contains('touched-opened'));
+  } finally { ctx.destroy(); }
+});
+
+test('opened rows belong to the session they were opened in', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    assert.equal(openedRows(ctx).length, 1);
+    await openTab(ctx, 's2');
+    assert.equal(ctx.stateOf('s2').currentTab.type, 'touched');
+    assert.equal(openedRows(ctx).length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a refused read adds no row, opens no editor and shows the reason without the path', async () => {
+  const ctx = setupDom({ readImpl: () => ({ ok: false, error: 'access to sensitive path denied' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/home/u/.ssh/id_rsa');
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
+    assert.equal(openedRows(ctx).length, 0);
+    const err = ctx.document.querySelector('#touched-summary .changes-error');
+    assert.match(err.textContent, /access to sensitive path denied/);
+    assert.doesNotMatch(err.textContent, /id_rsa/);
+  } finally { ctx.destroy(); }
+});
+
+test('a list that cannot be read does not stop the open, and the opened row is drawn', async () => {
+  const ctx = setupDom({ touchedImpl: () => ({ ok: false, reason: 'no-transcript', error: 'this session has no transcript on disk' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    assert.equal(ctx.stateOf('s1').currentTab.absolutePath, '/work/notes.txt');
+    assert.deepEqual(openedRows(ctx).map(r => r.dataset.path), ['/work/notes.txt']);
+    assert.match(summaryText(ctx), /no transcript on disk/);
+  } finally { ctx.destroy(); }
+});
+
+test('a link to another file over a dirty editor asks, and No keeps everything and reads nothing', async () => {
+  const ctx = setupDom({ confirmImpl: () => false });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    ctx.editors.at(-1).setText('dirty');
+    await openLink(ctx, '/work/b.txt');
+    assert.equal(ctx.calls.confirm, 1);
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.equal(ctx.editors.at(-1).current, 'dirty');
+    assert.deepEqual(ctx.calls.readFile, ['/work/a.txt']);
+  } finally { ctx.destroy(); }
+});
+
+test('a link with a line to the file already open reveals the line without asking or reading', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    const view = ctx.editors.at(-1);
+    view.setText('dirty');
+    await openLink(ctx, '/work/a.txt', { line: 7 });
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.equal(ctx.editors.at(-1), view);
+    assert.deepEqual(ctx.calls.readFile, ['/work/a.txt']);
+    assert.deepEqual(ctx.calls.revealed, [7]);
+  } finally { ctx.destroy(); }
+});
+
+test('a link or a row click on the formatted file already open keeps it formatted and reads nothing', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    await openTab(ctx);
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    await openLink(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    await openRow(ctx, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    assert.deepEqual(ctx.calls.readFile, ['/work/README.md']);
+  } finally { ctx.destroy(); }
+});
+
+test('a path:line link to a markdown file opens the source at that line and leaves the preference alone', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/README.md', { line: 12 });
+    assertSource(ctx);
+    assert.deepEqual(ctx.calls.revealed, [12]);
+    assert.equal(ctx.window.localStorage.getItem('touchedMarkdownFormatted'), null);
+  } finally { ctx.destroy(); }
+});
+
+test('a link to a file the working tree reports changed opens in Touched with its diff, not in Changes', async () => {
+  const ctx = setupDom({ locateImpl: () => ({ ok: true, changed: true, relPath: 'notes.txt', staged: false, untracked: false }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    assert.deepEqual(ctx.calls.locate, []);
+    assert.deepEqual(ctx.calls.gitFile, []);
+    assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
+    assert.equal(ctx.document.getElementById('changes-diff-mode-btn').style.display, '');
+  } finally { ctx.destroy(); }
+});
+
+test('a link clicked in a panel shell opens in the panel of the session that owns the shell', async () => {
+  const ctx = setupDom({ ownerOf: id => (id === 'shell-1' ? 'owner' : null) });
+  try {
+    ctx.window.switchPanel('owner');
+    await openLink(ctx, '/work/notes.txt', undefined, 'shell-1');
+    assert.equal(ctx.stateOf('owner').currentTab?.absolutePath, '/work/notes.txt');
+    assert.deepEqual(ctx.calls.touched, ['owner']);
+    assert.equal(ctx.stateOf('shell-1')?.currentTab ?? null, null);
+    assert.ok(ctx.document.getElementById('file-panel').classList.contains('open'));
+  } finally { ctx.destroy(); }
+});
+
+test('opened rows keep the fifty newest, and opening one again moves it to the top', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    for (let i = 0; i < 51; i++) await openLink(ctx, `/work/n${i}.txt`);
+    assert.equal(openedRows(ctx).length, 50);
+    assert.equal(openedRows(ctx)[0].dataset.path, '/work/n50.txt');
+    assert.equal(openedRows(ctx).at(-1).dataset.path, '/work/n1.txt');
+    await openLink(ctx, '/work/n10.txt');
+    assert.equal(new Set(openedRows(ctx).map(r => r.dataset.path)).size, 50);
+    assert.equal(openedRows(ctx)[0].dataset.path, '/work/n10.txt');
+    assert.equal(openedRows(ctx).at(-1).dataset.path, '/work/n1.txt');
+  } finally { ctx.destroy(); }
+});
+
+test('a link in a remote session opens nothing and reads nothing, decided main-side', async () => {
+  const ctx = setupDom({ resolveImpl: (_id, texts) => texts.map(() => ({ ok: false, reason: 'remote' })) });
+  try {
+    ctx.window.switchPanel('r1');
+    assert.equal(ctx.document.querySelector('.session-item'), null);
+    await openLink(ctx, '/x/a.txt', undefined, 'r1');
+    assert.deepEqual(ctx.calls.resolve.map(([id, texts]) => [id, [...texts]]), [['r1', ['/x/a.txt']]]);
+    assert.deepEqual(ctx.calls.readFile, []);
+    assert.deepEqual(ctx.calls.touched, []);
+    assert.equal(ctx.stateOf('r1').currentTab, null);
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+  } finally { ctx.destroy(); }
+});
+
+test('a link the path check refuses for another reason still goes to the guarded read', async () => {
+  const ctx = setupDom({ resolveImpl: (_id, texts) => texts.map(() => ({ ok: false, reason: 'missing' })) });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/notes.txt');
+    assert.deepEqual(ctx.calls.readFile, ['/work/notes.txt']);
+  } finally { ctx.destroy(); }
+});
+
+test('a link in a remote session with no known working directory opens nothing, through the real resolution', async () => {
+  const { resolveTerminalPathsCwd } = require('../terminal-path-target');
+  const ctx = setupDom({
+    resolveImpl: (id, texts) => {
+      const where = resolveTerminalPathsCwd(id, {
+        getSession: () => undefined,
+        resolveTarget: () => ({ ok: false, kind: 'remote', error: 'remote session has no known working directory' }),
+        resolvePanelCwd: () => ({ ok: false }),
+      });
+      return texts.map(() => ({ ok: false, reason: where.reason }));
+    },
+  });
+  try {
+    ctx.window.switchPanel('r1');
+    await openLink(ctx, '/x/a.txt', undefined, 'r1');
+    assert.deepEqual(ctx.calls.readFile, []);
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+  } finally { ctx.destroy(); }
+});
+
+const DIFF = { oldFilePath: '/work/x.js', oldContent: 'a\n', newContent: 'b\n' };
+
+function stashes(ctx, sessionId = 's1') {
+  return ctx.stateOf(sessionId).touchedStashes || new Map();
+}
+
+async function dirtyTouched(ctx, filePath, text) {
+  clickRow(ctx, filePath);
+  await flush();
+  ctx.editors.at(-1).setText(text);
+}
+
+function twoFiles() {
+  return result({ files: [row({ path: '/work/a.txt' }), row({ path: '/work/b.txt' })] });
+}
+
+test('a link over an unanswered diff keeps the diff, answers nothing, and opens once the session closes it', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await openLink(ctx, '/work/notes.txt');
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
+    assert.deepEqual(ctx.calls.diffResponse, []);
+    assert.deepEqual(ctx.calls.readFile, []);
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
+    assert.equal(ctx.stateOf('s1').currentTab?.returnList?.type, 'touched');
+  } finally { ctx.destroy(); }
+});
+
+test('a deferred open is dropped when another route takes the diff out of the slot', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await openLink(ctx, '/work/notes.txt');
+    const toggle = ctx.document.getElementById('touched-toggle-btn');
+    toggle.click();
+    await flush();
+    toggle.click();
+    await flush();
+    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+    ctx.window.openDiffTab('s1', 'd2', DIFF);
+    ctx.window.closeDiffByDiffId('s1', 'd2');
+    await flush();
+    assert.deepEqual(ctx.calls.readFile, []);
+    assert.notEqual(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
+  } finally { ctx.destroy(); }
+});
+
+test('a replayed open never asks, and the stash it passes over stays stashed', async () => {
+  const ctx = setupDom({ touchedImpl: twoFiles });
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await openLink(ctx, '/work/b.txt');
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    await flush();
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/b.txt');
+    assert.deepEqual([...stashes(ctx).keys()], ['/work/a.txt']);
+    assert.equal(stashes(ctx).get('/work/a.txt').content, 'unsaved A');
+  } finally { ctx.destroy(); }
+});
+
+test('Touched edits stashed by a diff come back when the session closes the diff', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab?.absolutePath, '/work/a.txt');
+    assert.equal(ctx.editors.at(-1).current, 'unsaved');
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Unsaved edits kept/);
+    assert.equal(stashes(ctx).size, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('a link while a stash exists opens the clicked file, and the stashed file comes back from its row without a read', async () => {
+  const ctx = setupDom({ touchedImpl: twoFiles });
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    await openLink(ctx, '/work/b.txt');
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/b.txt');
+    assert.deepEqual([...stashes(ctx).keys()], ['/work/a.txt']);
+    await openRow(ctx, '/work/a.txt');
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/a.txt');
+    assert.equal(ctx.editors.at(-1).current, 'unsaved A');
+    assert.equal(ctx.stateOf('s1').currentTab.restoredEdits, true);
+    assert.deepEqual(ctx.calls.readFile, ['/work/a.txt', '/work/b.txt']);
+    assert.equal(stashes(ctx).size, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('two Touched stashes are kept side by side, each with its text', async () => {
+  const ctx = setupDom({ touchedImpl: twoFiles });
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+    const changes = ctx.document.getElementById('changes-toggle-btn');
+    changes.click();
+    await flush();
+    await openLink(ctx, '/work/b.txt');
+    ctx.editors.at(-1).setText('unsaved B');
+    changes.click();
+    await flush();
+    assert.deepEqual([...stashes(ctx)].map(([key, entry]) => [key, entry.content]), [['/work/a.txt', 'unsaved A'], ['/work/b.txt', 'unsaved B']]);
+  } finally { ctx.destroy(); }
+});
+
+test('the quit check lists a stashed Touched file and Save writes it with its version, then forgets it', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    const pending = ctx.window.askAboutUnsavedEdits();
+    const items = [...ctx.document.querySelectorAll('#unsaved-edits-dialog li')];
+    assert.deepEqual(items.map(li => [li.textContent, li.title]), [['a.txt', '/work/a.txt']]);
+    ctx.document.getElementById('unsaved-save').click();
+    await flush();
+    assert.equal(await pending, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(ctx.calls.save)), [{ filePath: '/work/a.txt', content: 'unsaved', expected: 'file body', options: { git: true, version: 'v1' } }]);
+    assert.equal(stashes(ctx).size, 0);
+  } finally { ctx.destroy(); }
+});
+
+for (const route of ['Changes toggle', 'panel close', 'Touched toggle']) {
+  test(`closing the panel by the ${route} keeps both stashes and restores neither`, async () => {
+    const ctx = setupDom({ touchedImpl: twoFiles });
+    try {
+      await openTab(ctx);
+      await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+      const changes = ctx.document.getElementById('changes-toggle-btn');
+      changes.click();
+      await flush();
+      await openLink(ctx, '/work/b.txt');
+      ctx.editors.at(-1).setText('unsaved B');
+      changes.click();
+      await flush();
+      const editors = ctx.editors.length;
+      if (route === 'Changes toggle') changes.click();
+      else if (route === 'panel close') ctx.document.querySelector('#file-panel-changes .fp-close-btn').click();
+      else {
+        await openLink(ctx, '/work/c.txt');
+        ctx.document.getElementById('changes-diff-close-btn').click();
+        assert.equal(ctx.stateOf('s1').currentTab.type, 'touched');
+        ctx.document.getElementById('touched-toggle-btn').click();
+      }
+      await flush();
+      assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+      assert.equal(ctx.stateOf('s1').currentTab, null);
+      assert.equal(stashes(ctx).size, 2);
+      assert.equal(ctx.editors.length, editors + (route === 'Touched toggle' ? 1 : 0));
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('a stash restored from its row returns to the list now in the slot', async () => {
+  const ctx = setupDom({ touchedImpl: twoFiles });
+  try {
+    await openTab(ctx);
+    const first = ctx.stateOf('s1').currentTab;
+    await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    await openLink(ctx, '/work/b.txt');
+    const second = ctx.stateOf('s1').currentTab?.returnList;
+    assert.notEqual(second, first);
+    await openRow(ctx, '/work/a.txt');
+    assert.equal(ctx.stateOf('s1').currentTab?.returnList, second);
+    assert.equal(ctx.editors.at(-1).current, 'unsaved A');
+  } finally { ctx.destroy(); }
+});
+
+test('Accept on a diff with a deferred open answers once and opens the file; the later close changes nothing', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    await openLink(ctx, '/work/notes.txt');
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
+    ctx.document.querySelector('.file-panel-accept-btn').click();
+    await flush();
+    assert.deepEqual(ctx.calls.diffResponse.map(args => args[2]), ['accept']);
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab?.absolutePath, '/work/notes.txt');
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.deepEqual(ctx.calls.readFile, ['/work/notes.txt']);
+  } finally { ctx.destroy(); }
+});
+
+test('Accept with no deferred open keeps the answered diff in the slot', async () => {
+  const ctx = setupDom();
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    ctx.document.querySelector('.file-panel-accept-btn').click();
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
+    assert.equal(ctx.stateOf('s1').currentTab.resolved, true);
+  } finally { ctx.destroy(); }
+});
+
+for (const deferred of [false, true]) {
+  test(`the panel close on an unanswered diff rejects it and never restores a stash (deferred open: ${deferred})`, async () => {
+    const ctx = setupDom();
+    try {
+      await openTab(ctx);
+      await dirtyTouched(ctx, '/work/a.txt', 'unsaved A');
+      ctx.document.getElementById('changes-toggle-btn').click();
+      await flush();
+      ctx.window.openDiffTab('s1', 'd1', DIFF);
+      if (deferred) await openLink(ctx, '/work/notes.txt');
+      ctx.document.querySelector('#file-panel-diff .fp-close-btn').click();
+      await flush();
+      assert.deepEqual(ctx.calls.diffResponse.map(args => args[2]), ['reject']);
+      assert.deepEqual([...stashes(ctx).keys()], ['/work/a.txt']);
+      assert.equal(ctx.calls.confirm, 0);
+      if (deferred) {
+        assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
+      } else {
+        assert.equal(ctx.stateOf('s1').currentTab, null);
+        assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
+      }
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('the quit check keeps a stash whose save is refused, and forgets only the stash it saved', async () => {
+  const ctx = setupDom({ saveImpl: call => (call === 0 ? { ok: true, version: 'v2' } : { ok: false, reason: 'stale', error: 'stale' }) });
+  try {
+    await openTab(ctx, 's1');
+    await dirtyTouched(ctx, '/work/a.txt', 'one');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await openTab(ctx, 's2');
+    await dirtyTouched(ctx, '/work/a.txt', 'two');
+    ctx.window.openDiffTab('s2', 'd2', DIFF);
+    const pending = ctx.window.askAboutUnsavedEdits();
+    ctx.document.getElementById('unsaved-save').click();
+    await flush();
+    assert.equal(ctx.calls.save.length, 2);
+    assert.equal(stashes(ctx, 's1').size, 0);
+    assert.equal(stashes(ctx, 's2').get('/work/a.txt')?.content, 'two');
+    assert.match(ctx.document.getElementById('unsaved-edits-dialog').textContent, /changed on disk/);
+    ctx.document.getElementById('unsaved-cancel').click();
+    assert.equal(await pending, false);
+  } finally { ctx.destroy(); }
+});
+
+test('a file the session opens over a dirty editor never asks, keeps the editor and lists the file', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/a.txt', 'dirty');
+    const tab = ctx.stateOf('s1').currentTab;
+    ctx.mcpOpenFile('s1', { filePath: '/work/b.txt' });
+    await flush();
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.equal(ctx.editors.at(-1).current, 'dirty');
+    assert.deepEqual(openedRows(ctx).map(r => r.dataset.path), ['/work/b.txt']);
+    assert.deepEqual(ctx.calls.resolve, []);
+  } finally { ctx.destroy(); }
+});
+
+test('a file the session opens over a clean editor replaces it without asking', async () => {
+  const ctx = setupDom();
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.mcpOpenFile('s1', { filePath: '/work/b.txt' });
+    await flush();
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/b.txt');
+    assert.deepEqual({ ...ctx.calls.readOptions.at(-1) }, { editor: true });
+  } finally { ctx.destroy(); }
+});
+
+test('a file the session opens that the panel refuses shows nothing of it', async () => {
+  const ctx = setupDom({ readImpl: () => ({ ok: false, error: 'access to sensitive path denied' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    ctx.mcpOpenFile('s1', { filePath: '/home/u/.ssh/id_rsa', content: 'SECRET' });
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
+    assert.equal(openedRows(ctx).length, 0);
+    assert.doesNotMatch(ctx.document.body.innerHTML, /SECRET/);
+    assert.match(ctx.document.querySelector('#touched-summary .changes-error').textContent, /Could not open the file: access to sensitive path denied/);
+  } finally { ctx.destroy(); }
+});
+
+test('a file the session opens over a dirty editor never restores its stash, and only lists it', async () => {
+  const ctx = setupDom({ touchedImpl: twoFiles });
+  try {
+    await openTab(ctx);
+    await dirtyTouched(ctx, '/work/b.txt', 'unsaved B');
+    ctx.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    await openLink(ctx, '/work/a.txt');
+    ctx.editors.at(-1).setText('unsaved A');
+    const tab = ctx.stateOf('s1').currentTab;
+    ctx.mcpOpenFile('s1', { filePath: '/work/b.txt' });
+    await flush();
+    assert.equal(ctx.calls.confirm, 0);
+    assert.equal(ctx.stateOf('s1').currentTab, tab);
+    assert.equal(ctx.editors.at(-1).current, 'unsaved A');
+    assert.equal(stashes(ctx).get('/work/b.txt')?.content, 'unsaved B');
+    assert.equal(ctx.stateOf('s1').touchedOpened[0], '/work/b.txt');
+    assert.deepEqual(ctx.calls.readFile, ['/work/b.txt', '/work/a.txt']);
   } finally { ctx.destroy(); }
 });

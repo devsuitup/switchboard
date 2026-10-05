@@ -13,8 +13,7 @@ link.
 | `terminal-path-target.js` | Main-side openability: the one question the provider asks per candidate. |
 | `main.js` | `resolve-terminal-paths` handler. |
 | `public/terminal-manager.js` | Registers the provider per terminal; routes a click to `openFileInPanel`. |
-| `public/file-panel.js` | `openFileInPanel(sessionId, path, { line })` — both routes into the panel carry the line. |
-| `public/viewer-panel.js` | `revealLine(n)`. |
+| `public/file-panel.js` | `openFileInPanel(sessionId, path, { line })` — hands the path and the line to `openTouchedPath` (`public/touched-files-view.js`). |
 | `public/codemirror-setup.js` | `window.cmRevealLine(view, n)`. |
 
 ## Three decisions this rests on
@@ -77,16 +76,17 @@ shell resolves through the session that owns it, the same way its spawn does.
 ### `path:line` and `path:line:col` carry the line into the panel
 
 Compiler output, `grep -n` and stack traces all print it. `openFileInPanel`
-takes `{ line }` and both routes honour it:
+takes `{ line }` and passes it to the Touched editor (`tab.pendingLine`,
+applied by `consumeChangesPendingLine` once the editor exists). Unified,
+side-by-side and plain all show the working-tree document, so the line number
+means the same thing in each. A markdown file opens in source at the line,
+whatever the formatted preference, and the preference is not written. A link
+with a line to the file already in the editor reveals the line without reading
+it again.
 
-- an unchanged file opens in the viewer, which scrolls to the line once the
-  CodeMirror bundle has resolved;
-- a changed file opens its diff, and the line is applied to the editor the
-  diff created — unified, side-by-side and plain all show the working-tree
-  document, so the line number means the same thing in each;
-- a changed file that is **not** editable falls back to a read-only `git diff`
-  text, where a working-tree line number has no target. The panel says so in
-  its notice rather than dropping the line silently.
+The editor read is stricter than this check (it also applies the Touched path
+rules and refuses a path git will not open), so a few underlined paths are
+refused on click; the refusal shows above the Touched list.
 
 ## What becomes a candidate
 

@@ -81,13 +81,15 @@ outside the credential paths the side panel refuses (`~/.ssh/`, `~/.gnupg/`,
 `.my.cnf`). Text that fails a check is not underlined. The answer for a path is
 cached for 30 seconds.
 
-A plain left click opens the file in the side panel, scrolled to the line:
-in the [Changes view](changes-view.md) when it is one of the session's changed
-files, in the file viewer otherwise. OSC 8 file links and `file://` URLs open
-the same way, without a line. `file:///C:/…` URIs resolve to the Windows drive
-path.
+A plain left click opens the file in [Touched](touched-files.md#files-opened-from-elsewhere),
+in the side panel, scrolled to the line, with its diff against HEAD when it has
+changed. A file the file tools did not touch is listed there as **opened**. OSC 8
+file links, `file://` URLs and **Open in panel** open the same way, without a
+line. `file:///C:/…` URIs resolve to the Windows drive path. A symbolic link
+opens read-only.
 
-Remote sessions have no path links: their files are on another machine.
+Remote sessions have no path links, and their `file://` links and **Open in
+panel** open nothing: their files are on another machine.
 
 ## Copy and paste
 

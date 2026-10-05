@@ -1,7 +1,8 @@
 'use strict';
 
-// The MCP openFile tool hands the renderer a normalised path, so a file tab can
-// be matched to the same file however the CLI spelt it.
+// The MCP openFile tool hands the renderer a normalised path and nothing read
+// from it: the renderer opens it through the panel's guarded read, so the
+// bytes of a file the panel refuses never cross IPC on this route.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -40,19 +41,30 @@ async function connect(sessionId, sent) {
   return { ws, call };
 }
 
-test('openFile sends the renderer the path resolved, dot segments removed, with the file read from it', async () => {
+test('openFile sends the renderer the path resolved, dot segments removed, and no content', async () => {
   const dir = fs.mkdtempSync(path.join(home, 'repo-'));
   fs.writeFileSync(path.join(dir, 'a.md'), 'a0\n');
   const sent = [];
   const { ws, call } = await connect('s-open', sent);
   try {
-    const reply = await call(1, 'openFile', { filePath: `${dir}/./sub/../a.md` });
+    const reply = await call(1, 'openFile', { filePath: `${dir}/./sub/../a.md`, preview: true, startText: 'a', endText: 'b' });
     assert.equal(reply.result.content[0].text, 'ok');
     const [channel, sessionId, data] = sent.find((args) => args[0] === 'mcp-open-file');
     assert.equal(channel, 'mcp-open-file');
     assert.equal(sessionId, 's-open');
-    assert.equal(data.filePath, path.join(dir, 'a.md'));
-    assert.equal(data.content, 'a0\n');
+    assert.deepEqual(data, { filePath: path.join(dir, 'a.md') });
+  } finally { ws.close(); }
+});
+
+test('openFile on a file that cannot be read is still answered ok and sends only the path', async () => {
+  const sent = [];
+  const { ws, call } = await connect('s-missing', sent);
+  try {
+    const missing = path.join(home, 'no-such-dir', 'gone.md');
+    const reply = await call(1, 'openFile', { filePath: missing });
+    assert.equal(reply.result.content[0].text, 'ok');
+    const [, , data] = sent.find((args) => args[0] === 'mcp-open-file');
+    assert.deepEqual(data, { filePath: missing });
   } finally { ws.close(); }
 });
 

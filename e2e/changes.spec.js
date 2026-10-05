@@ -135,3 +135,31 @@ test('a Touched modified file shows the shared diff below its list and Close res
   await expect(row).toHaveClass(/\bselected\b/);
   await expect(diff).toBeHidden();
 });
+
+test('a clicked markdown file opens formatted in Touched as an opened row, and its preview scrolls inside the panel', async ({ home, env, launch }) => {
+  const paragraphs = Array.from({ length: 300 }, (_, i) => `Paragraph ${i + 1}.`).join('\n\n');
+  const repo = makeRepo(home, env, { 'README.md': `# Title\n\n${paragraphs}\n` });
+  const readme = path.join(repo, 'README.md');
+
+  const { page } = await launch();
+  await openPlainTerminal(page);
+  const id = await page.evaluate(() => activeSessionId);
+  expect(id).toBeTruthy();
+  await page.evaluate(([sessionId, filePath]) => window.openFileInPanel(sessionId, filePath), [id, readme]);
+
+  const list = page.locator('#touched-list');
+  await expect(list.locator('.touched-opened')).toHaveCount(1);
+  const preview = page.locator('#changes-diff-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('h1')).toHaveCount(1);
+  const previewBox = await box(preview);
+  const contentBox = await box(page.locator('#file-panel-content'));
+  expect(previewBox.y + previewBox.height).toBeLessThanOrEqual(contentBox.y + contentBox.height + 1);
+  expect(await preview.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  const listBox = await box(list);
+  expect(listBox.y + listBox.height).toBeLessThanOrEqual(previewBox.y);
+
+  await page.locator('#changes-diff-format-btn').click();
+  await expect(page.locator('#changes-diff-host .cm-editor')).toBeVisible();
+  await expect(preview).toBeHidden();
+});

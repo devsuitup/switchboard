@@ -1000,7 +1000,7 @@ test('the shell IS in the grid-eligible set — only the missing row keeps it ou
 // --- 11. The session terminal's refit when the panel opens --------------
 
 test('opening the panel refits the session terminal through the content-box clamp, not a raw fit', async () => {
-  const ctx = setupPanel({ proposeDimensions: () => ({ cols: 100, rows: 41 }) });
+  const ctx = setupPanel({ proposeDimensions: () => ({ cols: 100, rows: 41 }), api: { gitChangesStatus: () => Promise.resolve(STATUS_OK) } });
   try {
     const { window, spies } = ctx;
     const entry = window.createTerminalEntry({ sessionId: 'owner' });
@@ -1012,7 +1012,7 @@ test('opening the panel refits the session terminal through the content-box clam
     const fitsBefore = spies.fitCalls;
     spies.resize.length = 0;
 
-    window.openFileTab('owner', { filePath: '/proj/a.js', content: 'a' });
+    window.openChangesTab('owner');
     await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
     await microtasks();
 

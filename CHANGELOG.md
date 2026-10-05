@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - Markdown files open formatted in Touched, with a toggle back to the source that is remembered. (#472)
+- Clicking a file in the terminal, or a file Claude opens, shows it in Touched, at the top of the list as opened when the file tools did not touch it, with its diff against HEAD when it changed. A `path:line` link opens the source at that line. Symbolic links open read-only, and files Claude opens get the panel's checks: credential paths, binary files and files over 2 MB are refused. (#472)
 ### Fixed
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 

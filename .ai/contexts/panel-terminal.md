@@ -1,7 +1,7 @@
 # Context: panel-terminal
 
 **Purpose**: a shell inside the right-hand file panel, below whatever the panel
-is showing (Changes list, file viewer, MCP diff), running in the **session's own
+is showing (Changes, Touched, MCP diff), running in the **session's own
 resolved working directory** — the worktree, not the collapsed project root.
 User-facing behavior: `docs/terminal.md` ("Panel shell") and
 `docs/changes-view.md`. The panel itself: `.ai/contexts/viewer-panel.md` and

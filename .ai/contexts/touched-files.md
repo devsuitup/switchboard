@@ -12,7 +12,7 @@ User-facing behavior: `docs/touched-files.md`. IPC and its guard row:
 | File | Role |
 |---|---|
 | `session-touched-files.js` | Main-side module, no electron: `extractTouches(line)`, `resolveTouchedPath(raw, {cwd})`, `collectSessionTouchedFiles(opts)` (the walk, with every dependency injected) and `listSessionTouchedFiles(sessionId, deps)` (the IPC's target resolution). |
-| `public/touched-files-view.js` | Renderer: the `'touched'` tab type, its container, rows, toggle and refresh. Loaded after `file-panel.js`, which reaches it behind `typeof` (`initTouchedView`, `renderTouchedTab`, `hideTouchedView`). |
+| `public/touched-files-view.js` | Renderer: the `'touched'` tab type, its container, rows (touched and opened), toggle and refresh, and `openTouchedPath`, the route every clicked file takes into the panel. Loaded after `file-panel.js`, which reaches it behind `typeof` (`initTouchedView`, `renderTouchedTab`, `hideTouchedView`, `openTouchedPath`). |
 | `read-session-file.js` | `enumerateSessionFiles(folderPath)` lists the parent and subagent transcripts (both layouts); the module keeps the entries that belong to the session. |
 
 ## What "touched" means, and what it does not
@@ -72,7 +72,8 @@ listing *does* with it.
   regular-file, size and binary guards. An unsuccessful read leaves the list
   visible with the refusal. Gone, unreadable, refused and non-file rows keep
   their existing state and cannot be opened. The absolute path is one main
-  returned in the list.
+  returned in the list. An opened row (below) is a second kind of row: its
+  click calls the same function, through the same guards.
 - **The folder** comes from `getCachedFolder` and must be a plain name (no
   separator, not `.` or `..`) before it is joined to the projects directory; a
   `sub:` session id and a remote folder are refused.
@@ -189,11 +190,13 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 - **Remote sessions**: the issue is silent; local only. The IPC answers
   `reason: 'remote'` and the tab shows the message. Remote transcripts are
   mirrored copies, but their paths name the host's disk, which cannot be stat-ed
-  from here.
+  from here. A clicked file in a remote session opens nothing (see "One route
+  into Touched").
 - **Ordering**: latest file-tool timestamp first, with a path tie-breaker;
   the toolbar can sort by path instead. Unknown timestamps are displayed
   explicitly and sort after dated entries.
-- **Open**: a present row opens the shared Changes editor described below.
+- **Open**: a present row opens the shared Changes editor described below, and
+  so does every file clicked anywhere else (see "One route into Touched").
 
 ## Not covered
 
@@ -203,7 +206,7 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 
 ## If you change this, also check
 
-- `test/session-touched-files.test.js` (extraction, resolution, walk, target resolution), `test/dom-file-panel-touched.test.js`, `test/touched-files-wiring.test.js`
+- `test/session-touched-files.test.js` (extraction, resolution, walk, target resolution), `test/dom-file-panel-touched.test.js` (the route, opened rows and stashes included), `test/touched-files-wiring.test.js`, `test/dom-file-panel-goto-line.test.js`, `test/dom-file-panel-unsaved-guard.test.js`
 - `public/header-controls.js` (`HEADER_CONTROLS`, the icon) and `test/header-controls.test.js`
 - the guard row in `.ai/contexts/ipc-bridge.md`
 
@@ -280,9 +283,10 @@ existing expected-content save guard. Saving after deletion returns
 "File does not exist" without recreating the file. Refresh, Save and Reload reread this
 absolute file, without fetching either list. Watching uses the existing
 absolute-path `watch-file` registry and `file-changed` event; closing the
-editor releases that watch. Dirty buffers and their return list survive a
-temporary file open through a dedicated Touched stash. Changes has its own
-stash; each list restores only its own edits, and restored Save controls are
+editor releases that watch. Dirty buffers and their return list survive
+another tab taking the slot through the Touched stashes (see "Stashed edits").
+Changes has its own single stash; each list restores only its own edits, and
+restored Save controls are
 updated after the editor mounts. The Changes header toggle is active only
 for a Changes list/editor without a return list, and opens Changes when a
 Touched editor is visible. The Touched header is pressed for its list or an
@@ -298,6 +302,109 @@ evaluates the shipped IPC handlers over disposable files and a fixture Git
 repository. The Touched journey in `e2e/changes.spec.js` checks the actual
 merge editor, width and close navigation with a visible list; it requires a
 separate live run.
+
+## One route into Touched (#472)
+
+Every file opened by a click outside the Touched list goes through
+`openTouchedPath(sessionId, filePath, {line, origin})`: a terminal path link and
+a `file://` link (`openFileInPanel`, see `.ai/contexts/terminal-path-links.md`),
+the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
+(`mcp-open-file`). There is no other file tab: the panel's tab types are
+`changes`, `touched` and `diff`.
+
+- **Origin.** `'link'` for the three terminal routes, `'mcp'` for `openFile`,
+  `'row'` for a click on a row of the list. A link and a row are the user's
+  click and may ask "This file has unsaved edits. Discard them?"; an `'mcp'`
+  open never asks (`.ai/contexts/viewer-panel.md`, "Nothing a session
+  triggers shows a modal").
+- **Owner.** A link clicked in a panel shell opens in the panel of the session
+  that owns the shell (`panelTerminalOwnerOf`), the session whose transcripts
+  Touched reads.
+- **Remote.** For `'link'`, the first step is `resolveTerminalPaths(sessionId,
+  [filePath])`; an answer with `reason: 'remote'` ends the open with no read and
+  no panel change. Any other answer, refused or not, continues, and the guarded
+  read decides. Remoteness is decided main-side from the session's folder:
+  `resolveGitChangesTarget` answers `kind: 'remote'` on a remote folder whose
+  descriptor has no cwd and on any live session whose `kind` is set and is not
+  `'local-pty'` (an attached remote session whose folder is not cached), and
+  `resolveTerminalPathsCwd` tests `kind === 'remote'` before `ok`. The sidebar
+  DOM is never consulted. `'mcp'` skips the check: remote sessions never get
+  the bridge.
+- **An unanswered MCP diff in the slot** keeps the slot: the open is stored in
+  `state.pendingTouchedOpen` (a later one replaces it) and replayed when the
+  diff ends (see `.ai/contexts/viewer-panel.md`, "An open that arrives over a
+  diff").
+- **Touched not in the slot**: a fresh Touched list is opened
+  (`openTouchedTab(id, {restoreStash: false})`), whatever the slot held; a dirty
+  Changes buffer goes to `changesStash` as on any takeover. The Touched
+  stashes stay where they are.
+- **The file**: `openTouchedFile`. The same file already in the editor (compared
+  with `filePathKey`) is not read again; a `line` sets `pendingLine` and
+  switches a formatted markdown view to the source. A file with a stash entry
+  is restored from it (below). Otherwise the read is `readFileForPanel(path,
+  {editor: true})` for every origin, and a `line` opens the source at that line
+  (`openTouchedEditor(..., {line})`).
+- **`'mcp'` over a dirty editor**: the file is read and listed as opened, and
+  the editor in the slot is left as it is; with a stash entry for the file, it
+  is listed without a read and both buffers stay as they are.
+- **A refused read** shows "Could not open the file: <reason>" for a link or an
+  `openFile`, without the path, which did not pass `resolveTouchedPath` and may
+  hold format characters. A row click keeps `<path>: <reason>`.
+- **A git-changed file** opens here too, with its diff against HEAD
+  (`readTouchedChangesFile`). The Changes list is not opened by a click; its
+  header toggle is the way to it.
+- **What the editor read refuses that a link check does not**: a path git
+  refuses to open (exit 128 not saying "not a git repository"), and the
+  Touched path rules of `resolveTouchedPath`. A symbolic link opens read-only.
+- **`mcp-bridge.js`** sends `{filePath}` only and reads nothing, so the bytes
+  of a file the panel refuses never cross IPC on this route.
+
+## Opened rows (#472)
+
+A file opened by a link or by `openFile` that the file tools did not touch is
+listed above the touched rows, under a `.changes-subagent-header` "Opened, not
+touched by the file tools": one `.touched-file-row.touched-opened.touched-openable`
+per path, labelled `opened`, no time, no tools, its path by `textContent` in a
+`.touched-file-path`.
+
+- **Model**: `state.touchedOpened`, absolute paths newest first, on the session
+  state (`getSessionState`), so it survives Refresh, closing and reopening
+  Touched, session switches and `rekeyFilePanelState`. It is not persisted.
+- **Bound**: `TOUCHED_OPENED_MAX` (50); opening a listed path again (by
+  `filePathKey`) moves it to the top.
+- **Added** only after the editor read answers `ok`; a refused read adds
+  nothing. A row click adds nothing.
+- **Deduplicated at render**: a path whose `filePathKey` equals that of any
+  entry of `data.cachedFiles || data.files` is not drawn; the touched row
+  stands for it. Row selection compares `filePathKey` on both sides, so on
+  Windows a link spelt `c:/w\a.js` selects the touched row `C:\w\a.js`.
+- **Drawn whatever the list's state**: loading, error (a plain terminal has no
+  transcript) or empty. `touchedOpenedRevision` is part of the list signature.
+- **Not counted**: the summary's "N files touched" never includes them.
+- **Trust**: they never come from a transcript and never reach main as a list.
+
+## Stashed edits (#472)
+
+`state.touchedStashes` is a `Map` keyed by `filePathKey(absolutePath)`, oldest
+first. `stashChangesEdits` on a dirty Touched editor (a tab with a
+`returnList`) sets the entry for its path (re-setting moves it last); each entry
+is the stash object plus `type: 'touched-stash'` and `filePath`. An entry exists
+only because the user typed into that file, so the map has no bound.
+
+- **Restored** (with the `restoredEdits` notice, and the entry removed): when
+  its file is opened again from a row or a link, returning to the list now in
+  the slot (`restoreChangesEdits(..., {key, returnList})`); by the Touched
+  toggle, the newest entry with its own list; and when the CLI ends a diff
+  (`endCurrentTab(..., {restoreStash: true})`) with no open waiting.
+- **Kept**: closing the panel, turning Touched or Changes off, and the panel's
+  close on a diff restore nothing; the entries stay for the quit check, a later
+  open of their file and the Touched toggle.
+- **Quit check**: `collectUnsavedFileTabs` lists the current tab when it has an
+  `absolutePath`, plus every entry of every session. An entry is dirty when
+  `content !== savedContent`. Save writes it with
+  `saveFileForPanel(filePath, content, savedContent, {git, version})` and
+  removes it from its session on success; a refusal keeps it and the dialog
+  says why.
 
 ## Markdown, formatted (#472)
 
