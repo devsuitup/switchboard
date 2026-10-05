@@ -1,10 +1,10 @@
-// Regression coverage for the project-level "Archive all sessions" button.
+// Regression coverage for the project-level "Archive folder" button.
 // See .ai/contexts/subagent-observability.md.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const { setupSidebarDom, makeSampleProject, answerChoiceDialog } = require('./dom-setup');
 
 function installRecordingApi(ctx) {
   const calls = [];
@@ -12,6 +12,7 @@ function installRecordingApi(ctx) {
     get(_target, prop) {
       return (...args) => {
         calls.push({ method: String(prop), args });
+        if (prop === 'getProjectArchivePlan') return Promise.resolve({ schedules: [] });
         return Promise.resolve({ ok: true });
       };
     },
@@ -32,15 +33,18 @@ test('project archive-all: confirmation counts only top-level sessions', async (
   try {
     const project = makeSampleProject();
     const calls = installRecordingApi(ctx);
-    let prompt = null;
-    ctx.window.confirm = (message) => { prompt = message; return false; };
+    ctx.window.cachedAllProjects = [project];
 
     ctx.sidebar.renderProjects([project], true);
-    await archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
-
-    assert.match(prompt, /Archive all 1 session in /,
-      `confirmation must count 1 top-level session, got: ${prompt}`);
-    assert.deepEqual(calls, [], 'declining the confirmation must archive nothing');
+    const done = archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    const box = ctx.document.querySelector('.modal-overlay input[data-choice-id="archiveSessions"]');
+    assert.ok(box, 'the dialog must offer to archive the sessions');
+    const label = box.parentElement.textContent;
+    assert.match(label, /^Archive the 1 session$/, `the box must count 1 top-level session, got: ${label}`);
+    await answerChoiceDialog(ctx, { confirm: false });
+    await done;
+    assert.deepEqual(calls.map(c => c.method), ['getProjectArchivePlan'], 'declining the dialog must archive nothing');
   } finally {
     ctx.destroy();
   }
@@ -51,11 +55,13 @@ test('project archive-all: subagents are neither archived nor stopped', async ()
   try {
     const project = makeSampleProject();
     const calls = installRecordingApi(ctx);
-    ctx.window.confirm = () => true;
+    ctx.window.cachedAllProjects = [project];
     for (const id of ['s-top-1', 's-sub-1', 's-sub-2', 's-sub-orphan']) ctx.window.activePtyIds.add(id);
 
     ctx.sidebar.renderProjects([project], true);
-    await archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
+    const done = archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
 
     const archived = calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]);
     assert.deepEqual(archived, ['s-top-1'], 'only the unarchived top-level session may be archived');
@@ -75,10 +81,12 @@ test('project archive-all: project survives the re-render with only orphan subag
   try {
     const project = makeSampleProject();
     installRecordingApi(ctx);
-    ctx.window.confirm = () => true;
+    ctx.window.cachedAllProjects = [project];
 
     ctx.sidebar.renderProjects([project], true);
-    await archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
+    const done = archiveButtonFor(ctx, project).onclick(new ctx.window.MouseEvent('click'));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
 
     // What buildProjectsFromCache(false) sends back: archived rows and the subagents of archived parents are gone.
     const archivedIds = new Set(project.sessions.filter(s => s.archived).map(s => s.sessionId));

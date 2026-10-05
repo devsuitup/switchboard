@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('api', {
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
+  getProjectArchivePlan: (groups) => ipcRenderer.invoke('get-project-archive-plan', groups),
+  archiveProject: (groups, opts) => ipcRenderer.invoke('archive-project', groups, opts),
+  reenableProjectSchedules: (projectPath, folderKey) => ipcRenderer.invoke('reenable-project-schedules', projectPath, folderKey),
+  dismissScheduleReenableOffer: (projectPath, folderKey) => ipcRenderer.invoke('dismiss-schedule-reenable-offer', projectPath, folderKey),
   deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
   deleteSessionPreview: (id) => ipcRenderer.invoke('delete-session-preview', id),
   // initialSize: { cols, rows } measured by the renderer before the spawn, so

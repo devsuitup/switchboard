@@ -69,7 +69,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry, initialScheduleProjects } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
+const { archivedEntry, knownIdsForGroup, applyAndPersistArchived, clearArchivedEntry, archivePlanForGroups, reenableScheduleFiles } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -709,6 +710,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
       setSetting('global', global);
     }
+    clearArchivedEntry(getSetting, setSetting, null, projectPath);
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
@@ -761,6 +763,124 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+// --- IPC: archive a project folder — see .ai/contexts/session-cache.md ("Archived projects") ---
+function archiveGroupsArg(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.filter(g => g && typeof g.projectPath === 'string' && g.projectPath !== ''
+    && (g.folderKey === undefined || g.folderKey === null || typeof g.folderKey === 'string'));
+}
+
+function projectArchivePlan(groups) {
+  return archivePlanForGroups(groups, {
+    registered: scheduleProjects().list(),
+    scan: (projectPath) => scanSchedules(log, [projectPath]),
+    realpath: fs.realpathSync,
+    parseFolderKey,
+  });
+}
+
+/** Re-index every folder of the group and return the transcript ids on disk. */
+function refreshArchivedGroupFolders(alias, projectPath) {
+  const entry = archivedEntry(alias, projectPath);
+  const encoded = encodeProjectPath(projectPath);
+  const folders = new Set([alias === null ? encoded : joinFolderKey(alias, encoded)]);
+  for (const row of getAllCached()) {
+    if (typeof row.projectPath !== 'string') continue;
+    const rowAlias = parseFolderKey(row.folder).alias;
+    if (rowAlias === alias && archivedEntry(rowAlias, row.projectPath) === entry) folders.add(row.folder);
+  }
+  const ids = [];
+  for (const folder of folders) {
+    const dir = resolveFolderDir(folder);
+    if (!dir || !fs.existsSync(dir)) continue;
+    refreshFolder(folder);
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (name.endsWith('.jsonl')) ids.push(name.slice(0, -'.jsonl'.length));
+      }
+    } catch {}
+  }
+  return ids;
+}
+
+ipcMain.handle('get-project-archive-plan', (_event, groups) => {
+  if (!isInitialScanComplete()) return { indexing: true };
+  return { schedules: projectArchivePlan(archiveGroupsArg(groups)) };
+});
+
+ipcMain.handle('archive-project', (_event, groups, opts) => {
+  if (!isInitialScanComplete()) return { error: 'indexing' };
+  try {
+    const targets = archiveGroupsArg(groups).map(group => ({ group, alias: parseFolderKey(group.folderKey).alias }));
+    const confirmed = Array.isArray(opts && opts.disableSchedules) ? opts.disableSchedules : [];
+    const disabled = [];
+    const failed = [];
+    const disabledFiles = targets.map(() => []);
+    targets.forEach(({ group }, i) => {
+      for (const schedule of projectArchivePlan([group])) {
+        if (!schedule.disableable || !confirmed.includes(schedule.filePath)) continue;
+        const res = setScheduleEnabled(schedule.filePath, false, { projectRoot: group.projectPath });
+        if (res.ok) {
+          disabledFiles[i].push(schedule.filePath);
+          disabled.push(schedule.name);
+        } else {
+          failed.push({ name: schedule.name, error: res.error });
+        }
+      }
+    });
+
+    const diskIds = targets.map(({ group, alias }) => refreshArchivedGroupFolders(alias, group.projectPath));
+    const projects = mergePlaceholderSessions(buildProjectsFromCache(true));
+    const archivedAt = new Date().toISOString();
+    const archived = getSetting('archivedProjects') || {};
+    const offers = { ...(getSetting('scheduleReenableOffers') || {}) };
+    const next = { ...archived };
+    targets.forEach(({ group, alias }, i) => {
+      const entry = archivedEntry(alias, group.projectPath);
+      next[entry] = {
+        archivedAt,
+        knownSessionIds: knownIdsForGroup({ projects, activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }),
+        disabledSchedules: disabledFiles[i],
+      };
+      delete offers[entry];
+    });
+    setSetting('archivedProjects', next);
+    setSetting('scheduleReenableOffers', offers);
+    notifyRendererProjectsChanged();
+    log.info(`[archive-project] archived=${targets.length} disabled=${disabled.length} failed=${failed.length}`);
+    return { ok: true, disabled, failed };
+  } catch (err) {
+    log.warn('[archive-project] failed:', err.message);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('reenable-project-schedules', (_event, projectPath, folderKey) => {
+  if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+  const entry = archivedEntry(parseFolderKey(folderKey).alias, projectPath);
+  const offers = getSetting('scheduleReenableOffers') || {};
+  const offer = offers[entry];
+  if (!offer) return { ok: true, enabled: [], failed: [] };
+  const result = reenableScheduleFiles(offer.disabledSchedules, projectPath);
+  const next = { ...offers };
+  if (result.failed.length > 0) next[entry] = { ...offer, disabledSchedules: result.failed.map(f => f.filePath), failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
+  else delete next[entry];
+  setSetting('scheduleReenableOffers', next);
+  notifyRendererProjectsChanged();
+  log.info(`[reenable-project-schedules] enabled=${result.enabled.length} failed=${result.failed.length}`);
+  return { ok: true, enabled: result.enabled, failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
+});
+
+ipcMain.handle('dismiss-schedule-reenable-offer', (_event, projectPath, folderKey) => {
+  if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+  const entry = archivedEntry(parseFolderKey(folderKey).alias, projectPath);
+  const next = { ...(getSetting('scheduleReenableOffers') || {}) };
+  delete next[entry];
+  setSetting('scheduleReenableOffers', next);
+  notifyRendererProjectsChanged();
+  return { ok: true };
 });
 
 // --- IPC: remap-project ---
@@ -888,6 +1008,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
           setSetting('global', global);
         }
       } catch {}
+      try { clearArchivedEntry(getSetting, setSetting, null, normalizedPath); } catch {}
 
       // Also clean up folder meta
       try {
@@ -1122,7 +1243,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       reconcileCacheFromFilesystem();
     }
 
-    return annotateRemoteAttachable(mergePlaceholderSessions(buildProjectsFromCache(showArchived)));
+    return annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(buildProjectsFromCache(showArchived)), showArchived, { getSetting, setSetting }));
   } catch (err) {
     console.error('Error listing projects:', err);
     return [];

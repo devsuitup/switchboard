@@ -321,7 +321,7 @@ const REMOTE_LAUNCH_PATH_RE = /^\/[A-Za-z0-9._+@:,=/ -]*$/;
 
 function knownRemotePaths(alias) {
   const paths = new Set();
-  for (const p of cachedProjects) {
+  for (const p of cachedAllProjects) {
     if (p.remoteAlias === alias && p.projectPath) paths.add(p.projectPath);
   }
   return [...paths].sort();

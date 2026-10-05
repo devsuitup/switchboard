@@ -108,6 +108,11 @@ const rendererCrossFileGlobals = {
   // no ESLint config, so new cross-file renderer symbols have to be declared
   // here when syncing or no-undef fires across five consumers.
   shortProjectPath: 'readonly',
+  // public/choice-dialog.js and public/worktree-nesting.js
+  showChoiceDialog: 'readonly',
+  SIDEBAR_WORKTREE_RE: 'readonly',
+  worktreeParentPath: 'readonly',
+  worktreeName: 'readonly',
   formatIndexingBannerText: 'readonly',
   PERMISSION_MODES: 'readonly',
   showSession: 'readonly',
@@ -501,6 +506,27 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Producer of cross-file renderer globals, dual-mode like subagent-timing.js below.
+  {
+    files: ['public/worktree-nesting.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        module: 'writable',
+        SIDEBAR_WORKTREE_RE: 'off',
+        worktreeParentPath: 'off',
+        worktreeName: 'off',
       },
     },
     rules: {

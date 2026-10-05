@@ -164,6 +164,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   // jsonl-viewer.js defines showSubagentTranscript — eval'd here so the real
   // implementation is available when tests exercise it directly. For routing

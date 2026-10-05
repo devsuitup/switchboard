@@ -15,7 +15,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { setupSidebarDom } = require('./dom-setup');
+const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 
 function installRecordingApi(ctx, overrides = {}) {
   const calls = [];
@@ -23,6 +23,8 @@ function installRecordingApi(ctx, overrides = {}) {
     stopSession: () => Promise.resolve({ ok: true }),
     remoteStopSession: () => Promise.resolve({ ok: true }),
     archiveSession: () => Promise.resolve({ ok: true }),
+    getProjectArchivePlan: () => Promise.resolve({ schedules: [] }),
+    archiveProject: () => Promise.resolve({ ok: true, disabled: [], failed: [] }),
     deleteSession: () => Promise.resolve({ ok: true, removed: ['x'], subagents: 0 }),
     deleteSessionPreview: () => Promise.resolve({ ok: true, transcripts: 1, subagents: 0, running: false }),
     ...overrides,
@@ -130,16 +132,25 @@ test('stopBeforeArchive: a failed remote stop surfaces { ok: false, error }', as
 // .project-archive-btn
 // ---------------------------------------------------------------------------
 
+function sessionsBoxLabel(ctx) {
+  const box = ctx.document.querySelector('.modal-overlay input[data-choice-id="archiveSessions"]');
+  assert.ok(box, 'the dialog must offer to archive the sessions');
+  return box.parentElement.textContent;
+}
+
 test('project archive-all: an alive remote session is stopped on its host, alias named in the confirmation', async () => {
   const ctx = setupSidebarDom();
   try {
     const project = { projectPath: '/home/dev/proj', sessions: [remoteSession('r1', 'vps', true)] };
     const calls = installRecordingApi(ctx);
-    let prompt = null;
-    ctx.window.confirm = (m) => { prompt = m; return true; };
+    ctx.window.cachedAllProjects = [project];
 
     ctx.sidebar.renderProjects([project], true);
-    await headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    const prompt = sessionsBoxLabel(ctx);
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
 
     assert.match(prompt, /vps/, 'the confirmation must name the host alias that will be stopped');
     assert.deepEqual(calls.filter(c => c.method === 'remoteStopSession').map(c => c.args), [['vps', 'r1']]);
@@ -153,17 +164,20 @@ test('project archive-all: no alias is named when no session in the group is a l
   try {
     const project = { projectPath: '/home/dev/proj', sessions: [remoteSession('r1', 'vps', false), localSession('s2')] };
     installRecordingApi(ctx);
-    let prompt = null;
-    ctx.window.confirm = (m) => { prompt = m; return false; };
+    ctx.window.cachedAllProjects = [project];
 
     ctx.sidebar.renderProjects([project], true);
-    await headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    const prompt = sessionsBoxLabel(ctx);
+    await answerChoiceDialog(ctx, { confirm: false });
+    await done;
 
     assert.doesNotMatch(prompt, /vps/, 'a dead remote session is nothing to stop, so it must not be named');
   } finally { ctx.destroy(); }
 });
 
-test('project archive-all: a stop refusal skips that session\'s archive and surfaces it; the other proceeds', async () => {
+test('project archive-all: a stop refusal is surfaced, every other session is still stopped, and nothing is archived', async () => {
   const ctx = setupSidebarDom();
   try {
     const project = { projectPath: '/home/dev/proj', sessions: [remoteSession('r1', 'vps', true), localSession('s2')] };
@@ -171,15 +185,20 @@ test('project archive-all: a stop refusal skips that session\'s archive and surf
     const calls = installRecordingApi(ctx, {
       remoteStopSession: () => Promise.resolve({ ok: false, error: 'pid now belongs to a non-claude process' }),
     });
-    ctx.window.confirm = () => true;
+    ctx.window.cachedAllProjects = [project];
     let flashed = null;
     ctx.window.flashButtonText = (btn, text) => { flashed = { btn, text }; };
 
     ctx.sidebar.renderProjects([project], true);
-    await headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
 
-    assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]), ['s2'],
-      'the refused remote session must not be archived; the local one still proceeds');
+    assert.deepEqual(calls.filter(c => c.method === 'stopSession').map(c => c.args[0]), ['s2'],
+      'the local session must still be stopped after the remote one was refused');
+    assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [],
+      'one refused stop must leave every session unarchived');
+    assert.deepEqual(calls.filter(c => c.method === 'archiveProject'), [], 'nor archive the folder');
     assert.ok(flashed, 'the failure must flash a button');
     assert.equal(flashed.text, 'Failed');
     const failedBtn = ctx.document.getElementById('si-r1').querySelector('.session-archive-btn');
