@@ -1334,6 +1334,23 @@ test('markdown: opening another file shows the formatted view from its top', asy
   } finally { ctx.destroy(); }
 });
 
+test('markdown: the same file in another session shows the formatted view from its top', async () => {
+  const ctx = markdownDom(['/work/README.md']);
+  try {
+    await openTab(ctx, 's1');
+    await openRow(ctx, '/work/README.md');
+    const { preview } = markdownChrome(ctx);
+    let scrollTop = 0;
+    Object.defineProperty(preview, 'scrollTop', { get: () => scrollTop, set: (value) => { scrollTop = value; }, configurable: true });
+    scrollTop = 500;
+    await openTab(ctx, 's2');
+    await openRow(ctx, '/work/README.md');
+    assert.equal(ctx.stateOf('s2').currentTab.absolutePath, '/work/README.md');
+    assertFormatted(ctx, 'Title');
+    assert.equal(scrollTop, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('markdown: a file that is not markdown has no format toggle and no preview', async () => {
   const ctx = setupDom();
   try {
