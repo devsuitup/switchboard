@@ -336,6 +336,50 @@ The Agents view (`.ai/contexts/bg-agents.md`) reads the same
   `jobId`, so `guardResume` can answer a `kind: 'bg'` session with an attach
   instead of a resume confirmation.
 
+## Owner of a /clear transcript
+
+`/clear` does not continue the open transcript: the CLI opens a **new jsonl
+under a new session id** in the same project folder, and writes into it only
+the bookkeeping of the command (a `<local-command-caveat>` record, then the
+`<command-name>/clear</command-name>` record). Nothing in that file names the
+session it replaced — no `forkedFrom`, and the `sessionId` on every record is
+the new one. `detectSessionTransitions()` (`session-transitions.js`) used to
+match new files by those two fields only, so after a `/clear` the open
+terminal stayed on the old row and the new conversation, once its first prompt
+made it indexable, showed up as a second, unattached row.
+
+The state file is what links the two: the CLI rewrites
+`~/.claude/sessions/<pid>.json` with the new `sessionId` on `/clear` (checked
+2026-10-05 on CLI 2.1.28x: live state files whose `sessionId` names a
+transcript that starts with the `/clear` record). `clearOwner(newId, ptyPid)`
+finds the live pid whose state file names `newId` and walks its parent chain
+(`/proc/<pid>/stat`) up to the PTY's pid. Verdicts:
+
+- `mine` — the CLI runs under this PTY: re-key, exactly like a fork
+  (`session-forked` to the renderer).
+- `other` — another process (a CLI started outside Switchboard, another tab in
+  the same folder): not this session's file.
+- `pending` — no live state file names `newId` yet (the jsonl can land before
+  the state file is rewritten): the file stays out of `knownJsonlFiles` and is
+  rechecked on the next flush, for at most 60 s from its mtime.
+- `unknown` — the pid is found but its parent cannot be read (no `/proc`:
+  macOS, Windows). Matched only when this is the one live Claude PTY in the
+  folder, since `cwd` cannot tell two sessions apart (see "Matching a state
+  file" above); with two or more, nothing is re-keyed, the file is recorded
+  and never rechecked — retrying it would hand it to whichever session
+  outlives the others, not to its owner.
+
+`readNewSessionSignals()` recognises the file by its first user record that is
+not local-command bookkeeping, through `classifyUserText()` — the caveat record
+comes first and must be skipped, not taken as the file's first turn.
+
+The renderer re-keys as for a fork, and when the old id was not a pending
+(transcript-less) row it adds one for the new id titled "New session": the
+`/clear` transcript is not indexed until its first prompt (see
+session-cache.md), so without it the open terminal would have no row at all
+until then. The old conversation stays in the list as an ordinary,
+resumable session — it is a real transcript on disk.
+
 ## Canary tests
 
 `test/canary-*.test.js` is a convention this module introduces. A canary

@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { readSubagentMeta } = require('./read-session-file');
+const { readSubagentMeta, classifyUserText } = require('./read-session-file');
 const { enabled: TRACE, trace } = require('./activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
 
@@ -8,7 +8,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -17,6 +17,7 @@ function init(ctx) {
   log = ctx.log;
   rekeyMcpServer = ctx.rekeyMcpServer;
   rekeyActivity = ctx.rekeyActivity || (() => {});
+  clearOwner = ctx.clearOwner || (() => 'pending');
 }
 
 // --- Subagent spawn / completion detection ---
@@ -309,6 +310,7 @@ function readNewSessionSignals(filePath) {
     let slug = null;
     let parentSessionId = null;
     let hasSnapshots = false;
+    let cleared = false;
     for (const line of lines) {
       const entry = JSON.parse(line);
       // Skip snapshot lines — they carry no fork/session signals
@@ -317,16 +319,33 @@ function readNewSessionSignals(filePath) {
       if (entry.slug && !slug) slug = entry.slug;
       // --fork-session copies messages with original sessionId
       if (entry.sessionId && !parentSessionId) parentSessionId = entry.sessionId;
+      if (entry.type === 'user') {
+        const text = typeof entry.message?.content === 'string' ? entry.message.content : '';
+        const kind = classifyUserText(text);
+        // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+        if (kind.kind === 'skip') continue;
+        cleared = kind.kind === 'command' && kind.text === '/clear';
+      }
       // Stop after finding a user or assistant message
       if (entry.type === 'user' || entry.type === 'assistant') break;
     }
-    return { forkedFrom, slug, parentSessionId, hasSnapshots };
+    return { forkedFrom, slug, parentSessionId, hasSnapshots, cleared };
   } catch {
-    return { forkedFrom: null, slug: null, parentSessionId: null, hasSnapshots: false };
+    return { forkedFrom: null, slug: null, parentSessionId: null, hasSnapshots: false, cleared: false };
   }
 }
 
-/** Detect fork transitions for active PTY sessions in a folder */
+const CLEAR_OWNER_WAIT_MS = 60000;
+
+function isSoleClaudeIn(folder) {
+  let count = 0;
+  for (const session of activeSessions.values()) {
+    if (!session.exited && !session.isPlainTerminal && session.projectFolder === folder) count++;
+  }
+  return count === 1;
+}
+
+/** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
@@ -405,12 +424,25 @@ function detectSessionTransitions(folder) {
         matched = true;
       }
 
+      const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
+      if (!matched && signals.cleared && !awaitingFork && newId !== (session.realSessionId || sessionId)) {
+        const owner = clearOwner(newId, session.pty && session.pty.pid);
+        if (owner === 'mine' || (owner === 'unknown' && isSoleClaudeIn(folder))) {
+          matched = true;
+        } else if (owner === 'pending') {
+          let fresh = false;
+          try { fresh = Date.now() - fs.statSync(newFilePath).mtimeMs < CLEAR_OWNER_WAIT_MS; } catch {}
+          if (fresh) emptyFiles.add(newFile);
+        }
+        log.info(`[detect] session=${sessionId} /clear file=${newId} owner=${owner} matched=${matched}`);
+      }
+
       if (session.forkFrom && !matched) {
         log.info(`[detect] session=${sessionId} NO MATCH for newFile=${newId} forkFrom=${session.forkFrom} parentSessionId=${signals.parentSessionId||'null'} forkedFrom=${signals.forkedFrom||'null'}`);
       }
 
       if (matched) {
-        log.info(`[session-transition] ${sessionId} → ${newId} (fork)`);
+        log.info(`[session-transition] ${sessionId} → ${newId} (${signals.cleared && !awaitingFork ? 'clear' : 'fork'})`);
         session.knownJsonlFiles = new Set(currentFiles);
         session.realSessionId = newId;
         // Subagent scanning follows realSessionId into a different directory —

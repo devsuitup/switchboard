@@ -3104,6 +3104,7 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
+  clearOwner: (sessionId, ptyPid) => cliSessionState.clearOwner(sessionId, ptyPid),
 });
 const { detectSessionTransitions } = sessionTransitions;
 

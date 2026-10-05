@@ -510,6 +510,11 @@ window.api.onSessionForked((oldId, newId) => {
   if (pendingEntry) {
     pendingEntry.sessionId = newId;
     pendingSessions.set(newId, pendingEntry);
+  } else if (entry.session.projectPath) {
+    // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+    const projectPath = entry.session.projectPath;
+    const session = { ...entry.session, sessionId: newId, summary: 'New session', firstPrompt: '', name: null, messageCount: 0 };
+    pendingSessions.set(newId, { session, projectPath, folder: encodeProjectPath(projectPath) });
   }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
