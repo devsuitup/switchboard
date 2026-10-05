@@ -33,7 +33,7 @@ function harness(overrides = {}) {
     refreshFolder: (folder) => { calls.refreshFolder.push(folder); },
     buildProjects: () => [],
     activeSessions: new Map(),
-    getSetting: (k) => (k in settings ? settings[k] : null),
+    getSetting: (k) => (k in settings ? JSON.parse(JSON.stringify(settings[k])) : null),
     setSetting: (k, v) => { calls.writes.push(k); settings[k] = JSON.parse(JSON.stringify(v)); },
     notify: () => { calls.notify++; },
     now: () => 'T1',

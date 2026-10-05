@@ -113,6 +113,7 @@ const rendererCrossFileGlobals = {
   SIDEBAR_WORKTREE_RE: 'readonly',
   worktreeParentPath: 'readonly',
   worktreeName: 'readonly',
+  isHiddenRepositoryWorktree: 'readonly',
   formatIndexingBannerText: 'readonly',
   PERMISSION_MODES: 'readonly',
   showSession: 'readonly',
@@ -527,6 +528,7 @@ module.exports = [
         SIDEBAR_WORKTREE_RE: 'off',
         worktreeParentPath: 'off',
         worktreeName: 'off',
+        isHiddenRepositoryWorktree: 'off',
       },
     },
     rules: {

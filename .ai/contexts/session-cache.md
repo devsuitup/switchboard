@@ -1589,8 +1589,11 @@ it. The state is the `archivedProjects` settings row:
   bare or `<alias>::` entry, matched exactly as `isProjectHidden` does) carries
   `hiddenRepository`, set in `applyAndPersistArchived`, and is drawn nowhere:
   `isProjectHidden` hides exact paths only, so hiding a repository has to hide
-  its worktree groups this way. Any other worktree whose repository is not
-  listed is drawn at top level.
+  its worktree groups this way. The rule is `isHiddenRepositoryWorktree`
+  (`public/worktree-nesting.js`); `loadProjects` (`public/app.js`) applies it
+  too to the group it builds for a pending session, reading
+  `global.hiddenProjects` only when that session is in a worktree. Any other
+  worktree whose repository is not listed is drawn at top level.
 - **Cold scan.** A folder not yet in `cache_meta` during the initial scan shows
   empty under its decoded path, which does not match its entry; it hides again
   once indexed. Matching on the folder key instead would break the remote and
@@ -1603,6 +1606,7 @@ it. The state is the `archivedProjects` settings row:
 - `dom-choice-dialog.test.js` — covers `showChoiceDialog`
 - `archive-project-wiring.test.js` — covers the `main.js`, `preload.js` and `dialogs.js` wiring of archived folders
 - `archive-project-assembly.test.js` — covers `archiveProjectFolders`, `reenableOfferedSchedules` and `dismissReenableOffer` with their effects injected
+- `app-pending-hidden-repository.test.js` — covers the pending-session group of a hidden repository's worktree
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one

@@ -14,6 +14,18 @@ function worktreeName(projectPath) {
   return match ? match[2] : null;
 }
 
+/**
+ * Whether the group is a worktree of a repository hidden with Hide Project on
+ * its host: a bare `hiddenProjects` entry hides on every host, an
+ * `<alias>::<path>` entry on that host only, as isProjectHidden reads them.
+ */
+function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects) {
+  const parentPath = worktreeParentPath(projectPath);
+  if (parentPath === null) return false;
+  const hidden = Array.isArray(hiddenProjects) ? hiddenProjects : [];
+  return hidden.includes(parentPath) || !!(alias && hidden.includes(alias + '::' + parentPath));
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SIDEBAR_WORKTREE_RE, worktreeParentPath, worktreeName };
+  module.exports = { SIDEBAR_WORKTREE_RE, worktreeParentPath, worktreeName, isHiddenRepositoryWorktree };
 }

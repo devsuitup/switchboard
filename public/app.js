@@ -1123,6 +1123,7 @@ async function loadProjects({ resort = false } = {}) {
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
+  let hiddenProjects = null;
   for (const [sid, pending] of [...pendingSessions]) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
@@ -1137,6 +1138,10 @@ async function loadProjects({ resort = false } = {}) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
           if (pendingAlias) proj.remoteAlias = pendingAlias;
+          if (worktreeParentPath(pending.projectPath) !== null && hiddenProjects === null) {
+            hiddenProjects = ((await window.api.getSetting('global')) || {}).hiddenProjects || [];
+          }
+          if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
           projList.unshift(proj);
         }
         if (!proj.sessions.some(s => s.sessionId === sid)) {

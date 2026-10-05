@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { joinFolderKey, parseFolderKey } = require('./remote-hosts');
 const { encodeProjectPath } = require('./encode-project-path');
-const { worktreeParentPath } = require('./public/worktree-nesting');
+const { worktreeParentPath, isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
 const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter } = require('./schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
@@ -112,14 +112,9 @@ function applyAndPersistArchived(projects, showArchived, { getSetting, setSettin
   const archived = getSetting(SETTING_KEY) || {};
   const { projects: kept, cleared } = applyArchivedProjects(projects, archived, showArchived);
   if (cleared.length > 0) retireArchivedEntries(getSetting, setSetting, archived, cleared);
-  const hidden = new Set(((getSetting('global') || {}).hiddenProjects) || []);
+  const hidden = (getSetting('global') || {}).hiddenProjects;
   for (const project of kept) {
-    const parentPath = worktreeParentPath(project.projectPath);
-    if (parentPath === null) continue;
-    const alias = project.remoteAlias || null;
-    if (hidden.has(parentPath) || (alias !== null && hidden.has(joinFolderKey(alias, parentPath)))) {
-      project.hiddenRepository = true;
-    }
+    if (isHiddenRepositoryWorktree(project.projectPath, project.remoteAlias || null, hidden)) project.hiddenRepository = true;
   }
   const offers = getSetting(OFFERS_KEY) || {};
   for (const project of kept) {
