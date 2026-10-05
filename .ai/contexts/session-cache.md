@@ -1526,13 +1526,28 @@ it. The state is the `archivedProjects` settings row:
   3. a group whose entry remains is dropped unless `showArchived`, so Show
      archived and search (which renders from `cachedAllProjects`) still see it.
   The setting is written back only when an entry was cleared.
-- **Snapshot.** `archive-project` computes `knownSessionIds` per group, after
-  `refreshFolder` of every folder of the group (the `row.folder` of its cached
-  rows plus its encoded folder, kept when the directory exists): the top-level
-  ids of the group in `mergePlaceholderSessions(buildProjectsFromCache(true))`
-  (archived rows, plain terminals, remote placeholders), the `activeSessions`
-  keys of the group and their `realSessionId`, and the `*.jsonl` basenames on
-  disk. The read-modify-write of the setting has no `await` in it.
+- **Main-process side.** `archiveProjectFolders`, `reenableOfferedSchedules`
+  and `dismissReenableOffer` in `archived-projects.js` hold the logic of the
+  `archive-project`, `reenable-project-schedules` and
+  `dismiss-schedule-reenable-offer` handlers, with every effect injected
+  (`archiveDeps()` in `main.js`); they are synchronous, so no read-modify-write
+  of a setting has an `await` in it.
+- **Snapshot.** `archiveProjectFolders` computes `knownSessionIds` per group,
+  after `refreshFolder` of every folder of the group (the `row.folder` of its
+  cached rows with the same alias and entry, plus its encoded folder, kept when
+  the directory exists): the top-level ids of the group in
+  `mergePlaceholderSessions(buildProjectsFromCache(true))` (archived rows, plain
+  terminals, remote placeholders), the `activeSessions` keys of the group and
+  their `realSessionId`, and the `*.jsonl` basenames on disk. A running
+  session belongs to the group when `archivedEntry(session.host, projectPath)`
+  equals the group's entry: a local entry is an absolute path and a remote one
+  starts with `<alias>::`, and an alias holds no `:`, so the entry comparison
+  already separates hosts.
+- **Order.** The snapshot is taken and the entries written before any schedule
+  is disabled, so a failure while taking it disables nothing; each disabled
+  file is then added to its entry and the entries written again. If that second
+  write fails, the error response carries `disabled` and the renderer's alert
+  names the schedules that were turned off.
 - **Refusal while indexing.** `get-project-archive-plan` and `archive-project`
   refuse while `!isInitialScanComplete()`: a snapshot taken from a partial cache
   would miss sessions and the folder would reappear on its own.
@@ -1553,7 +1568,10 @@ it. The state is the `archivedProjects` settings row:
   `reenable-project-schedules`, which turns back on the files still reading
   `enabled: false` and keeps only the failures in the offer, so the notice
   stays and reports them; **Dismiss** calls `dismiss-schedule-reenable-offer`.
-  Archiving the folder again deletes its offer.
+  Archiving the folder again deletes its offer and carries the offered files
+  that still read `enabled: false` into the new entry's `disabledSchedules`,
+  so they are offered again on the next reappearance. A group holding an offer
+  is never auto-collapsed, so the notice stays in view.
 - **Differences from `hiddenProjects`.** `archive-project` deletes no setting,
   cache row, search row or schedule registration, and a new session brings the
   folder back; Hide Project does both and never comes back on its own.
@@ -1565,8 +1583,14 @@ it. The state is the `archivedProjects` settings row:
   (`public/choice-dialog.js`).
 - **Worktree nesting.** `renderProjects` nests a worktree group only under a
   listed group of the same alias and repository path
-  (`public/worktree-nesting.js`, shared with `archived-projects.js`); otherwise
-  the worktree is drawn at top level.
+  (`public/worktree-nesting.js`, a classic `<script>` in the renderer that
+  `archived-projects.js` also `require()`s, so both sides follow the same
+  regex). A worktree whose repository is hidden on its host (`hiddenProjects`,
+  bare or `<alias>::` entry, matched exactly as `isProjectHidden` does) carries
+  `hiddenRepository`, set in `applyAndPersistArchived`, and is drawn nowhere:
+  `isProjectHidden` hides exact paths only, so hiding a repository has to hide
+  its worktree groups this way. Any other worktree whose repository is not
+  listed is drawn at top level.
 - **Cold scan.** A folder not yet in `cache_meta` during the initial scan shows
   empty under its decoded path, which does not match its entry; it hides again
   once indexed. Matching on the folder key instead would break the remote and
@@ -1578,6 +1602,7 @@ it. The state is the `archivedProjects` settings row:
 - `dom-project-archive-folder.test.js` — covers the **Archive folder** flow and the alias-aware worktree nesting
 - `dom-choice-dialog.test.js` — covers `showChoiceDialog`
 - `archive-project-wiring.test.js` — covers the `main.js`, `preload.js` and `dialogs.js` wiring of archived folders
+- `archive-project-assembly.test.js` — covers `archiveProjectFolders`, `reenableOfferedSchedules` and `dismissReenableOffer` with their effects injected
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one

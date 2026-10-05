@@ -272,6 +272,60 @@ test('worktree nesting: a worktree whose repository is not listed is drawn at to
   } finally { ctx.destroy(); }
 });
 
+test('worktree nesting: a worktree whose repository is hidden on its host stays hidden', () => {
+  const ctx = setupSidebarDom();
+  try {
+    render(ctx, [{ projectPath: WT, folder: 'box::-r--claude-worktrees-w', remoteAlias: 'box', hiddenRepository: true, sessions: [remote('c', 'box')] }]);
+    assert.equal(ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT)), null);
+    assert.equal(ctx.document.getElementById(ctx.sidebar.folderId(WT)), null);
+  } finally { ctx.destroy(); }
+});
+
+test('archive folder: a worktree of another host at the same path is not archived with the folder', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
+    const child = { projectPath: WT, folder: 'planificator::-r--claude-worktrees-w', remoteAlias: 'planificator', sessions: [remote('c', 'planificator')] };
+    const calls = installApi(ctx);
+    render(ctx, [parent, child]);
+    await clickArchive(ctx, '/r', { confirm: true });
+
+    assert.deepEqual(plain(named(calls, 'archiveProject')[0].args[0]), [{ projectPath: '/r', folderKey: '-r' }]);
+    assert.deepEqual(archivedIds(calls), ['a']);
+    assert.deepEqual(named(calls, 'remoteStopSession'), []);
+  } finally { ctx.destroy(); }
+});
+
+test('archive folder: the sessions box starts from the remembered answer', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.localStorage.setItem('archiveFolder.archiveSessions', '0');
+    installApi(ctx);
+    render(ctx, [{ projectPath: '/p', folder: '-p', sessions: [session('s1')] }]);
+    const done = archiveButton(ctx, '/p').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    const box = ctx.document.querySelector('.modal-overlay input[data-choice-id="archiveSessions"]');
+    assert.ok(box, 'the sessions box must render');
+    assert.equal(box.checked, false);
+    await answerChoiceDialog(ctx, { confirm: false });
+    await done;
+  } finally { ctx.destroy(); }
+});
+
+test('archive folder: an archive that failed after disabling schedules names them', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY', disabled: ['nightly'] }) });
+    let alerted = null;
+    ctx.window.alert = (m) => { alerted = m; };
+    render(ctx, [{ projectPath: '/p', folder: '-p', sessions: [session('s1')] }]);
+    await clickArchive(ctx, '/p', { confirm: true });
+
+    assert.match(alerted || '', /could not be archived: SQLITE_BUSY/);
+    assert.match(alerted || '', /turned off: nightly/);
+  } finally { ctx.destroy(); }
+});
+
 test('worktree nesting: a same-host worktree still nests under its folder', () => {
   const ctx = setupSidebarDom();
   try {
@@ -440,5 +494,21 @@ test('re-enable notice: a nested worktree carrying an offer shows it too', () =>
     render(ctx, [parent, child]);
     const wtGroup = ctx.document.getElementById(ctx.sidebar.folderId(WT));
     assert.ok(wtGroup && wtGroup.querySelector('.schedule-reenable-notice'));
+  } finally { ctx.destroy(); }
+});
+
+test('re-enable notice: a stale folder carrying an offer is not auto-collapsed, without an offer it is', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.sessionMaxAgeDays = 1;
+    const withOffer = { projectPath: '/p', folder: '-p', sessions: [session('s1')], reenableOffer: { names: ['nightly'] } };
+    const without = { projectPath: '/q', folder: '-q', sessions: [session('s2')] };
+    const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
+    const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')], reenableOffer: { names: ['wt-job'] } };
+    render(ctx, [withOffer, without, parent, child]);
+    const header = (p) => ctx.document.getElementById('ph-' + ctx.sidebar.folderId(p));
+    assert.equal(header('/p').classList.contains('collapsed'), false);
+    assert.equal(header('/q').classList.contains('collapsed'), true, 'precondition: a stale folder auto-collapses');
+    assert.equal(header(WT).classList.contains('collapsed'), false);
   } finally { ctx.destroy(); }
 });

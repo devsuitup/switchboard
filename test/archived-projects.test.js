@@ -13,7 +13,6 @@ const {
   clearArchivedEntry, archivePlanForGroups, reenableScheduleFiles,
 } = require('../archived-projects');
 const { scheduleFileUnlinked } = require('../schedule-runner');
-const { parseFolderKey } = require('../remote-hosts');
 
 function group(projectPath, sessions, remoteAlias = null) {
   return { projectPath, remoteAlias, sessions };
@@ -151,6 +150,38 @@ test('archived projects: a parent that comes back leaves its archived worktree h
   assert.deepEqual(paths(projects), ['|/r']);
 });
 
+test('archived projects: a folder archived with its worktree, with no new session, stays hidden with it', () => {
+  const store = archivedStore([[null, '/r', ['a']], [null, WT, ['b']]]);
+  const input = [group('/r', [top('a', { archived: 1 })]), group(WT, [top('b', { archived: 1 })])];
+  const { projects, cleared } = applyArchivedProjects(input, store, false);
+  assert.deepEqual(projects, []);
+  assert.deepEqual(cleared, []);
+});
+
+test('archived projects: a remote entry ignores a trailing slash', () => {
+  assert.equal(archivedEntry('planificator', '/srv/x/'), archivedEntry('planificator', '/srv/x'));
+  assert.equal(archivedEntry('planificator', '/srv/x/'), 'planificator::/srv/x');
+});
+
+function hiddenStore(hiddenProjects) {
+  return { getSetting: (k) => (k === 'global' ? { hiddenProjects } : null), setSetting: () => {} };
+}
+
+test('hidden repositories: a worktree of a repository hidden on its host is marked, on another host it is not', () => {
+  const projects = [
+    group(WT, [top('c')], 'box'),
+    group(WT, [top('d')], 'other'),
+    group('/q/.claude/worktrees/w', [top('e')], 'box'),
+  ];
+  const shown = applyAndPersistArchived(projects, false, hiddenStore(['box::/r']));
+  assert.deepEqual(shown.map(p => !!p.hiddenRepository), [true, false, false]);
+});
+
+test('hidden repositories: a bare hidden entry marks the worktrees of that path on every host', () => {
+  const shown = applyAndPersistArchived([group(WT, [top('c')]), group(WT, [top('d')], 'box')], false, hiddenStore(['/r']));
+  assert.deepEqual(shown.map(p => !!p.hiddenRepository), [true, true]);
+});
+
 test('archived projects: a cleared entry is persisted once, and nothing is written when nothing is cleared', () => {
   const store = archivedStore([[null, '/r', ['a']], [null, '/q', ['q1']]]);
   const writes = [];
@@ -181,19 +212,19 @@ const scanOne = (projectPath) => [{ name: 'a', filePath: path.join(projectPath, 
 
 test('archive plan: a remote group contributes no schedule', () => {
   const plan = archivePlanForGroups([{ projectPath: '/p', folderKey: 'planificator::-p' }],
-    { registered: [path.resolve('/p')], scan: scanOne, realpath: identity, parseFolderKey });
+    { registered: [path.resolve('/p')], scan: scanOne, realpath: identity });
   assert.deepEqual(plan, []);
 });
 
 test('archive plan: a local group outside the schedule registry contributes no schedule', () => {
   const plan = archivePlanForGroups([{ projectPath: '/p', folderKey: '-p' }],
-    { registered: [path.resolve('/q')], scan: scanOne, realpath: identity, parseFolderKey });
+    { registered: [path.resolve('/q')], scan: scanOne, realpath: identity });
   assert.deepEqual(plan, []);
 });
 
 test('archive plan: a registered project is matched whatever trailing slash the group carries', () => {
   const plan = archivePlanForGroups([{ projectPath: '/p/', folderKey: '-p' }],
-    { registered: [path.resolve('/p')], scan: scanOne, realpath: identity, parseFolderKey });
+    { registered: [path.resolve('/p')], scan: scanOne, realpath: identity });
   assert.equal(plan.length, 1);
   assert.equal(plan[0].name, 'a');
   assert.equal(plan[0].disableable, true);
@@ -222,7 +253,7 @@ test('archive plan: a schedule reached through a linked commands directory is li
   if (!r) return;
   try {
     const plan = archivePlanForGroups([{ projectPath: r.project, folderKey: '-p' }],
-      { registered: [r.project], scan: () => [{ name: 'a', filePath: r.filePath }], realpath: fs.realpathSync, parseFolderKey });
+      { registered: [r.project], scan: () => [{ name: 'a', filePath: r.filePath }], realpath: fs.realpathSync });
     assert.deepEqual(plan, [{ name: 'a', filePath: r.filePath, disableable: false, reason: 'linked file or directory' }]);
   } finally { r.cleanup(); }
 });
@@ -231,7 +262,7 @@ test('archive plan: a plain schedule file is disableable', (t) => {
   const r = planRig(t, false);
   try {
     const plan = archivePlanForGroups([{ projectPath: r.project, folderKey: '-p' }],
-      { registered: [r.project], scan: () => [{ name: 'a', filePath: r.filePath }], realpath: fs.realpathSync, parseFolderKey });
+      { registered: [r.project], scan: () => [{ name: 'a', filePath: r.filePath }], realpath: fs.realpathSync });
     assert.deepEqual(plan, [{ name: 'a', filePath: r.filePath, disableable: true }]);
   } finally { r.cleanup(); }
 });
@@ -248,7 +279,7 @@ test('archive plan: a schedule file that vanished is dropped, and the link check
     { name: 'kept', filePath: path.join(projectPath, '.claude', 'commands', 'schedule-kept.md') },
   ];
   const plan = archivePlanForGroups([{ projectPath: '/p', folderKey: '-p' }],
-    { registered: [path.resolve('/p')], scan, realpath: enoent, parseFolderKey });
+    { registered: [path.resolve('/p')], scan, realpath: enoent });
   assert.deepEqual(plan.map(s => s.name), ['kept']);
 });
 

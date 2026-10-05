@@ -7,7 +7,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - **Archive folder** on a project header opens a dialog that archives the folder's sessions and disables its enabled schedules, each optional, and hides the folder with its worktrees. The folder comes back, with its settings, when you add it again or a new session starts in it, and then offers to turn back on the schedules the archive disabled. (#473)
 ### Fixed
-- Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. (#473)
+- Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. The worktrees of a repository hidden with Hide Project stay hidden. (#473)
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 
 ## v0.0.89 — 2026-10-04

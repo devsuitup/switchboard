@@ -69,7 +69,8 @@ Sessions run in a git worktree are listed in their repository's project — see
 [Worktree sessions](worktrees.md). A worktree folder is nested under its
 repository only when that repository is listed for the same host; a worktree of
 another host, or one whose repository is not listed, is shown as a project of
-its own.
+its own. The worktrees of a repository hidden with **Hide Project** stay hidden
+with it.
 
 ### Missing projects
 
@@ -191,7 +192,9 @@ top of its group names them: **Turn back on** writes `enabled: true` into each
 file that still reads `enabled: false`, and leaves a file you have re-enabled or
 edited since as it is; a file it cannot change is named in the notice, which
 stays until you dismiss it. **Dismiss** leaves the schedules disabled. Archiving
-the folder again replaces the notice.
+the folder again replaces the notice; the schedules it named that are still
+disabled are offered again the next time the folder comes back. A folder with a
+notice is not collapsed automatically.
 
 ## Stop
 

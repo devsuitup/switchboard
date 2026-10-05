@@ -592,7 +592,7 @@ function rewriteEnabled(content, value) {
  * written atomically with the original mode. Refuses a file reached through a
  * link below `projectRoot`.
  */
-function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteEnabled } = {}) {
+function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteEnabled, rename = fs.renameSync } = {}) {
   const value = enabled ? 'true' : 'false';
   if (!scheduleFileUnlinked(projectRoot, filePath)) return { ok: false, error: 'linked file or directory' };
   let tmp = null;
@@ -608,7 +608,7 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
     tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
     fs.writeFileSync(tmp, next, { mode });
     fs.chmodSync(tmp, mode);
-    fs.renameSync(tmp, filePath);
+    rename(tmp, filePath);
     tmp = null;
     return { ok: true };
   } catch (err) {

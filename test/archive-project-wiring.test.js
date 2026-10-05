@@ -25,10 +25,24 @@ function functionBody(src, name) {
 }
 
 test('archive-project: deletes no setting, cache row, search row or schedule registration', () => {
-  const body = handlerBody('archive-project');
-  for (const call of ['deleteSetting(', 'deleteCachedFolder(', 'deleteSearchFolder(', '.remove(']) {
-    assert.ok(!body.includes(call), `archive-project must not call ${call}`);
+  const bodies = [handlerBody('archive-project'), functionBody(read('main.js'), 'archiveDeps'),
+    functionBody(read('archived-projects.js'), 'archiveProjectFolders')];
+  for (const body of bodies) {
+    for (const call of ['deleteSetting', 'deleteCachedFolder', 'deleteSearchFolder', '.remove(']) {
+      assert.ok(!body.includes(call), `the archive must not reach ${call}`);
+    }
   }
+});
+
+test('archive-project: wires the real effects into archiveProjectFolders', () => {
+  assert.match(handlerBody('archive-project'), /archiveProjectFolders\(groups, opts, archiveDeps\(\)\)/);
+  const deps = functionBody(read('main.js'), 'archiveDeps');
+  for (const wiring of [
+    /isInitialScanComplete,/, /plan: projectArchivePlan,/, /setEnabled: setScheduleEnabled,/,
+    /getAllCached, resolveFolderDir, refreshFolder,/,
+    /buildProjects: \(\) => mergePlaceholderSessions\(buildProjectsFromCache\(true\)\),/,
+    /activeSessions, getSetting, setSetting,/, /notify: notifyRendererProjectsChanged,/,
+  ]) assert.match(deps, wiring);
 });
 
 test('add-project: clears the archived entry of the folder', () => {
@@ -50,44 +64,18 @@ test('delete-worktree: clears the archived entry of the removed worktree', () =>
   assert.match(handlerBody('delete-worktree'), /clearArchivedEntry\(getSetting, setSetting, null, normalizedPath\)/);
 });
 
-test('archive plan and archive refuse while the initial scan is incomplete', () => {
+test('archive plan: refused while the initial scan is incomplete', () => {
   assert.match(handlerBody('get-project-archive-plan'), /if \(!isInitialScanComplete\(\)\) return \{ indexing: true \};/);
-  assert.match(handlerBody('archive-project'), /if \(!isInitialScanComplete\(\)\) return \{ error: 'indexing' \};/);
-});
-
-test('archive-project: no await between reading and writing archivedProjects', () => {
-  const body = handlerBody('archive-project');
-  const start = body.indexOf("getSetting('archivedProjects')");
-  const end = body.indexOf("setSetting('archivedProjects'");
-  assert.ok(start !== -1 && end > start, 'archive-project must read then write archivedProjects');
-  assert.ok(!/\bawait\b/.test(body.slice(start, end)), 'the read-modify-write must be synchronous');
+  assert.match(handlerBody('get-project-archive-plan'), /projectArchivePlan\(validArchiveGroups\(groups\)\)/);
 });
 
 test('remote launch dialog: suggests the paths of archived folders too', () => {
   assert.match(functionBody(read('public/dialogs.js'), 'knownRemotePaths'), /for \(const p of cachedAllProjects\)/);
 });
 
-test('archive-project: records the files it disabled per group and replaces the folder\'s offer', () => {
-  const body = handlerBody('archive-project');
-  assert.match(body, /if \(res\.ok\) \{\s*disabledFiles\[i\]\.push\(schedule\.filePath\);/,
-    'only the files actually disabled are recorded');
-  assert.match(body, /disabledSchedules: disabledFiles\[i\],/);
-  assert.match(body, /delete offers\[entry\];/, 'archiving again replaces any existing offer');
-  const start = body.indexOf("getSetting('archivedProjects')");
-  const end = body.indexOf("setSetting('scheduleReenableOffers'");
-  assert.ok(start !== -1 && end > start, 'both settings are written in the same step');
-  assert.ok(!/\bawait\b/.test(body.slice(start, end)));
-});
-
-test('reenable-project-schedules: turns back on the offered files, keeps only the failures, never awaits', () => {
-  const body = handlerBody('reenable-project-schedules');
-  assert.match(body, /reenableScheduleFiles\(offer\.disabledSchedules, projectPath\)/);
-  assert.match(body, /if \(result\.failed\.length > 0\) next\[entry\] = \{ \.\.\.offer, disabledSchedules: result\.failed\.map\(f => f\.filePath\), failed: result\.failed\.map\(f => \(\{ name: f\.name, error: f\.error \}\)\) \};\s*else delete next\[entry\];/);
-  assert.ok(!/\bawait\b/.test(body));
-});
-
-test('dismiss-schedule-reenable-offer: deletes the folder\'s offer', () => {
-  assert.match(handlerBody('dismiss-schedule-reenable-offer'), /delete next\[entry\];\s*setSetting\('scheduleReenableOffers', next\);/);
+test('re-enable and dismiss: wired to their functions with the real effects', () => {
+  assert.match(handlerBody('reenable-project-schedules'), /reenableOfferedSchedules\(projectPath, folderKey, archiveDeps\(\)\)/);
+  assert.match(handlerBody('dismiss-schedule-reenable-offer'), /dismissReenableOffer\(projectPath, folderKey, archiveDeps\(\)\)/);
 });
 
 test('preload: the offer bridges forward the project path and folder key', () => {

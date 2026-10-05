@@ -618,6 +618,10 @@ function renderProjects(projects, resort) {
   for (const project of projects) {
     const parentPath = worktreeParentPath(project.projectPath);
     if (parentPath === null) continue;
+    if (project.hiddenRepository) {
+      worktreeSet.add(nestKey(project));
+      continue;
+    }
     const parentKey = nestKey(project, parentPath);
     if (!listedGroups.has(parentKey)) continue;
     if (!worktreeMap.has(parentKey)) worktreeMap.set(parentKey, []);
@@ -915,6 +919,8 @@ function renderProjects(projects, resort) {
       header.classList.add('collapsed');
     } else if (project._projectMatchedOnly) {
       header.classList.add('collapsed');
+    } else if (project.reenableOffer) {
+      // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
     } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
       const mostRecent = filtered[0]?.modified;
       if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
@@ -968,7 +974,7 @@ function renderProjects(projects, resort) {
       if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
 
       // Auto-collapse worktree if stale
-      if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+      if (!wt.reenableOffer && searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
         const mostRecent = wtResult.filtered[0]?.modified;
         if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
           wtHeader.classList.add('collapsed');
@@ -1185,7 +1191,8 @@ async function archiveProjectFolder(project, button) {
   if (res && res.error === 'indexing') {
     alert(ARCHIVE_INDEXING_MESSAGE);
   } else if (res && res.error) {
-    alert('The folder could not be archived: ' + res.error);
+    alert('The folder could not be archived: ' + res.error
+      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : ''));
   } else if (res && Array.isArray(res.failed) && res.failed.length > 0) {
     alert('The folder is archived, but these schedules could not be disabled:\n'
       + res.failed.map(f => `${f.name}: ${f.error}`).join('\n'));

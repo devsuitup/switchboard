@@ -1,5 +1,4 @@
-// Classic <script> in the renderer, require()-d in the main process and tests.
-// see .ai/contexts/session-cache.md ("Archived projects")
+// see .ai/contexts/session-cache.md ("Archived projects", worktree nesting)
 
 const SIDEBAR_WORKTREE_RE = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
 

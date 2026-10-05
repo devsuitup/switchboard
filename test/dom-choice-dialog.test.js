@@ -211,3 +211,45 @@ test('choice dialog: the close button and a click on the overlay cancel', async 
     assert.equal(overlay(ctx), null);
   } finally { ctx.destroy(); }
 });
+
+test('choice dialog: once closed, Escape and Tab reach the rest of the app again', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = open(ctx);
+    cancelBtn(ctx).click();
+    await pending;
+    const seen = [];
+    ctx.document.addEventListener('keydown', (e) => seen.push(e.key));
+    const esc = key(ctx, ctx.document.body, 'Escape');
+    const tab = key(ctx, ctx.document.body, 'Tab');
+    assert.deepEqual(seen, ['Escape', 'Tab']);
+    assert.equal(esc.defaultPrevented, false);
+    assert.equal(tab.defaultPrevented, false);
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: a click on a box keeps the dialog open', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = open(ctx);
+    box(ctx, 'a').click();
+    assert.ok(overlay(ctx), 'the dialog must stay open');
+    assert.equal(box(ctx, 'a').checked, false);
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...(await pending) }, { a: false, b: true });
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: Enter outside the dialog does nothing', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const outside = ctx.document.createElement('input');
+    ctx.document.body.appendChild(outside);
+    const pending = open(ctx);
+    const event = key(ctx, outside, 'Enter');
+    assert.ok(overlay(ctx), 'the dialog must stay open');
+    assert.equal(event.defaultPrevented, false);
+    cancelBtn(ctx).click();
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});

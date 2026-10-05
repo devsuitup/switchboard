@@ -176,3 +176,44 @@ test('setScheduleEnabled: turns a disabled schedule back on and leaves every oth
     assert.equal(scanSchedules(null, [r.project]).length, 1);
   } finally { r.cleanup(); }
 });
+
+test('setScheduleEnabled: refuses a rewrite that changes the cron line or the prompt, and leaves the file', () => {
+  const r = rig();
+  try {
+    const filePath = writeSchedule(r, 'cron: * * * * *\nenabled: true');
+    const original = fs.readFileSync(filePath, 'utf8');
+    const cronChanged = (content) => content.replace('enabled: true', 'enabled: false').replace('cron: * * * * *', 'cron: 0 * * * *');
+    assert.equal(setScheduleEnabled(filePath, false, { projectRoot: r.project, rewrite: cronChanged }).ok, false);
+    assert.equal(fs.readFileSync(filePath, 'utf8'), original);
+    const bodyChanged = (content) => content.replace('enabled: true', 'enabled: false').replace('Run the report.', 'Something else.');
+    assert.equal(setScheduleEnabled(filePath, false, { projectRoot: r.project, rewrite: bodyChanged }).ok, false);
+    assert.equal(fs.readFileSync(filePath, 'utf8'), original);
+  } finally { r.cleanup(); }
+});
+
+test('setScheduleEnabled: keeps a mode the umask would drop', (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX file modes'); return; }
+  const r = rig();
+  try {
+    const probe = path.join(r.root, 'umask-probe');
+    fs.writeFileSync(probe, '', { mode: 0o666 });
+    if ((fs.statSync(probe).mode & 0o777) === 0o666) { t.skip('the umask drops no bit'); return; }
+    const filePath = writeSchedule(r, 'cron: * * * * *\nenabled: true');
+    fs.chmodSync(filePath, 0o666);
+    assert.equal(setScheduleEnabled(filePath, false, { projectRoot: r.project }).ok, true);
+    assert.equal(fs.statSync(filePath).mode & 0o777, 0o666);
+  } finally { r.cleanup(); }
+});
+
+test('setScheduleEnabled: a failed replace leaves no temp file and the original in place', () => {
+  const r = rig();
+  try {
+    const filePath = writeSchedule(r, 'cron: * * * * *\nenabled: true');
+    const original = fs.readFileSync(filePath, 'utf8');
+    const rename = () => { throw new Error('EPERM'); };
+    const res = setScheduleEnabled(filePath, false, { projectRoot: r.project, rename });
+    assert.deepEqual(res, { ok: false, error: 'EPERM' });
+    assert.deepEqual(fs.readdirSync(r.commands), ['schedule-a.md']);
+    assert.equal(fs.readFileSync(filePath, 'utf8'), original);
+  } finally { r.cleanup(); }
+});

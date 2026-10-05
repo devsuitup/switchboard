@@ -2,7 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { joinFolderKey } = require('./remote-hosts');
+const { joinFolderKey, parseFolderKey } = require('./remote-hosts');
+const { encodeProjectPath } = require('./encode-project-path');
 const { worktreeParentPath } = require('./public/worktree-nesting');
 const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter } = require('./schedule-runner');
 
@@ -33,7 +34,6 @@ function knownIdsForGroup({ projects, activeSessions, diskIds, alias, projectPat
   }
   for (const [sessionId, session] of activeSessions || []) {
     if (!session || typeof session.projectPath !== 'string') continue;
-    if ((session.host || null) !== (alias || null)) continue;
     if (archivedEntry(session.host || null, session.projectPath) !== target) continue;
     ids.add(sessionId);
     if (session.realSessionId) ids.add(session.realSessionId);
@@ -104,12 +104,23 @@ function retireArchivedEntries(getSetting, setSetting, archived, entries) {
 
 /**
  * applyArchivedProjects against the stored setting, writing it back only when
- * an entry was cleared, then mark each listed project holding a re-enable offer.
+ * an entry was cleared; then mark each worktree group whose repository is
+ * hidden on its host (`hiddenRepository`) and each project holding a re-enable
+ * offer.
  */
 function applyAndPersistArchived(projects, showArchived, { getSetting, setSetting, scheduleName = readScheduleName }) {
   const archived = getSetting(SETTING_KEY) || {};
   const { projects: kept, cleared } = applyArchivedProjects(projects, archived, showArchived);
   if (cleared.length > 0) retireArchivedEntries(getSetting, setSetting, archived, cleared);
+  const hidden = new Set(((getSetting('global') || {}).hiddenProjects) || []);
+  for (const project of kept) {
+    const parentPath = worktreeParentPath(project.projectPath);
+    if (parentPath === null) continue;
+    const alias = project.remoteAlias || null;
+    if (hidden.has(parentPath) || (alias !== null && hidden.has(joinFolderKey(alias, parentPath)))) {
+      project.hiddenRepository = true;
+    }
+  }
   const offers = getSetting(OFFERS_KEY) || {};
   for (const project of kept) {
     const offer = offers[entryOf(project)];
@@ -155,7 +166,7 @@ function reenableScheduleFiles(filePaths, projectRoot) {
  * The enabled schedules of the archived groups, each marked `disableable`
  * when no link below the project root reaches its file.
  */
-function archivePlanForGroups(groups, { registered, scan, realpath, parseFolderKey }) {
+function archivePlanForGroups(groups, { registered, scan, realpath }) {
   const registry = new Set(registered || []);
   const plan = [];
   for (const group of groups) {
@@ -173,7 +184,136 @@ function archivePlanForGroups(groups, { registered, scan, realpath, parseFolderK
   return plan;
 }
 
+/** The groups of an archive-project call that are well formed. */
+function validArchiveGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.filter(g => g && typeof g.projectPath === 'string' && g.projectPath !== ''
+    && (g.folderKey === undefined || g.folderKey === null || typeof g.folderKey === 'string'));
+}
+
+/** The schedule file's parsed `enabled`, or undefined when it cannot be read. */
+function readScheduleEnabled(filePath) {
+  try {
+    return parseFrontmatter(fs.readFileSync(filePath, 'utf8')).meta.enabled;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Re-index every folder of the group and return the transcript ids on disk. */
+function groupDiskIds(alias, projectPath, { getAllCached, resolveFolderDir, refreshFolder }) {
+  const entry = archivedEntry(alias, projectPath);
+  const encoded = encodeProjectPath(projectPath);
+  const folders = new Set([alias === null ? encoded : joinFolderKey(alias, encoded)]);
+  for (const row of getAllCached()) {
+    if (typeof row.projectPath !== 'string') continue;
+    const rowAlias = parseFolderKey(row.folder).alias;
+    if (rowAlias === alias && archivedEntry(rowAlias, row.projectPath) === entry) folders.add(row.folder);
+  }
+  const ids = [];
+  for (const folder of folders) {
+    const dir = resolveFolderDir(folder);
+    if (!dir || !fs.existsSync(dir)) continue;
+    refreshFolder(folder);
+    for (const name of fs.readdirSync(dir)) {
+      if (name.endsWith('.jsonl')) ids.push(name.slice(0, -'.jsonl'.length));
+    }
+  }
+  return ids;
+}
+
+/**
+ * archive-project: snapshot each group's sessions, record the entries, then
+ * disable the confirmed schedules and record them too. Synchronous.
+ */
+function archiveProjectFolders(groups, opts, deps) {
+  const { getSetting, setSetting, readEnabled = readScheduleEnabled } = deps;
+  if (!deps.isInitialScanComplete()) return { error: 'indexing' };
+  const targets = validArchiveGroups(groups).map(group => ({ group, alias: parseFolderKey(group.folderKey).alias }));
+  const confirmed = Array.isArray(opts && opts.disableSchedules) ? opts.disableSchedules : [];
+  const disabled = [];
+  const failed = [];
+  try {
+    const diskIds = targets.map(({ group, alias }) => groupDiskIds(alias, group.projectPath, deps));
+    const projects = deps.buildProjects();
+    const archivedAt = deps.now();
+    const offers = { ...(getSetting(OFFERS_KEY) || {}) };
+    const entries = targets.map(({ group, alias }, i) => {
+      const entry = archivedEntry(alias, group.projectPath);
+      const offered = (offers[entry] && Array.isArray(offers[entry].disabledSchedules)) ? offers[entry].disabledSchedules : [];
+      delete offers[entry];
+      return {
+        entry,
+        record: {
+          archivedAt,
+          knownSessionIds: knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }),
+          disabledSchedules: offered.filter(filePath => readEnabled(filePath) === 'false'),
+        },
+      };
+    });
+    const writeEntries = () => {
+      const next = { ...(getSetting(SETTING_KEY) || {}) };
+      for (const { entry, record } of entries) next[entry] = record;
+      setSetting(SETTING_KEY, next);
+    };
+    writeEntries();
+    setSetting(OFFERS_KEY, offers);
+
+    targets.forEach(({ group }, i) => {
+      for (const schedule of deps.plan([group])) {
+        if (!schedule.disableable || !confirmed.includes(schedule.filePath)) continue;
+        let res;
+        try {
+          res = deps.setEnabled(schedule.filePath, false, { projectRoot: group.projectPath });
+        } catch (err) {
+          res = { ok: false, error: err.message };
+        }
+        if (res.ok) {
+          entries[i].record.disabledSchedules.push(schedule.filePath);
+          disabled.push(schedule.name);
+        } else {
+          failed.push({ name: schedule.name, error: res.error });
+        }
+      }
+    });
+    if (disabled.length > 0) writeEntries();
+    deps.notify();
+    return { ok: true, disabled, failed };
+  } catch (err) {
+    return { error: err.message, disabled };
+  }
+}
+
+/** reenable-project-schedules: turn back on the folder's offered schedules; failures stay offered. */
+function reenableOfferedSchedules(projectPath, folderKey, { getSetting, setSetting, notify, reenable = reenableScheduleFiles }) {
+  if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+  const entry = archivedEntry(parseFolderKey(folderKey).alias, projectPath);
+  const offers = getSetting(OFFERS_KEY) || {};
+  const offer = offers[entry];
+  if (!offer) return { ok: true, enabled: [], failed: [] };
+  const result = reenable(offer.disabledSchedules, projectPath);
+  const failed = result.failed.map(f => ({ name: f.name, error: f.error }));
+  const next = { ...offers };
+  if (failed.length > 0) next[entry] = { ...offer, disabledSchedules: result.failed.map(f => f.filePath), failed };
+  else delete next[entry];
+  setSetting(OFFERS_KEY, next);
+  notify();
+  return { ok: true, enabled: result.enabled, failed };
+}
+
+/** dismiss-schedule-reenable-offer: forget the folder's offer. */
+function dismissReenableOffer(projectPath, folderKey, { getSetting, setSetting, notify }) {
+  if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+  const entry = archivedEntry(parseFolderKey(folderKey).alias, projectPath);
+  const next = { ...(getSetting(OFFERS_KEY) || {}) };
+  delete next[entry];
+  setSetting(OFFERS_KEY, next);
+  notify();
+  return { ok: true };
+}
+
 module.exports = {
   archivedEntry, knownIdsForGroup, applyArchivedProjects, applyAndPersistArchived,
   clearArchivedEntry, archivePlanForGroups, reenableScheduleFiles,
+  validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer,
 };
