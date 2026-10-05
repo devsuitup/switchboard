@@ -172,7 +172,13 @@ const restoreInFlight = new Map();
 // cannot interleave and silently drop each other's keys.
 let _persistChain = Promise.resolve();
 
-function persistWorkingSet() {
+// see docs/session-restore.md ("Closing the app")
+let exitingApp = false;
+let exitingAppTimer = null;
+const EXIT_FLUSH_GRACE_MS = 10000;
+
+function persistWorkingSet({ final = false } = {}) {
+  if (exitingApp && !final) return _persistChain;
   _persistChain = _persistChain.then(async () => {
     const g = await window.api.getSetting('global');
     const global = g || {};
@@ -210,13 +216,26 @@ function pendingRestoreEntries() {
 }
 
 function schedulePersistWorkingSet() {
-  if (restoringWorkingSet) return;
+  if (restoringWorkingSet || exitingApp) return;
   if (persistWorkingSetTimer) clearTimeout(persistWorkingSetTimer);
   persistWorkingSetTimer = setTimeout(() => {
     persistWorkingSetTimer = null;
     persistWorkingSet();
   }, 500);
 }
+
+async function flushStateForExit() {
+  if (persistWorkingSetTimer) {
+    clearTimeout(persistWorkingSetTimer);
+    persistWorkingSetTimer = null;
+  }
+  exitingApp = true;
+  if (exitingAppTimer) clearTimeout(exitingAppTimer);
+  exitingAppTimer = setTimeout(() => { exitingApp = false; exitingAppTimer = null; }, EXIT_FLUSH_GRACE_MS);
+  if (restoringWorkingSet) return _persistChain;
+  return persistWorkingSet({ final: true });
+}
+window.flushStateForExit = flushStateForExit;
 
 async function runRestore(list) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));

@@ -238,3 +238,33 @@ test('the check is acknowledged on receipt, before any dialog is shown', async (
     await flush();
   } finally { ctx.destroy(); }
 });
+
+// see docs/session-restore.md ("Closing the app")
+test('a confirmed close or quit flushes the app state before answering; a reload does not', async () => {
+  const ctx = setup();
+  try {
+    const flushed = [];
+    ctx.window.flushStateForExit = () => { flushed.push(ctx.calls.answers.length); return Promise.resolve(); };
+    ctx.calls.check(1, 'quit');
+    await flush();
+    assert.deepEqual(flushed, [0], 'flushed before the answer was sent');
+    assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: true }]);
+    ctx.calls.check(2, 'reload');
+    await flush();
+    assert.equal(flushed.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('a cancelled close does not flush', async () => {
+  const ctx = setup();
+  try {
+    let flushed = 0;
+    ctx.window.flushStateForExit = () => { flushed++; return Promise.resolve(); };
+    await dirtyTab(ctx, 's1', A);
+    ctx.calls.check(3, 'quit');
+    await flush();
+    button(ctx, 'unsaved-cancel').click();
+    await flush();
+    assert.equal(flushed, 0);
+  } finally { ctx.destroy(); }
+});

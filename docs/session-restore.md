@@ -21,6 +21,27 @@ Each time a session is opened or closed, Switchboard saves the open set — each
 session's id and project, and which one was active — in its global settings
 (`openWorkingSet`).
 
+## Closing the app
+
+The saved set is written on each open and close half a second later, so
+the last change before quitting could be lost, and so could the whole set:
+quitting stops every session, and each of those exits was itself a "session
+closed" that saved the set again — empty, if the app took longer than that
+half second to go away.
+
+Once a close or quit is confirmed (the window's close, ☰ → Quit, an update
+install; see the unsaved-edits guard in `.ai/contexts/viewer-panel.md`), the
+renderer writes the set at once, before it answers main (`flushStateForExit`
+in `public/app.js`, called by the `unsaved-check` handler in
+`public/file-panel.js`, bounded to 2 s so a stuck write cannot hold the
+window open), and stops saving it for the next 10 s. Main stops sending
+`process-exited` once `before-quit` starts killing the sessions
+(`appQuitting`), so the shutdown cannot record them as closed. A reload is
+not an exit and does neither. An exit asked during a restore writes
+nothing: the set from the previous run is still the one to restore. If the
+exit does not happen after all (an installer that fails to start), saving
+resumes after the 10 s.
+
 ## What restore does
 
 Restore is a respawn, not a reattach: a session's process is a child of the
