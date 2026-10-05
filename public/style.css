@@ -5142,6 +5142,10 @@ body { display: flex; flex-direction: column; }
   min-width: 0;
 }
 
+#changes-diff-preview {
+  min-height: 0;
+}
+
 .changes-diff-body {
   flex: 1;
   overflow: auto;

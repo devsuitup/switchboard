@@ -234,6 +234,8 @@ const rendererCrossFileGlobals = {
   isMac: 'readonly',
   flashButtonText: 'readonly',
   toggleMarkdownPreview: 'readonly',
+  isMarkdownPath: 'readonly',
+  renderMarkdownPreview: 'readonly',
   refreshSidebar: 'readonly',
   updateRunningIndicators: 'readonly',
   hideAllViewers: 'readonly',

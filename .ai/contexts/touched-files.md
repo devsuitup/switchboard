@@ -298,3 +298,45 @@ evaluates the shipped IPC handlers over disposable files and a fixture Git
 repository. The Touched journey in `e2e/changes.spec.js` checks the actual
 merge editor, width and close navigation with a visible list; it requires a
 separate live run.
+
+## Markdown, formatted (#472)
+
+A Touched editor on a markdown file (`isMarkdownPath` in
+`public/viewer-toolbar.js`: extension `md`, `mdx` or `markdown`, any case)
+opens formatted. `#changes-diff-format-btn` in the shared toolbar switches
+between formatted and source and carries `aria-pressed`. It shows only for a
+tab with `absolutePath`, which only Touched sets (`openTouchedEditor` and the
+Touched stash restore), so a Changes list editor on a markdown file never has
+it.
+
+- **Preference**: one key, `localStorage.touchedMarkdownFormatted`. `'false'`
+  means source; an absent key falls back to
+  `DEFAULT_TOUCHED_MARKDOWN_FORMATTED` (formatted); a throwing storage reads as
+  the default and the toggle still switches the open file. The toggle writes
+  the key; nothing else does.
+- **Per open**: `tab.formatted` is computed from the preference in
+  `openTouchedEditor` and again in `restoreChangesEdits`. The stash does not
+  carry it, so a restored file follows the preference as it is at restore time.
+- **The buffer lives in source**: the editor is created and kept in
+  `#changes-diff-host`, hidden while formatted. `#changes-diff-preview`
+  renders `readChangesEditorContent(tab) ?? tab.current`, so unsaved edits are
+  shown; toggling never destroys the editor; Save and Reload stay. Every
+  `renderChangesDiff` re-renders the preview, after `loadCodeMirrorBundle`
+  (it provides `window.marked`), so a watcher reload shows the new content.
+  The preview element is shared by every tab and session: a render for a tab
+  other than the last one rendered (`changesPreviewTab`) resets its
+  `scrollTop` to 0, a re-render of the same tab keeps it.
+- **Formatted wins over the diff**: the diff-mode button is hidden while
+  formatted; toggling to source shows the stored `changesDiffMode` view.
+- **Escape**: the preview has `tabindex="0"` and takes focus on the toggle to
+  formatted, so a keydown on it reaches the panel's Escape handler through
+  `closest('#changes-diff-view')`.
+- **Layout**: `#changes-diff-preview` adds `min-height: 0` to
+  `.markdown-preview`'s `flex: 1; overflow-y: auto`, so a long document
+  scrolls inside the column-flex `#changes-diff-view`.
+- **Sink**: the preview is written by `renderMarkdownPreview`, one of the
+  sanitised markdown sinks listed in `.ai/contexts/viewer-panel.md`.
+
+Tests: the `markdown:` tests in `test/dom-file-panel-touched.test.js` use the
+real `marked` and `DOMPurify` builds; `window.marked` is set only by the
+`loadCodeMirrorBundle` stub, as the bundle sets it in the app.
