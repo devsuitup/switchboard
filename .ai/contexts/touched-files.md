@@ -327,6 +327,8 @@ the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
   `resolveGitChangesTarget` answers `kind: 'remote'` on a remote folder whose
   descriptor has no cwd and on any live session whose `kind` is set and is not
   `'local-pty'` (an attached remote session whose folder is not cached), and
+  on the id of a remote-attach terminal that exited, which main keeps in
+  `exitedRemoteSessionIds` until the renderer closes that terminal; and
   `resolveTerminalPathsCwd` tests `kind === 'remote'` before `ok`. The sidebar
   DOM is never consulted. `'mcp'` skips the check: remote sessions never get
   the bridge.
@@ -387,13 +389,15 @@ per path, labelled `opened`, no time, no tools, its path by `textContent` in a
 
 `state.touchedStashes` is a `Map` keyed by `filePathKey(absolutePath)`, oldest
 first. `stashChangesEdits` on a dirty Touched editor (a tab with a
-`returnList`) sets the entry for its path (re-setting moves it last); each entry
+`returnList`) adds the entry for its path, newest last: a stashed file is never
+also in an editor, since opening it restores the entry and removes it. Each entry
 is the stash object plus `type: 'touched-stash'` and `filePath`. An entry exists
 only because the user typed into that file, so the map has no bound.
 
 - **Restored** (with the `restoredEdits` notice, and the entry removed): when
   its file is opened again from a row or a link, returning to the list now in
-  the slot (`restoreChangesEdits(..., {key, returnList})`); by the Touched
+  the slot (`restoreChangesEdits(..., {key, returnList, line})`; a `line` opens
+  the source at that line); by the Touched
   toggle, the newest entry with its own list; and when the CLI ends a diff
   (`endCurrentTab(..., {restoreStash: true})`) with no open waiting.
 - **Kept**: closing the panel, turning Touched or Changes off, and the panel's

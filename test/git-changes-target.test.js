@@ -16,6 +16,7 @@ function baseDeps(overrides = {}) {
     parseFolderKey: (folder) => ({ alias: null, folder }),
     getRemoteSessions: () => ({ sessions: [] }),
     activeSessions: new Map(),
+    wasRemoteSession: () => false,
     resolveSessionRealCwd: () => null,
     existsSync: () => false,
     projectsDir: '/projects',
@@ -97,6 +98,30 @@ test('remote: refuses when the descriptor is gone or carries no cwd (mutation ta
   assert.equal(result.ok, false);
   assert.equal(result.kind, 'remote');
   assert.match(result.error, /no known working directory/);
+});
+
+test('remote: an attached remote session whose terminal exited stays remote while its output is still shown', () => {
+  const deps = baseDeps({
+    getCachedFolder: () => null,
+    activeSessions: new Map(),
+    wasRemoteSession: (id) => id === 'r1',
+    resolveSessionRealCwd: () => '/srv/app',
+    existsSync: () => true,
+  });
+  const result = resolveGitChangesTarget('r1', deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.kind, 'remote');
+  assert.deepEqual(resolveGitChangesTarget('s1', deps), { ok: true, kind: 'local', cwd: '/srv/app' });
+});
+
+test('main.js remembers an exited remote-attach session until its terminal is closed, and hands that to the target', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'main.js'), 'utf8');
+  const deps = src.slice(src.indexOf('function gitChangesTargetDeps'), src.indexOf('};', src.indexOf('function gitChangesTargetDeps')));
+  assert.match(deps, /wasRemoteSession:\s*\(id\)\s*=>\s*exitedRemoteSessionIds\.has\(id\)/);
+  const exit = src.slice(src.indexOf('activeSessions.delete(realId);') - 400, src.indexOf('activeSessions.delete(realId);'));
+  assert.match(exit, /if \(session\.kind === 'remote-attach'\) \{\s*exitedRemoteSessionIds\.add\(realId\);\s*exitedRemoteSessionIds\.add\(sessionId\);/);
+  const close = src.slice(src.indexOf("ipcMain.on('close-terminal'"), src.indexOf('});', src.indexOf("ipcMain.on('close-terminal'")));
+  assert.match(close, /exitedRemoteSessionIds\.delete\(sessionId\)/);
 });
 
 for (const exited of [false, true]) {

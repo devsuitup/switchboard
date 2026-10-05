@@ -743,7 +743,6 @@ function stashChangesEdits(state, tab) {
   // see .ai/contexts/touched-files.md ("Stashed edits")
   if (!state.touchedStashes) state.touchedStashes = new Map();
   const key = filePathKey(tab.absolutePath);
-  state.touchedStashes.delete(key);
   state.touchedStashes.set(key, { ...entry, type: 'touched-stash', filePath: tab.absolutePath });
 }
 
@@ -760,14 +759,15 @@ function takeChangesStash(state, listType, key) {
   return stash;
 }
 
-function restoreChangesEdits(sessionId, state, tab, listType = 'changes', { key, returnList } = {}) {
+function restoreChangesEdits(sessionId, state, tab, listType = 'changes', { key, returnList, line } = {}) {
   const stash = takeChangesStash(state, listType, key);
   if (!stash) return false;
 
   tab.returnList = returnList || stash.returnList;
   tab.absolutePath = stash.absolutePath;
   tab.filePath = stash.absolutePath;
-  tab.formatted = touchedOpensFormatted(stash.absolutePath);
+  tab.formatted = touchedOpensFormatted(stash.absolutePath) && !line;
+  tab.pendingLine = line || null;
   tab.gitFile = stash.gitFile;
   tab.noDiff = stash.noDiff;
   tab.selectedFile = stash.file;
@@ -1240,14 +1240,13 @@ function unwatchChangesFile(sessionId, tab) {
   tab.watchedPath = null;
 }
 
-async function openChangesDiff(sessionId, file, line = null) {
+async function openChangesDiff(sessionId, file) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
 
   if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
 
-  tab.pendingLine = Number.isInteger(line) && line > 0 ? line : null;
   if (!tab.selectedFile && currentPanelSessionId === sessionId) snapshotPanelList(changesListEl, tab);
   tab.selectedFile = file;
   tab.listSelection = file;
@@ -1850,7 +1849,6 @@ function renderChangesNotice(tab) {
   if (tab.remote) notes.push('Remote session — read-only.');
   if (tab.readOnly) notes.push('Symbolic link — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
-  if (tab.pendingLine && !tab.editable && !tab.diffLoading) notes.push(`Line ${tab.pendingLine} was not reached — a read-only diff has no line to jump to.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
   if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
   if (tab.externalChange) notes.push('This file changed on disk since you opened it — reload before saving, or your edits will not be accepted.');

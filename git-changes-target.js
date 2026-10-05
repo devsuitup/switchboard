@@ -291,7 +291,7 @@ async function collectSubagentChanges(groups, runnerFor) {
   };
 }
 
-// deps: {getCachedFolder, isRemoteFolder, parseFolderKey, getRemoteSessions, activeSessions, resolveSessionRealCwd, existsSync, projectsDir, readSubagentMeta}
+// deps: {getCachedFolder, isRemoteFolder, parseFolderKey, getRemoteSessions, activeSessions, wasRemoteSession, resolveSessionRealCwd, existsSync, projectsDir, readSubagentMeta}
 function resolveGitChangesTarget(sessionId, deps, opts) {
   const id = String(sessionId || '');
   if (!isValidChangesSessionId(id, opts)) return { ok: false, error: 'invalid session id' };
@@ -309,7 +309,7 @@ function resolveGitChangesTarget(sessionId, deps, opts) {
   }
 
   const session = deps.activeSessions.get(id);
-  if (session && session.kind && session.kind !== 'local-pty') return { ok: false, kind: 'remote', error: 'remote session' };
+  if ((session && session.kind && session.kind !== 'local-pty') || deps.wasRemoteSession(id)) return { ok: false, kind: 'remote', error: 'remote session' };
   if (session && !session.exited && session.cwd) {
     return { ok: true, kind: 'local', cwd: session.cwd };
   }

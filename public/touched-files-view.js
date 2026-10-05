@@ -312,7 +312,7 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
     tab.selection = filePath;
     if (currentPanelSessionId === sessionId) window.snapshotPanelList(touchedListEl, tab);
     destroyCurrentTab(state, { stash: false });
-    restoreTouchedStash(sessionId, state, { key: stashKey, returnList: tab });
+    restoreTouchedStash(sessionId, state, { key: stashKey, returnList: tab, line });
     return;
   }
   if (asks && !confirmDiscardChangesEdits(current)) return;

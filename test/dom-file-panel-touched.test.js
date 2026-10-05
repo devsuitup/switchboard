@@ -1661,23 +1661,32 @@ test('a link to another file over a dirty editor asks, and No keeps everything a
   } finally { ctx.destroy(); }
 });
 
-test('a link with a line to the file already open reveals the line without asking or reading', async () => {
-  const ctx = setupDom();
-  try {
-    await openTab(ctx);
-    clickRow(ctx, '/work/a.txt');
-    await flush();
-    const tab = ctx.stateOf('s1').currentTab;
-    const view = ctx.editors.at(-1);
-    view.setText('dirty');
-    await openLink(ctx, '/work/a.txt', { line: 7 });
-    assert.equal(ctx.calls.confirm, 0);
-    assert.equal(ctx.stateOf('s1').currentTab, tab);
-    assert.equal(ctx.editors.at(-1), view);
-    assert.deepEqual(ctx.calls.readFile, ['/work/a.txt']);
-    assert.deepEqual(ctx.calls.revealed, [7]);
-  } finally { ctx.destroy(); }
-});
+for (const [name, rowPath, link, platform] of [
+  ['the same spelling', '/work/a.txt', '/work/a.txt', null],
+  ['another spelling on Windows', String.raw`C:\w\a.js`, String.raw`c:\w\a.js`, 'win32'],
+  ['a formatted markdown file', '/work/README.md', '/work/README.md', null],
+]) {
+  test(`a link with a line to the file already open reveals the line in the source, without asking or reading (${name})`, async () => {
+    const ctx = markdownDom([rowPath]);
+    try {
+      if (platform) ctx.window.api.platform = platform;
+      await openTab(ctx);
+      clickRow(ctx, rowPath);
+      await flush();
+      const tab = ctx.stateOf('s1').currentTab;
+      const view = ctx.editors.at(-1);
+      view.setText('# Dirty\n');
+      await openLink(ctx, link, { line: 7 });
+      assert.equal(ctx.calls.confirm, 0);
+      assert.equal(ctx.stateOf('s1').currentTab, tab);
+      assert.equal(ctx.editors.at(-1), view);
+      assert.deepEqual(ctx.calls.readFile, [rowPath]);
+      assert.deepEqual(ctx.calls.revealed, [7]);
+      assert.equal(tab.formatted, false);
+      assert.equal(markdownChrome(ctx).host.style.display, '');
+    } finally { ctx.destroy(); }
+  });
+}
 
 test('a link or a row click on the formatted file already open keeps it formatted and reads nothing', async () => {
   const ctx = markdownDom(['/work/README.md']);
@@ -1802,7 +1811,13 @@ function twoFiles() {
   return result({ files: [row({ path: '/work/a.txt' }), row({ path: '/work/b.txt' })] });
 }
 
-test('a link over an unanswered diff keeps the diff, answers nothing, and opens once the session closes it', async () => {
+const CLOSE_ROUTES = [
+  ['close_tab', ctx => ctx.window.closeDiffByDiffId('s1', 'd1')],
+  ['closeAllDiffTabs', ctx => ctx.window.closeAllDiffs('s1')],
+];
+
+for (const [route, closeDiff] of CLOSE_ROUTES) {
+test(`a link over an unanswered diff keeps the diff, answers nothing, and opens once the session closes it (${route})`, async () => {
   const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
@@ -1811,12 +1826,13 @@ test('a link over an unanswered diff keeps the diff, answers nothing, and opens 
     assert.equal(ctx.stateOf('s1').currentTab.type, 'diff');
     assert.deepEqual(ctx.calls.diffResponse, []);
     assert.deepEqual(ctx.calls.readFile, []);
-    ctx.window.closeDiffByDiffId('s1', 'd1');
+    closeDiff(ctx);
     await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
     assert.equal(ctx.stateOf('s1').currentTab?.returnList?.type, 'touched');
   } finally { ctx.destroy(); }
 });
+}
 
 test('a deferred open is dropped when another route takes the diff out of the slot', async () => {
   const ctx = setupDom();
@@ -1854,13 +1870,14 @@ test('a replayed open never asks, and the stash it passes over stays stashed', a
   } finally { ctx.destroy(); }
 });
 
-test('Touched edits stashed by a diff come back when the session closes the diff', async () => {
+for (const [route, closeDiff] of CLOSE_ROUTES) {
+test(`Touched edits stashed by a diff come back when the session closes the diff (${route})`, async () => {
   const ctx = setupDom();
   try {
     await openTab(ctx);
     await dirtyTouched(ctx, '/work/a.txt', 'unsaved');
     ctx.window.openDiffTab('s1', 'd1', DIFF);
-    ctx.window.closeDiffByDiffId('s1', 'd1');
+    closeDiff(ctx);
     await flush();
     const tab = ctx.stateOf('s1').currentTab;
     assert.equal(tab?.absolutePath, '/work/a.txt');
@@ -1869,6 +1886,7 @@ test('Touched edits stashed by a diff come back when the session closes the diff
     assert.equal(stashes(ctx).size, 0);
   } finally { ctx.destroy(); }
 });
+}
 
 test('a link while a stash exists opens the clicked file, and the stashed file comes back from its row without a read', async () => {
   const ctx = setupDom({ touchedImpl: twoFiles });
@@ -1903,6 +1921,11 @@ test('two Touched stashes are kept side by side, each with its text', async () =
     changes.click();
     await flush();
     assert.deepEqual([...stashes(ctx)].map(([key, entry]) => [key, entry.content]), [['/work/a.txt', 'unsaved A'], ['/work/b.txt', 'unsaved B']]);
+    ctx.document.getElementById('touched-toggle-btn').click();
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/b.txt', 'the toggle restores the newest stash');
+    assert.equal(ctx.editors.at(-1).current, 'unsaved B');
+    assert.deepEqual([...stashes(ctx).keys()], ['/work/a.txt']);
   } finally { ctx.destroy(); }
 });
 
@@ -2021,6 +2044,11 @@ for (const deferred of [false, true]) {
       assert.equal(ctx.calls.confirm, 0);
       if (deferred) {
         assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
+        ctx.window.openDiffTab('s1', 'd2', DIFF);
+        ctx.window.closeDiffByDiffId('s1', 'd2');
+        await flush();
+        assert.deepEqual(ctx.calls.readFile.filter(p => p === '/work/notes.txt'), ['/work/notes.txt'], 'the open is replayed once');
+        assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/a.txt');
       } else {
         assert.equal(ctx.stateOf('s1').currentTab, null);
         assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
@@ -2113,3 +2141,23 @@ test('a file the session opens over a dirty editor never restores its stash, and
     assert.deepEqual(ctx.calls.readFile, ['/work/b.txt', '/work/a.txt']);
   } finally { ctx.destroy(); }
 });
+
+for (const [name, filePath] of [['a text file', '/work/a.txt'], ['a markdown file', '/work/README.md']]) {
+  test(`a path:line link to a file with stashed edits restores them in the source at that line (${name})`, async () => {
+    const ctx = markdownDom([filePath]);
+    try {
+      await openTab(ctx);
+      await dirtyTouched(ctx, filePath, '# Unsaved\n');
+      ctx.document.getElementById('changes-toggle-btn').click();
+      await flush();
+      await openLink(ctx, filePath, { line: 7 });
+      const tab = ctx.stateOf('s1').currentTab;
+      assert.equal(tab?.absolutePath, filePath);
+      assert.equal(tab.restoredEdits, true);
+      assert.equal(ctx.editors.at(-1).current, '# Unsaved\n');
+      assert.deepEqual(ctx.calls.revealed, [7]);
+      assert.equal(tab.formatted, false);
+      assert.equal(markdownChrome(ctx).host.style.display, '');
+    } finally { ctx.destroy(); }
+  });
+}
