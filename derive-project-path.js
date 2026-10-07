@@ -70,7 +70,7 @@ function extractVerifiedCwdFromJsonl(filePath, folderName, tailBudget = null) {
       if (!mayBeWorktreeFolderOf(cwd, folderName)) return { cwd: null, rejected: cwd, complete: true };
     }
     if (firstRejected !== null && size > CWD_SCAN_BYTES) {
-      if (tailBudget && tailBudget.bytes < CWD_SCAN_BYTES) return { cwd: null, rejected: firstRejected, complete: false };
+      if (tailBudget && tailBudget.bytes < CWD_SCAN_BYTES) return { cwd: null, rejected: firstRejected, complete: false, skipped: true };
       if (tailBudget) tailBudget.bytes -= CWD_SCAN_BYTES;
       const tail = [...cwdsInWindow(fd, size - CWD_SCAN_BYTES, size)].reverse();
       for (const cwd of tail) {
@@ -101,7 +101,7 @@ function rememberResume(folderPath, fileName) {
 
 function unresolvedCwdOf(filePath, folderName) {
   let stat;
-  try { stat = fs.statSync(filePath); } catch { return null; }
+  try { stat = fs.statSync(filePath); } catch { return { failed: true }; }
   const memo = unresolvedMemo.get(filePath);
   if (memo && memo.folderName === folderName && memo.size === stat.size && memo.mtimeMs === stat.mtimeMs) return memo;
   return { stat };
@@ -137,12 +137,15 @@ function deriveProjectPath(folderPath, folderName, opts) {
       return typeof cwd === 'string' && cwd ? cwd : null;
     }
     const memo = unresolvedCwdOf(filePath, name);
-    if (!memo) return null;
+    if (memo.failed) {
+      incomplete = true;
+      return null;
+    }
     if (!memo.stat) {
       if (memo.rejected && firstRejected === null) firstRejected = memo.rejected;
       return null;
     }
-    const { cwd, rejected, complete } = extractVerifiedCwdFromJsonl(filePath, name, tailBudget);
+    const { cwd, rejected, complete, skipped } = extractVerifiedCwdFromJsonl(filePath, name, tailBudget);
     if (cwd) {
       unresolvedMemo.delete(filePath);
       return cwd;
@@ -152,12 +155,12 @@ function deriveProjectPath(folderPath, folderName, opts) {
       rememberUnresolved(filePath, name, memo.stat, rejected);
     } else {
       incomplete = true;
-      if (resumeName === null && path.dirname(filePath) === folderPath) resumeName = path.basename(filePath);
+      if (skipped && resumeName === null && path.dirname(filePath) === folderPath) resumeName = path.basename(filePath);
     }
     return null;
   };
   let resumeName = null;
-  const result = deriveVerified(folderPath, trustedCwdOf, remote ? null : resumeAt.get(folderPath));
+  const result = deriveVerified(folderPath, trustedCwdOf, remote ? null : resumeAt.get(folderPath), () => { incomplete = true; });
   if (!remote) rememberResume(folderPath, result === null ? resumeName : null);
   if (result === null && firstRejected !== null && opts && typeof opts.onRejected === 'function') {
     opts.onRejected(firstRejected);
@@ -166,7 +169,7 @@ function deriveProjectPath(folderPath, folderName, opts) {
   return result;
 }
 
-function deriveVerified(folderPath, trustedCwdOf, startName = null) {
+function deriveVerified(folderPath, trustedCwdOf, startName = null, onListingFailed = () => {}) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first
@@ -195,9 +198,13 @@ function deriveVerified(folderPath, trustedCwdOf, startName = null) {
             if (cwd) return resolveWorktreePath(cwd);
           }
         }
-      } catch {}
+      } catch {
+        onListingFailed();
+      }
     }
-  } catch {}
+  } catch {
+    onListingFailed();
+  }
   return null;
 }
 
