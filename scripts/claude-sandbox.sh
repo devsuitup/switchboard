@@ -18,8 +18,6 @@
 #                entry of ~/.claude and of each bound directory's .claude
 #                that is not listed session state, a private copy of
 #                ~/.claude.json, each repository's config and hooks
-#                (skills and agents become session state with
-#                $SWITCHBOARD_SANDBOX_RW_SKILLS=1 / $SWITCHBOARD_SANDBOX_RW_AGENTS=1)
 #   network:     shared with the host — Claude needs the API, and the
 #                Switchboard IDE bridge listens on localhost
 #
@@ -106,18 +104,15 @@ PROJECT_STATE_ENTRIES=(worktrees agent-memory agent-memory-local)
 # Created in ~/.claude before launch when missing, so that they are mounted
 # from the host rather than left to the tmpfs.
 USER_PRECREATED_DIRS=(projects todos statsig file-history sessions plans tasks ide)
-# Opt-in: an unsandboxed claude later loads what is written there; see
-# docs/sandbox.md, "Writable skills and agents".
-if [ "${SWITCHBOARD_SANDBOX_RW_SKILLS:-0}" = "1" ]; then
-  USER_STATE_ENTRIES+=(skills)
-  PROJECT_STATE_ENTRIES+=(skills)
-  USER_PRECREATED_DIRS+=(skills)
-fi
-if [ "${SWITCHBOARD_SANDBOX_RW_AGENTS:-0}" = "1" ]; then
-  USER_STATE_ENTRIES+=(agents)
-  PROJECT_STATE_ENTRIES+=(agents)
-  USER_PRECREATED_DIRS+=(agents)
-fi
+# see docs/sandbox.md, "Writable skills and agents"
+OPT_IN_ENTRIES=()
+[ "${SWITCHBOARD_SANDBOX_RW_SKILLS:-0}" = "1" ] && OPT_IN_ENTRIES+=(skills)
+[ "${SWITCHBOARD_SANDBOX_RW_AGENTS:-0}" = "1" ] && OPT_IN_ENTRIES+=(agents)
+for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
+  USER_STATE_ENTRIES+=("$_e")
+  PROJECT_STATE_ENTRIES+=("$_e")
+  USER_PRECREATED_DIRS+=("$_e")
+done
 
 # Project directory plus whatever Switchboard forwarded. These must already
 # exist — creating a mistyped "Additional Directory" on the host would be worse
@@ -300,6 +295,9 @@ fi
 
 # The host paths the sandbox can write, as bound, and their resolved form.
 WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
+for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
+  [ -L "$CLAUDE_DIR/$_e" ] && [ -d "$CLAUDE_DIR/$_e" ] && WRITABLE_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
+done
 WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
   WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
@@ -485,12 +483,19 @@ bind_user_claude_dir() {
       mount_op --symlink "$(readlink "$e")" "$e"
       if in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
         case "$name" in *.json|*.jsonl|.last-*) kind=file ;; *) kind=dir ;; esac
+        STATE_LINK_TARGET=""
         bind_state_link_target "$e" "$kind"
+        if [ -n "$STATE_LINK_TARGET" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+          protect_tree "$STATE_LINK_TARGET" nocreate
+        fi
       else
         protect_link_target "$e"
       fi
     elif in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
       mount_op --bind "$e" "$e"
+      if [ -d "$e" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+        protect_tree "$e" nocreate
+      fi
     else
       mount_op --ro-bind "$e" "$e"
       [ -d "$e" ] && protect_links_below "$e"
@@ -588,7 +593,7 @@ protect_git() {
 
 # The .git and .claude of a directory, bound or found below one.
 protect_repo_root() {
-  local d="$1"
+  local d="$1" create="${2:-create}"
   if [ -L "$d/.git" ]; then
     fail "refusing to launch: $d/.git is a symbolic link. The sandbox protects the repository's config and hooks with read-only mounts, which cannot stop the link itself from being replaced. Turn Sandbox off for this session."
   elif [ -d "$d/.git" ]; then
@@ -597,34 +602,37 @@ protect_repo_root() {
     mount_op --ro-bind "$d/.git" "$d/.git"
     GIT_WORKTREES+=("$d")
   fi
-  protect_claude_dir "$d/.claude"
+  protect_claude_dir "$d/.claude" "$create"
 }
 
 protect_claude_dir() {
-  local c="$1"
+  local c="$1" create="${2:-create}"
   if [ -L "$c" ]; then
     fail "refusing to launch: $c is a symbolic link. The sandbox protects it with read-only mounts, which cannot stop the link itself from being replaced. Replace the link with the directory it points to, or turn Sandbox off for this session."
   elif [ -d "$c" ]; then
     bind_project_claude_dir "$c"
   elif [ -e "$c" ]; then
     mount_op --ro-bind "$c" "$c"
-  elif [ -w "$(dirname "$c")" ]; then
+  elif [ "$create" = create ] && [ -w "$(dirname "$c")" ]; then
     MISSING_DIRS+=("$c")
   fi
 }
 
 bind_project_dir() {
-  local d="$1" n
-  mount_op --bind "$d" "$d"
-  [ -d "$d" ] || return 0
-  protect_repo_root "$d"
-  # Every .claude and repository below, worktrees included; see
-  # docs/sandbox.md, "Git".
+  mount_op --bind "$1" "$1"
+  [ -d "$1" ] || return 0
+  protect_tree "$1" create
+}
+
+# .git and .claude at and below $1; see docs/sandbox.md, "Git".
+protect_tree() {
+  local d="$1" create="$2" n
+  protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
     inside_ro_area "$n" && continue
     case "${n##*/}" in
-      .claude) protect_claude_dir "$n" ;;
-      .git) protect_repo_root "$(dirname "$n")" ;;
+      .claude) protect_claude_dir "$n" "$create" ;;
+      .git) protect_repo_root "$(dirname "$n")" "$create" ;;
     esac
   done < <(find "$d" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \

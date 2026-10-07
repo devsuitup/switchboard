@@ -20,7 +20,8 @@ project files and stay writable), and changes to ~/.claude.json (MCP servers) ar
 isolated: network, environment, the project's own files and build scripts, the
 project's CLAUDE.md and memory files, a new .git/commondir or repository or
 worktree the session creates (git follows their config and hooks), the claude
-binary of the native installer.* The
+binary of the native installer, and skills and agents when
+SWITCHBOARD_SANDBOX_RW_SKILLS=1 or SWITCHBOARD_SANDBOX_RW_AGENTS=1 is set.* The
 badge is also shown when Switchboard reattaches to a running sandboxed session.
 
 ## Turning it on
@@ -195,8 +196,13 @@ directory's `.claude`, as session state:
   be created from inside the sandbox: create it once outside.
 - A `~/.claude/skills` or `~/.claude/agents` that is a symbolic link is
   followed like the other state links: only to a directory of the same name,
-  elsewhere, and never to `$HOME` or a parent of it. Links inside it are no
-  longer followed and protected.
+  elsewhere, and never to `$HOME` or a parent of it.
+- Inside the writable directory, or the directory it links to, every
+  repository keeps its config and hooks read-only and every `.claude` stays
+  read-only, as in a bound directory (see [Git](#git)); a file linked from
+  `~/.claude` into it, such as a `settings.json` kept in the same dotfiles
+  repository, stays read-only too. No `.claude` is created there. Other links
+  inside it are not followed.
 
 This gives up part of the protection: what the session writes there is loaded,
 and its scripts run, by every later session outside the sandbox, other

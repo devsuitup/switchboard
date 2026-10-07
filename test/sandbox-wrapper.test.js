@@ -18,12 +18,14 @@ const LINUX = process.platform === 'linux';
 /**
  * The environment every child of these tests runs with: no inherited GIT_* or
  * HUSKY* variable, so a git command inside the rig can never reach the
- * repository the suite runs from (the pre-commit hook sets GIT_INDEX_FILE).
+ * repository the suite runs from (the pre-commit hook sets GIT_INDEX_FILE),
+ * and no SWITCHBOARD_SANDBOX_* one, which a suite run from a sandboxed
+ * session would otherwise pass on to the wrapper under test.
  */
 function cleanEnv(extra = {}) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (!/^(GIT_|HUSKY)/.test(k)) env[k] = v;
+    if (!/^(GIT_|HUSKY|SWITCHBOARD_SANDBOX_)/.test(k)) env[k] = v;
   }
   return { ...env, ...extra };
 }
@@ -507,6 +509,78 @@ test('sandbox wrapper: skills and agents are read-write only with SWITCHBOARD_SA
       assert.equal(mountAt(ops, path.join(dir, 'agents'))?.op, '--bind');
       assert.equal(mountAt(ops, path.join(dot, 'agents'))?.op, '--bind');
       assert.ok(fs.statSync(path.join(dir, 'agents')).isDirectory(), 'a missing ~/.claude/agents is created on the host');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: an opted-in skills linked to a repository elsewhere keeps that repository\'s git config, hooks and linked settings read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const skills = path.join(rig.root, 'dotfiles', 'skills');
+      fs.mkdirSync(path.join(skills, 'mine'), { recursive: true });
+      git(skills, 'init', '-q');
+      fs.mkdirSync(path.join(skills, '.claude'));
+      fs.writeFileSync(path.join(skills, '.claude', 'settings.json'), '{}\n');
+      fs.writeFileSync(path.join(skills, 'settings.json'), '{}\n');
+      fs.symlinkSync(skills, path.join(dir, 'skills'));
+      fs.symlinkSync(path.join(skills, 'settings.json'), path.join(dir, 'settings.json'));
+
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' });
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, skills)?.op, '--bind', 'the opted-in target is writable');
+      assert.equal(accessAt(ops, path.join(skills, 'mine', 'SKILL.md')), '--bind');
+      for (const p of [path.join(skills, '.git', 'config'), path.join(skills, '.git', 'hooks'),
+        path.join(skills, 'settings.json'), path.join(skills, '.claude', 'settings.json')]) {
+        assert.equal(accessAt(ops, p), '--ro-bind', `${p} must stay read-only inside the writable target`);
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a repository inside an opted-in ~/.claude/agents keeps its git config and hooks read-only, and no .claude is created there',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      const vendored = path.join(dir, 'agents', 'vendored');
+      fs.mkdirSync(vendored, { recursive: true });
+      git(vendored, 'init', '-q');
+
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_AGENTS: '1' });
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, path.join(dir, 'agents'))?.op, '--bind');
+      for (const p of [path.join(vendored, '.git', 'config'), path.join(vendored, '.git', 'hooks')]) {
+        assert.equal(accessAt(ops, p), '--ro-bind', `${p} must stay read-only`);
+      }
+      assert.equal(fs.existsSync(path.join(vendored, '.claude')), false, 'no .claude is planted in a skill or agent repository');
+      assert.equal(fs.existsSync(path.join(dir, 'agents', '.claude')), false);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: an opted-in skills in a project\'s .claude that links out of the sandbox is not followed',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const outside = path.join(rig.root, 'elsewhere', 'skills');
+      fs.mkdirSync(outside, { recursive: true });
+      fs.mkdirSync(path.join(rig.proj, '.claude'));
+      fs.symlinkSync(outside, path.join(rig.proj, '.claude', 'skills'));
+
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' });
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(ops.find(o => o.dest === outside || o.dest.startsWith(outside + '/')), undefined,
+        'a target outside what the sandbox sees stays invisible');
     } finally {
       rig.cleanup();
     }
