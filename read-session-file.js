@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { StringDecoder } = require('string_decoder');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -623,21 +624,37 @@ function hasTerminalTurn(text) {
   return false;
 }
 
+function firstUserEntrypointIn(lines) {
+  for (const line of lines) {
+    if (!line) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry.type === 'user') return entrypointOf(entry);
+  }
+  return undefined;
+}
+
+function readFirstUserEntrypoint(fd, size) {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  for (let pos = 0; pos < size; pos += SDK_TAIL_SCAN_BYTES) {
+    const length = Math.min(SDK_TAIL_SCAN_BYTES, size - pos);
+    const buf = Buffer.alloc(length);
+    const n = fs.readSync(fd, buf, 0, length, pos);
+    const lines = (pending + decoder.write(buf.subarray(0, n))).split('\n');
+    pending = lines.pop();
+    const found = firstUserEntrypointIn(lines);
+    if (found !== undefined) return found;
+  }
+  return firstUserEntrypointIn([pending + decoder.end()]);
+}
+
 function readSessionEntrypoint(filePath) {
   let fd;
   try {
     fd = fs.openSync(filePath, 'r');
     const size = fs.fstatSync(fd).size;
-    const headLen = Math.min(SDK_TAIL_SCAN_BYTES, size);
-    const headLines = readTextRange(fd, 0, headLen).split('\n');
-    if (headLen < size) headLines.pop();
-    let first;
-    for (const line of headLines) {
-      if (!line) continue;
-      let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (entry.type === 'user') { first = entrypointOf(entry); break; }
-    }
+    const first = readFirstUserEntrypoint(fd, size);
     if (first === undefined) return null;
     if (!isSdkEntrypoint(first)) return first;
     const rest = size <= SDK_FULL_SCAN_MAX_BYTES

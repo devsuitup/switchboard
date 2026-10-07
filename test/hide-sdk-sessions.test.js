@@ -247,6 +247,12 @@ test('readSessionEntrypoint reads the head, and the tail of a large SDK transcri
     ]);
     assert.ok(fs.statSync(big).size > 2 * 1024 * 1024);
     assert.equal(readSessionEntrypoint(big), 'cli');
+    const longPrompt = write(tmp, 'long-prompt', [
+      { type: 'queue-operation', operation: 'enqueue', content: 'é'.repeat(300 * 1024) },
+      { type: 'queue-operation', operation: 'dequeue' },
+      user('review', { entrypoint: 'sdk-cli' }),
+    ]);
+    assert.equal(readSessionEntrypoint(longPrompt), 'sdk-cli');
   } finally {
     cleanup(tmp);
   }
