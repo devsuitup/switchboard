@@ -696,7 +696,13 @@ async function showDispatchAgentDialog(project) {
   const defaultPath = requested || projects[0] || '';
   async function effectiveFor(projectPath) {
     if (!projectPath) return {};
-    try { return (await window.api.getEffectiveSettings(projectPath)) || {}; } catch { return {}; }
+    try {
+      const settings = await window.api.getEffectiveSettings(projectPath);
+      if (settings && typeof settings === 'object') return settings;
+      return { lookupError: 'no settings returned' };
+    } catch (err) {
+      return { lookupError: (err && err.message) || 'unknown error' };
+    }
   }
   let effective = await effectiveFor(defaultPath);
 
@@ -792,7 +798,8 @@ async function showDispatchAgentDialog(project) {
     dangerousSkip = !!effective.dangerouslySkipPermissions;
     modeGrid.innerHTML = renderModeGrid();
     dialog.querySelector('#dad-add-dirs').value = effective.addDirs || SETTING_DEFAULTS.addDirs || '';
-    if (effective.sandbox) refusal = 'This project runs its sessions sandboxed; a background agent would run outside the sandbox.';
+    if (effective.lookupError) refusal = `Could not read this project's settings (${effective.lookupError}); close and reopen this dialog to retry.`;
+    else if (effective.sandbox) refusal = 'This project runs its sessions sandboxed; a background agent would run outside the sandbox.';
     else if (typeof effective.preLaunchCmd === 'string' && effective.preLaunchCmd.trim()) refusal = 'This project has a pre-launch command, which a background agent would not run.';
     else refusal = null;
     errorEl.textContent = refusal || '';

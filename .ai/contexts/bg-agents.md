@@ -55,11 +55,14 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 9. `delete-session` asks `deleteSessionRefusal` (`delete-session-guard.js`)
    first, and it fails closed. It refuses a session held by an open
    terminal (by id or `realSessionId`), by a live job (`liveJobCheck`: the
-   roster, then a direct read of every `jobs/*/state.json`, so it works before
-   the view was ever opened), or by another process
+   job files, read directly so it works before the view was ever opened; the
+   roster only supplies a session id a file lacks, or answers when `jobs/`
+   does not exist), or by another process
    (`cliSessionState.liveElsewhereChecked`). It also refuses when it cannot
-   tell: an unreadable jobs or descriptor directory, an unreadable state, or a
-   live job whose state names no session. A missing directory means nothing
+   tell: an unreadable jobs or descriptor directory, an unreadable state, a
+   state outside `JOB_STATES`, or a live job whose state names no session.
+   The dispatch dialog likewise keeps Start disabled when the project's
+   settings cannot be read. A missing directory means nothing
    is live. Ids are compared lowercased everywhere, since Windows resolves a
    transcript path case-insensitively.
 

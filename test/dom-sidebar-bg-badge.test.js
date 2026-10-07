@@ -39,3 +39,13 @@ test('without the roster global the sidebar renders as before', (t) => {
   ctx.sidebar.renderProjects([makeSampleProject()], false);
   assert.equal(ctx.document.querySelector('.bg-badge'), null);
 });
+
+test('a roster job badges its session whatever the case of either id', (t) => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  ctx.evalPublic('agents-view.js');
+  const project = makeSampleProject();
+  ctx.read('applyAgentsSnapshot')({ roster: [{ id: 'aaaaaaaa', sessionId: 'S-TOP-1', kind: 'background', state: 'working' }], daemonReachable: true });
+  ctx.sidebar.renderProjects([project], false);
+  assert.ok(ctx.document.querySelector('[data-session-id="s-top-1"] .bg-badge'));
+});

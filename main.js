@@ -77,7 +77,7 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
-const { deleteSessionRefusal } = require('./delete-session-guard');
+const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
@@ -2206,11 +2206,7 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
 
 ipcMain.handle('delete-session', async (_event, sessionId) => {
   const id = String(sessionId || '');
-  const refusal = await deleteSessionRefusal(id, {
-    activeSessions,
-    liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
-    liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
-  });
+  const refusal = await deleteSessionGuard(id);
   if (refusal) return { ok: false, error: refusal };
 
   // Validation, symlink resolution and containment live in
@@ -3151,6 +3147,7 @@ bgAgents.init({
   },
 });
 require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log });
+const deleteSessionGuard = makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids });
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;

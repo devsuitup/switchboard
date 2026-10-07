@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { deleteSessionRefusal } = require('../delete-session-guard');
+const { makeDeleteSessionGuard } = require('../delete-session-guard');
 const bgAgents = require('../bg-agents');
 const cliSessionState = require('../cli-session-state');
 
@@ -27,11 +27,7 @@ function setup({ jobsDir, descriptorsDir }) {
 }
 
 function refusal(id, activeSessions = new Map()) {
-  return deleteSessionRefusal(id, {
-    activeSessions,
-    liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
-    liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, () => false, () => []),
-  });
+  return makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [] })(id);
 }
 
 function writeJob(jobsDir, id, state) {
@@ -113,4 +109,31 @@ test('an open terminal holds the session under any case, by its id or its real i
   assert.match(await refusal(UPPER, new Map([[SID, { exited: false }]])), /close it first/);
   assert.match(await refusal(UPPER, new Map([['tmp-1', { exited: false, realSessionId: SID }]])), /close it first/);
   assert.equal(await refusal(UPPER, new Map([[SID, { exited: true }]])), null);
+});
+
+test('a job in a state this version does not know cannot be ruled out: refused', async () => {
+  const jobsDir = path.join(root, 'jobs');
+  writeJob(jobsDir, 'aaaaaaaa', 'paused');
+  setup({ jobsDir, descriptorsDir: path.join(root, 'sessions') });
+  assert.match(await refusal(SID), /state this version does not know/);
+});
+
+test('a stale cached working entry does not outvote a done job file', async () => {
+  const jobsDir = path.join(root, 'jobs');
+  writeJob(jobsDir, 'aaaaaaaa', 'working');
+  bgAgents.init({
+    jobsDir, log: silentLog, cliSessionState, homeDir: os.tmpdir(), resolveProjectRoots: async () => null,
+    runClaude: async (argv) => (argv[0] === 'agents'
+      ? { code: 0, stdout: JSON.stringify([{ id: 'aaaaaaaa', sessionId: SID, kind: 'background', state: 'working', cwd: root }]), stderr: '' }
+      : { code: 1, stdout: '', stderr: '' }),
+  });
+  cliSessionState.init({
+    dir: path.join(root, 'sessions'), activeSessions: new Map(), log: silentLog, onIdle: () => {},
+    isProcessAlive: () => true, readProcStart: () => '111', readParentPid: () => 1, ownPid: 99999, platform: 'linux',
+  });
+  bgAgents.start();
+  await bgAgents.reconcile();
+  writeJob(jobsDir, 'aaaaaaaa', 'done');
+  assert.equal(bgAgents.getSnapshot().roster.find(e => e.id === 'aaaaaaaa').state, 'working', 'the cache is still stale');
+  assert.equal(await refusal(SID), null);
 });

@@ -238,3 +238,30 @@ test('a failed dispatch does not re-enable Start while the next project\'s setti
   assert.equal(ctx.calls.dispatched[1].dangerouslySkipPermissions, false);
   assert.equal(ctx.calls.dispatched[1].addDirs, '');
 });
+
+test('a settings lookup that fails keeps Start disabled and says so, never dispatching with empty settings', async (t) => {
+  const byProject = { '/w/one': { addDirs: '/srv/one' } };
+  const ctx = setup({ effective: (p) => (p in byProject ? byProject[p] : Promise.reject(new Error('settings store locked'))) }); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const d = ctx.document;
+  const startBtn = d.querySelector('.new-session-start-btn');
+  assert.equal(startBtn.disabled, false);
+  const select = d.querySelector('#dad-project');
+  select.value = '/w/two';
+  select.dispatchEvent(new ctx.window.Event('change'));
+  await tick(); await tick();
+  assert.equal(startBtn.disabled, true);
+  assert.match(d.querySelector('#dad-error').textContent, /Could not read this project's settings \(settings store locked\)/);
+  d.querySelector('#dad-prompt').value = 'go';
+  startBtn.click();
+  d.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(); await tick();
+  assert.equal(ctx.calls.dispatched.length, 0);
+});
+
+test('a failed lookup for the opening project keeps Start disabled too', async (t) => {
+  const ctx = setup({ effective: () => Promise.reject(new Error('boom')) }); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  assert.equal(ctx.document.querySelector('.new-session-start-btn').disabled, true);
+  assert.match(ctx.document.querySelector('#dad-error').textContent, /boom/);
+});

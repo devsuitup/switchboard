@@ -27,8 +27,10 @@ test('delete-session: the liveness guard runs before anything is resolved or rem
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   const start = main.indexOf("ipcMain.handle('delete-session'");
   const body = main.slice(start, main.indexOf('\n});', start));
-  const guard = body.indexOf('await deleteSessionRefusal(id,');
+  const guard = body.indexOf('await deleteSessionGuard(id)');
   assert.ok(guard > 0, 'the handler asks delete-session-guard.js (behaviour tested in delete-session-guard.test.js)');
+  assert.match(main, /const deleteSessionGuard = makeDeleteSessionGuard\(\{ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids \}\);/,
+    'the guard is built from the real modules, not stubs');
   assert.ok(guard < body.indexOf('resolveDeletionTargets('));
   assert.match(body, /if \(refusal\) return \{ ok: false, error: refusal \}/);
 });

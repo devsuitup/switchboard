@@ -18,4 +18,12 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
   return null;
 }
 
-module.exports = { deleteSessionRefusal };
+function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids }) {
+  return (sessionId) => deleteSessionRefusal(sessionId, {
+    activeSessions,
+    liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
+    liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
+  });
+}
+
+module.exports = { deleteSessionRefusal, makeDeleteSessionGuard };

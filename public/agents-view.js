@@ -186,7 +186,7 @@ function agentsSelectedEntry() {
 function applyAgentsSnapshot(snapshot) {
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
-  const next = new Set(agentsRoster.filter(e => agentJobIsLive(e) && e.sessionId).map(e => e.sessionId));
+  const next = new Set(agentsRoster.filter(e => agentJobIsLive(e) && e.sessionId).map(e => String(e.sessionId).toLowerCase()));
   let changed = next.size !== bgAgentSessionIds.size;
   if (!changed) for (const id of next) if (!bgAgentSessionIds.has(id)) { changed = true; break; }
   if (changed) {

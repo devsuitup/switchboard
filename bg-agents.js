@@ -281,12 +281,12 @@ function liveJobCheck(sessionId) {
   const key = typeof sessionId === 'string' ? sessionId.toLowerCase() : '';
   if (!key) return { known: true, job: null };
   const sameSession = (sid) => typeof sid === 'string' && sid.toLowerCase() === key;
-  const fromRoster = roster.find(e => e.kind === 'background' && isLiveJobState(e.state) && sameSession(e.sessionId));
-  if (fromRoster) return { known: true, job: { id: fromRoster.id, state: fromRoster.state } };
+  const listed = (id) => roster.find(e => e.kind === 'background' && e.id === id) || null;
   let names;
   try { names = fs.readdirSync(jobsDir); } catch (err) {
-    if (err && err.code === 'ENOENT') return { known: true, job: null };
-    return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
+    if (!(err && err.code === 'ENOENT')) return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
+    const cached = roster.find(e => e.kind === 'background' && isLiveJobState(e.state) && sameSession(e.sessionId));
+    return { known: true, job: cached ? { id: cached.id, state: cached.state } : null };
   }
   let unknown = null;
   for (const id of names) {
@@ -297,9 +297,9 @@ function liveJobCheck(sessionId) {
       continue;
     }
     if (!parsed) { unknown = unknown || `job ${id} has an unreadable state`; continue; }
+    if (!parsed.state) { unknown = unknown || `job ${id} is in a state this version does not know`; continue; }
     if (!isLiveJobState(parsed.state)) continue;
-    const listed = roster.find(e => e.kind === 'background' && e.id === id);
-    const sid = parsed.sessionId || (listed && listed.sessionId);
+    const sid = parsed.sessionId || (listed(id) && listed(id).sessionId);
     if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
     if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
   }
