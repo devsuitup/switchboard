@@ -47,6 +47,7 @@ function makeHandler(mocks) {
     'populateCacheViaWorker',
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
     'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
+    'backfillEntrypoints',
     body
   );
   // annotateRemoteAttachable (remote-attach join, issue #221),
@@ -61,7 +62,8 @@ function makeHandler(mocks) {
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, applyAndPersistArchived, () => null, () => {}, false
+    annotateRemoteAttachable, applyAndPersistArchived, () => null, () => {}, false,
+    () => {}
   );
 }
 

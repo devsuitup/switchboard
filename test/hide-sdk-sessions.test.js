@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readSessionFile } = require('../read-session-file');
+const { readSessionFile, readSessionEntrypoint } = require('../read-session-file');
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
 
@@ -59,7 +59,7 @@ test('a scheduled run keeps no entrypoint: its first user turn is pre-seeded by 
       user('continue', { entrypoint: 'sdk-cli' }),
       assistant({ entrypoint: 'sdk-cli' }),
     ]);
-    assert.equal(readSessionFile(scheduled, 'f', '/p').entrypoint, null);
+    assert.equal(readSessionFile(scheduled, 'f', '/p').entrypoint, '');
   } finally {
     cleanup(tmp);
   }
@@ -79,7 +79,7 @@ test('an SDK session later typed into from a terminal counts as interactive', ()
   }
 });
 
-test('refreshFolder re-reads a cached SDK session in full, so a terminal turn makes it visible', () => {
+test('refreshFolder notices a terminal turn appended to a cached SDK session', () => {
   const projectsDir = mkTmp();
   try {
     const projectPath = projectsDir;
@@ -180,4 +180,138 @@ test('SDK-launched sessions and their subagents are hidden by default', () => {
 test('turning hideSdkSessions off shows them again', () => {
   assert.deepEqual(visibleIds({ hideSdkSessions: false }),
     ['interactive', 'scheduled', 'sdk-cli-run', 'sdk-py-run', 'sdk-ts-run', 'sub:sdk-py-run:a1']);
+});
+
+function buildWith({ cachedRows, global = {}, activeSessions = new Map(), folders = [] }) {
+  const projectsDir = mkTmp();
+  try {
+    for (const f of folders) fs.mkdirSync(path.join(projectsDir, f));
+    const folderMeta = new Map(folders.map(f => [f, { folder: f, projectPath: cachedRows.find(r => r.folder === f).projectPath }]));
+    sessionCache.init({
+      PROJECTS_DIR: projectsDir,
+      activeSessions,
+      getMainWindow: () => null,
+      log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
+      db: { ...makeFakeDb({ cachedRows, global }), getAllFolderMeta: () => folderMeta, setFolderMeta: () => {} },
+    });
+    sessionCache.setRemoteRoots(new Map());
+    return sessionCache.buildProjectsFromCache(true);
+  } finally {
+    cleanup(projectsDir);
+  }
+}
+
+const ids = (projects) => projects.flatMap(p => p.sessions.map(s => s.sessionId)).sort();
+
+test('an SDK session open in a terminal or in the saved working set stays listed', () => {
+  const folder = encodeProjectPath('/srv/runner');
+  const cachedRows = [
+    row('open-now', folder, '/srv/runner', 'sdk-py'),
+    row('saved', folder, '/srv/runner', 'sdk-py'),
+    row('closed', folder, '/srv/runner', 'sdk-py'),
+    row('exited', folder, '/srv/runner', 'sdk-py'),
+  ];
+  const activeSessions = new Map([['open-now', { exited: false }], ['exited', { exited: true }]]);
+  const projects = buildWith({ cachedRows, activeSessions, global: { openWorkingSet: [{ sessionId: 'saved' }] } });
+  assert.deepEqual(ids(projects), ['open-now', 'saved']);
+});
+
+test('an SDK session continued from a terminal in a compaction mirror is listed', () => {
+  const folder = encodeProjectPath('/srv/runner');
+  const cachedRows = [
+    row('parent', folder, '/srv/runner', 'sdk-ts'),
+    { ...row('mirror', folder, '/srv/runner', 'cli'), mergedIntoSessionId: 'parent' },
+  ];
+  assert.deepEqual(ids(buildWith({ cachedRows })), ['parent']);
+});
+
+test('a project holding only SDK sessions gets no empty header', () => {
+  const folder = encodeProjectPath('/srv/only-sdk');
+  const cachedRows = [row('sdk', folder, '/srv/only-sdk', 'sdk-cli')];
+  assert.deepEqual(buildWith({ cachedRows, folders: [folder] }).map(p => p.projectPath), []);
+});
+
+test('readSessionEntrypoint reads the head, and the tail of a large SDK transcript', () => {
+  const tmp = mkTmp();
+  try {
+    assert.equal(readSessionEntrypoint(write(tmp, 'cli', [user('hi', { entrypoint: 'cli' }), assistant()])), 'cli');
+    assert.equal(readSessionEntrypoint(write(tmp, 'sched', [user('Scheduled Task: x'), user('go', { entrypoint: 'sdk-cli' })])), '');
+    assert.equal(readSessionEntrypoint(write(tmp, 'odd', [user('hi', { entrypoint: 42 })])), '');
+    assert.equal(readSessionEntrypoint(write(tmp, 'pure', [user('review', { entrypoint: 'sdk-py' }), assistant({ entrypoint: 'sdk-py' })])), 'sdk-py');
+    assert.equal(readSessionEntrypoint(write(tmp, 'queued', [{ type: 'queue-operation', operation: 'enqueue' }])), null);
+    const filler = assistant({ entrypoint: 'sdk-py', pad: 'x'.repeat(4096) });
+    const big = write(tmp, 'big', [
+      user('review', { entrypoint: 'sdk-py' }),
+      ...Array(700).fill(filler),
+      user('typed later', { entrypoint: 'cli' }),
+    ]);
+    assert.ok(fs.statSync(big).size > 2 * 1024 * 1024);
+    assert.equal(readSessionEntrypoint(big), 'cli');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('backfillEntrypoints fills the rows cached before the column existed', async () => {
+  const projectsDir = mkTmp();
+  try {
+    const folder = encodeProjectPath('/srv/runner');
+    const folderPath = path.join(projectsDir, folder);
+    fs.mkdirSync(folderPath);
+    write(folderPath, 'old-sdk', [user('review', { entrypoint: 'sdk-py' }), assistant()]);
+    write(folderPath, 'old-cli', [user('hello', { entrypoint: 'cli' }), assistant()]);
+    const written = [];
+    sessionCache.init({
+      PROJECTS_DIR: projectsDir,
+      activeSessions: new Map(),
+      getMainWindow: () => null,
+      log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
+      db: {
+        getCachedMissingEntrypoint: () => [{ sessionId: 'old-sdk', folder }, { sessionId: 'old-cli', folder }],
+        setCachedEntrypoints: (pairs) => written.push(...pairs),
+      },
+    });
+    sessionCache.setRemoteRoots(new Map());
+    await sessionCache.backfillEntrypoints();
+    assert.deepEqual(written, [
+      { sessionId: 'old-sdk', entrypoint: 'sdk-py' },
+      { sessionId: 'old-cli', entrypoint: 'cli' },
+    ]);
+  } finally {
+    cleanup(projectsDir);
+  }
+});
+
+test('adding the entrypoint column keeps the cached sessions', () => {
+  const { spawnSync } = require('child_process');
+  const electronBin = require('electron');
+  const appDir = path.join(__dirname, '..');
+  const dir = mkTmp();
+  const run = (code) => spawnSync(electronBin, ['-e', code], {
+    cwd: appDir,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dir },
+    encoding: 'utf8',
+  });
+  const loadDb = `require(${JSON.stringify(path.join(appDir, 'db.js'))})`;
+  try {
+    assert.equal(run(loadDb).status, 0);
+    const seed = run(`
+      const Database = require('better-sqlite3');
+      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+      db.exec('ALTER TABLE session_cache DROP COLUMN entrypoint');
+      db.prepare('INSERT INTO session_cache (sessionId, folder, projectPath, summary, modified) VALUES (?, ?, ?, ?, ?)')
+        .run('kept', 'f1', '/tmp/p1', 'hello', '2026-10-07T10:00:00.000Z');
+    `);
+    assert.equal(seed.status, 0, seed.stderr);
+    assert.equal(run(loadDb).status, 0);
+    const r = run(`
+      const Database = require('better-sqlite3');
+      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'), { readonly: true });
+      console.log(JSON.stringify(db.prepare('SELECT sessionId, entrypoint FROM session_cache').all()));
+    `);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), [{ sessionId: 'kept', entrypoint: null }]);
+  } finally {
+    cleanup(dir);
+  }
 });

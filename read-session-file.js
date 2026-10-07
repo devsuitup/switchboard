@@ -202,8 +202,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (entry.slug && !slug) slug = entry.slug;
       if (entry.agentId && !agentId) agentId = entry.agentId;
       if (entry.isSidechain) sidechainSeen = true;
-      if (entrypoint === undefined && entry.type === 'user') entrypoint = entry.entrypoint || null;
-      if (entry.type === 'user' && entry.entrypoint === 'cli') typedInTerminal = true;
+      if (entrypoint === undefined && entry.type === 'user') entrypoint = entrypointOf(entry);
+      if (isTerminalTurn(entry)) typedInTerminal = true;
       // Compaction mirror dedup key -- see .ai/contexts/session-cache.md
       if (entry.type === 'bridge-session' && typeof entry.bridgeSessionId === 'string' &&
           entry.bridgeSessionId && !bridgeSessionId) {
@@ -287,7 +287,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, customTitle, aiTitle,
       bridgeSessionId,
-      entrypoint: typedInTerminal ? 'cli' : (entrypoint || null),
+      entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,
     };
   } catch {
@@ -591,4 +591,64 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   }
 }
 
-module.exports = { readSessionFile, readSessionDisplayHeader, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+const SDK_FULL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
+const SDK_TAIL_SCAN_BYTES = 256 * 1024;
+
+function entrypointOf(entry) {
+  return typeof entry.entrypoint === 'string' ? entry.entrypoint : '';
+}
+
+function isTerminalTurn(entry) {
+  return entry.type === 'user' && entry.entrypoint === 'cli';
+}
+
+function isSdkEntrypoint(entrypoint) {
+  return typeof entrypoint === 'string' && entrypoint.startsWith('sdk-');
+}
+
+function readTextRange(fd, start, length) {
+  const buf = Buffer.alloc(length);
+  const n = fs.readSync(fd, buf, 0, length, start);
+  return buf.toString('utf8', 0, n);
+}
+
+function hasTerminalTurn(text) {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"cli"')) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (isTerminalTurn(entry)) return true;
+  }
+  return false;
+}
+
+function readSessionEntrypoint(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const headLen = Math.min(SDK_TAIL_SCAN_BYTES, size);
+    const headLines = readTextRange(fd, 0, headLen).split('\n');
+    if (headLen < size) headLines.pop();
+    let first;
+    for (const line of headLines) {
+      if (!line) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (entry.type === 'user') { first = entrypointOf(entry); break; }
+    }
+    if (first === undefined) return null;
+    if (!isSdkEntrypoint(first)) return first;
+    const rest = size <= SDK_FULL_SCAN_MAX_BYTES
+      ? readTextRange(fd, 0, size)
+      : readTextRange(fd, size - SDK_TAIL_SCAN_BYTES, SDK_TAIL_SCAN_BYTES);
+    return hasTerminalTurn(rest) ? 'cli' : first;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };

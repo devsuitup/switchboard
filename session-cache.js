@@ -4,7 +4,7 @@ const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
-const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
+const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
@@ -19,6 +19,8 @@ let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSes
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
+let getCachedMissingEntrypoint, setCachedEntrypoints;
+let entrypointBackfill = null;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -46,6 +48,9 @@ function init(ctx) {
   setName = ctx.db.setName;
   isInitialScanComplete = ctx.db.isInitialScanComplete;
   setInitialScanComplete = ctx.db.setInitialScanComplete;
+  getCachedMissingEntrypoint = ctx.db.getCachedMissingEntrypoint;
+  setCachedEntrypoints = ctx.db.setCachedEntrypoints;
+  entrypointBackfill = null;
 }
 
 // alias -> that host's mirrored projects root; empty unless one is declared.
@@ -242,9 +247,7 @@ function refreshFolder(folder, opts = {}) {
       continue; // unchanged, skip
     }
 
-    // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-    const rereadSdk = cachedEntry && isSdkEntrypoint(cachedEntry.entrypoint) && stat.size <= SDK_FULL_REREAD_MAX_BYTES;
-    if (cachedEntry && !rereadSdk) {
+    if (cachedEntry) {
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
       if (h) {
@@ -269,6 +272,10 @@ function refreshFolder(folder, opts = {}) {
           subagentType: h.subagentType || cachedEntry.subagentType,
           description: h.description || cachedEntry.description,
         };
+        // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+        if (isSdkEntrypoint(cachedEntry.entrypoint)) {
+          merged.entrypoint = readSessionEntrypoint(filePath) ?? cachedEntry.entrypoint;
+        }
         sessionsToUpsert.push(merged);
         if (h.customTitle && h.customTitle !== cachedEntry.customTitle) {
           namesToSet.push({ id: merged.sessionId, name: h.customTitle });
@@ -430,10 +437,55 @@ function isProjectHidden(hiddenProjects, alias, projectPath) {
   return alias !== null && hiddenProjects.has(joinFolderKey(alias, projectPath));
 }
 
-const SDK_FULL_REREAD_MAX_BYTES = 2 * 1024 * 1024;
+const ENTRYPOINT_BACKFILL_BATCH = 200;
 
-function isSdkEntrypoint(entrypoint) {
-  return typeof entrypoint === 'string' && entrypoint.startsWith('sdk-');
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+function backfillEntrypoints() {
+  if (entrypointBackfill) return entrypointBackfill;
+  entrypointBackfill = new Promise((resolve) => {
+    const rows = getCachedMissingEntrypoint ? getCachedMissingEntrypoint() : [];
+    let next = 0;
+    let sdkFound = false;
+    const step = () => {
+      const pairs = [];
+      const end = Math.min(next + ENTRYPOINT_BACKFILL_BATCH, rows.length);
+      for (; next < end; next++) {
+        const row = rows[next];
+        const dir = resolveFolderDir(row.folder);
+        if (!dir) continue;
+        const entrypoint = readSessionEntrypoint(resolveJsonlPath(dir, { ...row, folder: '.' }));
+        if (entrypoint === null) continue;
+        if (isSdkEntrypoint(entrypoint)) sdkFound = true;
+        pairs.push({ sessionId: row.sessionId, entrypoint });
+      }
+      if (pairs.length) setCachedEntrypoints(pairs);
+      if (next < rows.length) {
+        setImmediate(step);
+        return;
+      }
+      if (sdkFound) notifyRendererProjectsChanged();
+      resolve();
+    };
+    step();
+  });
+  return entrypointBackfill;
+}
+
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
+  if (!(global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions)) return new Set();
+  const kept = new Set((global.openWorkingSet || []).map(item => item && item.sessionId));
+  for (const [sessionId, session] of activeSessions || []) {
+    if (!session.exited) kept.add(sessionId);
+  }
+  const hidden = new Set();
+  for (const row of cachedRows) {
+    if (!isSdkEntrypoint(row.entrypoint) || kept.has(row.sessionId)) continue;
+    const children = mergedChildrenByParent.get(row.sessionId) || [];
+    if (children.some(child => !isSdkEntrypoint(child.entrypoint))) continue;
+    hidden.add(row.sessionId);
+  }
+  return hidden;
 }
 
 /** Build projects response from cached data */
@@ -442,11 +494,6 @@ function buildProjectsFromCache(showArchived) {
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
-  // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-  const hideSdkSessions = global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions;
-  const hiddenSdkIds = new Set(hideSdkSessions
-    ? cachedRows.filter(r => isSdkEntrypoint(r.entrypoint)).map(r => r.sessionId)
-    : []);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -468,6 +515,9 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
+  const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent);
+  const sdkOnlyProjectKeys = new Set();
+
   const cachedIds = new Set(cachedRows.map(r => r.sessionId));
   const isArchivedParent = (id) => cachedIds.has(id) && !!metaMap.get(id)?.archived;
 
@@ -478,8 +528,11 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
-    if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) continue;
     const { alias } = parseFolderKey(row.folder);
+    if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) {
+      sdkOnlyProjectKeys.add(groupKey(alias, row.projectPath));
+      continue;
+    }
     if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
@@ -572,7 +625,7 @@ function buildProjectsFromCache(showArchived) {
         if (!projectPath) continue;
         if (isProjectHidden(hiddenProjects, alias, projectPath)) continue;
         const key = groupKey(alias, projectPath);
-        if (projectMap.has(key)) continue;
+        if (projectMap.has(key) || sdkOnlyProjectKeys.has(key)) continue;
         // For a placeholder the on-disk name IS the ground truth — re-encoding
         // the lossy decode could diverge from it (>200-char hashed names).
         const bare = placeholder ? d.name : encodeProjectPath(projectPath);
@@ -981,6 +1034,7 @@ module.exports = {
   refreshFolder,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
+  backfillEntrypoints,
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,

@@ -310,12 +310,14 @@ if (migrations.length > currentDbVersion) {
   // Fork columns (shipped in our v4): a foreign-version DB may have skipped
   // that migration the same way. Their absence means subagent rows were never
   // indexed, so a re-index is needed too.
-  for (const col of ['parentSessionId', 'agentId', 'subagentType', 'description', 'bridgeSessionId', 'mergedIntoSessionId', 'entrypoint']) {
+  for (const col of ['parentSessionId', 'agentId', 'subagentType', 'description', 'bridgeSessionId', 'mergedIntoSessionId']) {
     if (!cols.has(col)) {
       db.exec(`ALTER TABLE session_cache ADD COLUMN ${col} TEXT`);
       mustReindex = true;
     }
   }
+  // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+  if (!cols.has('entrypoint')) db.exec('ALTER TABLE session_cache ADD COLUMN entrypoint TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
   // Fork table (shipped in our v5), referenced unconditionally by prepare()
   // below — must exist whatever db_version claims.
@@ -438,6 +440,8 @@ const stmts = {
   // refresh can merge display fields without re-reading the transcript body.
   // fileMtime still comes through, so upstream's invalidation key works.
   cacheGetByFolder: db.prepare('SELECT * FROM session_cache WHERE folder = ?'),
+  cacheGetMissingEntrypoint: db.prepare('SELECT sessionId, folder FROM session_cache WHERE entrypoint IS NULL AND parentSessionId IS NULL'),
+  cacheSetEntrypoint: db.prepare('UPDATE session_cache SET entrypoint = ? WHERE sessionId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
@@ -558,7 +562,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.parentSessionId || null, s.agentId || null,
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
-      s.entrypoint || null
+      typeof s.entrypoint === 'string' ? s.entrypoint : null
     );
   }
 });
@@ -589,6 +593,14 @@ function getCachedByParent(parentSessionId) {
 function upsertCachedSessions(sessions) {
   upsertCachedSessionsBatch(sessions);
 }
+
+function getCachedMissingEntrypoint() {
+  return stmts.cacheGetMissingEntrypoint.all();
+}
+
+const setCachedEntrypoints = db.transaction((pairs) => {
+  for (const { sessionId, entrypoint } of pairs) stmts.cacheSetEntrypoint.run(entrypoint, sessionId);
+});
 
 function getCachedByFolder(folder) {
   return stmts.cacheGetByFolder.all(folder);
@@ -888,7 +900,7 @@ function closeDb() {
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,
