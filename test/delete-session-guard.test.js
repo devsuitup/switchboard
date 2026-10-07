@@ -137,3 +137,25 @@ test('a stale cached working entry does not outvote a done job file', async () =
   assert.equal(bgAgents.getSnapshot().roster.find(e => e.id === 'aaaaaaaa').state, 'working', 'the cache is still stale');
   assert.equal(await refusal(SID), null);
 });
+
+test('a cached live job whose state.json is missing still refuses the delete', async () => {
+  for (const layout of ['no job directory', 'empty job directory']) {
+    const jobsDir = path.join(root, `jobs-${layout.replace(/ /g, '-')}`);
+    fs.mkdirSync(jobsDir, { recursive: true });
+    if (layout === 'empty job directory') fs.mkdirSync(path.join(jobsDir, 'aaaaaaaa'));
+    bgAgents.init({
+      jobsDir, log: silentLog, cliSessionState, homeDir: os.tmpdir(), resolveProjectRoots: async () => null,
+      runClaude: async (argv) => (argv[0] === 'agents'
+        ? { code: 0, stdout: JSON.stringify([{ id: 'aaaaaaaa', sessionId: SID, kind: 'background', state: 'working', cwd: root }]), stderr: '' }
+        : { code: 1, stdout: '', stderr: '' }),
+    });
+    cliSessionState.init({
+      dir: path.join(root, 'sessions'), activeSessions: new Map(), log: silentLog, onIdle: () => {},
+      isProcessAlive: () => true, readProcStart: () => '111', readParentPid: () => 1, ownPid: 99999, platform: 'linux',
+    });
+    bgAgents.start();
+    await bgAgents.reconcile();
+    assert.match(await refusal(UPPER), /background job aaaaaaaa is still running/, layout);
+    bgAgents.stop();
+  }
+});

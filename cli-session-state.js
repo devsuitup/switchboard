@@ -38,6 +38,7 @@ const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
 const lastProbeAt = new Map();
+const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
@@ -224,7 +225,7 @@ function handleFile(name) {
   if (prev && prev.sessionId && prev.sessionId !== state.sessionId) forgetSession(prev.sessionId);
   known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+    statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
     forgetSession(state.sessionId);
   }
@@ -273,15 +274,15 @@ function seed() {
     if (state) {
       known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+        statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       }
     }
   }
 }
 
 function forgetSession(sessionId) {
-  statusBySession.delete(sessionId);
-  lastProbeAt.delete(sessionId);
+  statusBySession.delete(statusKey(sessionId));
+  lastProbeAt.delete(statusKey(sessionId));
 }
 
 function ensureWatching() {
@@ -332,13 +333,14 @@ function stop() {
 
 // Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
 function getStatus(sessionId) {
-  const entry = statusBySession.get(sessionId);
+  const key = statusKey(sessionId);
+  const entry = statusBySession.get(key);
   if (!entry) return undefined;
 
   const t = now();
-  const last = lastProbeAt.get(sessionId) || 0;
+  const last = lastProbeAt.get(key) || 0;
   if (t - last >= GET_STATUS_PROBE_THROTTLE_MS) {
-    lastProbeAt.set(sessionId, t);
+    lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
       forgetSession(sessionId);
       return undefined;

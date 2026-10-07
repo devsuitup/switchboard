@@ -282,6 +282,19 @@ test('getStatus returns the last parsed status/statusUpdatedAt for a sessionId',
   }
 });
 
+test('getStatus finds a descriptor whatever the case of the id it is asked with', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession());
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+    assert.deepEqual(cliSessionState.getStatus('SESS-1'), { status: 'busy', statusUpdatedAt: 1000 });
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('getStatus works for a CLI descriptor with no matching Switchboard session (started outside Switchboard)', async () => {
   const dir = mkTmp();
   try {

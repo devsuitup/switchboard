@@ -11,7 +11,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `preload.js` | ~150 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
 | `main.js` | ~2600 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
 | `schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
-| `bg-agents-ipc.js` | ~25 | **Also registers IPC handlers** (`get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
+| `bg-agents-ipc.js` | ~25 | **Also registers IPC handlers** (`get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these four. Audit both files. |
 
 ## Public surface (IPC inventory)
 
@@ -123,6 +123,7 @@ every call, and the absolute path built from it is used and discarded there.
 | `get-bg-agents` | — | `{roster, daemonReachable}` | Arms the watchers on first call, re-subscribes the `bg-agents-changed` push on every call, then reconciles through `claude agents --json --all`. Handler in `bg-agents-ipc.js`. |
 | `bg-agent-verb` | `(verb, id)` | `{ok, error?}` | `stop` \| `respawn` \| `rm`; id validated against `JOB_ID_RE`; `respawn`/`rm` refused on a live (`working`/`blocked`) job. |
 | `dispatch-bg-agent` | `(fields)` | `{ok, id?, error?}` | `claude --bg …` in `fields.cwd`. |
+| `bg-agent-live-job` | `(sessionId)` | `{known, job} \| {known:false, reason}` | `liveJobCheck`; `stopBeforeArchive` refuses on a live job or an unknown answer. |
 
 `open-terminal` accepts `sessionOptions = {type: 'attach', jobId, cwd}` and runs `claude attach <jobId>`; `stop-session` on such a session detaches (`{ok, detached: true}`).
 

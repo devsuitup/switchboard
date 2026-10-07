@@ -70,8 +70,8 @@ test('stopBeforeArchive: local session with an active PTY stops it and clears ac
     ctx.window.activePtyIds.add('s1');
     const result = await ctx.window.stopBeforeArchive({ sessionId: 's1' });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls.map(c => c.method), ['stopSession']);
-    assert.equal(calls[0].args[0], 's1');
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'stopSession']);
+    assert.equal(calls[1].args[0], 's1');
     assert.equal(ctx.window.activePtyIds.has('s1'), false);
   } finally { ctx.destroy(); }
 });
@@ -82,7 +82,7 @@ test('stopBeforeArchive: local session with no PTY calls nothing', async () => {
     const calls = installRecordingApi(ctx);
     const result = await ctx.window.stopBeforeArchive({ sessionId: 's1' });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob'], 'only the background-job check');
   } finally { ctx.destroy(); }
 });
 
@@ -306,7 +306,7 @@ test('per-session archive toggle: local session with an active PTY is stopped, t
     await ctx.document.getElementById('si-s1').querySelector('.session-archive-btn').onclick(new ctx.window.MouseEvent('click'));
 
     const methods = calls.map(c => c.method);
-    assert.deepEqual(methods, ['stopSession', 'archiveSession'], 'stop must precede archive');
+    assert.deepEqual(methods, ['bgAgentLiveJob', 'stopSession', 'archiveSession'], 'stop must precede archive');
   } finally { ctx.destroy(); }
 });
 
@@ -329,5 +329,50 @@ test('per-session archive toggle: a failed remote stop blocks the archive and fl
     assert.ok(flashed && flashed.text === 'Failed');
     assert.match(archiveBtn.title, /non-claude/, 'the error must be surfaced on the button title');
     assert.equal(r1.archived, 0, 'the session object itself must stay unarchived');
+  } finally { ctx.destroy(); }
+});
+
+test('stopBeforeArchive: a session a live background job runs is refused before anything is stopped', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const calls = installRecordingApi(ctx, { bgAgentLiveJob: () => Promise.resolve({ known: true, job: { id: 'aaaaaaaa', state: 'working' } }) });
+    ctx.window.activePtyIds.add('s1');
+    const result = await ctx.window.stopBeforeArchive({ sessionId: 's1' });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /background job aaaaaaaa is still running this session/);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob'], 'the attach tab is not detached');
+    assert.equal(ctx.window.activePtyIds.has('s1'), true);
+  } finally { ctx.destroy(); }
+});
+
+test('stopBeforeArchive: an unknown background-job answer, or a failed check, is refused', async () => {
+  for (const impl of [() => Promise.resolve({ known: false, reason: 'cannot read jobs' }), () => Promise.reject(new Error('ipc down'))]) {
+    const ctx = setupSidebarDom();
+    try {
+      installRecordingApi(ctx, { bgAgentLiveJob: impl });
+      const result = await ctx.window.stopBeforeArchive({ sessionId: 's1' });
+      assert.equal(result.ok, false);
+      assert.match(result.error, /cannot tell whether a background job is running this session \((cannot read jobs|ipc down)\)/);
+    } finally { ctx.destroy(); }
+  }
+});
+
+test('project archive-all: a session a live background job runs keeps the whole folder from being archived', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = { projectPath: '/home/dev/proj', sessions: [localSession('bg1'), localSession('plain1')] };
+    const calls = installRecordingApi(ctx, {
+      bgAgentLiveJob: (id) => Promise.resolve(id === 'bg1' ? { known: true, job: { id: 'aaaaaaaa', state: 'blocked' } } : { known: true, job: null }),
+    });
+    ctx.window.cachedAllProjects = [project];
+    ctx.window.flashButtonText = () => {};
+    ctx.sidebar.renderProjects([project], true);
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
+    assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [], 'no session is archived');
+    assert.deepEqual(calls.filter(c => c.method === 'archiveProject'), [], 'nor the folder');
+    const failedBtn = ctx.document.getElementById('si-bg1').querySelector('.session-archive-btn');
+    assert.match(failedBtn.title, /background job aaaaaaaa/);
   } finally { ctx.destroy(); }
 });

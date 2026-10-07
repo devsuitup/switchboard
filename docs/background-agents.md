@@ -131,8 +131,11 @@ cannot start a background agent: the daemon starts the agent itself, outside
 the sandbox and without the pre-launch command. The dialog says so and Start
 stays disabled; start a session in that project instead.
 
-A session that a background job is still running, or that is live in another
-process, cannot be deleted from the sidebar: stop it first.
+A session that a background job is still running cannot be archived or
+deleted from the sidebar, nor can a folder that holds one: stop the job from
+the Agents view first. A session live in another process cannot be deleted
+either. When Switchboard cannot tell, for example because `~/.claude/jobs`
+cannot be read, it refuses and says why.
 
 ## When the daemon does not answer
 

@@ -289,6 +289,7 @@ function liveJobCheck(sessionId) {
     return { known: true, job: cached ? { id: cached.id, state: cached.state } : null };
   }
   let unknown = null;
+  const read = new Set();
   for (const id of names) {
     if (!JOB_ID_RE.test(id)) continue;
     let parsed;
@@ -296,6 +297,7 @@ function liveJobCheck(sessionId) {
       if (!(err && err.code === 'ENOENT')) unknown = unknown || `cannot read job ${id}`;
       continue;
     }
+    read.add(id);
     if (!parsed) { unknown = unknown || `job ${id} has an unreadable state`; continue; }
     if (!parsed.state) { unknown = unknown || `job ${id} is in a state this version does not know`; continue; }
     if (!isLiveJobState(parsed.state)) continue;
@@ -303,6 +305,8 @@ function liveJobCheck(sessionId) {
     if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
     if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
   }
+  const cached = roster.find(e => e.kind === 'background' && !read.has(e.id) && isLiveJobState(e.state) && sameSession(e.sessionId));
+  if (cached) return { known: true, job: { id: cached.id, state: cached.state } };
   return unknown ? { known: false, reason: unknown } : { known: true, job: null };
 }
 

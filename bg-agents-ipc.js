@@ -19,6 +19,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log }) {
   });
   ipcMain.handle('bg-agent-verb', (_event, verb, id) => bgAgents.runVerb(verb, id));
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
+  ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));
   subscribe();
 }
 

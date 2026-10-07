@@ -57,7 +57,8 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    terminal (by id or `realSessionId`), by a live job (`liveJobCheck`: the
    job files, read directly so it works before the view was ever opened; the
    roster only supplies a session id a file lacks, or answers when `jobs/`
-   does not exist), or by another process
+   does not exist or a listed job's `state.json` is missing), or by another
+   process
    (`cliSessionState.liveElsewhereChecked`). It also refuses when it cannot
    tell: an unreadable jobs or descriptor directory, an unreadable state, a
    state outside `JOB_STATES`, or a live job whose state names no session.
@@ -389,9 +390,10 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 ## Known limits
 
-- Archiving a folder (#482) never stops a daemon job. An attach tab open on
-  one is detached by `stopBeforeArchive`, the job keeps running, its session
-  is archived with the folder and stays listed in the Agents view.
+- Archiving or deleting a session that a live daemon job runs is refused by
+  `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
+  failing closed) before anything is detached; a folder archive (#482) that
+  holds one archives nothing. Stop the job from the Agents view first.
 - A live job keeps the sidebar's Fork button: a fork reads the transcript and
   starts a new session, it never resumes the job.
 - A global WSL shell profile runs `claude` inside WSL, whose daemon and

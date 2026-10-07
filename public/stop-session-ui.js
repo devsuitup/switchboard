@@ -23,6 +23,18 @@ function isRemoteSessionAlive(session) {
   return !!session.remoteDescriptorSeen;
 }
 
+// see .ai/contexts/bg-agents.md ("Invariants")
+async function liveBackgroundJobRefusal(sessionId) {
+  if (!window.api || typeof window.api.bgAgentLiveJob !== 'function') return null;
+  let check;
+  try { check = await window.api.bgAgentLiveJob(sessionId); } catch (err) {
+    return `cannot tell whether a background job is running this session (${(err && err.message) || 'unknown error'})`;
+  }
+  if (check && check.known === false) return `cannot tell whether a background job is running this session (${check.reason || 'unknown'})`;
+  if (check && check.job) return `background job ${check.job.id} is still running this session — stop it from the Agents view first`;
+  return null;
+}
+
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
 async function stopBeforeArchive(session) {
   if (!session) return { ok: true };
@@ -36,6 +48,8 @@ async function stopBeforeArchive(session) {
     if (typeof applyRemoteStopped === 'function') applyRemoteStopped(session.sessionId);
     return { ok: true };
   }
+  const refusal = await liveBackgroundJobRefusal(session.sessionId);
+  if (refusal) return { ok: false, error: refusal };
   if (typeof activePtyIds === 'undefined' || !activePtyIds.has(session.sessionId)) return { ok: true };
   const result = await window.api.stopSession(session.sessionId);
   if (result && result.ok === false) {
