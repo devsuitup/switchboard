@@ -59,6 +59,8 @@ function boot(dir, activeSessions, opts = {}) {
     log: silentLog,
     isProcessAlive: opts.isProcessAlive || (() => true),
     now: opts.now,
+    readProcStart: opts.readProcStart,
+    readParentPid: opts.readParentPid,
     onIdle: (sessionId, session) => rescans.push({ sessionId, session }),
   });
   const attached = cliSessionState.ensureWatching();
@@ -468,7 +470,7 @@ test('liveElsewhere reports the descriptor kind and jobId, so a bg session can b
   const dir = mkTmp();
   try {
     writeState(dir, 4242, { status: 'idle', kind: 'bg', jobId: 'bc3fd129' });
-    boot(dir, new Map());
+    boot(dir, new Map(), { readProcStart: () => '111', readParentPid: () => 1 });
     const live = await cliSessionState.liveElsewhere('sess-1', () => false, () => []);
     assert.equal(live.pid, 4242);
     assert.equal(live.kind, 'bg');
