@@ -243,7 +243,8 @@ function refreshFolder(folder, opts = {}) {
     }
 
     // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-    if (cachedEntry && !isSdkEntrypoint(cachedEntry.entrypoint)) {
+    const rereadSdk = cachedEntry && isSdkEntrypoint(cachedEntry.entrypoint) && stat.size <= SDK_FULL_REREAD_MAX_BYTES;
+    if (cachedEntry && !rereadSdk) {
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
       if (h) {
@@ -428,6 +429,8 @@ function isProjectHidden(hiddenProjects, alias, projectPath) {
   if (hiddenProjects.has(projectPath)) return true;
   return alias !== null && hiddenProjects.has(joinFolderKey(alias, projectPath));
 }
+
+const SDK_FULL_REREAD_MAX_BYTES = 2 * 1024 * 1024;
 
 function isSdkEntrypoint(entrypoint) {
   return typeof entrypoint === 'string' && entrypoint.startsWith('sdk-');
