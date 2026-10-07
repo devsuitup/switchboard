@@ -165,6 +165,7 @@ let sessionOpenedOutsideRestore = false;
 const skippedWorkingSetEntries = new Map();
 let restoreSavedIndex = new Map();
 let restoreAwaitingConsent = [];
+const restoreInFlight = new Map();
 
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
@@ -200,7 +201,7 @@ function persistWorkingSet() {
 
 // see .ai/contexts/session-cache.md ("Working-set restore: retry until indexing is done")
 function pendingRestoreEntries() {
-  const pending = [...restoreAwaitingConsent];
+  const pending = [...restoreAwaitingConsent, ...restoreInFlight.values()];
   if (restorePlanner && !restorePlanner.isSettled()) pending.push(...restorePlanner.pending());
   return pending.map(item => ({
     item,
@@ -219,6 +220,7 @@ function schedulePersistWorkingSet() {
 
 async function runRestore(list) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
+  for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
   const skippedNow = [];
   for (const [position, item] of list.entries()) {
@@ -228,7 +230,12 @@ async function runRestore(list) {
     // Resume with the project's current "new session" defaults, exactly like a
     // manual session relaunch — not options frozen from a previous launch.
     const live = liveById[item.sessionId] || null;
-    const opened = await openSession(s, undefined, { automatic: true, live });
+    let opened;
+    try {
+      opened = await openSession(s, undefined, { automatic: true, live });
+    } finally {
+      restoreInFlight.delete(item.sessionId);
+    }
     if (opened === false) {
       const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
       skippedWorkingSetEntries.set(item.sessionId, { item, index });

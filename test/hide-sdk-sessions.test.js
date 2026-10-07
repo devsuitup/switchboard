@@ -281,6 +281,14 @@ test('readSessionEntrypoint reads the head, and the tail of a large SDK transcri
       ...Array(700).fill(filler),
     ]);
     assert.equal(readSessionEntrypoint(earlyTurn), 'cli');
+    const middleTurn = write(tmp, 'middle', [
+      user('review', { entrypoint: 'sdk-py' }),
+      ...Array(350).fill(filler),
+      user('typed in the middle', { entrypoint: 'cli' }),
+      ...Array(350).fill(filler),
+    ]);
+    assert.equal(readSessionEntrypoint(middleTurn), 'sdk-py', 'the live path samples the head and the tail only');
+    assert.equal(readSessionEntrypoint(middleTurn, { full: true }), 'cli');
     const longPrompt = write(tmp, 'long-prompt', [
       { type: 'queue-operation', operation: 'enqueue', content: 'é'.repeat(300 * 1024) },
       { type: 'queue-operation', operation: 'dequeue' },
@@ -354,4 +362,26 @@ test('adding the entrypoint column keeps the cached sessions', () => {
   } finally {
     cleanup(dir);
   }
+});
+
+test('both paths that make a session active call revealIfSdkSession right after registering it', () => {
+  const vm = require('node:vm');
+  const { extractFunction } = require('./app-source');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+
+  const activeSessions = new Map();
+  const revealed = [];
+  const context = vm.createContext({
+    activeSessions,
+    mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
+    wireSessionPty() {},
+    revealIfSdkSession: (id) => revealed.push({ id, active: activeSessions.has(id) }),
+  });
+  vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);
+  vm.runInContext(`registerRemoteAttachSession('remote-sdk', { alias: 'h', projectPath: '/p', cwd: '/p', ptyProcess: {}, remoteResizeAllowed: false })`, context);
+  assert.deepEqual(revealed, [{ id: 'remote-sdk', active: true }]);
+
+  const start = main.indexOf("ipcMain.handle('open-terminal'");
+  const openTerminal = main.slice(start, main.indexOf('\n});', start));
+  assert.match(openTerminal, /activeSessions\.set\(sessionId, session\);\n\s*if \(!isPlainTerminal\) revealIfSdkSession\(sessionId\);/);
 });

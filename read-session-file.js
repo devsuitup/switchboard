@@ -649,7 +649,7 @@ function readFirstUserEntrypoint(fd, size) {
   return firstUserEntrypointIn([pending + decoder.end()]);
 }
 
-function readSessionEntrypoint(filePath) {
+function readSessionEntrypoint(filePath, { full = false } = {}) {
   let fd;
   try {
     fd = fs.openSync(filePath, 'r');
@@ -657,7 +657,7 @@ function readSessionEntrypoint(filePath) {
     const first = readFirstUserEntrypoint(fd, size);
     if (first === undefined) return null;
     if (!isSdkEntrypoint(first)) return first;
-    if (size <= SDK_FULL_SCAN_MAX_BYTES) return hasTerminalTurn(readTextRange(fd, 0, size)) ? 'cli' : first;
+    if (full || size <= SDK_FULL_SCAN_MAX_BYTES) return hasTerminalTurn(readTextRange(fd, 0, size)) ? 'cli' : first;
     const head = readTextRange(fd, 0, SDK_TAIL_SCAN_BYTES);
     const tail = readTextRange(fd, size - SDK_TAIL_SCAN_BYTES, SDK_TAIL_SCAN_BYTES);
     return hasTerminalTurn(head) || hasTerminalTurn(tail) ? 'cli' : first;

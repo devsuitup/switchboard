@@ -454,7 +454,7 @@ function backfillEntrypoints() {
         const row = rows[next];
         const dir = resolveFolderDir(row.folder);
         if (!dir) continue;
-        const entrypoint = readSessionEntrypoint(resolveJsonlPath(dir, { ...row, folder: '.' }));
+        const entrypoint = readSessionEntrypoint(resolveJsonlPath(dir, { ...row, folder: '.' }), { full: true });
         if (entrypoint === null) continue;
         if (isSdkEntrypoint(entrypoint)) sdkFound = true;
         pairs.push({ sessionId: row.sessionId, entrypoint });

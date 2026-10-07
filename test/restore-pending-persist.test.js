@@ -28,26 +28,44 @@ function setup() {
   vm.runInContext(PLAN_SRC, ctx);
   vm.runInContext(`
     var openSessions = new Map([['opened', { session: { projectPath: '/p' }, closed: false }]]);
+    var sessionMap = new Map();
     var activeSessionId = 'opened';
     var _persistChain = Promise.resolve();
+    var RESTORE_STAGGER_MS = 0;
     var restorePlanner = createRestorePlanner({ savedSet: ${JSON.stringify(SAVED)} });
+    var liveCheckRelease = [];
+    function liveElsewhereMany() { return new Promise(resolve => liveCheckRelease.push(() => resolve({}))); }
+    async function openSession(s) {
+      openSessions.set(s.sessionId, { session: { projectPath: s.projectPath }, closed: false });
+      return true;
+    }
+    function showLiveElsewhereNotice() {}
+    function showSession() {}
   `, ctx);
   const fns = loadAppFunctions(ctx, {
-    functions: ['persistWorkingSet', 'pendingRestoreEntries'],
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent'],
+    functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore'],
+    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight'],
   });
   vm.runInContext(`restoreSavedIndex = new Map(${JSON.stringify(SAVED.map((item, i) => [item.sessionId, i]))});`, ctx);
-  return { dom, ctx, settings, ...fns };
+  const stored = () => settings.global.openWorkingSet.map(i => i.sessionId);
+  const releaseLiveChecks = () => vm.runInContext('liveCheckRelease.splice(0).forEach(release => release());', ctx);
+  return { dom, ctx, stored, releaseLiveChecks, ...fns };
+}
+
+function dispatchToRestore(h) {
+  vm.runInContext(`sessionMap.set('opened', {}); sessionMap.set('sdk-unindexed', { sessionId: 'sdk-unindexed', projectPath: '/p' });`, h.ctx);
+  const plan = vm.runInContext('restorePlanner.tick({ sessionMap, openSessions, indexingDone: false })', h.ctx);
+  assert.equal(plan.action, 'restore');
+  return plan.candidates;
 }
 
 test('a persist during a cold restore keeps the saved entries not indexed yet', async () => {
   const h = setup();
   vm.runInContext(`restorePlanner.tick({ sessionMap: new Map([['opened', {}]]), openSessions, indexingDone: false });`, h.ctx);
   await h.persistWorkingSet();
-  assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['opened', 'sdk-unindexed']);
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed']);
   await h.persistWorkingSet();
-  assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['opened', 'sdk-unindexed'],
-    'a second persist keeps it too');
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed'], 'a second persist keeps it too');
   h.dom.window.close();
 });
 
@@ -55,10 +73,36 @@ test('entries offered by the restore toast survive a persist until answered', as
   const h = setup();
   vm.runInContext(`restorePlanner.dismiss(); restoreAwaitingConsent = [${JSON.stringify(SAVED[1])}];`, h.ctx);
   await h.persistWorkingSet();
-  assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['opened', 'sdk-unindexed']);
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed']);
   vm.runInContext('restoreAwaitingConsent = [];', h.ctx);
   await h.persistWorkingSet();
-  assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['opened'],
-    'once dismissed, the entry is dropped as before');
+  assert.deepEqual(h.stored(), ['opened'], 'once dismissed, the entry is dropped as before');
+  h.dom.window.close();
+});
+
+test('a persist while the restore checks the candidates keeps them, and they are opened after', async () => {
+  const h = setup();
+  const restoring = h.runRestore(dispatchToRestore(h));
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed'], 'dispatched to runRestore, not yet opened or skipped');
+  h.releaseLiveChecks();
+  await restoring;
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed']);
+  assert.ok(vm.runInContext(`openSessions.has('sdk-unindexed') && restoreInFlight.size === 0`, h.ctx));
+  h.dom.window.close();
+});
+
+test('two overlapping restores keep the candidate stored until one of them opens it', async () => {
+  const h = setup();
+  const candidates = dispatchToRestore(h);
+  const first = h.runRestore(candidates);
+  const second = h.runRestore(candidates);
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed']);
+  h.releaseLiveChecks();
+  await Promise.all([first, second]);
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened', 'sdk-unindexed']);
   h.dom.window.close();
 });
