@@ -690,14 +690,15 @@ function showAddProjectDialog() {
 // see .ai/contexts/bg-agents.md
 async function showDispatchAgentDialog(project) {
   const projects = (typeof cachedAllProjects !== 'undefined' ? cachedAllProjects : [])
-    .map(p => p && p.projectPath).filter(Boolean);
-  const requested = project && project.projectPath;
+    .filter(p => p && p.projectPath && !p.remoteAlias).map(p => p.projectPath);
+  const requested = project && !project.remoteAlias && project.projectPath;
   if (requested && !projects.includes(requested)) projects.unshift(requested);
   const defaultPath = requested || projects[0] || '';
-  let effective = {};
-  if (defaultPath) {
-    try { effective = (await window.api.getEffectiveSettings(defaultPath)) || {}; } catch { effective = {}; }
+  async function effectiveFor(projectPath) {
+    if (!projectPath) return {};
+    try { return (await window.api.getEffectiveSettings(projectPath)) || {}; } catch { return {}; }
   }
+  let effective = await effectiveFor(defaultPath);
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -781,12 +782,37 @@ async function showDispatchAgentDialog(project) {
     if (p === defaultPath) opt.selected = true;
     projectSelect.appendChild(opt);
   }
-  dialog.querySelector('#dad-add-dirs').value = effective.addDirs || SETTING_DEFAULTS.addDirs || '';
+  const modeGrid = dialog.querySelector('#dad-mode-grid');
+  const errorEl = dialog.querySelector('#dad-error');
+  const startBtn = dialog.querySelector('.new-session-start-btn');
+  let refusal = null;
+
+  function applyEffective() {
+    selectedMode = effective.permissionMode || null;
+    dangerousSkip = !!effective.dangerouslySkipPermissions;
+    modeGrid.innerHTML = renderModeGrid();
+    dialog.querySelector('#dad-add-dirs').value = effective.addDirs || SETTING_DEFAULTS.addDirs || '';
+    if (effective.sandbox) refusal = 'This project runs its sessions sandboxed; a background agent would run outside the sandbox.';
+    else if (typeof effective.preLaunchCmd === 'string' && effective.preLaunchCmd.trim()) refusal = 'This project has a pre-launch command, which a background agent would not run.';
+    else refusal = null;
+    errorEl.textContent = refusal || '';
+    startBtn.disabled = !!refusal;
+  }
+  applyEffective();
+
+  let projectToken = 0;
+  projectSelect.addEventListener('change', async () => {
+    const token = ++projectToken;
+    startBtn.disabled = true;
+    const next = await effectiveFor(projectSelect.value);
+    if (token !== projectToken) return;
+    effective = next;
+    applyEffective();
+  });
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
-  const modeGrid = dialog.querySelector('#dad-mode-grid');
   modeGrid.addEventListener('click', (e) => {
     const btn = e.target.closest('.permission-option');
     if (!btn) return;
@@ -801,8 +827,6 @@ async function showDispatchAgentDialog(project) {
     modeGrid.innerHTML = renderModeGrid();
   });
 
-  const errorEl = dialog.querySelector('#dad-error');
-  const startBtn = dialog.querySelector('.new-session-start-btn');
   let starting = false;
 
   function close() {
@@ -811,7 +835,7 @@ async function showDispatchAgentDialog(project) {
   }
 
   async function start() {
-    if (starting) return;
+    if (starting || refusal || startBtn.disabled) return;
     const prompt = dialog.querySelector('#dad-prompt').value.trim();
     if (!prompt) { errorEl.textContent = 'A prompt is required.'; return; }
     const fields = {

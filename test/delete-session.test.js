@@ -34,6 +34,17 @@ test('delete-session: refuses while the session still has a live PTY', () => {
 
 
 
+test('delete-session: refuses a session that a daemon job or another process is still running', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('delete-session'");
+  const body = main.slice(start, main.indexOf('\n});', start));
+  const guard = body.indexOf('bgAgents.liveJobForSession(id)');
+  assert.ok(guard > 0, 'a live background job must be refused');
+  assert.match(body, /cliSessionState\.liveElsewhere\(id, sessionHasPty, ptyPids\)/,
+    'a session live in another process must be refused');
+  assert.ok(guard < body.indexOf('resolveDeletionTargets('), 'the guard runs before anything is resolved or removed');
+});
+
 test('delete-session: clears the caches so the row does not reappear', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   const start = main.indexOf("ipcMain.handle('delete-session'");

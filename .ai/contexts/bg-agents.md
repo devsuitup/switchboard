@@ -9,8 +9,8 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 | File | Role |
 |---|---|
-| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
-| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
+| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isLiveJobState`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
+| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobForSession`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `bg-agents-ipc.js` | `get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
@@ -45,6 +45,15 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 7. The attach options are exactly `{ type: 'attach', jobId, cwd }`. Never
    `sandbox`, `preLaunchCmd` or MCP emulation: the attach branch of
    `open-terminal` skips them, and the client only talks to the daemon.
+8. Dispatch is refused in a project whose effective settings ask for a
+   sandbox or a pre-launch command (`dispatchRefusal`, fed by main's
+   `dispatchSettings(cwd)`): the daemon starts the worker, so neither could
+   apply, and running it unconfined without a word is the outcome to avoid.
+   The dialog re-reads the effective settings on every project change and
+   shows the same refusal; remote projects are not offered.
+9. `delete-session` refuses a session that `liveJobForSession` (a `working`
+   or `blocked` roster entry) or `cliSessionState.liveElsewhere` reports, on
+   top of the app's own `activeSessions` check.
 
 ## Job states
 

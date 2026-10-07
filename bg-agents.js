@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
+  dispatchRefusal, isLiveJobState,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
 
@@ -26,6 +27,7 @@ let cliSessionState = null;
 let makeIsOwnPid = () => () => false;
 let isAttachedHere = () => false;
 let resolveRoots = resolveProjectRoots;
+let dispatchSettings = () => ({});
 const rootCache = new Map();
 const rootPending = new Set();
 const rootQueue = [];
@@ -53,6 +55,7 @@ function init(ctx) {
   makeIsOwnPid = ctx.makeIsOwnPid || (() => () => false);
   isAttachedHere = ctx.isAttachedHere || (() => false);
   resolveRoots = ctx.resolveProjectRoots || resolveProjectRoots;
+  dispatchSettings = ctx.dispatchSettings || (() => ({}));
 }
 
 function onChange(listener) {
@@ -249,7 +252,7 @@ async function runVerb(verb, id) {
   if (!VERBS.has(verb)) return { ok: false, error: `unknown verb: ${String(verb)}` };
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
   const live = roster.find(e => e.kind === 'background' && e.id === id);
-  if (verb !== 'stop' && live && (live.state === 'working' || live.state === 'blocked')) {
+  if (verb !== 'stop' && live && isLiveJobState(live.state)) {
     return { ok: false, error: `cannot ${verb} a ${live.state} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
@@ -263,6 +266,8 @@ async function dispatch(fields) {
   const built = dispatchArgs(fields);
   if (!built.ok) return { ok: false, error: built.error };
   if (!fs.existsSync(built.cwd)) return { ok: false, error: `project directory no longer exists: ${built.cwd}` };
+  const refusal = dispatchRefusal(dispatchSettings(built.cwd) || {});
+  if (refusal) return { ok: false, error: refusal };
   const result = await run(built.args, { cwd: built.cwd, timeout: VERB_TIMEOUT_MS });
   if (result.code !== 0) {
     return { ok: false, error: String(result.stderr).trim() || `claude --bg exited with ${result.code}` };
@@ -272,7 +277,12 @@ async function dispatch(fields) {
   return { ok: true, id };
 }
 
+function liveJobForSession(sessionId) {
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+  return roster.find(e => e.kind === 'background' && e.sessionId === sessionId && isLiveJobState(e.state)) || null;
+}
+
 module.exports = {
-  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch,
+  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobForSession,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

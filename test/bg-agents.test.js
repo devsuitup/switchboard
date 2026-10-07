@@ -61,10 +61,10 @@ function fakeSessionState(descriptors = []) {
   };
 }
 
-function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots = async () => null } = {}) {
+function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots = async () => null, dispatchSettings } = {}) {
   bgAgents.init({
     jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
-    makeIsOwnPid: () => () => false, isAttachedHere: attached, resolveProjectRoots,
+    makeIsOwnPid: () => () => false, isAttachedHere: attached, resolveProjectRoots, dispatchSettings,
   });
   return { cli, sessionState };
 }
@@ -326,6 +326,43 @@ for (const liveState of ['working', 'blocked']) {
     } finally { rmTmp(dir); }
   });
 }
+
+test('dispatch is refused, before any claude call, in a project that is sandboxed or has a pre-launch command', async () => {
+  const dir = mkTmp();
+  try {
+    const seen = [];
+    let settings = { sandbox: true };
+    const { cli } = boot(dir, { dispatchSettings: (cwd) => { seen.push(cwd); return settings; } });
+    const sandboxed = await bgAgents.dispatch({ prompt: 'hello', cwd: dir });
+    assert.equal(sandboxed.ok, false);
+    assert.match(sandboxed.error, /sandbox/);
+    settings = { sandbox: false, preLaunchCmd: 'aws-vault exec p --' };
+    const preLaunch = await bgAgents.dispatch({ prompt: 'hello', cwd: dir });
+    assert.equal(preLaunch.ok, false);
+    assert.match(preLaunch.error, /pre-launch command/);
+    assert.deepEqual(seen, [dir, dir], 'the settings are those of the dispatch directory');
+    assert.equal(cli.calls.filter(c => c.argv[0] === '--bg').length, 0);
+    settings = { sandbox: false, preLaunchCmd: '' };
+    assert.equal((await bgAgents.dispatch({ prompt: 'hello', cwd: dir })).ok, true);
+  } finally { rmTmp(dir); }
+});
+
+test('liveJobForSession finds a working or blocked job by its session id, never a finished one', async () => {
+  const dir = mkTmp();
+  try {
+    const list = [
+      { ...CLI_LIST[0], state: 'blocked', cwd: dir },
+      { ...CLI_LIST[1], cwd: dir },
+    ];
+    boot(dir, { cli: fakeCli({ list }) });
+    bgAgents.start();
+    await bgAgents.reconcile();
+    assert.equal(bgAgents.liveJobForSession('s-a').id, 'aaaaaaaa');
+    assert.equal(bgAgents.liveJobForSession('s-b'), null, 'a done job is not live');
+    assert.equal(bgAgents.liveJobForSession('s-zzz'), null);
+    assert.equal(bgAgents.liveJobForSession(''), null);
+  } finally { rmTmp(dir); }
+});
 
 test('roster entries carry projectRoot and worktreeRoot: the pattern or the cwd at once, the resolved roots after a change event', async () => {
   const dir = mkTmp();

@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE, stripShellNoise,
+  dispatchRefusal, isLiveJobState,
 } = require('../bg-agents-roster');
 
 const STATE = JSON.stringify({
@@ -143,6 +144,18 @@ test('dispatchArgs refuses an empty prompt, a missing cwd, and a prompt that loo
   const flag = dispatchArgs({ prompt: '--help', cwd: '/p' });
   assert.equal(flag.ok, false);
   assert.match(flag.error, /cannot start with/);
+});
+
+test('dispatchRefusal refuses a sandboxed project and one with a pre-launch command, and lets the rest through', () => {
+  assert.match(dispatchRefusal({ sandbox: true }), /sandbox/);
+  assert.match(dispatchRefusal({ sandbox: false, preLaunchCmd: 'aws-vault exec p --' }), /pre-launch command/);
+  assert.equal(dispatchRefusal({ sandbox: false, preLaunchCmd: '   ' }), null);
+  assert.equal(dispatchRefusal({}), null);
+  assert.equal(dispatchRefusal(), null);
+});
+
+test('isLiveJobState: working and blocked are live, the finished states are not', () => {
+  assert.deepEqual(['working', 'blocked', 'done', 'stopped', 'failed', null].map(isLiveJobState), [true, true, false, false, false, false]);
 });
 
 test('parseDispatchOutput finds an eight-hex id anywhere in the output, or returns null', () => {

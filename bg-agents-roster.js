@@ -209,12 +209,22 @@ function dispatchArgs(fields) {
   return { ok: true, args, cwd: f.cwd };
 }
 
+function isLiveJobState(state) {
+  return state === 'working' || state === 'blocked';
+}
+
+function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {
+  if (sandbox) return 'this project runs its sessions sandboxed, and a background agent runs under the claude daemon, outside the sandbox: start it as a session instead';
+  if (typeof preLaunchCmd === 'string' && preLaunchCmd.trim()) return 'this project has a pre-launch command, and the claude daemon does not run it for a background agent: start it as a session instead';
+  return null;
+}
+
 function parseDispatchOutput(stdout) {
   const m = JOB_ID_IN_TEXT_RE.exec(String(stdout || ''));
   return m ? m[1].toLowerCase() : null;
 }
 
 module.exports = {
-  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput,
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isLiveJobState,
   sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES,
 };

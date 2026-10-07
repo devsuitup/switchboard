@@ -16,7 +16,7 @@ function setup({ dispatchResult = { ok: true, id: 'cccccccc' }, projects, effect
   const calls = { dispatched: [], selected: [] };
   window.api = {
     platform: 'linux',
-    getEffectiveSettings: async () => effective,
+    getEffectiveSettings: async (projectPath) => (typeof effective === 'function' ? effective(projectPath) : effective),
     dispatchBgAgent: async (fields) => { calls.dispatched.push(fields); return dispatchResult; },
   };
   const g = {
@@ -147,4 +147,58 @@ test('the dialog scrolls inside the window when it is taller than the screen', a
   assert.ok(rule, 'a rule scoped to the dispatch dialog');
   assert.match(rule[1], /max-height:\s*calc\(100vh\s*-\s*\d+px\)/);
   assert.match(rule[1], /overflow-y:\s*auto/);
+});
+
+test('switching project re-reads its settings: mode, Dangerous Skip and directories follow the new project', async (t) => {
+  const byProject = {
+    '/w/one': { dangerouslySkipPermissions: true, addDirs: '/srv/one' },
+    '/w/two': { permissionMode: 'plan', dangerouslySkipPermissions: false, addDirs: '' },
+  };
+  const ctx = setup({ effective: (p) => byProject[p] }); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const d = ctx.document;
+  assert.ok(d.querySelector('.permission-option.dangerous').classList.contains('selected'));
+  const select = d.querySelector('#dad-project');
+  select.value = '/w/two';
+  select.dispatchEvent(new ctx.window.Event('change'));
+  await tick(); await tick();
+  assert.equal(d.querySelector('.permission-option.dangerous').classList.contains('selected'), false);
+  assert.ok(d.querySelector('.permission-option[data-mode="plan"]').classList.contains('selected'));
+  assert.equal(d.querySelector('#dad-add-dirs').value, '');
+  d.querySelector('#dad-prompt').value = 'go';
+  d.querySelector('.new-session-start-btn').click();
+  await tick(); await tick();
+  assert.equal(ctx.calls.dispatched[0].cwd, '/w/two');
+  assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
+  assert.equal(ctx.calls.dispatched[0].permissionMode, 'plan');
+  assert.equal(ctx.calls.dispatched[0].addDirs, '');
+});
+
+test('a sandboxed project, or one with a pre-launch command, says why and cannot be started', async (t) => {
+  const byProject = { '/w/one': { sandbox: true }, '/w/two': { preLaunchCmd: 'aws-vault exec p --' } };
+  const ctx = setup({ effective: (p) => byProject[p] }); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const d = ctx.document;
+  const startBtn = d.querySelector('.new-session-start-btn');
+  assert.match(d.querySelector('#dad-error').textContent, /sandbox/);
+  assert.equal(startBtn.disabled, true);
+  d.querySelector('#dad-prompt').value = 'go';
+  startBtn.click();
+  d.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick(); await tick();
+  assert.equal(ctx.calls.dispatched.length, 0);
+  const select = d.querySelector('#dad-project');
+  select.value = '/w/two';
+  select.dispatchEvent(new ctx.window.Event('change'));
+  await tick(); await tick();
+  assert.match(d.querySelector('#dad-error').textContent, /pre-launch command/);
+  assert.equal(startBtn.disabled, true);
+});
+
+test('remote projects are not offered, and a remote active project does not become a local destination', async (t) => {
+  const ctx = setup({ projects: [{ projectPath: '/w/one' }, { projectPath: '/srv/remote', remoteAlias: 'box' }] }); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog({ projectPath: '/srv/remote', remoteAlias: 'box' });
+  const select = ctx.document.querySelector('#dad-project');
+  assert.deepEqual([...select.options].map(o => o.value), ['/w/one']);
+  assert.equal(select.value, '/w/one');
 });

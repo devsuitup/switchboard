@@ -122,6 +122,18 @@ finishes, and a finished background session resumes like any other.
 runs `claude --bg …` in the project directory and selects the new row. A
 prompt starting with `-` is refused, since the CLI would read it as a flag.
 
+The permission mode, Dangerous Skip and additional directories are filled from
+the chosen project's settings, and filled again when you pick another project.
+Remote projects are not offered: the agent runs on this machine.
+
+A project that runs its sessions sandboxed, or that has a pre-launch command,
+cannot start a background agent: the daemon starts the agent itself, outside
+the sandbox and without the pre-launch command. The dialog says so and Start
+stays disabled; start a session in that project instead.
+
+A session that a background job is still running, or that is live in another
+process, cannot be deleted from the sidebar: stop it first.
+
 ## When the daemon does not answer
 
 The view reads two files the CLI writes for itself, `~/.claude/jobs/<id>/state.json`

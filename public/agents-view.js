@@ -508,7 +508,7 @@ function initAgentsView() {
     newBtn.addEventListener('click', () => {
       if (typeof showDispatchAgentDialog !== 'function') return;
       const active = activeSessionId ? sessionMap.get(activeSessionId) : null;
-      showDispatchAgentDialog(active && active.projectPath ? { projectPath: active.projectPath } : null);
+      showDispatchAgentDialog(active && active.projectPath ? { projectPath: active.projectPath, remoteAlias: active.remoteAlias } : null);
     });
   }
   const viewer = document.getElementById('agents-viewer');

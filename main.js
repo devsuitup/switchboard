@@ -2203,10 +2203,13 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   return { ok: true, transcripts: resolved.targets.length, subagents, running };
 });
 
-ipcMain.handle('delete-session', (_event, sessionId) => {
+ipcMain.handle('delete-session', async (_event, sessionId) => {
   const id = String(sessionId || '');
   if (activeSessions.has(id) && !activeSessions.get(id).exited) {
     return { ok: false, error: 'session is still running — close it first' };
+  }
+  if (bgAgents.liveJobForSession(id) || await cliSessionState.liveElsewhere(id, sessionHasPty, ptyPids)) {
+    return { ok: false, error: 'session is still running outside this window — stop it first' };
   }
 
   // Validation, symlink resolution and containment live in
@@ -3132,6 +3135,13 @@ bgAgents.init({
   runClaude: runClaudeCommand,
   cliSessionState,
   makeIsOwnPid: () => cliSessionState.ownProcessFilter(ptyPids),
+  dispatchSettings: (cwd) => {
+    const project = getSetting('project:' + path.resolve(cwd)) || {};
+    const global = getSetting('global') || {};
+    const preLaunchCmd = project.preLaunchCmd !== undefined ? project.preLaunchCmd
+      : (global.preLaunchCmd !== undefined ? global.preLaunchCmd : SETTING_DEFAULTS.preLaunchCmd);
+    return { sandbox: resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox), preLaunchCmd };
+  },
   isAttachedHere: (jobId) => {
     for (const session of activeSessions.values()) {
       if (session && !session.exited && session.isAttach && session.attachJobId === jobId) return true;
