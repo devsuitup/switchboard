@@ -61,6 +61,34 @@ function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isP
   }
 }
 
+const MARKDOWN_EXTENSIONS = new Set(['md', 'mdx', 'markdown']);
+
+function isMarkdownPath(filePath) {
+  return MARKDOWN_EXTENSIONS.has(String(filePath || '').split('.').pop().toLowerCase());
+}
+
+// see .ai/contexts/viewer-panel.md ("Invariants")
+function renderMarkdownPreview(el, text) {
+  el.innerHTML = DOMPurify.sanitize(window.marked.parse(text));
+}
+
+function setViewerPath(el, text) {
+  const value = String(text ?? '');
+  const display = value.replace(/[\\/]+$/, '') || value;
+  const split = Math.max(display.lastIndexOf('/'), display.lastIndexOf('\\')) + 1;
+  el.classList.add('viewer-header-path');
+  el.title = value;
+  const head = document.createElement('span');
+  head.className = 'viewer-path-head';
+  head.textContent = display.slice(0, split);
+  const tail = document.createElement('span');
+  tail.className = 'viewer-path-tail';
+  tail.textContent = display.slice(split);
+  el.replaceChildren(head, tail);
+}
+
+window.setViewerPath = setViewerPath;
+
 /**
  * Create a viewer toolbar.
  *
@@ -220,7 +248,7 @@ function createViewerToolbar(opts = {}) {
     deleteBtn,
 
     setTitle(text) { titleEl.textContent = text; },
-    setPath(text) { pathEl.textContent = text; },
+    setPath(text) { setViewerPath(pathEl, text); },
 
     setPreviewMode(active) {
       if (!previewBtn) return;

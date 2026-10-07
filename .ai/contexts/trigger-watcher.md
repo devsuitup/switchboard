@@ -8,6 +8,7 @@
 |---|---|---|
 | `trigger-watcher.js` | ~1050 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
 | `trigger-context.js` | ~35 | `createTriggerContext({ activeSessions, log })` — builds the whole `ctx` object out of `main.js`'s session map. |
+| `transcript-turn.js` | ~140 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `terminal-input.js` | ~20 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `main.js` (wiring) | 3 | `require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
@@ -53,9 +54,9 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
   local handle: `write` calls `ptyProcess.write`, `isAlive` is the same
   signal-0 probe (`process.kill(pid, 0)`, `EPERM` counts as alive) that used
   to live inline in `trigger-watcher.js` as `defaultIsPtyAlive`. `getPtyForSession`
-  uses it whenever `session.host == null`; a non-null host would instead take
-  `session.handle` as given — nothing currently sets that, since no remote
-  session type exists yet.
+  uses it whenever `session.host == null`; a non-null host takes
+  `session.handle` from the tmux-attach entry. Unattached remote targets use
+  the separate socket branch described below and do not construct a handle.
 - `trigger-watcher.js` deduces the same local handle itself
   (`resolveHandle(entry)`, wrapping `entry.ptyProcess`) whenever a ctx doesn't
   supply `entry.handle` — this keeps every ctx implementation that predates
@@ -68,6 +69,112 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
 Was a seam only: as of issue #221, `main.js`'s tmux-attach branch is the
 first production caller to set a non-null `host` and a real `session.handle`
 — see `.ai/contexts/session-cache.md`, "Remote hosts — tmux attach".
+
+### Remote socket targets (issue #437)
+
+Live local and tmux-attached entries retain precedence over `ctx.remote`, so
+terminal input still respects the composer. An exited pane returns no entry
+and may resolve to a remote socket. The optional context dependency is a
+getter: the global `remoteTriggers` setting defaults to false in
+`SETTING_DEFAULTS`, and is read at trigger time rather than startup. There is
+no UI. Remote reach is opt-in because a writer with access to the triggers
+directory may otherwise gain access to unattached sessions; the sandbox bind
+policy is owned separately.
+
+`findSessionAliases` filters the cached descriptors using the enabled-host
+predicate on every lookup. Each poll obtains a fresh remote dependency from
+the getter, reads the global settings once and builds one enabled-alias set.
+The context passes the predicate over that set to the indexer without reading
+the settings a second time or once per alias. Disabled hosts can remain in
+the cache, so a pull's
+listing alone is insufficient authorization. No aliases means not found;
+multiple aliases means a refusal naming them all. Neither alias nor descriptor,
+pid or socket path comes from a trigger field. The shared adapter validates
+the main-side path, refuses Windows pipes without reading key files, probes
+the pid and puts the session id in the NDJSON line. Prompt text is stdin only;
+these modules add no process-spawn site.
+
+Remote targets support a single command, `none`/`idle`, `timeout_ms` and
+`expectedCwd`. The cwd guard uses `path.posix.normalize`, is case-sensitive
+on all platforms, strips a trailing slash except at root, and refuses a missing
+cwd. Chains are refused because a complete turn can occur between pulls and
+no inter-step readiness proof is available. The session lock already acquired
+by the watcher is held for the entire idle wait and adapter call.
+
+Idle polling uses `pollLoop` and its unref'd timers. It never refreshes a host.
+The indexer stores its descriptor list before recording completed-pull `at`;
+therefore `at >= start` alone can describe a pre-start fetch. Remember the first
+post-start `at`, and accept status only from a later, strictly larger one.
+The second pull started after the first completed. It proves a fetch after
+the wait began, with a read up to a refresh cycle plus latency and one poll
+old; it does not prove idle now. It costs about two cycles, up to ten minutes
+at the default interval before latency; the 600000 ms cap can still expire.
+No settle window compares the host clock with local time. A change of resolved
+host during the wait is refused; pulls from different hosts cannot establish
+freshness for one target.
+
+Fresh idle permits the send; busy, waiting and shell keep waiting with distinct
+deadline reasons. Unknown or absent fresh status refuses immediately. Fewer
+than two post-start pulls gives `REASON_REMOTE_NO_FRESH_PULL`; shell uses
+`REASON_REMOTE_SHELL`. Missing descriptors or a disabled host end the wait as
+`session exited during wait`. Attachment is checked on each poll and immediately
+before writing, so a user who attaches during the wait prevents a socket send.
+`none` bounds descriptor age to twice `normalizeRefreshMs(remoteRefreshMs)`;
+null `at` or an older pull refuses with the last backoff error. A newly started
+id is not found until a pull lists it.
+
+The queue channel does not type into a composer: no politeness wait, dialog
+hold, Enter retry, busy edge, transcript fallback or post-send confirmation.
+Success records `channel: socket`, host and the pre-write descriptor's status,
+host `statusUpdatedAt` and local pull time, with absent status fields explicitly
+null. Submission is assumed only, with zero retries and no confirmed field.
+The adapter's definite failures map to not sent, a dead target maps to target
+process not running, and `maybeWritten` maps to send unconfirmed with written
+unknown. Callers must not treat an ambiguous write as a safe retry.
+
+One adapter is shared by Send and triggers. It reserves the existing dedupe key
+and a token from an alias/session bucket of 30 at 0.5 tokens/s before spawning.
+Definite failures refund tokens; timeouts and unknown exits retain them. A
+timeout retains dedupe; other non-zero exits preserve the earlier release
+behavior. Pruning also removes buckets whose elapsed refill makes them full
+and which have no pending send. Depleted buckets retain their rate history;
+pending sends retain the bucket referenced by their refund callback.
+The remote command check first refuses any command containing a Unicode
+format character (\p{Cf}), a default-ignorable code point
+(\p{Default_Ignorable_Code_Point}), U+2800 (braille blank), a variation selector
+(U+FE00–U+FE0F or U+E0100–U+E01EF), U+034F (combining grapheme joiner), or a
+tag-block character (U+E0000–U+E007F), anywhere in the string. This covers Hangul
+fillers, U+17B4/U+17B5, U+180B–U+180F and U+2065 too. `REASON_REMOTE_FORMAT` is
+`the command contains an invisible format character or blank that cannot be sent to a remote session; nothing was written`,
+with `error: not sent` and `submitted: no`, before prefix
+handling or idle waiting. The whole command is refused rather than stripped.
+This includes ZWJ (U+200D), so remote prompts containing joined emoji such as
+👩‍💻 are refused, as are emoji with variation selectors such as hearts,
+soft hyphens and right-to-left marks; plain emoji without these characters still
+pass. Local PTY and live tmux-attached delivery are unchanged. Whether the CLI strips
+these characters before parsing socket input remains UNVERIFIED; this guard
+does not depend on that behavior.
+
+For remaining commands, leading and trailing whitespace is trimmed for the
+prefix check without changing plain prompt text. A case-sensitive fixed
+allow-list accepts only `/compact` and `/clear`, sent from the constants,
+without arguments. First-non-whitespace `!` and `#` are refused before waiting,
+with `REASON_REMOTE_BASH` and `REASON_REMOTE_MEMORY`; unsupported `/` retains
+`REASON_REMOTE_SLASH`. Their fullwidth counterparts U+FF01, U+FF03 and U+FF0F
+use the same respective refusal reasons because NFKC folds them to the ASCII
+prefixes. The prompt itself is not normalized. `／compact` and `／clear` are
+refused because they are not exact allow-list constants.
+All four refusal strings are documented in
+`docs/automation.md`, "Remote trigger targets". Mid-prompt `!`/`#` remain
+text, as do their fullwidth counterparts. Their effect over the socket is
+UNVERIFIED, as is queuing during a permission dialog. L1-L7 require a real host
+and isolated running instance.
+
+Tests exercise the real file watcher with a fake descriptor source and the
+real context/indexer for host enablement. Polling tests keep a ref'd interval
+in `finally`-protected test scope for Node 20/22; production timers stay unref'd.
+U4 and U20 are guard-only tests. Mutation artifacts and commands are recorded
+in the local PR body.
 
 ## The submission contract
 
@@ -834,13 +941,11 @@ wired to `cliSessionState.getStatus` in `main.js`; `undefined` for a remote
 session, which has no local descriptor). No new watcher: it reuses the cache
 `cli-session-state.js` already keeps.
 
-- **Readiness.** A chain step that follows a `/compact` step first waits
+- **Readiness.** (Extended to every step, see the next section.) A chain step that follows a `/compact` step first waits
   (`waitForCliIdleAfter`) for `status: "idle"` with a `statusUpdatedAt` later
-  than the compact step's send time. Bounded by
-  `SWITCHBOARD_CLI_READY_WAIT_MS` (default 60 000 ms) and by the step's own
-  deadline; on expiry the step is written anyway, with the warning `CLI not
-  idle after /compact within N ms, writing chain step N anyway`. Its time is
-  counted in the step's and the chain's `waited_ms`.
+  than the compact step's Enter. Bounded by the step's own deadline; on
+  expiry the step is not written (see the next section). Its time is counted
+  in the step's and the chain's `waited_ms`.
 - **Proof of submission by edge.** When a descriptor with an integer
   `statusUpdatedAt` is available, a submission counts when the descriptor
   shows ANY status write (`busy`, `idle` or `waiting`) with a
@@ -884,6 +989,332 @@ named, not that the first Enter always lands.
 
 Tests: `test/trigger-descriptor-proof.test.js` (fake timers and a fake
 descriptor for the helpers; the real watcher for the chain wiring).
+
+### Readiness before every step, and the descriptor as busy-fall authority (issues #407, #360)
+
+Second field case (2026-10-02): step 0 of a `compact-now.sh` chain, with no
+`/compact` before it, landed in the composer and its Enter became a line
+break, while four background subagents had just been spawned (three still
+running). The #407 readiness wait only covered the step after a `/compact`;
+nothing waited before step 0.
+
+**The mechanism is NOT established.** The working hypothesis is that text
+written while the CLI is mid-turn has its Enter absorbed as a newline, but #360
+shows the opposite: a step written mid-turn was enqueued and submitted
+normally. What is known is only that the step was typed while the descriptor
+read `busy`. The rule below stops typing in that state; it does not prove that
+state was the cause.
+
+- **The wait runs before EVERY chain step**, step 0 included
+  (`waitForCliIdleAfter`, after the composer-free and liveness checks, so the
+  descriptor is read as close to the write as possible). Before a step that
+  follows `/compact` the idle must also be newer than the compact's Enter
+  (`enterAt` from `submitWithVerify`); before any other step any `idle` counts.
+  The idle must hold for the busy-fall settle window
+  (`SWITCHBOARD_BUSY_FALL_SETTLE_MS`, 300 ms) with an unchanged
+  `statusUpdatedAt`, so a `busy` that follows an `idle` within the window is
+  not mistaken for readiness.
+- **The wait is bounded by the step's own deadline only** (the per-step
+  `timeout_ms`, capped by the chain's). `SWITCHBOARD_CLI_READY_WAIT_MS` is gone.
+  A parent session keeps its descriptor `busy` for as long as a delegated
+  agent runs (`cli-session-state.md`), so a shorter bound would write into the
+  very state this rule exists for.
+- **Not idle at the deadline means not written, whatever the status**:
+  `busy`, `waiting` (a dialog is open) and any status this code does not know
+  (e.g. `shell`) are all not-idle and not-writable. The step fails: result
+  `ok: false`, `error` `not sent` (step 0) or `chain timeout` (later steps),
+  `submitted` the weakest of the chain so far, the step recorded with
+  `submitted: "no"`, and a `reason` naming the cause (dialog open, turn still
+  running, never idle). A dialog is reported when `waiting` was sampled
+  anywhere in the final settle window, not only on the last sample.
+- **A step typed but not confirmed, with the recovery Enter withheld** (the
+  descriptor reads `busy` or `waiting` and showed no reaction to our Enter)
+  stops the chain: `ok: false`, `error` `step not confirmed`, nothing more is
+  typed into that composer. The step's text may be sitting there. The
+  recovery Enter is also withheld when input of the user's own is pending in
+  the composer (`waitForComposerFree`), which stops the chain the same way.
+- **No usable descriptor at the FIRST read of the wait** (the wait owns this decision: there is no separate precheck, so a descriptor read once and lost at the next sample is "not idle", never the legacy path) (`getCliStatus` absent,
+  `undefined`, or a `statusUpdatedAt` that is not an integer): no wait, today's
+  behaviour (`available: false`). A descriptor lost AFTER it was read (the CLI
+  rewriting its file, a failed pid probe, a momentary bad timestamp) is not the
+  same: it may reappear, so the wait goes on, counted as not idle, until the
+  deadline, then fails like any not-idle case. Nothing is typed on the strength
+  of a descriptor that merely vanished.
+- **Never ready past the deadline, never written past it.** A settle that
+  completes at or after the deadline is a timeout, not readiness, and the
+  deadline is checked again immediately before the write (a step timeout of 0
+  or a settle of 0 included): the step fails with `not sent`/`chain timeout`
+  and the reason "the step deadline passed before it could be written".
+- **`waitForCliIdleAfter` return shape**: `{ ready, available, timedOut,
+  sessionExited, waited_ms, lastStatus, waitingSeen }`. `lastStatus` is the
+  status at the last sample; `waitingSeen` is true when `waiting` was sampled
+  within the last settle window before the end.
+- **Single triggers: see "Readiness before a single trigger" below.**
+- **Busy-fall authority (#360).** `waitForBusyFall` receives the Enter's
+  timestamp. A descriptor `idle` with `statusUpdatedAt >= enterAt`, held for the
+  settle window, ends the wait even when `_cliBusy` is stuck true. An idle
+  older than the Enter proves nothing (the Enter may have been absorbed) and
+  leaves the `_cliBusy` logic in charge, as it does when no usable descriptor
+  exists. For sessions with background agents the descriptor stays `busy`
+  until the last agent ends; the transcript fallback below covers that case.
+
+Tests: `test/trigger-every-step-readiness.test.js` (the real watcher with a
+fake descriptor, plus the wait helpers under mocked timers).
+
+### Transcript fallback while the descriptor stays busy (issue #360)
+
+Measured: the descriptor keeps `status: "busy"` while background agents
+(`run_in_background`) run, even when the prompt is free and the user can type,
+and `shell` while background shell jobs run. A chain then waited out its
+whole deadline after step 0 (issue comment of 2026-10-02: `steps_completed`
+0, `waited_ms` 599959). Maintainer decision (2026-10-03): when the descriptor
+says `busy` or `shell` but the transcript shows the turn is over, the prompt
+is treated as free.
+
+**Where it applies.** Chains only: the readiness wait before every step
+(`waitForCliIdleAfter`, 7th argument `{ transcriptAfterMs }`) and the
+busy-fall wait after a non-final step (`waitForBusyFall`). Single triggers do
+not pass the option and are unchanged. An `idle` descriptor never reaches the
+fallback: its own path decides, including an idle older than the `/compact`
+anchor, and the transcript is not even read. `waiting` (a dialog) never
+reaches it either.
+
+**All of these must hold** (`transcriptShowsTurnOver`):
+
+- The descriptor reads `busy` or `shell`.
+- No dialog: `waiting` was not sampled within the settle window
+  (`createDialogProbe`, the same detection as everywhere else).
+- The last main-thread message entry of the transcript closes a turn and
+  has a parseable `timestamp` (`transcript-turn.js`, `classifyTranscriptTail`).
+  Three entries close one: an `assistant` entry with `stop_reason` `end_turn`
+  or `stop_sequence`, followed by a main-thread `system` `turn_duration`
+  entry; a `user` entry whose string content is one `<local-command-stdout>`
+  block, start to end (the output of `/compact`, `/clear`, `/model`, …); a
+  `user` entry with `isCompactSummary: true` whose previous main-thread entry
+  is a `compact_boundary` with `compactMetadata.trigger` `manual` (an
+  automatic compaction happens inside a turn that goes on). Any other `user`
+  entry (a prompt, a meta prompt
+  such as a scheduled task or the `<local-command-caveat>`, a
+  `<command-name>` entry, a `tool_result`) means a turn is in progress, and so
+  does a `tool_use` stop. A slash command that expands into a prompt writes
+  its `<command-name>` entry and then a model turn, so it is closed only by
+  that turn's `end_turn`.
+  Entries with `isSidechain` are skipped. Bookkeeping entries (`system`,
+  `attachment`, `last-prompt`, `file-history-*`, …) are skipped. A
+  `queue-operation` after the closed turn counts: any `dequeue`, or more
+  `enqueue` than `remove`, means a queued prompt is about to run.
+- The closed turn is stamped at or after the anchor: the Enter of the step
+  just written (busy-fall), or the Enter of the previous step (readiness; no
+  anchor before step 0). A turn that closed before our Enter says nothing
+  about our step.
+- The transcript file has not changed for `SWITCHBOARD_TRANSCRIPT_QUIET_MS`
+  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). With `turn_duration`
+  required, the quiet window no longer decides when a turn ends; it lets the
+  entries written in the same burst (a queued prompt's `enqueue`/`dequeue`)
+  land before the tail is trusted.
+
+**Why `turn_duration`, measured.** An `end_turn` alone is not the end of a
+turn. Measured on the 19 real transcripts of this machine (2026-10-03, read
+only), over 4344 main-thread `end_turn` messages:
+
+- 4120 (94.8 %) are followed by a `turn_duration` before the next message
+  entry. The gap is p50 0.27 s, p90 2.9 s, p99 42.8 s, max 124 s; 404 gaps
+  (9.8 %) are 3 s or more, so a quiet window alone would have read those
+  turns as over while their Stop hook still ran.
+- The 224 others are all continued, never ended: 173 by a meta `user` entry,
+  24 by a `user` prompt, 17 by a `<task-notification>`, 5 by a synthetic
+  `stop_sequence` message 9 to 76 s later, 2 by a local command, and 3 end
+  the file (a session still running, or killed).
+- Where both are present (3695 times), `stop_hook_summary` always comes
+  before `turn_duration` (0 exceptions; `turn_duration` lands p50 16 ms, max
+  5.5 s after it): `turn_duration` is written after the Stop hook. 39
+  `end_turn` have a `stop_hook_summary` and no `turn_duration`; all 39 were
+  continued, so `stop_hook_summary` alone does not close.
+- `stop_sequence` is only the synthetic message (`model` `<synthetic>`, 39
+  entries): 19 are followed by a `turn_duration`, 20 are not. It closes on the
+  same condition as `end_turn`.
+- No `turn_duration` follows a `<local-command-stdout>` entry (0 of 95) or a
+  compaction summary (0 of 82), so those two keep the rule above, without
+  `turn_duration`. All 82 compactions of the corpus are `manual`.
+
+**What `/compact` leaves.** Measured on a real transcript (CLI of
+2026-10-03, two compactions), in file order once compaction ends: a `system`
+`compact_boundary`; the summary, a `user` entry with `isCompactSummary` and
+`isVisibleInTranscriptOnly`, stamped about 0.8 s before the boundary; the
+`<local-command-caveat>` (`isMeta`) and the `<command-name>/compact` entries,
+both stamped at the command's Enter; the `<local-command-stdout>` entry,
+stamped last; then `attachment` entries and bookkeeping. The stdout entry is
+the last message entry, so a `compact-now.sh` chain's step after `/compact`
+is released from the transcript while background agents hold the descriptor
+busy. The summary alone (read before the stdout lands) also closes, and the
+quiet window covers the gap. The test fixture copies this shape with
+synthetic text.
+
+**Proof of submission.** In edge mode a busy descriptor that does not change
+status writes no new `statusUpdatedAt`, so our Enter would never count as
+seen and the chain would stop on `step not confirmed`. For a chain step only
+(`submitWithVerify(…, { transcriptReaction: true })`; single triggers do not
+pass it), while the descriptor reads `busy` or `shell`, the step's own entry
+stamped at or after the Enter also counts as the CLI's reaction
+(`transcriptReactedSince`): a non-meta main-thread `user` entry with string
+content, or an `enqueue` `queue-operation`, whose text equals the step's
+command once trimmed (`promptMatches`). Two shapes are matched besides:
+
+- a slash command: content made only of `<command-message>`,
+  `<command-name>`, `<command-args>` and `<command-contents>` elements, whose
+  `<command-name>` element, wherever it sits, equals the command's first word.
+  Measured (2026-10-03, read only): of 116 main-thread entries holding a
+  `<command-name>`, the 111 command entries are made only of those elements,
+  99 with `<command-name>` first and 12 with `<command-message>` first (skills
+  and custom commands); the 5 others are compaction summaries quoting them;
+- a `!cmd` step: content that is one `<bash-input>` element whose text,
+  trimmed, equals the command without its `!` (23 of 23 such entries are one
+  whole element).
+
+Attachments, `system` entries, meta entries and other texts (another agent's
+notice) never confirm. The reader keeps the last 50 such entries of the tail
+(`prompts`). Each step records `confirm_source` (`descriptor` or
+`transcript`) when its submission was confirmed in edge mode.
+
+**A chain step written while the CLI stays busy.** The CLI writes the
+`<command-name>/compact` entry only when compaction ends, one to three
+minutes after the Enter although it is stamped at the Enter, and a descriptor
+held `busy` writes no new stamp. In 79 of 82 measured compactions a plain
+`user` entry `/compact` is also written at the Enter, which the 2 s verify
+window does confirm; in the other 3 it sees nothing, so
+an unconfirmed chain step whose recovery Enter was withheld is not a failure
+when the descriptor reads `busy` or `shell` and the session's transcript is
+readable: it is pending (`waitForPendingConfirmation`), up to the step's own
+deadline, and no Enter is written meanwhile. The step is confirmed when the
+descriptor reacts after the Enter (`confirm_source` `descriptor`), or when
+the step's own entry, stamped at or after the Enter, appears and the turn is
+closed after that entry under the rules above, quiet window included
+(`confirm_source` `transcript`). A turn closed before the step's own entry,
+or another turn with no own entry, does not count. The dialog check is not
+applied here: a `waiting` written after the Enter carries a new stamp, so the
+descriptor branch, checked first, confirms the step on it.
+
+Two limits, `error` `step not confirmed` and nothing more typed at either:
+
+- No own entry within `SWITCHBOARD_PENDING_OWN_ENTRY_MS` of the Enter
+  (default 30 s, `DEFAULT_PENDING_OWN_ENTRY_MS`): `reasonNoOwnEntry`. A
+  prompt or slash command shows at once, as a `user` entry or an `enqueue`,
+  so a swallowed Enter fails then instead of spending the chain's budget.
+- `/compact` is exempt: 3 of the 82 manual compactions measured wrote no
+  entry naming `/compact` before compaction ended (Enter to boundary: 0.5 s
+  to 332 s, median 129 s). It waits to the step deadline, as does any step
+  whose own entry has appeared and whose turn is not closed yet:
+  `REASON_UNCONFIRMED_BEFORE_DEADLINE`. A chain starting with `/compact`
+  under busy should set `timeout_ms` to 600 000. A dialog, a remote
+session or a missing transcript keep the immediate `step not confirmed`. Once
+confirmed, the step goes on as any other: for a non-final step the busy-fall
+wait reads the same closed turn and ends at once.
+
+**The result records the signal.** Each chain step carries `ready_source`
+(`descriptor` or `transcript`: what released the readiness wait before it;
+absent when no descriptor was available) and, for a non-final step,
+`idle_source` (`descriptor`, `transcript`, `busy_flag` for the `_cliBusy`
+level probe, `no_rise` when no turn was ever observed). A step ended from the
+transcript also logs one info line.
+
+**Reading the transcript.** `trigger-context.js` builds
+`ctx.getTranscriptTurn(sessionId)` when `main.js` passes `projectsDir`
+(`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
+key>.jsonl`, local sessions only (a remote session returns `null`). The reader
+stats the file and re-reads only when its mtime or size changed, the last
+256 KB, so a poll costs a `stat`. The cache holds one entry per path, so
+two chains on two sessions do not re-read each other's files. A chain
+evicts its session's entry when it ends, whatever the outcome
+(`ctx.forgetTranscriptTurn`, which remembers the path read for the session,
+so it works after the session left `activeSessions`). A missing file, a read error, or a tail
+with no message entry is never "closed".
+
+**Known limits.**
+
+- An `end_turn` with no `turn_duration` never reads closed: in the corpus,
+  3 of 4344 ended the file that way; a chain there waits for the descriptor.
+- An interrupted turn ends on a `user` entry and never reads closed.
+- A step whose text is pasted and stored differently by the CLI (a
+  `[Pasted text]` placeholder, for example) is not matched: its Enter is
+  confirmed by the descriptor or not at all. Not measured.
+- `popAll` queue operations (26 in the corpus) are not counted.
+- The anchors compare the CLI's transcript timestamps with this process's
+  clock; both are the same machine's clock.
+
+Tests: `test/trigger-transcript-fallback.test.js` (the classification on
+JSONL text, the reader on real files, the wait helpers under mocked timers,
+and the chain through the real watcher and the real trigger context over a
+real transcript file).
+
+### A blocked session tells its driver (issue #379)
+
+Every wait that can end a trigger on its deadline reports a dialog, not only
+the chain's readiness wait. `createDialogProbe(ctx, sessionId, windowMs)` is
+the one mechanism: `sample(now)` reads the descriptor through `readCliStatus`
+and remembers when `waiting` last read, `seen(now)` is true when that was
+within `windowMs` (the busy-fall settle window, as in `waitForCliIdleAfter`).
+
+- `waitForIdle` (single trigger wait, chain initial wait) and `waitForBusyFall`
+  (chain, after a step was written) return `waitingSeen` on a timeout.
+  `waitForIdle` reads the descriptor only while the session still reads busy,
+  so a session that is already idle costs no descriptor read (a test counts
+  the reads of the readiness wait).
+- Before a write, `reason` is `REASON_DIALOG_OPEN` ("nothing was written into
+  it"). After a write, `REASON_DIALOG_OPEN_AFTER_WRITE` says the step had been
+  written; `error` stays `chain timeout`. Without a dialog the reasons are
+  unchanged, and none is added to the busy-fall timeout.
+- What is written into the PTY, and when, is unchanged. The submit-verify
+  timeout (`submitWithVerify`) is not covered: it still reports a bare
+  `chain timeout`.
+
+Tests: `test/trigger-blocked-session.test.js`.
+
+### Readiness before a single trigger (issue #379)
+
+The two `wait` values keep their documented meaning; only the dialog is new
+for `none`.
+
+- **`wait: "idle"`**: the same `waitForCliIdleAfter` as a chain step (afterMs
+  `-Infinity`, the trigger's own deadline `timeout_ms`), after `waitForIdle`,
+  `waitForComposerFree` and the liveness re-check, right before
+  `submitWithVerify`. No parallel mechanism: the not-ready results map to the
+  chain reasons (`REASON_DIALOG_OPEN`, `REASON_CLI_BUSY`, `REASON_CLI_NOT_IDLE`)
+  plus `REASON_IDLE_UNSETTLED` when the last read was `idle` but it never held
+  long enough to settle (a fresh idle at the deadline, or one that kept
+  restarting), never "never reported idle" for an idle descriptor. `error` is
+  `not sent`, `submitted` `no`. A session whose descriptor is held `busy` by
+  background agents (#360, a CLI limit) fails at the deadline; `none` is the
+  value for it.
+- **Settle.** `waitForCliIdleAfter(…, trustIdleStamp)` is off by default, so
+  chains behave exactly as before: a stale idle read after a step whose Enter
+  drew no reaction must still pay the settle (the #407 family). The single path
+  passes `true`: an `idle` first read counts from its `statusUpdatedAt`, so one
+  older than the settle window is ready on that read (no flat +300 ms on every
+  trigger; a later new stamp still counts from when it was seen). The single path caps the settle at the time left to the
+  deadline, so a `timeout_ms` under the settle on an idle session writes.
+  Poll granularity is 100 ms, so a fresh idle with a very short deadline can
+  still end `REASON_IDLE_UNSETTLED`.
+- **`wait: "none"`** writes now, the CLI queues a prompt written while busy.
+  `waitForNoDialog(sessionId, ctx, deadline)` holds only while the descriptor
+  reads `waiting` (a descriptor lost after it read `waiting` keeps the hold),
+  with no settle once it stops, and fails `not sent` + `REASON_DIALOG_OPEN` at
+  the deadline. `busy`, `idle` or no descriptor write at once. This closes the
+  hole `waitForIdle` leaves: it samples the descriptor only while `_cliBusy` is
+  true, so a dialog shown while `_cliBusy` reads false was written into.
+- **Deadline.** Both paths refuse to write once `Date.now() >= commandDeadline`
+  (`REASON_DEADLINE_BEFORE_WRITE`), descriptor or not, as chains do.
+
+Typed input (`sendInput`, IPC `terminal-input`) is deliberately NOT held back.
+The channel is fire-and-forget (`ipcMain.on`, no reply to carry an error), is
+fed only by the renderer, and carries keystrokes, pastes, drops and the
+context-menu paste on the same call with no marker telling a person from a
+driver. A driver acting through the renderer (devtools, CDP) is the same call.
+Holding it on `waiting` would also block the keystrokes that answer the
+dialog. The only programmatic path that can be told apart is the trigger
+watcher, which is held above. `handleTerminalInput` has no descriptor access
+either (the descriptor is read through the trigger context).
+
+Tests: `test/trigger-single-readiness.test.js`.
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
@@ -1483,4 +1914,5 @@ observation layer.
 - If you rename `session.composerState` or stop feeding it from `terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
 - If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `terminal-input.js`.
 - If you rename `session.cwd` in `main.js`, update `getPtyForSession` in `trigger-context.js` — the target guard silently falls back to "indeterminate" (refuses every guarded trigger) rather than throwing, so this one fails quiet, not loud.
+- If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `getTranscriptTurn` in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).
 - Tests live in `test/trigger-watcher.test.js`.  They use `SWITCHBOARD_TRIGGERS_DIR` env override — do not hardcode paths there.

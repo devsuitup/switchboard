@@ -46,6 +46,29 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktree
 - **`get-projects` never awaits the cold-start scan.** `main.js`'s handler fires `populateCacheViaWorker()` without `await` when the cache is empty, returning whatever's cached right now (still non-empty for project *names* — `buildProjectsFromCache` lists on-disk directories synchronously even with zero indexed sessions). Progressive fill-in relies entirely on `notifyRendererProjectsChanged()` firing per folder. Don't reintroduce the `await` — it's what caused the multi-minute blocking "Loading…" on a large `~/.claude/projects/`.
 - **"Cache has rows" does not mean "initial scan finished".** The worker streams one DB write per folder, so killing the app mid-first-scan leaves `session_cache` partially populated. The authoritative signal is the `initial_scan_complete` settings key: written by `session-cache.js` only on the worker's final successful `done` message, backfilled once by migration v8 for pre-marker installs (their populated caches could only come from completed batch-write scans), cleared whenever the schema-reconciliation pass wipes the cache. `get-projects` treats "rows present but marker absent" as an interrupted scan: it resumes the background worker (safe — each folder message is delete-then-insert, so re-scanned folders never duplicate) and must NOT run the synchronous `reconcileCacheFromFilesystem()` sweep, which would re-parse every missing folder on the main thread. While the marker is absent, `buildProjectsFromCache`'s empty-dir fallback also skips `deriveProjectPath()` (per-folder readdir + 256 KB read) in favor of a zero-I/O best-effort decode of the folder name (`decodeProjectFolderBestEffort`), never persisted to `cache_meta`.
 
+## Transcript cwd trust (issue #385)
+
+A transcript's `cwd` is trusted for a filesystem decision only if it encodes back to the name of the folder holding the transcript: `verifiedTranscriptCwd(cwd, folderName)` in `encode-project-path.js` returns the resolved absolute cwd when `encodeProjectPath(path.resolve(cwd)) === folderName`, else `null`. The seed of the schedule registry uses the same function.
+
+The one exception is a recorded remap: `remap-project` (main process, `project-remap.js`) rewrites every transcript's cwd of the folder `enc(oldPath)` to `newPath` but cannot rename the folder, so it first records `folder -> newPath` in the `projectRemaps` setting, which only main writes and which survives a cache rebuild. `verifiedTranscriptCwd` also accepts a cwd equal to the value recorded for that folder, read through `setRemappedProjectReader` (set by `session-cache.js` `init`; the scan worker gets the map in `workerData.remaps`). No check on whether the directory exists: it would be circular.
+
+Why: a sandboxed session can write its own transcript folder `~/.claude/projects/<enc(P)>/` and the subtree of P, so it can forge a JSONL there whose `cwd` is `P/evil` and plant `P/evil/.claude/commands/schedule-x.md`. An unverified cwd became the sidebar project path, the resume/fork spawn directory, the sandbox's `SWITCHBOARD_SANDBOX_PROJECT_FOLDER`, the target of the schedule creator's `mkdir`, and a schedule-registry entry at the next launch, where a per-launch unsandboxed choice runs the planted schedule outside the sandbox. The sandbox cannot write any other encoded folder, so a cwd that encodes to the folder it sits in is one the session could not have chosen freely.
+
+Where it applies:
+
+| Consumer of a transcript cwd | Status |
+|---|---|
+| `deriveProjectPath` (sidebar project path, `session.projectPath`, `cache_meta`, `getKnownProjectPaths`, and the cold-start scan in `workers/scan-projects.js`) | Verified: a JSONL whose cwd does not verify is skipped, then the worktree collapse applies to the verified cwd; no verified JSONL gives `null` |
+| `refreshFolder` reuse of a stored `cache_meta.projectPath`; `buildProjectsFromCache` (empty-folder section); `reconcileCacheFromFilesystem` | Verified by `storedProjectPathMatchesFolder` (the verified path, the repository of a worktree folder, or the remap record). A value stored before the upgrade is re-derived: `reconcileCacheFromFilesystem` refreshes a folder whose stored path fails the check even when its mtime is current, and `refreshFolder` rewrites a cached row whose `projectPath` differs from the folder's even when its file is unchanged. A folder with no verifiable transcript has its cached rows deleted |
+| `resolveSessionRealCwd` (resume and fork spawn cwd in `open-terminal`, Changes panel, panel terminal, terminal path links, subagent worktree discovery, the sandbox bind folder, which follows the spawn cwd) | Verified against the folder holding the session's JSONL, which main finds on disk; a transcript that does not verify is skipped for the next folder holding the same id; none left means resume starts in the requested project path as for a session without a recorded cwd |
+| `create-schedule-session` `mkdir enc(projectPath)` and `open-terminal` registration of `projectPath` | The path comes from the sidebar, so from `deriveProjectPath`; the registration stays a plain launch registration |
+| Remote hosts | Not verified: a remote cwd is a path on the host, `deriveProjectPath` takes `{ remote: true }` there, and nothing local is opened from it |
+| `resolveSessionRealCwd` for a worktree session | Kept: its JSONL lives in `enc(P/.claude/worktrees/x)` and its cwd encodes to that folder |
+
+A folder that holds transcripts with a cwd but none that verifies is logged once per folder, `[session-cache]` prefix with the folder name and the first rejected cwd (main log; the cold-start worker reports it through its folder message), so a change of the CLI's naming shows up in the log instead of as projects silently missing.
+
+Residuals: `encodeProjectPath` truncates at 200 characters and appends a 32-bit hash, so a path of 200 characters or more can collide (`enc(P/long) === enc(P)`), seed included. The hash is taken over the raw characters of the path, as the CLI does; normalising before hashing would stop matching the CLI's folder names, so it was left alone (the verified cwd is already `path.resolve`d before it is encoded). A transcript written by the CLI whose cwd does not encode to its folder (a symlinked cwd named by its real path, say) no longer gives a project path or a resume directory. A `projectPath` persisted by session restore before the upgrade is not re-verified; the renderer's own strings are out of scope.
+
 ## Non-obvious behaviors
 
 - **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers must dedupe (see `get-work-files` IPC for the pattern).
@@ -758,19 +781,20 @@ created the `.jsonl`; a manual host refresh did not help.
     rel path, not its own, because `readSubagentMeta()` in the transcript's
     row is what actually needs re-deriving.
 
-### Remote hosts — capability tiers (issue #218, first slice)
+### Remote hosts — capability tiers (issue #218, first and second slice)
 
 `remote-host-profile.js` is a pure function: `computeHostProfile({ at, error, descriptors })` returns
 `{ tier, tiers, missing }`, the highest of `observe < liveness < inject < attach < launch` that is
 available plus, for every tier above it, the reason it is not. The indexer's `getRemoteHostProfile(alias)`
-feeds it the last cycle's own data (`at`, `error`, live descriptors), so there is no probe and no extra ssh.
+feeds it the last cycle's own data (`at`, `error`, live descriptors) and the probe result (`tools`), and the profile
+also returns `blocked` (why nothing could be read, or null) and the normalised `tools`.
 
 - `none`: never synced, or the last cycle failed. A failed `find ~/.claude/projects` fails the whole
   cycle, so an unreadable projects directory and an unreachable host are not told apart; the ssh error is the reason.
 - `liveness`: at least one live descriptor. `inject`: a live descriptor with a `messagingSocketPath` that is a POSIX
   absolute path. `attach`: a live descriptor naming a tmux pane with a valid pid (the adapter's own test).
   The tiers are independent requirements: the reported tier is the highest available one, not the highest contiguous one.
-- `launch` is never available: starting a session from here is not implemented.
+- `launch`: available under the same rule as attach (probe `tmux: true`, or a live descriptor naming a tmux pane, and not `tmux: false`), and unlike the other tiers it is not withdrawn by a failed last refresh (launch runs its own ssh, as Send does); its reason otherwise starts with "needs tmux on the host". See "Remote hosts — launching a session".
 - A tier that needs a live session reads as missing on an idle host; that is "nothing to read it from", not "unsupported".
 - `annotateRemoteAttachable` (main.js) puts the profile on the project (`remoteHostProfile`). After 3 consecutive failed
   cycles (`attachBlockReason`), it sets `remoteAttachable: false` plus `remoteAttachBlocked` (the last error) on the
@@ -778,10 +802,70 @@ feeds it the last cycle's own data (`at`, `error`, live descriptors), so there i
   Stop is never blocked, it runs its own ssh. The renderer only shows the strings: the host dot's tooltip (which states
   the last error from the first failure), the row and badge titles.
 - The new-session button was already disabled for every remote host; it is unchanged.
-- Not done: the probe for what the descriptors cannot tell (multiplexer installed but no session in it, `inotifywait`),
-  the inject affordance (issue #219), the launch tier.
+- The new-session button was already disabled for every remote host; its title now carries the launch tier's reason.
+- Not done: the launch tier itself (issue #222), multiplexers other than tmux (`parseTmuxField` is the only recogniser).
+
+#### The probe and the gates (second slice)
+
+- `PROBE_COMMAND` (remote-transport.js) is its own ssh command, pinned exactly in `test/remote-transport-probe.test.js`;
+  `LIST_COMMAND` is not widened. It prints `tmux=0|1` and `inotifywait=0|1`; `parseProbe` accepts exactly those two
+  lines and `probeTools` throws on a timeout (15 s), a cap overrun (1 KiB), a non-zero exit or any other output. It goes
+  through the same `run()`, so the same ssh binary, `BatchMode` and `ConnectTimeout` apply and no new spawn site exists.
+- The indexer probes at the end of `refreshHost`, after a successful sync only, at most every `PROBE_INTERVAL_MS` (6 h);
+  a failed probe is retried after `PROBE_RETRY_MS` (30 min), keeps the previous answer, and never fails the cycle. A
+  forced reconnect re-arms it without forgetting the answer. A removed alias drops its answer. A transport without
+  `probeTools` is skipped.
+- `tools.<name>` is `true`, `false` or `null` (unknown). Only `false` withholds anything. `tmux === false` makes the attach tier
+  unavailable even when a descriptor names a pane, because the attach adapter runs a bare `tmux` over the same
+  non-interactive ssh, so a failing `command -v tmux` there is a failing attach. `tmux === true` makes attach available on
+  an idle host. Liveness is unchanged: it needs a descriptor, which the probe cannot tell.
+- `attachBlockReason(profile, failures)` returns the observe reason from the third failure on (the fallback for a host
+  whose ssh keeps failing, which wins), else the tmux reason when tmux is known missing, else null. The session carries it in
+  `remoteAttachBlocked`; the renderer already opens the transcript and puts it in the row and badge titles.
+- `sendBlockReason(profile)` is the inject tier's reason on a host that was read (`blocked` null), else null: a failing host
+  does not disable Send, which runs its own ssh. The tier is host-level, "some live session reports a socket", so a
+  session without its own socket on a host where another one has one is still offered Send and fails at the click.
+  `session.remoteSendBlocked` disables the button with the reason in its title.
+- Stop has no gate (`test/annotate-remote-tier-gates.test.js` and `test/dom-sidebar-remote-tier-gates.test.js` pin it).
+
+## Remote hosts — launching a session (issues #218, #222)
+
+`remote-launch.js` builds the one ssh command and orchestrates launch then attach; the renderer side is `showRemoteLaunchDialog` (dialogs.js) and `launchRemoteSession` (app.js), the IPC is `remote-launch-session`.
+
+- **The command is `sh -c '<script>'`** (`shellSingleQuote`, as `remote-send.js`), so a fish or csh login shell never parses it. The script checks `[ -d "$cwd" ]`, `command -v tmux`, `command -v claude` with exit codes 9, 10, 11 (each mapped to its own message), then `exec tmux new-session -d -P -F '#{session_name}:#{window_id}.#{pane_id} #{pane_pid}' -s switchboard-<uuid8> -c "$cwd" 'claude --session-id <uuid> [flags]'`. The exact string is pinned in `test/remote-launch.test.js`.
+- **Validation, not escaping, is the guard.** The cwd must match `CWD_RE` (absolute; letters, digits, space, `. _ + @ : , = / -`; no `..` segment; at most 4096 bytes). That set has no quote, `$`, backtick, backslash, newline or leading `-`, so the single-quoting is a second layer, not the only one. The uuid is matched by regex, the tmux name derives from it, the permission mode is checked against an allow-list. The same checks run in the renderer (UX), in `handleLaunchRequest` and in the adapter.
+- **Why attach straight to the created pane.** `-P -F` prints the pane's `session:@window.%pane` and `pane_pid`. `handleLaunchRequest` hands `{ pid, tmux, sessionId, cwd }` to the existing `remoteAttachAdapter.attach`, which discovers the socket from `/proc/<pid>/environ` and runs the same pid-reuse guard (the pane's command line contains `claude`). No wait for the descriptor to show up in the next refresh; `refreshHostNow` is fired afterwards so the row's real descriptor replaces the pending one.
+- **The id is generated locally** (`crypto.randomUUID` in the renderer, validated again in main) and passed as `--session-id`, so the pending sidebar row and the later descriptor share one id.
+- **Stop is unchanged.** The pane target we created has a pane component, so `buildStopCommand` emits `kill-pane` (pinned for this exact target shape in `remote-launch.test.js`); never `kill-session`. Killing the only pane of the only window ends the tmux session as a side effect of tmux itself.
+- **A failed attach after a successful launch** leaves the tmux session running on the host; the error names it, and it appears in the sidebar at the next refresh.
+- Not verified here: a real host (the tests use a fake runner, plus a real `sh` with stubbed `tmux`/`claude`), tmux older than the `-P -F` form, and a `claude` that exits at once (the pane then closes and attach fails with the probe error).
+
+## Remote hosts — enrolment (issue #222)
+
+`remote-enrol.js` builds the checklist and guards the request; the command and its parser are in `remote-transport.js` (`ENROL_COMMAND`, `parseEnrol`, `checkHost`); the IPC is `remote-host-enrol-check`, the UI is `public/remote-enrol-panel.js` driven from the host rows of `settings-panel.js`.
+
+- **It reports state, it acquires nothing.** The sensitive-path denylist refuses `.claude/.credentials.json` on purpose (#208), so no check opens, copies, hashes or tests that file, and none reads `ANTHROPIC_*`, a keychain or a token. Pinned by a negative match on `ENROL_COMMAND` in `test/remote-transport-enrol.test.js`.
+- **The logged-in signal is the CLI's own exit status.** `claude auth status` (verified locally, CLI 2.1.288, read-only) exits 0 when logged in and 1 when not, and prints JSON or text that includes the email and organisation. The command runs it with stdout and stderr thrown away (`>/dev/null 2>&1 </dev/null`), so the account details never cross ssh; only `auth=1|0|unknown` comes back. Any other exit status, a host whose `claude auth --help` has no `status` line (an older CLI, where `auth` would be read as a prompt), a missing `claude` or a missing `~/.claude` give `auth=unknown`, never "logged out". With no `~/.claude` the command is not run at all, because on a fresh account the CLI creates its config files on first use and the check must not change the host.
+- **`ENROL_COMMAND` extends `PROBE_COMMAND` by concatenation**; the probe's own string and parser stay pinned and unchanged, as does `LIST_COMMAND`. Fixed string, no interpolation: the alias is the ssh operand, validated by `isValidAlias` and required to be in the saved `remoteHosts` before any ssh runs.
+- **Strict parse.** `parseEnrol` takes the lines `tmux`, `inotifywait`, `claude`, `claude_version` (only when `claude=1`), `claude_dir`, `auth` in that order and nothing else, or returns null. The version is the one free-text field: it is kept only when it matches `CLAUDE_VERSION_RE`, else shown as unreadable. Output cap 2 KiB, timeout 30 s (`enrolTimeoutMs`), the same `run()` and ssh options.
+- **Outcomes of `checkHost`**: ssh exit 255, a spawn failure or a timeout is `reachable: false`; any other failure is `reachable: true` with no facts (a Windows host lands here), and every other item is then `unknown`, not `missing`. Detail text from stderr is one line, control characters stripped, 200 characters.
+- **The hand-off commands** are constants in `remote-enrol.js`: the install one-liner and `sudo apt install tmux` are assumptions about the host, offered as text to copy and never run by Switchboard. Each carries `where` (`host` or `workstation`) so the UI says where to run it. tmux is `optional`: its absence is observe-only, not an error.
+- **The UI builds its DOM with `textContent` only**; the copy button goes through `window.api.writeClipboard` (main process, as the Wayland fix). The check applies to hosts in the saved settings; an unsaved row answers "save the settings first". One check per alias at a time (`running` set in `remote-enrol.js`).
+- **A non-POSIX login shell** (fish, csh) fails the command like a Windows host does, so the "no facts" detail names both causes. The command is not wrapped in `sh -c`: the `PROBE_COMMAND` prefix pin must hold.
+- Not verified: whether `claude auth status` refreshes or rewrites an expired token, or makes network calls, on the host (Switchboard only sees the exit status, but the command is not known to be free of side effects on the host); a real host (tests use a fake spawn and a real `sh` with a stubbed `claude`), `claude auth login` on a machine with no browser, and whether `claude auth status` in a non-interactive ssh sees a login provided only by an environment variable set in an interactive profile (it would read "not logged in").
 
 ## Remote hosts — sending a prompt (issue #219)
+
+The trigger entry point also uses the one `remoteSendAdapter` instance when
+`remoteTriggers` is enabled. Its global default is in `SETTING_DEFAULTS`; the
+context getter checks it without requiring a restart. Send and triggers share
+the 30-second dedupe and a bucket per alias/session id: 30 tokens, refill 0.5/s,
+reserved before running the command, refunded on definite failures, retained
+on ambiguous writes. Failure codes distinguish pre-write refusals from
+`timeout`/`exit` with `maybeWritten: true`; success remains exactly `{ ok: true }`.
+`findSessionAliases(id, isEnabled)` returns all enabled matching hosts without
+changing the older singular lookup. See `trigger-watcher.md`, "Remote socket
+targets", for trigger guards and the two-pull rule.
 
 `remote-send.js` writes one prompt to a live, unattached remote session through
 the CLI's own messaging socket. Send only: nothing is read back, the state comes
@@ -836,6 +920,12 @@ from the descriptor the refresh cycle already pulls.
   `dom-send-prompt-dialog.test.js`.
 
 ## Remote hosts — tmux attach (issue #221)
+
+Screen refresh (#446) uses a fitted-size nudge only for solo attachments.
+Shared attachments skip automatic return refresh and explicitly repaint the
+local buffer without resizing their ssh PTY. All geometry resizes retain
+the solo-client rule below; see
+[terminal-refresh](terminal-refresh.md) for restoration and measurement limits.
 
 `open-terminal` no longer refuses every remote session outright. When
 `isRemoteFolder(cachedFolder)` is true, it now looks up that session's own
@@ -932,16 +1022,97 @@ Launching a new remote session (#222) and injection over the messaging socket
   descriptor, localSize)` takes the caller's locally-measured `{cols, rows}`
   (`main.js`'s `open-terminal` handler passes the same `normalizePtySize
   (initialSize)` result a local spawn uses) and treats the session as
-  **solo** only when the probed client count is exactly `0` *and* a valid
+  **solo** when there are no real clients after classification *and* a valid
   `localSize` was supplied. Solo: the PTY opens at `localSize`, and the
   returned `ptyProcess.resize(cols, rows)` forwards to the underlying ssh
   PTY — a live terminal like any local one. Not solo (one or more other
   clients attached, or the client count could not be parsed — fail closed
   the same as "attached"): the PTY opens at the sizing-rule's remote
-  `cols/rows` as before, and `resize()` stays a no-op, logging which of the
+  `cols/rows` as before, and `resize()` stays a no-op while shared, logging which of the
   two reasons applied. Rewrapping a screen someone else is actively looking
   at is the failure this refuses; an unparseable count is treated the same
   as "someone's there" rather than guessed.
+
+- **Mode re-evaluation and stale clients, issue #452.** On v0.0.88, the
+  maintainer measured three restart-time attaches at 316x94 with one other
+  client each (2026-10-03, 22:06:38–22:06:41). Each socket later had only the
+  current instance's client, but the attach-time shared decision kept resize
+  disabled permanently. The host's measured sshd settings are
+  ClientAliveInterval 60 and ClientAliveCountMax 3: an abruptly cut connection
+  can remain listed for approximately three minutes.
+  - Every solo and shared attach uses exec env
+    SWITCHBOARD_ATTACH=<profile>:<instance>:<attach> tmux -S ... with the
+    existing option segments. The profile id is 24 random bytes encoded as
+    base64url, persisted in app.getPath('userData')/remote-attach-profile-id.
+    With SWITCHBOARD_DATA_DIR, this is <data-dir>/electron/remote-attach-profile-id;
+    otherwise it is under Electron's installed-app userData directory. The
+    file is created exclusively with wx on first use; an existing valid file
+    is read without rewriting it, including when another creator wins the race.
+    A corrupt or unreadable file, or failed creation, is logged and produces a
+    random in-memory identity for this run only. The untrusted file is never
+    overwritten. The instance id is generated once when the main process loads
+    the adapter module, and the attach id is generated for each attach. All
+    tag components must match [A-Za-z0-9_-] and have 1–128 characters; persisted
+    profile ids have 22–128 characters. Invalid identities return ok:false from
+    attach before any remote command. Using the env executable avoids
+    login-shell-specific variable assignments and shell-pid assumptions.
+  - When the discovery count is nonzero or unknown, one additional bounded
+    command lists client_pid and client_tty and reads each client's tag from
+    /proc/<client_pid>/environ. A quoted sh -c isolates its POSIX control flow
+    from the login shell. The command emits at most 201 records, reads at most
+    64 KiB plus one overflow byte per environment, and has a 5 s timeout and
+    128 KiB output cap. More than 200 clients, incomplete records, invalid pids,
+    failed commands and unreadable environments fail closed. Oversized
+    environments supply no trusted tag.
+  - **Classification:**
+
+    | Client evidence | Action |
+    | --- | --- |
+    | No tag, malformed tag or unreadable environment | Real client; shared |
+    | Tag from another profile, including a live dev/test-pr instance on this machine | Real client; shared; never detach |
+    | This profile and another instance, with validated /dev/pts/N tty | Detach that client by tty; solo immediately if no real clients remain and a valid local size is known |
+    | This profile and this instance, another attach id | Real client; shared; never detach |
+    | Invalid tty or unsuccessful detach | Remain shared |
+
+    The single-instance lock is keyed on userData, not the machine. It proves
+    that another instance of this profile is dead; idle time is not the proof.
+    Installed, dev and test-pr instances can run beside each other with distinct
+    data directories. Hostnames neither establish ownership nor distinguish
+    computers. Untagged clients, other profiles and unreadable environments
+    are never detached. No client_activity threshold
+    is used. The three-second attach-time retry and session-option markers
+    are removed; no marker cleanup is needed.
+  - A shared attach polls list-clients every SHARED_MODE_POLL_INTERVAL_MS
+    (3 s after the preceding evaluation finishes), using the same bounded
+    environment discovery. It promotes only when the single listed client has
+    this exact profile, instance and attach id. The poll never detaches clients.
+    Recursive timeouts avoid overlapping requests; timers are unref'd and
+    cancelled on detach/exit, and start only once a valid local size is known.
+    ptyProcess.reevaluateMode() shares the in-flight operation and remains
+    exposed for a future control, without adding a control here.
+  - Promotion applies session-scoped status off, mouse on and window-size
+    latest, enrolls the existing full restore once, and sends the latest valid
+    local size once. Subsequent resizes are forwarded. A confirmed solo attach
+    never silently downgrades. Titles keep the #290 rule. Failed polls and
+    option applications retry conservatively. Detach remembers a potentially
+    partial option application and waits for it before restoring.
+  - Polling avoids session-wide hooks that could conflict with host hooks or
+    survive connection loss. A failed list-clients exits before producing a
+    usable empty list. Tests exercise the production adapter with fake SSH/PTY
+    ports and injected clocks; a real host and the SSH/tmux chain have not been
+    exercised here.
+
+- **Promotion sizing notification, issue #452 after #453.** The attach handle's
+  onResizeAllowed subscriber runs once after a live shared-to-solo promotion,
+  retaining the promotion log. registerRemoteAttachSession updates the current
+  session's remoteResizeAllowed flag and sends remote-resize-allowed(sessionId)
+  through preload.onRemoteResizeAllowed; exited or replaced sessions are
+  ignored. The renderer enables solo sizing and schedules its existing
+  debounced fit to send one current fitted size, even if unchanged. Later
+  resizes, return refresh and the solo PTY nudge are enabled. Unknown or closed
+  entries ignore the notification. No promotion means no event, and solo never
+  silently downgrades. See .ai/contexts/terminal-refresh.md for coalescing and
+  hidden-entry behavior.
 
 - **Solo attach parity, issue #253.** A solo attach now makes the remote
   tmux session look and behave like a local terminal instead of a plain
@@ -1331,8 +1502,111 @@ stayed empty, one warn line in `main.log` and no user-visible error.
 The tests that hold this: "restart() after adding a host keeps the transport
 usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 
+## Archived projects (issue #473)
+
+**Archive folder** on a project header hides the folder, and its nested
+worktree folders, until a session it did not hold at archive time appears in
+it. The state is the `archivedProjects` settings row:
+`{ [entry]: { archivedAt, knownSessionIds } }`.
+
+- **Entry.** `archivedEntry(alias, projectPath)` in `archived-projects.js`:
+  `path.resolve(projectPath)` for a local group,
+  `<alias>::<posix-normalised path without trailing slash>` for a remote one.
+  A bare entry matches the local group only, unlike a bare `hiddenProjects`
+  entry, which matches every host.
+- **Rule.** `applyArchivedProjects(projects, archived, showArchived)` is pure
+  and runs in `get-projects` (through `applyAndPersistArchived`) on the output
+  of `mergePlaceholderSessions(buildProjectsFromCache(showArchived))`:
+  1. a group whose entry is stored comes back when it holds a session with no
+     `parentSessionId`, not archived, and not in `knownSessionIds`; its entry
+     is cleared;
+  2. a visible worktree group (`worktreeParentPath`, same alias) clears its
+     parent's entry, so the parent header comes back to hold it. A cleared
+     parent does not clear its children;
+  3. a group whose entry remains is dropped unless `showArchived`, so Show
+     archived and search (which renders from `cachedAllProjects`) still see it.
+  The setting is written back only when an entry was cleared.
+- **Main-process side.** `archiveProjectFolders`, `reenableOfferedSchedules`
+  and `dismissReenableOffer` in `archived-projects.js` hold the logic of the
+  `archive-project`, `reenable-project-schedules` and
+  `dismiss-schedule-reenable-offer` handlers, with every effect injected
+  (`archiveDeps()` in `main.js`); they are synchronous, so no read-modify-write
+  of a setting has an `await` in it.
+- **Snapshot.** `archiveProjectFolders` computes `knownSessionIds` per group,
+  after `refreshFolder` of every folder of the group (the `row.folder` of its
+  cached rows with the same alias and entry, plus its encoded folder, kept when
+  the directory exists): the top-level ids of the group in
+  `mergePlaceholderSessions(buildProjectsFromCache(true))` (archived rows, plain
+  terminals, remote placeholders), the `activeSessions` keys of the group and
+  their `realSessionId`, and the `*.jsonl` basenames on disk. A running
+  session belongs to the group when `archivedEntry(session.host, projectPath)`
+  equals the group's entry: a local entry is an absolute path and a remote one
+  starts with `<alias>::`, and an alias holds no `:`, so the entry comparison
+  already separates hosts.
+- **Order.** The snapshot is taken and the entries written before any schedule
+  is disabled, so a failure while taking it disables nothing; each disabled
+  file is then added to its entry and the entries written again. If that second
+  write fails, the error response carries `disabled` and the renderer's alert
+  names the schedules that were turned off.
+- **Refusal while indexing.** `get-project-archive-plan` and `archive-project`
+  refuse while `!isInitialScanComplete()`: a snapshot taken from a partial cache
+  would miss sessions and the folder would reappear on its own.
+- **Schedules.** `archivePlanForGroups` lists the enabled schedules of the
+  local groups in the schedule registry; `archive-project` re-scans and disables
+  only the ones the renderer confirmed — see
+  [schedule-runner.md](schedule-runner.md) ("Disabling a schedule file").
+- **Clearing by hand.** `add-project` and `delete-worktree` call
+  `clearArchivedEntry`.
+- **Re-enable offers.** An entry records `disabledSchedules`, the files the
+  archive actually disabled. When an entry leaves `archivedProjects` (a
+  reappearance in `get-projects`, or `clearArchivedEntry`), a non-empty list
+  moves to the `scheduleReenableOffers` setting, `{ [entry]: { disabledSchedules,
+  archivedAt, failed? } }`, in the same synchronous step. `get-projects` marks
+  each listed project holding an offer with `reenableOffer: { names, failed? }`,
+  names read from the files still present. The sidebar shows it as an inline
+  notice in the group (`buildReenableNotice`); **Turn back on** calls
+  `reenable-project-schedules`, which turns back on the files still reading
+  `enabled: false` and keeps only the failures in the offer, so the notice
+  stays and reports them; **Dismiss** calls `dismiss-schedule-reenable-offer`.
+  Archiving the folder again deletes its offer and carries the offered files
+  that still read `enabled: false` into the new entry's `disabledSchedules`,
+  so they are offered again on the next reappearance. A group holding an offer
+  is never auto-collapsed, so the notice stays in view.
+- **Differences from `hiddenProjects`.** `archive-project` deletes no setting,
+  cache row, search row or schedule registration, and a new session brings the
+  folder back; Hide Project does both and never comes back on its own.
+- **Renderer.** `archiveProjectFolder` (`public/sidebar.js`) reads the groups
+  and sessions from `cachedAllProjects`, never from the rendered list, which is
+  a search projection during a search; with no matching cached group it only
+  reloads. The stop is all-or-nothing: every session is stopped first, and one
+  refusal leaves everything unarchived. The dialog is `showChoiceDialog`
+  (`public/choice-dialog.js`).
+- **Worktree nesting.** `renderProjects` nests a worktree group only under a
+  listed group of the same alias and repository path
+  (`public/worktree-nesting.js`, a classic `<script>` in the renderer that
+  `archived-projects.js` also `require()`s, so both sides follow the same
+  regex). A worktree whose repository is hidden on its host (`hiddenProjects`,
+  bare or `<alias>::` entry, matched exactly as `isProjectHidden` does) carries
+  `hiddenRepository`, set in `applyAndPersistArchived`, and is drawn nowhere:
+  `isProjectHidden` hides exact paths only, so hiding a repository has to hide
+  its worktree groups this way. The rule is `isHiddenRepositoryWorktree`
+  (`public/worktree-nesting.js`); `loadProjects` (`public/app.js`) applies it
+  too to the group it builds for a pending session, reading
+  `global.hiddenProjects` only when that session is in a worktree. Any other
+  worktree whose repository is not listed is drawn at top level.
+- **Cold scan.** A folder not yet in `cache_meta` during the initial scan shows
+  empty under its decoded path, which does not match its entry; it hides again
+  once indexed. Matching on the folder key instead would break the remote and
+  merged-folder cases.
+
 ## If you change this, also check
 
+- `archived-projects.test.js` — covers the archived-folder rule, the snapshot sources, the worktree step, the archive plan and the re-enable offers
+- `dom-project-archive-folder.test.js` — covers the **Archive folder** flow and the alias-aware worktree nesting
+- `dom-choice-dialog.test.js` — covers `showChoiceDialog`
+- `archive-project-wiring.test.js` — covers the `main.js`, `preload.js` and `dialogs.js` wiring of archived folders
+- `archive-project-assembly.test.js` — covers `archiveProjectFolders`, `reenableOfferedSchedules` and `dismissReenableOffer` with their effects injected
+- `app-pending-hidden-repository.test.js` — covers the pending-session group of a hidden repository's worktree
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one

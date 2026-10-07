@@ -6,7 +6,7 @@
 
 | File | LOC | Role |
 |---|---|---|
-| `schedule-runner.js` | ~420 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
+| `schedule-runner.js` | ~490 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
 | `schedule-ipc.js` | ~225 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
 
 ## Public surface
@@ -17,12 +17,12 @@ From `schedule-runner.js`:
 - `claimScheduleMinute(stateDir, key, minuteMs, info)` — exclusive-create one record file; `false` when it already exists. Exported for tests.
 - `scanSchedules(log, projectPaths)` — scan the given projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`. Without `projectPaths` it scans nothing. `startScheduler` passes its `projects()` option, which `main.js` fills from the registry below.
 - `scheduleRegistry(getSetting, setSetting)` — the `scheduleProjects` setting: `list()`, `add(path)`, `remove(path)`. `main.js` adds a project when it spawns a Claude session in it and on `add-project`, removes it on `remove-project`. Transcripts never add one: their `cwd`, and a folder name derived from it, are written by whoever ran claude, a sandboxed session included (see [docs/sandbox.md](../../docs/sandbox.md), "Schedules").
-- `initialScheduleProjects()` — the seed, read once while the setting has never been written: `~/.claude/projects` folders whose recorded path encodes back to the folder's name and holds a schedule.
-- `resolveScheduleSandbox(cwd, getSetting, default)` — the `project:` setting of `cwd` or of the nearest directory above it that has one, then `global`, then the default.
+- `initialScheduleProjects(listProjectSettingKeys)` — the seed, read once while the setting has never been written. It is the union of the `project:<path>` settings keys whose path is an existing local directory (`main.js` passes `db.listSettingKeys('project:')`; a key carries no host alias, so a remote project whose path also exists locally registers that local directory — the user's own directory, low harm), and of the `~/.claude/projects` folders whose recorded path, resolved, encodes back to the folder's name, holds a schedule and contains a `.git` entry (directory or file). Its recorded path comes through `verifiedTranscriptCwd`, the same rule as every other transcript cwd (`.ai/contexts/session-cache.md`, "Transcript cwd trust"). The second source exists because v0.0.85 ran schedules from every transcript folder, so dropping it would silently stop the schedules of an upgrading user. The `.git` requirement only keeps out schedule directories that are not repositories: a folder planted before the upgrade (under v0.0.85 a sandboxed session could write both `~/.claude/projects` and its project directory) that holds a `.git` and a schedule is still registered, once, at the first read, and inherits the enclosing project's sandbox setting. Accepted residual (maintainer decision 2026-10-02); after the upgrade `~/.claude/projects` is read-only to sandboxed sessions except their own folder, so nothing new is planted. Any other project is registered at its first launch from the app.
 - `refusedScheduleBinds(addDirs, projects, home, baseDir)` / `scheduleBindRefusals` (with the reason, used by `main.js`) — the `add-dirs` that are at or inside a `.claude` or `.git` (judged as spelled and by real path, anywhere), or under `home` and neither a registered project nor inside one (real paths). `main.js` skips a sandboxed run when it is not empty.
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns the session UUID.
 - `buildScheduleCommand(sessionId, schedule)` — assemble the shell command (`claude --resume "<sid>" -p "..." --permission-mode acceptEdits --allowedTools "..."`).
 - `parseFrontmatter(content)`, `cronMatches(cronExpr, now)` — utilities, exported for tests.
+- `scheduleFileUnlinked(projectRoot, filePath, realpath)` and `setScheduleEnabled(filePath, enabled, { projectRoot, rewrite })` — see [Disabling a schedule file](#disabling-a-schedule-file).
 
 From `schedule-ipc.js`:
 
@@ -48,6 +48,35 @@ cli:
 
 `enabled: false` disables without deleting. `catch-up: true` (`true` in any case, optionally quoted; the key spelled exactly so) opts in to [catch-up](#catch-up). `cron` is standard 5-field (minute, hour, day-of-month, month, day-of-week).
 
+## Disabling a schedule file
+
+`setScheduleEnabled` writes `enabled: false` or `enabled: true` into a
+schedule file. Its callers: `archive-project` in `main.js` (archiving a folder,
+see [session-cache.md](session-cache.md), "Archived projects"), which passes
+the group's project path as `projectRoot` and disables only the files of a
+fresh scan that the user confirmed; and `reenableScheduleFiles` in
+`archived-projects.js` (the re-enable offer), which turns back on only the
+offered files that still read `enabled: false`.
+
+- **No link below the project root.** `scheduleFileUnlinked` holds when
+  `realpath(filePath)` is `<realpath(projectRoot)>/.claude/commands/<name>`. A
+  symlinked file, `commands` or `.claude` directory fails it: writing through
+  it would change a file shared with another project or a dotfiles repository.
+  A link above the root (a symlinked home, macOS `/tmp`) passes. It returns
+  `false` on any `realpath` error. The archive plan uses the same helper, so a
+  schedule offered as disableable is never refused for a link.
+- **The parser decides.** The rewrite walks the front matter with
+  `parseFrontmatter`'s own state machine and rewrites every line it reads as
+  the top-level `enabled` key (an indented line with no open block counts; the
+  last duplicate wins), or inserts `enabled: false` first when none is read (a
+  line ending in `\r` is not read). The result is checked with
+  `parseFrontmatter` before writing: `enabled` must read the requested value, `cron` and the
+  body unchanged, or the file is left as is.
+- **Atomic.** A temp file in the same directory, with the original mode, then
+  `rename`.
+- The file lives in the user's repository, so a tracked schedule file shows a
+  working-tree diff after an archive.
+
 ## Invariants
 
 - **Schedules are scanned fresh every check** (`scanSchedules` on every minute boundary, at start and on `resume`). No in-memory cache — adding/editing a `.md` file takes effect within 60 seconds without any restart.
@@ -72,6 +101,7 @@ cli:
 - `public/memory-workfiles-view.js` brain tab — lists existing `schedule-*.md` files, surfaces the "run now" play button
 - `scan-md-files.js` — what that brain tab list is actually built from (`get-memories` in `main.js`); it decides whether a schedule file is visible at all, and takes the memory allowlist so the list carries nothing the readers behind it would refuse to open
 - `public/sidebar.js` — `.project-schedule-btn` clock icon wiring per project
+- `archived-projects.js` (`archivePlanForGroups`) and `test/schedule-disable.test.js` — if you change `parseFrontmatter`, the rewrite in `setScheduleEnabled` follows the same state machine
 - `schedule-ipc.js` `SCHEDULE_CREATOR_TEMPLATE` — if you change the schedule file format, update the template's instructions
 - `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir })` is invoked at app boot — checked 2026-09, it moves as main.js grows)
 - The `runScheduleCommand` factory in `main.js` — uses `child_process.spawn`, `cleanPtyEnv`, and the global shell profile. Schedules don't get their own shell selector.

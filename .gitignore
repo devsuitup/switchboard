@@ -24,3 +24,6 @@ coverage/
 
 # task test-pr worktrees
 .worktrees/
+
+# Playwright output (docs/e2e.md)
+e2e/playwright-report/

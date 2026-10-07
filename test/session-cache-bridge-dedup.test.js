@@ -18,6 +18,7 @@ const os = require('os');
 const path = require('path');
 
 const sessionCache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-bridge-dedup-'));
@@ -71,7 +72,7 @@ const MIRROR_NEW_USAGE = { input_tokens: 9, output_tokens: 4 };
 test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId set), contributes only its post-cutoff tokens, and an independent session is untouched', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'proj';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -149,7 +150,7 @@ test('refreshFolder: a mirror indexed alone before its parent is known is correc
   // stamped with mergedIntoSessionId (see coordinator review on issue #197).
   const projectsDir = mkTmp();
   try {
-    const folder = 'proj-order';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -191,7 +192,7 @@ test('refreshFolder: a mirror indexed alone before its parent is known is correc
 test('refreshFolder: a mirror indexed alone whose entire content turns out to be a duplicate is deleted once its parent is discovered, end to end', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'proj-order-2';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -272,7 +273,7 @@ test('buildProjectsFromCache: the mirror does not appear as its own sidebar entr
 test('refreshFolder: an existing row misidentified as parent is re-parented AND re-derived (not merely re-labelled) once a genuinely earlier file is discovered', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'proj2';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -332,7 +333,7 @@ test('refreshFolder: an existing row misidentified as parent is re-parented AND 
 test('readFolderFromFilesystem: a fresh full-folder scan merges the mirror in one pass with no double-counted tokens', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'proj3';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 

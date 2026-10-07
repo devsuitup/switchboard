@@ -823,6 +823,20 @@ A **remote** session, and any file the main process refuses to open for editing 
 
 ### The list and the editor
 
+Touched now shares the Changes list/editor splitter and sizing code. Its ratio is stored in `localStorage.touchedListRatio`; Changes retains its desired pixel height. The resize observer watches both list containers as well as the panel content, so opening the shell or dragging its splitter reapplies the split against the available height and preserves the editor's 120px minimum.
+
+The panel has one shared **Back to list** button for Touched and Changes
+(#444). Escape with focus inside either viewer uses the same control. For
+Changes it closes the selected diff through the existing dirty-buffer guard
+and unwatch/editor cleanup; it makes no git status or content request. The
+list DOM is reused while its data, loading/error state and count revision are
+unchanged. Selection and scroll are captured before the diff opens, so a
+hidden or resized list reporting zero cannot overwrite the return position.
+Escape bubbles after editor handlers and ignores prevented/composing events,
+search panels, autocomplete tooltips and non-editor input fields.
+An explicit refresh still rebuilds the list. Per-tab DOM snapshots survive session switches. The existing editor
+Close button remains available.
+
 The list is never hidden. A selected file opens *below* it — summary, list, a drag handle, then the editor region — and the current row carries `.selected`. Reviewing a set of files is then click, read, click, which is the whole point of the layout; there is no navigation step to undo, so the editor's first button is **Close** (close the file, keep the list) rather than Back.
 
 The split uses `createSplitter` (`public/splitter.js`, shared with the panel's shell region) and the height model that region settled on: `changesListDesiredHeight` stores what the drag asked for, `clampChangesListHeight` narrows it only for display against the space actually available, and only the desired value is persisted (`localStorage.changesListHeight`). A transient shrink — a short panel, the shell open — therefore never ratchets the stored height down. The list has a floor of its own (`MIN_CHANGES_LIST_HEIGHT`, 96px, about four rows) so it cannot collapse to nothing, and the editor keeps `MIN_CHANGES_EDITOR_HEIGHT` (120px, the same floor the shell region uses for the content above it). Below that the list scrolls; nothing overlaps and nothing is clipped out of reach.
@@ -932,3 +946,63 @@ working directory busy for a moment after the call has returned, as above.
 `fs.rmSync`'s `maxRetries` does not cover this failure on Node 20 and 22: their
 recursive removal retries only after emptying a directory (`ENOTEMPTY`,
 `EPERM`); an `EBUSY` on the first `rmdir` of a directory is thrown at once.
+
+## Local reads run one at a time
+
+A local `status()` runs its `git status` and two `git diff` calls one after the
+other. Run together, each may refresh the index and rename a new `.git/index`
+over the old one while another git has it open; on Windows the loser fails
+with `fatal: .git/index: index file open failed: Permission denied`, and the
+panel showed that as an error (the flake behind `test/git-changes-runner-real-git.test.js`,
+issue #421). `GIT_OPTIONAL_LOCKS=0` does not help: measured, `git diff` still
+rewrites a stale index with it set. The remote transport keeps its parallel
+calls: the host is not Windows, and a round trip per call is the cost there.
+Measured 2026-10-03 on a scratch repo, four processes at once, a commit and an
+edit before every round: 4 failing rounds in 400 with the three calls
+parallel.
+
+## Opening the shared editor from Touched (#450)
+
+Touched uses the same `createChangesTab`, diff chrome, editor factories,
+dirty-buffer checks and save/reload flow as Changes. Its editor tab carries
+`absolutePath` and `returnList`; it renders only the shared editor and routes
+Back, Escape and the editor close button to the saved Touched list. It does
+not request a Changes list. Details and the absolute-path IPC contract:
+`.ai/contexts/touched-files.md`, "Shared editor".
+
+Changes rows retain their existing index/HEAD comparison and session-relative
+read, save and watch IPCs. Touched explicitly compares to HEAD from the file's
+own repository through `readTouchedChangesFile` / `writeTouchedChangesFile`.
+Both helpers reuse the existing repository file guards and byte-version save
+contract. When the pair is identical or there is no repository, the same
+editor host uses its plain factory without changing the stored diff mode.
+
+Changes and Touched keep separate unsaved-edit stashes. Opening Changes never
+restores a Touched target; opening Touched restores its own buffer and original
+return list. Save state is recalculated once a restored editor mounts. The
+Changes header toggle and busy-to-idle refresh apply only to a Changes tab
+without a return list. Touched continues to reread on watcher events, Reload
+and Save, rather than on each session idle.
+
+The Touched repository check canonicalizes the file and repository root with
+fs.realpathSync.native before deriving the Git operand, expanding Windows 8.3
+names. That local containment check ignores case on Windows and protects both
+read and save. Discovery and the shared Changes guards retain the shared
+resolver's original spelling; the native paths are used only for comparison
+and deriving the relative operand. The shared resolver is unchanged. A missing
+repository file is refused before deriving that operand. Filename and line-ending
+refusals or transport failures use guarded plain mode; invalid UTF-8 in working
+text or HEAD remains refused. Non-repository panel reads and all panel saves
+also decode strictly, preserving bytes after an invalid-encoding refusal.
+Binary files and binary
+HEAD blobs remain refusals. A final file symlink opens through the shared host's
+read-only factory; both plain and Git save paths refuse the link. Watcher rereads
+also update read-only state when identical text changes between a link and a file.
+Repository-boundary refusals still fail closed. Literal and resolved .git
+segments are blocked with fs.realpathSync.native on read-file-for-panel and
+save-file-for-panel, including Windows 8.3 aliases, for every
+caller, including terminal links. This is an intended change from the earlier
+ordinary viewer policy. A save after deletion returns "File does not exist".
+A probe exit 128 is a non-repository result only with
+the matching stderr diagnostic. The Touched header toggle keys on returnList
+and uses the Changes discard guard when closing its editor.

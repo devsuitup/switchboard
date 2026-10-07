@@ -6,6 +6,7 @@ const path = require('path');
 
 const sessionCache = require('../session-cache');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
+const { encodeProjectPath } = require('../encode-project-path');
 
 // Minimal valid transcript: a `cwd` line (for deriveProjectPath) and a user
 // message (so readSessionFile yields a non-null session).
@@ -51,15 +52,17 @@ function makeFakeDb(metaMap) {
 test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to-date ones', () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-reconcile-'));
   try {
-    writeSession(path.join(projectsDir, 'proj-new'), '/tmp/proj-new');       // never indexed (no meta)
-    writeSession(path.join(projectsDir, 'proj-stale'), '/tmp/proj-stale');   // meta older than disk
-    writeSession(path.join(projectsDir, 'proj-current'), '/tmp/proj-current'); // meta == disk
+    const cwdOf = (name) => path.join(projectsDir, name);
+    const [fNew, fStale, fCurrent] = ['proj-new', 'proj-stale', 'proj-current'].map(n => encodeProjectPath(cwdOf(n)));
+    writeSession(path.join(projectsDir, fNew), cwdOf('proj-new'));         // never indexed (no meta)
+    writeSession(path.join(projectsDir, fStale), cwdOf('proj-stale'));     // meta older than disk
+    writeSession(path.join(projectsDir, fCurrent), cwdOf('proj-current')); // meta == disk
 
     const metaMap = new Map();
-    metaMap.set('proj-stale', { folder: 'proj-stale', projectPath: '/tmp/proj-stale', indexMtimeMs: 0 });
-    metaMap.set('proj-current', {
-      folder: 'proj-current', projectPath: '/tmp/proj-current',
-      indexMtimeMs: getFolderIndexMtimeMs(path.join(projectsDir, 'proj-current')),
+    metaMap.set(fStale, { folder: fStale, projectPath: cwdOf('proj-stale'), indexMtimeMs: 0 });
+    metaMap.set(fCurrent, {
+      folder: fCurrent, projectPath: cwdOf('proj-current'),
+      indexMtimeMs: getFolderIndexMtimeMs(path.join(projectsDir, fCurrent)),
     });
 
     const fake = makeFakeDb(metaMap);
@@ -81,9 +84,9 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
       .filter(c => c.indexMtimeMs > 0)
       .map(c => c.folder);
 
-    assert.ok(indexedFolders.includes('proj-new'), 'new folder should be stamped with non-zero indexMtimeMs');
-    assert.ok(indexedFolders.includes('proj-stale'), 'stale folder should be re-stamped with non-zero indexMtimeMs');
-    assert.ok(!indexedFolders.includes('proj-current'), 'up-to-date folder must not be re-indexed');
+    assert.ok(indexedFolders.includes(fNew), 'new folder should be stamped with non-zero indexMtimeMs');
+    assert.ok(indexedFolders.includes(fStale), 'stale folder should be re-stamped with non-zero indexMtimeMs');
+    assert.ok(!indexedFolders.includes(fCurrent), 'up-to-date folder must not be re-indexed');
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

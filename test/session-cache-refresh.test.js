@@ -15,6 +15,7 @@ const os = require('os');
 const path = require('path');
 
 const sessionCache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -81,7 +82,7 @@ function makeFakeDb(opts = {}) {
 test('refreshFolder: only the changed-mtime file gets upserted; unchanged files are skipped', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'test-proj';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir; // cwd points here → deriveProjectPath returns it
 
@@ -138,7 +139,7 @@ test('refreshFolder: only the changed-mtime file gets upserted; unchanged files 
 test('refreshFolder targeted: opts.files limits upsert to only the named file', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'targeted-proj';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -177,7 +178,7 @@ test('refreshFolder targeted: opts.files limits upsert to only the named file', 
 test('refreshFolder: deleted file produces deleteCachedSession call (full walk)', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'delete-proj';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 
@@ -221,7 +222,7 @@ test('refreshFolder: deleted file produces deleteCachedSession call (full walk)'
 test('refreshFolder: new session produces a searchEntriesToUpsert entry with non-empty body and correct title', () => {
   const projectsDir = mkTmp();
   try {
-    const folder = 'search-proj';
+    const folder = encodeProjectPath(projectsDir);
     const folderPath = path.join(projectsDir, folder);
     const projectPath = projectsDir;
 

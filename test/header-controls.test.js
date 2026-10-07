@@ -19,12 +19,44 @@ const {
 const { terminalStatusLabel } = require('../public/process-exit');
 const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
+const { loadAppFunctions } = require('./app-source');
 
 const HTML = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 const RAW_CSS = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
 const CSS = RAW_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const KIND_RANK = { indicator: 0, toggle: 1, action: 2 };
+
+test('header Refresh is disabled with an accessible reason until the session is running', () => {
+  const ctx = setupTerminalDom();
+  try {
+    const { window } = ctx;
+    const holder = window.document.createElement('div');
+    holder.innerHTML = HTML;
+    const button = holder.querySelector('#terminal-refresh-btn');
+    window.document.querySelector('#terminal-header-controls').append(button);
+    window.activeSessionId = 's';
+    window.terminalHeaderStatus = window.document.createElement('span');
+    window.terminalStopBtn = window.document.getElementById('terminal-stop-btn');
+    window.terminalStatusLabel = terminalStatusLabel;
+    window.forgetSessionExit = () => {};
+    window.lastSessionExit = () => null;
+    const calls = [];
+    window.requestTerminalRefresh = (id) => calls.push(id);
+    const { initTerminalRefreshControl, updateTerminalHeader } = loadAppFunctions(ctx.context, { functions: ['initTerminalRefreshControl', 'updateTerminalHeader'] });
+    initTerminalRefreshControl();
+    for (const running of [false, true, false]) {
+      if (running) window.activePtyIds.add('s');
+      else window.activePtyIds.delete('s');
+      updateTerminalHeader();
+      assert.equal(button.disabled, !running);
+      assert.equal(button.getAttribute('aria-disabled'), String(!running));
+      assert.equal(button.title, running ? 'Refresh screen' : 'Open this session in a terminal to refresh its screen');
+      button.click();
+    }
+    assert.deepEqual(calls, ['s']);
+  } finally { ctx.destroy(); }
+});
 
 function emptyRow() {
   const dom = new JSDOM('<!DOCTYPE html><body><div id="terminal-header-controls"></div></body>');
@@ -41,6 +73,8 @@ test('the row is declared once: indicators, then panel toggles, then Stop last',
     ['ide-emulation-indicator', 'indicator'],
     ['panel-terminal-toggle-btn', 'toggle'],
     ['changes-toggle-btn', 'toggle'],
+    ['touched-toggle-btn', 'toggle'],
+    ['terminal-refresh-btn', 'action'],
     ['terminal-stop-btn', 'action'],
   ]);
   const ranks = HEADER_CONTROLS.map((c) => KIND_RANK[c.kind]);
@@ -54,7 +88,7 @@ test('index.html carries its static controls in the declared order, marked with 
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-stop-btn']);
+  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-refresh-btn', 'terminal-stop-btn']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -64,8 +98,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['terminal-stop-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
-    ['changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-header-sandbox'],
+    ['terminal-stop-btn', 'terminal-refresh-btn', 'touched-toggle-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
+    ['touched-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {
@@ -112,7 +146,7 @@ test('a header toggle is an icon button with a tooltip, and shows its on state',
 
   assert.throws(() => createHeaderToggle({ id: 'terminal-stop-btn', label: 'x', title: 'x', icon: 'shell', onClick() {} }, doc),
     /not a header toggle/);
-  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'shell']);
+  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'shell', 'touched']);
 });
 
 test('the live row, built by the modules in their start-up order, reads in the declared order', () => {
@@ -120,9 +154,9 @@ test('the live row, built by the modules in their start-up order, reads in the d
   try {
     const doc = ctx.window.document;
     const present = HEADER_CONTROLS.map((c) => c.id).filter((id) => doc.getElementById(id));
-    assert.deepEqual(present, ['ide-emulation-indicator', 'panel-terminal-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn']);
+    assert.deepEqual(present, ['ide-emulation-indicator', 'panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn', 'terminal-stop-btn']);
     assert.deepEqual(rowIds(doc), present);
-    for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn']) {
+    for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn']) {
       assert.equal(doc.getElementById(id).className, 'icon-btn', `#${id}`);
     }
   } finally { ctx.destroy(); }

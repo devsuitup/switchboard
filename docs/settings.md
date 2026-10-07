@@ -93,6 +93,12 @@ Builds run from source never check.
 
 - `sidebarWidth` (default 340): the sidebar's width, set by dragging its edge.
 - `hiddenProjects`: projects hidden with **Hide Project**.
+- `archivedProjects`, a setting of its own: folders hidden with
+  [Archive folder](session-browser.md#archive-a-folder), each with the session
+  ids it held and the schedule files it disabled.
+- `scheduleReenableOffers`, a setting of its own: for each folder that came
+  back, the schedules its archive disabled, until **Turn back on** or
+  **Dismiss**.
 - `openWorkingSet`: the open sessions, for [session restore](session-restore.md).
 - `dangerouslySkipPermissions` (default off): launches with
   `--dangerously-skip-permissions`; no settings field sets it, the dialogs'

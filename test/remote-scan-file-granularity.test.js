@@ -15,6 +15,7 @@ const os = require('os');
 const path = require('path');
 
 const sessionCache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 
 function tmp(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-' + name + '-'));
@@ -113,23 +114,25 @@ test('property 1: a single changed file in a multi-file folder rereads only that
 test('property 2: with no fileSubsets, a folder is still scanned in full (local/default path unchanged)', async () => {
   const projectsDir = tmp('gran-full');
   try {
-    const folderPath = path.join(projectsDir, 'proj');
+    const cwd = path.join(projectsDir, 'proj');
+    const folder = encodeProjectPath(cwd);
+    const folderPath = path.join(projectsDir, folder);
     writeJsonl(path.join(folderPath, 'a.jsonl'), [
-      { type: 'user', cwd: folderPath, timestamp: '2026-09-01T10:00:00.000Z', message: { role: 'user', content: 'session a' } },
+      { type: 'user', cwd, timestamp: '2026-09-01T10:00:00.000Z', message: { role: 'user', content: 'session a' } },
     ]);
     writeJsonl(path.join(folderPath, 'b.jsonl'), [
-      { type: 'user', cwd: folderPath, timestamp: '2026-09-01T11:00:00.000Z', message: { role: 'user', content: 'session b' } },
+      { type: 'user', cwd, timestamp: '2026-09-01T11:00:00.000Z', message: { role: 'user', content: 'session b' } },
     ]);
 
     const { db, deletedFolders, upsertedSessionIds } = makeFakeDb();
     initCache(db);
 
-    console.log('[property2] mutated line under test: scanFoldersViaWorker called with folders:["proj"] and NO fileSubsets key at all');
-    const scan = await sessionCache.scanFoldersViaWorker({ projectsDir, folders: ['proj'] });
+    console.log('[property2] mutated line under test: scanFoldersViaWorker called with folders:[folder] and NO fileSubsets key at all');
+    const scan = await sessionCache.scanFoldersViaWorker({ projectsDir, folders: [folder] });
     assert.equal(scan.ok, true, scan.error);
 
     assert.deepEqual(upsertedSessionIds.sort(), ['a', 'b'], 'a whole-folder scan reads every file, exactly as before');
-    assert.deepEqual(deletedFolders, ['proj'], 'the pre-existing delete-then-insert path is unchanged when no fileSubsets is given');
+    assert.deepEqual(deletedFolders, [folder], 'the pre-existing delete-then-insert path is unchanged when no fileSubsets is given');
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

@@ -26,10 +26,15 @@ contextBridge.exposeInMainWorld('api', {
   dispatchBgAgent: (fields) => ipcRenderer.invoke('dispatch-bg-agent', fields),
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
+  remoteLaunchSession: (payload) => ipcRenderer.invoke('remote-launch-session', payload),
   remoteSendPrompt: (alias, sessionId, text) => ipcRenderer.invoke('remote-send-prompt', { alias, sessionId, text }),
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
+  getProjectArchivePlan: (groups) => ipcRenderer.invoke('get-project-archive-plan', groups),
+  archiveProject: (groups, opts) => ipcRenderer.invoke('archive-project', groups, opts),
+  reenableProjectSchedules: (projectPath, folderKey) => ipcRenderer.invoke('reenable-project-schedules', projectPath, folderKey),
+  dismissScheduleReenableOffer: (projectPath, folderKey) => ipcRenderer.invoke('dismiss-schedule-reenable-offer', projectPath, folderKey),
   deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
   deleteSessionPreview: (id) => ipcRenderer.invoke('delete-session-preview', id),
   // initialSize: { cols, rows } measured by the renderer before the spawn, so
@@ -49,6 +54,8 @@ contextBridge.exposeInMainWorld('api', {
   gitChangesLocate: (sessionId, filePath) => ipcRenderer.invoke('git-changes-locate', sessionId, filePath),
   gitChangesWatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-watch', sessionId, filePath),
   gitChangesUnwatch: (sessionId, filePath) => ipcRenderer.invoke('git-changes-unwatch', sessionId, filePath),
+  // see .ai/contexts/touched-files.md
+  sessionTouchedFiles: (sessionId, options) => ipcRenderer.invoke('session-touched-files', sessionId, options),
   onGitChangesFileChanged: (callback) => {
     ipcRenderer.on('git-changes-file-changed', (_event, sessionId, filePath) => callback(sessionId, filePath));
   },
@@ -66,6 +73,7 @@ contextBridge.exposeInMainWorld('api', {
   remoteHostsApply: () => ipcRenderer.invoke('remote-hosts-apply'),
   remoteHostsRefresh: () => ipcRenderer.invoke('remote-hosts-refresh'),
   remoteHostRefresh: (alias) => ipcRenderer.invoke('remote-host-refresh', alias),
+  remoteHostEnrolCheck: (alias) => ipcRenderer.invoke('remote-host-enrol-check', alias),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
@@ -104,7 +112,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Send (fire-and-forget)
   sendInput: (id, data) => ipcRenderer.send('terminal-input', id, data),
-  resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal-resize', id, cols, rows),
+  resizeTerminal: (id, cols, rows, options) => ipcRenderer.send('terminal-resize', id, cols, rows, options?.refresh === true),
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
 
   // Listeners (main → renderer)
@@ -116,6 +124,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   onProcessExited: (callback) => {
     ipcRenderer.on('process-exited', (_event, sessionId, exitCode, signal, stopped, generation) => callback(sessionId, exitCode, signal, stopped, generation));
+  },
+  onRemoteResizeAllowed: (callback) => {
+    ipcRenderer.on('remote-resize-allowed', (_event, sessionId) => callback(sessionId));
   },
   onTerminalNotification: (callback) => {
     ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
@@ -196,8 +207,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('mcp-diff-response', sessionId, diffId, action, editedContent);
   },
   resolveTerminalPaths: (sessionId, texts) => ipcRenderer.invoke('resolve-terminal-paths', sessionId, texts),
-  readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
-  saveFileForPanel: (filePath, content, expected) => ipcRenderer.invoke('save-file-for-panel', filePath, content, expected),
+  readFileForPanel: (filePath, opts) => ipcRenderer.invoke('read-file-for-panel', filePath, opts),
+  saveFileForPanel: (filePath, content, expected, opts) => ipcRenderer.invoke('save-file-for-panel', filePath, content, expected, opts),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
   onFileChanged: (callback) => {

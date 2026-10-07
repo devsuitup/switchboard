@@ -56,7 +56,7 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 - **File watch lifecycle**: each `open()` unwatches the previous path, then watches the new one. `destroy()` unwatches but is rarely called. **If you spawn a new ViewerPanel without destroying the old one, both will keep watchers alive.**
 - **`format` is a renderer-only transform** — it modifies the editor's document, doesn't write to disk. Use `save` separately if you want to persist.
 - **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
-- **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Three sinks share this rule: `viewer-panel.js:397`, `viewer-toolbar.js:47`, and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
+- **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Four sinks share this rule: `ViewerPanel._replaceContent` in `viewer-panel.js`, `toggleMarkdownPreview` and `renderMarkdownPreview` in `viewer-toolbar.js` (the second renders the Touched editor's formatted view, `.ai/contexts/touched-files.md`), and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `grep -n "marked.parse" public/*.js | grep -v "DOMPurify.sanitize(window.marked.parse"` prints only `jsonl-viewer.js`'s `marked.parse(escaped)`, sanitised two lines below. `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
 
 ## Saving over a file that moved
 
@@ -309,3 +309,20 @@ computed from that callback is therefore still right after an undo.
 - **CodeMirror state holds DOM references** — calling `destroy()` then immediately `open()` on the SAME container works because `_createEditor` rebuilds it, but if you reorder this, the editor can dangle.
 - **`format` swallows parse errors**: an invalid `.json` file shows a `!` flash on the button instead of an error message. By design (no toast system in this codebase yet).
 - **`onDelete` doesn't refresh the list automatically** — the workFilesPanel wires a manual `removeWorkFileFromCache(filePath)` call in its `onDelete` handler. If you wire `onDelete` to another panel, add the equivalent refresh.
+
+## Shared controls and header paths (#467)
+
+Keep the select, button, icon button, info button and modal styles together in
+`public/style.css`. `control-select` shares the unchanged `settings-select`
+look; the Settings alias remains supported. `control-btn` aliases the panel
+button style, and `icon-btn` and `info-btn` compose compact controls.
+`modal-overlay` and `modal-dialog` share the existing What's new dialog rules.
+
+`setViewerPath` in `public/viewer-toolbar.js` builds every file/diff header
+path: ViewerPanel (Memory, Work Files and file tabs), Changes/Touched editors
+and the MCP diff header. It keeps the complete path in `title` and two text
+spans: the head shrinks first with ellipsis, and an oversized filename tail
+can also shrink with its own ellipsis. A separator-ending path displays its
+last non-empty segment as the tail; `title` retains the original path. CSS
+follows available width without measuring text or injecting path markup.
+jsdom checks structure and hover paths; visual width behavior needs a live run.

@@ -84,10 +84,20 @@ for (const [name, show, arg] of [
   });
 }
 
-test('style.css: .new-session-body carries the app\'s dark scrollbar', () => {
-  const sel = '.new-session-dialog .new-session-body::-webkit-scrollbar';
-  assert.match(ruleFor(sel) || '', /width:\s*5px/);
-  assert.match(ruleFor(`${sel}-track`) || '', /background:\s*transparent/);
-  assert.match(ruleFor(`${sel}-thumb`) || '', /background:\s*var\(--hairline\)/);
-  assert.match(ruleFor(`${sel}-thumb:hover`) || '', /background:\s*rgba\(255,\s*255,\s*255,\s*0\.1\)/);
+test('style.css: .new-session-body shares the app\'s global dark scrollbar', () => {
+  const window = setup();
+  try {
+    const dialog = window.document.createElement('div');
+    dialog.className = 'new-session-dialog';
+    dialog.innerHTML = '<div class="new-session-body"></div>';
+    window.document.body.appendChild(dialog);
+    const body = dialog.firstElementChild;
+    assert.match(ruleFor('.new-session-dialog .new-session-body'), /overflow-y:\s*auto/);
+    for (const block of CSS.match(/[^{}]+\{[^{}]*\}/g) || []) {
+      const [selector, declarations] = block.split('{');
+      if (!/scrollbar-(?:width|color)\s*:/.test(declarations)) continue;
+      assert.ok(![body, dialog, window.document.body, window.document.documentElement]
+        .some(el => el.matches(selector.trim())), `dialog scrollbar overridden by ${selector.trim()}`);
+    }
+  } finally { window.close(); }
 });

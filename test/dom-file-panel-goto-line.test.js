@@ -77,7 +77,7 @@ function setup({ locateImpl, fileImpl } = {}) {
   });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
-  for (const f of ['splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js']) {
+  for (const f of ['splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'viewer-toolbar.js', 'file-panel.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
   }
   window.initFilePanel();

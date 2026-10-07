@@ -69,7 +69,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
+const { applyAndPersistArchived, clearArchivedEntry, archivePlanForGroups, validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
@@ -77,14 +78,17 @@ const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMe
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, resizePty, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
+const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./remote-attach');
+const { loadAttachProfileId } = require('./remote-attach-profile');
 const { createRemoteStopAdapter } = require('./remote-stop');
-const { attachBlockReason } = require('./remote-host-profile');
+const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./remote-host-profile');
+const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
 const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./run-to-exit');
@@ -93,6 +97,7 @@ const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
+const { listSessionTouchedFiles, mainTouchedCache } = require('./session-touched-files');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
@@ -149,7 +154,7 @@ const {
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
-  getSetting, setSetting, deleteSetting,
+  getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
@@ -466,6 +471,7 @@ ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { deriveProjectPath, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { remapProjectTranscripts } = require('./project-remap');
 const { resolveDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -485,10 +491,11 @@ sessionCache.init({
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
-const { resolveJsonlPath, enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
+const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./remote-hosts');
+const { handleEnrolRequest } = require('./remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 require('./remote-ssh-binary').setResolverLog(log);
@@ -555,6 +562,7 @@ function restartWatcherForAlias(alias) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 const remoteAttachAdapter = createTmuxAttachAdapter({
+  profileId: loadAttachProfileId(app.getPath('userData'), log),
   spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanPtyEnv }),
   log,
 });
@@ -564,6 +572,9 @@ const remoteStopAdapter = createRemoteStopAdapter({ log });
 
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
 const remoteSendAdapter = createRemoteSendAdapter({ log });
+
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+const remoteLaunchAdapter = createRemoteLaunchAdapter({ log });
 
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
@@ -595,6 +606,7 @@ function annotateRemoteAttachable(projects) {
         const supportsAttach = !!(descriptor && remoteAttachAdapter.supports(descriptor));
         session.remoteAttachable = supportsAttach && !hostBlocked;
         session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
+        session.remoteSendBlocked = sendBlockReason(info.profile);
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
@@ -685,7 +697,7 @@ ipcMain.handle('browse-folder', async () => {
 
 // Projects whose schedules may run; see docs/sandbox.md ("Schedules").
 function scheduleProjects() {
-  return scheduleRegistry(getSetting, setSetting);
+  return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
 // --- IPC: add-project ---
@@ -701,6 +713,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
       setSetting('global', global);
     }
+    clearArchivedEntry(getSetting, setSetting, null, projectPath);
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
@@ -755,35 +768,47 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
   }
 });
 
-// --- IPC: remap-project ---
-
-/**
- * Atomically rewrite cwd occurrences of oldPath → newPath in a single JSONL
- * file. Uses a .tmp sibling + rename for crash safety. On any failure the .tmp
- * orphan is cleaned up so it cannot block a future remap attempt.
- */
-function rewriteJsonlAtomic(filePath, oldPath, newPath) {
-  const tmp = filePath + '.tmp';
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const updated = content.split('\n').map(line => {
-      if (!line) return line;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.cwd === oldPath) {
-          parsed.cwd = newPath;
-          return JSON.stringify(parsed);
-        }
-      } catch {}
-      return line;
-    }).join('\n');
-    fs.writeFileSync(tmp, updated);
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
+// --- IPC: archive a project folder — see .ai/contexts/session-cache.md ("Archived projects") ---
+function projectArchivePlan(groups) {
+  return archivePlanForGroups(groups, {
+    registered: scheduleProjects().list(),
+    scan: (projectPath) => scanSchedules(log, [projectPath]),
+    realpath: fs.realpathSync,
+  });
 }
+
+function archiveDeps() {
+  return {
+    isInitialScanComplete,
+    plan: projectArchivePlan,
+    setEnabled: setScheduleEnabled,
+    getAllCached, resolveFolderDir, refreshFolder,
+    buildProjects: () => mergePlaceholderSessions(buildProjectsFromCache(true)),
+    activeSessions, getSetting, setSetting,
+    notify: notifyRendererProjectsChanged,
+    now: () => new Date().toISOString(),
+  };
+}
+
+ipcMain.handle('get-project-archive-plan', (_event, groups) => {
+  if (!isInitialScanComplete()) return { indexing: true };
+  return { schedules: projectArchivePlan(validArchiveGroups(groups)) };
+});
+
+ipcMain.handle('archive-project', (_event, groups, opts) => {
+  const res = archiveProjectFolders(groups, opts, archiveDeps());
+  if (res.error) log.warn(`[archive-project] failed: ${res.error} disabled=${(res.disabled || []).length}`);
+  else log.info(`[archive-project] disabled=${res.disabled.length} failed=${res.failed.length}`);
+  return res;
+});
+
+ipcMain.handle('reenable-project-schedules', (_event, projectPath, folderKey) =>
+  reenableOfferedSchedules(projectPath, folderKey, archiveDeps()));
+
+ipcMain.handle('dismiss-schedule-reenable-offer', (_event, projectPath, folderKey) =>
+  dismissReenableOffer(projectPath, folderKey, archiveDeps()));
+
+// --- IPC: remap-project ---
 
 ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
   try {
@@ -822,10 +847,7 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
 
     // Rewrite cwd in all session JSONL files (top-level + subagents) so
     // `claude --resume` from CLI also picks up the new path.
-    const sessionFiles = enumerateSessionFiles(folderPath);
-    for (const { filePath } of sessionFiles) {
-      rewriteJsonlAtomic(filePath, oldPath, newPath);
-    }
+    remapProjectTranscripts({ folder, folderPath, oldPath, newPath, getSetting, setSetting });
 
     // Refresh the folder cache so the new path takes effect in the UI
     refreshFolder(folder);
@@ -911,6 +933,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
           setSetting('global', global);
         }
       } catch {}
+      try { clearArchivedEntry(getSetting, setSetting, null, normalizedPath); } catch {}
 
       // Also clean up folder meta
       try {
@@ -1003,9 +1026,12 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
-ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
+ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
   try {
     const resolved = path.resolve(filePath);
+    if (gitChangesFile.hasGitSegment(filePath) || gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) {
+      return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+    }
     if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
     // A file link in terminal output decides this path, so the size is not
     // ours -- see .ai/contexts/viewer-panel.md, "Bounds".
@@ -1016,7 +1042,15 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
     }
     const buf = fs.readFileSync(resolved);
     if (buf.includes(0)) return { ok: false, error: 'binary file' };
-    return { ok: true, content: buf.toString('utf8') };
+    const content = gitChangesFile.decodeUtf8(buf);
+    if (content === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+    if (opts?.editor) {
+      const pair = await gitChangesFile.readTouchedChangesFile({ absolutePath: resolved, maxBytes: PANEL_FILE_MAX_BYTES });
+      if (!pair.ok || pair.git) return pair;
+      const current = gitChangesFile.toLf(content);
+      return { ok: true, git: false, original: current, current, readOnly: !!pair.readOnly };
+    }
+    return { ok: true, content };
   } catch (err) {
     return { ok: false, error: err.message, code: err.code };
   }
@@ -1029,7 +1063,24 @@ const panelSaves = createMainPanelSaves({
   onError: (err) => console.error('Error saving memory file:', err),
 });
 
-ipcMain.handle('save-file-for-panel', (_event, filePath, content, expected) => panelSaves.saveFileForPanel(filePath, content, expected));
+ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected, opts) => {
+  try {
+    if (gitChangesFile.hasGitSegment(filePath) || gitChangesFile.hasGitSegment(fs.realpathSync.native(filePath))) {
+      return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+    }
+    if (fs.lstatSync(filePath).isSymbolicLink()) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
+    if (isSensitivePath(path.resolve(filePath))) return { ok: false, error: 'access to sensitive path denied' };
+    if (gitChangesFile.decodeUtf8(fs.readFileSync(filePath)) === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
+    if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
+    const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
+    if (!result.ok) return result;
+    if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file');
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    return { ok: true, version: result.version };
+  } catch (err) {
+    return { ok: false, error: err.code === 'ENOENT' ? 'File does not exist' : err.message };
+  }
+});
 
 // ── File Watching (for viewer panels) ────────────────────────────────
 const fileWatchers = createViewerWatchRegistry({
@@ -1117,7 +1168,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       reconcileCacheFromFilesystem();
     }
 
-    return annotateRemoteAttachable(mergePlaceholderSessions(buildProjectsFromCache(showArchived)));
+    return annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(buildProjectsFromCache(showArchived)), showArchived, { getSetting, setSetting }));
   } catch (err) {
     console.error('Error listing projects:', err);
     return [];
@@ -1614,6 +1665,12 @@ ipcMain.handle('remote-hosts-refresh', async () => {
   }
 });
 
+// see .ai/contexts/session-cache.md ("Remote hosts — enrolment")
+ipcMain.handle('remote-host-enrol-check', (_event, alias) => handleEnrolRequest({ alias }, {
+  isDeclared: (a) => normalizeHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === a),
+  transport: remoteTransport,
+}));
+
 ipcMain.handle('remote-host-refresh', async (_event, alias) => {
   try {
     const result = await remoteIndexer.refreshHostNow(alias, { force: true });
@@ -1729,6 +1786,28 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     }
   }
   return result;
+});
+
+// --- IPC: remote-launch-session ---
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+ipcMain.handle('remote-launch-session', async (_event, payload) => {
+  if (!mainWindow) return { ok: false, error: 'no window' };
+  const rawId = payload && payload.sessionId;
+  const sessionId = typeof rawId === 'string' ? rawId.toLowerCase() : null;
+  if (sessionId && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
+  const result = await handleLaunchRequest(payload, {
+    hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
+    launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),
+    adapter: remoteLaunchAdapter,
+    attach: (alias, descriptor, size) => remoteAttachAdapter.attach(alias, descriptor, size),
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  const session = registerRemoteAttachSession(result.descriptor.sessionId, {
+    alias: payload.alias, projectPath: result.descriptor.cwd, cwd: result.descriptor.cwd, ptyProcess: result.attachResult.ptyProcess,
+    remoteResizeAllowed: result.attachResult.remoteResizeAllowed,
+  });
+  remoteIndexer.refreshHostNow(payload.alias, { force: true }).catch(() => {});
+  return { ok: true, remote: true, remoteResizeAllowed: session.remoteResizeAllowed, generation: session.generation };
 });
 
 // --- IPC: remote-send-prompt ---
@@ -1926,6 +2005,21 @@ ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
 ipcMain.handle('git-changes-unwatch', (_event, sessionId, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return { ok: true };
   return changesWatchers.unwatch(sessionId, filePath);
+});
+
+// see .ai/contexts/touched-files.md
+ipcMain.handle('session-touched-files', async (_event, sessionId, options = {}) => {
+  try {
+    return await listSessionTouchedFiles(sessionId, {
+      projectsDir: PROJECTS_DIR,
+      getCachedFolder,
+      isRemoteFolder,
+      isSensitive: isSensitivePathAsync,
+      windowDays: Number.isFinite(options?.windowDays) && options.windowDays >= 1 ? options.windowDays : undefined,
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // --- IPC: toggle-star ---
@@ -2154,6 +2248,7 @@ ipcMain.handle('delete-session', (_event, sessionId) => {
   }
 
   for (const sid of [id, ...subagentIds]) {
+    mainTouchedCache.dropSession(sid);
     try { deleteCachedSession(sid); } catch {}
     try { deleteSearchSession(sid); } catch {}
   }
@@ -2402,6 +2497,30 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
 }
 
 // --- IPC: open-terminal ---
+function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyProcess, remoteResizeAllowed }) {
+  const remoteSession = {
+    pty: ptyProcess,
+    // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
+    handle: ptyProcess,
+    host: alias, kind: 'remote-attach',
+    remoteResizeAllowed: remoteResizeAllowed === true,
+    rendererAttached: true, exited: false,
+    outputBuffer: [], outputBufferSize: 0, altScreen: false,
+    projectPath, firstResize: true,
+    cwd,
+    isPlainTerminal: false,
+    _openedAt: Date.now(),
+  };
+  activeSessions.set(sessionId, remoteSession);
+  wireSessionPty(remoteSession, sessionId, ptyProcess);
+  ptyProcess.onResizeAllowed?.(() => {
+    if (activeSessions.get(sessionId) !== remoteSession || remoteSession.exited || remoteSession.remoteResizeAllowed) return;
+    remoteSession.remoteResizeAllowed = true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('remote-resize-allowed', sessionId);
+  });
+  return remoteSession;
+}
+
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
 
@@ -2431,6 +2550,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       ok: true, reattached: true, attach: !!session.isAttach, sandbox: !!session.sandbox,
       mcpState: session.mcpError ? 'failed' : getMcpState(session.realSessionId || sessionId),
       mcpError: session.mcpError || null,
+      remoteResizeAllowed: session.remoteResizeAllowed,
       generation: session.generation,
     };
   }
@@ -2452,21 +2572,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (!attachResult.ok) return { ok: false, error: attachResult.error || REMOTE_READ_ONLY };
 
       const remoteCwd = (descriptor && typeof descriptor.cwd === 'string') ? descriptor.cwd : null;
-      const remoteSession = {
-        pty: attachResult.ptyProcess,
-        // handle: {write, isAlive} — see .ai/contexts/trigger-watcher.md, "Session handle"
-        handle: attachResult.ptyProcess,
-        host: alias, kind: 'remote-attach',
-        rendererAttached: true, exited: false,
-        outputBuffer: [], outputBufferSize: 0, altScreen: false,
-        projectPath, firstResize: true,
-        cwd: remoteCwd,
-        isPlainTerminal: false,
-        _openedAt: Date.now(),
-      };
-      activeSessions.set(sessionId, remoteSession);
-      wireSessionPty(remoteSession, sessionId, attachResult.ptyProcess);
-      return { ok: true, reattached: false, remote: true, sandbox: false, generation: remoteSession.generation };
+      const remoteSession = registerRemoteAttachSession(sessionId, {
+        alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult.ptyProcess,
+        remoteResizeAllowed: attachResult.remoteResizeAllowed,
+      });
+      return { ok: true, reattached: false, remote: true, sandbox: false, remoteResizeAllowed: remoteSession.remoteResizeAllowed, generation: remoteSession.generation };
     }
   }
 
@@ -2946,26 +3056,18 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
 });
 
 // --- IPC: terminal-resize (fire-and-forget) ---
-ipcMain.on('terminal-resize', (_event, sessionId, cols, rows) => {
+const handleTerminalResize = createTerminalResizeHandler(activeSessions);
+ipcMain.on('terminal-resize', (_event, sessionId, cols, rows, refresh) => {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     // For plain terminals, suppress buffering during resize to avoid
     // accumulating prompt redraws that pollute reattach replay
     if (session.isPlainTerminal) session._suppressBuffer = true;
 
-    resizePty(session, cols, rows, sessionId);
+    handleTerminalResize(sessionId, cols, rows, refresh);
 
     if (session.isPlainTerminal) {
       setTimeout(() => { session._suppressBuffer = false; }, 200);
-    }
-
-    // First resize: nudge to force TUI redraw on reattach (skip for plain terminals — causes duplicate prompts)
-    if (session.firstResize && !session.isPlainTerminal) {
-      session.firstResize = false;
-      setTimeout(() => {
-        if (!resizePty(session, cols + 1, rows, sessionId)) return;
-        setTimeout(() => resizePty(session, cols, rows, sessionId), 50);
-      }, 50);
     }
   }
 });
@@ -3293,7 +3395,22 @@ if (!gotSingleInstanceLock) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({ activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id) }));
+      require('./trigger-watcher').start(createTriggerContext({
+        activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
+        get remote() {
+          const settings = getSetting('global') || {};
+          if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
+            const aliases = new Set(enabledHosts(settings.remoteHosts).map(host => host.alias));
+            return {
+              indexer: remoteIndexer,
+              adapter: remoteSendAdapter,
+              isEnabled: alias => aliases.has(alias),
+              maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
+            };
+          }
+          return undefined;
+        },
+      }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }

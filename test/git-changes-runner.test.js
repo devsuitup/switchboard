@@ -1227,6 +1227,18 @@ function countingExec(responses, calls = []) {
   };
 }
 
+async function expireCountPass(t, promise, budgetMs) {
+  let done = false;
+  let result;
+  promise.then((value) => { done = true; result = value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(done, false, 'the pass is still waiting on I/O or a slot');
+  t.mock.timers.tick(budgetMs);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(done, true, 'the pass returns at its budget without waiting for blocked I/O');
+  return result;
+}
+
 const TEST_LIMITS = { maxFiles: 500, maxFileBytes: 100, maxTotalBytes: 100, timeBudgetMs: 1000, concurrency: 2 };
 
 test('remote runner .status(): untracked rows are marked "on open" and no extra ssh call is made for them (mutation target: counting remotely)', async () => {
@@ -1365,22 +1377,28 @@ test('measureUntrackedLocal: a file that grew past the cap between lstat and rea
   assert.equal(out.results.get('grew.txt').countStatus, 'too-large');
 });
 
-test('measureUntrackedLocal: past its time budget the pass returns, and the files it did not reach are left for the merge to mark (mutation target: awaiting every file)', async () => {
+test('measureUntrackedLocal: past its time budget the pass returns, and the files it did not reach are left for the merge to mark (mutation target: awaiting every file)', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
   const contents = { 'fast.txt': 'x\n', 'slow.txt': 'y\n', 'late.txt': 'z\n' };
   const fsOps = countingFsOps(contents, { lstatDelayMs: { 'slow.txt': 300 } });
-  const t0 = Date.now();
-  const out = await measureUntrackedLocal(REPO, Object.keys(contents), fsOps, { ...TEST_LIMITS, timeBudgetMs: 60, concurrency: 1 });
-  const elapsed = Date.now() - t0;
-  assert.ok(elapsed < 250, `the pass must return near its budget, took ${elapsed} ms`);
-  assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt']);
-  assert.equal(out.results.has('slow.txt'), false, 'a straggler that settles after the deadline writes nothing');
-  assert.equal(out.results.has('late.txt'), false);
-  await new Promise((resolve) => setTimeout(resolve, 350));
-  assert.equal(out.results.has('slow.txt'), false, 'and nothing lands later either');
-  assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt'], 'a late text file does not land in measured either (mutation target: the closed-pass guard and the returned copies)');
+  const pass = measureUntrackedLocal(REPO, Object.keys(contents), fsOps, { ...TEST_LIMITS, timeBudgetMs: 60, concurrency: 1 });
+  try {
+    const out = await expireCountPass(t, pass, 60);
+    assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt']);
+    assert.equal(out.results.has('slow.txt'), false, 'a straggler that settles after the deadline writes nothing');
+    assert.equal(out.results.has('late.txt'), false);
+    t.mock.timers.tick(300);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(out.results.has('slow.txt'), false, 'and nothing lands later either');
+    assert.deepEqual(out.measured.map((m) => m.path), ['fast.txt'], 'a late text file does not land in measured either (mutation target: the closed-pass guard and the returned copies)');
+  } finally {
+    t.mock.timers.tick(300);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 });
 
-test('measureUntrackedLocal: a call that never returns keeps its slot, so later passes wait for one instead of stacking more blocked calls (mutation target: releasing the slot at the deadline)', async () => {
+test('measureUntrackedLocal: a call that never returns keeps its slot, so later passes wait for one instead of stacking more blocked calls (mutation target: releasing the slot at the deadline)', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
   let release;
   const hung = new Promise((resolve) => { release = resolve; });
   const fsOps = {
@@ -1395,15 +1413,15 @@ test('measureUntrackedLocal: a call that never returns keeps its slot, so later 
   const limits = { ...TEST_LIMITS, timeBudgetMs: 30, concurrency: 2 };
   const before = untrackedCountSlotsInUse();
   try {
-    await measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 1 });
-    await measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 2 });
+    await expireCountPass(t, measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 1 }), limits.timeBudgetMs);
+    await expireCountPass(t, measureUntrackedLocal(REPO, ['hang.txt'], fsOps, { ...limits, concurrency: 2 }), limits.timeBudgetMs);
     assert.equal(untrackedCountSlotsInUse(), before + 2, 'both hung workers still hold their slot');
-    const third = await measureUntrackedLocal(REPO, ['ok.txt'], fsOps, limits);
+    const third = await expireCountPass(t, measureUntrackedLocal(REPO, ['ok.txt'], fsOps, limits), limits.timeBudgetMs);
     assert.equal(third.measured.length, 0, 'no slot comes free within the budget: nothing is started, nothing more can hang');
     assert.equal(untrackedCountSlotWaiters(), 0, 'a pass that gives up withdraws its queued requests, so refreshes cannot grow the queue (mutation target: the withdrawal loop)');
   } finally {
     release();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(untrackedCountSlotsInUse(), before, 'the slots come back once the calls return');
 });
@@ -1680,4 +1698,20 @@ test('runner: a root lookup that prints something other than an absolute path is
   };
   await createGitChangesRunner({ kind: 'remote', cwd: '/srv/app', alias: 'vps', exec }).diff('x.txt');
   assert.equal(commands[1], "git -C '/srv/app' '--literal-pathspecs' 'diff' '--' 'x.txt'");
+});
+
+test('local runner .status(): never two git calls in flight at once — a refresh renames .git/index and a concurrent reader fails on Windows (mutation target: Promise.all)', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const exec = async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight -= 1;
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const runner = createGitChangesRunner({ kind: 'local', cwd: REPO, exec });
+  const result = await runner.status();
+  assert.equal(result.ok, true);
+  assert.equal(peak, 1);
 });

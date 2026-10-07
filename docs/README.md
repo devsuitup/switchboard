@@ -20,6 +20,7 @@ links are in the [README](../README.md#download).
 | [Background agents](background-agents.md) | The Agents view: the daemon's `--bg` sessions, attach in a tab, stop, respawn, delete, dispatch |
 | [IDE emulation](ide-emulation.md) | Switchboard as Claude's IDE: file opens and diffs in a side panel |
 | [Changes view](changes-view.md) | A session's git status and diffs, with an editor for local sessions |
+| [Touched files](touched-files.md) | The files a session's file tools touched, including outside any repository |
 | [Agent Files and Work Files](memory-workfiles.md) | The two file tabs: `CLAUDE.md` and memory files, schedules, `.work-files/` |
 | [Stats](activity-stats.md) | Heatmap, totals, per-model tokens, rate limits |
 | [Session restore](session-restore.md) | Reopening the open sessions at the next launch |
@@ -38,6 +39,7 @@ links are in the [README](../README.md#download).
 | [Development](development.md) | Prerequisites, `task` commands, running from source next to an installed copy, building, project layout |
 | [Testing a PR live](testing-a-pr.md) | `task test-pr`: a PR's code in an isolated instance next to your own, and its pitfalls |
 | [Live testing with a throwaway HOME](live-testing.md) | An instance that cannot see your sessions at all, driven by Playwright |
+| [End-to-end journeys](e2e.md) | The Playwright journeys run against the real app in CI, and how to add one |
 | [Releasing](releasing.md) | Version bump, tag, draft release, publishing |
 | [Changelog](changelog.md) | Writing a `CHANGELOG.md` entry, the CI check, the What's new dialog |
 | [Decisions](decisions/README.md) | Architecture decision records |

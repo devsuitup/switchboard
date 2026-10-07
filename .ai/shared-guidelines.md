@@ -17,6 +17,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Read the Claude CLI's own session state files | [contexts/cli-session-state.md](contexts/cli-session-state.md) |
 | Change Memory/.work-files panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
 | Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
+| Change the Touched tab (files a session's file tools touched, from transcripts) | [contexts/touched-files.md](contexts/touched-files.md) |
 | Change the shell inside the file panel (mount point, hidden-write exemption, splitter) | [contexts/panel-terminal.md](contexts/panel-terminal.md) |
 | Change how a plain terminal's shell starts (the `claude` shim, generated rcfile / `ZDOTDIR`, the typed fallback) | [contexts/plain-terminal.md](contexts/plain-terminal.md) |
 | Change what a path in terminal output links to (matcher, openability check, `path:line`) | [contexts/terminal-path-links.md](contexts/terminal-path-links.md) |
@@ -25,7 +26,9 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the window frame, the strip that replaces the title bar, its drag regions or the menu's accelerators | [contexts/window-frame.md](contexts/window-frame.md) |
 | Change the Agents view, the daemon's job files, attach/detach, dispatch | [contexts/bg-agents.md](contexts/bg-agents.md) |
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
+| Change screen refresh on return, the Refresh controls, or the PTY resize nudge | [contexts/terminal-refresh.md](contexts/terminal-refresh.md) |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
+| Check something only a running app shows (layout, a full IPC round trip), in CI | [../docs/e2e.md](../docs/e2e.md) — Playwright journeys in `e2e/` |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
 | Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |

@@ -39,6 +39,7 @@ function boot(dir, readProcStartMany, platform) {
     readProcStartMany,
     platform,
     readParentPid: () => null,
+    ownPid: -1,
   });
 }
 
@@ -106,6 +107,7 @@ test('no probe is spawned when no candidate needs one', () => withDir(async (dir
   cliSessionState.init({
     dir, activeSessions: new Map(), log: silentLog, onIdle: () => {},
     isProcessAlive: (pid) => pid === 4242,
+    ownPid: -1,
     readProcStartMany: async () => { calls++; return new Map(); },
   });
   const found = await cliSessionState.liveElsewhereMany(['sess-4242', 'sess-4343'], noPty);

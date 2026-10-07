@@ -29,10 +29,6 @@ const markdownExtras = HighlightStyle.define([
 const appThemePatch = EditorView.theme({
   '&': { height: '100%', fontSize: '12.5px' },
   '.cm-content': { padding: '20px 8px' },
-  '.cm-scroller': {
-    scrollbarWidth: 'thin',
-    scrollbarColor: 'rgba(255,255,255,0.08) transparent',
-  },
 }, { dark: true });
 
 // ── Custom floating search bar (matches xterm search bar style) ──────

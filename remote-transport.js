@@ -17,6 +17,12 @@ const MAX_SESSION_DESCRIPTOR_BYTES = 8192;
 const DEFAULT_CONNECT_TIMEOUT_S = 10;
 const DEFAULT_LIST_TIMEOUT_MS = 60_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
+const DEFAULT_ENROL_TIMEOUT_MS = 30_000;
+const MAX_PROBE_BYTES = 1024;
+const MAX_ENROL_BYTES = 2048;
+const MAX_ENROL_DETAIL = 200;
+const SSH_CONNECT_FAILED_EXIT = 255;
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
 // see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
@@ -39,6 +45,63 @@ const LIST_COMMAND =
   `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
   `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +
   `pid=$(basename "$f" .json); printf '\\002ALIVE:%s\\n' "$( [ -d "/proc/$pid" ] && echo 1 || echo 0 )"; done`;
+
+// see .ai/contexts/session-cache.md ("Remote hosts — capability tiers", the probe)
+const PROBE_COMMAND =
+  'if command -v tmux >/dev/null 2>&1; then echo tmux=1; else echo tmux=0; fi; ' +
+  'if command -v inotifywait >/dev/null 2>&1; then echo inotifywait=1; else echo inotifywait=0; fi';
+
+function parseProbe(stdout) {
+  const lines = String(stdout).split('\n').map(l => l.replace(/\r$/, '')).filter(l => l !== '');
+  if (lines.length !== 2) return null;
+  const out = {};
+  for (const name of ['tmux', 'inotifywait']) {
+    const line = lines.find(l => l.startsWith(name + '='));
+    if (line !== name + '=1' && line !== name + '=0') return null;
+    out[name] = line === name + '=1';
+  }
+  return out;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — enrolment")
+const ENROL_COMMAND = PROBE_COMMAND + '; ' +
+  'if command -v claude >/dev/null 2>&1; then echo claude=1; ' +
+  'v=$(claude --version 2>/dev/null | head -n 1 | head -c 64); printf \'claude_version=%s\\n\' "$v"; else echo claude=0; fi; ' +
+  'if [ -d "$HOME/.claude" ]; then echo claude_dir=1; else echo claude_dir=0; fi; ' +
+  'auth=unknown; ' +
+  'if command -v claude >/dev/null 2>&1 && [ -d "$HOME/.claude" ] && claude auth --help 2>/dev/null | grep -q \'^  status\'; then ' +
+  'claude auth status >/dev/null 2>&1 </dev/null; rc=$?; if [ $rc -eq 0 ]; then auth=1; elif [ $rc -eq 1 ]; then auth=0; fi; fi; ' +
+  'echo auth=$auth';
+
+const CLAUDE_VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+.][A-Za-z0-9.+-]{1,32})?(?: \(Claude Code\))?$/;
+
+function parseEnrol(stdout) {
+  const lines = String(stdout).split('\n').map(l => l.replace(/\r$/, '')).filter(l => l !== '');
+  const flag = (line, name) => (line === name + '=1' ? true : line === name + '=0' ? false : undefined);
+  let i = 0;
+  const tmux = flag(lines[i++], 'tmux');
+  const inotifywait = flag(lines[i++], 'inotifywait');
+  const claude = flag(lines[i++], 'claude');
+  if (tmux === undefined || inotifywait === undefined || claude === undefined) return null;
+  let claudeVersion = null;
+  if (claude) {
+    const line = lines[i++];
+    if (typeof line !== 'string' || !line.startsWith('claude_version=')) return null;
+    const value = line.slice('claude_version='.length);
+    claudeVersion = CLAUDE_VERSION_RE.test(value) ? value : null;
+  }
+  const claudeDir = flag(lines[i++], 'claude_dir');
+  if (claudeDir === undefined) return null;
+  const authLine = lines[i++];
+  const auth = authLine === 'auth=1' ? true : authLine === 'auth=0' ? false : authLine === 'auth=unknown' ? null : undefined;
+  if (auth === undefined || i !== lines.length) return null;
+  return { tmux, inotifywait, claude, claudeVersion, claudeDir, auth };
+}
+
+function oneLine(text) {
+  const first = String(text || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+  return first.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, MAX_ENROL_DETAIL);
+}
 
 function parseInventory(stdout) {
   const out = [];
@@ -131,6 +194,8 @@ function createSshTransport(opts = {}) {
   const resolveScpPath = opts.resolveScpPath || defaultResolveScpPath;
   const log = opts.log || { info() {}, warn() {}, error() {} };
   const listTimeoutMs = opts.listTimeoutMs || DEFAULT_LIST_TIMEOUT_MS;
+  const probeTimeoutMs = opts.probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS;
+  const enrolTimeoutMs = opts.enrolTimeoutMs || DEFAULT_ENROL_TIMEOUT_MS;
   const fetchTimeoutMs = opts.fetchTimeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
   const concurrency = Math.max(1, Math.min(8, opts.concurrency || DEFAULT_CONCURRENCY));
 
@@ -233,6 +298,37 @@ function createSshTransport(opts = {}) {
     const transcriptIds = transcriptSessionIds(files);
     const sessions = rawSessions.map(s => ({ ...s, descriptorOnly: !transcriptIds.has(s.sessionId) }));
     return { files, sessions };
+  }
+
+  async function probeTools(alias) {
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, PROBE_COMMAND], {
+      timeoutMs: probeTimeoutMs,
+      maxBytes: MAX_PROBE_BYTES,
+    });
+    if (res.timedOut) throw new Error(`ssh probe timed out after ${probeTimeoutMs} ms`);
+    if (res.truncated) throw new Error('ssh probe output exceeded the size cap');
+    if (res.code !== 0) throw new Error(`ssh probe failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
+    const tools = parseProbe(res.stdout);
+    if (!tools) throw new Error('ssh probe returned unexpected output');
+    return tools;
+  }
+
+  async function checkHost(alias) {
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, ENROL_COMMAND], {
+      timeoutMs: enrolTimeoutMs,
+      maxBytes: MAX_ENROL_BYTES,
+    });
+    if (res.timedOut) return { reachable: false, facts: null, detail: `ssh timed out after ${enrolTimeoutMs} ms` };
+    if (res.truncated) return { reachable: true, facts: null, detail: 'the answer exceeded the size cap' };
+    if (res.code === SSH_CONNECT_FAILED_EXIT || res.code === -1) {
+      return { reachable: false, facts: null, detail: oneLine(res.stderr) || `ssh failed (exit ${res.code})` };
+    }
+    if (res.code !== 0) {
+      return { reachable: true, facts: null, detail: `the check failed on the host (exit ${res.code}): ${oneLine(res.stderr) || 'no stderr'}` };
+    }
+    const facts = parseEnrol(res.stdout);
+    if (!facts) return { reachable: true, facts: null, detail: 'the host returned unexpected output' };
+    return { reachable: true, facts, detail: '' };
   }
 
   async function fetchOne(alias, rel, destRoot) {
@@ -351,7 +447,7 @@ function createSshTransport(opts = {}) {
     cancelInFlight();
   }
 
-  return { listFiles, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
+  return { listFiles, probeTools, checkHost, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
 module.exports = {
@@ -361,6 +457,10 @@ module.exports = {
   splitListOutput,
   transcriptSessionIds,
   LIST_COMMAND,
+  PROBE_COMMAND,
+  parseProbe,
+  ENROL_COMMAND,
+  parseEnrol,
   ALIVE_MARKER_PREFIX,
   REMOTE_PROJECTS_REL,
   REMOTE_SESSIONS_REL,

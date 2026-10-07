@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { computeHostProfile, attachBlockReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
 
 const root = path.join(__dirname, '..');
 
@@ -38,7 +38,7 @@ function makeAnnotate(mocks) {
   const source = extractAnnotateRemoteAttachableSource();
   const factory = new Function(
     'remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker', 'cliSessionState',
-    'attachBlockReason',
+    'attachBlockReason', 'sendBlockReason',
     source + '\nreturn annotateRemoteAttachable;'
   );
   return factory(
@@ -50,7 +50,7 @@ function makeAnnotate(mocks) {
     mocks.remoteAttachAdapter || { supports: () => false },
     mocks.remoteActivityTracker || { activeAt: () => null },
     mocks.cliSessionState || { getStatus: () => undefined },
-    attachBlockReason
+    attachBlockReason, sendBlockReason
   );
 }
 
@@ -145,7 +145,7 @@ test('a session on a host that failed three refreshes in a row is not attachable
   assert.equal(session.remoteAttachable, false);
   assert.match(session.remoteAttachBlocked, /connect timed out/);
   assert.equal(session.remoteStopBlocked, undefined, 'stop runs its own ssh and is never blocked by a poll failure');
-  assert.equal(projects[0].remoteHostProfile.tier, 'none');
+  assert.equal(projects[0].remoteHostProfile.tier, 'launch');
 });
 
 test('a single failed refresh does not block attach, while the project profile still states the error', () => {
@@ -158,7 +158,7 @@ test('a single failed refresh does not block attach, while the project profile s
   const session = projects[0].sessions[0];
   assert.equal(session.remoteAttachable, true);
   assert.equal(session.remoteAttachBlocked, null);
-  assert.match(projects[0].remoteHostProfile.missing[0].reason, /connect timed out/);
+  assert.match(projects[0].remoteHostProfile.tiers.find(t => t.tier === 'observe').reason, /connect timed out/);
 });
 
 test('a session on a healthy host carries no blocking reason and the project carries the host profile', () => {
@@ -175,7 +175,7 @@ test('a session on a healthy host carries no blocking reason and the project car
   const session = projects[0].sessions[0];
   assert.equal(session.remoteAttachable, true);
   assert.equal(session.remoteAttachBlocked, null);
-  assert.equal(projects[0].remoteHostProfile.tier, 'attach');
+  assert.equal(projects[0].remoteHostProfile.tier, 'launch');
 });
 
 test('a remote session carries the descriptor waitingFor, and null when the descriptor has none or is gone', () => {

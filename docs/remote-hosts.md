@@ -73,6 +73,41 @@ The search through the `PATH` and the system locations also runs once. An
 `ssh` or `scp` it found that is later removed is searched for again at its
 next use; one installed after nothing was found is seen after a restart.
 
+### Check host
+
+Each host row in Settings has a **Check host** button. It runs one read-only
+`ssh` to the host and shows a checklist, one line per item with its status (ok,
+missing or unknown), and for a missing or unknown item the command to run, with
+a **Copy** button and where to run it:
+
+| Item | What is read |
+|---|---|
+| ssh reachable | whether the connection (same `ssh`, `BatchMode=yes`) succeeded |
+| claude CLI | whether `claude` is on the `PATH` of an ssh command, and its `--version` |
+| tmux | whether `tmux` is installed; without it the host is observed but cannot launch or attach (optional) |
+| `~/.claude` | whether the directory exists |
+| account logged in | the exit status of `claude auth status` (0 logged in, 1 not) |
+
+The check does not install, log in or write anything itself: the
+commands it hands you are for you to run on the host (`ssh -t <alias>`).
+Switchboard never copies or reads credentials. The login check does not open the
+credentials file or test that it exists: it asks the CLI, throws away what the
+CLI prints (which includes your email), and keeps only the exit status. When the
+state cannot be told (an older CLI without `claude auth status`, no `~/.claude`
+yet, `claude` missing, an unusual exit status) the line says *unknown — run
+`claude` on the host once to log in*, never "not logged in".
+
+Not verified: whether `claude auth status` itself refreshes or rewrites an
+expired token, or makes network calls, when the CLI runs it on the host. The
+check neither asks for nor sees any of that; it only receives the exit status.
+
+Limits: the host must be saved first (the button checks the hosts in the saved
+settings); a Linux host whose login shell is POSIX is required (the command is
+not wrapped in `sh -c`), so a Windows host, or a host whose login shell is fish
+or csh, is reported as not checked; only `tmux` is looked for. If the CLI is logged in only
+through an environment variable set by an interactive profile, the check, which
+runs in a non-interactive shell, reads "not logged in".
+
 ## Requirements on the host
 
 - A Linux host (`/proc` is read for liveness, attach and stop), a POSIX shell
@@ -81,7 +116,7 @@ next use; one installed after nothing was found is seen after a restart.
   `~/.claude/sessions/<pid>.json` descriptors.
 - For live updates: `inotifywait` (inotify-tools). Without it, only the periodic
   pull runs, and a warning is logged.
-- For attach: sessions started inside tmux.
+- For attach: `tmux` installed, and sessions started inside it.
 - For the [Changes view](changes-view.md): `git`.
 
 ## What is copied
@@ -105,8 +140,9 @@ growing delay when it fails.
 ## In the sidebar
 
 A remote host's projects are listed like local ones, with the alias as a badge
-on each session. Their `+` is disabled (*Read-only mirror of &lt;alias&gt; — new
-sessions must be started on that host*).
+on each session. Their `+` starts a new session on the host when it has
+`tmux` (see [Launch a session](#launch-a-session)); without it the button is
+disabled and its tooltip says the host needs tmux.
 
 ### Status
 
@@ -122,10 +158,32 @@ The project header carries a dot for the host's state, with a tooltip:
 
 Hovering the dot also lists the host's capability: the highest of observe,
 liveness, inject, attach and launch that its last refresh could confirm, and for
-each one above it why it is missing (for example no live session names a tmux
-pane). A tier that needs a live session reads as missing on an idle host. After
-three failed refreshes in a row, a row that would attach opens its transcript,
-with the reason in its tooltip; **Stop** is never disabled, it runs its own ssh.
+each one above it why it is missing (for example no live session reports a
+messaging socket). Liveness and inject need a live session to read, so they read
+as missing on an idle host.
+
+Once per host, at its first successful refresh and then every six hours (and on
+**Reconnect**), one extra ssh asks whether `tmux` and `inotifywait` are
+installed and nothing else; while one of them is missing it asks again every 30 minutes, so an install is noticed. A host with `tmux` and no session offers attach; a
+host without it does not, even when a descriptor names a pane, and the dot says
+so. A host without `inotifywait` says that only the periodic pull runs. When the
+probe fails (timeout after 15 seconds, refused, unreadable answer), the host
+stays as it was and the probe is tried again 30 minutes later: an unknown answer
+is never shown as missing.
+
+What the tier gates:
+
+- **Attach.** A row attaches only when the host has `tmux` (as far as the probe
+  knows) and the descriptor names a pane. Otherwise it opens its transcript, with
+  the reason in its tooltip. After three failed refreshes in a row it also opens
+  its transcript, whatever the probe said.
+- **New session** is enabled when the host has `tmux` (probe answer, or a live
+  session naming a tmux pane). Otherwise it is disabled and its tooltip gives the
+  launch tier's reason: the host needs tmux.
+- **Send a prompt…** is disabled, with the inject reason in its tooltip, while no
+  live session on the host reports a messaging socket. A host whose refresh
+  failed does not disable it: it runs its own ssh.
+- **Stop** is never disabled, it runs its own ssh.
 
 A failing host is retried with a doubling delay, up to 30 minutes, and never
 dropped; one success resets it. **Reconnect** on the header retries at once and
@@ -150,15 +208,53 @@ answered. A session open in a tab keeps the terminal's own signals.
   `ssh -tt` (badge tooltip: *Live session on &lt;alias&gt; — click to attach*).
   Switchboard finds the tmux socket from the process's own `TMUX` variable.
   When no other client is attached, it hides tmux's status bar, turns the mouse
-  on and follows the window's size; otherwise the size is fixed at attach time.
+  on and follows the window's size. Every attach carries a tag identifying its
+  data-directory profile, this app instance and this attach. The profile is a
+  random id created once in `app.getPath('userData')/remote-attach-profile-id`
+  and reused after a restart. With `SWITCHBOARD_DATA_DIR`, the file lives in
+  `<data-dir>/electron/remote-attach-profile-id`. Creation is exclusive; a
+  corrupt or unreadable file remains intact and is logged, with a fresh
+  in-memory id used for this run only.
+  Switchboard detaches a listed client only when its readable tag identifies
+  this profile and a different app instance, and its tty is a validated
+  /dev/pts/N. The single-instance lock is per userData directory, so it proves
+  that older instance of this profile is no longer running. Dev and test-pr
+  instances with separate data directories can run beside the installed app;
+  their live clients must remain attached. Hostnames are not used; idle time
+  is not evidence.
+  Once those clients are detached, the terminal opens solo immediately if no
+  real clients remain. There is no three-second attach-time delay. The measured
+  host sshd timeout is 60 seconds × 3: a cut connection can linger for about
+  three minutes without this classification.
+  Untagged clients, clients from another profile, unreadable environments,
+  invalid ttys and another attach of this running instance are never detached.
+  They keep shared mode and its fixed size. Shared terminals check every three
+  seconds and follow the current local size once this exact attach is the only
+  client left. Leaving a solo terminal restores the prior tmux options.
   Leaving the session ends the local ssh client only: the remote session keeps
   running, and opening it again reattaches.
 - **Any other session** opens its transcript in the read-only viewer.
+
+| Listed client's identity | Action |
+| --- | --- |
+| Same profile, different instance, validated /dev/pts/N tty | Detach; open solo if no real client remains and local size is valid |
+| Different profile, including dev/test-pr on the same computer | Never detach; remain shared |
+| Same instance, another attach | Never detach; remain shared |
+| Missing, malformed or unreadable tag; invalid tty; failed detach | Remain shared |
 
 Remote sessions get no [IDE emulation](ide-emulation.md), no
 [panel shell](terminal.md#panel-shell) and no
 [path links](terminal.md#clickable-paths). The [Changes view](changes-view.md)
 works, read-only, by running git over ssh in the session's directory.
+
+Returning to an attached terminal refreshes its screen automatically only
+when it is solo, including after the other clients leave during an attach.
+**Refresh screen**, beside Stop in the terminal header and in the sidebar
+session context menu, also refreshes on demand. The control works for open
+local terminals too. Refreshing a hidden terminal reveals it to fit its size;
+the sidebar control is disabled when no terminal is open. The header control
+is disabled when the session is not running. For shared attachments, explicit
+Refresh only redraws the local buffer; it never resizes the ssh PTY.
 
 ## Stop, archive, delete
 
@@ -171,6 +267,15 @@ works, read-only, by running git over ssh in the session's directory.
   would fetch again.
 
 ## Send a prompt
+
+[Remote triggers](automation.md#remote-trigger-targets) can use the same socket
+adapter when the global `remoteTriggers` setting is enabled (default off, no
+Settings control yet). They share the Send dialog's 30-second dedupe and the
+per-host-session bucket of 30 prompts, refilling one every two seconds. Only
+single commands to unattached sessions use the socket; attached terminals keep
+their existing trigger behavior. Results say `assumed` on success and
+`send unconfirmed` when a write may have happened. Remote idle waits read two
+completed pulls passively; they never request a refresh.
 
 A live session that is not attached in a terminal has a **Send a prompt…**
 button next to Stop. It opens a small dialog; Send (or Ctrl+Enter) writes the
@@ -195,6 +300,35 @@ travels on ssh's standard input only, never on a command line.
 - A host running Windows is refused: its channel needs the session's key file,
   which Switchboard does not read.
 - A session attached in a terminal is refused: type in the terminal.
+
+## Launch a session
+
+The `+` of a remote project opens a dialog: the directory (a list of the host's
+known project paths, or any absolute path typed) and the permission mode, with
+Dangerous Skip as locally. Start runs one `ssh` that checks the directory
+exists (`test -d`), that `tmux` and `claude` are found, then starts
+`claude --session-id <uuid>` in a new detached tmux session named
+`switchboard-<first 8 of the uuid>`, in that directory. The uuid is generated
+by Switchboard. Switchboard then attaches to the new pane the way it attaches to
+any running session, so you land in it.
+
+- Only tmux hosts can launch. There is no launch without a multiplexer. A failed
+  last refresh does not disable it: it runs its own ssh.
+- A directory that does not exist on the host refuses the launch, and the
+  terminal tab says so.
+- Authentication is done on the host, by you. Switchboard copies no credential;
+  a CLI that is not logged in shows its own login prompt in the pane.
+- `claude` must be on the `PATH` of a non-interactive ssh command. When it is
+  only added by an interactive shell profile, the launch says it was not found.
+- The directory may only contain letters, digits, space and `. _ + @ : , = / -`,
+  must be absolute and must not contain a `..` segment. Anything else is refused
+  before ssh runs.
+- Only the permission mode maps to a CLI flag. The local dialog's worktree, Chrome,
+  sandbox, pre-launch command and additional directories do not apply to a remote
+  launch.
+- Stop works as for any remote session: it kills the pane, never the tmux
+  session. Closing the only pane of a session ends that session.
+- Linux hosts only, as for attach.
 
 ## Known limits
 

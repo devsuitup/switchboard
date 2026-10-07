@@ -95,10 +95,10 @@ and pinned by `test/header-controls.test.js`:
 |---|---|---|
 | `indicator` | `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
 | `toggle` | `#panel-terminal-toggle-btn` (Shell), `#changes-toggle-btn` (Changes) | `.icon-btn`: the sidebar filter row's square outlined button (`#running-toggle` and its siblings share the rule), a 14 px icon, the name in `title` and `aria-label`, and the filter buttons' accent `.active` state with `aria-pressed`. |
-| `action` | `#terminal-stop-btn` | A borderless red icon, last, set apart from the toggles by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
+| `action` | `#terminal-refresh-btn`, `#terminal-stop-btn` | Refresh is a neutral borderless icon; Stop is red and last, set apart by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
 
 Each element carries its kind as `data-header-kind`. The static ones (sandbox,
-Stop) are written in `index.html` in the declared order. The modules
+Refresh, Stop) are written in `index.html` in the declared order. The modules
 that build the others (`addMcpToggle` and `addChangesToggle` in `file-panel.js`,
 `addPanelTerminalToggle` in `panel-terminal.js`) hand their element to
 `placeHeaderControl()`, which inserts it before the next declared control

@@ -502,6 +502,7 @@ const stmts = {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `),
   settingsDelete: db.prepare('DELETE FROM settings WHERE key = ?'),
+  settingsKeysWithPrefix: db.prepare('SELECT key FROM settings WHERE substr(key, 1, ?) = ?'),
   searchQuery: db.prepare(`
     SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
     FROM search_fts
@@ -741,6 +742,10 @@ function deleteSetting(key) {
   stmts.settingsDelete.run(key);
 }
 
+function listSettingKeys(prefix) {
+  return stmts.settingsKeysWithPrefix.all(prefix.length, prefix).map(row => row.key);
+}
+
 // --- Initial-scan completeness marker ---
 // The scan worker streams per-folder DB writes, so "session_cache has rows"
 // no longer implies "the initial scan finished" — an interrupted first scan
@@ -888,7 +893,7 @@ module.exports = {
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
-  getSetting, setSetting, deleteSetting,
+  getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete,
   getDailyActivity,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,

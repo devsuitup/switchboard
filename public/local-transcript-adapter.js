@@ -132,4 +132,7 @@ function pruneLocalTranscriptTimers() {
   }
 }
 
-window.api.onSessionTranscriptActivity(onLocalTranscriptActivity);
+// called by app.js once its state exists — see .ai/contexts/session-state.md
+function initLocalTranscriptAdapter() {
+  window.api.onSessionTranscriptActivity(onLocalTranscriptActivity);
+}

@@ -10,6 +10,23 @@ const { spawnSync } = require('node:child_process');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
+test('U3/U19/U23: dynamic remote context filters hosts on every lookup and forwards only source data', () => {
+  let on = false; let enabled = true; let ambiguous = false; const descriptor = { sessionId: 'remote' }; const sent = [];
+  const remote = {
+    indexer: { findSessionAliases: (id, predicate) => id === 'remote' && predicate('vps') ? (ambiguous ? ['vps', 'other'] : ['vps']) : [], getRemoteSessions: () => ({ sessions: [descriptor], at: 42, error: 'backoff' }) },
+    adapter: { send: (...args) => sent.push(args) }, isEnabled: () => enabled, maxAgeMs: 123,
+  };
+  const ctx = createTriggerContext({ activeSessions: new Map(), log: silentLog, get remote() { return on ? remote : undefined; } });
+  assert.equal(ctx.remote, undefined); on = true;
+  assert.deepEqual(ctx.remote.lookup('remote'), { alias: 'vps', descriptor, at: 42, error: 'backoff', maxAgeMs: 123 });
+  ctx.remote.send('vps', descriptor, 'text'); assert.deepEqual(sent, [['vps', descriptor, 'text']]);
+  ambiguous = true; assert.deepEqual(ctx.remote.lookup('remote'), { aliases: ['vps', 'other'] }); ambiguous = false;
+  enabled = false; assert.equal(ctx.remote.lookup('remote'), null);
+  on = false; assert.equal(ctx.remote, undefined);
+  assert.equal(createTriggerContext({ activeSessions: new Map(), log: silentLog }).remote, undefined);
+  assert.equal(Object.hasOwn(createTriggerContext({ activeSessions: new Map(), log: silentLog }), 'remote'), false);
+});
+
 function makeSession(overrides = {}) {
   return {
     pty: { pid: process.pid, write() {} },

@@ -82,7 +82,7 @@ const PRELUDE = `
 `;
 
 function setup() {
-  const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
+  const dom = new JSDOM('<!DOCTYPE html><body><button id="terminal-refresh-btn"></button></body>', { runScripts: 'outside-only' });
   const { window } = dom;
   let exitHandler = null;
   const h = { whileOpening: null };

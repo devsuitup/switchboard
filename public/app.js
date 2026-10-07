@@ -431,6 +431,7 @@ function clearNotifications(sessionId) {
 // terminal-manager.js (handleTerminalData) so the flush interplay is
 // covered by jsdom tests — app.js itself cannot be loaded in jsdom.
 window.api.onTerminalData((sessionId, data) => handleTerminalData(sessionId, data));
+initLocalTranscriptAdapter();
 
 window.api.onSessionDetected((tempId, realId) => {
   if (window.ATRACE) window.atrace('recv.session-detected', realId, { tempId });
@@ -600,6 +601,10 @@ function settlePtyOpen(sessionId, result) {
 
 window.api.onProcessExited((sessionId, exitCode, signal, stopped, generation) => {
   handleProcessExited(sessionId, exitCode, signal, stopped, generation);
+});
+
+window.api.onRemoteResizeAllowed((sessionId) => {
+  allowRemoteResize(sessionId);
 });
 
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
@@ -927,6 +932,14 @@ terminalStopBtn.addEventListener('click', () => {
   if (activeSessionId) confirmAndStopSession(activeSessionId, terminalStopBtn);
 });
 
+function initTerminalRefreshControl() {
+  const button = document.getElementById('terminal-refresh-btn');
+  button.addEventListener('click', () => {
+    if (activeSessionId) requestTerminalRefresh(activeSessionId);
+  });
+}
+initTerminalRefreshControl();
+
 
 // --- Poll for active PTY sessions ---
 // Adaptive cadence: poll fast (3s) only while PTYs are running; when idle, back
@@ -1041,6 +1054,10 @@ function updateTerminalHeader() {
   terminalHeaderStatus.title = status;
   terminalHeaderStatus.setAttribute('aria-label', status);
   terminalStopBtn.style.display = running ? '' : 'none';
+  const refreshButton = document.getElementById('terminal-refresh-btn');
+  refreshButton.disabled = !running;
+  refreshButton.setAttribute('aria-disabled', String(!running));
+  refreshButton.title = running ? 'Refresh screen' : 'Open this session in a terminal to refresh its screen';
   updatePtyTitle();
 }
 
@@ -1108,6 +1125,7 @@ async function loadProjects({ resort = false } = {}) {
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
+  let hiddenProjects = null;
   for (const [sid, pending] of [...pendingSessions]) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
@@ -1116,10 +1134,16 @@ async function loadProjects({ resort = false } = {}) {
       hasReinjected = true;
       // Still pending — re-inject into cached data
       for (const projList of [cachedProjects, cachedAllProjects]) {
-        let proj = projList.find(p => p.projectPath === pending.projectPath);
+        const pendingAlias = pending.session.remoteAlias || null;
+        let proj = projList.find(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias);
         if (!proj) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
+          if (pendingAlias) proj.remoteAlias = pendingAlias;
+          if (worktreeParentPath(pending.projectPath) !== null && hiddenProjects === null) {
+            hiddenProjects = ((await window.api.getSetting('global')) || {}).hiddenProjects || [];
+          }
+          if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
           projList.unshift(proj);
         }
         if (!proj.sessions.some(s => s.sessionId === sid)) {
@@ -1198,10 +1222,55 @@ async function launchNewSession(project, sessionOptions) {
     showSession(sessionId);
     return;
   }
-  syncPtySizeAfterOpen(entry);
+  syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
+  showSession(sessionId);
+  schedulePersistWorkingSet();
+  pollActiveSessions();
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
+async function launchRemoteSession(project, { cwd, options }) {
+  const alias = project.remoteAlias;
+  const sessionId = crypto.randomUUID();
+  const session = {
+    sessionId,
+    summary: 'New session',
+    firstPrompt: '',
+    projectPath: cwd,
+    name: null,
+    starred: 0,
+    archived: 0,
+    messageCount: 0,
+    modified: new Date().toISOString(),
+    created: new Date().toISOString(),
+    remoteAlias: alias,
+  };
+
+  const folder = alias + '::' + encodeProjectPath(cwd);
+  pendingSessions.set(sessionId, { session, projectPath: cwd, folder });
+  sessionMap.set(sessionId, session);
+  for (const projList of [cachedProjects, cachedAllProjects]) {
+    let proj = projList.find(p => p.remoteAlias === alias && p.projectPath === cwd);
+    if (!proj) {
+      proj = { folder, projectPath: cwd, remoteAlias: alias, sessions: [] };
+      projList.unshift(proj);
+    }
+    proj.sessions.unshift(session);
+  }
+  refreshSidebar();
+
+  const entry = createTerminalEntry(session);
+  const result = await window.api.remoteLaunchSession({ alias, sessionId, cwd, options, initialSize: entry.initialSize });
+  if (!result.ok) {
+    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+    entry.closed = true;
+    showSession(sessionId);
+    return;
+  }
+  syncPtySizeAfterOpen(entry, result);
   showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
@@ -1289,7 +1358,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   }
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
-  syncPtySizeAfterOpen(entry);
+  syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 

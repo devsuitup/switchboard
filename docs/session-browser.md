@@ -48,7 +48,7 @@ Buttons on a project header:
 |---|---|
 | Create scheduled task | Opens a Claude session that writes a schedule file — see [Automation](automation.md#creating-a-schedule) |
 | Project settings | Per-project overrides — see [Settings reference](settings.md#project-settings) |
-| Archive all sessions | Archives every session of the project, stopping running ones first |
+| Archive folder | Opens a dialog that archives the folder's sessions and disables its schedules, each optional, and hides the folder — see [Archive a folder](#archive-a-folder) |
 | New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
 
 A project on a [remote host](remote-hosts.md) carries a host status dot and a
@@ -61,10 +61,16 @@ listed before any session has run in it.
 
 **Hide Project**, in Project Settings, removes a project from the sidebar
 without deleting any file. Adding the same folder again with **Add Project**
-shows it again.
+shows it again. Unlike **Archive folder**, it also drops the project's settings
+and its schedule registration, and a new session in the folder does not show
+it again.
 
 Sessions run in a git worktree are listed in their repository's project — see
-[Worktree sessions](worktrees.md).
+[Worktree sessions](worktrees.md). A worktree folder is nested under its
+repository only when that repository is listed for the same host; a worktree of
+another host, or one whose repository is not listed, is shown as a project of
+its own. The worktrees of a repository hidden with **Hide Project** stay hidden
+with it.
 
 ### Missing projects
 
@@ -150,12 +156,45 @@ freeze the window.
 
 - **Pin**: click the pin at the left of a row. Pinned sessions sort before
   unpinned ones and are never hidden behind `+ N older`.
-- **Archive**: the archive button on a row, **Archive all sessions** on a
-  project header, or **Archive all sessions in group** on a slug group.
-  Archiving a running session stops it first — on its host, for a remote
-  session. The bulk buttons skip and report any session that fails to stop,
-  and leave it unarchived; **Archive all sessions** leaves subagents alone.
-  Archived sessions are listed with the **Show archived sessions** filter.
+- **Archive**: the archive button on a row, or **Archive all sessions in
+  group** on a slug group. Archiving a running session stops it first — on its
+  host, for a remote session. The group button skips and reports any session
+  that fails to stop, and leaves it unarchived. Archived sessions are listed
+  with the **Show archived sessions** filter.
+
+### Archive a folder
+
+**Archive folder** on a project header opens a dialog with two boxes, both
+ticked by default and remembered from one use to the next:
+
+- **Archive the N sessions**: archives every top-level session of the folder and
+  of its nested worktrees, whatever the search or filters show. Subagents are
+  left alone. Running sessions are stopped first, on their host for a remote
+  session. If any session fails to stop, the failure is shown on its row and
+  nothing is archived, neither the sessions nor the folder; the sessions that
+  did stop stay stopped.
+- **Disable the M enabled schedules**: writes `enabled: false` into the
+  folder's schedule files — see [Automation](automation.md#schedules).
+  A schedule file reached through a symbolic link is left as it is, and the
+  dialog names it.
+
+Confirming hides the folder and its nested worktrees from the sidebar, even
+with both boxes unticked. **Show archived sessions** shows it again, and search
+still finds its sessions. The folder comes back, with its settings, when it is
+added again with **Add Project**, or when a session it did not hold at archive
+time appears in it: a new session, a fork, a new plain terminal, a run of a
+schedule left enabled, or a new session in one of its worktrees. Resuming or
+unarchiving one of its sessions does not bring it back. While Switchboard is
+still indexing sessions, the folder cannot be archived.
+
+When a folder whose schedules the archive disabled comes back, a notice at the
+top of its group names them: **Turn back on** writes `enabled: true` into each
+file that still reads `enabled: false`, and leaves a file you have re-enabled or
+edited since as it is; a file it cannot change is named in the notice, which
+stays until you dismiss it. **Dismiss** leaves the schedules disabled. Archiving
+the folder again replaces the notice; the schedules it named that are still
+disabled are offered again the next time the folder comes back. A folder with a
+notice is not collapsed automatically.
 
 ## Stop
 

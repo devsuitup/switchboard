@@ -53,6 +53,7 @@ function setupCombinedDom() {
     replayHiddenBuffer: () => {},
     updateRunningIndicators: () => {},
     fitAndScroll: () => {},
+    refreshRemoteTerminalOnReturn: () => {},
 
     statsContent: window.document.getElementById('stats-content'),
     memoryContent: window.document.getElementById('memory-content'),
@@ -100,7 +101,7 @@ function setupCombinedDom() {
   const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
   vm.runInContext(fs.readFileSync(MORPHDOM_PATH, 'utf8'), dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
 
-  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js', 'bridge-url.js', 'sidebar.js']) {
+  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
 

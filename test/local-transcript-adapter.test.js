@@ -18,7 +18,7 @@ const DOM_SRC = path.join(__dirname, '..', 'public', 'session-activity-dom.js');
 const ACTIVITY_SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 const SRC = path.join(__dirname, '..', 'public', 'local-transcript-adapter.js');
 
-function setup(sessionIds = ['s1']) {
+function setup(sessionIds = ['s1'], { init = true, ptyState = true } = {}) {
   const items = sessionIds
     .map(id => `<div class="session-item" data-session-id="${id}"><span class="session-icon"></span></div>`)
     .join('');
@@ -27,8 +27,10 @@ function setup(sessionIds = ['s1']) {
   const { window } = dom;
 
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
-  Object.defineProperty(window, 'activePtyIds', { value: new Set(), writable: true, configurable: true });
-  Object.defineProperty(window, 'sessionMap', { value: new Map(), writable: true, configurable: true });
+  if (ptyState) {
+    Object.defineProperty(window, 'activePtyIds', { value: new Set(), writable: true, configurable: true });
+    Object.defineProperty(window, 'sessionMap', { value: new Map(), writable: true, configurable: true });
+  }
 
   let onActivityCb = null;
   Object.defineProperty(window, 'api', {
@@ -59,6 +61,7 @@ function setup(sessionIds = ['s1']) {
   vm.runInContext(fs.readFileSync(DOM_SRC, 'utf8'), ctx, { filename: DOM_SRC });
   vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
   vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });
+  if (init) vm.runInContext('initLocalTranscriptAdapter()', ctx);
 
   const call = (fnName, ...args) => vm.runInContext(
     `${fnName}(${args.map((a) => JSON.stringify(a)).join(',')})`, ctx
@@ -69,6 +72,8 @@ function setup(sessionIds = ['s1']) {
     document: window.document,
     item: (id) => window.document.querySelector(`.session-item[data-session-id="${id}"]`),
     emit: (payload) => onActivityCb(payload),
+    registered: () => onActivityCb !== null,
+    init: () => vm.runInContext('initLocalTranscriptAdapter()', ctx),
     snapshot: (id) => vm.runInContext(`localTranscriptState(${JSON.stringify(id)}).snapshot()`, ctx),
     hasState: (id) => vm.runInContext(`localTranscriptStates.has(${JSON.stringify(id)})`, ctx),
     setSessionStatus: (id, status, at) => { window.sessionMap.set(id, { status, statusUpdatedAt: at }); },
@@ -233,4 +238,27 @@ test('a mutant subagent decay that leaves agentsBusy stillActive would be caught
   t.pending()[0].fn();
   assert.equal(t.snapshot('p1').agentsBusy, false);
   t.destroy();
+});
+
+test('loading the adapter registers no listener, so a message before app.js state exists reaches nothing', () => {
+  const t = setup(['s1'], { init: false, ptyState: false });
+  assert.equal(t.registered(), false, 'no onSessionTranscriptActivity registration at script load');
+  t.destroy();
+});
+
+test('init registers the handler once the app state exists and the handler then drives the row busy', () => {
+  const t = setup(['s1'], { init: false });
+  t.init();
+  assert.equal(t.registered(), true);
+  assert.doesNotThrow(() => t.emit({ sessionId: 's1', at: Date.now() }));
+  assert.equal(t.snapshot('s1').busy, true);
+  t.destroy();
+});
+
+test('app.js calls initLocalTranscriptAdapter after it declares activePtyIds', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  const decl = src.search(/^let activePtyIds = /m);
+  const call = src.search(/^initLocalTranscriptAdapter\(\);/m);
+  assert.ok(decl >= 0, 'activePtyIds declaration found');
+  assert.ok(call > decl, 'init call found after the declaration');
 });

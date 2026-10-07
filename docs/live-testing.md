@@ -37,18 +37,18 @@ directory, and deleted with it.
 
 ## Driving it with Playwright
 
-Playwright's `_electron.launch()`, from `playwright-core`, starts Electron, and
+Playwright's `_electron.launch()` starts Electron, and
 its locators wait for elements on their own. `app.evaluate(fn)` runs `fn` in the
 main process, with Electron's module as its argument; `app.firstWindow()` is the
 renderer, a regular Playwright `Page`.
 
-Playwright is **not** a dependency of this repository. Install it outside the
-repository's `package.json`, in a scratch directory — `.work-files/` is
-gitignored:
+`@playwright/test` is a dev dependency of this repository, for the
+[end-to-end journeys](e2e.md). A one-off script can live in `.work-files/`
+(gitignored) and `require('@playwright/test')` from the checkout's
+`node_modules`:
 
 ```bash
 mkdir -p .work-files/live && cd .work-files/live
-npm init -y >/dev/null && npm install playwright-core
 ```
 
 `live.js` in that directory — the whole technique in one file:
@@ -59,7 +59,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { _electron: electron } = require('playwright-core');
+const { _electron: electron } = require('@playwright/test');
 
 // A fixture repository with one commit, and a two-line transcript so the project shows in the sidebar.
 function makeFixture(home, env) {
@@ -152,8 +152,7 @@ the `try`, so the `finally` closes the app, if it started, and deletes the
 temporary `HOME` on every path, a failed `git` or a failed launch included.
 Keep new steps inside it, or temporary homes accumulate in `/tmp`.
 
-Turning such journeys into a CI suite is tracked in
-[#304](https://github.com/devsuitup/switchboard/issues/304).
+Journeys worth keeping belong in the CI suite: see [End-to-end journeys](e2e.md).
 
 ## Which one to use
 

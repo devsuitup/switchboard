@@ -316,17 +316,11 @@ function ptySizeChanged(entry, cols, rows) {
   return true;
 }
 
-// Send one resize to the PTY unconditionally, right after open-terminal
-// resolved. Two reasons this is not deduplicated:
-//   - the main process arms its reattach "nudge" (cols+1 then cols, which
-//     forces a TUI repaint) on the FIRST terminal-resize it receives for a
-//     session; with the spawn size now already correct, no organic resize may
-//     ever arrive and a resumed session would never repaint;
-//   - it is the acknowledgement that the size we asked to spawn with is the
-//     size xterm actually ended up with.
-// Cost: exactly one fire-and-forget IPC per session open.
-function syncPtySizeAfterOpen(entry) {
+// see .ai/contexts/terminal-refresh.md
+function syncPtySizeAfterOpen(entry, result) {
   if (!entry || !entry.terminal) return;
+  if (entry.session.remoteAlias) entry.remoteResizeAllowed = result?.remoteResizeAllowed === true;
+  if (entry.session.remoteAlias && !entry.remoteResizeAllowed) return;
   const { cols, rows } = entry.terminal;
   if (!cols || !rows) return;
   entry.lastPtySize = { cols, rows };
@@ -338,6 +332,62 @@ function syncPtySizeAfterOpen(entry) {
 // without being perceptible.
 const CONTAINER_RESIZE_DEBOUNCE_MS = 80;
 
+// see .ai/contexts/terminal-refresh.md
+function scheduleTerminalFit(entry) {
+  clearTimeout(entry.fitTimer);
+  entry.fitTimer = setTimeout(() => {
+    entry.fitTimer = null;
+    if (entry.closed || !entry.element.isConnected || entry.element.clientHeight === 0) {
+      entry.refreshRequested = false;
+      return;
+    }
+    if (entry.refreshRequested && entry.session.remoteAlias && entry.remoteResizeAllowed !== true) {
+      entry.refreshRequested = false;
+      forceRepaint(entry);
+      return;
+    }
+    safeFit(entry);
+    if (entry.resizeSyncRequested) {
+      entry.resizeSyncRequested = false;
+      if (!entry.refreshRequested) {
+        const { cols, rows } = entry.terminal;
+        entry.lastPtySize = { cols, rows };
+        window.api.resizeTerminal(entry.session.sessionId, cols, rows);
+      }
+    }
+    if (!entry.refreshRequested) return;
+    entry.refreshRequested = false;
+    forceRepaint(entry);
+    const { cols, rows } = entry.terminal;
+    entry.lastPtySize = { cols, rows };
+    window.api.resizeTerminal(entry.session.sessionId, cols, rows, { refresh: true });
+  }, CONTAINER_RESIZE_DEBOUNCE_MS);
+}
+
+function allowRemoteResize(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed || !entry.session.remoteAlias || entry.remoteResizeAllowed === true) return;
+  entry.remoteResizeAllowed = true;
+  entry.resizeSyncRequested = true;
+  scheduleTerminalFit(entry);
+}
+
+function requestTerminalRefresh(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed) return;
+  entry.refreshRequested = true;
+  if (entry.element.clientHeight === 0) showSession(sessionId);
+  scheduleTerminalFit(entry);
+}
+
+function refreshRemoteTerminalOnReturn(sessionId, previousSessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed) return;
+  const firstReveal = !entry.hasBeenShown;
+  entry.hasBeenShown = true;
+  if ((previousSessionId !== sessionId || firstReveal) && entry.session.remoteAlias && entry.remoteResizeAllowed === true) requestTerminalRefresh(sessionId);
+}
+
 // Watch the terminal container's own geometry. This is the piece that covers
 // the cases no existing hook did (wake-from-sleep, DPI change, monitor change,
 // sidebar drag): the browser only calls back when the box really changed, so
@@ -345,21 +395,11 @@ const CONTAINER_RESIZE_DEBOUNCE_MS = 80;
 // a leaked observer would be exactly the recurring cost we are avoiding.
 function observeContainerResize(entry) {
   if (typeof ResizeObserver !== 'function') return; // jsdom / very old runtimes
-  let timer = 0;
-  const observer = new ResizeObserver(() => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = 0;
-      // Cheap guard before any measuring call: a hidden container (inactive
-      // tab, grid card scrolled out) has nothing to fit.
-      if (!entry.element.isConnected || entry.element.clientHeight === 0) return;
-      safeFit(entry);
-    }, CONTAINER_RESIZE_DEBOUNCE_MS);
-  });
+  const observer = new ResizeObserver(() => scheduleTerminalFit(entry));
   observer.observe(entry.element);
   entry.stopObservingResize = () => {
-    clearTimeout(timer);
-    timer = 0;
+    clearTimeout(entry.fitTimer);
+    entry.fitTimer = null;
     try { observer.disconnect(); } catch {}
     entry.stopObservingResize = null;
   };
@@ -417,6 +457,45 @@ function isHiddenSingleViewSession(sessionId) {
   return !(entry && entry.panelMounted);
 }
 
+// see docs/activity-trace.md "render.stats"
+const RENDER_STATS_INTERVAL_MS = 1000;
+const renderStats = new Map();
+let renderStatsTimer = 0;
+let renderStatsSince = 0;
+
+function renderStatFor(sessionId) {
+  let s = renderStats.get(sessionId);
+  if (!s) {
+    s = {
+      chunks: 0, chars: 0, hiddenChunks: 0, writes: 0, writeChars: 0,
+      maxBatchChunks: 0, maxBatchChars: 0, atlasChanges: 0, atlasCanvases: 0,
+    };
+    renderStats.set(sessionId, s);
+  }
+  if (!renderStatsTimer) {
+    renderStatsSince = performance.now();
+    renderStatsTimer = setTimeout(emitRenderStats, RENDER_STATS_INTERVAL_MS);
+  }
+  return s;
+}
+
+function noteRenderWrite(sessionId, chunks, chars) {
+  const s = renderStatFor(sessionId);
+  s.writes++;
+  s.writeChars += chars;
+  if (chunks > s.maxBatchChunks) s.maxBatchChunks = chunks;
+  if (chars > s.maxBatchChars) s.maxBatchChars = chars;
+}
+
+function emitRenderStats() {
+  renderStatsTimer = 0;
+  const ms = Math.round(performance.now() - renderStatsSince);
+  const pending = Array.from(renderStats);
+  renderStats.clear();
+  if (!window.ATRACE) return;
+  for (const [sid, s] of pending) window.atrace('render.stats', sid, { ms, ...s });
+}
+
 function flushTerminalBuffer(sessionId) {
   const buf = terminalWriteBuffers.get(sessionId);
   if (!buf) return;
@@ -431,6 +510,7 @@ function flushTerminalBuffer(sessionId) {
   if (!entry) return;
 
   const data = buf.chunks.join('');
+  if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
   const savedViewportY = entry.terminal.buffer.active.viewportY;
@@ -675,13 +755,34 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
   acc.raw = buf.chunks.join('') + acc.raw; // leftover is older — goes first
 }
 
+// Cursor-position query (DSR 6): never kept for a replay — see
+// .ai/contexts/ipc-bridge.md, "Cursor-position queries".
+const CURSOR_POSITION_QUERY = '\x1b[6n';
+
+// One pass: a query re-formed by the removal is left alone, see the doc above.
+function removeCursorPositionQueries(str) {
+  return str.includes(CURSOR_POSITION_QUERY) ? str.split(CURSOR_POSITION_QUERY).join('') : str;
+}
+
+// Length of the query prefix `prev` ends with that `next` completes, 0 if
+// none. Only a chunk starting with '[', '6' or 'n' can complete one.
+function splitQueryPrefixLength(prev, next) {
+  if (!'[6n'.includes(next[0])) return 0;
+  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
+    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
+  }
+  return 0;
+}
+
 function appendToHiddenAccumulator(sessionId, data) {
   let acc = hiddenAccumulators.get(sessionId);
   if (!acc) {
     acc = { raw: '', reset: false };
     hiddenAccumulators.set(sessionId, acc);
   }
-  acc.raw += data;
+  const k = splitQueryPrefixLength(acc.raw, data);
+  const head = k ? acc.raw.slice(0, -k) : acc.raw;
+  acc.raw = head + removeCursorPositionQueries(k ? data.slice(CURSOR_POSITION_QUERY.length - k) : data);
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
     const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
     acc.raw = trimmed.data;
@@ -743,8 +844,11 @@ function replayHiddenBuffer(sessionId) {
   if (!acc || !acc.raw) return;
   const entry = openSessions.get(sessionId);
   if (!entry) return; // destroySession may have removed it first
+  const raw = removeCursorPositionQueries(acc.raw);
+  if (!raw && !acc.reset) return;
   if (acc.reset) entry.terminal.reset();
-  entry.terminal.write(acc.raw);
+  if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
+  entry.terminal.write(raw);
 }
 
 // Entry point for PTY data (wired to window.api.onTerminalData in app.js).
@@ -753,8 +857,15 @@ function replayHiddenBuffer(sessionId) {
 // this logic sat in untestable app.js.
 function handleTerminalData(sessionId, data) {
   const entry = openSessions.get(sessionId);
+  const hidden = !!entry && isHiddenSingleViewSession(sessionId);
+  if (window.ATRACE) {
+    const s = renderStatFor(sessionId);
+    s.chunks++;
+    s.chars += data.length;
+    if (hidden) s.hiddenChunks++;
+  }
   if (entry) {
-    if (isHiddenSingleViewSession(sessionId)) {
+    if (hidden) {
       // Fully suspended — accumulate only, never call terminal.write().
       // drainLiveBufferIntoHiddenAccumulator folds in whatever was left
       // pending from before this session became hidden (see its own
@@ -1027,6 +1138,8 @@ function createTerminalEntry(session, opts = {}) {
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
+    if (entry.resizeSyncRequested) return;
+    if (entry.session.remoteAlias && entry.remoteResizeAllowed !== true) return;
     // Only tell the PTY when the size really moved — see ptySizeChanged.
     if (!ptySizeChanged(entry, cols, rows)) return;
     window.api.resizeTerminal(entry.session.sessionId, cols, rows);
@@ -1061,8 +1174,14 @@ function loadTerminalWebgl(entry) {
     // garbled glyphs. Repaint all visible rows so they re-resolve against the
     // new atlas.
     const repaintVisible = () => entry.terminal.refresh(0, entry.terminal.rows - 1);
-    webglAddon.onChangeTextureAtlas(repaintVisible);
-    webglAddon.onAddTextureAtlasCanvas(repaintVisible);
+    webglAddon.onChangeTextureAtlas(() => {
+      if (window.ATRACE) renderStatFor(entry.session.sessionId).atlasChanges++;
+      repaintVisible();
+    });
+    webglAddon.onAddTextureAtlasCanvas(() => {
+      if (window.ATRACE) renderStatFor(entry.session.sessionId).atlasCanvases++;
+      repaintVisible();
+    });
     entry.webglAddon = webglAddon;
   } catch (e) {
     console.warn('[terminal] WebGL addon failed, falling back to DOM renderer', e);
@@ -1085,6 +1204,8 @@ function restoreTerminalWebgl(sessionId) {
 function destroySession(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
+  clearTimeout(entry.fitTimer);
+  entry.refreshRequested = false;
   // see .ai/contexts/panel-terminal.md
   if (typeof destroyPanelTerminalFor === 'function') destroyPanelTerminalFor(sessionId);
   if (typeof forgetSessionExit === 'function') forgetSessionExit(sessionId);
@@ -1187,6 +1308,7 @@ function showSession(sessionId) {
       entry.terminal.focus();
       fitAndScroll(entry);
     }
+    refreshRemoteTerminalOnReturn(sessionId, previousActiveSessionId);
   }
 }
 

@@ -4,6 +4,7 @@
   "exclude": [
     "**/*.test.js",
     "test/**",
+    "e2e/**",
     "scripts/**",
     "workers/**",
     "public/codemirror-bundle.js",

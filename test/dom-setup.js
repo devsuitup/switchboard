@@ -51,7 +51,7 @@ function setupSidebarDom() {
   const apiTarget = {
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
     onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
-    // local-transcript-adapter.js registers this once at eval time — see
+    // initLocalTranscriptAdapter() registers this once — see
     // .ai/contexts/session-state.md (migration step 4).
     onSessionTranscriptActivity: (cb) => { apiTarget._sessionTranscriptActivityCb = cb; },
     // Manual remote reconnect (issue #252) — explicit defaults so a test that
@@ -104,6 +104,7 @@ function setupSidebarDom() {
     confirmAndStopSession: () => {},
     pollActiveSessions: () => {},
     showNewSessionPopover: () => {},
+    showRemoteLaunchDialog: () => {},
     openSettingsViewer: () => {},
     showResumeSessionDialog: () => {},
     showJsonlViewer: () => {},
@@ -145,9 +146,12 @@ function setupSidebarDom() {
   // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
   // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
+  vm.runInContext('initLocalTranscriptAdapter()', dom.getInternalVMContext());
 
   const ctx = dom.getInternalVMContext();
   const read = (expr) => vm.runInContext(expr, ctx);
@@ -258,4 +262,23 @@ function makeSampleProject(overrides = {}) {
   };
 }
 
-module.exports = { setupSidebarDom, makeSampleProject };
+// Answer the showChoiceDialog modal (public/choice-dialog.js) once it opens:
+// untick the named boxes, then click its confirm or its cancel button.
+// Resolves to the overlay, or null when no dialog opened.
+async function answerChoiceDialog(ctx, { confirm = true, uncheck = [] } = {}) {
+  let overlay = null;
+  for (let i = 0; i < 50 && !overlay; i++) {
+    overlay = ctx.document.querySelector('.modal-overlay');
+    if (!overlay) await new Promise(r => setTimeout(r, 0));
+  }
+  if (!overlay) return null;
+  for (const id of uncheck) {
+    const box = overlay.querySelector(`input[type="checkbox"][data-choice-id="${id}"]`);
+    if (!box) throw new Error(`answerChoiceDialog: no box "${id}"`);
+    box.checked = false;
+  }
+  overlay.querySelector(confirm ? '.choice-dialog-confirm' : '.choice-dialog-cancel').click();
+  return overlay;
+}
+
+module.exports = { setupSidebarDom, makeSampleProject, answerChoiceDialog };

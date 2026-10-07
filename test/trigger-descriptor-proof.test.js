@@ -263,14 +263,14 @@ function chainSession(sessionId, { log, onEnter }) {
   return { ctx, written, desc, setBusy(v) { busy = v; } };
 }
 
-async function runChain(chain, session, uuid) {
+async function runChain(chain, session, uuid, timeoutMs = 20000) {
   const tmp = mkTmp();
   process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
   process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
   const watcher = start(session.ctx);
   try {
     fs.writeFileSync(path.join(tmp, uuid + '.json'),
-      JSON.stringify({ sessionId: uuid, wait: 'idle', chain, timeout_ms: 20000 }), 'utf8');
+      JSON.stringify({ sessionId: uuid, wait: 'idle', chain, timeout_ms: timeoutMs }), 'utf8');
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     const deadline = Date.now() + 15000;
     while (!fs.existsSync(resultPath)) {
@@ -321,38 +321,33 @@ test('chain: the step after /compact is held until the descriptor is idle after 
   assert.ok(!log.lines.some((l) => /Chain step 1 sent/.test(l.text)));
 });
 
-test('chain: a CLI that never goes idle after /compact -> bounded wait, warning, step still written', async () => {
-  process.env.SWITCHBOARD_CLI_READY_WAIT_MS = '300';
-  try {
-    const uuid = 'sess-desc-timeout-' + Date.now();
-    const log = recordingLog();
-    const session = chainSession(uuid, {
-      log,
-      onEnter(n, desc) {
-        if (n === 1) {
-          desc.status = 'busy'; desc.statusUpdatedAt = Date.now();
-          setTimeout(() => session.setBusy(false), 60);
-        }
-      },
-    });
-    session.setBusy(false);
+test('chain: a CLI that never goes idle after /compact -> held to the step deadline, step never written, chain fails', async () => {
+  const uuid = 'sess-desc-timeout-' + Date.now();
+  const log = recordingLog();
+  const session = chainSession(uuid, {
+    log,
+    onEnter(n, desc) {
+      if (n === 1) {
+        desc.status = 'busy'; desc.statusUpdatedAt = Date.now();
+        setTimeout(() => session.setBusy(false), 60);
+      }
+    },
+  });
+  session.setBusy(false);
 
-    const started = Date.now();
-    const result = await runChain([{ command: '/compact' }, { command: 'resume the work' }], session, uuid);
+  const started = Date.now();
+  const result = await runChain([{ command: '/compact' }, { command: 'resume the work' }], session, uuid, 2500);
 
-    const nextText = session.written.find((w) => w.data === 'resume the work');
-    assert.ok(nextText, 'the step must still be written after the bounded wait');
-    assert.ok(log.lines.some((l) => l.level === 'warn' && /CLI not idle after \/compact/.test(l.text)));
-    assert.ok(nextText.at - started >= 300, 'the readiness wait must have been honoured up to its bound');
-    assert.equal(result.ok, true);
-  } finally {
-    delete process.env.SWITCHBOARD_CLI_READY_WAIT_MS;
-  }
+  assert.ok(!session.written.some((w) => w.data === 'resume the work'), 'a step must never be typed while the CLI reads busy');
+  assert.ok(Date.now() - started >= 2000, 'the wait must run to the step deadline');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'chain timeout');
+  assert.match(result.reason, /busy/);
+  assert.equal(result.steps_completed, 1);
 });
 
 test('chain: an Enter that never starts a turn is reported "not confirmed submitted", never "sent"', async () => {
-  process.env.SWITCHBOARD_CLI_READY_WAIT_MS = '200';
-  try {
+  {
     const uuid = 'sess-desc-unconfirmed-' + Date.now();
     const log = recordingLog();
     const session = chainSession(uuid, {
@@ -374,7 +369,5 @@ test('chain: an Enter that never starts a turn is reported "not confirmed submit
     assert.equal(result.steps[1].submitted, 'assumed');
     assert.deepEqual(result.unconfirmed_steps, [1]);
     assert.equal(result.submitted, 'assumed');
-  } finally {
-    delete process.env.SWITCHBOARD_CLI_READY_WAIT_MS;
   }
 });

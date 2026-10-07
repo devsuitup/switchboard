@@ -126,6 +126,16 @@ every call, and the absolute path built from it is used and discarded there.
 
 `open-terminal` accepts `sessionOptions = {type: 'attach', jobId, cwd}` and runs `claude attach <jobId>`; `stop-session` on such a session detaches (`{ok, detached: true}`).
 
+### Touched files (issue #309)
+
+| IPC | Args | Returns | Notes |
+|---|---|---|---|
+| `session-touched-files` | `(sessionId)` | `{ok, files, unresolved, omitted, coverage} \| {ok:false, reason?, error}` | The files the session's file tools touched, from its transcript and its subagents'. `files` rows are `{path, state, openable, tools, count, sources}` with `state` one of `present`, `gone`, `unreadable`, `refused`, `not-file`; `unresolved` rows carry the raw text and a reason, never a `path`. `reason` is `remote` or `no-transcript`. Local sessions only; a `sub:` id is refused. Full design: `.ai/contexts/touched-files.md`. |
+
+This is the one handler whose *output* is a list of absolute paths taken from
+attacker-influenced data. Listing is not opening: the renderer opens a row
+through `read-file-for-panel` and its guards, never through this IPC.
+
 ### Misc
 
 | IPC | Notes |
@@ -148,7 +158,13 @@ every call, and the absolute path built from it is used and discarded there.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`
+
+`remote-resize-allowed(sessionId)` is emitted once when a live remote attach
+promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
+to the renderer, which enables solo sizing and schedules a fitted resize.
+Initial solo attaches and failed promotions emit no event; there is no reverse
+notification. See `.ai/contexts/terminal-refresh.md`.
 
 `session-transcript-activity` and (not listed above; see
 `.ai/contexts/session-cache.md`, "Remote hosts — busy spinner") `remote-activity`
@@ -196,6 +212,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
 | `git-changes-file` / `git-changes-watch` / `git-changes-unwatch` / `git-changes-locate` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root and git directories come from `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, a symlink at the target is refused before anything follows it, and **every remaining check runs on the disk-resolved path** — containment in the root, no `.git` segment, nothing inside a git directory, `isSensitivePath`, regular file | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
+| `session-touched-files` | `isValidChangesSessionId` (no subagent shape), a plain-folder-name check on the cached folder, `resolveTouchedPath` (absolute, no UNC / `\?\` / device form, no control character; relative only against a `verifiedTranscriptCwd`), `isSensitivePathAsync` on every resolved path before its `stat` | shape + disk-resolved denylist — **stat-only**: a path that fails the denylist is listed `refused` and never stat-ed; nothing is read. The click goes to `read-file-for-panel` |
 | `git-changes-diff` | `isSafeGitPath`, or `isSafeNoIndexPath` + containment when `untracked` (`git-changes-runner.js`) | a git pathspec relative to an arbitrary (possibly remote) cwd; see `.ai/contexts/changes-view.md` ("Quoting rule") for why this is a denylist, not an allowlist. The untracked variant is a real filesystem operand of `git diff --no-index`, which has no repository-boundary check of its own: on top of the syntactic guard it is resolved with `realpath`/`stat` against the resolved cwd (local) or checked against `git ls-files --others` (remote), git receives the guard's operand rather than the caller's, and the returned diff must name that same path in its `diff --git` line — see "Untracked files" in the same doc |
 
 ### Sensitive-path candidates
@@ -217,6 +234,11 @@ Fail closed: if **either** realpath fails for a reason other than `ENOENT`/`ENOT
 - **Updater events use a single `onUpdaterEvent(type, data)` callback** for all 5+ event types — different from the per-event onSubagentSpawned/Completed pattern. Inconsistency tax.
 
 ### PTY operations race the exit
+
+`terminal-resize` accepts `(sessionId, cols, rows, refresh)`. The preload
+`resizeTerminal` takes `{refresh: true}` as its optional fourth argument and
+sends the boolean in a single message. The main resize handler owns the nudge
+and final-size restoration; see [terminal-refresh](terminal-refresh.md).
 
 `session.exited` is set from `ptyProcess.onExit`, which fires on a later tick
 than the child's actual death. So `if (!session.exited) session.pty.resize(...)`
@@ -246,6 +268,97 @@ closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
 `writePty` return false on a killed pty. `test/pty-ops-conpty-kill.test.js`
 proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
+
+node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
+(microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
+entry, and frees it, without a lock, while the main thread may be inside
+`PtyKill` or `PtyResize` holding a pointer to that entry, or walking the table
+while the erase shifts it. The beta takes `g_ptyHandlesMutex` on both sides.
+It does not make a second kill safe: `PtyKill` still leaves the handle
+registered with its `hpc`, and `WindowsTerminal.kill` has no once-only guard.
+Measured 2026-10-03 with the child above against the beta: two raw
+`term.kill()` still exit 3221226356, two `killPty` exit 0. The guard stays.
+
+The race itself was measured with a scratch stress script, not kept in the
+suite (each run takes about a minute, and a pass proves nothing). One child
+process per run, so a crash is an exit status: 20 iterations, each starting 4
+`cmd.exe /c exit` ptys plus one long-lived pty, then 300 ms of resize calls
+straight into the binding while the short shells exit, and in kill mode one
+agent-level kill per short pty at a random moment in the first 150 ms.
+Results, 2026-10-03, `useConptyDll`, plain node 24:
+
+| Mode | 1.1.0 | 1.2.0-beta.15 |
+| --- | --- | --- |
+| kill | 5 of 8 runs died, 0xc0000005 | 0 of 8 died |
+| resize | 0 of 3 died | 0 of 3 died |
+
+One beta kill run completed its 20 iterations and then never exited (killed
+after 600 s); not explained. The crash is not deterministic: it needs the exit
+thread's erase to land inside the few instructions between the main thread's
+lookup and its last use of the entry, and reading or writing freed memory only
+crashes when the allocator has already reused or unmapped it. A kill holds
+the pointer across `ClosePseudoConsole`, which can wait for OpenConsole, and then
+writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
+
+### Cursor-position queries
+
+The beta's bundled OpenConsole asks the terminal where its cursor is: a plain
+DSR (`CSI 6n`). 1.1.0 sent none in the same runs. Measured 2026-10-03 on an
+isolated pty under Electron 41 with `useConptyDll` (`cmd.exe`, then a raw-mode
+node reader as the shell):
+
+- With no resize, no query in 10 s.
+- A resize within about the first 3 s of the pty brings one query about 3.3 to
+  4 s after spawn. Unanswered, it is repeated about every 520 ms and dropped
+  after 3 (`cmd.exe`) or 4 (node) queries. Answered, it is sent once. A resize
+  at 4 s or later brought none, and a second resize no second series.
+- OpenConsole keeps waiting after the last repeat: the first CPR that arrives
+  later, even seconds later, is consumed. Every other CPR it receives, a reply
+  it is not waiting for, is passed to the shell's application as typed input,
+  verbatim (`ESC [ 24 ; 1 R` read by the child's stdin). 1.1.0 passes such a
+  reply through the same way.
+
+A visible session answers at once: xterm.js replies with a plain CPR
+(`CSI row;col R`), which `composer-state.js` does not treat as a report (see
+`.ai/contexts/trigger-watcher.md`, CPR), so the answer pushes the quiet clock
+once.
+
+A hidden single-view session cannot answer: its output goes to the hidden
+accumulator, not to xterm. A session with no renderer attached cannot either.
+Both replay paths drop the query instead of keeping it:
+
+- `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
+  remove `CSI 6n` from what they keep, including a query split across chunks
+  and one left in the live write buffer when the session was hidden.
+- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes it
+  on the way in, a query split across several chunks included (the last
+  three code units of the buffer are checked, across entries). That buffer also
+  holds the queries a visible renderer already answered.
+
+The filter is not specific to Windows or to OpenConsole: it runs on every
+platform and removes any `CSI 6n` in a session's output, including one an
+application asked itself (a shell's line editor measuring the cursor, for
+example). Such an application gets its answer while its session is visible; a
+query it sent while the session was hidden or detached goes unanswered, where
+it used to be answered late, at reveal or reattach, with a stale position.
+
+The removal is a single pass. Removing a query can join the bytes around it
+into a new one (`ESC [ ESC [6n 6n` becomes `ESC [6n`); that one is kept, so
+such input is replayed with one query. The earlier version repeated the pass
+until no query was left: it removed bytes that are not a query (xterm.js shows
+the trailing `6n` of that input as text) and was quadratic, and on a crafted
+64 KB chunk the main-side version, which recursed, overflowed the stack.
+
+Kept, each query would be answered by xterm.js at reveal or reattach: one reply
+consumed by an OpenConsole still waiting, every other one typed into Claude or
+the shell. Answering once at reveal instead was rejected: the reply would give
+the cursor of a replay that happened after the output OpenConsole had already
+moved on from, and nothing tells the renderer whether OpenConsole is still
+waiting or a reply was already sent. Left unanswered, OpenConsole keeps its own
+idea of the cursor, as it did on 1.1.0 where it never asked; the next query it
+sends while the session is visible is answered live. Other terminal queries
+in a replay (`CSI c`, `CSI > q`, OSC colour queries) are not filtered; their
+replay is older than this change and not addressed here.
 
 Swallowed errors are not silent: `setPtyOpLogger(log)` in `main.js` routes them
 to `log.debug` as `[pty] <op> skipped session=<id> reason=<message>`. Debug level
@@ -360,6 +473,21 @@ that channel is disabled in the shipped binary, so nothing reaches us. Switchboa
 does not claim the distinction: the sidebar tints the busy spinner violet when
 subagents are live, which asserts only that both things are true at once — see
 `docs/subagents.md`, "Live status".
+
+### Activity trace: render-path counters
+
+`render.stats` (renderer, `public/terminal-manager.js`) answers "is this
+terminal's CPU legitimate": writes, batch size and glyph-atlas rebuilds per
+session per second. It aggregates instead of tracing each write, because a
+per-chunk line would itself be the load at 30 writes a second. The counters sit
+in `renderStats`, created on the first event while `window.ATRACE` is true;
+one `setTimeout` per window, armed by that first event, emits and clears them,
+and drops them if the trace was switched off meanwhile. Nothing is armed while
+the trace is off or the session is silent. `maxBatch*` is per write, not per
+second; `atlasChanges` / `atlasCanvases` are the events that make
+`loadTerminalWebgl` repaint every visible row. Test:
+`test/terminal-render-stats.test.js`. It reports; it does not change the flush
+cap or the WebGL policy.
 
 ### Activity trace: why the main process is the only writer
 

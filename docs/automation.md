@@ -39,7 +39,7 @@ The full, self-contained prompt Claude runs each time.
 |---|---|---|
 | `name` | Display name, in logs and in [ActivityWatch](activitywatch.md) | the file name |
 | `cron` | When to run — see below | required |
-| `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on | on |
+| `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on. [Archiving the folder](session-browser.md#archive-a-folder) can write `enabled: false` | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
 | `catch-up` | `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
@@ -99,9 +99,10 @@ runs under its slug; open it to read the result.
   [Sandbox](sandbox.md#schedules).
 - A schedule runs only in a project Switchboard has launched a session in, or
   that you added with **Add project**. A project with schedules that it never
-  opened runs none until you open a session in it once. Existing schedules
-  keep running: the list is seeded, on first use, with the projects that
-  already hold one. See [Sandbox](sandbox.md#schedules).
+  opened runs none until you open a session in it once. Schedules you
+  already have keep running if they are in a project that has settings of its
+  own or in a git checkout (a directory with a `.git`): the list is seeded, on
+  first use, with those projects. A project outside both is not in it. See [Sandbox](sandbox.md#schedules).
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
 
 ### Catching up a missed run
@@ -146,6 +147,11 @@ one run.
   after that.
 - A schedule turned off with `enabled: false` is not looked at; turned back on,
   it catches up a run it missed in the meantime, within the seven days.
+- Archiving a folder with **Disable the enabled schedules** ticked writes
+  `enabled: false` into each of its schedule files, which live in the
+  project's repository. A file reached through a symbolic link is not changed.
+  When the folder shows again, a notice in its group offers to turn them back
+  on — see [Archive a folder](session-browser.md#archive-a-folder).
 - **Run now** does not count as a run for the record.
 - If the record cannot be read or written, the schedule runs on its cron minute
   as if it had no `catch-up`, and a warning is logged.
@@ -190,11 +196,16 @@ JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
   Any open session qualifies, plain terminals included.
 - `command` — written to the terminal, followed by a separate Enter keypress. At
   most 4 KB, and no CR, LF, NUL or ESC.
-- `wait` — `"none"` (the default) does not wait for the session to stop being
-  busy; `"idle"` does. Neither writes into a prompt that holds unsubmitted
-  input — see [Politeness](#politeness-switchboard-never-types-over-you) — so
-  `"none"` can still wait, up to `timeout_ms`. Use `"idle"` for anything that
-  must not interrupt a response being written.
+- `wait` — `"none"` (the default) writes now: it does not wait for the session
+  to stop being busy, and a prompt written while the CLI is busy is queued by
+  the CLI. It holds in two cases only, each up to `timeout_ms`: the prompt holds
+  unsubmitted input — see
+  [Politeness](#politeness-switchboard-never-types-over-you) — or the CLI shows
+  a dialog (a permission prompt, a question), which would swallow the text. At
+  the deadline it fails `not sent`. `"idle"` waits for the CLI to be at its
+  prompt first, and is the value for anything that must not interrupt a
+  response being written; a session held busy by background agents never gets
+  there, so it fails `not sent` at the deadline.
 - `timeout_ms` — optional bound on all the waiting: idle **and** politeness. A
   positive integer up to 600 000; default 300 000. On a `chain` it is the
   deadline for the **whole chain** — see below.
@@ -251,7 +262,11 @@ Size the budget by what the steps do, not by how many there are. A chain that
 compacts and then resumes spends most of it waiting for the session to go idle
 after `/compact`: `{"chain": [{"command": "/compact"}, {"command": "…"}],
 "timeout_ms": 600000}` is the shape that fits. A session busy for another reason
-spends the same budget.
+spends the same budget. Keep `timeout_ms` at 600 000 for a chain that starts
+with `/compact` while background agents keep the CLI busy: the step is
+confirmed only when compaction ends, and the 82 manual compactions measured
+on one machine took from under a second to 332 s from the Enter, median
+129 s.
 
 ### Environment overrides
 
@@ -262,8 +277,8 @@ spends the same budget.
 | `SWITCHBOARD_TRIGGER_QUIET_MS` | The politeness quiet window | 3 000 |
 | `SWITCHBOARD_TRIGGER_MAX_AGE_MS` | The staleness limit | 300 000 |
 | `SWITCHBOARD_SUBMIT_ENTER_DELAY_MS` | Delay between the text and its Enter | 50 |
+| `SWITCHBOARD_PENDING_OWN_ENTRY_MS` | How long a chain step written while the CLI reads `busy` may take to show in the transcript (not `/compact`) | 30 000 |
 | `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
-| `SWITCHBOARD_CLI_READY_WAIT_MS` | How long a chain step after `/compact` waits for the CLI to report idle | 60 000 |
 | `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
 
 The triggers directory does not move with `SWITCHBOARD_DATA_DIR`: an instance
@@ -344,8 +359,9 @@ sends when no turn started — on a half-typed sentence, that Enter would submit
 it. When politeness never allows a write, the result is `{ "ok": false,
 "submitted": "no", "error": "not sent", "reason": "…" }`.
 
-**What this costs `wait: "none"`.** It does not mean "write now": against a
-non-empty prompt it waits, bounded only by `timeout_ms`. All that time the
+**What this costs `wait: "none"`.** It writes now unless the prompt is
+non-empty or the CLI shows a dialog; in those cases it waits, bounded only by
+`timeout_ms`. All that time the
 trigger holds one of the watcher's 8 concurrent slots (`MAX_INFLIGHT`), so a few
 triggers aimed at sessions whose user walked away mid-sentence can stall the
 queue for everyone. Give triggers that would rather give up a short
@@ -384,6 +400,100 @@ macOS and Linux the comparison is case-sensitive and `\` is not a separator.
 The comparison is by directory: two sessions in the same directory are not told
 apart. 8.3 short names, `subst` drives, junctions and symbolic links are not
 resolved; two spellings of one directory count as a mismatch.
+
+### Remote trigger targets
+
+Set the global `remoteTriggers` setting to `true` to allow a single trigger to
+send a prompt to an unattached remote session. It defaults to `false` and has
+no UI yet; enabling it is maintainer-only for now. The value is the JSON
+property `"remoteTriggers": true` in the SQLite `settings` table's row whose
+`key` is `global`; the row's `value` holds the global settings object
+(`db.js`, `getSetting`/`setSetting`). Preserve its other properties when
+changing it. Changes take effect without a restart. With it off, an unattached
+remote id gives `session not found`.
+
+Use the same `sessionId`, `command`, `wait` (`none` or `idle`), `timeout_ms`
+and optional `expectedCwd` fields. A live local or tmux-attached terminal takes
+precedence and follows the existing terminal path. An exited pane can fall
+through to the socket. Enabled hosts are checked at trigger time and on every
+poll; an id listed by more than one enabled host is refused with both aliases
+in the reason. Trigger fields such as `host` cannot choose a host. An id
+started since the last pull is not found until the next pull. A remote chain
+is refused, with `steps_total` set to its length. `expectedCwd` compares the
+descriptor's cwd using POSIX normalization, including on Windows: case matters,
+a trailing slash does not, and a missing cwd refuses the write.
+
+`wait: none` needs a completed pull no older than twice the host's refresh
+interval; a missing or older pull refuses the write and the reason includes
+the last refresh error. It does not require a readable status.
+
+`wait: idle` polls the descriptors from the normal refresh cycle; it never
+forces a refresh. Only the second distinct completed pull after the wait began
+can establish readiness: the first may have fetched its descriptors before the
+wait began. `idle` permits the send, `busy`, `waiting` and `shell` keep waiting,
+and an absent or unknown fresh status refuses the send. At the deadline the
+reason distinguishes busy, a dialog, a shell command and fewer than two fresh
+pulls. Losing the descriptor or disabling the host during the wait gives
+`session exited during wait`. Attaching a terminal during the wait aborts it.
+
+This may need about two refresh cycles: about two minutes at the 60-second
+floor or ten minutes at the default 300 seconds, plus pull latency. At the
+default interval, use `timeout_ms: 600000` (the cap); it can still expire before
+two pulls finish. The idle read is at most one cycle plus pull latency and one
+poll old, and does not prove the session is idle at the moment of sending.
+Host status timestamps are never compared with the local clock. A target
+also cannot move to another host during the wait; that change refuses
+the send rather than combining pulls from different hosts. The per-session
+lock remains held throughout the idle wait and the bounded 15-second send;
+another trigger for that id queues behind it.
+
+The socket queues text without typing into the composer, so no composer check,
+dialog hold, Enter retry or transcript confirmation runs on this path. Windows
+hosts are refused with the key-file reason. Before prefix handling or waiting,
+the whole command is refused if it contains a Unicode format character
+(`\p{Cf}`), a default-ignorable code point (`\p{Default_Ignorable_Code_Point}`),
+U+2800 (braille blank), U+034F (combining grapheme joiner), a variation selector
+(U+FE00–U+FE0F or U+E0100–U+E01EF), or a tag-block character (U+E0000–U+E007F),
+anywhere in the text. These characters are refused rather than stripped. This
+includes Hangul fillers, joined emoji, emoji with variation selectors such as
+hearts, soft hyphens and right-to-left marks.
+
+For remaining commands, only leading and trailing whitespace is trimmed for
+the prefix check. Only exact `/compact` and `/clear` are allowed slash commands;
+their constant text is sent. Other leading-slash commands, arguments and case
+variants are refused. A first non-whitespace `!` (bash mode) or `#` (memory) is
+also refused. Fullwidth `／` (U+FF0F), `！` (U+FF01) and `＃` (U+FF03) prefixes
+receive the corresponding ASCII refusal; `／compact` and `／clear` are refused
+too. Plain prompts retain their original text, including ASCII and fullwidth
+punctuation in the middle. Plain emoji without refused characters still pass.
+Local PTY and live tmux-attached delivery keep their existing behavior. Each
+refusal returns `error: "not sent"`, `submitted: "no"` and its own reason:
+
+| Command content or prefix | `reason` |
+|---|---|
+| Refused invisible character or blank anywhere | `the command contains an invisible format character or blank that cannot be sent to a remote session; nothing was written` |
+| Unsupported `/` or any `／` | `a slash command other than /compact and /clear cannot be sent to a remote session; nothing was written` |
+| `!` or `！` | `a bash-mode command cannot be sent to a remote session; nothing was written` |
+| `#` or `＃` | `a memory command cannot be sent to a remote session; nothing was written` |
+
+**The effect of `/compact` and `/clear` over the socket is UNVERIFIED**;
+they may execute as commands or arrive as plain text. Whether a prompt during
+a permission dialog is queued or lost is also unverified.
+
+Successful socket results add `channel: "socket"`, `host` and
+`descriptor: { status, status_updated_at, pulled_at }`, captured before the
+write; absent status fields are `null`. `pulled_at` is local epoch milliseconds,
+while `status_updated_at` is the host's timestamp. Success is always
+`submitted: "assumed"`, `submit_retries: 0`, with no `submit_confirmed`: the
+channel has no reply and can silently drop a prompt. Compare a later status
+timestamp from the same host to confirm the effect yourself.
+
+The Send dialog and triggers share the adapter's 30-second dedupe and a bucket
+of 30 prompts per host and session, refilling one token every two seconds.
+Identical text repeated within 30 seconds is refused before any send; a timeout
+also holds that dedupe reservation. A definite failure refunds its bucket token;
+an uncertain write keeps it. Other non-zero exits retain the existing dedupe
+release behavior. The server can still silently drop a prompt.
 
 ### Reading a result
 
@@ -433,7 +543,9 @@ never in `error`: `not sent: input pending` is not `not sent`.
 | `error` | What it promises | What to do |
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
+| `send unconfirmed` | a socket write timed out or returned an unclassified non-zero exit; the line may have reached the session; `written` is `unknown` and `submitted` is `no` | check the session before retrying; a timeout reserves identical text for 30 seconds |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
+| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed. For a local session whose descriptor reads `busy`, the chain first waits for the step to show in the session transcript with its turn finished: up to 30 s for the step to show at all (up to the step's deadline for `/compact`, which shows only when compaction ends), then up to the step's deadline for its turn to finish; `reason` says which wait ran out | after a dialog or input of your own, the step may sit unsubmitted in the composer: look before sending again. After a wait under `busy`, the step may still be running or queued in the CLI: look at the session before sending again |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 The two reserved values mean opposite things:
@@ -446,6 +558,39 @@ The two reserved values mean opposite things:
   `partial: false` for a `chain`. A session reports itself busy for as long as
   any subagent runs, so `idle` is often unreachable; `not sent` there tells the
   caller the payload never left.
+- A single `command` with `wait: "idle"` is held like a chain step: after the idle
+  wait and the politeness wait, it is not written until the CLI's descriptor
+  reads `idle`, up to `timeout_ms`. An `idle` stamped before the settle window
+  is ready at once; a more recent one settles for at most the time left. If it
+  still reads `waiting` then, the result is `not sent` with `reason` *the CLI
+  reports a dialog open (waiting); nothing was written into it*; `busy` gives
+  *the CLI still reported a turn running (busy) at the deadline; nothing was
+  written*, and a session whose background agents keep the parent descriptor
+  `busy` (#360) always ends so: use `wait: "none"` for it. An `idle` that
+  never held long enough to settle gives *the CLI was idle only briefly before
+  the deadline; it never held long enough to settle; nothing was written*. Without a readable
+  descriptor at the first read nothing is waited for.
+- A single `command` with `wait: "none"` keeps its write-now meaning: `busy`,
+  `idle` or an unreadable descriptor write at once, with no settle. The only
+  hold is a dialog: while the descriptor reads `waiting`, nothing is written,
+  and at `timeout_ms` the result is `not sent` with the dialog reason above. A
+  descriptor lost after it read `waiting` keeps the hold.
+- Every single `command` is also never written once its `timeout_ms` has passed
+  (`not sent`, *the step deadline passed before it could be written; nothing
+  was written*). Keystrokes typed in the terminal are never held back: they are
+  how a dialog is answered.
+- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
+- When the wait ends because the session never got there and the CLI's
+  descriptor read `waiting` (a dialog is open: a permission prompt or a
+  question) at any sample in the last few hundred milliseconds of it, `reason`
+  says so: *the CLI reports a dialog open (waiting); nothing was written into
+  it* for a `command` or a chain's initial wait, in place of the plain timeout
+  reason. A chain whose turn was still awaited after a step was written ends
+  `chain timeout` with `reason` *the CLI reports a dialog open (waiting) while
+  the turn was awaited; the step had been written*; without a dialog, that
+  result carries no `reason`. Without a readable descriptor, results are as
+  before. The result file is the only place this is reported: answer the dialog
+  in the session.
 - A session that exits during that initial wait reports `submitted: "no"` and a
   `reason` saying nothing was written (`partial: false` on a chain).
 
@@ -455,6 +600,8 @@ Both count every wait the trigger spent, at different scopes:
 
 - A `command` result carries `waited_ms`: the `wait: "idle"` wait (0 with
   `wait: "none"` or an idle session), plus the politeness wait, plus the
+  readiness wait (for `wait: "idle"`, the time spent until the descriptor read
+  idle; for `wait: "none"`, the time a dialog held it, else 0), plus the
   submission verification and its retry, if any.
 - A `chain` result carries `total_waited_ms` for the whole chain, and a
   `waited_ms` in each `steps[]` entry: that step's politeness wait, its

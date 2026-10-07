@@ -632,6 +632,8 @@ watch-channel descriptor list to poll; its only inputs are:
 - **Nothing else.** No `attention`, no `waitingForInput` claimed from a
   completion signal — see the ports-table note below the table.
 
+**Registration waits for `app.js`.** The adapter script loads before `app.js`, and its handler reads `activePtyIds` (declared in `app.js`), so the script does not register the listener itself: `app.js` calls `initLocalTranscriptAdapter()` right after its own state exists, next to the other `window.api.on*` listeners (`test/local-transcript-adapter.test.js` pins the order). A `session-transcript-activity` message sent before that point reaches no listener and is dropped, which loses at most one busy signal: the main-process tracker emits at most once per second per session, has no trailing emission, and re-emits on the next transcript write, so a session still writing is marked busy within about a second of `app.js` loading. Before this, such a message threw `activePtyIds is not defined` in the renderer (issue #415). The other `window.api.on*` registrations in scripts loaded before `app.js` read only state owned by those scripts or by earlier ones, so none needed the same change.
+
 **The main-process half has its own two guards, in `local-transcript-activity.js`
 (a pure factory, `createLocalTranscriptTracker`, unit-tested without Electron —
 same pattern as `remote-activity.js`).** `sessionIdFromWatchParts(parts)`

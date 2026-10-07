@@ -13,6 +13,26 @@ const path = require('path');
 const { createRemoteIndexer } = require('../remote-index');
 const { MIN_REFRESH_MS } = require('../remote-hosts');
 
+test('U18/U23: all enabled aliases resolve dynamically while singular lookup stays unchanged', async () => {
+  const dataDir = tmp('idx-find-aliases');
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }, { alias: 'other' }], dataDir, transport: {},
+    scanFolders: async () => ({ ok: true }), listIndexedFolderKeys: () => [], timers: fakeTimers(),
+    sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set(), sessions: [{ sessionId: 'shared', pid: 1 }] }),
+  });
+  try {
+    await indexer.refreshNow();
+    let enabled = true;
+    const isEnabled = alias => alias === 'vps' || enabled;
+    assert.deepEqual(indexer.findSessionAliases('shared', isEnabled), ['vps', 'other']);
+    assert.deepEqual(indexer.findSessionAliases('absent', isEnabled), []);
+    enabled = false;
+    assert.deepEqual(indexer.findSessionAliases('shared', isEnabled), ['vps']);
+    assert.deepEqual(indexer.findSessionAliases('shared', () => false), []);
+    assert.equal(indexer.findSessionAlias('shared'), 'vps');
+  } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 function tmp(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-' + name + '-'));
 }
@@ -911,12 +931,12 @@ test('getRemoteHostProfile follows the last cycle: never synced, then live tmux 
 
     assert.equal(indexer.getRemoteHostProfile('box').tier, 'none', 'never synced');
     await indexer.refreshNow();
-    assert.equal(indexer.getRemoteHostProfile('box').tier, 'attach');
+    assert.equal(indexer.getRemoteHostProfile('box').tier, 'launch');
     outcome = 'fail';
     await indexer.refreshNow({ force: true });
     const failed = indexer.getRemoteHostProfile('box');
-    assert.equal(failed.tier, 'none');
-    assert.match(failed.missing[0].reason, /connect timed out/);
+    assert.equal(failed.tier, 'launch');
+    assert.match(failed.tiers.find(t => t.tier === 'observe').reason, /connect timed out/);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

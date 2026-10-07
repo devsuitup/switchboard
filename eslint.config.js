@@ -108,15 +108,23 @@ const rendererCrossFileGlobals = {
   // no ESLint config, so new cross-file renderer symbols have to be declared
   // here when syncing or no-undef fires across five consumers.
   shortProjectPath: 'readonly',
+  // public/choice-dialog.js and public/worktree-nesting.js
+  showChoiceDialog: 'readonly',
+  SIDEBAR_WORKTREE_RE: 'readonly',
+  worktreeParentPath: 'readonly',
+  worktreeName: 'readonly',
+  isHiddenRepositoryWorktree: 'readonly',
   formatIndexingBannerText: 'readonly',
   PERMISSION_MODES: 'readonly',
   showSession: 'readonly',
   confirmAndStopSession: 'readonly',
   pollActiveSessions: 'readonly',
   showNewSessionPopover: 'readonly',
+  showRemoteLaunchDialog: 'readonly',
   openSettingsViewer: 'readonly',
   wireActivityTraceToggle: 'readonly',
   wireActivityReportingToggle: 'readonly',
+  wireRemoteEnrolControls: 'readonly',
   renderActivityReportingStatus: 'readonly',
   renderActivityTraceFiles: 'readonly',
   openActivityTraceFile: 'readonly',
@@ -189,6 +197,7 @@ const rendererCrossFileGlobals = {
   isRemoteRowOwned: 'readonly',
   // public/local-transcript-adapter.js (local-transcript adapter, see .ai/contexts/session-state.md)
   localTranscriptPtyTakeover: 'readonly',
+  initLocalTranscriptAdapter: 'readonly',
   pruneLocalTranscriptTimers: 'readonly',
   localTranscriptStates: 'readonly',
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
@@ -225,6 +234,8 @@ const rendererCrossFileGlobals = {
   isMac: 'readonly',
   flashButtonText: 'readonly',
   toggleMarkdownPreview: 'readonly',
+  isMarkdownPath: 'readonly',
+  renderMarkdownPreview: 'readonly',
   refreshSidebar: 'readonly',
   updateRunningIndicators: 'readonly',
   hideAllViewers: 'readonly',
@@ -280,12 +291,16 @@ const rendererCrossFileGlobals = {
   setSessionSandboxed: 'readonly',
   destroySession: 'readonly',
   launchNewSession: 'readonly',
+  launchRemoteSession: 'readonly',
   launchTerminalSession: 'readonly',
   launchScheduleCreator: 'readonly',
   resolveDefaultSessionOptions: 'readonly',
   handleSessionNavKey: 'readonly',
   isSessionNavKey: 'readonly',
   fitAndScroll: 'readonly',
+  requestTerminalRefresh: 'readonly',
+  allowRemoteResize: 'readonly',
+  refreshRemoteTerminalOnReturn: 'readonly',
   safeFit: 'readonly',
   proposeFittedDimensions: 'readonly',
   refitOpenTerminals: 'readonly',
@@ -356,7 +371,8 @@ module.exports = [
       'dist/**',
       'build/**',
       'public/codemirror-bundle.js',
-      'scripts/**', // ad-hoc build helpers; out of lint scope for now
+      'scripts/**/*', // ad-hoc build helpers; out of lint scope for now
+      '!scripts/test-pr.js',
       '.work-files/**',
       '.claude/**', // agent worktrees (nested checkouts) and command config; not lint scope
     ],
@@ -380,6 +396,36 @@ module.exports = [
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-unreachable': 'warn',
       'no-redeclare': 'warn',
+    },
+  },
+
+  // see .ai/contexts/touched-files.md
+  {
+    files: ['public/file-panel.js'],
+    languageOptions: {
+      globals: { initTouchedView: 'readonly', renderTouchedTab: 'readonly', hideTouchedView: 'readonly' },
+    },
+  },
+  {
+    files: ['public/touched-files-view.js'],
+    languageOptions: {
+      globals: {
+        FP_ICONS: 'readonly',
+        currentPanelSessionId: 'readonly',
+        handleClose: 'readonly',
+        getSessionState: 'readonly',
+        endCurrentTab: 'readonly',
+        destroyCurrentTab: 'readonly',
+        confirmDiscardChangesEdits: 'readonly',
+        showPanel: 'readonly',
+        renderPanel: 'readonly',
+        filePanelState: 'readonly',
+        openTouchedEditor: 'readonly',
+        renderPanelListLayout: 'readonly',
+        readChangesEditorContent: 'readonly',
+        createChangesTab: 'readonly',
+        restoreChangesEdits: 'readonly',
+      },
     },
   },
 
@@ -428,6 +474,21 @@ module.exports = [
     },
   },
 
+  // Producer of the host checklist global that settings-panel.js consumes.
+  {
+    files: ['public/remote-enrol-panel.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: { ...globals.browser, wireRemoteEnrolControls: 'off' },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
   // Dual-mode Settings section (public/activity-reporting-panel.js — see
   // .ai/contexts/activitywatch.md): classic <script> in the renderer, and
   // require()-d in node:test for its status text. It declares the two globals
@@ -462,6 +523,28 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Producer of cross-file renderer globals, dual-mode like subagent-timing.js below.
+  {
+    files: ['public/worktree-nesting.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        module: 'writable',
+        SIDEBAR_WORKTREE_RE: 'off',
+        worktreeParentPath: 'off',
+        worktreeName: 'off',
+        isHiddenRepositoryWorktree: 'off',
       },
     },
     rules: {
@@ -588,6 +671,7 @@ module.exports = [
       'git-changes.js',
       'git-changes-runner.js',
       'git-changes-target.js',
+      'session-touched-files.js',
       'panel-terminal-target.js',
       'folder-index-state.js',
       'pty-size.js',
@@ -597,7 +681,9 @@ module.exports = [
       'schedule-runner.js',
       'shell-profiles.js',
       'terminal-input.js',
+      'terminal-resize.js',
       'trigger-context.js',
+      'scripts/test-pr.js',
       'workers/**/*.js',
     ],
     languageOptions: {
@@ -624,6 +710,25 @@ module.exports = [
       sourceType: 'commonjs',
       globals: {
         ...globals.node,
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+    },
+  },
+
+  // Playwright journeys: Node, plus the renderer callbacks passed to page.evaluate
+  {
+    files: ['e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+        activeSessionId: 'readonly',
+        openSessions: 'readonly',
       },
     },
     rules: {

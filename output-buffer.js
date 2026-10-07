@@ -39,7 +39,9 @@
 //   The reattach loop in main.js iterates `for (const chunk of outputBuffer)`
 //   and forwards each chunk verbatim to xterm.js.  Because we only ever
 //   remove bytes from the front of the conceptual stream (never insert, split,
-//   or reorder), xterm.js sees a consistent terminal state.  The line-boundary
+//   or reorder), xterm.js sees a consistent terminal state.  (Cursor-position
+//   queries are the one exception: dropped on the way in, they draw nothing.)
+//   The line-boundary
 //   trim means the replay starts at a newline (not mid-escape), so cursor/color
 //   state from before the trim window is simply absent — same trade-off the
 //   original whole-chunk front-trim had, just at a byte-accurate boundary.
@@ -63,6 +65,61 @@
 const COALESCE_THRESHOLD = 64;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
+// Cursor-position query (DSR 6). Never replayed: see .ai/contexts/ipc-bridge.md,
+// "Cursor-position queries".
+const CURSOR_POSITION_QUERY = '\x1b[6n';
+
+// One pass: a query re-formed by the removal is left alone, see the doc above.
+function removeCursorPositionQueries(data) {
+  return data.includes(CURSOR_POSITION_QUERY) ? data.split(CURSOR_POSITION_QUERY).join('') : data;
+}
+
+// Length of the query prefix `prev` ends with that `next` completes, 0 if none.
+function splitQueryPrefixLength(prev, next) {
+  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
+    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
+  }
+  return 0;
+}
+
+// The last n code units of the buffer, across entries.
+function bufferTail(state, n) {
+  const parts = [];
+  let size = 0;
+  for (let i = state.outputBuffer.length - 1; i >= 0 && size < n; i--) {
+    const part = state.outputBuffer[i].slice(-(n - size));
+    parts.unshift(part);
+    size += part.length;
+  }
+  return parts.join('');
+}
+
+function dropBufferEnd(state, count) {
+  let left = count;
+  while (left > 0) {
+    const last = state.outputBuffer.length - 1;
+    const entry = state.outputBuffer[last];
+    if (entry.length <= left) {
+      state.outputBuffer.pop();
+      state.outputBufferSize -= entry.length;
+      left -= entry.length;
+    } else {
+      state.outputBuffer[last] = entry.slice(0, -left);
+      state.outputBufferSize -= left;
+      left = 0;
+    }
+  }
+}
+
+// Only a chunk starting with '[', '6' or 'n' can complete a split query.
+function dropSplitQuery(state, chunk) {
+  if (!'[6n'.includes(chunk[0])) return chunk;
+  const k = splitQueryPrefixLength(bufferTail(state, CURSOR_POSITION_QUERY.length - 1), chunk);
+  if (k === 0) return chunk;
+  dropBufferEnd(state, k);
+  return chunk.slice(CURSOR_POSITION_QUERY.length - k);
+}
+
 /**
  * Push `data` into `state.outputBuffer` and maintain the two invariants:
  *   1. `state.outputBufferSize` ≤ `max` (the 256 KB ceiling by default)
@@ -74,10 +131,12 @@ const MAX_BUFFER_SIZE = 256 * 1024;
  * `state`.  Designed to be unit-testable in isolation from main.js / Electron.
  *
  * @param {{ outputBuffer: string[], outputBufferSize: number }} state
- * @param {string} data
+ * @param {string} chunk
  * @param {number} max  Maximum retained UTF-16 code units (normally MAX_BUFFER_SIZE)
  */
-function appendToOutputBuffer(state, data, max) {
+function appendToOutputBuffer(state, chunk, max) {
+  if (!chunk) return;
+  const data = removeCursorPositionQueries(dropSplitQuery(state, chunk));
   if (!data) return;
 
   state.outputBuffer.push(data);

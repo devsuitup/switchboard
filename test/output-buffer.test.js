@@ -237,3 +237,67 @@ test('appendToOutputBuffer: small chunk on a MAX-1 spine keeps full history', ()
   // The newest bytes ('c') must survive at the tail.
   assert.ok(joined(state).endsWith('c'.repeat(chunkSize)), 'newest chunk must remain at the tail');
 });
+
+// ---------------------------------------------------------------------------
+// Cursor-position queries (CSI 6n) are not replayed on reattach: the renderer
+// would answer each one, and ConPTY hands a reply it is not waiting for to the
+// application as typed input. See .ai/contexts/ipc-bridge.md.
+// ---------------------------------------------------------------------------
+
+test('GIVEN chunks carrying cursor-position queries WHEN appended THEN the replay buffer keeps the text without the queries', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A\x1b[6nB', MAX);
+  appendToOutputBuffer(state, '\x1b[6n\x1b[6nC', MAX);
+  assert.equal(joined(state), 'ABC');
+  assert.equal(state.outputBufferSize, 3);
+});
+
+test('GIVEN a cursor-position query split across two chunks WHEN both are appended THEN neither half stays in the replay buffer', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A\x1b[', MAX);
+  appendToOutputBuffer(state, '6nB', MAX);
+  appendToOutputBuffer(state, 'C\x1b', MAX);
+  appendToOutputBuffer(state, '[6nD', MAX);
+  appendToOutputBuffer(state, 'E\x1b[6', MAX);
+  appendToOutputBuffer(state, 'nF', MAX);
+  assert.equal(joined(state), 'ABCDEF');
+  assert.equal(state.outputBufferSize, 6);
+});
+
+test('GIVEN other sequences that look like the query WHEN appended THEN they are kept byte for byte', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[', MAX);
+  appendToOutputBuffer(state, '5n', MAX);
+  assert.equal(joined(state), '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+});
+
+test('GIVEN a chunk that is only a query WHEN appended THEN no empty entry is pushed', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A', MAX);
+  appendToOutputBuffer(state, '\x1b[6n', MAX);
+  assert.deepEqual(state.outputBuffer, ['A']);
+});
+
+test('GIVEN a chunk that is only the first half of a query WHEN the second half arrives THEN no empty entry is left behind', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A', MAX);
+  appendToOutputBuffer(state, '\x1b[', MAX);
+  appendToOutputBuffer(state, '6n', MAX);
+  assert.deepEqual(state.outputBuffer, ['A']);
+  assert.equal(state.outputBufferSize, 1);
+});
+
+test('GIVEN a query inside an unfinished sequence WHEN appended THEN the query is removed once and the bytes around it are kept', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A\x1b[\x1b[6n6nB', MAX);
+  assert.equal(joined(state), 'A\x1b[6nB');
+});
+
+test('GIVEN a cursor-position query split across three chunks WHEN all are appended THEN none of it stays in the replay buffer', () => {
+  const state = makeState();
+  appendToOutputBuffer(state, 'A\x1b', MAX);
+  appendToOutputBuffer(state, '[', MAX);
+  appendToOutputBuffer(state, '6nB', MAX);
+  assert.equal(joined(state), 'AB');
+  assert.equal(state.outputBufferSize, 2);
+});

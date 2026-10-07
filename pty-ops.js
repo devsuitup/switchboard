@@ -41,9 +41,9 @@ function isKilled(session) {
   return !!(session && session.pty && killedPtys.has(session.pty));
 }
 
-function resizePty(session, cols, rows, sessionId) {
+function resizePty(session, cols, rows, sessionId, options) {
   if (isKilled(session)) return false;
-  return withPty(session, 'resize', (pty) => pty.resize(cols, rows), sessionId);
+  return withPty(session, 'resize', (pty) => pty.resize(cols, rows, options), sessionId);
 }
 
 function killPty(session, sessionId) {

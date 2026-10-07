@@ -256,8 +256,28 @@ session in it or when you add it (**Add project**), and removes it when you
 remove the project. Nothing a session writes — a transcript, the `cwd` it
 records, the folder name derived from it — adds one. The registry is seeded
 once, when Switchboard first starts with it and before any session can run,
-with the projects whose transcript folder matches their path and that already
-hold a schedule.
+with two kinds of project: those that carry a per-project setting of their own
+(a `project:` entry in the settings table, for a directory that exists on this
+machine), and those that already hold a schedule, are a git checkout (a `.git`
+directory or file) and have a transcript folder named after their path. A
+transcript folder alone registers nothing, and neither does a schedule in a
+directory that is not a git repository. A folder planted before the upgrade
+that holds a `.git` and a schedule is still registered, once, at that first
+read: under v0.0.85 a sandboxed session could write both `~/.claude/projects`
+and its project directory, and nothing in the seed can tell such a folder from
+a real repository. The maintainer accepted this residual on 2026-10-02. After
+the upgrade `~/.claude/projects` is read-only to a sandboxed session except its
+own folder, so nothing new can be planted. Any other project enters the registry the normal way, when a session is launched in
+it from the app or when you add it.
+
+A project path is never read from a transcript on trust. The sidebar project,
+the directory a resumed or forked session starts in and the folder the sandbox
+binds as its own transcript folder all come from a transcript's `cwd` only when
+that `cwd`, with every character but letters and digits replaced by `-`, is the
+name of the folder holding the transcript. A transcript forged in the session's
+own folder with a `cwd` below the project therefore moves none of them, and
+registers nothing. Moving a project with the remap dialog is the one case where a transcript's `cwd` differs from its folder name; Switchboard records the new path itself and accepts that one. Paths of 200 characters or more are shortened and hashed in
+that name, so two of them can share a folder name; this is not closed.
 
 A sandboxed session can still create a `.claude` below a bound directory
 after launch: the mount plan is fixed when the sandbox starts, and a new

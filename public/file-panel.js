@@ -12,6 +12,8 @@
  *   window.createViewerToolbar, openSessions (from app.js)
  */
 
+/* exported openTouchedEditor */
+
 // ── Per-Session State ───────────────────────────────────────────────
 
 const filePanelState = new Map();
@@ -28,6 +30,7 @@ let currentPanelSessionId = null;
 let fpViewerPanel = null;
 let fpViewerOwner = null;
 let heldBarEl = null;
+let panelBackBtn = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -43,10 +46,13 @@ let changesDiffEl = null;
 let changesToggleBtn = null;
 let changesDiffTitleEl = null;
 let changesDiffModeBtn = null;
+let changesDiffFormatBtn = null;
 let changesDiffSaveBtn = null;
 let changesDiffReloadBtn = null;
 let changesDiffNoticeEl = null;
 let changesDiffHostEl = null;
+let changesDiffPreviewEl = null;
+let changesPreviewTab = null;
 let changesListSplitterEl = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
@@ -55,6 +61,11 @@ const MAX_SUBAGENT_GROUP_ROWS = 100;
 
 const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
 const DEFAULT_CHANGES_LIST_HEIGHT = 200;
+const TOUCHED_LIST_RATIO_KEY = 'touchedListRatio';
+const DEFAULT_TOUCHED_LIST_RATIO = 0.4;
+let touchedListRatio = readStoredTouchedListRatio();
+const TOUCHED_MARKDOWN_FORMATTED_KEY = 'touchedMarkdownFormatted';
+const DEFAULT_TOUCHED_MARKDOWN_FORMATTED = true;
 // see .ai/contexts/changes-view.md ("The list and the editor")
 const MIN_CHANGES_LIST_HEIGHT = 96;
 const MIN_CHANGES_EDITOR_HEIGHT = 120;
@@ -90,6 +101,7 @@ const FP_ICONS = {
   'side-by-side': FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>'),
   inline: FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>'),
   plain: FP_STROKE_ICON('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/>'),
+  formatted: FP_STROKE_ICON('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
 };
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -118,6 +130,24 @@ function initFilePanel() {
   filePanelContentEl = document.createElement('div');
   filePanelContentEl.id = 'file-panel-content';
   filePanelEl.appendChild(filePanelContentEl);
+
+  panelBackBtn = document.createElement('button');
+  panelBackBtn.id = 'file-panel-back-btn';
+  panelBackBtn.className = 'viewer-toolbar-btn fp-toolbar-btn';
+  panelBackBtn.textContent = '← Back to list';
+  panelBackBtn.style.display = 'none';
+  panelBackBtn.addEventListener('click', returnToPanelList);
+  filePanelContentEl.appendChild(panelBackBtn);
+  filePanelContentEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !event.target.closest('#file-panel-viewer, #changes-diff-view')) return;
+    if (event.defaultPrevented || event.isComposing) return;
+    if (event.target.closest('.cm-panels, .cm-search, .cm-tooltip')) return;
+    if (event.target.closest('input, textarea') && !event.target.closest('.cm-content')) return;
+    if (returnToPanelList()) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
 
   heldBarEl = document.createElement('div');
   heldBarEl.id = 'file-panel-held';
@@ -268,7 +298,6 @@ function initFilePanel() {
   changesContainerEl.appendChild(changesDiffEl);
 
   buildChangesDiffChrome();
-  setupChangesListSplitter();
   // Shell region below every tab type — see .ai/contexts/panel-terminal.md
   if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
 
@@ -279,12 +308,14 @@ function initFilePanel() {
   setupPanelResizeHandle();
   addMcpToggle();
   addChangesToggle();
+  if (typeof initTouchedView === 'function') initTouchedView(filePanelContentEl);
+  setupChangesListSplitter();
 
   // see .ai/contexts/changes-view.md ("Refresh triggers")
   if (typeof onSessionIdle === 'function') {
     onSessionIdle((sessionId) => {
       const state = filePanelState.get(sessionId);
-      if (state && state.currentTab && state.currentTab.type === 'changes') {
+      if (state && state.currentTab && state.currentTab.type === 'changes' && !state.currentTab.returnList) {
         Promise.resolve(refreshChanges(sessionId)).catch(() => {});
       }
     });
@@ -321,6 +352,60 @@ function handleClose() {
   }
 
   endCurrentTab(currentPanelSessionId, state);
+}
+
+function returnToPanelList() {
+  if (!currentPanelSessionId) return false;
+  const state = getSessionState(currentPanelSessionId);
+  const tab = state.currentTab;
+  if (tab?.type === 'changes' && tab.selectedFile && !tab.returnList) {
+    closeChangesDiff(currentPanelSessionId);
+    return !tab.selectedFile;
+  }
+  if (!tab?.returnList) return false;
+  if (!confirmDiscardChangesEdits(tab)) return false;
+  if (tab.type === 'file' && fileTabHasUnsavedEdits(tab) && !window.confirm('This file has unsaved edits. Discard them?')) return false;
+  const previous = tab.returnList;
+  destroyCurrentTab(state, { stash: false, discardFile: true });
+  state.currentTab = previous;
+  renderPanel(currentPanelSessionId);
+  return true;
+}
+
+function snapshotPanelList(list, tab) {
+  if (list?._owner === tab) tab.listScrollTop = list.scrollTop;
+}
+
+function restorePanelListScroll(list, tab) {
+  if (tab.listScrollTop == null) return;
+  list.scrollTop = tab.listScrollTop;
+  tab.listScrollTop = null;
+}
+
+function reusePanelList(list, summary, tab, signature, detail = null) {
+  const previous = list._owner;
+  if (previous && previous !== tab) {
+    previous.listView = {
+      signature: list._signature,
+      nodes: [...list.childNodes],
+      summaryNodes: [...summary.childNodes],
+      detail: detail?.textContent,
+      scrollTop: previous.listScrollTop ?? list.scrollTop,
+    };
+  }
+  const same = values => values && signature.every((value, i) => value === values[i]);
+  if (previous === tab && same(list._signature)) return true;
+  list._owner = tab;
+  list._signature = signature;
+  if (previous !== tab && same(tab.listView?.signature)) {
+    list.replaceChildren(...tab.listView.nodes);
+    summary.replaceChildren(...tab.listView.summaryNodes);
+    if (detail) detail.textContent = tab.listView.detail || '';
+    list.scrollTop = tab.listView.scrollTop;
+    tab.listView = null;
+    return true;
+  }
+  return false;
 }
 
 async function handleDiffSave() {
@@ -435,6 +520,16 @@ function wireIpcListeners() {
     });
   }
 
+  if (window.api.onFileChanged) {
+    window.api.onFileChanged((filePath) => {
+      for (const [sessionId, state] of filePanelState) {
+        const tab = state.currentTab;
+        if (tab?.absolutePath && filePathKey(tab.absolutePath) === filePathKey(filePath) && !tab.saving) {
+          syncOpenChangesFile(sessionId, tab).catch(() => {});
+        }
+      }
+    });
+  }
   if (window.api.onGitChangesFileChanged) {
     window.api.onGitChangesFileChanged((sessionId, filePath) => {
       handleChangesFileChanged(sessionId, filePath);
@@ -509,6 +604,8 @@ function openFileTab(sessionId, data) {
     return reopenFileTab(sessionId, state, current, data);
   }
   const held = takeHeldFileTab(state, data.filePath);
+  const returnList = data.returnList || null;
+  if (returnList?.type === 'touched' && currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
 
   // Destroy previous
   destroyCurrentTab(state);
@@ -520,6 +617,7 @@ function openFileTab(sessionId, data) {
     content: data.content,
     pendingLine: null,
   };
+  state.currentTab.returnList = returnList;
   if (Number.isInteger(data.line) && data.line > 0) state.currentTab.pendingLine = data.line;
 
   state.panelVisible = true;
@@ -540,6 +638,7 @@ function reopenFileTab(sessionId, state, tab, data) {
 }
 
 function fileTabHasUnsavedEdits(tab) {
+  if (tab?.absolutePath && tab.type === 'changes') return hasUnsavedChangesEdits(tab);
   if (fpViewerOwner === tab) return fpViewerPanel.hasUnsavedEdits();
   return !!tab.viewerState && fpViewerPanel.snapshotHasUnsavedEdits(tab.viewerState);
 }
@@ -589,7 +688,7 @@ function collectUnsavedFileTabs() {
   const found = new Set();
   for (const state of filePanelState.values()) {
     const tabs = [];
-    if (state.currentTab && state.currentTab.type === 'file') tabs.push(state.currentTab);
+    if (state.currentTab && (state.currentTab.type === 'file' || state.currentTab.absolutePath)) tabs.push(state.currentTab);
     if (state.heldFileTabs) tabs.push(...state.heldFileTabs.values());
     for (const tab of tabs) if (fileTabHasUnsavedEdits(tab)) found.add(tab);
   }
@@ -597,6 +696,11 @@ function collectUnsavedFileTabs() {
 }
 
 async function saveUnsavedFileTab(tab) {
+  if (tab.absolutePath && tab.type === 'changes') {
+    const owner = [...filePanelState].find(([, state]) => state.currentTab === tab);
+    if (owner) await handleChangesSave(owner[0]);
+    return hasUnsavedChangesEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
+  }
   if (fpViewerOwner === tab) {
     await fpViewerPanel.saveNow();
     return fileTabHasUnsavedEdits(tab) ? 'not saved: it changed on disk, or could not be written' : null;
@@ -751,20 +855,31 @@ function stashChangesEdits(state, tab) {
   if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
   const content = readChangesEditorContent(tab);
   if (content == null || content === tab.savedContent) return;
-  state.changesStash = {
+  state[tab.returnList ? 'touchedStash' : 'changesStash'] = {
     file: tab.selectedFile,
     content,
     original: tab.original,
     savedContent: tab.savedContent,
     version: tab.version,
+    returnList: tab.returnList,
+    absolutePath: tab.absolutePath,
+    gitFile: tab.gitFile,
+    noDiff: tab.noDiff,
   };
 }
 
-function restoreChangesEdits(sessionId, state, tab) {
-  const stash = state.changesStash;
+function restoreChangesEdits(sessionId, state, tab, listType = 'changes') {
+  const key = listType === 'touched' ? 'touchedStash' : 'changesStash';
+  const stash = state[key];
   if (!stash) return false;
-  state.changesStash = null;
+  state[key] = null;
 
+  tab.returnList = stash.returnList;
+  tab.absolutePath = stash.absolutePath;
+  tab.filePath = stash.absolutePath;
+  tab.formatted = touchedOpensFormatted(stash.absolutePath);
+  tab.gitFile = stash.gitFile;
+  tab.noDiff = stash.noDiff;
   tab.selectedFile = stash.file;
   tab.editable = true;
   tab.original = stash.original;
@@ -777,7 +892,7 @@ function restoreChangesEdits(sessionId, state, tab) {
   return true;
 }
 
-function destroyCurrentTab(state, { stash = true } = {}) {
+function destroyCurrentTab(state, { stash = true, discardFile = false } = {}) {
   const tab = state.currentTab;
   if (!tab) return;
   if (stash) stashChangesEdits(state, tab);
@@ -794,7 +909,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
     unwatchChangesFile(currentPanelSessionId, tab);
     destroyChangesEditor(tab);
   }
-  if (tab.type === 'file') holdFileTabIfDirty(state, tab);
+  if (tab.type === 'file' && !discardFile) holdFileTabIfDirty(state, tab);
   if (tab.type === 'file' && fpViewerOwner === tab) {
     fpViewerPanel.destroy();
     fpViewerOwner = null;
@@ -872,6 +987,7 @@ function hidePanel() {
     return;
   }
   setHeaderToggle(changesToggleBtn, false);
+  if (typeof hideTouchedView === 'function') hideTouchedView();
   filePanelEl.classList.remove('open');
   filePanelEl.style.width = '0';
   filePanelResizeHandle.style.display = 'none';
@@ -943,10 +1059,12 @@ function showFileTabInViewer(tab) {
 function renderTabContent(sessionId, tab) {
   const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
+  panelBackBtn.style.display = tab && tab.returnList?.type !== 'touched' && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
   // see .ai/contexts/panel-terminal.md ("Layout")
   if (typeof setPanelTerminalShellOnly === 'function') setPanelTerminalShellOnly(!tab);
 
-  setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes');
+  setHeaderToggle(changesToggleBtn, !!tab && tab.type === 'changes' && !tab.returnList);
+  if (typeof renderTouchedTab === 'function') renderTouchedTab(sessionId, tab);
   renderHeldBar(sessionId, tab);
 
   if (!tab) {
@@ -969,8 +1087,12 @@ function renderTabContent(sessionId, tab) {
   } else if (tab.type === 'changes') {
     vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
-    changesContainerEl.style.display = 'flex';
+    changesContainerEl.style.display = tab.returnList?.type === 'touched' ? 'none' : 'flex';
     renderChangesContent(sessionId, tab);
+  } else if (tab.type === 'touched') {
+    vpContainer.style.display = 'none';
+    diffContainer.style.display = 'none';
+    changesContainerEl.style.display = 'none';
   } else {
     // MCP diff mode
     vpContainer.style.display = 'none';
@@ -987,7 +1109,7 @@ function renderDiffContent(sessionId, tab) {
   const titleEl = diffToolbarEl.querySelector('#diff-title');
   const pathEl = diffToolbarEl.querySelector('#diff-path');
   if (titleEl) titleEl.textContent = tab.label;
-  if (pathEl) pathEl.textContent = tab.filePath || '';
+  if (pathEl) window.setViewerPath(pathEl, tab.filePath || '');
 
   updateDiffSaveButton(tab);
 
@@ -1070,7 +1192,7 @@ function handleDiffAction(sessionId, tab, action) {
 
 function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
-  if (state.currentTab && state.currentTab.type === 'changes') {
+  if (state.currentTab && state.currentTab.type === 'changes' && !state.currentTab.returnList) {
     if (!confirmDiscardChangesEdits(state.currentTab)) return;
     destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
@@ -1080,10 +1202,8 @@ function toggleChangesTab(sessionId) {
   return openChangesTab(sessionId);
 }
 
-function openChangesTab(sessionId) {
-  const state = getSessionState(sessionId);
-  destroyCurrentTab(state);
-  state.currentTab = {
+function createChangesTab() {
+  return {
     type: 'changes',
     label: 'Changes',
     loading: true,
@@ -1113,6 +1233,12 @@ function openChangesTab(sessionId) {
     externalChange: false,
     notARepo: false,
   };
+}
+
+function openChangesTab(sessionId) {
+  const state = getSessionState(sessionId);
+  destroyCurrentTab(state);
+  state.currentTab = createChangesTab();
   state.panelVisible = true;
   restoreChangesEdits(sessionId, state, state.currentTab);
 
@@ -1123,10 +1249,57 @@ function openChangesTab(sessionId) {
   return refreshChanges(sessionId);
 }
 
+function openTouchedEditor(sessionId, absolutePath, pair, returnList) {
+  const state = getSessionState(sessionId);
+  if (currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
+  destroyCurrentTab(state, { stash: false });
+  const tab = createChangesTab();
+  tab.returnList = returnList;
+  tab.label = 'Touched files';
+  tab.absolutePath = absolutePath;
+  tab.filePath = absolutePath;
+  tab.selectedFile = { path: absolutePath };
+  tab.loading = false;
+  tab.formatted = touchedOpensFormatted(absolutePath);
+  applyChangesPair(tab, pair);
+  state.currentTab = tab;
+  state.panelVisible = true;
+  watchChangesFile(sessionId, tab, absolutePath);
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
+function applyChangesPair(tab, pair) {
+  tab.diffLoading = false;
+  tab.editable = true;
+  tab.readOnly = !!pair.readOnly;
+  tab.original = pair.original;
+  tab.current = pair.current;
+  tab.savedContent = pair.current;
+  tab.version = pair.version;
+  if (tab.absolutePath) {
+    tab.gitFile = pair.git;
+    tab.noDiff = !pair.git || pair.original === pair.current;
+  }
+}
+
+async function readChangesPair(sessionId, tab, file) {
+  try {
+    return tab.absolutePath
+      ? await window.api.readFileForPanel(tab.absolutePath, { editor: true })
+      : await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+  } catch (err) {
+    return { ok: false, error: err?.message || 'this file could not be read' };
+  }
+}
+
 async function refreshChanges(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
+  if (tab.absolutePath) return syncOpenChangesFile(sessionId, tab);
 
   tab.loading = true;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
@@ -1163,7 +1336,7 @@ async function syncOpenChangesFile(sessionId, tab) {
   if (!isChangesBufferDirty(tab)) repointSelectedFile(tab);
 
   const file = tab.selectedFile;
-  const result = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+  const result = await readChangesPair(sessionId, tab, file);
 
   const stillState = filePanelState.get(sessionId);
   if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
@@ -1176,21 +1349,21 @@ async function syncOpenChangesFile(sessionId, tab) {
   tab.fileError = null;
 
   if (isChangesBufferDirty(tab)) {
-    tab.externalChange = result.version !== tab.version;
+    tab.externalChange = tab.absolutePath && !tab.gitFile
+      ? result.current !== tab.savedContent
+      : result.version !== tab.version;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
 
   tab.version = result.version;
   tab.externalChange = false;
-  if (result.current === tab.current && result.original === tab.original) {
+  if (result.current === tab.current && result.original === tab.original && !!result.readOnly === !!tab.readOnly) {
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
 
-  tab.original = result.original;
-  tab.current = result.current;
-  tab.savedContent = result.current;
+  applyChangesPair(tab, result);
   destroyChangesEditor(tab);
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 }
@@ -1217,14 +1390,14 @@ function handleChangesFileChanged(sessionId, filePath) {
 function watchChangesFile(sessionId, tab, filePath) {
   unwatchChangesFile(sessionId, tab);
   tab.watchedPath = filePath;
-  const watch = window.api.gitChangesWatch;
-  if (watch) Promise.resolve(watch(sessionId, filePath)).catch(() => {});
+  const watch = tab.absolutePath ? window.api.watchFile : window.api.gitChangesWatch;
+  if (watch) Promise.resolve(tab.absolutePath ? watch(filePath) : watch(sessionId, filePath)).catch(() => {});
 }
 
 function unwatchChangesFile(sessionId, tab) {
   if (!tab.watchedPath) return;
-  const unwatch = window.api.gitChangesUnwatch;
-  if (unwatch) Promise.resolve(unwatch(sessionId, tab.watchedPath)).catch(() => {});
+  const unwatch = tab.absolutePath ? window.api.unwatchFile : window.api.gitChangesUnwatch;
+  if (unwatch) Promise.resolve(tab.absolutePath ? unwatch(tab.watchedPath) : unwatch(sessionId, tab.watchedPath)).catch(() => {});
   tab.watchedPath = null;
 }
 
@@ -1236,7 +1409,9 @@ async function openChangesDiff(sessionId, file, line = null) {
   if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
 
   tab.pendingLine = Number.isInteger(line) && line > 0 ? line : null;
+  if (!tab.selectedFile && currentPanelSessionId === sessionId) snapshotPanelList(changesListEl, tab);
   tab.selectedFile = file;
+  tab.listSelection = file;
   tab.diffError = null;
   tab.diffContent = null;
   tab.diffTruncated = false;
@@ -1261,18 +1436,13 @@ async function openChangesDiff(sessionId, file, line = null) {
   if (file.subSessionId) {
     tab.fallbackReason = 'subagent worktree';
   } else if (!tab.remote) {
-    const pair = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+    const pair = await readChangesPair(sessionId, tab, file);
 
     const pairState = filePanelState.get(sessionId);
     if (!pairState || pairState.currentTab !== tab || tab.selectedFile !== file) return;
 
     if (pair && pair.ok) {
-      tab.diffLoading = false;
-      tab.editable = true;
-      tab.original = pair.original;
-      tab.current = pair.current;
-      tab.savedContent = pair.current;
-      tab.version = pair.version;
+      applyChangesPair(tab, pair);
       watchChangesFile(sessionId, tab, file.path);
       if (file.untracked) applyUntrackedCounts(tab, dataAtRequest, file.path, countAddedLines(pair.current), 0);
       if (currentPanelSessionId === sessionId) renderPanel(sessionId);
@@ -1339,12 +1509,17 @@ function applyUntrackedCounts(tab, expectedData, filePath, added, deleted, count
     if (typeof f.added !== 'number') uncounted += 1;
   }
   tab.data.totals = { ...tab.data.totals, added: totalAdded, deleted: totalDeleted, uncounted };
+  tab.listRevision = (tab.listRevision || 0) + 1;
 }
 
 function closeChangesDiff(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
+  if (tab.returnList) {
+    if (currentPanelSessionId === sessionId) returnToPanelList();
+    return;
+  }
   if (!confirmDiscardChangesEdits(tab)) return;
   unwatchChangesFile(sessionId, tab);
   destroyChangesEditor(tab);
@@ -1377,21 +1552,28 @@ function confirmDiscardChangesEdits(tab) {
 }
 
 function renderChangesContent(sessionId, tab) {
+  if (tab.returnList) {
+    renderPanelListLayout(true);
+    renderChangesDiff(sessionId, tab);
+    return;
+  }
   const editorOpen = !!tab.selectedFile;
   changesSummaryEl.style.display = 'block';
   changesListEl.style.display = 'block';
-  changesListSplitterEl.style.display = editorOpen ? 'block' : 'none';
-  changesDiffEl.style.display = editorOpen ? 'flex' : 'none';
-  changesListEl.classList.toggle('changes-list-split', editorOpen);
-  if (editorOpen) applyChangesListHeight();
-  else changesListEl.style.height = '';
+  renderPanelListLayout(editorOpen);
 
   renderChangesList(sessionId, tab);
   if (editorOpen) renderChangesDiff(sessionId, tab);
+  else restorePanelListScroll(changesListEl, tab);
 }
 
 function renderChangesList(sessionId, tab) {
+  const signature = [tab.data, tab.loading, tab.error, tab.listRevision];
   const branchInfoEl = document.getElementById('changes-branch-info');
+  if (reusePanelList(changesListEl, changesSummaryEl, tab, signature, branchInfoEl)) {
+    updateChangesListSelection(tab);
+    return;
+  }
 
   if (tab.loading && !tab.data) {
     changesSummaryEl.textContent = 'Loading changes…';
@@ -1453,6 +1635,15 @@ function renderChangesList(sessionId, tab) {
     more.className = 'changes-more-note';
     more.textContent = `+${data.subagentsOmitted} more subagent worktrees not shown`;
     changesListEl.appendChild(more);
+  }
+  updateChangesListSelection(tab);
+}
+
+function updateChangesListSelection(tab) {
+  const selected = tab.selectedFile || tab.listSelection;
+  for (const row of changesListEl.querySelectorAll('.changes-file-row')) {
+    row.classList.toggle('selected', !!selected && row.dataset.path === selected.path
+      && (row.dataset.subagent || null) === (selected.subSessionId || null));
   }
 }
 
@@ -1557,22 +1748,85 @@ function clampChangesListHeight(height, available) {
 }
 
 function applyChangesListHeight() {
-  if (!changesListEl || !changesContainerEl) return;
-  const available = changesContainerEl.clientHeight - changesSummaryEl.offsetHeight;
-  changesListEl.style.height = clampChangesListHeight(changesListDesiredHeight, available) + 'px';
+  const layout = currentPanelListLayout();
+  const available = panelListAvailableHeight(layout);
+  const desired = layout.touched ? available * touchedListRatio : changesListDesiredHeight;
+  layout.list.style.height = clampChangesListHeight(desired, available) + 'px';
+}
+
+function readStoredTouchedListRatio() {
+  try {
+    const value = Number(localStorage.getItem(TOUCHED_LIST_RATIO_KEY));
+    if (value > 0 && value < 1) return value;
+  } catch {}
+  return DEFAULT_TOUCHED_LIST_RATIO;
+}
+
+function currentPanelListLayout() {
+  const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+  const touched = tab?.type === 'touched' || tab?.returnList?.type === 'touched';
+  return {
+    touched,
+    container: touched ? document.getElementById('file-panel-touched') : changesContainerEl,
+    summary: touched ? document.getElementById('touched-summary') : changesSummaryEl,
+    list: touched ? document.getElementById('touched-list') : changesListEl,
+  };
+}
+
+function panelListAvailableHeight(layout) {
+  const margins = layout.touched ? [layout.list, layout.summary].reduce((sum, el) => {
+    const style = getComputedStyle(el);
+    return sum + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+  }, 0) : 0;
+  return Math.max(0, layout.container.clientHeight - layout.summary.offsetHeight
+    - margins - (layout.touched ? layout.container.querySelector('.viewer-toolbar').offsetHeight + changesListSplitterEl.offsetHeight : 0));
+}
+
+function renderPanelListLayout(editorOpen) {
+  const layout = currentPanelListLayout();
+  if (changesDiffEl.parentElement !== layout.container) {
+    layout.container.append(changesListSplitterEl, changesDiffEl);
+  }
+  changesListSplitterEl.style.display = editorOpen ? 'block' : 'none';
+  changesDiffEl.style.display = editorOpen ? 'flex' : 'none';
+  layout.list.classList.toggle('changes-list-split', editorOpen);
+  if (editorOpen) applyChangesListHeight();
+  else layout.list.style.height = '';
 }
 
 function setupChangesListSplitter() {
   if (typeof createSplitter !== 'function') return;
   createSplitter(changesListSplitterEl, {
     axis: 'y',
-    getSize: () => changesListEl.offsetHeight || changesListDesiredHeight,
+    getSize: () => {
+      const layout = currentPanelListLayout();
+      return layout.list.offsetHeight || parseFloat(layout.list.style.height) || changesListDesiredHeight;
+    },
     onDrag: (startSize, delta) => {
-      changesListDesiredHeight = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(startSize + delta));
+      const layout = currentPanelListLayout();
+      const available = panelListAvailableHeight(layout);
+      if (layout.touched) {
+        if (available) touchedListRatio = Math.min(0.95, clampChangesListHeight(startSize + delta, available) / available);
+      } else changesListDesiredHeight = Math.max(MIN_CHANGES_LIST_HEIGHT, Math.round(startSize + delta));
       applyChangesListHeight();
     },
-    onCommit: () => localStorage.setItem(CHANGES_LIST_HEIGHT_KEY, String(changesListDesiredHeight)),
+    onCommit: () => {
+      try {
+        const touched = currentPanelListLayout().touched;
+        localStorage.setItem(touched ? TOUCHED_LIST_RATIO_KEY : CHANGES_LIST_HEIGHT_KEY, String(touched ? touchedListRatio : changesListDesiredHeight));
+      } catch {}
+    },
   });
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => {
+      const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+      if (tab?.selectedFile) applyChangesListHeight();
+    });
+    observer.observe(filePanelContentEl);
+    const touched = document.getElementById('file-panel-touched');
+    if (touched) observer.observe(touched);
+    observer.observe(changesContainerEl);
+  }
 }
 
 // Built once: a render must never tear the open editor down — see .ai/contexts/changes-view.md
@@ -1601,6 +1855,13 @@ function buildChangesDiffChrome() {
     if (currentPanelSessionId) closeChangesDiff(currentPanelSessionId);
   });
   controls.appendChild(closeEditorBtn);
+
+  changesDiffFormatBtn = document.createElement('button');
+  changesDiffFormatBtn.className = 'icon-btn';
+  changesDiffFormatBtn.id = 'changes-diff-format-btn';
+  changesDiffFormatBtn.innerHTML = FP_ICONS.formatted;
+  changesDiffFormatBtn.addEventListener('click', handleChangesFormatToggle);
+  controls.appendChild(changesDiffFormatBtn);
 
   changesDiffModeBtn = document.createElement('button');
   changesDiffModeBtn.className = 'icon-btn';
@@ -1642,18 +1903,35 @@ function buildChangesDiffChrome() {
   changesDiffHostEl.id = 'changes-diff-host';
   changesDiffEl.appendChild(changesDiffHostEl);
 
+  changesDiffPreviewEl = document.createElement('div');
+  changesDiffPreviewEl.id = 'changes-diff-preview';
+  changesDiffPreviewEl.className = 'markdown-preview';
+  changesDiffPreviewEl.tabIndex = 0;
+  changesDiffPreviewEl.style.display = 'none';
+  changesDiffEl.appendChild(changesDiffPreviewEl);
+
   changesDiffEl.addEventListener('cm-save', () => {
     if (currentPanelSessionId) handleChangesSave(currentPanelSessionId);
   });
 }
 
 function renderChangesDiff(sessionId, tab) {
-  changesDiffTitleEl.textContent = tab.selectedFile.path;
+  window.setViewerPath(changesDiffTitleEl, tab.selectedFile.path);
 
-  changesDiffModeBtn.style.display = tab.editable ? '' : 'none';
+  const markdown = isMarkdownPath(tab.absolutePath);
+  const formatted = markdown && !!tab.formatted;
+  changesDiffFormatBtn.style.display = markdown ? '' : 'none';
+  changesDiffFormatBtn.setAttribute('aria-pressed', String(formatted));
+  changesDiffFormatBtn.title = formatted ? 'Formatted — click for the source' : 'Source — click for formatted';
+  changesDiffFormatBtn.setAttribute('aria-label', changesDiffFormatBtn.title);
+  changesDiffHostEl.style.display = formatted ? 'none' : '';
+  changesDiffPreviewEl.style.display = formatted ? '' : 'none';
+  if (formatted) renderChangesPreview(sessionId, tab);
+
+  changesDiffModeBtn.style.display = tab.editable && !tab.noDiff && !formatted ? '' : 'none';
   const nextMode = CHANGES_DIFF_MODES[(CHANGES_DIFF_MODES.indexOf(changesDiffMode) + 1) % CHANGES_DIFF_MODES.length];
   setModeButton(changesDiffModeBtn, changesDiffMode, nextMode);
-  changesDiffSaveBtn.style.display = tab.editable ? '' : 'none';
+  changesDiffSaveBtn.style.display = tab.editable && !tab.readOnly ? '' : 'none';
   updateChangesSaveButton(sessionId, tab);
   changesDiffReloadBtn.style.display = tab.editable ? '' : 'none';
 
@@ -1683,11 +1961,46 @@ function renderChangesDiff(sessionId, tab) {
   changesDiffHostEl.appendChild(body);
 }
 
+// see .ai/contexts/touched-files.md ("Markdown, formatted")
+function renderChangesPreview(sessionId, tab) {
+  window.loadCodeMirrorBundle().then(() => {
+    if (filePanelState.get(sessionId)?.currentTab !== tab) return;
+    renderMarkdownPreview(changesDiffPreviewEl, readChangesEditorContent(tab) ?? tab.current);
+    if (changesPreviewTab !== tab) {
+      changesPreviewTab = tab;
+      changesDiffPreviewEl.scrollTop = 0;
+    }
+  }).catch((err) => {
+    console.error('[file-panel] Failed to load codemirror-bundle:', err);
+  });
+}
+
+function readStoredTouchedMarkdownFormatted() {
+  try {
+    const value = localStorage.getItem(TOUCHED_MARKDOWN_FORMATTED_KEY);
+    if (value != null) return value !== 'false';
+  } catch {}
+  return DEFAULT_TOUCHED_MARKDOWN_FORMATTED;
+}
+
+function touchedOpensFormatted(absolutePath) {
+  return isMarkdownPath(absolutePath) && readStoredTouchedMarkdownFormatted();
+}
+
+function handleChangesFormatToggle() {
+  const tab = filePanelState.get(currentPanelSessionId)?.currentTab;
+  if (!tab) return;
+  tab.formatted = !tab.formatted;
+  try { localStorage.setItem(TOUCHED_MARKDOWN_FORMATTED_KEY, String(tab.formatted)); } catch {}
+  renderPanel(currentPanelSessionId);
+  if (tab.formatted) changesDiffPreviewEl.focus();
+}
+
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
 function updateChangesSaveButton(sessionId, tab) {
   const state = filePanelState.get(sessionId);
   if (!state || state.currentTab !== tab) return;
-  changesDiffSaveBtn.disabled = !!tab.saving || !isChangesBufferDirty(tab);
+  changesDiffSaveBtn.disabled = !!tab.readOnly || !!tab.saving || !isChangesBufferDirty(tab);
   changesDiffSaveBtn.classList.toggle('active', !changesDiffSaveBtn.disabled);
 }
 
@@ -1696,6 +2009,7 @@ function renderChangesNotice(tab) {
   const listFailed = !!tab.error && !tab.notARepo;
   const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
+  if (tab.readOnly) notes.push('Symbolic link — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.pendingLine && !tab.editable && !tab.diffLoading) notes.push(`Line ${tab.pendingLine} was not reached — a read-only diff has no line to jump to.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
@@ -1715,18 +2029,18 @@ function renderChangesNotice(tab) {
 // see .ai/contexts/changes-view.md ("The render path is not a teardown")
 function ensureChangesEditor(sessionId, tab) {
   const key = changesEditorKey(tab);
-  if (tab.editorView && tab.editorKey === key && tab.editorMode === changesDiffMode) {
+  const mode = tab.noDiff ? 'plain' : changesDiffMode;
+  if (tab.editorView && tab.editorKey === key && tab.editorMode === mode) {
     mountChangesEditor(tab.editorView.dom);
     consumeChangesPendingLine(tab);
     return;
   }
-  const token = JSON.stringify([key, changesDiffMode]);
+  const token = JSON.stringify([key, mode]);
   if (tab.editorPending === token) return;
 
   destroyChangesEditor(tab);
   changesDiffHostEl.innerHTML = '';
 
-  const mode = changesDiffMode;
   tab.editorPending = token;
 
   window.loadCodeMirrorBundle().then(() => {
@@ -1737,7 +2051,9 @@ function ensureChangesEditor(sessionId, tab) {
 
     const filename = tab.selectedFile.path;
     const onChange = () => updateChangesSaveButton(sessionId, tab);
-    if (mode === 'plain') {
+    if (tab.readOnly) {
+      tab.editorView = window.createReadOnlyViewer(changesDiffHostEl, tab.current, filename);
+    } else if (mode === 'plain') {
       tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename, { onChange });
     } else if (mode === 'inline') {
       // mergeControls: false — this panel is not a git client, see .ai/contexts/changes-view.md
@@ -1747,6 +2063,7 @@ function ensureChangesEditor(sessionId, tab) {
     }
     tab.editorKey = key;
     tab.editorMode = mode;
+    updateChangesSaveButton(sessionId, tab);
     consumeChangesPendingLine(tab);
   }).catch((err) => {
     tab.editorPending = null;
@@ -1827,7 +2144,7 @@ function handleChangesDiffModeToggle() {
 async function handleChangesSave(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
-  if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile || tab.saving) return;
+  if (!tab || tab.type !== 'changes' || !tab.editable || tab.readOnly || !tab.selectedFile || tab.saving) return;
   if (!isChangesBufferDirty(tab)) return;
 
   const content = readChangesEditorContent(tab);
@@ -1839,7 +2156,9 @@ async function handleChangesSave(sessionId) {
 
   let result;
   try {
-    result = await window.api.gitChangesSave(sessionId, file.path, content, tab.version);
+    result = tab.absolutePath
+      ? await window.api.saveFileForPanel(tab.absolutePath, content, tab.savedContent, { git: tab.gitFile, version: tab.version })
+      : await window.api.gitChangesSave(sessionId, file.path, content, tab.version);
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'the save could not be sent' };
   } finally {
@@ -1884,7 +2203,7 @@ async function reloadChangesFile(sessionId) {
   if (!confirmDiscardChangesEdits(tab)) return;
 
   const file = tab.selectedFile;
-  const result = await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
+  const result = await readChangesPair(sessionId, tab, file);
 
   const stillState = filePanelState.get(sessionId);
   if (!stillState || stillState.currentTab !== tab || tab.selectedFile !== file) return;
@@ -1898,9 +2217,7 @@ async function reloadChangesFile(sessionId) {
   tab.fileError = null;
   tab.externalChange = false;
   tab.saveError = null;
-  tab.original = result.original;
-  tab.current = result.current;
-  tab.savedContent = result.current;
+  applyChangesPair(tab, result);
   tab.version = result.version;
   watchChangesFile(sessionId, tab, file.path);
   destroyChangesEditor(tab);

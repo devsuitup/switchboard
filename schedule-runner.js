@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { encodeProjectPath } = require('./encode-project-path');
+const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -166,28 +166,39 @@ function readProjectPathFromJsonl(folderPath) {
 }
 
 /**
- * The projects to seed the schedule registry with, the first time it is
- * read: the ~/.claude/projects folders whose recorded path encodes back to the
- * folder's name and holds a schedule. After that seeding, a project enters the
- * registry only from main-side actions, never from a transcript.
- * see docs/sandbox.md ("Schedules")
+ * The projects to seed the schedule registry with, the first time it is read:
+ * the local directories that have a `project:<path>` setting, and the git
+ * checkouts under a ~/.claude/projects folder named after them that already
+ * hold a schedule. see docs/sandbox.md ("Schedules")
  */
-function initialScheduleProjects() {
-  const found = [];
-  if (!fs.existsSync(PROJECTS_DIR)) return found;
+function initialScheduleProjects(listProjectSettingKeys) {
+  const found = new Set();
+  const prefix = 'project:';
+  for (const key of listProjectSettingKeys()) {
+    if (typeof key !== 'string' || !key.startsWith(prefix)) continue;
+    const projectPath = key.slice(prefix.length);
+    if (!path.isAbsolute(projectPath)) continue;
+    try {
+      if (fs.statSync(projectPath).isDirectory()) found.add(projectPath);
+    } catch {}
+  }
+  if (!fs.existsSync(PROJECTS_DIR)) return [...found];
   const folderMeta = loadFolderMetaMap();
   for (const folder of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
     if (!folder.isDirectory()) continue;
-    const projectPath = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
-    if (!projectPath || encodeProjectPath(projectPath) !== folder.name) continue;
+    const recorded = folderMeta.get(folder.name) || readProjectPathFromJsonl(path.join(PROJECTS_DIR, folder.name));
+    if (!recorded) continue;
+    const projectPath = verifiedTranscriptCwd(recorded, folder.name);
+    if (!projectPath) continue;
     try {
+      if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
-        found.push(projectPath);
+        found.add(projectPath);
       }
     } catch {}
   }
-  return found;
+  return [...found];
 }
 
 /**
@@ -195,7 +206,7 @@ function initialScheduleProjects() {
  * Switchboard opened a session in or the user added, seeded once by
  * `seed()` when the setting has never been written.
  */
-function scheduleRegistry(getSetting, setSetting, seed = initialScheduleProjects) {
+function scheduleRegistry(getSetting, setSetting, seed = () => []) {
   const read = () => {
     const stored = getSetting('scheduleProjects');
     if (Array.isArray(stored)) return stored;
@@ -537,4 +548,74 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+/**
+ * Whether `filePath` is `<projectRoot>/.claude/commands/<name>` with no link
+ * below the project root. False on any realpath error; never throws.
+ */
+function scheduleFileUnlinked(projectRoot, filePath, realpath = fs.realpathSync) {
+  try {
+    return realpath(filePath) === path.join(realpath(projectRoot), '.claude', 'commands', path.basename(filePath));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rewrite every front-matter line parseFrontmatter reads as the top-level
+ * `enabled` key to `enabled: <value>`, or insert that line first when none is.
+ */
+function rewriteEnabled(content, value) {
+  const enabledLine = 'enabled: ' + value;
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return content;
+  let currentKey = null;
+  let found = false;
+  const lines = match[1].split('\n').map((line) => {
+    if (currentKey && line.match(/^\s+/) && line.includes(':')) return line;
+    const kv = line.match(/^([^:]+):\s*(.*)$/);
+    if (!kv) return line;
+    if (kv[2].trim() === '') {
+      currentKey = kv[1].trim();
+      return line;
+    }
+    currentKey = null;
+    if (kv[1].trim() !== 'enabled') return line;
+    found = true;
+    return enabledLine;
+  });
+  if (!found) lines.unshift(enabledLine);
+  return '---\n' + lines.join('\n') + content.slice('---\n'.length + match[1].length);
+}
+
+/**
+ * Set `enabled` in a schedule file in place, checked with the real parser and
+ * written atomically with the original mode. Refuses a file reached through a
+ * link below `projectRoot`.
+ */
+function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteEnabled, rename = fs.renameSync } = {}) {
+  const value = enabled ? 'true' : 'false';
+  if (!scheduleFileUnlinked(projectRoot, filePath)) return { ok: false, error: 'linked file or directory' };
+  let tmp = null;
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const mode = fs.statSync(filePath).mode & 0o7777;
+    const next = rewrite(content, value);
+    const before = parseFrontmatter(content);
+    const after = parseFrontmatter(next);
+    if (after.meta.enabled !== value || after.meta.cron !== before.meta.cron || after.body !== before.body) {
+      return { ok: false, error: `the front matter could not be rewritten to enabled: ${value}` };
+    }
+    tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    fs.writeFileSync(tmp, next, { mode });
+    fs.chmodSync(tmp, mode);
+    rename(tmp, filePath);
+    tmp = null;
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+}
+
+module.exports = { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
