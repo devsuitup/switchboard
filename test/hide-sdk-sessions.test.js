@@ -65,6 +65,68 @@ test('a scheduled run keeps no entrypoint: its first user turn is pre-seeded by 
   }
 });
 
+test('an SDK session later typed into from a terminal counts as interactive', () => {
+  const tmp = mkTmp();
+  try {
+    const resumed = write(tmp, 'resumed', [
+      user('Invoque le skill workitem-develop', { entrypoint: 'sdk-ts' }),
+      assistant({ entrypoint: 'sdk-ts' }),
+      user('and now fix the test', { entrypoint: 'cli' }),
+    ]);
+    assert.equal(readSessionFile(resumed, 'f', '/p').entrypoint, 'cli');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('refreshFolder re-reads a cached SDK session in full, so a terminal turn makes it visible', () => {
+  const projectsDir = mkTmp();
+  try {
+    const projectPath = projectsDir;
+    const folder = encodeProjectPath(projectPath);
+    const folderPath = path.join(projectsDir, folder);
+    fs.mkdirSync(folderPath);
+    const filePath = write(folderPath, 'resumed', [
+      user('Invoque le skill workitem-develop', { entrypoint: 'sdk-ts', cwd: projectPath }),
+      assistant({ entrypoint: 'sdk-ts', cwd: projectPath }),
+      user('and now fix the test', { entrypoint: 'cli', cwd: projectPath }),
+    ]);
+    const store = new Map([['resumed', {
+      ...row('resumed', folder, projectPath, 'sdk-ts'),
+      fileMtime: '2000-01-01T00:00:00.000Z',
+    }]]);
+    sessionCache.init({
+      PROJECTS_DIR: projectsDir,
+      activeSessions: new Map(),
+      getMainWindow: () => null,
+      log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
+      db: {
+        deleteCachedFolder: () => {},
+        deleteSearchFolder: () => {},
+        getCachedByFolder: (f) => Array.from(store.values()).filter(r => r.folder === f),
+        getAllCached: () => Array.from(store.values()),
+        upsertCachedSessions: (rows) => { for (const r of rows) store.set(r.sessionId, { ...store.get(r.sessionId), ...r }); },
+        touchCachedModified: () => {},
+        deleteCachedSession: () => {},
+        replaceSessionMetrics: () => {},
+        deleteSearchSession: () => {},
+        upsertSearchEntries: () => {},
+        setFolderMeta: () => {},
+        getAllFolderMeta: () => new Map(),
+        getAllMeta: () => new Map(),
+        getSetting: () => ({}),
+        getMeta: () => null,
+        setName: () => {},
+      },
+    });
+    sessionCache.setRemoteRoots(new Map());
+    sessionCache.refreshFolder(folder, { files: new Set([path.basename(filePath)]) });
+    assert.equal(store.get('resumed').entrypoint, 'cli');
+  } finally {
+    cleanup(projectsDir);
+  }
+});
+
 function makeFakeDb({ cachedRows, global }) {
   return {
     getAllMeta: () => new Map(),
@@ -93,6 +155,7 @@ function visibleIds(global) {
       row('sdk-cli-run', folder, projectPath, 'sdk-cli'),
       row('sdk-py-run', folder, projectPath, 'sdk-py'),
       row('sdk-ts-run', folder, projectPath, 'sdk-ts'),
+      { ...row('sub:sdk-py-run:a1', folder, projectPath, null), parentSessionId: 'sdk-py-run', agentId: 'a1' },
     ];
     sessionCache.init({
       PROJECTS_DIR: projectsDir,
@@ -110,11 +173,11 @@ function visibleIds(global) {
   }
 }
 
-test('SDK-launched sessions are hidden by default', () => {
+test('SDK-launched sessions and their subagents are hidden by default', () => {
   assert.deepEqual(visibleIds({}), ['interactive', 'scheduled']);
 });
 
 test('turning hideSdkSessions off shows them again', () => {
   assert.deepEqual(visibleIds({ hideSdkSessions: false }),
-    ['interactive', 'scheduled', 'sdk-cli-run', 'sdk-py-run', 'sdk-ts-run']);
+    ['interactive', 'scheduled', 'sdk-cli-run', 'sdk-py-run', 'sdk-ts-run', 'sub:sdk-py-run:a1']);
 });

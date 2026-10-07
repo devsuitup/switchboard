@@ -242,7 +242,8 @@ function refreshFolder(folder, opts = {}) {
       continue; // unchanged, skip
     }
 
-    if (cachedEntry) {
+    // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+    if (cachedEntry && !isSdkEntrypoint(cachedEntry.entrypoint)) {
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
       if (h) {
@@ -440,6 +441,9 @@ function buildProjectsFromCache(showArchived) {
   const hiddenProjects = new Set(global.hiddenProjects || []);
   // see .ai/contexts/session-cache.md ("SDK-launched sessions")
   const hideSdkSessions = global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions;
+  const hiddenSdkIds = new Set(hideSdkSessions
+    ? cachedRows.filter(r => isSdkEntrypoint(r.entrypoint)).map(r => r.sessionId)
+    : []);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -471,7 +475,7 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
-    if (hideSdkSessions && isSdkEntrypoint(row.entrypoint)) continue;
+    if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) continue;
     const { alias } = parseFolderKey(row.folder);
     if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);

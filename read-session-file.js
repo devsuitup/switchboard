@@ -181,6 +181,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let sidechainSeen = false;
     // see .ai/contexts/session-cache.md ("SDK-launched sessions")
     let entrypoint;
+    let typedInTerminal = false;
     // Real conversation time bounds. Resuming a session appends untimestamped
     // bookkeeping records (last-prompt, mode, ai-title, …) which bump the file's
     // mtime without any actual activity, so mtime can't be the displayed time.
@@ -202,6 +203,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (entry.agentId && !agentId) agentId = entry.agentId;
       if (entry.isSidechain) sidechainSeen = true;
       if (entrypoint === undefined && entry.type === 'user') entrypoint = entry.entrypoint || null;
+      if (entry.type === 'user' && entry.entrypoint === 'cli') typedInTerminal = true;
       // Compaction mirror dedup key -- see .ai/contexts/session-cache.md
       if (entry.type === 'bridge-session' && typeof entry.bridgeSessionId === 'string' &&
           entry.bridgeSessionId && !bridgeSessionId) {
@@ -285,7 +287,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, customTitle, aiTitle,
       bridgeSessionId,
-      entrypoint: entrypoint || null,
+      entrypoint: typedInTerminal ? 'cli' : (entrypoint || null),
       dailyMetrics,
     };
   } catch {

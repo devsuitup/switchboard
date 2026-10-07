@@ -134,8 +134,9 @@ A session that a program started through the Claude Agent SDK — a headless
 left out of the list: its transcript carries no link to the session that
 launched it, so it cannot be nested under it like a subagent. Turn off **Hide
 SDK-launched Sessions** in [Global Settings](settings.md#application) to list
-them. Scheduled tasks are always listed. Hidden sessions still count in the
-activity heatmap.
+them. This applies to running and pinned ones too, and to their subagents. A
+session you later resumed and typed into is listed again. Scheduled tasks are
+always listed. Hidden sessions still count in the activity heatmap.
 
 ### Groups inside a project
 
