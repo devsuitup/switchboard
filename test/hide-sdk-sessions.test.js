@@ -1,5 +1,3 @@
-// Sessions started through the Agent SDK (entrypoint sdk-cli / sdk-py / sdk-ts)
-// are hidden from the project list unless the hideSdkSessions setting is off.
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 
 const test = require('node:test');
@@ -216,6 +214,36 @@ test('an SDK session open in a terminal or in the saved working set stays listed
   assert.deepEqual(ids(projects), ['open-now', 'saved']);
 });
 
+test('opening a hidden SDK session asks the renderer to reload the list, which then holds it', () => {
+  const folder = encodeProjectPath('/srv/runner');
+  const cachedRows = [row('sdk', folder, '/srv/runner', 'sdk-py'), row('typed', folder, '/srv/runner', 'cli')];
+  const activeSessions = new Map();
+  const sent = [];
+  const projectsDir = mkTmp();
+  try {
+    sessionCache.init({
+      PROJECTS_DIR: projectsDir,
+      activeSessions,
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (channel) => sent.push(channel) } }),
+      log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
+      db: { ...makeFakeDb({ cachedRows, global: {} }), getCachedSession: (id) => cachedRows.find(r => r.sessionId === id) || null },
+    });
+    sessionCache.setRemoteRoots(new Map());
+    assert.deepEqual(ids(sessionCache.buildProjectsFromCache(true)), ['typed']);
+
+    activeSessions.set('typed', { exited: false });
+    sessionCache.revealIfSdkSession('typed');
+    assert.deepEqual(sent, [], 'an interactive session is already listed');
+
+    activeSessions.set('sdk', { exited: false });
+    sessionCache.revealIfSdkSession('sdk');
+    assert.deepEqual(sent, ['projects-changed']);
+    assert.deepEqual(ids(sessionCache.buildProjectsFromCache(true)), ['sdk', 'typed']);
+  } finally {
+    cleanup(projectsDir);
+  }
+});
+
 test('an SDK session continued from a terminal in a compaction mirror is listed', () => {
   const folder = encodeProjectPath('/srv/runner');
   const cachedRows = [
@@ -247,6 +275,12 @@ test('readSessionEntrypoint reads the head, and the tail of a large SDK transcri
     ]);
     assert.ok(fs.statSync(big).size > 2 * 1024 * 1024);
     assert.equal(readSessionEntrypoint(big), 'cli');
+    const earlyTurn = write(tmp, 'early', [
+      user('review', { entrypoint: 'sdk-py' }),
+      user('typed early', { entrypoint: 'cli' }),
+      ...Array(700).fill(filler),
+    ]);
+    assert.equal(readSessionEntrypoint(earlyTurn), 'cli');
     const longPrompt = write(tmp, 'long-prompt', [
       { type: 'queue-operation', operation: 'enqueue', content: 'é'.repeat(300 * 1024) },
       { type: 'queue-operation', operation: 'dequeue' },

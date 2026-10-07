@@ -164,6 +164,7 @@ let sessionOpenedOutsideRestore = false;
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 const skippedWorkingSetEntries = new Map();
 let restoreSavedIndex = new Map();
+let restoreAwaitingConsent = [];
 
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
@@ -185,16 +186,26 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
-    const skipped = [...skippedWorkingSetEntries.values()]
+    const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
       .filter(({ item }) => !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
-    for (const { item, index } of skipped) {
+    for (const { item, index } of held) {
       set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
   }).catch((e) => { console.warn('[switchboard] failed to persist working set', e); });
   return _persistChain;
+}
+
+// see .ai/contexts/session-cache.md ("Working-set restore: retry until indexing is done")
+function pendingRestoreEntries() {
+  const pending = [...restoreAwaitingConsent];
+  if (restorePlanner && !restorePlanner.isSettled()) pending.push(...restorePlanner.pending());
+  return pending.map(item => ({
+    item,
+    index: restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : Number.MAX_SAFE_INTEGER,
+  }));
 }
 
 function schedulePersistWorkingSet() {
@@ -301,9 +312,11 @@ async function tickRestorePlanner() {
     `<button class="restore-toast-btn restore-toast-restore">Restore</button>` +
     `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
   document.body.appendChild(toast);
+  restoreAwaitingConsent = candidates;
 
   toast.querySelector('.restore-toast-restore').addEventListener('click', async () => {
     toast.remove();
+    restoreAwaitingConsent = [];
     restoringWorkingSet = true;
     try {
       await runRestore(candidates);
@@ -314,6 +327,7 @@ async function tickRestorePlanner() {
   });
   toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
     toast.remove();
+    restoreAwaitingConsent = [];
   });
 }
 

@@ -19,7 +19,7 @@ let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSes
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
-let getCachedMissingEntrypoint, setCachedEntrypoints;
+let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession;
 let entrypointBackfill = null;
 
 function init(ctx) {
@@ -49,6 +49,7 @@ function init(ctx) {
   isInitialScanComplete = ctx.db.isInitialScanComplete;
   setInitialScanComplete = ctx.db.setInitialScanComplete;
   getCachedMissingEntrypoint = ctx.db.getCachedMissingEntrypoint;
+  getCachedSession = ctx.db.getCachedSession;
   setCachedEntrypoints = ctx.db.setCachedEntrypoints;
   entrypointBackfill = null;
 }
@@ -469,6 +470,12 @@ function backfillEntrypoints() {
     step();
   });
   return entrypointBackfill;
+}
+
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+function revealIfSdkSession(sessionId) {
+  const row = getCachedSession ? getCachedSession(sessionId) : null;
+  if (row && isSdkEntrypoint(row.entrypoint)) notifyRendererProjectsChanged();
 }
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
@@ -1035,6 +1042,7 @@ module.exports = {
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   backfillEntrypoints,
+  revealIfSdkSession,
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,

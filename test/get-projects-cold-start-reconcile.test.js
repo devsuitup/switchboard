@@ -63,7 +63,7 @@ function makeHandler(mocks) {
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
     annotateRemoteAttachable, applyAndPersistArchived, () => null, () => {}, false,
-    () => {}
+    mocks.backfillEntrypoints || (() => {})
   );
 }
 
@@ -133,4 +133,22 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
     'reconcileCacheFromFilesystem on it re-parses every unindexed folder synchronously');
   assert.deepEqual(calls, ['populate', 'build'],
     'the interrupted scan must be resumed fire-and-forget, then serve whatever is cached');
+});
+
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+test('get-projects starts the entrypoint backfill on a cold and on a warm cache, before building the list', () => {
+  for (const warm of [false, true]) {
+    const calls = [];
+    const handler = makeHandler({
+      isCachePopulated: () => warm,
+      isSearchIndexPopulated: () => warm,
+      isInitialScanComplete: () => warm,
+      populateCacheViaWorker: () => {},
+      reconcileCacheFromFilesystem: () => {},
+      backfillEntrypoints: () => { calls.push('backfill'); },
+      buildProjectsFromCache: () => { calls.push('build'); return []; },
+    });
+    handler();
+    assert.deepEqual(calls, ['backfill', 'build'], warm ? 'warm cache' : 'cold cache');
+  }
 });

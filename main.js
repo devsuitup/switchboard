@@ -486,11 +486,11 @@ sessionCache.init({
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
-    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints,
+    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession,
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
-        buildProjectsFromCache, backfillEntrypoints, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+        buildProjectsFromCache, backfillEntrypoints, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
@@ -2513,6 +2513,7 @@ function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyPr
     _openedAt: Date.now(),
   };
   activeSessions.set(sessionId, remoteSession);
+  revealIfSdkSession(sessionId);
   wireSessionPty(remoteSession, sessionId, ptyProcess);
   ptyProcess.onResizeAllowed?.(() => {
     if (activeSessions.get(sessionId) !== remoteSession || remoteSession.exited || remoteSession.remoteResizeAllowed) return;
@@ -2882,6 +2883,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     host: null, kind: 'local-pty',
   };
   activeSessions.set(sessionId, session);
+  if (!isPlainTerminal) revealIfSdkSession(sessionId);
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
   // see .ai/contexts/cli-session-state.md

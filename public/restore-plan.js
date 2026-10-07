@@ -76,7 +76,7 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
     return { action: 'wait', candidates: [], remaining: remaining.size, unavailable: [] };
   }
 
-  return { tick, dismiss, isSettled: () => settled };
+  return { tick, dismiss, isSettled: () => settled, pending: () => [...remaining].map(id => items.get(id)) };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -657,10 +657,10 @@ function readSessionEntrypoint(filePath) {
     const first = readFirstUserEntrypoint(fd, size);
     if (first === undefined) return null;
     if (!isSdkEntrypoint(first)) return first;
-    const rest = size <= SDK_FULL_SCAN_MAX_BYTES
-      ? readTextRange(fd, 0, size)
-      : readTextRange(fd, size - SDK_TAIL_SCAN_BYTES, SDK_TAIL_SCAN_BYTES);
-    return hasTerminalTurn(rest) ? 'cli' : first;
+    if (size <= SDK_FULL_SCAN_MAX_BYTES) return hasTerminalTurn(readTextRange(fd, 0, size)) ? 'cli' : first;
+    const head = readTextRange(fd, 0, SDK_TAIL_SCAN_BYTES);
+    const tail = readTextRange(fd, size - SDK_TAIL_SCAN_BYTES, SDK_TAIL_SCAN_BYTES);
+    return hasTerminalTurn(head) || hasTerminalTurn(tail) ? 'cli' : first;
   } catch {
     return null;
   } finally {
