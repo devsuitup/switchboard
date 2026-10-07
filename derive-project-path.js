@@ -58,6 +58,7 @@ function mayBeWorktreeFolderOf(cwd, folderName) {
 function extractVerifiedCwdFromJsonl(filePath, folderName, tailBudget = null) {
   let fd;
   let firstRejected = null;
+  let failed = false;
   try {
     fd = fs.openSync(filePath, 'r');
     const size = fs.fstatSync(fd).size;
@@ -77,15 +78,26 @@ function extractVerifiedCwdFromJsonl(filePath, folderName, tailBudget = null) {
         if (verified) return { cwd: verified, rejected: null, complete: true };
       }
     }
-  } catch {} finally {
+  } catch {
+    failed = true;
+  } finally {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
   }
-  return { cwd: null, rejected: firstRejected, complete: true };
+  return { cwd: null, rejected: firstRejected, complete: !failed };
 }
 
 const DERIVE_TAIL_BUDGET_BYTES = 4 * CWD_SCAN_BYTES;
 const UNRESOLVED_MEMO_MAX = 4096;
 const unresolvedMemo = new Map();
+const RESUME_MAX = 1024;
+const resumeAt = new Map();
+
+function rememberResume(folderPath, fileName) {
+  resumeAt.delete(folderPath);
+  if (fileName === null) return;
+  if (resumeAt.size >= RESUME_MAX) resumeAt.delete(resumeAt.keys().next().value);
+  resumeAt.set(folderPath, fileName);
+}
 
 function unresolvedCwdOf(filePath, folderName) {
   let stat;
@@ -136,11 +148,17 @@ function deriveProjectPath(folderPath, folderName, opts) {
       return cwd;
     }
     if (rejected && firstRejected === null) firstRejected = rejected;
-    if (complete) rememberUnresolved(filePath, name, memo.stat, rejected);
-    else incomplete = true;
+    if (complete) {
+      rememberUnresolved(filePath, name, memo.stat, rejected);
+    } else {
+      incomplete = true;
+      if (resumeName === null && path.dirname(filePath) === folderPath) resumeName = path.basename(filePath);
+    }
     return null;
   };
-  const result = deriveVerified(folderPath, trustedCwdOf);
+  let resumeName = null;
+  const result = deriveVerified(folderPath, trustedCwdOf, remote ? null : resumeAt.get(folderPath));
+  if (!remote) rememberResume(folderPath, result === null ? resumeName : null);
   if (result === null && firstRejected !== null && opts && typeof opts.onRejected === 'function') {
     opts.onRejected(firstRejected);
   }
@@ -148,15 +166,15 @@ function deriveProjectPath(folderPath, folderName, opts) {
   return result;
 }
 
-function deriveVerified(folderPath, trustedCwdOf) {
+function deriveVerified(folderPath, trustedCwdOf, startName = null) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first
-    for (const e of entries) {
-      if (e.isFile() && e.name.endsWith('.jsonl')) {
-        const cwd = trustedCwdOf(path.join(folderPath, e.name));
-        if (cwd) return resolveWorktreePath(cwd);
-      }
+    const direct = entries.filter(e => e.isFile() && e.name.endsWith('.jsonl')).map(e => e.name);
+    const start = Math.max(0, direct.indexOf(startName));
+    for (const name of [...direct.slice(start), ...direct.slice(0, start)]) {
+      const cwd = trustedCwdOf(path.join(folderPath, name));
+      if (cwd) return resolveWorktreePath(cwd);
     }
     // Check session subdirectories (UUID folders with subagent .jsonl files)
     for (const e of entries) {
