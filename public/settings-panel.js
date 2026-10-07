@@ -74,6 +74,7 @@
     const addDirsValue = fieldValue('addDirs');
     const visCountValue = fieldValue('visibleSessionCount');
     const maxAgeValue = fieldValue('sessionMaxAgeDays');
+    const hideSdkValue = fieldValue('hideSdkSessions');
     const themeValue = fieldValue('terminalTheme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
@@ -291,6 +292,16 @@
           </div>
           <div class="settings-field-control">
             <input type="number" class="settings-input settings-input-compact" id="sv-max-age" min="1" max="365" value="${maxAgeValue}">
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Hide SDK-launched Sessions</span>
+            <div class="settings-description">Hide sessions started by a program through the Claude Agent SDK (headless runs, review agents) rather than typed in a terminal. Scheduled tasks stay visible.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-hide-sdk" ${hideSdkValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
 
@@ -578,6 +589,7 @@
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || SETTING_DEFAULTS.terminalTheme;
         settings.terminalRightClick = settingsViewerBody.querySelector('#sv-right-click').value || SETTING_DEFAULTS.terminalRightClick;
         settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
+        settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
@@ -628,7 +640,11 @@
         if (settings.shortcuts && typeof window._applyShortcuts === 'function') {
           window._applyShortcuts(settings.shortcuts);
         }
-        if (typeof refreshSidebar === 'function') refreshSidebar();
+        if (settings.hideSdkSessions !== hideSdkValue && typeof loadProjects === 'function') {
+          await loadProjects();
+        } else if (typeof refreshSidebar === 'function') {
+          refreshSidebar();
+        }
         // Re-arm the remote refresher so a host added here pulls immediately.
         try { await window.api.remoteHostsApply(); } catch {}
       }

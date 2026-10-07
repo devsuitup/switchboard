@@ -8,6 +8,7 @@ const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolv
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
+const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 
 /**
  * Session cache module.
@@ -427,12 +428,18 @@ function isProjectHidden(hiddenProjects, alias, projectPath) {
   return alias !== null && hiddenProjects.has(joinFolderKey(alias, projectPath));
 }
 
+function isSdkEntrypoint(entrypoint) {
+  return typeof entrypoint === 'string' && entrypoint.startsWith('sdk-');
+}
+
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   const metaMap = getAllMeta();
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
+  // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+  const hideSdkSessions = global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions;
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -464,6 +471,7 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
     if (!row.projectPath) continue;
+    if (hideSdkSessions && isSdkEntrypoint(row.entrypoint)) continue;
     const { alias } = parseFolderKey(row.folder);
     if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);

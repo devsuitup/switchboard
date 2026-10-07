@@ -42,6 +42,7 @@ for one launch — see [Launching sessions](launching-sessions.md).
 | Shell Profile | `shellProfile` | Auto (detect) | The shell for sessions and terminals; new sessions only — see [Launching sessions](launching-sessions.md#how-the-command-is-built) |
 | Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
 | Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |
+| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started through the Claude Agent SDK; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
 | IDE Emulation | `mcpEmulation` | off | Switchboard as Claude's IDE; new sessions only — see [IDE emulation](ide-emulation.md) |
 
 ### Keyboard Shortcuts
