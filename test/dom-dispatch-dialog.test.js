@@ -202,3 +202,39 @@ test('remote projects are not offered, and a remote active project does not beco
   assert.deepEqual([...select.options].map(o => o.value), ['/w/one']);
   assert.equal(select.value, '/w/one');
 });
+
+test('a failed dispatch does not re-enable Start while the next project\'s settings are still loading', async (t) => {
+  let release;
+  const byProject = {
+    '/w/one': { dangerouslySkipPermissions: true, addDirs: '/srv/one' },
+    '/w/two': new Promise(r => { release = () => r({ permissionMode: 'plan', addDirs: '' }); }),
+  };
+  let answer;
+  const ctx = setup({ effective: (p) => byProject[p] }); t.after(ctx.destroy);
+  ctx.window.api.dispatchBgAgent = (fields) => { ctx.calls.dispatched.push(fields); return new Promise(r => { answer = r; }); };
+  await ctx.window.showDispatchAgentDialog(null);
+  const d = ctx.document;
+  const startBtn = d.querySelector('.new-session-start-btn');
+  d.querySelector('#dad-prompt').value = 'go';
+  startBtn.click();
+  await tick();
+  const select = d.querySelector('#dad-project');
+  select.value = '/w/two';
+  select.dispatchEvent(new ctx.window.Event('change'));
+  answer({ ok: false, error: 'daemon said no' });
+  await tick(); await tick();
+  assert.equal(startBtn.disabled, true, 'Start waits for /w/two\'s settings');
+  startBtn.click();
+  d.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick();
+  assert.equal(ctx.calls.dispatched.length, 1, 'no retry with the previous project\'s settings');
+  release();
+  await tick(); await tick();
+  assert.equal(startBtn.disabled, false);
+  startBtn.click();
+  await tick();
+  assert.equal(ctx.calls.dispatched.length, 2);
+  assert.equal(ctx.calls.dispatched[1].cwd, '/w/two');
+  assert.equal(ctx.calls.dispatched[1].dangerouslySkipPermissions, false);
+  assert.equal(ctx.calls.dispatched[1].addDirs, '');
+});

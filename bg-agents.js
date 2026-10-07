@@ -277,12 +277,36 @@ async function dispatch(fields) {
   return { ok: true, id };
 }
 
-function liveJobForSession(sessionId) {
-  if (typeof sessionId !== 'string' || !sessionId) return null;
-  return roster.find(e => e.kind === 'background' && e.sessionId === sessionId && isLiveJobState(e.state)) || null;
+function liveJobCheck(sessionId) {
+  const key = typeof sessionId === 'string' ? sessionId.toLowerCase() : '';
+  if (!key) return { known: true, job: null };
+  const sameSession = (sid) => typeof sid === 'string' && sid.toLowerCase() === key;
+  const fromRoster = roster.find(e => e.kind === 'background' && isLiveJobState(e.state) && sameSession(e.sessionId));
+  if (fromRoster) return { known: true, job: { id: fromRoster.id, state: fromRoster.state } };
+  let names;
+  try { names = fs.readdirSync(jobsDir); } catch (err) {
+    if (err && err.code === 'ENOENT') return { known: true, job: null };
+    return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
+  }
+  let unknown = null;
+  for (const id of names) {
+    if (!JOB_ID_RE.test(id)) continue;
+    let parsed;
+    try { parsed = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
+      if (!(err && err.code === 'ENOENT')) unknown = unknown || `cannot read job ${id}`;
+      continue;
+    }
+    if (!parsed) { unknown = unknown || `job ${id} has an unreadable state`; continue; }
+    if (!isLiveJobState(parsed.state)) continue;
+    const listed = roster.find(e => e.kind === 'background' && e.id === id);
+    const sid = parsed.sessionId || (listed && listed.sessionId);
+    if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
+    if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
+  }
+  return unknown ? { known: false, reason: unknown } : { known: true, job: null };
 }
 
 module.exports = {
-  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobForSession,
+  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobCheck,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

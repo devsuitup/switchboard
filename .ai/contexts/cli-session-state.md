@@ -192,6 +192,11 @@ that session — a second Switchboard instance reading the same
 session, both writing its transcript, and input meant for this instance lands
 in a session the user is driving elsewhere.
 
+Session ids are matched lowercased, and `liveElsewhereMany` answers under the
+ids it was asked. `liveElsewhereChecked` returns `{known, live}` or `{known:
+false, reason}` when the directory or a descriptor cannot be read (a missing
+directory is known-empty); `delete-session` uses it to fail closed.
+
 **The check** is main-side, on demand, over IPC `session-live-elsewhere`:
 `liveElsewhere(sessionId, sessionHasPty, ptyPids)` returns `{pid, cwd,
 startedAt}` or `null`. A working-set restore asks for its whole batch at once

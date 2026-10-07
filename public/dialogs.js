@@ -796,17 +796,28 @@ async function showDispatchAgentDialog(project) {
     else if (typeof effective.preLaunchCmd === 'string' && effective.preLaunchCmd.trim()) refusal = 'This project has a pre-launch command, which a background agent would not run.';
     else refusal = null;
     errorEl.textContent = refusal || '';
-    startBtn.disabled = !!refusal;
+    syncStartBtn();
+  }
+
+  let projectToken = 0;
+  let lookupPending = false;
+  let effectiveProject = defaultPath;
+  let starting = false;
+  function syncStartBtn() {
+    startBtn.disabled = !!refusal || lookupPending || starting;
   }
   applyEffective();
 
-  let projectToken = 0;
   projectSelect.addEventListener('change', async () => {
     const token = ++projectToken;
-    startBtn.disabled = true;
-    const next = await effectiveFor(projectSelect.value);
+    const projectPath = projectSelect.value;
+    lookupPending = true;
+    syncStartBtn();
+    const next = await effectiveFor(projectPath);
     if (token !== projectToken) return;
+    lookupPending = false;
     effective = next;
+    effectiveProject = projectPath;
     applyEffective();
   });
 
@@ -827,22 +838,20 @@ async function showDispatchAgentDialog(project) {
     modeGrid.innerHTML = renderModeGrid();
   });
 
-  let starting = false;
-
   function close() {
     overlay.remove();
     document.removeEventListener('keydown', onKey);
   }
 
   async function start() {
-    if (starting || refusal || startBtn.disabled) return;
+    if (starting || refusal || lookupPending) return;
     const prompt = dialog.querySelector('#dad-prompt').value.trim();
     if (!prompt) { errorEl.textContent = 'A prompt is required.'; return; }
     const fields = {
       prompt,
       name: dialog.querySelector('#dad-name').value.trim(),
       agent: dialog.querySelector('#dad-agent').value.trim(),
-      cwd: projectSelect.value,
+      cwd: effectiveProject,
       permissionMode: dangerousSkip ? null : selectedMode,
       dangerouslySkipPermissions: dangerousSkip,
       addDirs: dialog.querySelector('#dad-add-dirs').value.trim(),
@@ -853,7 +862,7 @@ async function showDispatchAgentDialog(project) {
     let result;
     try { result = await window.api.dispatchBgAgent(fields); } catch (err) { result = { ok: false, error: err && err.message }; }
     starting = false;
-    startBtn.disabled = false;
+    syncStartBtn();
     if (!result || result.ok === false) {
       errorEl.textContent = (result && result.error) || 'unknown error';
       return;

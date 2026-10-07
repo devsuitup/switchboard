@@ -77,6 +77,7 @@ const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
+const { deleteSessionRefusal } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
@@ -2205,12 +2206,12 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
 
 ipcMain.handle('delete-session', async (_event, sessionId) => {
   const id = String(sessionId || '');
-  if (activeSessions.has(id) && !activeSessions.get(id).exited) {
-    return { ok: false, error: 'session is still running — close it first' };
-  }
-  if (bgAgents.liveJobForSession(id) || await cliSessionState.liveElsewhere(id, sessionHasPty, ptyPids)) {
-    return { ok: false, error: 'session is still running outside this window — stop it first' };
-  }
+  const refusal = await deleteSessionRefusal(id, {
+    activeSessions,
+    liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
+    liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
+  });
+  if (refusal) return { ok: false, error: refusal };
 
   // Validation, symlink resolution and containment live in
   // delete-session-target.js so they can be executed by tests against real

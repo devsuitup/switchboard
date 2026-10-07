@@ -23,26 +23,14 @@ test('delete-session: the IPC handler exists and is exposed to the renderer', ()
 });
 
 
-test('delete-session: refuses while the session still has a live PTY', () => {
+test('delete-session: the liveness guard runs before anything is resolved or removed', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   const start = main.indexOf("ipcMain.handle('delete-session'");
   const body = main.slice(start, main.indexOf('\n});', start));
-  assert.match(body, /activeSessions\.has\(id\)[\s\S]*?exited/,
-    'a running session must be refused rather than deleted underneath itself');
-  assert.match(body, /still running/, 'the refusal must say why');
-});
-
-
-
-test('delete-session: refuses a session that a daemon job or another process is still running', () => {
-  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  const start = main.indexOf("ipcMain.handle('delete-session'");
-  const body = main.slice(start, main.indexOf('\n});', start));
-  const guard = body.indexOf('bgAgents.liveJobForSession(id)');
-  assert.ok(guard > 0, 'a live background job must be refused');
-  assert.match(body, /cliSessionState\.liveElsewhere\(id, sessionHasPty, ptyPids\)/,
-    'a session live in another process must be refused');
-  assert.ok(guard < body.indexOf('resolveDeletionTargets('), 'the guard runs before anything is resolved or removed');
+  const guard = body.indexOf('await deleteSessionRefusal(id,');
+  assert.ok(guard > 0, 'the handler asks delete-session-guard.js (behaviour tested in delete-session-guard.test.js)');
+  assert.ok(guard < body.indexOf('resolveDeletionTargets('));
+  assert.match(body, /if \(refusal\) return \{ ok: false, error: refusal \}/);
 });
 
 test('delete-session: clears the caches so the row does not reappear', () => {

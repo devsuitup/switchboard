@@ -10,8 +10,9 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | File | Role |
 |---|---|
 | `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isLiveJobState`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
-| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobForSession`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
+| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
+| `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
 | `bg-agents-ipc.js` | `get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `pty-ops.js` | `detachPty` |
@@ -51,9 +52,16 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    apply, and running it unconfined without a word is the outcome to avoid.
    The dialog re-reads the effective settings on every project change and
    shows the same refusal; remote projects are not offered.
-9. `delete-session` refuses a session that `liveJobForSession` (a `working`
-   or `blocked` roster entry) or `cliSessionState.liveElsewhere` reports, on
-   top of the app's own `activeSessions` check.
+9. `delete-session` asks `deleteSessionRefusal` (`delete-session-guard.js`)
+   first, and it fails closed. It refuses a session held by an open
+   terminal (by id or `realSessionId`), by a live job (`liveJobCheck`: the
+   roster, then a direct read of every `jobs/*/state.json`, so it works before
+   the view was ever opened), or by another process
+   (`cliSessionState.liveElsewhereChecked`). It also refuses when it cannot
+   tell: an unreadable jobs or descriptor directory, an unreadable state, or a
+   live job whose state names no session. A missing directory means nothing
+   is live. Ids are compared lowercased everywhere, since Windows resolves a
+   transcript path case-insensitively.
 
 ## Job states
 

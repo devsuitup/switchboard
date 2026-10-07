@@ -347,20 +347,20 @@ test('dispatch is refused, before any claude call, in a project that is sandboxe
   } finally { rmTmp(dir); }
 });
 
-test('liveJobForSession finds a working or blocked job by its session id, never a finished one', async () => {
+test('liveJobCheck finds a working or blocked roster job by its session id, in any case, never a finished one', async () => {
   const dir = mkTmp();
   try {
     const list = [
-      { ...CLI_LIST[0], state: 'blocked', cwd: dir },
+      { ...CLI_LIST[0], sessionId: 'S-A', state: 'blocked', cwd: dir },
       { ...CLI_LIST[1], cwd: dir },
     ];
     boot(dir, { cli: fakeCli({ list }) });
     bgAgents.start();
     await bgAgents.reconcile();
-    assert.equal(bgAgents.liveJobForSession('s-a').id, 'aaaaaaaa');
-    assert.equal(bgAgents.liveJobForSession('s-b'), null, 'a done job is not live');
-    assert.equal(bgAgents.liveJobForSession('s-zzz'), null);
-    assert.equal(bgAgents.liveJobForSession(''), null);
+    assert.deepEqual(bgAgents.liveJobCheck('s-a'), { known: true, job: { id: 'aaaaaaaa', state: 'blocked' } });
+    assert.deepEqual(bgAgents.liveJobCheck('s-b'), { known: true, job: null }, 'a done job is not live');
+    assert.deepEqual(bgAgents.liveJobCheck('s-zzz'), { known: true, job: null });
+    assert.deepEqual(bgAgents.liveJobCheck(''), { known: true, job: null });
   } finally { rmTmp(dir); }
 });
 

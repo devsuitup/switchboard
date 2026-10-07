@@ -359,17 +359,23 @@ function canCompareProcStart(raw) {
 }
 
 // On-demand scan, independent of the watcher -- see .ai/contexts/cli-session-state.md ("Live elsewhere")
-async function scanLiveProcesses(sessionIds, exclude) {
+async function scanLiveProcessesChecked(sessionIds, exclude) {
   const found = new Map();
-  if (sessionIds.size === 0) return found;
+  if (sessionIds.size === 0) return { found, unreadable: null };
   let names;
-  try { names = fs.readdirSync(dir).sort(); } catch { return found; }
+  try { names = fs.readdirSync(dir).sort(); } catch (err) {
+    return { found, unreadable: err && err.code === 'ENOENT' ? null : `cannot read ${dir}: ${err && err.message}` };
+  }
+  let unreadable = null;
   const candidates = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
-    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-    if (!raw || typeof raw !== 'object' || !sessionIds.has(raw.sessionId)) continue;
+    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch (err) {
+      if (!(err && err.code === 'ENOENT')) unreadable = unreadable || `cannot read ${path.join(dir, name)}`;
+      continue;
+    }
+    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string' || !sessionIds.has(raw.sessionId.toLowerCase())) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     if (exclude(raw.pid)) continue;
@@ -387,12 +393,13 @@ async function scanLiveProcesses(sessionIds, exclude) {
   }
 
   for (const raw of candidates) {
-    if (found.has(raw.sessionId)) continue;
+    const key = raw.sessionId.toLowerCase();
+    if (found.has(key)) continue;
     if (canCompareProcStart(raw) && toProbe.includes(raw.pid)) {
       const actual = actualByPid.get(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
     }
-    found.set(raw.sessionId, {
+    found.set(key, {
       pid: raw.pid,
       cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
       startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
@@ -400,12 +407,17 @@ async function scanLiveProcesses(sessionIds, exclude) {
       jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
     });
   }
-  return found;
+  return { found, unreadable };
+}
+
+async function scanLiveProcesses(sessionIds, exclude) {
+  return (await scanLiveProcessesChecked(sessionIds, exclude)).found;
 }
 
 async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
-  return (await scanLiveProcesses(new Set([sessionId]), exclude)).get(sessionId) || null;
+  const key = sessionId.toLowerCase();
+  return (await scanLiveProcesses(new Set([key]), exclude)).get(key) || null;
 }
 
 function ownProcessFilter(ptyPids) {
@@ -419,15 +431,26 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
 }
 
+async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
+  if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
+  if (hasPty(sessionId)) return { known: true, live: null };
+  const key = sessionId.toLowerCase();
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownProcessFilter(ptyPids));
+  const live = found.get(key) || null;
+  if (live) return { known: true, live };
+  return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };
+}
+
 async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
   const result = {};
   if (!Array.isArray(sessionIds)) return result;
-  const wanted = new Set();
+  const wanted = new Map();
   for (const id of sessionIds) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
-    if (typeof id === 'string' && id && !hasPty(id)) wanted.add(id);
+    if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
-  for (const [id, live] of await scanLiveProcesses(wanted, ownProcessFilter(ptyPids))) result[id] = live;
+  const found = await scanLiveProcesses(new Set(wanted.values()), ownProcessFilter(ptyPids));
+  for (const [id, key] of wanted) if (found.has(key)) result[id] = found.get(key);
   return result;
 }
 
@@ -436,6 +459,7 @@ module.exports = {
   findLiveProcess,
   liveElsewhere,
   liveElsewhereMany,
+  liveElsewhereChecked,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,
