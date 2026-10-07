@@ -202,7 +202,7 @@ function findSession(sessionId) {
   for (const [key, session] of activeSessions) {
     if (!session || session.exited || session.isPlainTerminal || !session.projectFolder) continue;
     const effectiveId = session.realSessionId || key;
-    if (effectiveId === sessionId) return { sessionId: effectiveId, session };
+    if (statusKey(effectiveId) === statusKey(sessionId)) return { sessionId: effectiveId, session };
   }
   return null;
 }
@@ -222,7 +222,7 @@ function handleFile(name) {
   if (!state) return;
 
   const prev = known.get(name);
-  if (prev && prev.sessionId && prev.sessionId !== state.sessionId) forgetSession(prev.sessionId);
+  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
   known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
     statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
@@ -243,9 +243,9 @@ function handleFile(name) {
   }
 
   const now = Date.now();
-  const last = lastRescanAt.get(match.sessionId) || 0;
+  const last = lastRescanAt.get(statusKey(match.sessionId)) || 0;
   if (now - last < MIN_RESCAN_INTERVAL_MS) return;
-  lastRescanAt.set(match.sessionId, now);
+  lastRescanAt.set(statusKey(match.sessionId), now);
 
   try {
     onIdle(match.sessionId, match.session);

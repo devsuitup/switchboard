@@ -159,3 +159,29 @@ test('a cached live job whose state.json is missing still refuses the delete', a
     bgAgents.stop();
   }
 });
+
+test('a live job of another session does not refuse the delete, from the file or from the cache', async () => {
+  const OTHER = 'ffffffff-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const jobsDir = path.join(root, 'jobs');
+  fs.mkdirSync(path.join(jobsDir, 'aaaaaaaa'), { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, 'aaaaaaaa', 'state.json'), JSON.stringify({
+    state: 'working', linkScanPath: `/home/u/.claude/projects/-w/${OTHER}.jsonl`,
+  }));
+  bgAgents.init({
+    jobsDir, log: silentLog, cliSessionState, homeDir: os.tmpdir(), resolveProjectRoots: async () => null,
+    runClaude: async (argv) => (argv[0] === 'agents'
+      ? { code: 0, stdout: JSON.stringify([
+        { id: 'aaaaaaaa', sessionId: OTHER, kind: 'background', state: 'working', cwd: root },
+        { id: 'bbbbbbbb', sessionId: OTHER, kind: 'background', state: 'blocked', cwd: root },
+      ]), stderr: '' }
+      : { code: 1, stdout: '', stderr: '' }),
+  });
+  cliSessionState.init({
+    dir: path.join(root, 'sessions'), activeSessions: new Map(), log: silentLog, onIdle: () => {},
+    isProcessAlive: () => true, readProcStart: () => '111', readParentPid: () => 1, ownPid: 99999, platform: 'linux',
+  });
+  bgAgents.start();
+  await bgAgents.reconcile();
+  assert.equal(await refusal(SID), null);
+  assert.match(await refusal(OTHER.toUpperCase()), /background job aaaaaaaa is still running/);
+});

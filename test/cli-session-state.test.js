@@ -91,6 +91,35 @@ test('a busy → idle transition rescans the matching session immediately', asyn
   }
 });
 
+test('a descriptor whose id differs only in case still rescans the app session, under the app id', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', sessionId: 'SESS-1' });
+    const { rescans } = boot(dir, oneSession());
+    writeState(dir, 4242, { status: 'idle', sessionId: 'SESS-1' });
+    await waitFor(() => rescans.length === 1);
+    assert.equal(rescans[0].sessionId, 'sess-1');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an uppercase descriptor is found under the lowercase id, and forgotten when its file goes', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', sessionId: 'SESS-1' });
+    boot(dir, oneSession());
+    writeState(dir, 4242, { status: 'idle', sessionId: 'SESS-1' });
+    await waitFor(() => cliSessionState.getStatus('sess-1')?.status === 'idle');
+    fs.rmSync(path.join(dir, '4242.json'));
+    await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('waiting and shell never rescan — only idle does', async () => {
   // The CLI reports four statuses. Only idle means "the turn is over"; waiting
   // is a permission prompt and shell is a suspended session, both of which can

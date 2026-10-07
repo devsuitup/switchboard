@@ -2440,13 +2440,12 @@ function killProcessTree(child) {
   } catch { try { child.kill('SIGKILL'); } catch {} }
 }
 
-// Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md
+// Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
 function runClaudeCommand(claudeArgv, { cwd, timeout }) {
   return new Promise((resolve) => {
     const globalSettings = getSetting('global') || {};
     const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
     const shell = profile.path;
-    // cmd.exe and PowerShell mangle quotes, `&` and newlines in a prompt: run claude itself
     const direct = isWindows && !isWslShell(shell) && !/bash|zsh|fish|^sh$|^nu$/.test(path.basename(shell, path.extname(shell)).toLowerCase());
     const childEnv = { ...cleanPtyEnv, FORCE_COLOR: '0' };
     let program = shell;
@@ -2459,7 +2458,6 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
     } else {
       args = shellArgs(shell, 'claude ' + quoteArgvForShell(shell, claudeArgv), profile.args || []);
     }
-    // a timed-out --bg may have started the daemon: kill the client only, never its group
     const killTree = claudeArgv[0] !== '--bg';
     let stdout = '';
     let stderr = '';
@@ -2488,7 +2486,6 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', (err) => { clearTimeout(timer); finish(null, err); });
     child.on('close', (code) => { clearTimeout(timer); finish(code); });
-    // a daemon that inherited the pipes keeps `close` from firing: settle shortly after the client exits
     child.on('exit', (code) => {
       const grace = setTimeout(() => { clearTimeout(timer); finish(code); }, 1000);
       if (typeof grace.unref === 'function') grace.unref();

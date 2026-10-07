@@ -393,7 +393,10 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - Archiving or deleting a session that a live daemon job runs is refused by
   `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
   failing closed) before anything is detached; a folder archive (#482) that
-  holds one archives nothing. Stop the job from the Agents view first.
+  holds one archives nothing. Stop the job from the Agents view first. With
+  "Archive the sessions" unchecked a folder archive never calls
+  `stopBeforeArchive`: it only hides the folder, archives and detaches
+  nothing, and the job stays in the Agents view.
 - A live job keeps the sidebar's Fork button: a fork reads the transcript and
   starts a new session, it never resumes the job.
 - A global WSL shell profile runs `claude` inside WSL, whose daemon and

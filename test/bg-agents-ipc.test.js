@@ -1,4 +1,4 @@
-// test/bg-agents-ipc.test.js — the three handlers and the push. See .ai/contexts/bg-agents.md.
+// test/bg-agents-ipc.test.js — the four handlers and the push. See .ai/contexts/bg-agents.md.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,6 +18,7 @@ function fakeBgAgents() {
     reconcile: async () => { calls.push('reconcile'); return { roster: [], daemonReachable: true }; },
     runVerb: async (verb, id) => { calls.push(['verb', verb, id]); return { ok: true }; },
     dispatch: async (fields) => { calls.push(['dispatch', fields]); return { ok: true, id: 'aaaaaaaa' }; },
+    liveJobCheck: (sessionId) => { calls.push(['liveJobCheck', sessionId]); return { known: true, job: null }; },
     onChange: (l) => { listener = l; return () => { listener = null; }; },
     fire: (snap) => listener && listener(snap),
   };
@@ -64,4 +65,14 @@ test('get-bg-agents restores the push after stop() cleared it, without ever doub
   await handlers.get('get-bg-agents')({});
   for (const l of listeners) l({ roster: [], daemonReachable: true });
   assert.deepEqual(sent, [['bg-agents-changed', { roster: [], daemonReachable: true }]]);
+});
+
+test('bg-agent-live-job answers liveJobCheck for the id, coerced to a string', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} } });
+  assert.deepEqual(await handlers.get('bg-agent-live-job')({}, 'S-1'), { known: true, job: null });
+  await handlers.get('bg-agent-live-job')({}, undefined);
+  await handlers.get('bg-agent-live-job')({}, { toString: () => 'x' });
+  assert.deepEqual(bg.calls, [['liveJobCheck', 'S-1'], ['liveJobCheck', ''], ['liveJobCheck', 'x']]);
 });
