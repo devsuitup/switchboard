@@ -242,6 +242,102 @@ test('a refresh whose read failed leaves the folder to be derived again', () => 
   }
 });
 
+function refreshWithFailure(l, method, failsOn) {
+  const metas = [];
+  const { db } = makeFakeDb({});
+  db.setFolderMeta = (folder, projectPath, indexMtimeMs) => metas.push({ projectPath, indexMtimeMs });
+  sessionCache.init({ PROJECTS_DIR: l.projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: null, db });
+  const original = fs[method];
+  let failed = 0;
+  fs[method] = (p, ...rest) => {
+    if (p === failsOn && failed === 0) {
+      failed++;
+      throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+    }
+    return original(p, ...rest);
+  };
+  try {
+    sessionCache.refreshFolder(l.wtFolder);
+  } finally {
+    fs[method] = original;
+  }
+  assert.equal(failed, 1, `precondition: the injected ${method} error was hit`);
+  sessionCache.refreshFolder(l.wtFolder);
+  return metas;
+}
+
+test('a failed stat of a transcript leaves the folder to be derived again', () => {
+  const l = makeLayout();
+  try {
+    const filePath = path.join(l.projectsDir, l.wtFolder, 'moved.jsonl');
+    writeMovedTranscript(filePath, l.repo, l.worktree);
+    const metas = refreshWithFailure(l, 'statSync', filePath);
+    assert.deepEqual(metas[0], { projectPath: null, indexMtimeMs: 0 });
+    assert.equal(metas[metas.length - 1].projectPath, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
+test('a failed listing of the folder leaves it to be derived again', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    writeMovedTranscript(path.join(folderPath, 'moved.jsonl'), l.repo, l.worktree);
+    const metas = refreshWithFailure(l, 'readdirSync', folderPath);
+    assert.deepEqual(metas[0], { projectPath: null, indexMtimeMs: 0 });
+    assert.equal(metas[metas.length - 1].projectPath, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
+test('a failed listing of a session subdirectory leaves the folder to be derived again', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    const subDir = path.join(folderPath, 'parent-session');
+    writeMovedTranscript(path.join(subDir, 'subagents', 'agent-a.jsonl'), l.repo, l.worktree);
+    const metas = refreshWithFailure(l, 'readdirSync', subDir);
+    assert.deepEqual(metas[0], { projectPath: null, indexMtimeMs: 0 });
+    assert.equal(metas[metas.length - 1].projectPath, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
+test('a transcript that keeps failing to open does not hold back the walk past it', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    for (let i = 0; i < 12; i++) {
+      writeMovedTranscript(path.join(folderPath, `t-${i}.jsonl`), l.repo, l.worktree, { tailCwd: null });
+    }
+    const listing = fs.readdirSync(folderPath).filter((n) => n.endsWith('.jsonl'));
+    const broken = path.join(folderPath, listing[0]);
+    const lastListed = path.join(folderPath, listing[listing.length - 1]);
+    writeMovedTranscript(lastListed, l.repo, l.worktree);
+    const others = listing.slice(1, -1).map((n) => path.join(folderPath, n));
+    const originalOpen = fs.openSync;
+    fs.openSync = (p, ...rest) => {
+      if (p === broken) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+      return originalOpen(p, ...rest);
+    };
+    let result = null;
+    try {
+      for (let pass = 0; pass < 6 && result === null; pass++) {
+        result = deriveProjectPath(folderPath, l.wtFolder);
+        for (const f of others) fs.appendFileSync(f, JSON.stringify({ type: 'assistant', message: 'still running' }) + '\n');
+      }
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(result, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
 test('the tail budget moves on through the folder, so a transcript late in the listing is reached even when nothing is memoised', () => {
   const l = makeLayout();
   try {
