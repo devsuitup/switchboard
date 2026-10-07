@@ -185,6 +185,85 @@ test('a folder left unresolved by the tail budget is not marked as indexed, so r
   }
 });
 
+test('a read error is not remembered as an unresolved transcript', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    const filePath = path.join(folderPath, 'busy.jsonl');
+    writeMovedTranscript(filePath, l.repo, l.worktree);
+    const originalOpen = fs.openSync;
+    let failed = 0;
+    fs.openSync = (p, ...rest) => {
+      if (p === filePath && failed === 0) {
+        failed++;
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      return originalOpen(p, ...rest);
+    };
+    let first;
+    try {
+      first = deriveProjectPath(folderPath, l.wtFolder);
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.equal(failed, 1, 'precondition: the injected error was hit');
+    assert.equal(first, null);
+    assert.equal(deriveProjectPath(folderPath, l.wtFolder), l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
+test('a refresh whose read failed leaves the folder to be derived again', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    const filePath = path.join(folderPath, 'busy.jsonl');
+    writeMovedTranscript(filePath, l.repo, l.worktree);
+    const metas = [];
+    const { db } = makeFakeDb({});
+    db.setFolderMeta = (folder, projectPath, indexMtimeMs) => metas.push({ projectPath, indexMtimeMs });
+    sessionCache.init({ PROJECTS_DIR: l.projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: null, db });
+    const originalOpen = fs.openSync;
+    fs.openSync = (p, ...rest) => {
+      if (p === filePath) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      return originalOpen(p, ...rest);
+    };
+    try {
+      sessionCache.refreshFolder(l.wtFolder);
+    } finally {
+      fs.openSync = originalOpen;
+    }
+    assert.deepEqual(metas[0], { projectPath: null, indexMtimeMs: 0 });
+    sessionCache.refreshFolder(l.wtFolder);
+    assert.equal(metas[metas.length - 1].projectPath, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
+test('the tail budget moves on through the folder, so a transcript late in the listing is reached even when nothing is memoised', () => {
+  const l = makeLayout();
+  try {
+    const folderPath = path.join(l.projectsDir, l.wtFolder);
+    for (let i = 0; i < 12; i++) {
+      writeMovedTranscript(path.join(folderPath, `t-${i}.jsonl`), l.repo, l.worktree, { tailCwd: null });
+    }
+    const listing = fs.readdirSync(folderPath).filter((n) => n.endsWith('.jsonl'));
+    const lastListed = path.join(folderPath, listing[listing.length - 1]);
+    writeMovedTranscript(lastListed, l.repo, l.worktree);
+    const others = listing.slice(0, -1).map((n) => path.join(folderPath, n));
+    let result = null;
+    for (let pass = 0; pass < 6 && result === null; pass++) {
+      result = deriveProjectPath(folderPath, l.wtFolder);
+      for (const f of others) fs.appendFileSync(f, JSON.stringify({ type: 'assistant', message: 'still running' }) + '\n');
+    }
+    assert.equal(result, l.repo);
+  } finally {
+    cleanup(l.tmp);
+  }
+});
+
 test('a moved transcript past the tail budget still resolves on a later derivation', () => {
   const l = makeLayout();
   try {
