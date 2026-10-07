@@ -374,6 +374,13 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 ## Known limits
 
+- Archiving a folder (#482) never stops a daemon job. An attach tab open on
+  one is detached by `stopBeforeArchive`, the job keeps running, its session
+  is archived with the folder and stays listed in the Agents view.
+- A live job keeps the sidebar's Fork button: a fork reads the transcript and
+  starts a new session, it never resumes the job.
+- A global WSL shell profile runs `claude` inside WSL, whose daemon and
+  `~/.claude/jobs` can differ from the ones the Windows roster reads.
 - `runVerb`'s live-guard looks the job up in the roster. When the roster does
   not have it — before the first reconcile, or a job beyond `MAX_JOBS` — the
   guard passes `rm` and `respawn` through and the CLI is left to refuse.
