@@ -93,6 +93,29 @@ test('a persist while the restore checks the candidates keeps them, and they are
   h.dom.window.close();
 });
 
+test('a candidate opened by hand during the check, then closed, is not kept in the working set', async () => {
+  const h = setup();
+  const restoring = h.runRestore(dispatchToRestore(h));
+  vm.runInContext(`openSessions.set('sdk-unindexed', { session: { projectPath: '/p' }, closed: false });`, h.ctx);
+  h.releaseLiveChecks();
+  await restoring;
+  vm.runInContext(`openSessions.delete('sdk-unindexed');`, h.ctx);
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened']);
+  assert.equal(vm.runInContext('restoreInFlight.size', h.ctx), 0);
+  h.dom.window.close();
+});
+
+test('a restore that fails part-way leaves nothing in flight', async () => {
+  const h = setup();
+  vm.runInContext(`openSession = async () => { throw new Error('pty spawn failed'); };`, h.ctx);
+  const restoring = h.runRestore(dispatchToRestore(h));
+  h.releaseLiveChecks();
+  await assert.rejects(restoring, /pty spawn failed/);
+  assert.equal(vm.runInContext('restoreInFlight.size', h.ctx), 0);
+  h.dom.window.close();
+});
+
 test('two overlapping restores keep the candidate stored until one of them opens it', async () => {
   const h = setup();
   const candidates = dispatchToRestore(h);

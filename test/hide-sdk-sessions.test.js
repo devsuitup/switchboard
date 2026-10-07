@@ -367,7 +367,7 @@ test('adding the entrypoint column keeps the cached sessions', () => {
 test('both paths that make a session active call revealIfSdkSession right after registering it', () => {
   const vm = require('node:vm');
   const { extractFunction } = require('./app-source');
-  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
 
   const activeSessions = new Map();
   const revealed = [];

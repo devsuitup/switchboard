@@ -221,28 +221,34 @@ function schedulePersistWorkingSet() {
 async function runRestore(list) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
-  const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
   const skippedNow = [];
-  for (const [position, item] of list.entries()) {
-    const s = sessionMap.get(item.sessionId);
-    if (!s) continue;
-    if (openSessions.has(item.sessionId)) continue;
-    // Resume with the project's current "new session" defaults, exactly like a
-    // manual session relaunch — not options frozen from a previous launch.
-    const live = liveById[item.sessionId] || null;
-    let opened;
-    try {
-      opened = await openSession(s, undefined, { automatic: true, live });
-    } finally {
-      restoreInFlight.delete(item.sessionId);
+  try {
+    const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
+    for (const [position, item] of list.entries()) {
+      const s = sessionMap.get(item.sessionId);
+      if (!s || openSessions.has(item.sessionId)) {
+        restoreInFlight.delete(item.sessionId);
+        continue;
+      }
+      // Resume with the project's current "new session" defaults, exactly like a
+      // manual session relaunch — not options frozen from a previous launch.
+      const live = liveById[item.sessionId] || null;
+      let opened;
+      try {
+        opened = await openSession(s, undefined, { automatic: true, live });
+      } finally {
+        restoreInFlight.delete(item.sessionId);
+      }
+      if (opened === false) {
+        const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+        skippedWorkingSetEntries.set(item.sessionId, { item, index });
+        skippedNow.push({ session: s, live });
+        continue;
+      }
+      await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
     }
-    if (opened === false) {
-      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
-      skippedWorkingSetEntries.set(item.sessionId, { item, index });
-      skippedNow.push({ session: s, live });
-      continue;
-    }
-    await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
+  } finally {
+    for (const item of pending) restoreInFlight.delete(item.sessionId);
   }
   if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
