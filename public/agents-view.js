@@ -310,7 +310,7 @@ function renderAgentDetail(entry) {
   const v = agentVerbAvailability(entry, agentsDaemonReachable);
   const pending = agentsPendingVerbs.has(key);
   const btn = (verb, label, enabled) =>
-    `<button type="button" class="agents-verb-btn" data-verb="${verb}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
+    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');
   if (entry.model) meta.push(entry.model);

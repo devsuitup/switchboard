@@ -23,8 +23,6 @@ function escapeForCmd(arg) {
   return s.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
 }
 
-// How to run `claude <argv>` on Windows without a shell profile: the .exe itself, the .exe or node + cli.js an npm
-// .cmd shim points to, or cmd.exe over the shim. Only PATHEXT names count: npm also leaves an extensionless sh shim. Returns { program, args, verbatim } or { error }.
 function resolveWindowsClaude(argv, env = {}, deps = {}) {
   const exists = deps.exists || ((p) => fs.existsSync(p));
   const readFile = deps.readFile || ((p) => fs.readFileSync(p, 'utf8'));
