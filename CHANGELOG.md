@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Sessions a program started through the Claude Agent SDK, such as headless runs or review agents, no longer fill the sidebar and grid. Turn off **Hide SDK-launched Sessions** in Global Settings to list them again. Sessions you have open, scheduled tasks and sessions you continued by typing in them stay listed, and the activity heatmap still counts the hidden ones. (#486)
 ### Fixed
 - When the Claude CLI reports a session's id in a different letter case, the subagents that session started or finished during a turn now show up when the turn ends. (#487)
+- A session that moves into a worktree while it runs stays in the sidebar, under its project, instead of disappearing while its terminal keeps running. A running session also stays listed when its transcript leaves its folder for any other reason. (#485)
 - Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. The worktrees of a repository hidden with Hide Project stay hidden. (#473)
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 

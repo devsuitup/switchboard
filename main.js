@@ -2431,6 +2431,13 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     activeSessions.delete(sessionId);
     activityReporter.sessionEnded(realId);
     activityReporter.sessionEnded(sessionId);
+    try {
+      const releasedReal = sessionCache.releaseLiveSession(realId);
+      const releasedOriginal = sessionCache.releaseLiveSession(sessionId);
+      if (releasedReal || releasedOriginal) notifyRendererProjectsChanged();
+    } catch (err) {
+      log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
+    }
   });
 }
 
@@ -3181,7 +3188,7 @@ function startProjectsWatcher() {
           refreshFolder(folder, { files: scope });
         }
       } else {
-        deleteCachedFolder(folder);
+        sessionCache.dropFolderRows(folder);
       }
       changed = true;
     }

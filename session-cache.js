@@ -82,11 +82,48 @@ function warnRejectedCwd(folder, cwd) {
   if (log && log.warn) log.warn(`[session-cache] no transcript of folder ${folder} has a cwd that encodes to it; first rejected cwd: ${JSON.stringify(cwd)}`);
 }
 
-function deriveFolderProjectPath(folderPath, folderKey) {
+// see .ai/contexts/session-cache.md ("A running session keeps its row")
+const keptLiveRows = new Map();
+
+function isRunningSession(sessionId) {
+  const s = activeSessions && activeSessions.get(sessionId);
+  return !!s && !s.exited && !s.isPlainTerminal;
+}
+
+function keepIfRunning(sessionId, folder) {
+  if (!isRunningSession(sessionId)) return false;
+  keptLiveRows.set(sessionId, folder);
+  return true;
+}
+
+function dropFolderRows(folder, { search = false } = {}) {
+  const rows = getCachedByFolder(folder);
+  const dropped = rows.filter(r => !keepIfRunning(r.sessionId, folder));
+  if (dropped.length === rows.length) {
+    deleteCachedFolder(folder);
+    if (search) deleteSearchFolder(folder);
+    return;
+  }
+  for (const { sessionId } of dropped) {
+    deleteCachedSession(sessionId);
+    if (search) deleteSearchSession(sessionId);
+  }
+}
+
+function releaseLiveSession(sessionId) {
+  const folder = keptLiveRows.get(sessionId);
+  if (folder === undefined || isRunningSession(sessionId)) return false;
+  keptLiveRows.delete(sessionId);
+  refreshFolder(folder);
+  return true;
+}
+
+function deriveFolderProjectPath(folderPath, folderKey, onIncomplete) {
   const { alias, folder } = parseFolderKey(folderKey);
   return deriveProjectPath(folderPath, folder, {
     remote: alias !== null,
     onRejected: (cwd) => warnRejectedCwd(folder, cwd),
+    onIncomplete,
   });
 }
 
@@ -131,7 +168,7 @@ function refreshFolder(folder, opts = {}) {
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
-    deleteCachedFolder(folder);
+    dropFolderRows(folder);
     return;
   }
 
@@ -145,13 +182,11 @@ function refreshFolder(folder, opts = {}) {
     && (parseFolderKey(folder).alias !== null || storedProjectPathMatchesFolder(knownMeta.projectPath, folder))
     ? knownMeta.projectPath
     : null;
-  if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder);
+  let incomplete = false;
+  if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder, () => { incomplete = true; });
   if (!projectPath) {
-    if (parseFolderKey(folder).alias === null) {
-      deleteCachedFolder(folder);
-      deleteSearchFolder(folder);
-    }
-    setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
+    if (parseFolderKey(folder).alias === null) dropFolderRows(folder, { search: true });
+    setFolderMeta(folder, null, incomplete ? 0 : getFolderIndexMtimeMs(folderPath));
     return;
   }
 
@@ -313,7 +348,7 @@ function refreshFolder(folder, opts = {}) {
   // drift on the next folder-level event.
   if (!targeted) {
     for (const sessionId of cachedMap.keys()) {
-      if (!currentIds.has(sessionId)) {
+      if (!currentIds.has(sessionId) && !keepIfRunning(sessionId, folder)) {
         sessionsToDelete.push(sessionId);
         changed = true;
       }
@@ -325,6 +360,7 @@ function refreshFolder(folder, opts = {}) {
       const dbId = filePathToDbId.get(filePath);
       if (!dbId) continue;
       try { fs.statSync(filePath); } catch {
+        if (keepIfRunning(dbId, folder)) continue;
         sessionsToDelete.push(dbId);
         changed = true;
       }
@@ -764,10 +800,7 @@ function sendIndexingFinished() {
  *  worker was pointed at a remote mirror. Returns the session count written. */
 function writeScannedFolder(r, unverifiedLocalFolder = null) {
   if (!r) {
-    if (unverifiedLocalFolder) {
-      deleteCachedFolder(unverifiedLocalFolder);
-      deleteSearchFolder(unverifiedLocalFolder);
-    }
+    if (unverifiedLocalFolder) dropFolderRows(unverifiedLocalFolder, { search: true });
     return 0;
   }
   const { folder, projectPath, sessions, indexMtimeMs } = r;
@@ -1039,6 +1072,8 @@ module.exports = {
   readSessionFile,
   readFolderFromFilesystem,
   refreshFolder,
+  dropFolderRows,
+  releaseLiveSession,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   backfillEntrypoints,

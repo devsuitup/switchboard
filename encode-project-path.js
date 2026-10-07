@@ -3,14 +3,29 @@ const path = require('path');
 // Mirror Claude CLI's project-folder naming so Switchboard-created folders
 // match the ones the CLI writes for the same project path.
 // Reverse-engineered from claude CLI 2.1.126.
+const ENCODED_NAME_MAX = 200;
+
+function sanitizeProjectPath(projectPath) {
+  return projectPath.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
 function encodeProjectPath(projectPath) {
-  const sanitized = projectPath.replace(/[^a-zA-Z0-9]/g, '-');
-  if (sanitized.length <= 200) return sanitized;
+  const sanitized = sanitizeProjectPath(projectPath);
+  if (sanitized.length <= ENCODED_NAME_MAX) return sanitized;
   let h = 0;
   for (let i = 0; i < projectPath.length; i++) {
     h = (h << 5) - h + projectPath.charCodeAt(i) | 0;
   }
-  return sanitized.slice(0, 200) + '-' + Math.abs(h).toString(36);
+  return sanitized.slice(0, ENCODED_NAME_MAX) + '-' + Math.abs(h).toString(36);
+}
+
+// see .ai/contexts/session-cache.md ("A transcript moved into a worktree folder")
+function encodedFolderMayExtend(folderName, pathPrefix) {
+  const prefix = sanitizeProjectPath(pathPrefix);
+  if (folderName.length <= ENCODED_NAME_MAX) {
+    return folderName.length > prefix.length && folderName.startsWith(prefix);
+  }
+  return folderName.startsWith(prefix.slice(0, ENCODED_NAME_MAX));
 }
 
 let remappedProjectReader = () => null;
@@ -44,4 +59,4 @@ function decodeProjectFolderBestEffort(folder) {
   return folder.replace(/-/g, '/');
 }
 
-module.exports = { encodeProjectPath, decodeProjectFolderBestEffort, verifiedTranscriptCwd, setRemappedProjectReader };
+module.exports = { encodeProjectPath, encodedFolderMayExtend, decodeProjectFolderBestEffort, verifiedTranscriptCwd, setRemappedProjectReader };
