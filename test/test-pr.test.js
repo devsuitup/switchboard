@@ -45,6 +45,16 @@ const normalizedCredentialProxies = [
   ['embedded CR', 'http:\r//tok@proxy.invalid:8080'],
   ['embedded LF', 'http:\n//tok@proxy.invalid:8080'],
 ];
+const rejectedProxyValues = [
+  ['control character', Array.from({ length: 33 }, (_, index) =>
+    `${String.fromCharCode(index === 32 ? 0x7f : index)}http://u:p@px:1080`).concat([
+    'http://px/\u0001path', 'http://px\t', 'http://px\n',
+  ])],
+  ['non-ASCII text after trim', ['\u0301http://u:p@px:1080', 'http://px/\u00e9', 'http://px/\u0080']],
+  ['URL parse failure', ['http://u:p@px:bad', 'http://u:p@px:99999', 'http://u:p@[invalid]',
+    'http://u:p@%invalid', 'http://u:p@', 'u:p@px:bad', 'http://px:bad']],
+  ['password-only userinfo', ['http://:pass@px', 'socks5://:pass@px']],
+];
 
 function temp(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-test-pr-')));
@@ -567,6 +577,21 @@ for (const allowClaude of [false, true]) {
   }
 
   for (const proxy of proxyKeys) {
+    for (const [form, values] of rejectedProxyValues) {
+      test(`isolated ALLOW_CLAUDE=${allowClaude} drops ${proxy} with ${form}`, (t) => {
+        const root = temp(t);
+        for (const key of [proxy, proxy.toLowerCase(), proxy.toUpperCase()]) {
+          for (const value of values) {
+            const env = Object.freeze({ [key]: value, KEEP_ME: 'keep-sentinel' });
+            const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
+            assert.equal(Object.hasOwn(launch.env, key), false, `${key}: ${JSON.stringify(value)}`);
+            assert.equal(launch.env.KEEP_ME, 'keep-sentinel');
+            assert.equal(env[key], value);
+          }
+        }
+      });
+    }
+
     for (const [form, value] of normalizedCredentialProxies) {
       test(`isolated ALLOW_CLAUDE=${allowClaude} drops ${proxy} with ${form}`, (t) => {
         const root = temp(t);
@@ -614,7 +639,7 @@ for (const allowClaude of [false, true]) {
         for (const value of ['http://proxy.invalid:8080', 'https://proxy.invalid', 'socks5://proxy.invalid:1080',
           'proxy.invalid:8080', '//proxy.invalid:8080', '', 'http://proxy.invalid/user:pass@path',
           'proxy.invalid/user@path', 'http://proxy.invalid?user@query', 'http://proxy.invalid#user@fragment',
-          ' http://proxy.invalid:8080\t ', 'socks5h://proxy.invalid:1080', 'http://[::1]:8080',
+          ' http://proxy.invalid:8080 ', '\u00a0http://proxy.invalid:8080\u00a0', 'socks5h://proxy.invalid:1080', 'http://[::1]:8080',
           'http://@proxy.invalid', 'socks5://proxy%40name.invalid']) {
           const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env: { [key]: value } });
           assert.equal(launch.env[key], value, key);
@@ -656,6 +681,31 @@ for (const allowClaude of [false, true]) {
 }
 
 for (const allowClaude of ['0', '1']) {
+  for (const [form, values] of rejectedProxyValues) {
+    test(`isolated ALLOW_CLAUDE=${allowClaude} filters ${form} proxies through fixture setup and launch`, async (t) => {
+      const setup = workflow(t);
+      for (const value of values) {
+        const proxies = Object.fromEntries(proxyKeys.map(key => [key, value]));
+        const env = Object.freeze({ ...setup.env, ...proxies, ISOLATED: '1', ALLOW_CLAUDE: allowClaude });
+        let prepared = false;
+        let launched = false;
+        assert.equal(await tooling().main({ ...setup, env,
+          fixtures: (home, fixtureEnv) => {
+            for (const key of proxyKeys) assert.equal(Object.hasOwn(fixtureEnv, key), false, key);
+            prepared = true;
+          },
+          launch: async (file, args, options) => {
+            for (const key of proxyKeys) assert.equal(Object.hasOwn(options.env, key), false, key);
+            launched = true;
+            return 0;
+          } }), 0);
+        assert.equal(prepared, true);
+        assert.equal(launched, true);
+        for (const key of proxyKeys) assert.equal(env[key], value);
+      }
+    });
+  }
+
   for (const [form, value] of normalizedCredentialProxies) {
     test(`isolated ALLOW_CLAUDE=${allowClaude} filters ${form} proxies through fixture setup and launch`, async (t) => {
       const setup = workflow(t);

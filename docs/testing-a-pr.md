@@ -154,12 +154,13 @@ Names ending in `TOKEN`, `PASSWORD`, `_API_KEY`, `_APIKEY`, `_SECRET`,
 includes `PGPASSWORD` and `npm_config__authToken`. `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY` and `npm_config_https_proxy` are removed when URL parsing finds a
 non-empty username or password, including a user without a password or a value
-without a scheme. Classification trims surrounding whitespace and removes
-embedded tabs, CR and LF before parsing; schemeless values use an HTTP scheme.
-Credential-free proxies keep their original values. An `@` only in a path
+without a scheme. Values containing any ASCII control character (U+0000-U+001F
+or U+007F) are removed before trimming. Values that are not plain printable
+ASCII after trimming, or that cannot be parsed as a URL, are also removed.
+Schemeless values use an HTTP scheme. Empty values and credential-free proxies
+keep their original values. An `@` only in a path
 (including after an HTTP(S) backslash separator), query or fragment, or an
-empty userinfo marker, does not cause removal. Values that cannot be parsed
-are preserved.
+empty userinfo marker, does not cause removal.
 Git uses an empty
 global configuration in the temporary HOME and skips the system config;
 fixture commits receive a synthetic identity only during setup.

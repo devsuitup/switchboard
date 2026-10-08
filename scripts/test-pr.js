@@ -22,13 +22,16 @@ function validateAllowClaude(value, isolated) {
 }
 
 function hasProxyCredentials(value) {
-  const normalized = value.trim().replace(/[\t\r\n]/g, '');
+  if (/[\u0000-\u001f\u007f]/.test(value)) return true;
+  const normalized = value.trim();
+  if (/[^\x20-\x7e]/.test(normalized)) return true;
+  if (normalized === '') return false;
   try {
     const proxy = new URL(/^(?:[a-z][a-z\d+.-]*:\/\/|https?:)/i.test(normalized)
       ? normalized : `http:${normalized.startsWith('//') ? '' : '//'}${normalized}`);
     return proxy.username !== '' || proxy.password !== '';
   } catch {
-    return false;
+    return true;
   }
 }
 
