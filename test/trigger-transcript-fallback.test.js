@@ -648,7 +648,7 @@ test('chain: /compact as step 0 with the descriptor held busy -> confirmed from 
     assert.equal(s.written.filter((w) => w.data === '\r').length, 2, 'a recovery Enter was typed into the busy CLI');
     assert.equal(result.ok, true);
     assert.equal(result.steps[0].submit_confirmed, true);
-    assert.equal(result.steps[0].confirm_source, 'transcript');
+    assert.equal(result.steps[0].confirm_source, 'compact_boundary');
     assert.equal(result.steps[0].submitted, 'confirmed');
     assert.equal(result.steps[0].idle_source, 'transcript');
     assert.equal(result.steps[1].ready_source, 'transcript');
@@ -671,7 +671,7 @@ test('chain: /compact as the only step with the descriptor held busy -> confirme
 
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.steps[0].submit_confirmed, true);
-    assert.equal(result.steps[0].confirm_source, 'transcript');
+    assert.equal(result.steps[0].confirm_source, 'compact_boundary');
   } finally {
     s.cleanup();
   }

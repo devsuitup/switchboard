@@ -151,6 +151,160 @@ function readResult(processedDir, uuid) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
+async function runCompactEvidenceCase({ chain = false, evidence = 'none', descriptor = false, busy = true, evidenceDelay = 80, deadline = 900 } = {}) {
+  const tmp = mkTmp();
+  const keepAlive = setInterval(() => {}, 1000);
+  const timers = [];
+  const sessionId = 'i488-session';
+  const projectFolder = 'project';
+  const transcript = path.join(tmp, projectFolder, sessionId + '.jsonl');
+  const boundary = (at, trigger = 'manual', isSidechain = false) => ({
+    type: 'system', subtype: 'compact_boundary', timestamp: new Date(at).toISOString(),
+    uuid: 'boundary-' + at, sessionId, isSidechain, compactMetadata: { trigger },
+  });
+  let watcher;
+  try {
+    fs.mkdirSync(path.dirname(transcript));
+    const oldAt = Date.now() + (evidence === 'preexisting-future' ? 60_000 : -60_000);
+    fs.writeFileSync(transcript, JSON.stringify(boundary(oldAt)) + '\n');
+    process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
+    const written = [];
+    let compactsEntered = 0;
+    let status = { status: 'idle', statusUpdatedAt: oldAt };
+    const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+    const session = {
+      projectFolder, cwd: tmp, composerState: { pending: 0, lastInputAt: 0 }, _cliBusy: false,
+      pty: { pid: process.pid, write(data) {
+        written.push(data);
+        if (data !== '\r') return;
+        const command = written[written.length - 2];
+        if (command === '/compact') compactsEntered += 1;
+        if (busy) {
+          later(20, () => { session._cliBusy = true; status = { status: 'busy', statusUpdatedAt: Date.now() }; });
+          later(230, () => { session._cliBusy = false; status = { status: 'idle', statusUpdatedAt: Date.now() }; });
+        }
+        if (command === '/compact' && !['none', 'old', 'missing', 'preexisting-future'].includes(evidence)
+          && (evidence !== 'manual-once' || compactsEntered === 1)) {
+          later(evidenceDelay, () => {
+            const at = evidence === 'old-timestamp' ? oldAt : Date.now();
+            const entry = boundary(at, evidence === 'auto' ? 'auto' : 'manual', evidence === 'sidechain');
+            if (evidence === 'old-timestamp') entry.uuid = 'new-record-with-old-timestamp';
+            if (evidence === 'wrong-type') entry.type = 'user';
+            if (evidence === 'wrong-subtype') entry.subtype = 'informational';
+            if (evidence === 'no-timestamp') delete entry.timestamp;
+            fs.appendFileSync(transcript, JSON.stringify(entry) + '\n');
+          });
+        }
+      } },
+    };
+    const { createTriggerContext } = require('../trigger-context');
+    const ctx = createTriggerContext({
+      activeSessions: new Map([[sessionId, session]]), log: silentLog, projectsDir: tmp,
+      ...(descriptor ? { getCliStatus: () => status } : {}),
+    });
+    if (evidence === 'missing') fs.unlinkSync(transcript);
+    watcher = require('../trigger-watcher').start(ctx);
+    writeTrigger(tmp, 'i488', {
+      sessionId, timeout_ms: deadline + 700,
+      ...(chain ? { chain: [{ command: '/compact', timeout_ms: deadline },
+        ...(chain === 'repeat' ? [{ command: '/compact', timeout_ms: deadline }] : []),
+        ...(chain === 'only' ? [] : [{ command: 'resume after compaction' }])] }
+        : { command: '/compact', timeout_ms: deadline }),
+    });
+    await waitForFile(path.join(tmp, 'processed', 'i488.result.json'), deadline + 2000);
+    return { result: readResult(path.join(tmp, 'processed'), 'i488'), written };
+  } finally {
+    watcher?.close();
+    timers.forEach(clearTimeout);
+    clearInterval(keepAlive);
+    delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+    cleanup(tmp);
+  }
+}
+
+test('i488: unrelated busy activity cannot confirm a compact or release the resume step', async () => {
+  const { result, written } = await runCompactEvidenceCase({ chain: true });
+  assert.equal(result.ok, false, 'a compact without its effect must stop the chain');
+  assert.equal(result.submitted, 'activity');
+  assert.equal(result.compaction_observed, false);
+  assert.equal(result.steps_completed, 0);
+  assert.equal(result.steps_written, 1);
+  assert.equal(result.steps[0].written, true);
+  assert.equal(result.steps[0].turn_observed, true);
+  assert.equal(result.steps[0].submit_confirmed, false);
+  assert.equal(result.steps[0].compaction_observed, false);
+  assert.equal(result.error, 'step not confirmed');
+  assert.match(result.reason, /compaction.*not observed/i);
+  assert.deepEqual(written, ['/compact', '\r']);
+});
+
+for (const options of [
+  { evidence: 'none' }, { evidence: 'none', descriptor: true }, { evidence: 'old' },
+  { evidence: 'old-timestamp' }, { evidence: 'auto' }, { evidence: 'sidechain' }, { evidence: 'missing' },
+  { evidence: 'preexisting-future' },
+  { evidence: 'wrong-type' }, { evidence: 'wrong-subtype' }, { evidence: 'no-timestamp' },
+]) {
+  test(`i488: single compact refuses unrelated evidence ${JSON.stringify(options)}`, async () => {
+    const { result } = await runCompactEvidenceCase(options);
+    assert.equal(result.compaction_observed, false);
+    assert.equal(result.submit_confirmed, false);
+    assert.notEqual(result.submitted, 'confirmed');
+    assert.equal(result.ok, false);
+    assert.equal(result.written, true);
+    assert.equal(result.turn_observed, true);
+    assert.match(result.reason, /compaction.*not observed/i);
+  });
+}
+
+for (const options of [
+  { chain: true, evidence: 'manual' },
+  { evidence: 'manual', busy: false },
+  { chain: true, evidence: 'manual', descriptor: true, evidenceDelay: 750, deadline: 1400 },
+]) {
+  test(`i488: fresh manual boundary confirms compaction ${JSON.stringify(options)}`, async () => {
+    const { result, written } = await runCompactEvidenceCase(options);
+    const step = options.chain ? result.steps[0] : result;
+    assert.equal(result.ok, true);
+    assert.equal(result.compaction_observed, true);
+    assert.equal(step.compaction_observed, true);
+    assert.equal(step.submitted, 'confirmed');
+    assert.equal(step.submit_confirmed, true);
+    assert.equal(step.written, true);
+    assert.equal(step.submit_retries, 0, 'observing compaction must not send a recovery Enter');
+    assert.equal(step.confirm_source, 'compact_boundary');
+    if (options.chain) assert.deepEqual(written, ['/compact', '\r', 'resume after compaction', '\r']);
+    else assert.deepEqual(written, ['/compact', '\r']);
+  });
+}
+
+test('i488: a compact evidence deadline stops the chain before later compaction arrives', async () => {
+  const { result, written } = await runCompactEvidenceCase({ chain: true, evidence: 'manual', evidenceDelay: 1200, deadline: 600 });
+  assert.equal(result.ok, false);
+  assert.equal(result.compaction_observed, false);
+  assert.equal(result.steps_completed, 0);
+  assert.deepEqual(written, ['/compact', '\r']);
+});
+
+test('i488: a final compact also requires compaction evidence', async () => {
+  const { result, written } = await runCompactEvidenceCase({ chain: 'only' });
+  assert.equal(result.ok, false);
+  assert.equal(result.compaction_observed, false);
+  assert.equal(result.steps[0].submit_confirmed, false);
+  assert.equal(result.steps_completed, 0);
+  assert.deepEqual(written, ['/compact', '\r']);
+});
+
+test('i488: each compact needs its own boundary and the result requires every compact', async () => {
+  const { result, written } = await runCompactEvidenceCase({ chain: 'repeat', evidence: 'manual-once' });
+  assert.equal(result.ok, false);
+  assert.equal(result.compaction_observed, false);
+  assert.equal(result.steps[0].compaction_observed, true);
+  assert.equal(result.steps[1].compaction_observed, false);
+  assert.equal(result.steps_completed, 1);
+  assert.equal(result.steps_written, 2);
+  assert.deepEqual(written, ['/compact', '\r', '/compact', '\r']);
+});
+
 // ── Test cases ────────────────────────────────────────────────────────────────
 
 test('happy path: trigger → pty.write called, result ok:true, trigger deleted', async () => {
@@ -168,7 +322,7 @@ test('happy path: trigger → pty.write called, result ok:true, trigger deleted'
     const uuid    = 'aaa-' + Date.now();
     const triggerPath = writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -177,14 +331,14 @@ test('happy path: trigger → pty.write called, result ok:true, trigger deleted'
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true, 'result.ok should be true');
     assert.equal(result.sessionId, SESSION_ID);
-    assert.equal(result.command, '/compact');
+    assert.equal(result.command, '/clear');
     assert.ok(result.sent_at, 'result.sent_at should be set');
     assert.equal(typeof result.waited_ms, 'number', 'waited_ms should be a number');
     // busy never rises in this ctx → submit-verify retries the Enter once.
     assert.equal(result.submit_retries, 1, 'submit_retries should be 1 (no busy-rise observed)');
 
     // pty.write: command text, discrete Enter, then the verify-retry Enter.
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r'], 'pty.write: command text, Enter, then retry Enter');
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r'], 'pty.write: command text, Enter, then retry Enter');
 
     // Trigger file deleted
     assert.equal(fs.existsSync(triggerPath), false, 'trigger file should be deleted');
@@ -211,7 +365,7 @@ test('unknown sessionId: result ok:false with session not found, no PTY write', 
     const uuid    = 'bbb-' + Date.now();
     const triggerPath = writeTrigger(tmp, uuid, {
       sessionId: 'nonexistent-session-id',
-      command:   '/compact',
+      command:   '/clear',
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -315,7 +469,7 @@ test('wait:idle while busy → flips to idle after 150ms → write happens, wait
     const uuid    = 'eee-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
     });
 
@@ -332,7 +486,7 @@ test('wait:idle while busy → flips to idle after 150ms → write happens, wait
       `waited_ms (${result.waited_ms}) should be >= 100ms`,
     );
     // busy is false by the time we submit → no rise → verify retries the Enter.
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r'], 'PTY write should happen after idle (with verify-retry Enter)');
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r'], 'PTY write should happen after idle (with verify-retry Enter)');
 
   } finally {
     if (watcher) watcher.close();
@@ -357,7 +511,7 @@ test('wait:idle timeout: busy stays true → ok:false, error "not sent", no PTY 
     const uuid    = 'fff-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
     });
 
@@ -537,7 +691,7 @@ test('W3 forbidden control chars: \\r in command rejected, result ok:false', asy
 
     const uuid = 'w3-' + Date.now();
     // Write raw JSON with \r character in command
-    const payload = JSON.stringify({ sessionId: SESSION_ID, command: '/compact\rclear' });
+    const payload = JSON.stringify({ sessionId: SESSION_ID, command: '/clear\rclear' });
     fs.writeFileSync(path.join(tmp, uuid + '.json'), payload, 'utf8');
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -587,7 +741,7 @@ test('W4 concurrency cap: 12 simultaneous triggers all get processed', async () 
 
     // Drop all 12 triggers at once, each targeting its own session
     for (const uuid of uuids) {
-      writeTrigger(tmp, uuid, { sessionId: 'sess-' + uuid, command: '/compact' });
+      writeTrigger(tmp, uuid, { sessionId: 'sess-' + uuid, command: '/clear' });
     }
 
     // Wait for all 12 result files. Ceiling only: 12 triggers through
@@ -631,7 +785,7 @@ test('W5 session exits during wait:idle → ok:false, error contains "session ex
     const uuid = 'w5-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
     });
 
@@ -669,7 +823,7 @@ test('PTY write throws: result ok:false with pty write failed error', async () =
     watcher = start(ctx);
 
     const uuid = 'ptythrow-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);
@@ -701,7 +855,7 @@ test('inFlight dedup: same filename event fired twice → processed at most once
 
     // Write the trigger file once
     const uuid    = 'dedup-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);
@@ -738,7 +892,7 @@ test('I4 NaN timeout: invalid SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS uses default (
     const uuid = 'i4-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
     });
 
@@ -779,7 +933,7 @@ test('W6 timeout_ms: per-trigger timeout_ms honored, overrides env-var fallback'
     const uuid = 'tmout-override-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId:  SESSION_ID,
-      command:    '/compact',
+      command:    '/clear',
       wait:       'idle',
       timeout_ms: 1000, // per-trigger override: 1 s (50 ms env var would time out first)
     });
@@ -794,7 +948,7 @@ test('W6 timeout_ms: per-trigger timeout_ms honored, overrides env-var fallback'
     assert.equal(result.ok, true, 'result should be ok when timeout_ms overrides short env var');
     assert.ok(result.waited_ms >= 100, `waited_ms (${result.waited_ms}) should be >= 100ms`);
     // busy is false at submit time → no rise → verify retries the Enter once.
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r'], 'PTY write should happen (with verify-retry Enter)');
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r'], 'PTY write should happen (with verify-retry Enter)');
 
   } finally {
     if (watcher) watcher.close();
@@ -820,7 +974,7 @@ test('W6 timeout_ms invalid: negative → ok:false, error "invalid timeout_ms", 
     const uuid = 'neg-tmout-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId:  SESSION_ID,
-      command:    '/compact',
+      command:    '/clear',
       timeout_ms: -1,
     });
 
@@ -856,7 +1010,7 @@ test('W6 timeout_ms invalid: non-integer float (1.5) → ok:false, no PTY write'
     const uuid = 'float-tmout-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId:  SESSION_ID,
-      command:    '/compact',
+      command:    '/clear',
       timeout_ms: 1.5,
     });
 
@@ -892,7 +1046,7 @@ test('W6 timeout_ms invalid: value > 600000 → ok:false, no PTY write', async (
     const uuid = 'cap-tmout-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId:  SESSION_ID,
-      command:    '/compact',
+      command:    '/clear',
       timeout_ms: 600001,
     });
 
@@ -930,7 +1084,7 @@ test('W6 timeout_ms invalid: string type ("500") → ok:false, no PTY write', as
     const uuid = 'str-tmout-' + Date.now();
     fs.writeFileSync(
       path.join(tmp, uuid + '.json'),
-      JSON.stringify({ sessionId: SESSION_ID, command: '/compact', timeout_ms: '500' }),
+      JSON.stringify({ sessionId: SESSION_ID, command: '/clear', timeout_ms: '500' }),
       'utf8',
     );
 
@@ -967,7 +1121,7 @@ test('W6 timeout_ms absent: falls back to env-var; env-var absent → falls back
     const uuid = 'fallback-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
       // No timeout_ms — should use env-var (300 ms)
     });
@@ -1007,7 +1161,7 @@ test('W7 dead on arrival: liveness false at lookup → ok:false, no wait, no wri
 
     const uuid = 'dead-' + Date.now();
     const startedAt = Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', wait: 'idle' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', wait: 'idle' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);
@@ -1045,7 +1199,7 @@ test('W7 dies during wait: alive at lookup, dead before write → ok:false with 
 
     watcher = start(ctx);
     const uuid = 'dies-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', wait: 'idle' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', wait: 'idle' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 4000);
@@ -1175,7 +1329,7 @@ test('chain happy path: 3-step chain → 3 PTY writes, result ok:true with steps
       sessionId: SESSION_ID,
       wait: 'idle',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'verify result file and commit' },
         { command: 'open the PR' },
       ],
@@ -1192,7 +1346,7 @@ test('chain happy path: 3-step chain → 3 PTY writes, result ok:true with steps
     assert.ok(Array.isArray(result.steps), 'steps should be an array');
     assert.equal(result.steps.length, 3, 'steps should have 3 entries');
     assert.equal(result.steps[0].idx, 0);
-    assert.equal(result.steps[0].command, '/compact');
+    assert.equal(result.steps[0].command, '/clear');
     assert.ok(result.steps[0].sent_at, 'steps[0].sent_at should be set');
     assert.equal(typeof result.steps[0].waited_ms, 'number');
     assert.equal(result.steps[1].idx, 1);
@@ -1202,7 +1356,7 @@ test('chain happy path: 3-step chain → 3 PTY writes, result ok:true with steps
     assert.equal(typeof result.total_waited_ms, 'number');
 
     // All 3 writes happened in order
-    assert.deepEqual(ctx._written, ['/compact', '\r', 'verify result file and commit', '\r', 'open the PR', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r', 'verify result file and commit', '\r', 'open the PR', '\r']);
 
   } finally {
     if (watcher) watcher.close();
@@ -1228,8 +1382,8 @@ test('chain+command mutually exclusive: both present → ok:false, error mention
     const uuid = 'chain-both-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command: '/compact',
-      chain: [{ command: '/compact' }],
+      command: '/clear',
+      chain: [{ command: '/clear' }],
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -1329,7 +1483,7 @@ test('chain validation: step without command string → ok:false', async () => {
     const uuid = 'chain-badstep-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      chain: [{ command: '/compact' }, { notcommand: 'oops' }],
+      chain: [{ command: '/clear' }, { notcommand: 'oops' }],
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -1364,7 +1518,7 @@ test('chain validation: step command too long → ok:false, no PTY write', async
     const uuid = 'chain-longcmd-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      chain: [{ command: '/compact' }, { command: 'x'.repeat(4097) }],
+      chain: [{ command: '/clear' }, { command: 'x'.repeat(4097) }],
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -1399,7 +1553,7 @@ test('chain validation: step command with forbidden chars → ok:false, no PTY w
     const uuid = 'chain-ctrlcmd-' + Date.now();
     const payload = JSON.stringify({
       sessionId: SESSION_ID,
-      chain: [{ command: '/compact' }, { command: '/clear\rstep2' }],
+      chain: [{ command: '/clear' }, { command: '/clear\rstep2' }],
     });
     fs.writeFileSync(path.join(tmp, uuid + '.json'), payload, 'utf8');
 
@@ -1460,7 +1614,7 @@ test('chain timeout mid-chain: global timeout fires → ok:false, partial:true, 
       sessionId: SESSION_ID,
       wait: 'none',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'step-two' },   // stuck — never goes idle
         { command: 'step-three' }, // never reached
       ],
@@ -1476,7 +1630,7 @@ test('chain timeout mid-chain: global timeout fires → ok:false, partial:true, 
     assert.match(result.error, /timeout/i, 'error should mention timeout');
     assert.equal(result.steps_completed, 1, 'steps_completed should be 1 (step 0 done, step 1 failed)');
 
-    assert.equal(ctx._written[0], '/compact', 'step 0 text should be written');
+    assert.equal(ctx._written[0], '/clear', 'step 0 text should be written');
     assert.equal(ctx._written[1], '\r', 'step 0 Enter should be written');
     assert.equal(ctx._written[2], 'step-two', 'step 1 should be written (it was sent, just stuck)');
     assert.equal(ctx._written[3], '\r', 'step 1 Enter should be written');
@@ -1526,7 +1680,7 @@ test('chain session exit mid-chain: session exits during step 1 turn wait → ok
       sessionId: SESSION_ID,
       wait: 'idle',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'step-two' },
         { command: 'step-three' },
       ],
@@ -1588,7 +1742,7 @@ test('chain per-step timeout_ms: step with short per-step timeout fires before g
       sessionId: SESSION_ID,
       wait: 'idle',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'step-two', timeout_ms: 300 }, // short per-step timeout
         { command: 'step-three' },                // never reached
       ],
@@ -1629,7 +1783,7 @@ test('chain validation: invalid per-step timeout_ms → ok:false, no PTY write',
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'step-two', timeout_ms: -100 }, // invalid
       ],
     });
@@ -1838,7 +1992,7 @@ test('submit-verify chain final step silent: retry traced on steps[last].submit_
       sessionId: SESSION_ID,
       wait: 'none',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'resume and finish' }, // FINAL step — Enter gets absorbed
       ],
       timeout_ms: 8000,
@@ -1854,7 +2008,7 @@ test('submit-verify chain final step silent: retry traced on steps[last].submit_
     assert.equal(result.steps[1].submit_retries, 1, 'final step never rose → one verify-retry');
     // Final step carries the retry '\r'; step 0 does not.
     assert.deepEqual(ctx._written,
-      ['/compact', '\r', 'resume and finish', '\r', '\r'],
+      ['/clear', '\r', 'resume and finish', '\r', '\r'],
       'final step writes text, Enter, then the verify-retry Enter');
 
   } finally {
@@ -1885,7 +2039,7 @@ test('submit-verify chain happy: auto-turn rises every step → submit_retries:0
       sessionId: SESSION_ID,
       wait: 'idle',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'verify and commit' },
         { command: 'open the PR' },
       ],
@@ -1903,7 +2057,7 @@ test('submit-verify chain happy: auto-turn rises every step → submit_retries:0
     }
     // No retry '\r' anywhere — exactly one Enter per command.
     assert.deepEqual(ctx._written,
-      ['/compact', '\r', 'verify and commit', '\r', 'open the PR', '\r']);
+      ['/clear', '\r', 'verify and commit', '\r', 'open the PR', '\r']);
 
   } finally {
     if (watcher) watcher.close();
@@ -1932,7 +2086,7 @@ test('politeness: a non-empty composer blocks every write and renounces with "no
     watcher = start(ctx);
 
     const uuid = 'polite-busy-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', timeout_ms: 300 });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', timeout_ms: 300 });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -1966,7 +2120,7 @@ test('politeness: an empty and quiet composer lets the write through', async () 
     watcher = start(ctx);
 
     const uuid = 'polite-free-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -1974,7 +2128,7 @@ test('politeness: an empty and quiet composer lets the write through', async () 
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true);
     assert.equal(result.submitted, 'assumed', 'written, no failure seen, nothing observed after');
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r']);
 
   } finally {
     if (watcher) watcher.close();
@@ -2002,7 +2156,7 @@ test('politeness: a composer that was typed into a moment ago is not free yet', 
     watcher = start(ctx);
 
     const uuid = 'polite-fresh-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', timeout_ms: 300 });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', timeout_ms: 300 });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2041,7 +2195,7 @@ test('politeness: SWITCHBOARD_TRIGGER_QUIET_MS="" falls back to the default wind
     watcher = start(ctx);
 
     const uuid = 'polite-emptyenv-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', timeout_ms: 300 });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', timeout_ms: 300 });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2086,7 +2240,7 @@ test('W7: a PTY that dies during the politeness wait is not written to', async (
     flip = setTimeout(() => { ctx._composer.pending = 0; ctx._killPty(); }, 250);
 
     const uuid = 'polite-dies-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', timeout_ms: 4000 });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', timeout_ms: 4000 });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 8000);
@@ -2125,7 +2279,7 @@ test('W7: a chain step whose PTY dies during the politeness wait writes nothing'
     const uuid = 'chain-dies-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 4000,
     });
 
@@ -2162,7 +2316,7 @@ test('politeness: a ctx with no getComposerState is treated as busy, not as free
     watcher = start(ctx);
 
     const uuid = 'polite-blind-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', timeout_ms: 300 });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', timeout_ms: 300 });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2201,13 +2355,13 @@ test('politeness: the bare recovery Enter is withheld when the user types during
     watcher = start(ctx);
 
     const uuid = 'polite-recovery-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'no third write: the recovery Enter is withheld');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'no third write: the recovery Enter is withheld');
     assert.equal(result.submitted, 'assumed');
 
   } finally {
@@ -2240,7 +2394,7 @@ test('submitted: activity seen after our write yields "activity", never "confirm
     watcher = start(ctx);
 
     const uuid = 'submitted-confirmed-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
@@ -2251,7 +2405,7 @@ test('submitted: activity seen after our write yields "activity", never "confirm
     assert.notEqual(result.submitted, 'confirmed',
       'seeing the session go busy does not prove the CLI ran what we wrote, and the ' +
       'composer readback here is inconclusive, not empty');
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'an observed turn needs no recovery Enter');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'an observed turn needs no recovery Enter');
 
   } finally {
     if (watcher) watcher.close();
@@ -2274,7 +2428,7 @@ test('submitted: an ordinary clean write — idle beforehand, activity observed,
     watcher = start(ctx);
 
     const uuid = 'submitted-genuine-confirmed-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
@@ -2285,7 +2439,7 @@ test('submitted: an ordinary clean write — idle beforehand, activity observed,
     assert.equal(result.submitted, 'confirmed',
       'not busy beforehand, a turn observed, and the composer read back empty: ' +
       'the ordinary success path must still reach "confirmed"');
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'no recovery Enter on the ordinary path');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'no recovery Enter on the ordinary path');
 
   } finally {
     if (watcher) watcher.close();
@@ -2325,7 +2479,7 @@ test('submitted: the composer stays non-empty after our own Enter (it did not ta
     watcher = start(ctx);
 
     const uuid = 'submitted-stuck-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
@@ -2336,7 +2490,7 @@ test('submitted: the composer stays non-empty after our own Enter (it did not ta
       'the composer read back non-empty right after our own Enter: never confirmed');
     assert.equal(result.submitted, 'assumed', 'busy is never observed in this scenario');
     assert.equal(result.submit_retries, 1, 'a retry must fire when the Enter did not take');
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r'], 'the bare recovery Enter was actually sent');
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r'], 'the bare recovery Enter was actually sent');
 
   } finally {
     if (watcher) watcher.close();
@@ -2368,7 +2522,7 @@ test('submitted: a chain reports the weakest of its steps, and a blocked later s
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 1500,
     });
 
@@ -2376,7 +2530,7 @@ test('submitted: a chain reports the weakest of its steps, and a blocked later s
     await waitForFile(resultPath, 8000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'step 1 must not reach the PTY');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'step 1 must not reach the PTY');
     assert.equal(result.ok, false);
     assert.equal(result.submitted, 'no', 'the weakest step governs the chain');
     assert.equal(result.error, 'chain timeout',
@@ -2437,7 +2591,7 @@ test('chain per-step submitted: a confirmed step and a non-confirmed step in the
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 3000,
     });
 
@@ -2491,7 +2645,7 @@ test('chain per-step submitted: a step refused before writing (composer never fr
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 1500,
     });
 
@@ -2499,7 +2653,7 @@ test('chain per-step submitted: a step refused before writing (composer never fr
     await waitForFile(resultPath, 8000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'step 1 must not reach the PTY');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'step 1 must not reach the PTY');
     assert.equal(result.ok, false);
     assert.equal(result.error, 'chain timeout');
 
@@ -2532,7 +2686,7 @@ test('wait: an unrecognised value is refused loudly, before any write', async ()
     watcher = start(ctx);
 
     const uuid = 'wait-typo-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', wait: 'idel' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', wait: 'idel' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2565,7 +2719,7 @@ test('wait: an absent field keeps the "none" default', async () => {
     watcher = start(ctx);
 
     const uuid = 'wait-absent-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2573,7 +2727,7 @@ test('wait: an absent field keeps the "none" default', async () => {
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true);
     assert.equal(result.submitted, 'activity', 'the session was already busy when we polled');
-    assert.deepEqual(ctx._written, ['/compact', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r']);
 
   } finally {
     if (watcher) watcher.close();
@@ -2596,7 +2750,7 @@ test('submitted: a validation refusal before any write carries submitted "no"', 
     watcher = start(ctx);
 
     const uuid = 'submitted-no-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: 'nobody-here', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: 'nobody-here', command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
@@ -2637,7 +2791,7 @@ test('renouncing: a chain waiting on an idle that never comes writes nothing and
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'idle',
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 300,
     });
 
@@ -2678,7 +2832,7 @@ test('renouncing: a single command waiting on an idle that never comes says "not
     const uuid = 'cmd-never-idle-' + Date.now();
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
-      command:   '/compact',
+      command:   '/clear',
       wait:      'idle',
       timeout_ms: 300,
     });
@@ -2725,7 +2879,7 @@ test('renouncing: a chain whose first step was written reports "chain timeout", 
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume and finish' }],
+      chain: [{ command: '/clear' }, { command: 'resume and finish' }],
       timeout_ms: 800,
     });
 
@@ -2733,7 +2887,7 @@ test('renouncing: a chain whose first step was written reports "chain timeout", 
     await waitForFile(resultPath, 6000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.deepEqual(ctx._written, ['/compact', '\r'], 'step 0 reached the PTY');
+    assert.deepEqual(ctx._written, ['/clear', '\r'], 'step 0 reached the PTY');
     assert.equal(result.ok, false);
     assert.equal(result.error, 'chain timeout',
       'not sent would lie here: step 0 was written, so the guard must keep blocking');
@@ -2829,7 +2983,7 @@ test('unremovable entry: a later event on the same name is never processed again
     // The entry survived processing. Make the same name appear again — a valid
     // trigger this time. It must NOT be picked up: it was already processed.
     fs.rmdirSync(entry);
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     await new Promise(r => setTimeout(r, 600));
 
@@ -2870,7 +3024,7 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
     watcher = start(ctx);
 
     const uuid         = 'throwing-' + Date.now();
-    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
 
@@ -2895,12 +3049,12 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
     // name afterwards is a new attempt, not a replay, and must go through.
     shouldThrow = false;
     fs.rmSync(resultPath);
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     await waitForFile(resultPath, 2000);
 
     const secondResult = readResult(processedDir, uuid);
     assert.equal(secondResult.ok, true, 'a fresh trigger with the same name must not be blocked by retained');
-    assert.ok(ctx._written.includes('/compact'), 'the second, valid attempt reaches the PTY');
+    assert.ok(ctx._written.includes('/clear'), 'the second, valid attempt reaches the PTY');
 
   } finally {
     process.removeListener('unhandledRejection', onRejection);
@@ -3011,7 +3165,7 @@ test('lstat fails with a non-ENOENT error: result written and trigger deleted, n
       return realLstatSync.call(fs, p, ...rest);
     };
 
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);
@@ -3066,7 +3220,7 @@ test('a hook that throws starting from the SECOND tick of the composer-free poll
     watcher = start(ctx);
 
     const uuid         = 'composer-deferred-throw-' + Date.now();
-    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
 
@@ -3115,7 +3269,7 @@ test('a hook that throws starting from the SECOND tick of the idle-wait poll doe
     watcher = start(ctx);
 
     const uuid         = 'idle-deferred-throw-' + Date.now();
-    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact', wait: 'idle' });
+    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear', wait: 'idle' });
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
 
@@ -3231,7 +3385,7 @@ test('benign ENOENT race on unlink does not retain the name: a later reuse of th
       return realUnlinkSync.call(fs, p, ...rest);
     };
 
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     await waitForFile(resultPath, 2000);
     assert.equal(readResult(processedDir, uuid).ok, true, 'first pass processed normally');
 
@@ -3246,12 +3400,12 @@ test('benign ENOENT race on unlink does not retain the name: a later reuse of th
     // harness call). It must be picked up like any fresh trigger, not ignored
     // as if the name had been retained.
     fs.rmSync(resultPath);
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact-second' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear-second' });
 
     await waitForFile(resultPath, 2000);
     assert.equal(readResult(processedDir, uuid).ok, true,
       'a name freed by a benign ENOENT race must not stay retained');
-    assert.ok(ctx._written.includes('/compact-second'),
+    assert.ok(ctx._written.includes('/clear-second'),
       'the reused trigger must reach the PTY, not be silently ignored');
 
   } finally {
@@ -3288,7 +3442,7 @@ test('writeResult never throws when the result write itself fails AND ctx.log.er
     watcher = start(ctx);
 
     const uuid         = 'write-fails-' + Date.now();
-    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     const processedDir = path.join(tmp, 'processed');
     const resultTmpPath = path.join(processedDir, uuid + '.result.json.tmp');
 
@@ -3500,7 +3654,7 @@ test('dispatch() backstop log call cannot escape even when ctx.log.error throws 
     // The name must be genuinely retained: drop a fresh, valid trigger under
     // the same uuid and confirm it is never picked up.
     fs.rmdirSync(entry);
-    writeTrigger(tmp, uuid, { sessionId: 'any-session', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: 'any-session', command: '/clear' });
     await new Promise(r => setTimeout(r, 400));
     assert.deepEqual(ctx._written, [],
       'the name must stay retained -- dispatch()\'s own retained.add(filename) must have gone through');
@@ -3534,14 +3688,14 @@ test('submitted: a session already busy before our write never reports "confirme
     watcher = start(ctx);
 
     const uuid = 'preexisting-busy-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 5000);
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true);
-    assert.deepEqual(ctx._written, ['/compact', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r']);
     assert.notEqual(result.submitted, 'confirmed',
       'busy that predates the write must never be reported as a confirmation');
     assert.equal(result.submitted, 'activity');
@@ -3585,7 +3739,7 @@ test('submitted: the strength order is total, and "confirmed" sits strictly abov
 // see .ai/contexts/trigger-watcher.md ("submitted"). A prior version of this
 // suite never asserted result.submitted on a multi-step chain where a step is
 // legitimately submitted but never observed as busy -- the exact shape of the
-// 2026-09-03 incident (a "/compact" step that IS observed, followed by a
+// 2026-09-03 incident (a "/clear" step that IS observed, followed by a
 // resume prompt that sits unsubmitted and is never seen going busy).
 
 test('chain "activity" fold: a step that never observes busy pulls the whole chain down to "assumed"', async () => {
@@ -3606,7 +3760,7 @@ test('chain "activity" fold: a step that never observes busy pulls the whole cha
     ctx._ptyProcess.write = function (data) {
       origWrite(data);
       writeCount++;
-      // Step 0 ('/compact'): busy window wider than the 100ms poll interval so
+      // Step 0 ('/clear'): busy window wider than the 100ms poll interval so
       // the poll reliably catches it (see CHAIN-8 above) -- this step is
       // genuinely observed ("activity").
       if (writeCount === 2) {
@@ -3624,7 +3778,7 @@ test('chain "activity" fold: a step that never observes busy pulls the whole cha
       sessionId: SESSION_ID,
       wait: 'none',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'resume the task' },
       ],
       timeout_ms: 3000,
@@ -3720,7 +3874,7 @@ test('chain "confirmed" fold: every step idle beforehand, observed, and read bac
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 3000,
     });
 
@@ -3770,7 +3924,7 @@ test('chain "confirmed" fold: one step composer readback is inconclusive -> pull
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 3000,
     });
 
@@ -3796,7 +3950,7 @@ test('chain "confirmed" fold: one step composer readback is inconclusive -> pull
 // Regression test for the 2026-09-04 field incident: a chain step written
 // right after waitForBusyFall declares the PREVIOUS step's turn finished can
 // be falsely reported as "confirmed" (or "activity") when busy briefly reads
-// false then re-asserts on its own -- the CLI's tail activity after /compact
+// false then re-asserts on its own -- the CLI's tail activity after /clear
 // (still writing its summary), not anything the next step's own Enter did.
 // waitForBusyFall must NOT trust a single false sample; it must see busy stay
 // false for a settle window (SWITCHBOARD_BUSY_FALL_SETTLE_MS) before treating
@@ -3817,7 +3971,7 @@ test('chain "confirmed" false positive: a busy blip right after step 0\'s turn m
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
     // Busy schedule anchored to step 0's own write (not to ctx creation --
-    // fs.watch dispatch latency is not deterministic), simulating /compact:
+    // fs.watch dispatch latency is not deterministic), simulating /clear:
     // a real turn, a misleadingly brief drop to idle, then unrelated tail
     // activity that has nothing to do with step 1's own Enter, then truly
     // idle for good. The blip (200ms) is shorter than the default settle
@@ -3846,7 +4000,7 @@ test('chain "confirmed" false positive: a busy blip right after step 0\'s turn m
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 6000,
     });
 
@@ -3920,7 +4074,7 @@ test('waitForBusyFall settle window: busy that keeps reasserting must never let 
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 1800,
     });
 
@@ -4001,7 +4155,7 @@ test('waitForBusyFall settle window: a turn finishing with too little margin bef
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 1000,
     });
 
@@ -4094,7 +4248,7 @@ test('submitted: busy observed between a step\'s text write and its own Enter mu
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: STEP1_TEXT }],
+      chain: [{ command: '/clear' }, { command: STEP1_TEXT }],
       timeout_ms: 3000,
     });
 
@@ -4185,7 +4339,7 @@ test('waited_ms (single command): includes the submit-verification poll, not onl
     watcher = start(ctx);
 
     const uuid = 'waited-ms-verify-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
@@ -4234,7 +4388,7 @@ test('submitted: preBusy must be sampled before the write, not after -- a sessio
     watcher = start(ctx);
 
     const uuid = 'prebusy-order-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 6000);
@@ -4269,7 +4423,7 @@ test('submitted: busy observed between a step\'s text write and its own Enter mu
 
     const { start } = require('../trigger-watcher');
     const SESSION_ID = 'sess-midbusy-bare-' + Date.now();
-    const COMMAND = '/compact';
+    const COMMAND = '/clear';
     let busy = false;
     const ctx = makeCtx(SESSION_ID, () => busy);
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
@@ -4624,7 +4778,7 @@ test('target guard: expectedCwd absent -- behavior is unchanged even when the se
     watcher = start(ctx);
 
     const uuid = 'guard-absent-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 3000);
@@ -4633,7 +4787,7 @@ test('target guard: expectedCwd absent -- behavior is unchanged even when the se
     assert.equal(result.ok, true, 'an absent expectedCwd must not block an otherwise-normal trigger');
     // busy never rises in this ctx -> submit-verify retries the bare Enter once,
     // same as every other unguarded trigger against makeCtx's default.
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r']);
     assert.equal(result.targetMismatch, undefined);
     assert.equal(result.targetCwdUnknown, undefined);
 
@@ -4665,7 +4819,7 @@ test('target guard: expectedCwd concordant (differently spelled but the same rea
 
     const uuid = 'guard-match-' + Date.now();
     writeTrigger(tmp, uuid, {
-      sessionId: SESSION_ID, wait: 'none', command: '/compact',
+      sessionId: SESSION_ID, wait: 'none', command: '/clear',
       expectedCwd: declaredCwd,
     });
 
@@ -4676,7 +4830,7 @@ test('target guard: expectedCwd concordant (differently spelled but the same rea
     assert.equal(result.ok, true, 'a concordant expectedCwd must let the command through');
     // busy never rises in this ctx -> submit-verify retries the bare Enter once,
     // same as every other unguarded trigger against makeCtx's default.
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r']);
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r']);
     assert.equal(result.targetMismatch, undefined);
     assert.equal(result.targetCwdUnknown, undefined);
 
@@ -4702,7 +4856,7 @@ test('target guard: expectedCwd discordant -- refused, nothing written, distinct
 
     const uuid = 'guard-mismatch-' + Date.now();
     writeTrigger(tmp, uuid, {
-      sessionId: SESSION_ID, wait: 'none', command: '/compact',
+      sessionId: SESSION_ID, wait: 'none', command: '/clear',
       expectedCwd: 'C:\\Projects\\wrong-agent',
     });
 
@@ -4744,7 +4898,7 @@ test('target guard: session cwd indeterminate -- refused, distinct result shape 
 
     const uuid = 'guard-unknown-' + Date.now();
     writeTrigger(tmp, uuid, {
-      sessionId: SESSION_ID, wait: 'none', command: '/compact',
+      sessionId: SESSION_ID, wait: 'none', command: '/clear',
       expectedCwd: 'C:\\Projects\\wrong-agent',
     });
 
@@ -4790,7 +4944,7 @@ test('target guard: a malformed expectedCwd (empty string) is refused before any
 
     const uuid = 'guard-malformed-' + Date.now();
     writeTrigger(tmp, uuid, {
-      sessionId: 'nonexistent-session', wait: 'none', command: '/compact',
+      sessionId: 'nonexistent-session', wait: 'none', command: '/clear',
       expectedCwd: '',
     });
 
@@ -4829,7 +4983,7 @@ test('target guard: a mismatched expectedCwd on a chain refuses the whole chain 
       sessionId: SESSION_ID,
       wait: 'none',
       expectedCwd: 'C:\\Projects\\wrong-agent',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
     });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
@@ -4973,7 +5127,7 @@ test('startup scan: a trigger already on disk before start() is called is still 
     const uuid = 'scan-' + Date.now();
     // Written before start() -- this is the "app was closed" case: no
     // fs.watch instance exists yet to see it arrive.
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
 
     watcher = start(ctx);
 
@@ -4982,7 +5136,7 @@ test('startup scan: a trigger already on disk before start() is called is still 
 
     const result = readResult(path.join(tmp, 'processed'), uuid);
     assert.equal(result.ok, true);
-    assert.ok(ctx._written.includes('/compact'));
+    assert.ok(ctx._written.includes('/clear'));
     assert.ok(!fs.existsSync(path.join(tmp, uuid + '.json')),
       'the trigger file must be gone from the root once processed');
 
@@ -5007,7 +5161,7 @@ test('startup scan: a trigger older than SWITCHBOARD_TRIGGER_MAX_AGE_MS is refus
     const ctx        = makeCtx(SESSION_ID);
 
     const uuid = 'stale-' + Date.now();
-    const triggerPath = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    const triggerPath = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
     // Backdate the file well past the 1s threshold, simulating "written
     // hours ago, app was closed the whole time" without an actual sleep.
     const oldTime = new Date(Date.now() - 3600000); // 1h ago
@@ -5110,7 +5264,7 @@ test('startup scan: never descends into processed/ -- a leftover file there is n
     await new Promise((r) => setTimeout(r, 100));
 
     const uuid = 'noscan-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, wait: 'none', command: '/clear' });
     await waitForFile(path.join(tmp, 'processed', uuid + '.result.json'), 2000);
 
     // The stray file in processed/ must be untouched -- no result.json was
@@ -5143,7 +5297,7 @@ test('startup scan vs watcher race: a file present at start() is dispatched exac
     // least that long after being dispatched -- ample room for a duplicate
     // event to land while it is still processing.
     const ctx = makeCtx(SESSION_ID);
-    const payload = { sessionId: SESSION_ID, wait: 'none', command: '/compact' };
+    const payload = { sessionId: SESSION_ID, wait: 'none', command: '/clear' };
     const uuid = 'race-' + Date.now();
     const triggerPath = writeTrigger(tmp, uuid, payload);
 
@@ -5217,7 +5371,7 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
     // Write all 12 trigger files before start() -- this is the startup-scan
     // path, not the live watcher.
     for (let i = 0; i < COUNT; i++) {
-      writeTrigger(tmp, uuids[i], { sessionId: sessionIds[i], command: '/compact', wait: 'idle' });
+      writeTrigger(tmp, uuids[i], { sessionId: sessionIds[i], command: '/clear', wait: 'idle' });
     }
 
     watcher = start(ctx);
@@ -5271,7 +5425,7 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
 
 // ── waitForBusyFall waits for the rise too (2026-09-05) ───────────────────────
 //
-// Field incident: a `/compact` chain step whose compaction genuinely ran for
+// Field incident: a `/clear` chain step whose compaction genuinely ran for
 // 137s had its next chain step written ~260ms after the compaction started --
 // `waitForBusyFall` never confirmed a rise, it only ever watched for a fall,
 // so `isSessionBusy()` still reading false (the compaction hadn't yet flipped
@@ -5331,7 +5485,7 @@ test('waitForBusyFall waits for the rise: a busy flag that lags a genuine multi-
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 7000,
     });
 
@@ -5390,7 +5544,7 @@ test('waitForBusyFall rise-wait bound: a command with no observable turn is not 
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 5000,
     });
 
@@ -5401,7 +5555,7 @@ test('waitForBusyFall rise-wait bound: a command with no observable turn is not 
     assert.equal(result.ok, true,
       'a rise that never comes within the bound must not fail the chain -- the command may legitimately produce nothing observable');
     assert.equal(result.steps.length, 2);
-    assert.deepEqual(ctx._written, ['/compact', '\r', '\r', 'resume the task', '\r', '\r'],
+    assert.deepEqual(ctx._written, ['/clear', '\r', '\r', 'resume the task', '\r', '\r'],
       'both steps reach the PTY, each with its own verify-retry Enter');
 
   } finally {
@@ -5457,7 +5611,7 @@ test('waitForBusyFall regression: a session already busy when the call begins mu
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 6000,
     });
 
@@ -5533,7 +5687,7 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'none',
-      chain: [{ command: '/compact' }, { command: 'resume the task' }],
+      chain: [{ command: '/clear' }, { command: 'resume the task' }],
       timeout_ms: 8000,
     });
 
@@ -5589,7 +5743,7 @@ test('steps_total: a chain that runs to completion reports the chain length as w
       sessionId: SESSION_ID,
       wait: 'idle',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'resume the work' },
         { command: 'open the PR' },
       ],
@@ -5646,7 +5800,7 @@ test('steps_total: a chain truncated by a timeout still reports the full length,
       sessionId: SESSION_ID,
       wait: 'none',
       chain: [
-        { command: '/compact' },
+        { command: '/clear' },
         { command: 'step-two' },   // stuck
         { command: 'step-three' }, // never sent
         { command: 'step-four' },  // never sent
@@ -5693,7 +5847,7 @@ test('steps_total: a single-command trigger reports 1', async () => {
     watcher = start(ctx);
 
     const uuid = 'steps-total-single-' + Date.now();
-    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/compact' });
+    writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     await waitForFile(path.join(tmp, 'processed', uuid + '.result.json'));
     const result = readResult(path.join(tmp, 'processed'), uuid);
@@ -5726,7 +5880,7 @@ test('steps_total: a failure path that never sent anything still carries the fie
     writeTrigger(tmp, uuid, {
       sessionId: SESSION_ID,
       wait: 'idle',
-      chain: [{ command: '/compact' }, { command: 'resume the work' }],
+      chain: [{ command: '/clear' }, { command: 'resume the work' }],
       timeout_ms: 300,
     });
 

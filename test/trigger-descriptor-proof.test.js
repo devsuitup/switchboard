@@ -243,12 +243,16 @@ function recordingLog() {
 
 function chainSession(sessionId, { log, onEnter }) {
   const written = [];
+  const compactBoundaries = [];
   const desc = { status: 'idle', statusUpdatedAt: Date.now() - 10_000 };
   const ptyProcess = {
     pid: process.pid,
     write(data) {
       written.push({ data, at: Date.now() });
-      if (data === '\r') onEnter(written.filter((w) => w.data === '\r').length, desc);
+      if (data === '\r') {
+        if (written[written.length - 2]?.data === '/compact') compactBoundaries.push({ at: Date.now(), uuid: 'compact' });
+        onEnter(written.filter((w) => w.data === '\r').length, desc);
+      }
     },
   };
   let busy = false;
@@ -259,6 +263,7 @@ function chainSession(sessionId, { log, onEnter }) {
     isPtyAlive: () => true,
     getComposerState: () => ({ pending: 0, lastInputAt: 0 }),
     getCliStatus: (id) => (id === sessionId ? { ...desc } : undefined),
+    getTranscriptTurn: () => ({ compactBoundaries }),
   };
   return { ctx, written, desc, setBusy(v) { busy = v; } };
 }

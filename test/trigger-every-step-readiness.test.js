@@ -30,12 +30,16 @@ function recordingLog() {
 
 function chainSession(sessionId, { log, onEnter, withDescriptor = true }) {
   const written = [];
+  const compactBoundaries = [];
   const desc = { status: 'idle', statusUpdatedAt: Date.now() - 10_000 };
   const ptyProcess = {
     pid: process.pid,
     write(data) {
       written.push({ data, at: Date.now() });
-      if (data === '\r') onEnter(written.filter((w) => w.data === '\r').length, desc);
+      if (data === '\r') {
+        if (written[written.length - 2]?.data === '/compact') compactBoundaries.push({ at: Date.now(), uuid: 'compact' });
+        onEnter(written.filter((w) => w.data === '\r').length, desc);
+      }
     },
   };
   let busy = false;
@@ -45,6 +49,7 @@ function chainSession(sessionId, { log, onEnter, withDescriptor = true }) {
     isSessionBusy: () => busy,
     isPtyAlive: () => true,
     getComposerState: () => ({ pending: 0, lastInputAt: 0 }),
+    getTranscriptTurn: () => ({ compactBoundaries }),
   };
   if (withDescriptor) ctx.getCliStatus = (id) => (id === sessionId ? { ...desc } : undefined);
   return { ctx, written, desc, setBusy(v) { busy = v; } };

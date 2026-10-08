@@ -163,7 +163,14 @@ test('U20 GUARD: trigger modules cannot require a process spawner', () => {
   for (const file of ['trigger-watcher.js', 'trigger-context.js']) assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /require\(['"](?:node:)?child_process['"]\)/);
 });
 for (const command of ['/compact', '/clear', '  /compact  ', 'compact']) test(`U21: allowed command ${command} sends its canonical text`, async () => {
-  const s = fixture(); assert.equal((await run(s, { command })).ok, true); assert.equal(s.calls[0].args[2], command.trim());
+  const s = fixture(); const result = await run(s, { command });
+  assert.equal(result.ok, true); assert.equal(s.calls[0].args[2], command.trim());
+  if (command.trim() === '/compact') {
+    assert.equal(result.compaction_observed, false);
+    assert.equal(result.submit_confirmed, false);
+    assert.equal(result.submitted, 'assumed');
+    assert.match(result.reason, /compaction.*not observed/);
+  }
 });
 for (const command of ['/compact now', '/Compact', '/model', '//x']) test(`U21: unsupported slash ${command} is refused before waiting`, async () => {
   const s = fixture(); const r = await run(s, { command, wait: 'idle', timeout_ms: 1500 });
