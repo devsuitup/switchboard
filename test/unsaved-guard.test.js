@@ -234,7 +234,7 @@ test('an updater install asks before the installer starts: a no leaves it unstar
   assert.equal(c.prevented, false);
 });
 
-test('a Windows session end approves the quit so logoff never waits on the dialog', () => {
+test('a Windows session end approves the quit so logoff never waits on the dialog, and asks the renderer to save', () => {
   for (const name of ['query-session-end', 'session-end']) {
     const t = setup();
     t.win.emit(name, {});
@@ -243,7 +243,7 @@ test('a Windows session end approves the quit so logoff never waits on the dialo
     const c = t.closeEvent();
     t.win.emit('close', c);
     assert.equal(c.prevented, false, name);
-    assert.equal(t.sent.length, 0, name);
+    assert.deepEqual(t.sent.map((m) => m.channel), ['exit-flush'], `${name}: no dialog, one save request`);
   }
 });
 

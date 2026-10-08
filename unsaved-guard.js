@@ -77,8 +77,15 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     let reloading = false;
     let allowNextUnload = false;
 
-    win.on('query-session-end', approveQuit);
-    win.on('session-end', approveQuit);
+    // see docs/session-restore.md ("Closing the app")
+    const endSession = () => {
+      approveQuit();
+      const wc = win.webContents;
+      if (win.isDestroyed() || !wc || wc.isDestroyed()) return;
+      try { wc.send('exit-flush'); } catch { /* the window is going anyway */ }
+    };
+    win.on('query-session-end', endSession);
+    win.on('session-end', endSession);
 
     win.on('close', (event) => {
       if (approved || quitApproved) return;

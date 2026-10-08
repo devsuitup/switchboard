@@ -37,10 +37,23 @@ in `public/app.js`, called by the `unsaved-check` handler in
 window open), and stops saving it for the next 10 s. Main stops sending
 `process-exited` once `before-quit` starts killing the sessions
 (`appQuitting`), so the shutdown cannot record them as closed. A reload is
-not an exit and does neither. An exit asked during a restore writes
-nothing: the set from the previous run is still the one to restore. If the
-exit does not happen after all (an installer that fails to start), saving
-resumes after the 10 s.
+not an exit and does neither.
+
+The write keeps the saved sessions that are not open yet: those the index has
+not reached, those offered by the Restore prompt and not answered, and those
+the restore is still starting (`pendingRestoreEntries`). So quitting during a
+cold index, before answering the prompt, or in the middle of a restore keeps
+them for the next start, while a session you stopped during the restore is
+left out. An exit before the saved set has even been read writes nothing.
+
+If the exit does not happen after all (an installer that fails to start),
+saving resumes after the 10 s, and the set is written then if anything asked
+for a save in the meantime.
+
+A Windows logoff or shutdown (`query-session-end`, `session-end`) does not
+ask about unsaved edits; main sends `exit-flush` instead, and the renderer
+writes the set without waiting for an answer. That write is best effort:
+Windows may end the app before it lands.
 
 ## What restore does
 
