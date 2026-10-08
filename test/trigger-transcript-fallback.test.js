@@ -115,6 +115,72 @@ test('i488-fix2: the cursor skips the remainder of an incomplete pre-write recor
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('i488-fix3: the cursor refuses a changed transcript path even with the same device and inode', () => {
+  const dir = mkTmp('sw-compact-cursor-path-');
+  const file = path.join(dir, 'session.jsonl');
+  const alias = path.join(dir, 'alias.jsonl');
+  const reader = createTranscriptTurnReader();
+  try {
+    fs.writeFileSync(file, jsonl([userPrompt(1000)]));
+    const snapshot = reader.read(file);
+    fs.linkSync(file, alias);
+    fs.appendFileSync(alias, jsonl([{ ...systemEntry(2000, 'compact_boundary'), uuid: 'fresh', compactMetadata: { trigger: 'manual' } }]));
+    assert.equal(fs.statSync(alias).dev, snapshot.compactionCursor.dev);
+    assert.equal(fs.statSync(alias).ino, snapshot.compactionCursor.ino);
+    assert.equal(reader.read(alias, snapshot.compactionCursor), null);
+    assert.equal(snapshot.compactionCursor.invalid, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('i488-fix3: the cursor refuses a same-path device change with the same inode', () => {
+  const dir = mkTmp('sw-compact-cursor-device-');
+  const file = path.join(dir, 'session.jsonl');
+  const reader = createTranscriptTurnReader();
+  const realStat = fs.statSync;
+  const realFstat = fs.fstatSync;
+  try {
+    fs.writeFileSync(file, jsonl([userPrompt(1000)]));
+    const snapshot = reader.read(file);
+    fs.appendFileSync(file, jsonl([{ ...systemEntry(2000, 'compact_boundary'), uuid: 'fresh', compactMetadata: { trigger: 'manual' } }]));
+    const device = snapshot.compactionCursor.dev + 1;
+    fs.statSync = (...args) => ({ ...realStat(...args), dev: device });
+    fs.fstatSync = (...args) => ({ ...realFstat(...args), dev: device });
+    assert.equal(reader.read(file, snapshot.compactionCursor), null);
+    assert.equal(snapshot.compactionCursor.invalid, true);
+  } finally {
+    fs.statSync = realStat;
+    fs.fstatSync = realFstat;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const race of ['device', 'size']) {
+  test(`i488-fix3: an opened-file ${race} change before a cursor read fails closed`, () => {
+    const dir = mkTmp('sw-compact-opened-stat-');
+    const file = path.join(dir, 'session.jsonl');
+    const reader = createTranscriptTurnReader();
+    const realFstat = fs.fstatSync;
+    try {
+      fs.writeFileSync(file, jsonl([userPrompt(1000)]));
+      const snapshot = reader.read(file);
+      fs.appendFileSync(file, jsonl([{ ...systemEntry(2000, 'compact_boundary'), uuid: 'fresh', compactMetadata: { trigger: 'manual' } }]));
+      reader.read(file);
+      const offset = snapshot.compactionCursor.offset;
+      fs.fstatSync = (...args) => {
+        const actual = realFstat(...args);
+        return { ...actual, ...(race === 'device' ? { dev: actual.dev + 1 } : { size: snapshot.compactionCursor.offset - 1 }) };
+      };
+      assert.equal(reader.read(file, snapshot.compactionCursor), null);
+      assert.equal(snapshot.compactionCursor.offset, offset);
+      fs.fstatSync = realFstat;
+      assert.deepEqual(reader.read(file, snapshot.compactionCursor).compactBoundaries, [{ at: 2000, uuid: 'fresh' }]);
+    } finally {
+      fs.fstatSync = realFstat;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 for (const race of ['identity', 'short read']) {
   test(`i488-fix2: a ${race} change during a cursor read fails closed`, () => {
     const dir = mkTmp('sw-compact-read-race-');

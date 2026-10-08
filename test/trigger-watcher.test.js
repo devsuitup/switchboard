@@ -167,7 +167,7 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
   let watcher;
   try {
     fs.mkdirSync(path.dirname(transcript));
-    const oldAt = Date.now() + (evidence === 'preexisting-future' ? 60_000 : -60_000);
+    const oldAt = Date.now() + (['preexisting-future', 'replayed-future'].includes(evidence) ? 60_000 : -60_000);
     fs.writeFileSync(transcript, JSON.stringify(boundary(oldAt)) + '\n');
     process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
     const written = [];
@@ -190,7 +190,7 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
         if (command === '/compact' && !['none', 'old', 'missing', 'preexisting-future'].includes(evidence)
           && (evidence !== 'manual-once' || compactsEntered === 1)) {
           later(evidenceDelay, () => {
-            const at = evidence === 'old-timestamp' ? oldAt : Date.now() + (evidence === 'missing-then-future' ? 60_000 : 0);
+            const at = ['old-timestamp', 'replayed-future'].includes(evidence) ? oldAt : Date.now() + (evidence === 'missing-then-future' ? 60_000 : 0);
             const entry = boundary(at, evidence === 'auto' ? 'auto' : 'manual', evidence === 'sidechain');
             if (evidence === 'old-timestamp') entry.uuid = 'new-record-with-old-timestamp';
             if (evidence === 'wrong-type') entry.type = 'user';
@@ -229,6 +229,16 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
     cleanup(tmp);
   }
 }
+
+test('i488-fix3: replaying a pre-write boundary with the same uuid and timestamp cannot confirm compaction', async () => {
+  const { result, written } = await runCompactEvidenceCase({ chain: true, evidence: 'replayed-future' });
+  assert.equal(result.compaction_observed, false);
+  assert.equal(result.steps[0].compaction_observed, false);
+  assert.equal(result.steps[0].submit_confirmed, false);
+  assert.equal(result.steps_completed, 0);
+  assert.equal(result.ok, false);
+  assert.deepEqual(written, ['/compact', '\r']);
+});
 
 test('i488: unrelated busy activity cannot confirm a compact or release the resume step', async () => {
   const { result, written } = await runCompactEvidenceCase({ chain: true });
@@ -3786,7 +3796,7 @@ test('submitted: the strength order is total, and "confirmed" sits strictly abov
 // see .ai/contexts/trigger-watcher.md ("submitted"). A prior version of this
 // suite never asserted result.submitted on a multi-step chain where a step is
 // legitimately submitted but never observed as busy -- the exact shape of the
-// 2026-09-03 incident (a "/clear" step that IS observed, followed by a
+// 2026-09-03 incident (a "/compact" step that IS observed, followed by a
 // resume prompt that sits unsubmitted and is never seen going busy).
 
 test('chain "activity" fold: a step that never observes busy pulls the whole chain down to "assumed"', async () => {
@@ -3807,9 +3817,7 @@ test('chain "activity" fold: a step that never observes busy pulls the whole cha
     ctx._ptyProcess.write = function (data) {
       origWrite(data);
       writeCount++;
-      // Step 0 ('/clear'): busy window wider than the 100ms poll interval so
-      // the poll reliably catches it (see CHAIN-8 above) -- this step is
-      // genuinely observed ("activity").
+      // see .ai/contexts/trigger-watcher.md, "submitted"
       if (writeCount === 2) {
         setTimeout(() => { busy = true; }, 50);
         setTimeout(() => { busy = false; }, 350);
@@ -4010,12 +4018,7 @@ test('chain "confirmed" false positive: a busy blip right after step 0\'s turn m
     const SESSION_ID = 'sess-chain-busyfall-flicker-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
-    // Busy schedule anchored to step 0's own write (not to ctx creation --
-    // fs.watch dispatch latency is not deterministic), simulating /clear:
-    // a real turn, a misleadingly brief drop to idle, then unrelated tail
-    // activity that has nothing to do with step 1's own Enter, then truly
-    // idle for good. The blip (200ms) is shorter than the default settle
-    // (300ms); the tail activity (400ms) is longer, so it must not be missed.
+    // see .ai/contexts/trigger-watcher.md, "submitted"
     let scheduleStart = null;
     const BUSY_WINDOWS = [
       [130, 430],   // step 0's genuine turn
