@@ -95,6 +95,27 @@ offered files that still read `enabled: false`.
 - **The "schedule creator" is itself a Claude command**: when the user clicks the clock icon on a project, Switchboard opens an interactive Claude session pre-injected with `SCHEDULE_CREATOR_TEMPLATE` as its system prompt. Claude then has a conversation with the user about what they want scheduled, and **Claude itself writes the schedule `.md` file** with the Write tool. The runner just consumes whatever files appear.
 - **`run-schedule-now`** IPC triggers an immediate manual run via the same `runScheduleCommand` pathway, bypassing the cron match check.
 
+## Opening a running scheduled session (#484)
+
+`main.js`'s shared `runScheduleCommand` registers each spawned child with
+`cliSessionState.trackScheduleRun(sessionId, child, cwd)`, using the `--resume`
+id from the scheduler's argv. Cron and Run now therefore share the same guard.
+The in-memory entry carries `kind: 'schedule'`, the shell child's pid, cwd and
+launch time. It is released on the child's `exit` or `error`; a refused spawn
+never creates an entry. No CLI descriptor is written and no polling is added.
+
+The live-elsewhere queries consult these entries independently of CLI files and
+the own-process ancestry filter, which otherwise excludes a scheduled child on
+Linux. `guardResume` refuses a manual open even if its wait dialog is accepted,
+and automatic reload and working-set restore skip the run without prompting.
+After the child exits, normal resume reads the whole scheduled transcript.
+There is no daemon job id or PTY to attach to for these headless runs.
+
+`test/schedule-live-resume.test.js` drives the shipped launch function, IPC
+handlers, resume guard and renderer open/restore paths with a fake child.
+The registry belongs to this app process; after a restart, a surviving run can
+only be detected through the CLI's own descriptors, with their existing limits.
+
 ## If you change this, also check
 
 - `public/dialogs.js` (`launchScheduleCreator`) — UI entry point for the schedule creator flow

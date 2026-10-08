@@ -42,6 +42,18 @@ const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
+const scheduledRuns = new Map();
+
+function trackScheduleRun(sessionId, child, cwd) {
+  const key = sessionId.toLowerCase();
+  const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now() };
+  scheduledRuns.set(key, live);
+  const release = () => {
+    if (scheduledRuns.get(key) === live) scheduledRuns.delete(key);
+  };
+  child.once('exit', release);
+  child.once('error', release);
+}
 
 function defaultIsProcessAlive(pid) {
   try {
@@ -430,6 +442,8 @@ function ownProcessFilter(ptyPids) {
 async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
   if (hasPty(sessionId)) return null;
+  const scheduled = scheduledRuns.get(sessionId.toLowerCase());
+  if (scheduled) return scheduled;
   return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
 }
 
@@ -452,12 +466,16 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
     if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
   const found = await scanLiveProcesses(new Set(wanted.values()), ownProcessFilter(ptyPids));
-  for (const [id, key] of wanted) if (found.has(key)) result[id] = found.get(key);
+  for (const [id, key] of wanted) {
+    const live = scheduledRuns.get(key) || found.get(key);
+    if (live) result[id] = live;
+  }
   return result;
 }
 
 module.exports = {
   init,
+  trackScheduleRun,
   findLiveProcess,
   liveElsewhere,
   liveElsewhereMany,

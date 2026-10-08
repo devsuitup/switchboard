@@ -28,6 +28,12 @@ async function guardResume(session, { automatic = false, api, confirm, live } = 
   }
   if (!live) return true;
   if (automatic) return false;
+  if (live.kind === 'schedule') {
+    const where = live.cwd ? ` in ${live.cwd}` : '';
+    confirm(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
+      + 'Wait for the scheduled run to finish before opening it here.');
+    return false;
+  }
   // see .ai/contexts/bg-agents.md
   if (live.kind === 'bg') {
     if (typeof live.jobId === 'string' && live.jobId) return { attach: live.jobId, cwd: live.cwd || null };

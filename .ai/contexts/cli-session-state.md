@@ -275,6 +275,13 @@ ids past the cap are not looked up and resume as before the guard.
 **The decision** is in `public/resume-guard.js` (`guardResume`), called by
 `openSession` before `open-terminal`:
 
+Scheduled children this instance starts are registered by `trackScheduleRun`
+until `exit` or `error`. The single and batch resume queries return their
+`kind: 'schedule'` entry even without a CLI descriptor, before excluding this
+instance's child processes. A manual open shows a wait dialog and is always
+refused, regardless of the dialog's answer; automatic opens are skipped.
+See [schedule-runner.md](schedule-runner.md#opening-a-running-scheduled-session-484).
+
 | Resume | Live elsewhere | Result |
 |---|---|---|
 | automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt; from `runRestore`, a one-line notice |

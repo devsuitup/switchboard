@@ -3383,6 +3383,7 @@ if (!gotSingleInstanceLock) {
         stdio: ['ignore', 'ignore', 'pipe'],
         env,
       });
+      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd);
       // see .ai/contexts/activitywatch.md ("Running")
       const activityId = `schedule:${name}:${Date.now()}`;
       activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${name}` });
