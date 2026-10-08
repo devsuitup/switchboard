@@ -488,16 +488,16 @@ function narrowSessionsToSearch(sessions, matchIds) {
   return sessions.filter(s => matchIds.has(s.sessionId) || matchedParents.has(s.sessionId));
 }
 
-function buildSlugGroup(slug, sessions, subagentIndex) {
+function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, project) {
   const group = document.createElement('div');
-  const id = slugId(slug);
+  const id = scheduled ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, slug])) : slugId(slug);
   const expanded = getExpandedSlugs().has(id);
   group.className = expanded ? 'slug-group js-stateful' : 'slug-group collapsed js-stateful';
   group.id = id;
 
   const mostRecent = sessions.reduce((a, b) =>
     new Date(b.modified) > new Date(a.modified) ? b : a);
-  const displayName = cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
+  const displayName = scheduled ? slug : cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
   const mostRecentTime = new Date(mostRecent.modified);
   const timeStr = formatDate(mostRecentTime);
 
@@ -681,8 +681,10 @@ function renderProjects(projects, resort) {
     const ungrouped = [];
     for (const session of filtered) {
       if (session.slug) {
-        if (!slugMap.has(session.slug)) slugMap.set(session.slug, []);
-        slugMap.get(session.slug).push(session);
+        const scheduled = /^Scheduled Task(?::| \(catch-up:)/.test(session.firstPrompt || '');
+        const key = JSON.stringify([scheduled, session.slug]);
+        if (!slugMap.has(key)) slugMap.set(key, { slug: session.slug, scheduled, sessions: [] });
+        slugMap.get(key).sessions.push(session);
       } else {
         ungrouped.push(session);
       }
@@ -692,11 +694,11 @@ function renderProjects(projects, resort) {
       const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
     }
-    for (const [slug, sessions] of slugMap) {
+    for (const { slug, scheduled, sessions } of slugMap.values()) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
-      const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex);
+      const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
     }
 
