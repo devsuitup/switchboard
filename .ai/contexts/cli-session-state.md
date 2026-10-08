@@ -360,14 +360,24 @@ finds the live pid whose state file names `newId` and walks its parent chain
 - `other` — another process (a CLI started outside Switchboard, another tab in
   the same folder): not this session's file.
 - `pending` — no live state file names `newId` yet (the jsonl can land before
-  the state file is rewritten): the file stays out of `knownJsonlFiles` and is
-  rechecked on the next flush, for at most 60 s from its mtime.
+  the state file is rewritten): the file stays out of `knownJsonlFiles`, and
+  `scheduleRecheck` runs the folder's detection again a second later, while
+  the file is less than 60 s old. Nothing else would: the state file is not in
+  the watched folder, and the transcript gets no other write before the first
+  prompt. A new file whose first records are not written yet is rechecked the
+  same way.
 - `unknown` — the pid is found but its parent cannot be read (no `/proc`:
-  macOS, Windows). Matched only when this is the one live Claude PTY in the
-  folder, since `cwd` cannot tell two sessions apart (see "Matching a state
-  file" above); with two or more, nothing is re-keyed, the file is recorded
-  and never rechecked — retrying it would hand it to whichever session
-  outlives the others, not to its owner.
+  macOS, Windows). Never matched, not even when this is the only Claude PTY in
+  the folder: a `claude` run outside the app in the same folder would be taken
+  over. The file is recorded and not rechecked, so on macOS and Windows a
+  `/clear` is followed only when the PTY's own pid is the CLI's.
+
+Re-keying keeps `oldId → newId` (`currentSessionId`), so a trigger chain that
+sent `/clear` reaches the same terminal on its next step (see
+trigger-watcher.md, "Re-keyed sessions"). A `/clear` transcript starts with a
+`file-history-snapshot` record, so the "snapshot-only fork file" matcher
+skips files whose first real turn is `/clear`; otherwise a session waiting for
+its fork would take another session's `/clear` as its fork.
 
 `readNewSessionSignals()` recognises the file by its first user record that is
 not local-command bookkeeping, through `classifyUserText()` — the caveat record
@@ -377,7 +387,9 @@ The renderer re-keys as for a fork, and when the old id was not a pending
 (transcript-less) row it adds one for the new id titled "New session": the
 `/clear` transcript is not indexed until its first prompt (see
 session-cache.md), so without it the open terminal would have no row at all
-until then. The old conversation stays in the list as an ordinary,
+until then. Like any pending row, it is left out of the saved working set
+until that prompt (docs/session-restore.md, "A session with no transcript
+yet"). The old conversation stays in the list as an ordinary,
 resumable session — it is a real transcript on disk.
 
 ## Canary tests

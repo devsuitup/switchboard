@@ -956,25 +956,20 @@ test('/clear: a pending owner on a transcript older than the wait is given up', 
   }
 });
 
-test('/clear: an unknown owner matches only the sole Claude PTY in the folder', () => {
+test('/clear: an owner that cannot be established is never matched, even by the only Claude PTY in the folder', () => {
   const tmp = mkTmp();
   try {
     const folder = 'proj';
     const folderPath = path.join(tmp, folder);
     fs.mkdirSync(folderPath, { recursive: true });
-    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => 'unknown' });
+    const { events, activeSessions } = setupForkDetection(tmp, { clearOwner: () => 'unknown' });
     activeSessions.set('a', makePtySession(folder, { pty: { pid: 1 } }));
-    activeSessions.set('b', makePtySession(folder, { pty: { pid: 2 } }));
-    activeSessions.set('term', makePtySession(folder, { isPlainTerminal: true }));
 
     writeClearTranscript(folderPath, 'new-1');
     sessionTransitions.detectSessionTransitions(folder);
-    assert.ok(activeSessions.has('a') && activeSessions.has('b') && !activeSessions.has('new-1'), 'two candidates: no guess');
-
-    activeSessions.get('b').exited = true;
-    writeClearTranscript(folderPath, 'new-2');
-    sessionTransitions.detectSessionTransitions(folder);
-    assert.ok(activeSessions.has('new-2') && !activeSessions.has('a'), 'one candidate: matched');
+    assert.ok(activeSessions.has('a') && !activeSessions.has('new-1'), 'a CLI outside the app may own it');
+    assert.ok(activeSessions.get('a').knownJsonlFiles.has('new-1.jsonl'), 'recorded, not retried');
+    assert.equal(events.filter(e => e.channel === 'session-forked').length, 0);
   } finally {
     cleanup(tmp);
   }
@@ -1022,12 +1017,100 @@ test('/clear: a session still waiting for its fork is not matched to a /clear fi
     const folder = 'proj';
     fs.mkdirSync(path.join(tmp, folder), { recursive: true });
     let asked = false;
-    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'mine'; } });
+    const { events, activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'mine'; } });
     activeSessions.set('temp-id', makePtySession(folder, { pty: { pid: 9 }, forkFrom: 'source-id' }));
 
     writeClearTranscript(path.join(tmp, folder), 'new-id');
     sessionTransitions.detectSessionTransitions(folder);
     assert.equal(asked, false);
+    assert.ok(activeSessions.has('temp-id') && !activeSessions.has('new-id'), 'nor taken as its fork, though it starts with a snapshot');
+    assert.equal(events.filter(e => e.channel === 'session-forked').length, 0);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('/clear: a pending owner is rechecked on its own, without waiting for another change in the folder', () => {
+  const tmp = mkTmp();
+  try {
+    const folder = 'proj';
+    fs.mkdirSync(path.join(tmp, folder), { recursive: true });
+    const timers = [];
+    let owner = 'pending';
+    const { activeSessions } = setupForkDetection(tmp, {
+      clearOwner: () => owner,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; },
+    });
+    activeSessions.set('old-id', makePtySession(folder, { pty: { pid: 7 } }));
+
+    writeClearTranscript(path.join(tmp, folder), 'new-id');
+    sessionTransitions.detectSessionTransitions(folder);
+    sessionTransitions.detectSessionTransitions(folder);
+    assert.equal(timers.length, 1, 'one recheck per folder at a time');
+    owner = 'mine';
+    timers.shift().fn();
+    assert.ok(activeSessions.has('new-id'));
+    assert.equal(timers.length, 0, 'nothing left to wait for');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('/clear: a new transcript whose first records are not written yet is rechecked on its own while it is fresh', () => {
+  const tmp = mkTmp();
+  try {
+    const folder = 'proj';
+    const folderPath = path.join(tmp, folder);
+    fs.mkdirSync(folderPath, { recursive: true });
+    const timers = [];
+    const { activeSessions } = setupForkDetection(tmp, {
+      clearOwner: () => 'mine',
+      setTimeout: (fn) => { timers.push(fn); return { unref() {} }; },
+    });
+    activeSessions.set('old-id', makePtySession(folder, { pty: { pid: 7 } }));
+
+    fs.writeFileSync(path.join(folderPath, 'new-id.jsonl'), '{"type":"mo', 'utf8');
+    sessionTransitions.detectSessionTransitions(folder);
+    assert.equal(timers.length, 1);
+    writeClearTranscript(folderPath, 'new-id');
+    timers.shift()();
+    assert.ok(activeSessions.has('new-id'));
+
+    fs.writeFileSync(path.join(folderPath, 'old-partial.jsonl'), '{"type":"mo', 'utf8');
+    const t = (Date.now() - 120_000) / 1000;
+    fs.utimesSync(path.join(folderPath, 'old-partial.jsonl'), t, t);
+    sessionTransitions.detectSessionTransitions(folder);
+    assert.equal(timers.length, 0, 'an old one waits for the next change in the folder, as before');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('/clear: the old id still leads to the session, so a trigger chain that sent /clear can go on', () => {
+  const tmp = mkTmp();
+  try {
+    const folder = 'proj';
+    fs.mkdirSync(path.join(tmp, folder), { recursive: true });
+    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => 'mine' });
+    const pty = { pid: 4242, write() {} };
+    activeSessions.set('old-id', makePtySession(folder, { pty, cwd: '/w' }));
+    const { createTriggerContext } = require('../trigger-context');
+    const ctx = createTriggerContext({
+      activeSessions, log: { info() {}, warn() {}, error() {}, debug() {} },
+      getCliStatus: (id) => ({ status: 'idle', id }),
+      resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
+    });
+
+    writeClearTranscript(path.join(tmp, folder), 'new-id');
+    sessionTransitions.detectSessionTransitions(folder);
+    writeClearTranscript(path.join(tmp, folder), 'newer-id');
+    sessionTransitions.detectSessionTransitions(folder);
+    assert.ok(activeSessions.has('newer-id'));
+
+    assert.equal(sessionTransitions.currentSessionId('old-id'), 'newer-id');
+    assert.equal(ctx.getPtyForSession('old-id').ptyProcess, pty);
+    assert.equal(ctx.getCliStatus('old-id').id, 'newer-id', 'the status is read under the id the CLI writes now');
+    assert.equal(sessionTransitions.currentSessionId('never-seen'), 'never-seen');
   } finally {
     cleanup(tmp);
   }

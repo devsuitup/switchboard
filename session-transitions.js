@@ -8,7 +8,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, setTimeoutFn;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -18,6 +18,34 @@ function init(ctx) {
   rekeyMcpServer = ctx.rekeyMcpServer;
   rekeyActivity = ctx.rekeyActivity || (() => {});
   clearOwner = ctx.clearOwner || (() => 'pending');
+  setTimeoutFn = ctx.setTimeout || setTimeout;
+  rekeyed.clear();
+  for (const timer of recheckTimers.values()) clearTimeout(timer);
+  recheckTimers.clear();
+}
+
+// see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+const rekeyed = new Map();
+const MAX_REKEY_HOPS = 32;
+
+/** The id a session is keyed under now, following the re-keys of forks and /clear. */
+function currentSessionId(sessionId) {
+  let id = sessionId;
+  for (let hop = 0; hop < MAX_REKEY_HOPS && rekeyed.has(id); hop++) id = rekeyed.get(id);
+  return id;
+}
+
+const recheckTimers = new Map();
+const RECHECK_MS = 1000;
+
+function scheduleRecheck(folder) {
+  if (recheckTimers.has(folder)) return;
+  const timer = setTimeoutFn(() => {
+    recheckTimers.delete(folder);
+    detectSessionTransitions(folder);
+  }, RECHECK_MS);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  recheckTimers.set(folder, timer);
 }
 
 // --- Subagent spawn / completion detection ---
@@ -337,12 +365,8 @@ function readNewSessionSignals(filePath) {
 
 const CLEAR_OWNER_WAIT_MS = 60000;
 
-function isSoleClaudeIn(folder) {
-  let count = 0;
-  for (const session of activeSessions.values()) {
-    if (!session.exited && !session.isPlainTerminal && session.projectFolder === folder) count++;
-  }
-  return count === 1;
+function isFresh(filePath) {
+  try { return Date.now() - fs.statSync(filePath).mtimeMs < CLEAR_OWNER_WAIT_MS; } catch { return false; }
 }
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
@@ -374,6 +398,7 @@ function detectSessionTransitions(folder) {
     if (newFiles.length === 0) continue;
 
     const emptyFiles = new Set(); // files with no signals yet (still being written)
+    let recheck = false;
 
     for (const newFile of newFiles) {
       const newFilePath = path.join(folderPath, newFile);
@@ -397,6 +422,7 @@ function detectSessionTransitions(folder) {
             log.info(`[detect] session=${sessionId} archiving stale empty file=${newId}`);
           } else {
             emptyFiles.add(newFile);
+            if (isFresh(newFilePath)) recheck = true;
           }
           continue;
         }
@@ -419,20 +445,20 @@ function detectSessionTransitions(folder) {
       if (!matched && session.forkFrom && signals.parentSessionId === session.forkFrom && newId !== session.forkFrom) {
         matched = true;
       }
-      // Fork file with only snapshots — no user turn yet, but this session is waiting for a fork
-      if (!matched && signals.hasSnapshots && session.forkFrom && !session.realSessionId) {
+      // Fork file with only snapshots — no user turn yet, but this session is waiting for a fork.
+      // A /clear transcript also starts with a snapshot; it is never a fork.
+      if (!matched && signals.hasSnapshots && !signals.cleared && session.forkFrom && !session.realSessionId) {
         matched = true;
       }
 
       const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
       if (!matched && signals.cleared && !awaitingFork && newId !== (session.realSessionId || sessionId)) {
         const owner = clearOwner(newId, session.pty && session.pty.pid);
-        if (owner === 'mine' || (owner === 'unknown' && isSoleClaudeIn(folder))) {
+        if (owner === 'mine') {
           matched = true;
-        } else if (owner === 'pending') {
-          let fresh = false;
-          try { fresh = Date.now() - fs.statSync(newFilePath).mtimeMs < CLEAR_OWNER_WAIT_MS; } catch {}
-          if (fresh) emptyFiles.add(newFile);
+        } else if (owner === 'pending' && isFresh(newFilePath)) {
+          emptyFiles.add(newFile);
+          recheck = true;
         }
         log.info(`[detect] session=${sessionId} /clear file=${newId} owner=${owner} matched=${matched}`);
       }
@@ -452,6 +478,7 @@ function detectSessionTransitions(folder) {
         session._subFileList = null;
         activeSessions.delete(sessionId);
         activeSessions.set(newId, session);
+        rekeyed.set(sessionId, newId);
         // Re-key MCP server to match new session ID
         rekeyMcpServer(sessionId, newId);
         rekeyActivity(sessionId, newId);
@@ -468,8 +495,9 @@ function detectSessionTransitions(folder) {
     const updated = new Set(currentFiles);
     for (const f of emptyFiles) updated.delete(f);
     session.knownJsonlFiles = updated;
+    if (recheck) scheduleRecheck(folder);
   }
 }
 
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions };
+module.exports = { init, detectSessionTransitions, detectSubagentTransitions, currentSessionId };

@@ -181,6 +181,8 @@ function persistWorkingSet() {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
       if (entry.attach) continue; // attach tabs are not restored
       if (entry.closed) continue;
+      // see docs/session-restore.md ("A session with no transcript yet")
+      if (pendingSessions.has(sessionId)) continue;
       set.push({
         sessionId,
         projectPath: entry.session.projectPath,
@@ -1162,6 +1164,7 @@ async function loadProjects({ resort = false } = {}) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
       pendingSessions.delete(sid);
+      if (openSessions.has(sid)) schedulePersistWorkingSet();
     } else {
       hasReinjected = true;
       // Still pending — re-inject into cached data

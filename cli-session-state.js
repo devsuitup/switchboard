@@ -439,12 +439,14 @@ function clearOwner(sessionId, ptyPid) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
+  const key = sessionId.toLowerCase();
   let pid = null;
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
     try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-    if (!raw || raw.sessionId !== sessionId || !Number.isInteger(raw.pid) || raw.pid <= 0) continue;
+    if (!raw || typeof raw.sessionId !== 'string' || raw.sessionId.toLowerCase() !== key) continue;
+    if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     pid = raw.pid;
     break;

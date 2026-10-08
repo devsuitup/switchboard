@@ -21,6 +21,14 @@ Each time a session is opened or closed, Switchboard saves the open set — each
 session's id and project, and which one was active — in its global settings
 (`openWorkingSet`).
 
+### A session with no transcript yet
+
+A session started with **+**, or one just cleared with `/clear`, has no
+conversation until its first prompt: the CLI has nothing to resume, and the
+index does not list it. It is left out of the saved set, so the next start
+does not report it as "not in the index". Once its first prompt makes it a
+real session, the set is saved again with it.
+
 ## What restore does
 
 Restore is a respawn, not a reattach: a session's process is a child of the

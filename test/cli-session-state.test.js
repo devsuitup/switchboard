@@ -552,6 +552,7 @@ test('clearOwner: walks the state file pid up to the PTY pid', () => {
     writeState(dir, 600, { sessionId: 'no-proc', status: 'idle' });
 
     assert.equal(cliSessionState.clearOwner('cleared', 100), 'mine');
+    assert.equal(cliSessionState.clearOwner('CLEARED', 100), 'mine', 'ids compare in any letter case, as elsewhere since #487');
     assert.equal(cliSessionState.clearOwner('cleared', 300), 'mine', 'the PTY runs claude itself');
     assert.equal(cliSessionState.clearOwner('elsewhere', 100), 'other');
     assert.equal(cliSessionState.clearOwner('dead', 100), 'pending', 'a dead pid is no owner');
