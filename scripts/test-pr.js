@@ -21,6 +21,17 @@ function validateAllowClaude(value, isolated) {
   return value === '1';
 }
 
+function hasProxyCredentials(value) {
+  const normalized = value.trim().replace(/[\t\r\n]/g, '');
+  try {
+    const proxy = new URL(/^(?:[a-z][a-z\d+.-]*:\/\/|https?:)/i.test(normalized)
+      ? normalized : `http:${normalized.startsWith('//') ? '' : '//'}${normalized}`);
+    return proxy.username !== '' || proxy.password !== '';
+  } catch {
+    return false;
+  }
+}
+
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
   isolated = false, allowClaude = false, tempHome, port = 9223, platform = process.platform }) {
   validatePr(pr);
@@ -41,7 +52,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
     !/_(TOKEN|API_KEY|APIKEY|SECRET|SECRET_KEY|PASSWORD|PAT)$/i.test(key) &&
     !/(PASSWORD|TOKEN)$|^MYSQL_PWD$/i.test(key) &&
     !/^(GLAB_|GITLAB_|AZURE_)|^DOCKER_AUTH_CONFIG$/i.test(key) &&
-    !(/^(?:(HTTP|HTTPS|ALL)_PROXY|npm_config_https_proxy)$/i.test(key) && /^(?:[a-z][a-z\d+.-]*:\/\/|\/\/)?[^/?#@]*@/i.test(value))));
+    !(/^(?:(HTTP|HTTPS|ALL)_PROXY|npm_config_https_proxy)$/i.test(key) && hasProxyCredentials(value))));
   const originalPath = env.PATH || '';
   const fixtureData = path.join(tempHome, '.switchboard-test-pr');
   return {

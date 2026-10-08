@@ -152,10 +152,14 @@ Names ending in `TOKEN`, `PASSWORD`, `_API_KEY`, `_APIKEY`, `_SECRET`,
 `_SECRET_KEY` or `_PAT`, names starting with `GLAB_`, `GITLAB_` or `AZURE_`, and
 `DOCKER_AUTH_CONFIG` and `MYSQL_PWD` are also removed case-insensitively. This
 includes `PGPASSWORD` and `npm_config__authToken`. `HTTP_PROXY`, `HTTPS_PROXY`,
-`ALL_PROXY` and `npm_config_https_proxy` are removed when their values contain
-an `@` in the authority before the host, including a user without a password
-or a value without a scheme; credential-free proxies are preserved. An `@`
-only in a path, query or fragment does not cause removal.
+`ALL_PROXY` and `npm_config_https_proxy` are removed when URL parsing finds a
+non-empty username or password, including a user without a password or a value
+without a scheme. Classification trims surrounding whitespace and removes
+embedded tabs, CR and LF before parsing; schemeless values use an HTTP scheme.
+Credential-free proxies keep their original values. An `@` only in a path
+(including after an HTTP(S) backslash separator), query or fragment, or an
+empty userinfo marker, does not cause removal. Values that cannot be parsed
+are preserved.
 Git uses an empty
 global configuration in the temporary HOME and skips the system config;
 fixture commits receive a synthetic identity only during setup.

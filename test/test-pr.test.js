@@ -36,6 +36,15 @@ const credentialNameGuards = [
 ];
 
 const proxyKeys = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'npm_config_https_proxy'];
+const normalizedCredentialProxies = [
+  ['leading space', ' http://tok@proxy.invalid:8080'],
+  ['leading tab', '\thttp://tok@proxy.invalid:8080'],
+  ['leading and trailing whitespace', ' \thttp://tok@proxy.invalid:8080\r\n '],
+  ['schemeless leading and trailing whitespace', ' \ttok@proxy.invalid:8080\r\n '],
+  ['embedded tab', 'ht\ttp://tok@proxy.invalid:8080'],
+  ['embedded CR', 'http:\r//tok@proxy.invalid:8080'],
+  ['embedded LF', 'http:\n//tok@proxy.invalid:8080'],
+];
 
 function temp(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-test-pr-')));
@@ -558,11 +567,37 @@ for (const allowClaude of [false, true]) {
   }
 
   for (const proxy of proxyKeys) {
+    for (const [form, value] of normalizedCredentialProxies) {
+      test(`isolated ALLOW_CLAUDE=${allowClaude} drops ${proxy} with ${form}`, (t) => {
+        const root = temp(t);
+        for (const key of [proxy, proxy.toLowerCase(), proxy.toUpperCase()]) {
+          const env = Object.freeze({ [key]: value, KEEP_ME: 'keep-sentinel' });
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
+          assert.equal(Object.hasOwn(launch.env, key), false, `${key}: ${JSON.stringify(value)}`);
+          assert.equal(launch.env.KEEP_ME, 'keep-sentinel');
+          assert.equal(env[key], value);
+        }
+      });
+    }
+
+    test(`isolated ALLOW_CLAUDE=${allowClaude} preserves ${proxy} with backslash before path @`, (t) => {
+      const root = temp(t);
+      for (const key of [proxy, proxy.toLowerCase(), proxy.toUpperCase()]) {
+        for (const value of ['http://proxy.invalid\\user@path', 'proxy.invalid\\user@path']) {
+          const env = Object.freeze({ [key]: value });
+          const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
+          assert.equal(launch.env[key], value, key);
+          assert.equal(env[key], value);
+        }
+      }
+    });
+
     test(`isolated ALLOW_CLAUDE=${allowClaude} drops credential-bearing ${proxy}`, (t) => {
       const root = temp(t);
       for (const key of [proxy, proxy.toLowerCase(), proxy.replace('PROXY', 'Proxy')]) {
         for (const value of ['http://user:pass@proxy.invalid:8080', 'https://user:p%40ss@proxy.invalid',
-          'socks5://user:pass@proxy.invalid:1080', 'HTTP://user:pass@proxy.invalid', 'http://user:@proxy.invalid']) {
+          'socks5://user:pass@proxy.invalid:1080', 'socks5h://user:pass@proxy.invalid:1080',
+          'HTTP://user:pass@proxy.invalid', 'http://user:@proxy.invalid', 'http://user:pass@[::1]:8080']) {
           const env = { [key]: value, KEEP_ME: 'keep-sentinel' };
           const original = { ...env };
           const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, platform: 'win32', tempHome: root, env });
@@ -578,7 +613,9 @@ for (const allowClaude of [false, true]) {
       for (const key of [proxy, proxy.toLowerCase(), proxy.replace('PROXY', 'Proxy')]) {
         for (const value of ['http://proxy.invalid:8080', 'https://proxy.invalid', 'socks5://proxy.invalid:1080',
           'proxy.invalid:8080', '//proxy.invalid:8080', '', 'http://proxy.invalid/user:pass@path',
-          'proxy.invalid/user@path', 'http://proxy.invalid?user@query', 'http://proxy.invalid#user@fragment']) {
+          'proxy.invalid/user@path', 'http://proxy.invalid?user@query', 'http://proxy.invalid#user@fragment',
+          ' http://proxy.invalid:8080\t ', 'socks5h://proxy.invalid:1080', 'http://[::1]:8080',
+          'http://@proxy.invalid', 'socks5://proxy%40name.invalid']) {
           const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env: { [key]: value } });
           assert.equal(launch.env[key], value, key);
         }
@@ -616,6 +653,31 @@ for (const allowClaude of [false, true]) {
     const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude, tempHome: root, env });
     for (const [key, value] of Object.entries(env)) assert.equal(launch.env[key], value, key);
   });
+}
+
+for (const allowClaude of ['0', '1']) {
+  for (const [form, value] of normalizedCredentialProxies) {
+    test(`isolated ALLOW_CLAUDE=${allowClaude} filters ${form} proxies through fixture setup and launch`, async (t) => {
+      const setup = workflow(t);
+      const proxies = Object.fromEntries(proxyKeys.map(key => [key, value]));
+      const env = Object.freeze({ ...setup.env, ...proxies, ISOLATED: '1', ALLOW_CLAUDE: allowClaude });
+      let prepared = false;
+      let launched = false;
+      assert.equal(await tooling().main({ ...setup, env,
+        fixtures: (home, fixtureEnv) => {
+          for (const key of proxyKeys) assert.equal(Object.hasOwn(fixtureEnv, key), false, key);
+          prepared = true;
+        },
+        launch: async (file, args, options) => {
+          for (const key of proxyKeys) assert.equal(Object.hasOwn(options.env, key), false, key);
+          launched = true;
+          return 0;
+        } }), 0);
+      assert.equal(prepared, true);
+      assert.equal(launched, true);
+      for (const key of proxyKeys) assert.equal(env[key], value);
+    });
+  }
 }
 
 for (const allowClaude of ['0', '1']) {
