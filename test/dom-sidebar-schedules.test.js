@@ -7,7 +7,7 @@ const prompt = 'Invoke the journal command';
 
 function session(sessionId, slug, overrides = {}) {
   return {
-    sessionId, slug,
+    sessionId, slug, scheduleSlug: slug,
     firstPrompt: `Scheduled Task: ${prompt}`,
     name: prompt,
     summary: `Scheduled Task: ${prompt}`,
@@ -30,6 +30,50 @@ function render(sessions, verify) {
 function groupNames(ctx) {
   return [...ctx.document.querySelectorAll('.slug-group-name')].map(el => el.textContent);
 }
+
+test('a typed Scheduled Task prompt never creates a schedule group', () => {
+  render([
+    session('plain', 'woolly-scribbling-wirth', { scheduleSlug: null }),
+    session('morning', 'journal-morning'),
+  ], ctx => {
+    assert.equal(ctx.document.querySelector('[data-session-id="plain"]').closest('.slug-group'), null);
+    assert.deepEqual(groupNames(ctx), ['journal-morning']);
+  });
+});
+
+test('schedule provenance groups runs without a prefix or a CLI slug', () => {
+  render([session('marked', null, { scheduleSlug: 'journal-morning', firstPrompt: prompt })], ctx => {
+    assert.deepEqual(groupNames(ctx), ['journal-morning']);
+  });
+});
+
+test('invalid schedule markers leave ordinary singleton sessions ungrouped', () => {
+  const sessions = [null, '', 1, ['journal-morning'], { length: 1 }].map((scheduleSlug, i) =>
+    session('invalid-' + i, 'ordinary-' + i, { scheduleSlug }));
+  render(sessions, ctx => {
+    assert.equal(ctx.document.querySelectorAll('.slug-group').length, 0);
+  });
+});
+
+test('legacy expansion migrates once and an explicit collapse survives rebuilding', () => {
+  const ctx = setupSidebarDom();
+  try {
+    loadAppFunctions(ctx.context, { functions: ['getExpandedSlugs', 'saveExpandedSlugs'] });
+    ctx.window.sessionStorage.setItem('expandedSlugs', JSON.stringify(['slug-journal-morning']));
+    const projects = [makeSampleProject({ sessions: [session('run', 'journal-morning')] })];
+    ctx.sidebar.renderProjects(projects, true);
+    const group = ctx.document.querySelector('.slug-group');
+    assert.ok(!group.classList.contains('collapsed'), 'legacy expansion retained');
+    assert.ok(JSON.parse(ctx.window.sessionStorage.getItem('expandedSlugs')).includes(group.id), 'scoped key persisted');
+    group.querySelector('.slug-group-header').click();
+    ctx.window.sessionStorage.setItem('expandedSlugs', JSON.stringify(['slug-journal-morning']));
+    ctx.document.getElementById('sidebar-content').replaceChildren();
+    ctx.sidebar.renderProjects(projects, true);
+    assert.ok(ctx.document.querySelector('.slug-group').classList.contains('collapsed'), 'legacy key cannot reopen a migrated group');
+  } finally {
+    ctx.destroy();
+  }
+});
 
 test('a schedule with one visible run has its own named header', () => {
   render([session('morning-1', 'journal-morning')], ctx => {
@@ -65,7 +109,7 @@ test('two schedules with the same prompt keep separate named groups', () => {
 test('a plain session sharing the prompt and slug stays outside the schedule group', () => {
   render([
     session('morning-1', 'journal-morning'),
-    session('plain-1', 'journal-morning', { firstPrompt: prompt, summary: prompt }),
+    session('plain-1', 'journal-morning', { firstPrompt: prompt, summary: prompt, scheduleSlug: null }),
   ], ctx => {
     const plain = ctx.document.querySelector('[data-session-id="plain-1"]');
     assert.equal(plain.closest('.slug-group'), null);
@@ -85,9 +129,9 @@ test('a catch-up run uses its schedule header despite a renamed session', () => 
 
 test('ordinary singleton and shared CLI slugs keep their existing grouping', () => {
   render([
-    session('plain-1', 'single', { firstPrompt: prompt }),
-    session('plain-2', 'woolly-scribbling-wirth', { firstPrompt: prompt }),
-    session('plain-3', 'woolly-scribbling-wirth', { firstPrompt: prompt }),
+    session('plain-1', 'single', { firstPrompt: prompt, scheduleSlug: null }),
+    session('plain-2', 'woolly-scribbling-wirth', { firstPrompt: prompt, scheduleSlug: null }),
+    session('plain-3', 'woolly-scribbling-wirth', { firstPrompt: prompt, scheduleSlug: null }),
   ], ctx => {
     assert.equal(ctx.document.querySelector('[data-session-id="plain-1"]').closest('.slug-group'), null);
     assert.deepEqual(groupNames(ctx), [prompt]);
@@ -98,8 +142,8 @@ test('ordinary singleton and shared CLI slugs keep their existing grouping', () 
 test('ordinary slug groups and schedule groups with the same slug have distinct DOM identities', () => {
   render([
     session('morning-1', 'journal-morning'),
-    session('plain-1', 'journal-morning', { firstPrompt: prompt }),
-    session('plain-2', 'journal-morning', { firstPrompt: prompt }),
+    session('plain-1', 'journal-morning', { firstPrompt: prompt, scheduleSlug: null }),
+    session('plain-2', 'journal-morning', { firstPrompt: prompt, scheduleSlug: null }),
   ], ctx => {
     const groups = [...ctx.document.querySelectorAll('.slug-group')];
     assert.equal(groups.length, 2);

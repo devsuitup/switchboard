@@ -352,7 +352,7 @@ function createScheduleSession(schedule, dueMs) {
 
   const msgId = crypto.randomUUID();
   const lines = [
-    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: heading + schedule.prompt } }),
+    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, scheduleSlug: schedule.slug, timestamp, message: { role: 'user', content: heading + schedule.prompt } }),
   ];
   fs.writeFileSync(jsonlPath, lines.join('\n') + '\n');
   return { sessionId, jsonlPath };

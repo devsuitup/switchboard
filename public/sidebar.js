@@ -491,7 +491,21 @@ function narrowSessionsToSearch(sessions, matchIds) {
 function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, project) {
   const group = document.createElement('div');
   const id = scheduled ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, slug])) : slugId(slug);
-  const expanded = getExpandedSlugs().has(id);
+  const expandedSlugs = getExpandedSlugs();
+  if (scheduled) {
+    try {
+      const migrated = new Set(JSON.parse(sessionStorage.getItem('migratedScheduleSlugs') || '[]'));
+      if (!migrated.has(id)) {
+        migrated.add(id);
+        sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
+        if (expandedSlugs.has(slugId(slug))) {
+          expandedSlugs.add(id);
+          sessionStorage.setItem('expandedSlugs', JSON.stringify([...expandedSlugs]));
+        }
+      }
+    } catch {}
+  }
+  const expanded = expandedSlugs.has(id);
   group.className = expanded ? 'slug-group js-stateful' : 'slug-group collapsed js-stateful';
   group.id = id;
 
@@ -680,10 +694,11 @@ function renderProjects(projects, resort) {
     const slugMap = new Map();
     const ungrouped = [];
     for (const session of filtered) {
-      if (session.slug) {
-        const scheduled = /^Scheduled Task(?::| \(catch-up:)/.test(session.firstPrompt || '');
-        const key = JSON.stringify([scheduled, session.slug]);
-        if (!slugMap.has(key)) slugMap.set(key, { slug: session.slug, scheduled, sessions: [] });
+      const scheduled = typeof session.scheduleSlug === 'string' && session.scheduleSlug.length > 0;
+      const slug = scheduled ? session.scheduleSlug : session.slug;
+      if (slug) {
+        const key = JSON.stringify([scheduled, slug]);
+        if (!slugMap.has(key)) slugMap.set(key, { slug, scheduled, sessions: [] });
         slugMap.get(key).sessions.push(session);
       } else {
         ungrouped.push(session);
