@@ -302,7 +302,7 @@ function refreshFolder(folder, opts = {}) {
           modified: fileMtime,
           fileMtime,
           slug: h.slug || cachedEntry.slug,
-          scheduleSlug: h.scheduleSlug || cachedEntry.scheduleSlug,
+          scheduleSlug: h.scheduleSlugComplete ? h.scheduleSlug : h.scheduleSlug || cachedEntry.scheduleSlug,
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
           parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
           agentId: h.agentId || cachedEntry.agentId,

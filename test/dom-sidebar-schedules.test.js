@@ -90,6 +90,50 @@ test('a schedule with one visible run has its own named header', () => {
   });
 });
 
+test('ambiguous legacy expansion never crosses projects, hosts or punctuation collisions', () => {
+  const ctx = setupSidebarDom();
+  try {
+    loadAppFunctions(ctx.context, { functions: ['getExpandedSlugs', 'saveExpandedSlugs'] });
+    ctx.window.sessionStorage.setItem('expandedSlugs', JSON.stringify(['slug-journal-morning', 'slug-journal_morning']));
+    const projects = [
+      makeSampleProject({ projectPath: '/a', sessions: [session('a', 'journal-morning'), session('dot', 'journal.morning'), session('underscore', 'journal_morning')] }),
+      makeSampleProject({ projectPath: '/b', sessions: [session('b', 'journal-morning')] }),
+      makeSampleProject({ projectPath: '/a', remoteAlias: 'remote', sessions: [session('remote', 'journal-morning')] }),
+    ];
+    ctx.window.cachedAllProjects = projects;
+    ctx.sidebar.renderProjects([projects[0]], true);
+    assert.ok([...ctx.document.querySelectorAll('.slug-group')].every(group => group.classList.contains('collapsed')), 'hidden candidates also make inheritance ambiguous');
+    ctx.sidebar.renderProjects(projects, true);
+    assert.ok([...ctx.document.querySelectorAll('.slug-group')].every(group => group.classList.contains('collapsed')), 'no ambiguous group inherits the legacy expansion');
+    ctx.document.querySelector('[data-session-id="a"]').closest('.slug-group').querySelector('.slug-group-header').click();
+    ctx.document.getElementById('sidebar-content').replaceChildren();
+    ctx.sidebar.renderProjects(projects, true);
+    assert.ok(!ctx.document.querySelector('[data-session-id="a"]').closest('.slug-group').classList.contains('collapsed'));
+    for (const id of ['b', 'remote', 'dot', 'underscore']) {
+      assert.ok(ctx.document.querySelector(`[data-session-id="${id}"]`).closest('.slug-group').classList.contains('collapsed'));
+    }
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('a legacy expansion consumed in one scope cannot expand a schedule discovered later', () => {
+  const ctx = setupSidebarDom();
+  try {
+    loadAppFunctions(ctx.context, { functions: ['getExpandedSlugs', 'saveExpandedSlugs'] });
+    ctx.window.sessionStorage.setItem('expandedSlugs', JSON.stringify(['slug-journal-morning']));
+    const a = makeSampleProject({ projectPath: '/a', sessions: [session('a', 'journal-morning')] });
+    ctx.sidebar.renderProjects([a], true);
+    assert.ok(!ctx.document.querySelector('.slug-group').classList.contains('collapsed'));
+    const b = makeSampleProject({ projectPath: '/b', remoteAlias: 'remote', sessions: [session('b', 'journal-morning')] });
+    ctx.document.getElementById('sidebar-content').replaceChildren();
+    ctx.sidebar.renderProjects([b], true);
+    assert.ok(ctx.document.querySelector('[data-session-id="b"]').closest('.slug-group').classList.contains('collapsed'), 'legacy key stays consumed when its original scope is no longer listed');
+  } finally {
+    ctx.destroy();
+  }
+});
+
 test('two schedules with the same prompt keep separate named groups', () => {
   render([
     session('morning-1', 'journal-morning'),

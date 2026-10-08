@@ -79,6 +79,65 @@ function makeFakeDb(opts = {}) {
 
 // ---- Tests ------------------------------------------------------------------
 
+test('refreshFolder clears a removed schedule marker after a complete transcript replacement', () => {
+  const projectsDir = mkTmp();
+  try {
+    const folder = encodeProjectPath(projectsDir);
+    const file = path.join(projectsDir, folder, 'run.jsonl');
+    writeSession(file, projectsDir, [{ type: 'user', scheduleSlug: 'journal-morning' }]);
+    const { db, upserted } = makeFakeDb();
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+    sessionCache.refreshFolder(folder);
+    const cached = upserted[0];
+    assert.equal(cached.scheduleSlug, 'journal-morning');
+    db.getCachedByFolder = () => [cached];
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+    writeSession(file, projectsDir);
+    fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
+    sessionCache.refreshFolder(folder, { files: new Set(['run.jsonl']) });
+    assert.equal(upserted.at(-1).scheduleSlug, null, 'complete unmarked replacement clears stale provenance');
+    assert.equal(upserted.at(-1).fileMtime, fs.statSync(file).mtime.toISOString());
+    db.getCachedByFolder = () => [upserted.at(-1)];
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+    sessionCache.refreshFolder(folder);
+    assert.equal(upserted.length, 2, 'unchanged replacement is skipped');
+  } finally {
+    cleanup(projectsDir);
+  }
+});
+
+for (const boundary of ['bytes', 'lines', 'invalid JSON']) {
+  test(`refreshFolder preserves a schedule marker when the header is incomplete: ${boundary}`, () => {
+    const projectsDir = mkTmp();
+    try {
+      const folder = encodeProjectPath(projectsDir);
+      const file = path.join(projectsDir, folder, 'run.jsonl');
+      writeSession(file, projectsDir, [{ type: 'user', scheduleSlug: 'journal-morning' }]);
+      const { db, upserted } = makeFakeDb();
+      sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+      sessionCache.refreshFolder(folder);
+      const cached = upserted[0];
+      db.getCachedByFolder = () => [cached];
+      sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+      const padding = boundary === 'bytes'
+        ? [{ type: 'assistant', message: { content: 'x'.repeat(256 * 1024) } }]
+        : Array.from({ length: boundary === 'lines' ? 500 : 0 }, () => ({ type: 'system' }));
+      writeSession(file, projectsDir, padding);
+      if (boundary === 'invalid JSON') fs.appendFileSync(file, '{"type":"user"\n');
+      else fs.appendFileSync(file, JSON.stringify({ type: 'user', scheduleSlug: 'journal-morning' }) + '\n');
+      fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
+      sessionCache.refreshFolder(folder);
+      assert.equal(upserted.at(-1).scheduleSlug, 'journal-morning', 'incomplete negative read retains provenance');
+      writeSession(file, projectsDir, [{ type: 'user', scheduleSlug: 'journal-evening' }, ...padding]);
+      fs.utimesSync(file, new Date('2030-01-02'), new Date('2030-01-02'));
+      sessionCache.refreshFolder(folder);
+      assert.equal(upserted.at(-1).scheduleSlug, 'journal-evening', 'visible replacement marker wins even in an incomplete header');
+    } finally {
+      cleanup(projectsDir);
+    }
+  });
+}
+
 test('refreshFolder: only the changed-mtime file gets upserted; unchanged files are skipped', () => {
   const projectsDir = mkTmp();
   try {

@@ -488,7 +488,7 @@ function narrowSessionsToSearch(sessions, matchIds) {
   return sessions.filter(s => matchIds.has(s.sessionId) || matchedParents.has(s.sessionId));
 }
 
-function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, project) {
+function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, project, legacyScheduleScopes) {
   const group = document.createElement('div');
   const id = scheduled ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, slug])) : slugId(slug);
   const expandedSlugs = getExpandedSlugs();
@@ -498,9 +498,14 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
       if (!migrated.has(id)) {
         migrated.add(id);
         sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
-        if (expandedSlugs.has(slugId(slug))) {
-          expandedSlugs.add(id);
-          sessionStorage.setItem('expandedSlugs', JSON.stringify([...expandedSlugs]));
+        const legacyId = slugId(slug);
+        if (!migrated.has(legacyId)) {
+          migrated.add(legacyId);
+          sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
+          if (legacyScheduleScopes.get(legacyId)?.size === 1 && expandedSlugs.has(legacyId)) {
+            expandedSlugs.add(id);
+            sessionStorage.setItem('expandedSlugs', JSON.stringify([...expandedSlugs]));
+          }
         }
       }
     } catch {}
@@ -604,6 +609,16 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
 function renderProjects(projects, resort) {
   pruneStaleSubagents();
   pendingSubagentRest.clear();
+  const legacyScheduleScopes = new Map();
+  for (const project of [...cachedAllProjects, ...projects]) {
+    for (const session of project.sessions) {
+      const slug = session.scheduleSlug;
+      if (session.parentSessionId || typeof slug !== 'string' || !slug) continue;
+      const legacyId = slugId(slug);
+      if (!legacyScheduleScopes.has(legacyId)) legacyScheduleScopes.set(legacyId, new Set());
+      legacyScheduleScopes.get(legacyId).add(JSON.stringify([project.remoteAlias || '', project.projectPath, slug]));
+    }
+  }
   // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
   for (const project of projects) {
     for (const session of project.sessions) seedRemoteActivity(session, project.remoteHostError);
@@ -713,7 +728,7 @@ function renderProjects(projects, resort) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
-      const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project);
+      const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project, legacyScheduleScopes);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
     }
 
