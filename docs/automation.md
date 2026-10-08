@@ -466,6 +466,9 @@ also refused. Fullwidth `／` (U+FF0F), `！` (U+FF01) and `＃` (U+FF03) prefix
 receive the corresponding ASCII refusal; `／compact` and `／clear` are refused
 too. Plain prompts retain their original text, including ASCII and fullwidth
 punctuation in the middle. Plain emoji without refused characters still pass.
+An ordinary combining mark before `/`, U+2215 (division slash) and U+FF0E
+(fullwidth full stop) still go out as plain text. The CLI's parsing of these
+forms is unmeasured.
 Local PTY and live tmux-attached delivery keep their existing behavior. Each
 refusal returns `error: "not sent"`, `submitted: "no"` and its own reason:
 

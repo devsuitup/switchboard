@@ -39,8 +39,9 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   const inherited = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
     key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|SSH_AUTH_SOCK|SSH_AGENT_PID|OPENAI_API_KEY|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(key) &&
     !/_(TOKEN|API_KEY|APIKEY|SECRET|SECRET_KEY|PASSWORD|PAT)$/i.test(key) &&
+    !/(PASSWORD|TOKEN)$|^MYSQL_PWD$/i.test(key) &&
     !/^(GLAB_|GITLAB_|AZURE_)|^DOCKER_AUTH_CONFIG$/i.test(key) &&
-    !(/^(HTTP|HTTPS|ALL)_PROXY$/i.test(key) && /^[a-z][a-z\d+.-]*:\/\/[^/?#@]*:[^/?#@]*@/i.test(value))));
+    !(/^(?:(HTTP|HTTPS|ALL)_PROXY|npm_config_https_proxy)$/i.test(key) && /^(?:[a-z][a-z\d+.-]*:\/\/|\/\/)?[^/?#@]*@/i.test(value))));
   const originalPath = env.PATH || '';
   const fixtureData = path.join(tempHome, '.switchboard-test-pr');
   return {
