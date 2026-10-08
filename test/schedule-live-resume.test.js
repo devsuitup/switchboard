@@ -19,9 +19,7 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
 function setup(t, { sandbox = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'i484-live-'));
-  const child = new EventEmitter();
-  child.pid = 4242;
-  child.stderr = new EventEmitter();
+  const children = [];
   const log = { info() {}, error() {}, warn() {}, debug() {} };
   cliSessionState.init({ dir, activeSessions: new Map(), log, readParentPid: () => process.pid });
   const handlers = new Map();
@@ -32,7 +30,14 @@ function setup(t, { sandbox = false } = {}) {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     sessionHasPty: () => false,
     ptyPids: () => [],
-    cpSpawn: (...args) => { spawns.push(args); return child; },
+    cpSpawn: (...args) => {
+      spawns.push(args);
+      const child = new EventEmitter();
+      child.pid = 4242 + children.length;
+      child.stderr = new EventEmitter();
+      children.push(child);
+      return child;
+    },
     getSetting: () => ({}),
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false },
     resolveShell: () => ({ path: 'fake-shell' }),
@@ -100,16 +105,18 @@ function setup(t, { sandbox = false } = {}) {
   });
   ctx.sessionMap.set(SID, session);
   t.after(() => {
-    child.emit('exit', 0);
+    for (const child of children) child.emit('exit', 0);
     cliSessionState.stop();
     dom.window.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
   return {
-    child, spawns, done, messages, openTerminalCalls, session, ctx, settings,
+    get child() { return children[0]; },
+    spawns, done, messages, openTerminalCalls, session, ctx, settings,
     start: () => {
       const { claudeArgs } = buildScheduleCommand(SID, { name: 'Scheduled task', cli: {} });
       main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true));
+      return children.at(-1);
     },
     open: (options) => app.openSession(session, undefined, options),
     query: (id = SID) => dom.window.api.getSessionLiveElsewhere(id),
@@ -176,6 +183,26 @@ test('a spawn error clears the scheduled run so its session can be opened', asyn
   await h.open();
   assert.equal(h.openTerminalCalls.length, 1);
   assert.equal(h.done.length, 1);
+});
+
+test('a replaced scheduled child exiting preserves the replacement until it exits', async (t) => {
+  const h = setup(t);
+  const first = h.start();
+  assert.equal((await h.query())?.pid, first.pid);
+  const replacement = h.start();
+  assert.notEqual(first, replacement);
+  assert.equal(h.spawns.length, 2);
+  first.emit('exit', 0);
+  const live = await h.query();
+  assert.equal(live?.kind, 'schedule', 'the previous child exiting must not release the replacement');
+  assert.equal(live.pid, replacement.pid);
+  const batchLive = (await h.batch([SID.toUpperCase()]))[SID.toUpperCase()];
+  assert.equal(batchLive?.kind, 'schedule');
+  assert.equal(batchLive.pid, replacement.pid);
+  replacement.emit('exit', 0);
+  assert.equal(await h.query(), null);
+  assert.equal((await h.batch([SID]))[SID], undefined);
+  assert.equal(h.done.length, 2);
 });
 
 test('a refused scheduled spawn leaves no live run', async (t) => {

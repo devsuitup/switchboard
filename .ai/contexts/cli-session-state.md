@@ -285,7 +285,8 @@ See [schedule-runner.md](schedule-runner.md#opening-a-running-scheduled-session-
 | Resume | Live elsewhere | Result |
 |---|---|---|
 | automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt; from `runRestore`, a one-line notice |
-| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes | `confirm()`; cancel aborts, OK spawns the second CLI |
+| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, scheduled run | wait dialog; always refused, even if accepted |
+| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, other live session | `confirm()`; cancel aborts, OK spawns the second CLI |
 | any | no | spawns as before |
 
 Plain terminals are never checked.
@@ -314,7 +315,7 @@ a PowerShell probe on Windows (about 0.7 s, more than the stagger it would sit
 in), and skipping the probe would bring back the reused-pid false positive this
 section closes; the window is the few seconds of a restore, the miss costs one
 second CLI on a session another process started at that moment, exactly what a
-manual open does after its confirm.
+manual open of a non-scheduled session does after its confirm.
 
 The sidebar has no dedicated marker for such a session. Once the watcher has
 seen its state file, `getStatus()` gives it the same state+age line as any live
