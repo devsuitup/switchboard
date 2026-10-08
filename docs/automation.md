@@ -484,8 +484,10 @@ Successful socket results add `channel: "socket"`, `host` and
 `descriptor: { status, status_updated_at, pulled_at }`, captured before the
 write; absent status fields are `null`. `pulled_at` is local epoch milliseconds,
 while `status_updated_at` is the host's timestamp. Success is always
-`submitted: "assumed"`, `submit_retries: 0`, with no `submit_confirmed`: the
-channel has no reply and can silently drop a prompt. Compare a later status
+`submitted: "assumed"`, `submit_retries: 0`. Ordinary commands omit
+`submit_confirmed`; `/compact` reports `submit_confirmed: false` under the
+[compact evidence contract](#compact-evidence-contract). The channel has no
+reply and can silently drop a prompt. Compare a later status
 timestamp from the same host to confirm the effect yourself.
 
 The Send dialog and triggers share the adapter's 30-second dedupe and a bucket
@@ -537,12 +539,17 @@ Take `confirmed` as "the hand-off went through cleanly", `activity` as
 "something happened, unattributed". A slash command that misses the completion
 menu is sent as an ordinary message starting with `/`, and produces a turn too.
 
+#### Compact evidence contract
+
 **`/compact` waits for its effect.** A generic turn or descriptor update is
 insufficient. The session transcript must contain a new main-thread manual
-`compact_boundary` stamped at or after the command's Enter. Compaction keeps
+`compact_boundary` stamped at or after the command's Enter. A pre-write cursor
+reads appended records in bounded chunks, so retained records after the boundary
+cannot hide it outside the normal transcript tail. Compaction keeps
 the existing step deadline (and the chain's global cap); it returns as soon as
 the evidence is observed, then retains the existing readiness checks for the
-next step. No recovery Enter is sent while awaiting compaction. Without
+next step, carrying the observed turn into the idle settle gate without waiting
+for another busy rise. No recovery Enter is sent while awaiting compaction. Without
 evidence by the deadline, `ok: false`, `error: "step not confirmed"`,
 `submit_confirmed: false`, `compaction_observed: false` and an explanatory
 `reason` are returned. `submitted` is `activity` or `assumed`, because bytes
@@ -553,8 +560,9 @@ A successful compact carries `compaction_observed: true`,
 `submit_confirmed: true` and `confirm_source: "compact_boundary"`. For a chain,
 top-level `compaction_observed` is true only when **all requested compacts**
 were observed, including any unsent tail. PTY command/step fields `written`
-and `turn_observed` distinguish fully written text/Enter from generic activity;
-activity does not establish causality. Chain results add `steps_written` and
+and `turn_observed` distinguish fully written text/Enter from an observed turn;
+an observed compaction also sets `turn_observed: true`.
+Activity does not establish causality. Chain results add `steps_written` and
 `steps_with_turn_observed`, while `steps_completed` excludes an unconfirmed
 compact. Other commands keep their existing contract and omit
 `compaction_observed`. Absent observation fields do not mean success.
@@ -574,7 +582,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
 | `send unconfirmed` | a socket write timed out or returned an unclassified non-zero exit; the line may have reached the session; `written` is `unknown` and `submitted` is `no` | check the session before retrying; a timeout reserves identical text for 30 seconds |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
-| `step not confirmed` | a chain step **was written**, its submission was not confirmed by the CLI's descriptor, and the recovery Enter was withheld (the descriptor reads `busy` or `waiting`, or input of your own is pending in the composer); the chain stopped there and nothing more was typed. For a local session whose descriptor reads `busy`, the chain first waits for the step to show in the session transcript with its turn finished: up to 30 s for the step to show at all (up to the step's deadline for `/compact`, which shows only when compaction ends), then up to the step's deadline for its turn to finish; `reason` says which wait ran out | after a dialog or input of your own, the step may sit unsubmitted in the composer: look before sending again. After a wait under `busy`, the step may still be running or queued in the CLI: look at the session before sending again |
+| `step not confirmed` | text **was written** and nothing more was typed. For a single or chained `/compact`, its boundary evidence was not observed before the deadline; see the [compact evidence contract](#compact-evidence-contract). For an ordinary chain step, submission was not confirmed and recovery Enter was withheld by a busy/waiting descriptor or pending input. A readable local transcript under `busy` allows up to 30 s for the step's own entry, then up to the step deadline for its turn to finish; `reason` identifies the failed wait | inspect the session before retrying: the step may be unsubmitted, queued, running, or completed without readable evidence |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 The two reserved values mean opposite things:

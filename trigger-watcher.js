@@ -433,10 +433,10 @@ function getPendingOwnEntryMs() {
   return v !== undefined ? v : DEFAULT_PENDING_OWN_ENTRY_MS;
 }
 
-function readTranscriptTurn(ctx, sessionId) {
+function readTranscriptTurn(ctx, sessionId, compactionCursor) {
   if (typeof ctx.getTranscriptTurn !== 'function') return null;
   try {
-    return ctx.getTranscriptTurn(sessionId) || null;
+    return ctx.getTranscriptTurn(sessionId, compactionCursor) || null;
   } catch (_) {
     return null;
   }
@@ -600,8 +600,9 @@ function compactBoundaryKey(boundary) {
 }
 
 // see .ai/contexts/trigger-watcher.md, "Compaction evidence"
-function waitForCompaction(sessionId, ctx, enterAt, deadlineMs, previousBoundaries) {
+function waitForCompaction(sessionId, ctx, enterAt, deadlineMs, snapshot) {
   const start = Date.now();
+  const previousBoundaries = new Set((snapshot?.compactBoundaries || []).map(compactBoundaryKey));
   let sawBusy = false;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
@@ -615,11 +616,11 @@ function waitForCompaction(sessionId, ctx, enterAt, deadlineMs, previousBoundari
     if (now >= deadlineMs) {
       return resolve({ ...result, compactionReason: 'compaction was not observed in the session transcript before the step deadline; nothing more was typed' });
     }
-    const turn = readTranscriptTurn(ctx, sessionId);
+    const turn = snapshot ? readTranscriptTurn(ctx, sessionId, snapshot.compactionCursor) : null;
     const boundary = turn?.compactBoundaries?.find((entry) =>
       Number.isFinite(entry.at) && entry.at >= enterAt && !previousBoundaries.has(compactBoundaryKey(entry)));
     if (boundary) return resolve({
-      ...result, confirmed: true, composerConfirmed: true, compactionObserved: true,
+      ...result, sawBusy: true, confirmed: true, composerConfirmed: true, compactionObserved: true,
       confirmSource: 'compact_boundary',
     });
     scheduleNext();
@@ -729,13 +730,12 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   const edgeMode = readCliStatus(ctx, sessionId) !== null;
 
   const compact = isCompactCommand(command);
-  const previousBoundaries = compact
-    ? new Set((readTranscriptTurn(ctx, sessionId)?.compactBoundaries || []).map(compactBoundaryKey))
-    : null;
+  const compactSnapshot = compact ? readTranscriptTurn(ctx, sessionId) : null;
+  if (compactSnapshot) compactSnapshot.compactBoundaries = [...(compactSnapshot.compactBoundaries || [])];
 
   const { midBusy, enterAt } = await submitToPty(handle, command, sessionId, ctx);
 
-  if (compact) return waitForCompaction(sessionId, ctx, enterAt, deadlineMs ?? Date.now() + getIdleTimeout(), previousBoundaries);
+  if (compact) return waitForCompaction(sessionId, ctx, enterAt, deadlineMs ?? Date.now() + getIdleTimeout(), compactSnapshot);
 
   // Composer read-back: unconditional, immediate, never gated on activity.
   const postWriteState = (typeof ctx.getComposerState === 'function')
@@ -858,12 +858,11 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
  *
  * Returns { timedOut, sessionExited, waited_ms, waitingSeen } (waitingSeen only set on a timeout).
  */
-function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs) {
+function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = false) {
   const start = Date.now();
   const settleMs = getBusyFallSettleMs();
   const riseDeadline = start + getBusyRiseWaitMs();
-  // Until busy has read true once, a run of `false` proves nothing.
-  let hasRisen = false;
+  let hasRisen = turnObserved;
   // Set the instant busy first reads false (after having risen); reset to
   // null on every re-assertion.
   let idleSince = null;
@@ -1746,6 +1745,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         verify = { ...verify, pendingTimedOut: true, pendingNoOwnEntry: !!pending.noOwnEntry };
       }
     }
+    sources.turn_observed = !!verify.sawBusy;
     if (verify.confirmSource) sources.confirm_source = verify.confirmSource;
     // This step's own submitted -- same classification the chain fold below
     // uses, attached to the step itself so a consumer can ask "was THIS step
@@ -1816,7 +1816,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // could not confirm a turn.
     if (i < chain.length - 1) {
       // Same per-step deadline as the verify above — bounds the busy-fall wait.
-      const result = await waitForBusyFall(sessionId, ctx, stepDeadline, verify.enterAt);
+      const result = await waitForBusyFall(sessionId, ctx, stepDeadline, verify.enterAt, verify.compactionObserved === true);
       stepWaitedMs += result.waited_ms;
       totalWaitedMs += result.waited_ms;
       if (result.source) {

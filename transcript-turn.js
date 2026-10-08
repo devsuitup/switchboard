@@ -6,6 +6,7 @@ const fs = require('fs');
 
 const CLOSED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 const DEFAULT_TAIL_BYTES = 256 * 1024;
+const COMPACT_CHUNK_BYTES = 256 * 1024;
 
 function stampOf(entry) {
   const t = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
@@ -116,34 +117,80 @@ function classifyTranscriptTail(text) {
 function readTail(filePath, size, tailBytes) {
   const start = Math.max(0, size - tailBytes);
   const length = size - start;
+  return readRange(filePath, start, length).toString('utf8');
+}
+
+function readRange(filePath, start, length, expectedStat) {
   const buf = Buffer.alloc(length);
   const fd = fs.openSync(filePath, 'r');
   try {
+    if (expectedStat) {
+      const actual = fs.fstatSync(fd);
+      if (actual.dev !== expectedStat.dev || actual.ino !== expectedStat.ino || actual.size < start + length) {
+        throw new Error('transcript changed during read');
+      }
+    }
     let off = 0;
     while (off < length) {
       const n = fs.readSync(fd, buf, off, length - off, start + off);
-      if (n <= 0) break;
+      if (n <= 0) throw new Error('transcript shortened during read');
       off += n;
     }
-    return buf.toString('utf8', 0, off);
+    return buf.subarray(0, off);
   } finally {
     fs.closeSync(fd);
   }
 }
 
+// see .ai/contexts/trigger-watcher.md, "Compaction evidence"
+function readCompactChunk(filePath, stat, cursor) {
+  if (cursor.invalid || cursor.filePath !== filePath || cursor.dev !== stat.dev
+    || cursor.ino !== stat.ino || stat.size < cursor.offset) {
+    cursor.invalid = true;
+    throw new Error('transcript cursor invalidated');
+  }
+  const length = Math.min(COMPACT_CHUNK_BYTES, stat.size - cursor.offset);
+  const chunk = readRange(filePath, cursor.offset, length, stat);
+  cursor.offset += chunk.length;
+  const data = Buffer.concat([cursor.pending, chunk]);
+  const lastNewline = data.lastIndexOf(10);
+  let complete = lastNewline < 0 ? Buffer.alloc(0) : data.subarray(0, lastNewline + 1);
+  cursor.pending = Buffer.from(data.subarray(lastNewline + 1));
+  if (cursor.skipLine && complete.length) {
+    complete = complete.subarray(complete.indexOf(10) + 1);
+    cursor.skipLine = false;
+  }
+  if (cursor.pending.length > COMPACT_CHUNK_BYTES) {
+    cursor.pending = Buffer.alloc(0);
+    cursor.skipLine = true;
+  }
+  return parseMainThread(complete.toString('utf8')).filter(isManualCompactBoundary)
+    .map((entry) => ({ at: stampOf(entry), uuid: entry.uuid || null }))
+    .filter((entry) => entry.at !== null);
+}
+
 function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
   const cache = new Map();
   return {
-    read(filePath) {
+    read(filePath, compactionCursor) {
       let stat;
       try { stat = fs.statSync(filePath); } catch (_) { return null; }
       const hit = cache.get(filePath);
-      if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { ...hit.turn };
-      let tail;
-      try { tail = readTail(filePath, stat.size, tailBytes); } catch (_) { return null; }
-      const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs };
-      cache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, turn });
-      return { ...turn };
+      let cached = hit;
+      if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev) {
+        let tail;
+        try { tail = readTail(filePath, stat.size, tailBytes); } catch (_) { return null; }
+        const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs };
+        cached = { mtimeMs: stat.mtimeMs, size: stat.size, dev: stat.dev, ino: stat.ino,
+          skipLine: tail.length > 0 && !tail.endsWith('\n'), turn };
+        cache.set(filePath, cached);
+      }
+      const turn = { ...cached.turn };
+      if (compactionCursor) {
+        try { turn.compactBoundaries = readCompactChunk(filePath, stat, compactionCursor); } catch (_) { return null; }
+      }
+      return { ...turn, compactionCursor: { filePath, dev: stat.dev, ino: stat.ino,
+        offset: stat.size, pending: Buffer.alloc(0), skipLine: cached.skipLine } };
     },
     forget(filePath) {
       cache.delete(filePath);

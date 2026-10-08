@@ -1149,7 +1149,10 @@ busy. The summary alone (read before the stdout lands) also closes, and the
 quiet window covers the gap. The test fixture copies this shape with
 synthetic text.
 
-**Proof of submission.** In edge mode a busy descriptor that does not change
+**Proof of submission for ordinary commands.** `/compact` uses only the
+boundary contract in [Compaction evidence](#compaction-evidence). The following
+prompt/descriptor verification applies to other commands. In edge mode a busy
+descriptor that does not change
 status writes no new `statusUpdatedAt`, so our Enter would never count as
 seen and the chain would stop on `step not confirmed`. For a chain step only
 (`submitWithVerify(…, { transcriptReaction: true })`; single triggers do not
@@ -1175,13 +1178,16 @@ notice) never confirm. The reader keeps the last 50 such entries of the tail
 (`prompts`). Each step records `confirm_source` (`descriptor` or
 `transcript`) when its submission was confirmed in edge mode.
 
-**A chain step written while the CLI stays busy.** The CLI writes the
+**A chain step written while the CLI stays busy.** For `/compact`, historical
+prompt timing explains why confirmation now bypasses this path; see
+[Compaction evidence](#compaction-evidence). The CLI writes the
 `<command-name>/compact` entry only when compaction ends, one to three
 minutes after the Enter although it is stamped at the Enter, and a descriptor
 held `busy` writes no new stamp. In 79 of 82 measured compactions a plain
-`user` entry `/compact` is also written at the Enter, which the 2 s verify
-window does confirm; in the other 3 it sees nothing, so
-an unconfirmed chain step whose recovery Enter was withheld is not a failure
+`user` entry `/compact` was also written at the Enter, which the old 2 s verify
+window confirmed; in the other 3 it saw nothing. Compact confirmation now
+requires the boundary instead of these prompt/descriptor signals.
+For ordinary commands, an unconfirmed chain step whose recovery Enter was withheld is not a failure
 when the descriptor reads `busy` or `shell` and the session's transcript is
 readable: it is pending (`waitForPendingConfirmation`), up to the step's own
 deadline, and no Enter is written meanwhile. The step is confirmed when the
@@ -1199,15 +1205,15 @@ Two limits, `error` `step not confirmed` and nothing more typed at either:
   (default 30 s, `DEFAULT_PENDING_OWN_ENTRY_MS`): `reasonNoOwnEntry`. A
   prompt or slash command shows at once, as a `user` entry or an `enqueue`,
   so a swallowed Enter fails then instead of spending the chain's budget.
-- `/compact` is exempt: 3 of the 82 manual compactions measured wrote no
-  entry naming `/compact` before compaction ended (Enter to boundary: 0.5 s
-  to 332 s, median 129 s). It waits to the step deadline, as does any step
-  whose own entry has appeared and whose turn is not closed yet:
-  `REASON_UNCONFIRMED_BEFORE_DEADLINE`. A chain starting with `/compact`
-  under busy should set `timeout_ms` to 600 000. A dialog, a remote
-session or a missing transcript keep the immediate `step not confirmed`. Once
-confirmed, the step goes on as any other: for a non-final step the busy-fall
-wait reads the same closed turn and ends at once.
+- Once an ordinary step's own entry appears, it waits until the step deadline
+  for its turn to close: `REASON_UNCONFIRMED_BEFORE_DEADLINE`.
+
+For ordinary commands, a dialog, a remote session or a missing transcript keep
+the immediate `step not confirmed`. Once confirmed, a non-final step uses the
+existing busy-fall gate. Compacts use the separate evidence and readiness
+contract below; their boundary poll runs to the step deadline even without a
+descriptor or readable transcript. The historical boundary delays were 0.5 s
+to 332 s (median 129 s), so a long compaction may need `timeout_ms: 600000`.
 
 **The result records the signal.** Each chain step carries `ready_source`
 (`descriptor` or `transcript`: what released the readiness wait before it;
@@ -1220,8 +1226,9 @@ transcript also logs one info line.
 `ctx.getTranscriptTurn(sessionId)` when `main.js` passes `projectsDir`
 (`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
 key>.jsonl`, local sessions only (a remote session returns `null`). The reader
-stats the file and re-reads only when its mtime or size changed, the last
-256 KB, so a poll costs a `stat`. The cache holds one entry per path, so
+stats the file and re-reads the last 256 KiB only when its mtime, size or identity
+changes, so an ordinary turn poll costs a `stat`. Compaction evidence additionally
+uses the bounded cursor described below. The cache holds one entry per path, so
 two chains on two sessions do not re-read each other's files. A chain
 evicts its session's entry when it ends, whatever the outcome
 (`ctx.forgetTranscriptTurn`, which remembers the path read for the session,
@@ -1429,8 +1436,20 @@ write, sends text and a discrete Enter, then polls for a new main-thread
 `system` / `compact_boundary` record with `compactMetadata.trigger: "manual"`.
 Its timestamp must be at or after that Enter and its `(uuid, timestamp)` pair
 must be absent from the snapshot. Old boundaries, automatic compaction and
-sidechain records are excluded. The existing bounded transcript tail reader
-returns only boundary metadata alongside its turn classification; conversation
+sidechain records are excluded. The pre-write snapshot also creates a cursor
+at EOF, tied to the transcript path, device and inode. Each evidence poll reads
+up to 256 KiB from that offset and advances it, even when the file's mtime and
+size have stopped changing. Retained records after the boundary can exceed
+the normal 256 KiB tail without hiding the evidence. The turn classification
+still uses that tail; the total read budget is at most 512 KiB per evidence
+poll. Partial records are buffered up to 256 KiB and completed on a later poll;
+an oversized unfinished record is discarded through its next newline, then
+scanning resumes. A pre-existing incomplete line is similarly skipped.
+The cursor has no unbounded whole-file scan or fallback to old tail evidence.
+Rotation, observed truncation below the cursor, or a read failure fail closed;
+an unreadable pre-write snapshot cannot later confirm compaction. An in-place
+rewrite that regrows beyond the offset between polls cannot reliably be detected.
+The reader returns only boundary metadata alongside its turn classification; conversation
 text is not copied into results. The context selects the current session's
 transcript, including `realSessionId`, and clears its cache after the trigger.
 
@@ -1444,9 +1463,15 @@ also insufficient. The VPS incident transcripts were unavailable; no specific
 cause of their failure has been established.
 
 Compaction uses the existing command/step deadline, capped by the chain's
-global deadline; there is no new timeout or shorter own-entry bound. Evidence
-ends the poll immediately (at most one existing 100 ms poll later). A non-final
+global deadline; there is no new timeout or shorter own-entry bound. Each
+100 ms poll advances through at most one cursor chunk; a large backlog can
+require several polls within that same deadline. Reading a qualifying boundary
+ends the evidence wait immediately. A non-final
 compact still uses the existing busy-fall/readiness gates before the next step.
+The boundary satisfies the turn observation, so this wait starts with its
+rise already observed, without requiring another busy rise. Busy must still
+fall and remain idle for the settle window, and descriptor, dialog and composer
+readiness gates continue to apply before the next write.
 No recovery Enter is sent for `/compact`: while awaiting its effect, an Enter
 could answer a dialog or interfere with a running compaction. Other commands
 keep their existing verification window and Enter recovery.
@@ -1464,8 +1489,10 @@ safe retry signal.
 
 On an observed compact, `submitted: "confirmed"`, `submit_confirmed: true`,
 `compaction_observed: true` and `confirm_source: "compact_boundary"` are
-returned even if a busy transition was too short to sample. The boundary
-proves a manual compaction occurred after submission, not exclusive causality
+returned even if a busy transition was too short to sample, with
+`turn_observed: true`. Ordinary pending confirmations also refresh this field
+after their late descriptor/transcript proof so the aggregate counter agrees.
+The boundary proves a manual compaction occurred after submission, not exclusive causality
 against a human simultaneously requesting compaction. An inaccessible or
 truncated transcript can cause an unconfirmed result despite successful
 compaction. Attached remote sessions have no local transcript proof and fail
@@ -1477,10 +1504,10 @@ The additive result fields are:
 | Field | Scope | Meaning |
 |---|---|---|
 | `written` | Single PTY command / written chain step | Text and its Enter were written; not proof of receipt |
-| `turn_observed` | Single PTY command / written chain step | Generic busy or descriptor reaction observed; not attributed to this command |
+| `turn_observed` | Single PTY command / written chain step | Busy/descriptor/transcript reaction observed, including late confirmation; an observed compact boundary also implies a turn |
 | `compaction_observed` | Compact step / compact single / result containing compacts | Step effect observed; at chain level every requested compact has evidence, including any unsent tail |
 | `steps_written` | Chain result | Fully written entries in `steps[]` |
-| `steps_with_turn_observed` | Chain result | Entries with generic activity observed |
+| `steps_with_turn_observed` | Chain result | Written entries with `turn_observed: true`, including observed compaction |
 
 Non-compact commands omit `compaction_observed`. Unwritten chain entries omit
 `written` and `turn_observed`; absence is not a positive observation. Partial

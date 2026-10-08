@@ -80,13 +80,13 @@ function createTriggerContext(deps) {
   if (projectsDir) {
     const reader = createTranscriptTurnReader();
     const readPaths = new Map();
-    ctx.getTranscriptTurn = (sessionId) => {
+    ctx.getTranscriptTurn = (sessionId, compactionCursor) => {
       const session = activeSessions.get(sessionId);
       if (!session || session.exited || session.host != null || !session.projectFolder) return null;
       const id = session.realSessionId || sessionId;
       const filePath = path.join(projectsDir, session.projectFolder, id + '.jsonl');
       readPaths.set(sessionId, filePath);
-      return reader.read(filePath);
+      return reader.read(filePath, compactionCursor);
     };
     ctx.forgetTranscriptTurn = (sessionId) => {
       const filePath = readPaths.get(sessionId);

@@ -151,10 +151,12 @@ function readResult(processedDir, uuid) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
-async function runCompactEvidenceCase({ chain = false, evidence = 'none', descriptor = false, busy = true, evidenceDelay = 80, deadline = 900 } = {}) {
+async function runCompactEvidenceCase({ chain = false, evidence = 'none', descriptor = false, busy = true, evidenceDelay = 80, deadline = 900, retainedRecords = 0, busyFallDelay = 230, settleMs } = {}) {
   const tmp = mkTmp();
   const keepAlive = setInterval(() => {}, 1000);
   const timers = [];
+  const previousSettle = process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS;
+  if (settleMs !== undefined) process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = String(settleMs);
   const sessionId = 'i488-session';
   const projectFolder = 'project';
   const transcript = path.join(tmp, projectFolder, sessionId + '.jsonl');
@@ -169,6 +171,7 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
     fs.writeFileSync(transcript, JSON.stringify(boundary(oldAt)) + '\n');
     process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
     const written = [];
+    const writtenAt = [];
     let compactsEntered = 0;
     let status = { status: 'idle', statusUpdatedAt: oldAt };
     const later = (ms, fn) => timers.push(setTimeout(fn, ms));
@@ -176,23 +179,27 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
       projectFolder, cwd: tmp, composerState: { pending: 0, lastInputAt: 0 }, _cliBusy: false,
       pty: { pid: process.pid, write(data) {
         written.push(data);
+        writtenAt.push(Date.now());
         if (data !== '\r') return;
         const command = written[written.length - 2];
         if (command === '/compact') compactsEntered += 1;
         if (busy) {
           later(20, () => { session._cliBusy = true; status = { status: 'busy', statusUpdatedAt: Date.now() }; });
-          later(230, () => { session._cliBusy = false; status = { status: 'idle', statusUpdatedAt: Date.now() }; });
+          later(busyFallDelay, () => { session._cliBusy = false; status = { status: 'idle', statusUpdatedAt: Date.now() }; });
         }
         if (command === '/compact' && !['none', 'old', 'missing', 'preexisting-future'].includes(evidence)
           && (evidence !== 'manual-once' || compactsEntered === 1)) {
           later(evidenceDelay, () => {
-            const at = evidence === 'old-timestamp' ? oldAt : Date.now();
+            const at = evidence === 'old-timestamp' ? oldAt : Date.now() + (evidence === 'missing-then-future' ? 60_000 : 0);
             const entry = boundary(at, evidence === 'auto' ? 'auto' : 'manual', evidence === 'sidechain');
             if (evidence === 'old-timestamp') entry.uuid = 'new-record-with-old-timestamp';
             if (evidence === 'wrong-type') entry.type = 'user';
             if (evidence === 'wrong-subtype') entry.subtype = 'informational';
             if (evidence === 'no-timestamp') delete entry.timestamp;
-            fs.appendFileSync(transcript, JSON.stringify(entry) + '\n');
+            const retained = Array.from({ length: retainedRecords }, () => JSON.stringify({
+              type: 'attachment', timestamp: new Date(at).toISOString(), content: 'x'.repeat(8192),
+            }) + '\n').join('');
+            fs.appendFileSync(transcript, JSON.stringify(entry) + '\n' + retained);
           });
         }
       } },
@@ -202,7 +209,7 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
       activeSessions: new Map([[sessionId, session]]), log: silentLog, projectsDir: tmp,
       ...(descriptor ? { getCliStatus: () => status } : {}),
     });
-    if (evidence === 'missing') fs.unlinkSync(transcript);
+    if (['missing', 'missing-then-future'].includes(evidence)) fs.unlinkSync(transcript);
     watcher = require('../trigger-watcher').start(ctx);
     writeTrigger(tmp, 'i488', {
       sessionId, timeout_ms: deadline + 700,
@@ -212,11 +219,12 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
         : { command: '/compact', timeout_ms: deadline }),
     });
     await waitForFile(path.join(tmp, 'processed', 'i488.result.json'), deadline + 2000);
-    return { result: readResult(path.join(tmp, 'processed'), 'i488'), written };
+    return { result: readResult(path.join(tmp, 'processed'), 'i488'), written, writtenAt };
   } finally {
     watcher?.close();
     timers.forEach(clearTimeout);
     clearInterval(keepAlive);
+    process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = previousSettle;
     delete process.env.SWITCHBOARD_TRIGGERS_DIR;
     cleanup(tmp);
   }
@@ -303,6 +311,45 @@ test('i488: each compact needs its own boundary and the result requires every co
   assert.equal(result.steps_completed, 1);
   assert.equal(result.steps_written, 2);
   assert.deepEqual(written, ['/compact', '\r', '/compact', '\r']);
+});
+
+test('i488-fix2: retained records beyond the tail cannot hide a completed compaction', async () => {
+  const { result, written } = await runCompactEvidenceCase({
+    chain: true, evidence: 'manual', retainedRecords: 80, descriptor: true,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.compaction_observed, true);
+  assert.deepEqual(written, ['/compact', '\r', 'resume after compaction', '\r']);
+});
+
+test('i488-fix2: completion as busy falls releases resume within a 650 ms step deadline', async () => {
+  const { result, written } = await runCompactEvidenceCase({
+    chain: true, evidence: 'manual', evidenceDelay: 350, busyFallDelay: 350, deadline: 650,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.steps[0].idle_source, 'busy_flag');
+  assert.deepEqual(written, ['/compact', '\r', 'resume after compaction', '\r']);
+});
+
+test('i488-fix2: observed compaction still waits for busy to fall and settle', async () => {
+  const { result, writtenAt } = await runCompactEvidenceCase({
+    chain: true, evidence: 'manual', busyFallDelay: 450, deadline: 1000, settleMs: 200,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(writtenAt[2] - writtenAt[1] >= 650, 'resume must follow busy fall plus the idle settle');
+});
+
+test('i488-fix2: a compaction boundary counts as an observed turn without sampled busy', async () => {
+  const { result } = await runCompactEvidenceCase({ chain: 'only', evidence: 'manual', busy: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.steps[0].turn_observed, true);
+  assert.equal(result.steps_with_turn_observed, 1);
+});
+
+test('i488-fix2: an unreadable pre-write snapshot cannot confirm a later future-stamped boundary', async () => {
+  const { result } = await runCompactEvidenceCase({ evidence: 'missing-then-future' });
+  assert.equal(result.ok, false);
+  assert.equal(result.compaction_observed, false);
 });
 
 // ── Test cases ────────────────────────────────────────────────────────────────
@@ -3947,14 +3994,7 @@ test('chain "confirmed" fold: one step composer readback is inconclusive -> pull
   }
 });
 
-// Regression test for the 2026-09-04 field incident: a chain step written
-// right after waitForBusyFall declares the PREVIOUS step's turn finished can
-// be falsely reported as "confirmed" (or "activity") when busy briefly reads
-// false then re-asserts on its own -- the CLI's tail activity after /clear
-// (still writing its summary), not anything the next step's own Enter did.
-// waitForBusyFall must NOT trust a single false sample; it must see busy stay
-// false for a settle window (SWITCHBOARD_BUSY_FALL_SETTLE_MS) before treating
-// the previous turn as over. See .ai/contexts/trigger-watcher.md ("submitted").
+// see .ai/contexts/trigger-watcher.md, "submitted"
 test('chain "confirmed" false positive: a busy blip right after step 0\'s turn must not be attributed to step 1', async () => {
   const tmp = mkTmp();
   let watcher;
@@ -5425,20 +5465,7 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
 
 // ── waitForBusyFall waits for the rise too (2026-09-05) ───────────────────────
 //
-// Field incident: a `/clear` chain step whose compaction genuinely ran for
-// 137s had its next chain step written ~260ms after the compaction started --
-// `waitForBusyFall` never confirmed a rise, it only ever watched for a fall,
-// so `isSessionBusy()` still reading false (the compaction hadn't yet flipped
-// the flag) for one settle window was read as "the previous turn is already
-// over". See .ai/contexts/trigger-watcher.md, "waitForBusyFall waits for the
-// rise too".
-//
-// This suite's SWITCHBOARD_SUBMIT_VERIFY_MS override (400ms, top of file)
-// governs both submitWithVerify's own busy-observe window AND, by default,
-// getBusyRiseWaitMs() (which falls back to it) -- so a schedule where busy
-// stays false for longer than 2x that window (800ms: initial attempt + one
-// Enter retry, both inside submitWithVerify) reliably exhausts Phase 1
-// without a rise, exactly like the field incident's timing shape.
+// see .ai/contexts/trigger-watcher.md, "waitForBusyFall waits for the rise too"
 
 test('waitForBusyFall waits for the rise: a busy flag that lags a genuine multi-second turn must not be read as "already over"', async () => {
   const tmp = mkTmp();
