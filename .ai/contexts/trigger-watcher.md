@@ -584,11 +584,11 @@ ranking:
 | strongest | `confirmed` | 3 |
 
 - `no` — nothing was written, or it was written and never submitted.
-- `assumed` — written, no failure seen, nothing observed afterward.
+- `assumed` — written, no activity observed afterward; for `/compact`, its effect may also remain unconfirmed at the deadline.
 - `activity` — the session was seen busy after our write, but the readback
   below could not rule out interference, or the session was already mid-turn
   the instant we wrote.
-- `confirmed` — the composer was read back empty right after our own Enter,
+- `confirmed` — for `/compact`, a new manual boundary observed after its Enter (see "Compaction evidence"); for other commands, the composer was read back empty right after our own Enter,
   the session was **not** already busy when we wrote, and a turn was
   independently observed in the same verify window. All three, checked on the
   first attempt only — a retry never yields `confirmed`.
@@ -604,9 +604,8 @@ that has to change.
 A chain reports the **weakest** of its steps (`weakestSubmitted`), because the
 field exists to stop a transport overstating what it saw. This is the
 top-level field's whole job, unchanged by the per-step field below: it existed
-first, a production consumer (the harness) already reads it, and nothing here
-alters what it means or how it is computed — only what else is now available
-alongside it.
+first, a production consumer (the harness) already reads it. The fold is
+unchanged; `/compact` now requires effect evidence to contribute `confirmed`.
 
 ### Per-step `submitted` (2026-09-05)
 
@@ -1390,6 +1389,11 @@ whatever the retry's own busy observation supports (`activity` or `assumed`).
 
 ### What `confirmed` still does not claim
 
+The following transport-only limits apply to commands other than `/compact`.
+For `/compact`, `confirmed` additionally requires the effect described in
+"Compaction evidence" below. A generic busy level or descriptor update can
+never confirm compaction.
+
 **It does not claim the turn it observed is the one our write started.**
 Stated exactly, `confirmed` means: the session was idle the instant before we
 wrote, a turn was observed within the verify window after that write, and it
@@ -1412,40 +1416,82 @@ tell the difference. Narrowed, not eliminated.
 Composer-emptiness plus a not-already-busy write plus an observed turn is the
 strongest signal this module can produce without reading the CLI's own effect
 — it is **not** proof that the CLI ran the text as a *command* rather than an
-ordinary message beginning with the same characters (see "Why no discriminator
-was wired in" below, unchanged). A caller that must not act twice on the same
+ordinary message beginning with the same characters (see "Compaction evidence"
+below for `/compact`). A caller that must not act twice on the same
 intent still has to read the effect itself; `confirmed` only says the
 transport-level handoff went through cleanly.
 
-### Why no discriminator for command-vs-message was wired in
+### Compaction evidence
 
-We looked for a signal separating "the CLI ran a slash command" from "the CLI
-answered a message starting with `/`", observable **when the result is
-written**. There is none, measured on 13 real `/compact` occurrences across
-four session transcripts:
+Issue #488 changes `/compact` from transport verification to effect verification.
+`submitWithVerify` snapshots the transcript's manual boundaries before the text
+write, sends text and a discrete Enter, then polls for a new main-thread
+`system` / `compact_boundary` record with `compactMetadata.trigger: "manual"`.
+Its timestamp must be at or after that Enter and its `(uuid, timestamp)` pair
+must be absent from the snapshot. Old boundaries, automatic compaction and
+sidechain records are excluded. The existing bounded transcript tail reader
+returns only boundary metadata alongside its turn classification; conversation
+text is not copied into results. The context selects the current session's
+transcript, including `realSessionId`, and clears its cache after the trigger.
 
-- At Enter + a few seconds both cases write the *same* line —
-  `{"type":"user","message":{"content":"/compact"}}`, no `<command-name>`, no
-  `isMeta`, nothing structural to separate them.
-- The signal that never lied on that sample is the `system` /
-  `subtype:"compact_boundary"` record with its `compactMetadata`, plus the
-  `isCompactSummary` user record and the `<command-name>`/`<local-command-stdout>`
-  replay carrying the *same* `promptId` as the injected text.  It is flushed only
-  once the compaction has finished: **96 s to 271 s** on that sample, with no
-  intermediate write to watch.  A compaction stays in the same `.jsonl`; no new
-  transcript opens.
-- `~/.claude/sessions/<pid>.json` (see cli-session-state.md) reads `busy`
-  throughout a compaction exactly as through any other turn.
+Local structural inspection on 2026-10-08 found 77 manual boundaries and 77
+`isCompactSummary` records in 12 local transcripts. Earlier measurements found
+the effect flushed only at compaction completion (96–271 seconds), in the
+same `.jsonl`. CLI descriptor statuses (`busy`, `idle`, `waiting`, `shell`)
+have no compaction-specific transition, so they cannot substitute for the
+boundary. A quoted `/compact`, a summary alone or an unrelated closed turn is
+also insufficient. The VPS incident transcripts were unavailable; no specific
+cause of their failure has been established.
 
-So the effect *is* readable, minutes later, by a reader that keeps the injected
-`promptId` and watches the session file.  That is a caller's job, not the
-watcher's: the watcher returns in seconds by construction.
+Compaction uses the existing command/step deadline, capped by the chain's
+global deadline; there is no new timeout or shorter own-entry bound. Evidence
+ends the poll immediately (at most one existing 100 ms poll later). A non-final
+compact still uses the existing busy-fall/readiness gates before the next step.
+No recovery Enter is sent for `/compact`: while awaiting its effect, an Enter
+could answer a dialog or interfere with a running compaction. Other commands
+keep their existing verification window and Enter recovery.
+
+If the deadline arrives without evidence, `ok: false`, `error: "step not
+confirmed"` and a compaction-specific `reason` are returned. `submitted` is
+`activity` when generic activity was seen, otherwise `assumed`; it is never
+`confirmed` or `no` for a fully written compact lacking evidence.
+`submit_confirmed: false` is explicit even without a CLI descriptor. A chain
+stops at that compact, including when it is the last step, and does not send
+its resume step. `steps_completed` excludes the failed compact;
+`steps_written` includes it. This preserves consumers' distinction between
+unwritten and written-but-uncertain commands; absence of evidence is not a
+safe retry signal.
+
+On an observed compact, `submitted: "confirmed"`, `submit_confirmed: true`,
+`compaction_observed: true` and `confirm_source: "compact_boundary"` are
+returned even if a busy transition was too short to sample. The boundary
+proves a manual compaction occurred after submission, not exclusive causality
+against a human simultaneously requesting compaction. An inaccessible or
+truncated transcript can cause an unconfirmed result despite successful
+compaction. Attached remote sessions have no local transcript proof and fail
+closed. Socket delivery remains assumed, with `compaction_observed: false`;
+socket chains are already refused.
+
+The additive result fields are:
+
+| Field | Scope | Meaning |
+|---|---|---|
+| `written` | Single PTY command / written chain step | Text and its Enter were written; not proof of receipt |
+| `turn_observed` | Single PTY command / written chain step | Generic busy or descriptor reaction observed; not attributed to this command |
+| `compaction_observed` | Compact step / compact single / result containing compacts | Step effect observed; at chain level every requested compact has evidence, including any unsent tail |
+| `steps_written` | Chain result | Fully written entries in `steps[]` |
+| `steps_with_turn_observed` | Chain result | Entries with generic activity observed |
+
+Non-compact commands omit `compaction_observed`. Unwritten chain entries omit
+`written` and `turn_observed`; absence is not a positive observation. Partial
+PTY write failures retain their existing ambiguous error contract. The
+generic busy and descriptor paths remain transport-only proofs.
 
 ### Compatibility
 
 `confirmed` is emitted again, on the stricter footing above, and remains
 strictly above `activity` in `SUBMITTED_RANK`. A reader that debounces on
-`submitted === 'confirmed'` alone is trusting the transport-level handoff, not
+`submitted === 'confirmed'` alone for a non-compact command is trusting the transport-level handoff, not
 the CLI's interpretation of the text — see "What `confirmed` still does not
 claim". Readers testing `submitted === 'no'` or `submitted !== 'no'` are
 unaffected by any of this. The wire format is shared with other
@@ -1491,6 +1537,13 @@ behaviour, silently falling back to `none`, chose the more dangerous of the two.
 The returned `{ close() }` handle is not held by `main.js` (no graceful-close needed — Electron kills the process, and `persistent: false` is not set so the watcher keeps the event loop alive naturally).
 
 ## Trigger file contract
+
+For `/compact`, result confirmation now requires effect evidence rather than
+generic activity. `written`, `turn_observed`, `compaction_observed`,
+`steps_written` and `steps_with_turn_observed` are additive fields documented
+under "Compaction evidence". A failed compact is recorded as written, excluded
+from `steps_completed`, and stops the chain; `submitted` retains its existing
+four-value scale.
 
 Drop a file at `SWITCHBOARD_TRIGGERS_DIR/<uuid>.json` (default `~/.switchboard/triggers/`):
 

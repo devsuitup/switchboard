@@ -516,7 +516,7 @@ not a message received. Four values, compared by strict equality, ordered
 
 | Value | Meaning |
 |---|---|
-| `confirmed` | on the first attempt: the session was **not** busy when the text was written, the prompt read back empty after the Enter, and a turn was observed in the verification window |
+| `confirmed` | for `/compact`, a new manual compaction boundary was observed after its Enter; for other commands, transport verification observed a turn after a clean write (or a CLI descriptor reaction) |
 | `activity` | the session was seen busy after the write, but either the prompt read-back could not rule out interference, or the session was already busy when the text was written |
 | `assumed` | written, no failure seen, nothing observed afterwards |
 | `no` | nothing was written, or it was written and not submitted |
@@ -527,7 +527,7 @@ entry to know whether the final step — a resume prompt after `/compact`, say �
 was itself confirmed.
 
 **What `confirmed` proves, and what it does not.** It means the three checked
-facts in the table, nothing more. The turn check is a level probe over the
+facts for ordinary commands, nothing more. The turn check is a level probe over the
 verification window, not an edge tied to this write: any busy transition in the
 window satisfies it — a human typing, another process. Triggers aimed at the
 same session are serialized, so a second trigger cannot cause it, but an actor
@@ -536,6 +536,35 @@ checks the effect itself — a smaller context, a new transcript, a file on disk
 Take `confirmed` as "the hand-off went through cleanly", `activity` as
 "something happened, unattributed". A slash command that misses the completion
 menu is sent as an ordinary message starting with `/`, and produces a turn too.
+
+**`/compact` waits for its effect.** A generic turn or descriptor update is
+insufficient. The session transcript must contain a new main-thread manual
+`compact_boundary` stamped at or after the command's Enter. Compaction keeps
+the existing step deadline (and the chain's global cap); it returns as soon as
+the evidence is observed, then retains the existing readiness checks for the
+next step. No recovery Enter is sent while awaiting compaction. Without
+evidence by the deadline, `ok: false`, `error: "step not confirmed"`,
+`submit_confirmed: false`, `compaction_observed: false` and an explanatory
+`reason` are returned. `submitted` is `activity` or `assumed`, because bytes
+were written; it is never `confirmed`. The chain stops and does not send the
+resume step. This also applies to a compact as the final or only step.
+
+A successful compact carries `compaction_observed: true`,
+`submit_confirmed: true` and `confirm_source: "compact_boundary"`. For a chain,
+top-level `compaction_observed` is true only when **all requested compacts**
+were observed, including any unsent tail. PTY command/step fields `written`
+and `turn_observed` distinguish fully written text/Enter from generic activity;
+activity does not establish causality. Chain results add `steps_written` and
+`steps_with_turn_observed`, while `steps_completed` excludes an unconfirmed
+compact. Other commands keep their existing contract and omit
+`compaction_observed`. Absent observation fields do not mean success.
+
+An inaccessible transcript (including a tmux-attached remote session) cannot
+confirm compaction. Socket sends retain assumed delivery and report
+`compaction_observed: false`; socket chains remain unsupported. Missing
+evidence does not prove that retrying is safe. The boundary proves that manual
+compaction occurred after the write; it cannot identify who requested it if a
+human also requested compaction at the same time.
 
 **`error` is compared by strict equality**, so explanations are in `reason`,
 never in `error`: `not sent: input pending` is not `not sent`.

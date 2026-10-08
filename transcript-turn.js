@@ -86,6 +86,9 @@ function promptMatches(text, command) {
 function classifyTranscriptTail(text) {
   const entries = parseMainThread(text);
   const prompts = collectPrompts(entries);
+  const compactBoundaries = entries.filter(isManualCompactBoundary)
+    .map((entry) => ({ at: stampOf(entry), uuid: entry.uuid || null }))
+    .filter((entry) => entry.at !== null);
   let lastEntryAt = null;
   let enqueued = 0;
   let removed = 0;
@@ -105,9 +108,9 @@ function classifyTranscriptTail(text) {
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
     const queueIdle = enqueued <= removed && dequeued === 0;
     const closed = endsTurn(entry, turnDurationAfter, entries[i - 1]) && queueIdle && at !== null;
-    return { closed, closedAt: closed ? at : null, lastEntryAt, prompts };
+    return { closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries };
   }
-  return { closed: false, closedAt: null, lastEntryAt, prompts };
+  return { closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
 }
 
 function readTail(filePath, size, tailBytes) {
