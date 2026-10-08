@@ -192,6 +192,11 @@ that session — a second Switchboard instance reading the same
 session, both writing its transcript, and input meant for this instance lands
 in a session the user is driving elsewhere.
 
+Session ids are matched lowercased, `getStatus` included, and `liveElsewhereMany` answers under the
+ids it was asked. `liveElsewhereChecked` returns `{known, live}` or `{known:
+false, reason}` when the directory or a descriptor cannot be read (a missing
+directory is known-empty); `delete-session` uses it to fail closed.
+
 **The check** is main-side, on demand, over IPC `session-live-elsewhere`:
 `liveElsewhere(sessionId, sessionHasPty, ptyPids)` returns `{pid, cwd,
 startedAt}` or `null`. A working-set restore asks for its whole batch at once
@@ -307,6 +312,21 @@ manual open does after its confirm.
 The sidebar has no dedicated marker for such a session. Once the watcher has
 seen its state file, `getStatus()` gives it the same state+age line as any live
 session (see the section above).
+
+## Descriptor hooks for the agents view
+
+The Agents view (`.ai/contexts/bg-agents.md`) reads the same
+`~/.claude/sessions/<pid>.json` files through three additions:
+
+- `onDescriptorsChanged(listener)` fires once per flushed batch of descriptor
+  changes and returns an unsubscribe function. A throwing listener is logged
+  and does not stop the others.
+- `readAllDescriptors()` returns the parsed descriptors whose pid is alive,
+  capped at `MAX_DESCRIPTOR_SCAN` files; `kind` (`'bg'` or `'interactive'`) and
+  `jobId` are part of the parsed shape.
+- The results of `liveElsewhere` / `liveElsewhereMany` carry `kind` and
+  `jobId`, so `guardResume` can answer a `kind: 'bg'` session with an attach
+  instead of a resume confirmation.
 
 ## Canary tests
 

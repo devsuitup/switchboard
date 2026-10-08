@@ -1,13 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
+const { encodeProjectPath, encodedFolderMayExtend, verifiedTranscriptCwd } = require('./encode-project-path');
 
-// Only the head of the file is scanned: every session/subagent transcript
-// carries `cwd` on its first JSONL line. Reading the whole file here froze
-// the main process — refreshFolder() derives the project path on every
-// watcher flush, so a 338 MB host-session JSONL meant a multi-second
-// readFileSync per flush, back to back (witnessed 2026-06-11: main thread
-// pegged ~65% CPU re-reading the same file in a loop, UI freezes).
+// see .ai/contexts/session-cache.md ("Bounded cwd scan")
 const CWD_SCAN_BYTES = 256 * 1024;
 
 function extractCwdFromJsonl(filePath) {
@@ -33,6 +28,91 @@ function extractCwdFromJsonl(filePath) {
   return null;
 }
 
+function* cwdsInWindow(fd, start, fileSize) {
+  const from = Math.max(0, start - 1);
+  const buf = Buffer.alloc(Math.min(CWD_SCAN_BYTES + start - from, fileSize - from));
+  const bytesRead = fs.readSync(fd, buf, 0, buf.length, from);
+  const lines = buf.toString('utf8', 0, bytesRead).split('\n');
+  if (from + bytesRead < fileSize) lines.pop();
+  if (start > 0) lines.shift();
+  for (const line of lines) {
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.cwd) yield parsed.cwd;
+    } catch {}
+  }
+}
+
+const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', path.join('.claude', 'worktrees')];
+
+function mayBeWorktreeFolderOf(cwd, folderName) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (WORKTREE_DIRS.some((wt) => encodedFolderMayExtend(folderName, path.join(dir, wt) + path.sep))) return true;
+    if (path.dirname(dir) === dir) return false;
+  }
+}
+
+// see .ai/contexts/session-cache.md ("A transcript moved into a worktree folder")
+function extractVerifiedCwdFromJsonl(filePath, folderName, tailBudget = null) {
+  let fd;
+  let firstRejected = null;
+  let failed = false;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    for (const cwd of cwdsInWindow(fd, 0, size)) {
+      const verified = verifiedTranscriptCwd(cwd, folderName);
+      if (verified) return { cwd: verified, rejected: null, complete: true };
+      if (firstRejected !== null) continue;
+      firstRejected = cwd;
+      if (!mayBeWorktreeFolderOf(cwd, folderName)) return { cwd: null, rejected: cwd, complete: true };
+    }
+    if (firstRejected !== null && size > CWD_SCAN_BYTES) {
+      if (tailBudget && tailBudget.bytes < CWD_SCAN_BYTES) return { cwd: null, rejected: firstRejected, complete: false, skipped: true };
+      if (tailBudget) tailBudget.bytes -= CWD_SCAN_BYTES;
+      const tail = [...cwdsInWindow(fd, size - CWD_SCAN_BYTES, size)].reverse();
+      for (const cwd of tail) {
+        const verified = verifiedTranscriptCwd(cwd, folderName);
+        if (verified) return { cwd: verified, rejected: null, complete: true };
+      }
+    }
+  } catch {
+    failed = true;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+  }
+  return { cwd: null, rejected: firstRejected, complete: !failed };
+}
+
+const DERIVE_TAIL_BUDGET_BYTES = 4 * CWD_SCAN_BYTES;
+const UNRESOLVED_MEMO_MAX = 4096;
+const unresolvedMemo = new Map();
+const RESUME_MAX = 1024;
+const resumeAt = new Map();
+
+function rememberResume(folderPath, fileName) {
+  resumeAt.delete(folderPath);
+  if (fileName === null) return;
+  if (resumeAt.size >= RESUME_MAX) resumeAt.delete(resumeAt.keys().next().value);
+  resumeAt.set(folderPath, fileName);
+}
+
+function unresolvedCwdOf(filePath, folderName) {
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { return { failed: true }; }
+  const memo = unresolvedMemo.get(filePath);
+  if (memo && memo.folderName === folderName && memo.size === stat.size && memo.mtimeMs === stat.mtimeMs) return memo;
+  return { stat };
+}
+
+function rememberUnresolved(filePath, folderName, stat, rejected) {
+  unresolvedMemo.delete(filePath);
+  if (unresolvedMemo.size >= UNRESOLVED_MEMO_MAX) unresolvedMemo.delete(unresolvedMemo.keys().next().value);
+  unresolvedMemo.set(filePath, { folderName, size: stat.size, mtimeMs: stat.mtimeMs, rejected });
+}
+
 function resolveWorktreePath(cwd) {
   if (!cwd) return cwd;
   // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
@@ -49,28 +129,55 @@ function deriveProjectPath(folderPath, folderName, opts) {
   const name = folderName || path.basename(folderPath);
   const remote = !!(opts && opts.remote);
   let firstRejected = null;
-  const trusted = (cwd) => {
-    if (remote) return typeof cwd === 'string' && cwd ? cwd : null;
-    const verified = verifiedTranscriptCwd(cwd, name);
-    if (!verified && cwd && firstRejected === null) firstRejected = cwd;
-    return verified;
+  const tailBudget = { bytes: DERIVE_TAIL_BUDGET_BYTES };
+  let incomplete = false;
+  const trustedCwdOf = (filePath) => {
+    if (remote) {
+      const cwd = extractCwdFromJsonl(filePath);
+      return typeof cwd === 'string' && cwd ? cwd : null;
+    }
+    const memo = unresolvedCwdOf(filePath, name);
+    if (memo.failed) {
+      incomplete = true;
+      return null;
+    }
+    if (!memo.stat) {
+      if (memo.rejected && firstRejected === null) firstRejected = memo.rejected;
+      return null;
+    }
+    const { cwd, rejected, complete, skipped } = extractVerifiedCwdFromJsonl(filePath, name, tailBudget);
+    if (cwd) {
+      unresolvedMemo.delete(filePath);
+      return cwd;
+    }
+    if (rejected && firstRejected === null) firstRejected = rejected;
+    if (complete) {
+      rememberUnresolved(filePath, name, memo.stat, rejected);
+    } else {
+      incomplete = true;
+      if (skipped && resumeName === null && path.dirname(filePath) === folderPath) resumeName = path.basename(filePath);
+    }
+    return null;
   };
-  const result = deriveVerified(folderPath, trusted);
+  let resumeName = null;
+  const result = deriveVerified(folderPath, trustedCwdOf, remote ? null : resumeAt.get(folderPath), () => { incomplete = true; });
+  if (!remote) rememberResume(folderPath, result === null ? resumeName : null);
   if (result === null && firstRejected !== null && opts && typeof opts.onRejected === 'function') {
     opts.onRejected(firstRejected);
   }
+  if (result === null && incomplete && opts && typeof opts.onIncomplete === 'function') opts.onIncomplete();
   return result;
 }
 
-function deriveVerified(folderPath, trusted) {
+function deriveVerified(folderPath, trustedCwdOf, startName = null, onListingFailed = () => {}) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first
-    for (const e of entries) {
-      if (e.isFile() && e.name.endsWith('.jsonl')) {
-        const cwd = trusted(extractCwdFromJsonl(path.join(folderPath, e.name)));
-        if (cwd) return resolveWorktreePath(cwd);
-      }
+    const direct = entries.filter(e => e.isFile() && e.name.endsWith('.jsonl')).map(e => e.name);
+    const start = Math.max(0, direct.indexOf(startName));
+    for (const name of [...direct.slice(start), ...direct.slice(0, start)]) {
+      const cwd = trustedCwdOf(path.join(folderPath, name));
+      if (cwd) return resolveWorktreePath(cwd);
     }
     // Check session subdirectories (UUID folders with subagent .jsonl files)
     for (const e of entries) {
@@ -87,13 +194,17 @@ function deriveVerified(folderPath, trusted) {
             if (agentFiles.length > 0) jsonlPath = path.join(subDir, 'subagents', agentFiles[0]);
           }
           if (jsonlPath) {
-            const cwd = trusted(extractCwdFromJsonl(jsonlPath));
+            const cwd = trustedCwdOf(jsonlPath);
             if (cwd) return resolveWorktreePath(cwd);
           }
         }
-      } catch {}
+      } catch {
+        onListingFailed();
+      }
     }
-  } catch {}
+  } catch {
+    onListingFailed();
+  }
   return null;
 }
 
@@ -170,11 +281,11 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
     for (const folder of folders) {
       const jsonl = path.join(projectsDir, folder, sessionId + '.jsonl');
       if (!fs.existsSync(jsonl)) continue;
-      const cwd = verifiedTranscriptCwd(extractCwdFromJsonl(jsonl), folder);
+      const { cwd } = extractVerifiedCwdFromJsonl(jsonl, folder);
       if (cwd) return cwd;
     }
   } catch {}
   return null;
 }
 
-module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };
+module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };

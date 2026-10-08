@@ -109,7 +109,7 @@ test('shared selects preserve the Settings look, themed menu and interaction sta
 test('every declared index button and every optional viewer toolbar button has a background rule', () => {
   const dom = new JSDOM(source('index.html'), { runScripts: 'outside-only' });
   try {
-    assert.equal(assertThemedButtons(dom.window.document).length, 23);
+    assert.equal(assertThemedButtons(dom.window.document).length, 24);
     vm.runInContext(source('viewer-toolbar.js'), dom.getInternalVMContext());
     const toolbar = dom.window.createViewerToolbar({
       copyPath: true, copyContent: true, preview: true, wrap: true, gotoLine: true,

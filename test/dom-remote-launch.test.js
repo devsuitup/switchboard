@@ -25,7 +25,7 @@ function harness() {
   const { window } = ctx;
   const launched = [];
   window.launchRemoteSession = (project, request) => { launched.push({ project, request }); };
-  window.cachedProjects = [
+  window.cachedAllProjects = [
     remoteProject('box', '/srv/app'),
     remoteProject('box', '/srv/api'),
     remoteProject('box', '/srv/app'),

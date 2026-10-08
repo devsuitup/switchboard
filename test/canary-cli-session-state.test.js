@@ -67,3 +67,24 @@ test('CANARY: the Claude CLI still publishes per-session state we can read', (t)
     t.skip('every state file was mid-write — nothing to pin this run');
   }
 });
+
+test('CANARY: a background worker descriptor still carries kind "bg" and its short job id', (t) => {
+  const bg = [];
+  for (const name of listStateFiles()) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, name), 'utf8'));
+      if (raw && raw.kind === 'bg') bg.push({ name, raw });
+    } catch {}
+  }
+  if (bg.length === 0) {
+    t.skip('no kind:"bg" descriptor on this machine — start one with `claude --bg` to pin the shape');
+    return;
+  }
+  for (const { name, raw } of bg) {
+    const seen = `(${name}, CLI version ${raw.version || 'unknown'})`;
+    assert.match(String(raw.jobId), /^[0-9a-f]{8}$/,
+      `PINNED ASSUMPTION BROKEN: a bg descriptor used to carry "jobId", the eight-hex id that joins it to ~/.claude/jobs/<id> and to \`claude attach <id>\` ${seen}`);
+    assert.ok(raw.agent === undefined || typeof raw.agent === 'string',
+      `PINNED ASSUMPTION BROKEN: "agent" used to be a string when present ${seen}`);
+  }
+});

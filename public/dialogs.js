@@ -321,7 +321,7 @@ const REMOTE_LAUNCH_PATH_RE = /^\/[A-Za-z0-9._+@:,=/ -]*$/;
 
 function knownRemotePaths(alias) {
   const paths = new Set();
-  for (const p of cachedProjects) {
+  for (const p of cachedAllProjects) {
     if (p.remoteAlias === alias && p.projectPath) paths.add(p.projectPath);
   }
   return [...paths].sort();
@@ -685,4 +685,208 @@ function showAddProjectDialog() {
     if (e.key === 'Enter') addProject();
   }
   document.addEventListener('keydown', onKey);
+}
+
+// see .ai/contexts/bg-agents.md
+async function showDispatchAgentDialog(project) {
+  const projects = (typeof cachedAllProjects !== 'undefined' ? cachedAllProjects : [])
+    .filter(p => p && p.projectPath && !p.remoteAlias).map(p => p.projectPath);
+  const requested = project && !project.remoteAlias && project.projectPath;
+  if (requested && !projects.includes(requested)) projects.unshift(requested);
+  const defaultPath = requested || projects[0] || '';
+  async function effectiveFor(projectPath) {
+    if (!projectPath) return {};
+    try {
+      const settings = await window.api.getEffectiveSettings(projectPath);
+      if (settings && typeof settings === 'object') return settings;
+      return { lookupError: 'no settings returned' };
+    } catch (err) {
+      return { lookupError: (err && err.message) || 'unknown error' };
+    }
+  }
+  let effective = await effectiveFor(defaultPath);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog dispatch-agent-dialog';
+
+  let selectedMode = effective.permissionMode || null;
+  let dangerousSkip = !!effective.dangerouslySkipPermissions;
+
+  function renderModeGrid() {
+    return PERMISSION_MODES.map(m => {
+      const isSelected = !dangerousSkip && selectedMode === m.value;
+      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
+    }).join('') +
+    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
+  }
+
+  dialog.innerHTML = `
+    <h3>New background agent</h3>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Prompt</span>
+        <div class="settings-description">The task the agent runs, in the background, under the claude daemon</div>
+      </div>
+      <div class="settings-field-control">
+        <textarea class="settings-input" id="dad-prompt" rows="4"></textarea>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Project</span>
+        <div class="settings-description">Working directory of the agent</div>
+      </div>
+      <div class="settings-field-control">
+        <select class="settings-input" id="dad-project"></select>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Name</span>
+        <div class="settings-description">--name; empty lets the CLI pick one</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="dad-name" placeholder="optional">
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Agent</span>
+        <div class="settings-description">--agent, e.g. fleet:em; empty for none</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="dad-agent" placeholder="optional">
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-label">Permission Mode</div>
+      <div class="permission-grid" id="dad-mode-grid">${renderModeGrid()}</div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Additional Directories</span>
+        <div class="settings-description">Extra directories to include (comma-separated)</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="dad-add-dirs" placeholder="/path/to/dir1, /path/to/dir2">
+      </div>
+    </div>
+    <div id="dad-error" class="agents-detail-error"></div>
+    <div class="new-session-actions">
+      <button class="new-session-cancel-btn">Cancel</button>
+      <button class="new-session-start-btn">Start</button>
+    </div>
+  `;
+
+  const projectSelect = dialog.querySelector('#dad-project');
+  for (const p of projects) {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = shortProjectPath(p);
+    if (p === defaultPath) opt.selected = true;
+    projectSelect.appendChild(opt);
+  }
+  const modeGrid = dialog.querySelector('#dad-mode-grid');
+  const errorEl = dialog.querySelector('#dad-error');
+  const startBtn = dialog.querySelector('.new-session-start-btn');
+  let refusal = null;
+
+  function applyEffective() {
+    selectedMode = effective.permissionMode || null;
+    dangerousSkip = !!effective.dangerouslySkipPermissions;
+    modeGrid.innerHTML = renderModeGrid();
+    dialog.querySelector('#dad-add-dirs').value = effective.addDirs || SETTING_DEFAULTS.addDirs || '';
+    if (effective.lookupError) refusal = `Could not read this project's settings (${effective.lookupError}); close and reopen this dialog to retry.`;
+    else if (effective.sandbox) refusal = 'This project runs its sessions sandboxed; a background agent would run outside the sandbox.';
+    else if (typeof effective.preLaunchCmd === 'string' && effective.preLaunchCmd.trim()) refusal = 'This project has a pre-launch command, which a background agent would not run.';
+    else refusal = null;
+    errorEl.textContent = refusal || '';
+    syncStartBtn();
+  }
+
+  let projectToken = 0;
+  let lookupPending = false;
+  let effectiveProject = defaultPath;
+  let starting = false;
+  function syncStartBtn() {
+    startBtn.disabled = !!refusal || lookupPending || starting;
+  }
+  applyEffective();
+
+  projectSelect.addEventListener('change', async () => {
+    const token = ++projectToken;
+    const projectPath = projectSelect.value;
+    lookupPending = true;
+    syncStartBtn();
+    const next = await effectiveFor(projectPath);
+    if (token !== projectToken) return;
+    lookupPending = false;
+    effective = next;
+    effectiveProject = projectPath;
+    applyEffective();
+  });
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  modeGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.permission-option');
+    if (!btn) return;
+    const mode = btn.dataset.mode;
+    if (mode === 'dangerous-skip') {
+      dangerousSkip = !dangerousSkip;
+      if (dangerousSkip) selectedMode = null;
+    } else {
+      dangerousSkip = false;
+      selectedMode = mode === 'null' ? null : mode;
+    }
+    modeGrid.innerHTML = renderModeGrid();
+  });
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  async function start() {
+    if (starting || refusal || lookupPending) return;
+    const prompt = dialog.querySelector('#dad-prompt').value.trim();
+    if (!prompt) { errorEl.textContent = 'A prompt is required.'; return; }
+    const fields = {
+      prompt,
+      name: dialog.querySelector('#dad-name').value.trim(),
+      agent: dialog.querySelector('#dad-agent').value.trim(),
+      cwd: effectiveProject,
+      permissionMode: dangerousSkip ? null : selectedMode,
+      dangerouslySkipPermissions: dangerousSkip,
+      addDirs: dialog.querySelector('#dad-add-dirs').value.trim(),
+    };
+    errorEl.textContent = '';
+    starting = true;
+    startBtn.disabled = true;
+    let result;
+    try { result = await window.api.dispatchBgAgent(fields); } catch (err) { result = { ok: false, error: err && err.message }; }
+    starting = false;
+    syncStartBtn();
+    if (!result || result.ok === false) {
+      errorEl.textContent = (result && result.error) || 'unknown error';
+      return;
+    }
+    close();
+    if (result.id && typeof selectAgentsRow === 'function') selectAgentsRow(result.id);
+    if (typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
+  }
+
+  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  startBtn.onclick = start;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && !e.target.matches('input, textarea, select, button')) start();
+  }
+  document.addEventListener('keydown', onKey);
+  dialog.querySelector('#dad-prompt').focus();
 }

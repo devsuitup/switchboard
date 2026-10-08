@@ -108,6 +108,12 @@ const rendererCrossFileGlobals = {
   // no ESLint config, so new cross-file renderer symbols have to be declared
   // here when syncing or no-undef fires across five consumers.
   shortProjectPath: 'readonly',
+  // public/choice-dialog.js and public/worktree-nesting.js
+  showChoiceDialog: 'readonly',
+  SIDEBAR_WORKTREE_RE: 'readonly',
+  worktreeParentPath: 'readonly',
+  worktreeName: 'readonly',
+  isHiddenRepositoryWorktree: 'readonly',
   formatIndexingBannerText: 'readonly',
   PERMISSION_MODES: 'readonly',
   showSession: 'readonly',
@@ -339,6 +345,20 @@ const rendererCrossFileGlobals = {
   // Resume guard for sessions live in another process (public/resume-guard.js)
   guardResume: 'readonly',
   liveElsewhereMany: 'readonly',
+  // Agents view (public/agents-view.js) — see .ai/contexts/bg-agents.md
+  agentsViewActive: 'writable',
+  bgAgentSessionIds: 'readonly',
+  initAgentsView: 'readonly',
+  showAgentsView: 'readonly',
+  hideAgentsView: 'readonly',
+  toggleAgentsView: 'readonly',
+  restoreAgentsViewAtStartup: 'readonly',
+  applyAgentsSnapshot: 'readonly',
+  refreshAgentsRoster: 'readonly',
+  attachBgAgent: 'readonly',
+  runAgentVerb: 'readonly',
+  selectAgentsRow: 'readonly',
+  showDispatchAgentDialog: 'readonly',
   // claude.ai bridge URL (public/bridge-url.js)
   bridgeSessionUrl: 'readonly',
 };
@@ -415,7 +435,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/bridge-url.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js', 'public/whats-new.js'],
+    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/bridge-url.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/process-exit.js', 'public/whats-new.js', 'public/agents-view.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',
@@ -506,6 +526,28 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-redeclare': 'warn',
+    },
+  },
+
+  // Producer of cross-file renderer globals, dual-mode like subagent-timing.js below.
+  {
+    files: ['public/worktree-nesting.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        module: 'writable',
+        SIDEBAR_WORKTREE_RE: 'off',
+        worktreeParentPath: 'off',
+        worktreeName: 'off',
+        isHiddenRepositoryWorktree: 'off',
       },
     },
     rules: {

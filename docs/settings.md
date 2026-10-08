@@ -42,11 +42,12 @@ for one launch — see [Launching sessions](launching-sessions.md).
 | Shell Profile | `shellProfile` | Auto (detect) | The shell for sessions and terminals; new sessions only — see [Launching sessions](launching-sessions.md#how-the-command-is-built) |
 | Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
 | Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |
+| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started through the Claude Agent SDK; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
 | IDE Emulation | `mcpEmulation` | off | Switchboard as Claude's IDE; new sessions only — see [IDE emulation](ide-emulation.md) |
 
 ### Keyboard Shortcuts
 
-Three rebindable shortcuts, stored as `shortcuts` — see
+Four rebindable shortcuts, stored as `shortcuts` — see
 [Keyboard shortcuts](keyboard-shortcuts.md#rebinding).
 
 ### Updates
@@ -93,6 +94,12 @@ Builds run from source never check.
 
 - `sidebarWidth` (default 340): the sidebar's width, set by dragging its edge.
 - `hiddenProjects`: projects hidden with **Hide Project**.
+- `archivedProjects`, a setting of its own: folders hidden with
+  [Archive folder](session-browser.md#archive-a-folder), each with the session
+  ids it held and the schedule files it disabled.
+- `scheduleReenableOffers`, a setting of its own: for each folder that came
+  back, the schedules its archive disabled, until **Turn back on** or
+  **Dismiss**.
 - `openWorkingSet`: the open sessions, for [session restore](session-restore.md).
 - `dangerouslySkipPermissions` (default off): launches with
   `--dangerously-skip-permissions`; no settings field sets it, the dialogs'

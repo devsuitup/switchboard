@@ -43,6 +43,7 @@ its sessions from `~/.claude/projects`. Installed builds update themselves; see
 | Every open session as a live card | [Grid overview](docs/grid-overview.md) |
 | Busy, waiting and attention indicators; the status bar | [Status indicators](docs/notifications.md) |
 | Subagent hierarchy, live status, transcripts | [Subagents](docs/subagents.md) |
+| The sessions the claude daemon runs in the background: list, attach, stop, dispatch | [Background agents](docs/background-agents.md) |
 | Claude's file opens and proposed edits in a side panel | [IDE emulation](docs/ide-emulation.md) |
 | A session's git changes, with an editor | [Changes view](docs/changes-view.md) |
 | The files a session's file tools touched | [Touched files](docs/touched-files.md) |

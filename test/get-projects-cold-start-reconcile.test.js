@@ -46,20 +46,24 @@ function makeHandler(mocks) {
     'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
     'populateCacheViaWorker',
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
-    'annotateRemoteAttachable', 'showArchived',
+    'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
+    'backfillEntrypoints',
     body
   );
-  // annotateRemoteAttachable (remote-attach join, issue #221) and
-  // mergePlaceholderSessions (descriptor-only sessions, issue #278) are both
+  // annotateRemoteAttachable (remote-attach join, issue #221),
+  // mergePlaceholderSessions (descriptor-only sessions, issue #278) and
+  // applyAndPersistArchived (archived folders, issue #473) are all
   // irrelevant to the populate/reconcile/build ordering this file locks down
   // -- a passthrough stands in for each unless a test overrides it.
   const annotateRemoteAttachable = mocks.annotateRemoteAttachable || (projects => projects);
   const mergePlaceholderSessions = mocks.mergePlaceholderSessions || (projects => projects);
+  const applyAndPersistArchived = projects => projects;
   return () => fn(
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, false
+    annotateRemoteAttachable, applyAndPersistArchived, () => null, () => {}, false,
+    mocks.backfillEntrypoints || (() => {})
   );
 }
 
@@ -129,4 +133,22 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
     'reconcileCacheFromFilesystem on it re-parses every unindexed folder synchronously');
   assert.deepEqual(calls, ['populate', 'build'],
     'the interrupted scan must be resumed fire-and-forget, then serve whatever is cached');
+});
+
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+test('get-projects starts the entrypoint backfill on a cold and on a warm cache, before building the list', () => {
+  for (const warm of [false, true]) {
+    const calls = [];
+    const handler = makeHandler({
+      isCachePopulated: () => warm,
+      isSearchIndexPopulated: () => warm,
+      isInitialScanComplete: () => warm,
+      populateCacheViaWorker: () => {},
+      reconcileCacheFromFilesystem: () => {},
+      backfillEntrypoints: () => { calls.push('backfill'); },
+      buildProjectsFromCache: () => { calls.push('build'); return []; },
+    });
+    handler();
+    assert.deepEqual(calls, ['backfill', 'build'], warm ? 'warm cache' : 'cold cache');
+  }
 });

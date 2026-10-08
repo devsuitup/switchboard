@@ -146,6 +146,8 @@ function setupSidebarDom() {
   // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
   // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
@@ -173,6 +175,8 @@ function setupSidebarDom() {
     setActivity: read('setActivity'),
     // remote-activity-ui.js's per-session adapter state (const, not a window property — see .ai/contexts/session-state.md).
     remoteSessionStates: read('remoteSessionStates'),
+    read,
+    evalPublic(name) { evalInWindow(dom, path.join(PUBLIC_DIR, name)); },
     // Simulate the main process emitting subagent-spawned/subagent-completed
     // (session-transitions.js) by invoking the callback sidebar.js registered
     // via window.api.onSubagentSpawned/onSubagentCompleted at eval time.
@@ -258,4 +262,23 @@ function makeSampleProject(overrides = {}) {
   };
 }
 
-module.exports = { setupSidebarDom, makeSampleProject };
+// Answer the showChoiceDialog modal (public/choice-dialog.js) once it opens:
+// untick the named boxes, then click its confirm or its cancel button.
+// Resolves to the overlay, or null when no dialog opened.
+async function answerChoiceDialog(ctx, { confirm = true, uncheck = [] } = {}) {
+  let overlay = null;
+  for (let i = 0; i < 50 && !overlay; i++) {
+    overlay = ctx.document.querySelector('.modal-overlay');
+    if (!overlay) await new Promise(r => setTimeout(r, 0));
+  }
+  if (!overlay) return null;
+  for (const id of uncheck) {
+    const box = overlay.querySelector(`input[type="checkbox"][data-choice-id="${id}"]`);
+    if (!box) throw new Error(`answerChoiceDialog: no box "${id}"`);
+    box.checked = false;
+  }
+  overlay.querySelector(confirm ? '.choice-dialog-confirm' : '.choice-dialog-cancel').click();
+  return overlay;
+}
+
+module.exports = { setupSidebarDom, makeSampleProject, answerChoiceDialog };

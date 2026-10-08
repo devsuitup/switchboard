@@ -152,3 +152,38 @@ test('index.html loads the guard before app.js, preload exposes the check, main 
   assert.match(read('main.js'),
     /ipcMain\.handle\('sessions-live-elsewhere', \(_event, sessionIds\) => cliSessionState\.liveElsewhereMany\(sessionIds, sessionHasPty, ptyPids\)\)/);
 });
+
+// --- Background sessions (see .ai/contexts/bg-agents.md) --------------------
+
+const LIVE_BG = { pid: 346590, cwd: '/w/em', startedAt: 1, kind: 'bg', jobId: 'bc3fd129' };
+
+test('a user click on a session the daemon runs answers "attach", without asking', async () => {
+  const api = makeApi(LIVE_BG);
+  const { confirm, messages } = makeConfirm(false);
+  assert.deepEqual(await guardResume(SESSION, { api, confirm }), { attach: 'bc3fd129', cwd: '/w/em' });
+  assert.equal(messages.length, 0);
+});
+
+test('an automatic resume of a session the daemon runs is still refused', async () => {
+  const api = makeApi(LIVE_BG);
+  const { confirm } = makeConfirm(true);
+  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), false);
+});
+
+test('a live bg descriptor without a usable jobId is refused: no resume offer, no attach', async () => {
+  for (const jobId of [null, undefined, '']) {
+    const api = makeApi({ ...LIVE_BG, jobId });
+    const { confirm, messages } = makeConfirm(true);
+    assert.equal(await guardResume(SESSION, { api, confirm }), false);
+    assert.equal(messages.length, 0);
+  }
+});
+
+test('app.js turns the attach verdict into attach options and skips the guard for an explicit attach', () => {
+  const app = read('public/app.js');
+  assert.match(app, /customOptions\?\.type === 'attach'\s*\?\s*true\s*:\s*await guardResume\(/);
+  assert.match(app, /if \(verdict === false\) return false;/);
+  assert.match(app, /customOptions = \{ type: 'attach', jobId: verdict\.attach, cwd: verdict\.cwd \|\| projectPath \};/);
+  assert.match(app, /entry\.attach = resumeOptions\.type === 'attach';/);
+  assert.match(app, /if \(entry\.attach\) continue; \/\/ attach tabs are not restored/);
+});

@@ -23,6 +23,7 @@ without re-reading `main.js`, now ~2600 LOC.
 | Paths in terminal output becoming links: the matcher, the openability check, `path:line` | [terminal-path-links](terminal-path-links.md) |
 | What the right mouse button does in a terminal: the four modes, and keeping the press from the application | [terminal-right-click](terminal-right-click.md) |
 | The frameless window: the strip that replaces the title bar, its drag regions, the window controls, the menu's accelerators | [window-frame](window-frame.md) |
+| The Agents view, the daemon's job files, attach/detach, dispatch | [bg-agents](bg-agents.md) |
 
 ## Reading order for a new contributor (~30 min)
 

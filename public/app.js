@@ -164,6 +164,8 @@ let sessionOpenedOutsideRestore = false;
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 const skippedWorkingSetEntries = new Map();
 let restoreSavedIndex = new Map();
+let restoreAwaitingConsent = [];
+const restoreInFlight = new Map();
 
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
@@ -177,6 +179,7 @@ function persistWorkingSet() {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
+      if (entry.attach) continue; // attach tabs are not restored
       if (entry.closed) continue;
       set.push({
         sessionId,
@@ -184,16 +187,26 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
-    const skipped = [...skippedWorkingSetEntries.values()]
+    const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
       .filter(({ item }) => !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
-    for (const { item, index } of skipped) {
+    for (const { item, index } of held) {
       set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
   }).catch((e) => { console.warn('[switchboard] failed to persist working set', e); });
   return _persistChain;
+}
+
+// see .ai/contexts/session-cache.md ("Working-set restore: retry until indexing is done")
+function pendingRestoreEntries() {
+  const pending = [...restoreAwaitingConsent, ...restoreInFlight.values()];
+  if (restorePlanner && !restorePlanner.isSettled()) pending.push(...restorePlanner.pending());
+  return pending.map(item => ({
+    item,
+    index: restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : Number.MAX_SAFE_INTEGER,
+  }));
 }
 
 function schedulePersistWorkingSet() {
@@ -207,23 +220,35 @@ function schedulePersistWorkingSet() {
 
 async function runRestore(list) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
-  const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
+  for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
-  for (const [position, item] of list.entries()) {
-    const s = sessionMap.get(item.sessionId);
-    if (!s) continue;
-    if (openSessions.has(item.sessionId)) continue;
-    // Resume with the project's current "new session" defaults, exactly like a
-    // manual session relaunch — not options frozen from a previous launch.
-    const live = liveById[item.sessionId] || null;
-    const opened = await openSession(s, undefined, { automatic: true, live });
-    if (opened === false) {
-      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
-      skippedWorkingSetEntries.set(item.sessionId, { item, index });
-      skippedNow.push({ session: s, live });
-      continue;
+  try {
+    const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
+    for (const [position, item] of list.entries()) {
+      const s = sessionMap.get(item.sessionId);
+      if (!s || openSessions.has(item.sessionId)) {
+        restoreInFlight.delete(item.sessionId);
+        continue;
+      }
+      // Resume with the project's current "new session" defaults, exactly like a
+      // manual session relaunch — not options frozen from a previous launch.
+      const live = liveById[item.sessionId] || null;
+      let opened;
+      try {
+        opened = await openSession(s, undefined, { automatic: true, live });
+      } finally {
+        restoreInFlight.delete(item.sessionId);
+      }
+      if (opened === false) {
+        const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+        skippedWorkingSetEntries.set(item.sessionId, { item, index });
+        skippedNow.push({ session: s, live });
+        continue;
+      }
+      await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
     }
-    await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
+  } finally {
+    for (const item of pending) restoreInFlight.delete(item.sessionId);
   }
   if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
@@ -300,9 +325,11 @@ async function tickRestorePlanner() {
     `<button class="restore-toast-btn restore-toast-restore">Restore</button>` +
     `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
   document.body.appendChild(toast);
+  restoreAwaitingConsent = candidates;
 
   toast.querySelector('.restore-toast-restore').addEventListener('click', async () => {
     toast.remove();
+    restoreAwaitingConsent = [];
     restoringWorkingSet = true;
     try {
       await runRestore(candidates);
@@ -313,6 +340,7 @@ async function tickRestorePlanner() {
   });
   toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
     toast.remove();
+    restoreAwaitingConsent = [];
   });
 }
 
@@ -896,7 +924,8 @@ async function triggerRebuildAndSearch() {
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 // btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
 async function confirmAndStopSession(sessionId, btn) {
-  const plan = resolveSessionStop(sessionMap.get(sessionId));
+  const openEntry = openSessions.get(sessionId);
+  const plan = resolveSessionStop(sessionMap.get(sessionId), { attach: !!(openEntry && openEntry.attach) });
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
@@ -1123,6 +1152,7 @@ async function loadProjects({ resort = false } = {}) {
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
+  let hiddenProjects = null;
   for (const [sid, pending] of [...pendingSessions]) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
@@ -1137,6 +1167,10 @@ async function loadProjects({ resort = false } = {}) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
           if (pendingAlias) proj.remoteAlias = pendingAlias;
+          if (worktreeParentPath(pending.projectPath) !== null && hiddenProjects === null) {
+            hiddenProjects = ((await window.api.getSetting('global')) || {}).hiddenProjects || [];
+          }
+          if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
           projList.unshift(proj);
         }
         if (!proj.sessions.some(s => s.sessionId === sid)) {
@@ -1279,6 +1313,9 @@ async function showTerminalHeader(session) {
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeaderSandbox.style.display = sandboxedSessions.get(session.sessionId) ? '' : 'none';
+  const headerEntry = openSessions.get(session.sessionId);
+  terminalStopBtn.title = headerEntry && headerEntry.attach ? 'Detach (the session keeps running)' : 'Stop process';
+  terminalStopBtn.setAttribute('aria-label', terminalStopBtn.title);
   terminalHeader.style.display = '';
   updateTerminalHeader();
 
@@ -1316,8 +1353,12 @@ async function openSession(session, customOptions, { automatic = false, live } =
     }
   }
 
-  // see .ai/contexts/cli-session-state.md ("Live elsewhere")
-  if (!(await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) }))) return false;
+  // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) });
+  if (verdict === false) return false;
+  if (verdict && typeof verdict === 'object' && verdict.attach) {
+    customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
+  }
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
@@ -1325,6 +1366,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
   const resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  entry.attach = resumeOptions.type === 'attach';
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
   let result;
@@ -1341,6 +1383,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
     showSession(sessionId);
     return;
   }
+  if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
@@ -1423,6 +1466,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       terminalArea.style.display = 'none';
       memoryViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
+      if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
       statsViewer.style.display = 'flex';
       loadStats();
     } else if (tabName === 'memory') {
@@ -1443,6 +1487,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
 initGridGroupToggle();
+initAgentsView();
 
 // JSONL viewer (renderJsonlText, formatDuration, makeCollapsible, renderJsonlEntry, showJsonlViewer) → jsonl-viewer.js
 
@@ -1518,11 +1563,23 @@ initGridGroupToggle();
   // Insert next to the resort button
   resortBtn.parentElement.insertBefore(gridToggleBtn, resortBtn);
 
+  const agentsToggleBtn = document.createElement('button');
+  agentsToggleBtn.id = 'agents-toggle-btn';
+  agentsToggleBtn.title = 'Background agents';
+  agentsToggleBtn.innerHTML = '<svg width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>';
+  agentsToggleBtn.addEventListener('click', toggleAgentsView);
+  resortBtn.parentElement.insertBefore(agentsToggleBtn, resortBtn);
+
   // Global keyboard shortcuts (covers non-terminal focus)
   // When a terminal is focused, xterm's customKeyEventHandler fires first and sets
   // e._handled to prevent the document listener from double-firing the same action.
   document.addEventListener('keydown', (e) => {
     if (e._handled) return;
+    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+      e.preventDefault();
+      toggleAgentsView();
+      return;
+    }
     // Toggle grid view (default Cmd/Ctrl+Shift+G)
     if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
       e.preventDefault();
@@ -1591,6 +1648,7 @@ loadProjects().then(async () => {
   }
   // Restore working set (persisted across full restarts via global settings)
   await restoreWorkingSet();
+  restoreAgentsViewAtStartup();
 });
 
 // Live-reload sidebar when filesystem changes are detected

@@ -59,6 +59,10 @@ function boot(dir, activeSessions, opts = {}) {
     log: silentLog,
     isProcessAlive: opts.isProcessAlive || (() => true),
     now: opts.now,
+    readProcStart: opts.readProcStart,
+    readParentPid: opts.readParentPid,
+    ownPid: opts.ownPid,
+    platform: opts.platform,
     onIdle: (sessionId, session) => rescans.push({ sessionId, session }),
   });
   const attached = cliSessionState.ensureWatching();
@@ -81,6 +85,35 @@ test('a busy → idle transition rescans the matching session immediately', asyn
     writeState(dir, 4242, { status: 'idle' });
     await waitFor(() => rescans.length === 1);
     assert.equal(rescans[0].sessionId, 'sess-1');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a descriptor whose id differs only in case still rescans the app session, under the app id', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', sessionId: 'SESS-1' });
+    const { rescans } = boot(dir, oneSession());
+    writeState(dir, 4242, { status: 'idle', sessionId: 'SESS-1' });
+    await waitFor(() => rescans.length === 1);
+    assert.equal(rescans[0].sessionId, 'sess-1');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an uppercase descriptor is found under the lowercase id, and forgotten when its file goes', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', sessionId: 'SESS-1' });
+    boot(dir, oneSession());
+    writeState(dir, 4242, { status: 'idle', sessionId: 'SESS-1' });
+    await waitFor(() => cliSessionState.getStatus('sess-1')?.status === 'idle');
+    fs.rmSync(path.join(dir, '4242.json'));
+    await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
   } finally {
     cliSessionState.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -278,6 +311,19 @@ test('getStatus returns the last parsed status/statusUpdatedAt for a sessionId',
   }
 });
 
+test('getStatus finds a descriptor whatever the case of the id it is asked with', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
+    boot(dir, oneSession());
+    await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
+    assert.deepEqual(cliSessionState.getStatus('SESS-1'), { status: 'busy', statusUpdatedAt: 1000 });
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('getStatus works for a CLI descriptor with no matching Switchboard session (started outside Switchboard)', async () => {
   const dir = mkTmp();
   try {
@@ -426,4 +472,66 @@ test('getStatus keeps returning the cached status within the 5s probe throttle e
     cliSessionState.stop();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- Descriptor hooks for the agents view (see .ai/contexts/bg-agents.md) ---
+
+test('onDescriptorsChanged fires once per flushed batch, and the unsubscribe stops it', async () => {
+  const dir = mkTmp();
+  try {
+    boot(dir, oneSession());
+    let fired = 0;
+    const off = cliSessionState.onDescriptorsChanged(() => { fired++; });
+    writeState(dir, 4242, { status: 'busy', kind: 'bg', jobId: 'aaaaaaaa' });
+    writeState(dir, 4243, { status: 'idle', sessionId: 'sess-2' });
+    await waitFor(() => fired >= 1);
+    await delay(SETTLE_MS);
+    assert.equal(fired, 1, 'two writes inside one FLUSH_MS window are one notification');
+    off();
+    writeState(dir, 4242, { status: 'idle', kind: 'bg', jobId: 'aaaaaaaa' });
+    await delay(SETTLE_MS);
+    assert.equal(fired, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('readAllDescriptors returns the live descriptors with their kind, jobId and agent', () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 10, { status: 'idle', kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', startedAt: 5 });
+    writeState(dir, 11, { status: 'busy', kind: 'interactive', sessionId: 'sess-2' });
+    writeState(dir, 12, { status: 'busy', kind: 'interactive', sessionId: 'sess-dead' });
+    fs.writeFileSync(path.join(dir, '13.json'), '{not json', 'utf8');
+    boot(dir, oneSession(), { isProcessAlive: (pid) => pid !== 12 });
+    const all = cliSessionState.readAllDescriptors().sort((a, b) => a.pid - b.pid);
+    assert.deepEqual(all.map(d => d.pid), [10, 11]);
+    assert.deepEqual(all[0], { pid: 10, sessionId: 'sess-1', kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', cwd: dir, status: 'idle', startedAt: 5 });
+    assert.equal(all[1].kind, 'interactive');
+    assert.equal(all[1].jobId, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('liveElsewhere reports the descriptor kind and jobId, so a bg session can be attached instead of resumed', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'idle', kind: 'bg', jobId: 'bc3fd129' });
+    boot(dir, new Map(), { readProcStart: () => '111', readParentPid: () => 1, ownPid: 99999, platform: 'linux' });
+    const live = await cliSessionState.liveElsewhere('sess-1', () => false, () => []);
+    assert.equal(live.pid, 4242);
+    assert.equal(live.kind, 'bg');
+    assert.equal(live.jobId, 'bc3fd129');
+    writeState(dir, 4242, { status: 'idle' });
+    const plain = await cliSessionState.liveElsewhere('sess-1', () => false, () => []);
+    assert.equal(plain.kind, null);
+    assert.equal(plain.jobId, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('ownProcessFilter is exported and claims our own PTY pids', () => {
+  const dir = mkTmp();
+  try {
+    boot(dir, new Map());
+    const isOwn = cliSessionState.ownProcessFilter(() => [77]);
+    assert.equal(isOwn(77), true);
+    assert.equal(isOwn(78), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('api', {
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  // see .ai/contexts/bg-agents.md
+  getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),
+  bgAgentVerb: (verb, id) => ipcRenderer.invoke('bg-agent-verb', verb, id),
+  dispatchBgAgent: (fields) => ipcRenderer.invoke('dispatch-bg-agent', fields),
+  bgAgentLiveJob: (sessionId) => ipcRenderer.invoke('bg-agent-live-job', sessionId),
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
   remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
   remoteLaunchSession: (payload) => ipcRenderer.invoke('remote-launch-session', payload),
@@ -27,6 +32,10 @@ contextBridge.exposeInMainWorld('api', {
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
+  getProjectArchivePlan: (groups) => ipcRenderer.invoke('get-project-archive-plan', groups),
+  archiveProject: (groups, opts) => ipcRenderer.invoke('archive-project', groups, opts),
+  reenableProjectSchedules: (projectPath, folderKey) => ipcRenderer.invoke('reenable-project-schedules', projectPath, folderKey),
+  dismissScheduleReenableOffer: (projectPath, folderKey) => ipcRenderer.invoke('dismiss-schedule-reenable-offer', projectPath, folderKey),
   deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
   deleteSessionPreview: (id) => ipcRenderer.invoke('delete-session-preview', id),
   // initialSize: { cols, rows } measured by the renderer before the spawn, so
@@ -132,6 +141,7 @@ contextBridge.exposeInMainWorld('api', {
   onSubagentSpawned: (cb) => ipcRenderer.on('subagent-spawned', (_e, payload) => cb(payload)),
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),
+  onBgAgentsChanged: (cb) => ipcRenderer.on('bg-agents-changed', (_e, payload) => cb(payload)),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
   },

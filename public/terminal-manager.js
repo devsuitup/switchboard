@@ -91,6 +91,11 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
+    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+      if (e.type === 'keydown') { e._handled = true; toggleAgentsView(); }
+      return false;
+    }
+
     // Toggle grid view (default Cmd/Ctrl+Shift+G)
     if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
       if (e.type === 'keydown') { e._handled = true; toggleGridView(); }
@@ -1260,6 +1265,7 @@ function showSession(sessionId) {
   lruTouch(sessionId);
 
   if (gridViewActive) {
+    if (typeof hideAgentsView === 'function' && agentsViewActive) hideAgentsView();
     // Ensure grid layout is set up (e.g. on first session after startup restore)
     if (!terminalsEl.classList.contains('grid-layout')) {
       showGridView();

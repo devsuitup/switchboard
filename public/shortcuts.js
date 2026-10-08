@@ -20,6 +20,8 @@ const DEFAULT_SHORTCUTS = {
   sessionNavBrackets: { primary: true, alt: false, shift: true },
   // Ctrl/Cmd+Shift+G — toggle the grid overview.
   gridToggle: { primary: true, alt: false, shift: true, key: 'g' },
+  // Ctrl/Cmd+Shift+A — toggle the background agents view.
+  agentsToggle: { primary: true, alt: false, shift: true, key: 'a' },
 };
 
 // Metadata for rendering the settings UI and resolving each action's key family.
@@ -40,6 +42,12 @@ const SHORTCUT_DEFS = [
     id: 'gridToggle',
     label: 'Toggle grid view',
     description: 'Show or hide the session grid overview',
+    family: 'key',
+  },
+  {
+    id: 'agentsToggle',
+    label: 'Toggle agents view',
+    description: 'Show or hide the background agents view',
     family: 'key',
   },
 ];

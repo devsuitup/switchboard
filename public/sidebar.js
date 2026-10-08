@@ -610,18 +610,23 @@ function renderProjects(projects, resort) {
   }
   // projects are now in the correct order (data order for resort, preserved order otherwise)
 
-  // Detect worktree projects and group them under their parent
-  const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
-  const worktreeMap = new Map(); // parentPath → [worktreeProject, ...]
+  // see .ai/contexts/session-cache.md ("Archived projects", worktree nesting)
+  const nestKey = (project, projectPath = project.projectPath) => (project.remoteAlias || '') + '|' + projectPath;
+  const listedGroups = new Set(projects.map(p => nestKey(p)));
+  const worktreeMap = new Map(); // nestKey(parent) → [worktreeProject, ...]
   const worktreeSet = new Set();
   for (const project of projects) {
-    const match = project.projectPath.match(worktreePattern);
-    if (match) {
-      const parentPath = match[1];
-      if (!worktreeMap.has(parentPath)) worktreeMap.set(parentPath, []);
-      worktreeMap.get(parentPath).push(project);
-      worktreeSet.add(project.projectPath);
+    const parentPath = worktreeParentPath(project.projectPath);
+    if (parentPath === null) continue;
+    if (project.hiddenRepository) {
+      worktreeSet.add(nestKey(project));
+      continue;
     }
+    const parentKey = nestKey(project, parentPath);
+    if (!listedGroups.has(parentKey)) continue;
+    if (!worktreeMap.has(parentKey)) worktreeMap.set(parentKey, []);
+    worktreeMap.get(parentKey).push(project);
+    worktreeSet.add(nestKey(project));
   }
 
   const newSortedOrder = [];
@@ -822,7 +827,7 @@ function renderProjects(projects, resort) {
 
   for (const project of projects) {
     // Skip worktree projects — they'll be rendered nested under their parent
-    if (worktreeSet.has(project.projectPath)) continue;
+    if (worktreeSet.has(nestKey(project))) continue;
 
     const result = processProjectSessions(project, resort);
     if (!result) continue;
@@ -874,7 +879,7 @@ function renderProjects(projects, resort) {
 
     const archiveGroupBtn = document.createElement('button');
     archiveGroupBtn.className = 'project-archive-btn';
-    archiveGroupBtn.title = 'Archive all sessions';
+    archiveGroupBtn.title = 'Archive folder';
     archiveGroupBtn.innerHTML = ICONS.archive(18);
     header.appendChild(archiveGroupBtn);
 
@@ -906,12 +911,16 @@ function renderProjects(projects, resort) {
     header.appendChild(newBtn);
 
     const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath, topLevelIds);
+    const offerNotice = buildReenableNotice(project, fId);
+    if (offerNotice) sessionsList.prepend(offerNotice);
 
     // Auto-collapse if project path is missing, most recent session is older than threshold, or project matched with no sessions
     if (project.missing) {
       header.classList.add('collapsed');
     } else if (project._projectMatchedOnly) {
       header.classList.add('collapsed');
+    } else if (project.reenableOffer) {
+      // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
     } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
       const mostRecent = filtered[0]?.modified;
       if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
@@ -923,13 +932,13 @@ function renderProjects(projects, resort) {
     group.appendChild(sessionsList);
 
     // Render nested worktree sub-groups
-    const childWorktrees = worktreeMap.get(project.projectPath) || [];
+    const childWorktrees = worktreeMap.get(nestKey(project)) || [];
     for (const wt of childWorktrees) {
       const wtResult = processProjectSessions(wt, resort);
       if (!wtResult) continue;
       newSortedOrder.push(wtResult.sortOrderEntry);
 
-      const wtName = wt.projectPath.match(worktreePattern)?.[2] || wt.projectPath.split('/').pop();
+      const wtName = worktreeName(wt.projectPath) || wt.projectPath.split('/').pop();
       const wtFId = folderId(wt.projectPath);
 
       const wtGroup = document.createElement('div');
@@ -961,9 +970,11 @@ function renderProjects(projects, resort) {
 
       const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath, wtResult.topLevelIds);
       wtSessionsList.className = 'worktree-sessions';
+      const wtOfferNotice = buildReenableNotice(wt, wtFId);
+      if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
 
       // Auto-collapse worktree if stale
-      if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+      if (!wt.reenableOffer && searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
         const mostRecent = wtResult.filtered[0]?.modified;
         if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
           wtHeader.classList.add('collapsed');
@@ -1060,6 +1071,136 @@ function renderProjects(projects, resort) {
   }
 }
 
+// see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
+function buildReenableNotice(project, fId) {
+  const offer = project.reenableOffer;
+  if (!offer || !Array.isArray(offer.names) || offer.names.length === 0) return null;
+  const n = offer.names.length;
+  const el = document.createElement('div');
+  el.className = 'schedule-reenable-notice';
+  el.id = 'sro-' + fId;
+  const text = document.createElement('div');
+  text.className = 'schedule-reenable-text';
+  text.textContent = `${n} schedule${n === 1 ? ' was' : 's were'} turned off when this folder was archived: ${offer.names.join(', ')}`;
+  el.appendChild(text);
+  if (Array.isArray(offer.failed) && offer.failed.length > 0) {
+    const failed = document.createElement('div');
+    failed.className = 'schedule-reenable-failed';
+    failed.textContent = 'Could not turn back on: ' + offer.failed.map(f => `${f.name}: ${f.error}`).join('; ');
+    el.appendChild(failed);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'schedule-reenable-actions';
+  const on = document.createElement('button');
+  on.type = 'button';
+  on.className = 'schedule-reenable-on';
+  on.textContent = 'Turn back on';
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'schedule-reenable-dismiss';
+  dismiss.textContent = 'Dismiss';
+  actions.append(on, dismiss);
+  el.appendChild(actions);
+  return el;
+}
+
+const ARCHIVE_INDEXING_MESSAGE = 'Switchboard is still indexing sessions. Archive the folder once indexing has finished.';
+
+// see .ai/contexts/session-cache.md ("Archived projects")
+async function archiveProjectFolder(project, button) {
+  const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const alias = project.remoteAlias || null;
+  const parent = cachedAllProjects.find(p => (p.remoteAlias || null) === alias && p.projectPath === project.projectPath);
+  if (!parent) {
+    loadProjects();
+    return;
+  }
+  const children = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias && worktreeParentPath(p.projectPath) === parent.projectPath);
+  const groups = [parent, ...children];
+  const groupsArg = groups.map(g => ({ projectPath: g.projectPath, folderKey: g.folder }));
+  const sessions = groups.flatMap(g => g.sessions.filter(s => !s.parentSessionId && !s.archived));
+
+  const plan = await window.api.getProjectArchivePlan(groupsArg);
+  if (!plan || plan.indexing) {
+    alert(ARCHIVE_INDEXING_MESSAGE);
+    return;
+  }
+  const schedules = plan.schedules || [];
+  const disableable = schedules.filter(s => s.disableable);
+
+  const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.'];
+  for (const s of schedules) {
+    if (!s.disableable) message.push(`${s.name} stays enabled: ${s.reason}`);
+  }
+  if (children.length > 0) {
+    message.push(`Its ${counted(children.length, 'worktree')} ${children.length === 1 ? 'is' : 'are'} archived with it.`);
+  }
+  const choices = [];
+  if (sessions.length > 0) {
+    // issue #271 / .ai/contexts/session-state.md: archive is stop-then-archive.
+    const aliasesToStop = [...new Set(
+      sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
+    )];
+    let label = `Archive the ${counted(sessions.length, 'session')}`;
+    if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.join(', ')})`;
+    choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
+  }
+  if (disableable.length > 0) {
+    choices.push({
+      id: 'disableSchedules',
+      label: `Disable the ${disableable.length} enabled schedule${disableable.length === 1 ? '' : 's'}: ${disableable.map(s => s.name).join(', ')}`,
+      checked: true,
+      rememberKey: 'archiveFolder.disableSchedules',
+    });
+  }
+
+  const result = await showChoiceDialog({
+    title: `Archive ${shortProjectPath(parent.projectPath)}?`,
+    message,
+    choices,
+    confirmLabel: 'Archive folder',
+    initialFocus: 'confirm',
+    returnFocus: button,
+  });
+  if (!result) return;
+
+  if (result.archiveSessions) {
+    let refused = false;
+    for (const s of sessions) {
+      const stopResult = await stopBeforeArchive(s);
+      if (!stopResult.ok) {
+        refused = true;
+        const item = document.getElementById('si-' + s.sessionId);
+        surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
+      }
+    }
+    if (refused) {
+      pollActiveSessions();
+      loadProjects();
+      return;
+    }
+    for (const s of sessions) {
+      await window.api.archiveSession(s.sessionId, 1);
+      s.archived = 1;
+    }
+  }
+
+  const res = await window.api.archiveProject(groupsArg, {
+    disableSchedules: result.disableSchedules ? disableable.map(s => s.filePath) : [],
+  });
+  if (res && res.error === 'indexing') {
+    alert(ARCHIVE_INDEXING_MESSAGE);
+  } else if (res && res.error) {
+    alert('The folder could not be archived: ' + res.error
+      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : ''));
+  } else if (res && Array.isArray(res.failed) && res.failed.length > 0) {
+    alert('The folder is archived, but these schedules could not be disabled:\n'
+      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n'));
+  }
+  pollActiveSessions();
+  loadProjects();
+}
+
 function rebindSidebarEvents(projects) {
   for (const project of projects) {
     const fId = folderId(project.projectPath);
@@ -1084,34 +1225,24 @@ function rebindSidebarEvents(projects) {
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath, project.folder); };
     }
+    const offerNotice = document.getElementById('sro-' + fId);
+    if (offerNotice) {
+      offerNotice.querySelector('.schedule-reenable-on').onclick = async (e) => {
+        e.stopPropagation();
+        await window.api.reenableProjectSchedules(project.projectPath, project.folder);
+        loadProjects();
+      };
+      offerNotice.querySelector('.schedule-reenable-dismiss').onclick = async (e) => {
+        e.stopPropagation();
+        await window.api.dismissScheduleReenableOffer(project.projectPath, project.folder);
+        loadProjects();
+      };
+    }
     const archiveGroupBtn = header.querySelector('.project-archive-btn');
     if (archiveGroupBtn) {
-      archiveGroupBtn.onclick = async (e) => {
+      archiveGroupBtn.onclick = (e) => {
         e.stopPropagation();
-        const sessions = project.sessions.filter(s => !s.parentSessionId && !s.archived);
-        if (sessions.length === 0) return;
-        const shortName = shortProjectPath(project.projectPath);
-        // issue #271 / .ai/contexts/session-state.md: archive is stop-then-archive.
-        const aliasesToStop = [...new Set(
-          sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
-        )];
-        let message = `Archive all ${sessions.length} session${sessions.length > 1 ? 's' : ''} in ${shortName}?`;
-        if (aliasesToStop.length > 0) {
-          message += ` This stops the running session${aliasesToStop.length > 1 ? 's' : ''} on ${aliasesToStop.join(', ')} first.`;
-        }
-        if (!confirm(message)) return;
-        for (const s of sessions) {
-          const stopResult = await stopBeforeArchive(s);
-          if (!stopResult.ok) {
-            const item = document.getElementById('si-' + s.sessionId);
-            surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
-            continue;
-          }
-          await window.api.archiveSession(s.sessionId, 1);
-          s.archived = 1;
-        }
-        pollActiveSessions();
-        loadProjects();
+        return archiveProjectFolder(project, archiveGroupBtn);
       };
     }
     const hostRefreshBtn = header.querySelector('.remote-host-refresh-btn');
@@ -1556,6 +1687,15 @@ function buildSessionItem(session) {
         ? 'Session on ' + session.remoteAlias + ' — attach unavailable: ' + session.remoteAttachBlocked + ', click to read its transcript'
         : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
     badge.textContent = session.remoteAlias;
+    summaryEl.prepend(badge);
+  }
+
+  // see .ai/contexts/bg-agents.md ("The sidebar")
+  if (typeof bgAgentSessionIds !== 'undefined' && bgAgentSessionIds.has(String(session.sessionId).toLowerCase())) {
+    const badge = document.createElement('span');
+    badge.className = 'bg-badge';
+    badge.title = 'Background session run by the claude daemon — click to attach';
+    badge.textContent = 'bg';
     summaryEl.prepend(badge);
   }
 

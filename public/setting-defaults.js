@@ -19,6 +19,7 @@ const SETTING_DEFAULTS = {
   addDirs: '',
   visibleSessionCount: 10,
   sessionMaxAgeDays: 3,
+  hideSdkSessions: true,
   sidebarWidth: 340,
   terminalTheme: 'switchboard',
   terminalRightClick: 'menu',

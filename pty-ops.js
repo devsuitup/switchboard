@@ -57,10 +57,23 @@ function writePty(session, data, sessionId) {
   return withPty(session, 'write', (pty) => pty.write(data), sessionId);
 }
 
+// see .ai/contexts/bg-agents.md
+function detachPty(session, sessionId, { graceMs = 2000, schedule = setTimeout } = {}) {
+  if (session.detaching) return true;
+  session.detaching = true;
+  const wrote = writePty(session, '\x1a', sessionId);
+  if (!wrote) return killPty(session, sessionId);
+  const timer = schedule(() => {
+    if (!session.exited) killPty(session, sessionId);
+  }, graceMs);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  return true;
+}
+
 /** The name of the signal node-pty reports on exit (`SIGKILL`), or null when none killed it. */
 function ptyExitSignalName(signal, signals = os.constants.signals) {
   if (!signal) return null;
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, withPty, resizePty, killPty, writePty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };

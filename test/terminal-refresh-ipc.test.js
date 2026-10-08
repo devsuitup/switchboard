@@ -55,6 +55,7 @@ async function promotionFixture(t, { initialCount = 1 } = {}) {
       listeners.get(channel)?.(null, ...args);
     } } },
     wireSessionPty() {},
+    revealIfSdkSession() {},
   });
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);
@@ -145,6 +146,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
       remoteLaunchAdapter: {},
       handleLaunchRequest: async () => ({ ok: true, descriptor, attachResult }),
       wireSessionPty() {},
+      revealIfSdkSession() {},
       getMcpState: () => null,
     });
     vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);

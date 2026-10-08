@@ -39,7 +39,7 @@ The full, self-contained prompt Claude runs each time.
 |---|---|---|
 | `name` | Display name, in logs and in [ActivityWatch](activitywatch.md) | the file name |
 | `cron` | When to run — see below | required |
-| `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on | on |
+| `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on. [Archiving the folder](session-browser.md#archive-a-folder) can write `enabled: false` | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
 | `catch-up` | `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
@@ -147,6 +147,11 @@ one run.
   after that.
 - A schedule turned off with `enabled: false` is not looked at; turned back on,
   it catches up a run it missed in the meantime, within the seven days.
+- Archiving a folder with **Disable the enabled schedules** ticked writes
+  `enabled: false` into each of its schedule files, which live in the
+  project's repository. A file reached through a symbolic link is not changed.
+  When the folder shows again, a notice in its group offers to turn them back
+  on — see [Archive a folder](session-browser.md#archive-a-folder).
 - **Run now** does not count as a run for the record.
 - If the record cannot be read or written, the schedule runs on its cron minute
   as if it had no `catch-up`, and a warning is logged.

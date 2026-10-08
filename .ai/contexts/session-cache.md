@@ -58,7 +58,7 @@ Where it applies:
 
 | Consumer of a transcript cwd | Status |
 |---|---|
-| `deriveProjectPath` (sidebar project path, `session.projectPath`, `cache_meta`, `getKnownProjectPaths`, and the cold-start scan in `workers/scan-projects.js`) | Verified: a JSONL whose cwd does not verify is skipped, then the worktree collapse applies to the verified cwd; no verified JSONL gives `null` |
+| `deriveProjectPath` (sidebar project path, `session.projectPath`, `cache_meta`, `getKnownProjectPaths`, and the cold-start scan in `workers/scan-projects.js`) | Verified: a JSONL with no cwd that verifies, in its head or tail window (see "A transcript moved into a worktree folder"), is skipped, then the worktree collapse applies to the verified cwd; no verified JSONL gives `null` |
 | `refreshFolder` reuse of a stored `cache_meta.projectPath`; `buildProjectsFromCache` (empty-folder section); `reconcileCacheFromFilesystem` | Verified by `storedProjectPathMatchesFolder` (the verified path, the repository of a worktree folder, or the remap record). A value stored before the upgrade is re-derived: `reconcileCacheFromFilesystem` refreshes a folder whose stored path fails the check even when its mtime is current, and `refreshFolder` rewrites a cached row whose `projectPath` differs from the folder's even when its file is unchanged. A folder with no verifiable transcript has its cached rows deleted |
 | `resolveSessionRealCwd` (resume and fork spawn cwd in `open-terminal`, Changes panel, panel terminal, terminal path links, subagent worktree discovery, the sandbox bind folder, which follows the spawn cwd) | Verified against the folder holding the session's JSONL, which main finds on disk; a transcript that does not verify is skipped for the next folder holding the same id; none left means resume starts in the requested project path as for a session without a recorded cwd |
 | `create-schedule-session` `mkdir enc(projectPath)` and `open-terminal` registration of `projectPath` | The path comes from the sidebar, so from `deriveProjectPath`; the registration stays a plain launch registration |
@@ -68,6 +68,27 @@ Where it applies:
 A folder that holds transcripts with a cwd but none that verifies is logged once per folder, `[session-cache]` prefix with the folder name and the first rejected cwd (main log; the cold-start worker reports it through its folder message), so a change of the CLI's naming shows up in the log instead of as projects silently missing.
 
 Residuals: `encodeProjectPath` truncates at 200 characters and appends a 32-bit hash, so a path of 200 characters or more can collide (`enc(P/long) === enc(P)`), seed included. The hash is taken over the raw characters of the path, as the CLI does; normalising before hashing would stop matching the CLI's folder names, so it was left alone (the verified cwd is already `path.resolve`d before it is encoded). A transcript written by the CLI whose cwd does not encode to its folder (a symlinked cwd named by its real path, say) no longer gives a project path or a resume directory. A `projectPath` persisted by session restore before the upgrade is not re-verified; the renderer's own strings are out of scope.
+
+## Bounded cwd scan
+
+A transcript's cwd is read from bounded windows of the file (`CWD_SCAN_BYTES`, 256 KB, in `derive-project-path.js`), never from the whole of it. Reading the whole file froze the main process: `refreshFolder()` derives the project path on every watcher flush, so a 338 MB host-session JSONL meant a multi-second `readFileSync` per flush, back to back (witnessed 2026-06-11: main thread pegged ~65% CPU re-reading the same file in a loop, UI freezes). A cwd that appears only between the head and tail windows is not seen.
+
+## A transcript moved into a worktree folder
+
+When a session started at a repository's root enters a worktree (`EnterWorktree`), the CLI moves its transcript from `enc(P)` to `enc(P/.claude/worktrees/x)`; the old folder can disappear with it. The lines written before the move keep `cwd = P`, which does not encode to the new folder; only the lines written after carry the worktree's cwd. Witnessed 2026-10-07 with a 600 KB transcript: the first worktree cwd sat at byte 483 010, past the 256 KB head window, so `deriveProjectPath` returned `null` for the folder, `refreshFolder` dropped it, and the session, whose transcript had also left `enc(P)`, vanished from the sidebar while its PTY kept running.
+
+`extractVerifiedCwdFromJsonl(filePath, folderName, tailBudget)` returns the first cwd of the head window that verifies against the folder. The first rejected cwd ends the scan, as the head-only scan did, unless the folder may be a worktree folder of that cwd or of one of its ancestors (`mayBeWorktreeFolderOf`; a session started in `P/sub` moves the same way); then the rest of the head and, failing that, the file's last 256 KB are searched, last line first. The trust rule is unchanged: whichever line it comes from, a cwd is used only if it encodes to the folder holding the transcript.
+
+- **Long paths.** `encodeProjectPath` truncates a name over 200 characters and appends a hash of the whole path, so the folder of `P/.claude/worktrees/x` does not start with `enc(P)` when either is long. `mayBeWorktreeFolderOf` compares through `encodedFolderMayExtend` (`encode-project-path.js`), which applies the encoder's sanitising and its 200-character cut to `P/<worktree dir>/` and compares that prefix only. It is a gate for reading more of the file, not a trust decision, so a false positive costs one bounded read and nothing else. `storedProjectPathMatchesFolder` keeps its own exact prefix check.
+- **Cost.** One derivation (`deriveProjectPath`) gives the tail reads a budget of four windows (1 MiB). A transcript whose tail was skipped for lack of budget, or whose stat, open or read threw (`EBUSY` while the CLI holds it, say), is not memoised, and the derivation reports itself incomplete (`opts.onIncomplete`); so does a failed listing of the folder or of a session subdirectory. The next derivation of the folder starts its walk of the folder's transcripts at the first one skipped for budget (`resumeAt`, per folder, at most 1 024 folders; a transcript that failed is retried but never becomes the starting point, so one that keeps failing cannot hold the walk back), so a valid transcript listed after more unresolved ones than one budget covers is reached even when the memo cannot hold them all. `refreshFolder` then stores the folder's `indexMtimeMs` as 0 instead of its mtime, so `reconcileCacheFromFilesystem` derives it again on its next pass; each pass reads only the transcripts not yet memoised, so the folder resolves, or is marked indexed as unresolved, after a bounded number of passes. Every transcript found unresolved after a complete scan is memoised by path, size and mtime (`unresolvedMemo`, at most 4 096 entries), and is not read again until it changes. A remap rewrites the transcripts it remaps, so it changes their mtime and clears their memo. A file rewritten to the same size with its mtime restored keeps a stale memo; the CLI only appends, so this is not a case it produces. Measured on a folder of 50 rejected 660 KB transcripts: 7.9 ms per flush with the former head-only scan, which read every head on every flush; 0.64 ms per flush averaged over repeated flushes with the memo, the first pass reading the heads as before.
+- **Callers.** `deriveProjectPath` (local) and `resolveSessionRealCwd` go through it; the remote path keeps the plain head scan. The Touched panel does not: it resolves a relative touched path against one cwd per transcript, and the worktree cwd of a moved transcript is wrong for the touches made before the move. It keeps the head-only `extractCwdFromJsonl`, so the moved transcript's head cwd, which does not verify, leaves those touches unresolved.
+- **Residual.** A transcript whose last line alone exceeds 256 KB (a large tool result) has no complete line in the tail window. While its session runs, the row is kept (next section); after exit, the folder resolves again only once a later line carries the worktree's cwd.
+
+## A running session keeps its row
+
+`dropFolderRows(folder, { search })` (`session-cache.js`) deletes a folder's `session_cache` rows except those of a session with a live, non-plain PTY in `activeSessions` (`exited` false), and deletes the whole folder only when no row is kept. It is the path for every deletion that follows from the disk: a folder that has vanished (`refreshFolder`'s first branch and the watcher's `flushChanges` in `main.js`), a folder that stops resolving to a project, and a cold-scan folder with no verifiable transcript. `refreshFolder` applies the same rule to a single transcript missing from its folder (full walk and targeted). Deliberate deletions (hide or remove a project, drop a remote host) still use `deleteCachedFolder`.
+
+A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiveSession` for both ids after removing them from `activeSessions`; it refreshes that folder again, which drops the row if its transcript is still gone. That call is the exit handler's only database access and is wrapped in a `try`: at quit, `before-quit` kills the PTYs and `will-quit` closes the database, so a late exit event can meet a closed connection. A transcript that leaves a folder while its session runs therefore leaves the session in the sidebar until it reappears elsewhere, where the upsert on the same `sessionId` replaces the row's folder.
 
 ## Non-obvious behaviors
 
@@ -96,9 +117,15 @@ Residuals: `encodeProjectPath` truncates at 200 characters and appends a 32-bit 
   - **Open question #3 (existing databases)**: repaired on the next index pass, not left alone. `bridgeSessionId` and `mergedIntoSessionId` are added purely via the schema-reconciliation block (not a numbered migration — deliberately, to avoid coupling `migrations.length` to unrelated migration-ordering tests; see `db-schema-reconcile.test.js`'s "foreign higher-version" precedent for why reconciliation is the version-independent mechanism). Their absence sets `mustReindex = true`, which wipes `session_cache` + `cache_meta` + the `initial_scan_complete` marker, forcing every folder through the now-merging indexer on the next scan — the same repair path already used when `fileMtime` (v7) or the fork subagent columns (v4) were introduced.
   - **"Open on claude.ai" (issue #213).** `buildProjectsFromCache` passes `bridgeSessionId` to the renderer (`null` when absent). `bridgeSessionUrl()` in `public/bridge-url.js` turns it into `https://claude.ai/code/session_<suffix>`: the transcript record carries `cse_<suffix>`, the CLI descriptor and the web URL carry `session_<suffix>`, and the suffix is the same (measured on local transcripts that mention both forms). Any other shape, or an id with a character outside `[A-Za-z0-9]`, gives no URL and the row shows no button. The button (`.session-bridge-btn` in `buildSessionItem`) opens the URL through `window.api.openExternal`, whose main-side handler already refuses anything but `http(s)`.
 
-- **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. The end of indexing reaches the renderer on its own `indexing-finished` channel, sent at the end of **every** `populateCacheViaWorker` run, warm start included: `indexing-progress` is first-run only, so a warm start never told the planner that indexing was over and a saved session missing from the index left the "Finishing indexing" toast up for good. When the planner gives up (indexing over, or the tick cap) it returns the saved entries it never found as `unavailable`, and `tickRestorePlanner` names them in a "Not restored" notice. The end is also pullable (`get-indexing-state`, read once when the planner starts) because the startup scan can finish before the renderer listens, and `markRestoreIndexingDone` reloads the projects before the final tick because the last folders may not have reached `sessionMap` yet. See `test/session-restore-cold-cache.test.js`, `test/restore-unavailable.test.js`.
+- **Working-set restore retries until indexing is done, not once.** `populateCacheViaWorker` streams `sessionMap` one folder at a time on a cold start, so a saved working-set id can be missing for many ticks before it's genuinely indexed. `createRestorePlanner()` (`public/restore-plan.js`) is ticked from every `projects-changed` handler and from `updateIndexingBanner` on `payload.done`; it keeps returning `'wait'` until every saved id is indexed or indexing is over (then the rest is presumed deleted), restoring incrementally in `auto` mode and asking once (`askOnce: true`) in `ask` mode instead of re-prompting per tick. The end of indexing reaches the renderer on its own `indexing-finished` channel, sent at the end of **every** `populateCacheViaWorker` run, warm start included: `indexing-progress` is first-run only, so a warm start never told the planner that indexing was over and a saved session missing from the index left the "Finishing indexing" toast up for good. When the planner gives up (indexing over, or the tick cap) it returns the saved entries it never found as `unavailable`, and `tickRestorePlanner` names them in a "Not restored" notice. The end is also pullable (`get-indexing-state`, read once when the planner starts) because the startup scan can finish before the renderer listens, and `markRestoreIndexingDone` reloads the projects before the final tick because the last folders may not have reached `sessionMap` yet. See `test/session-restore-cold-cache.test.js`, `test/restore-unavailable.test.js`. A persist during that window keeps the entries not resolved yet (`pendingRestoreEntries`: the planner's pending ones, the ones awaiting the restore toast, and `restoreInFlight`, those handed to `runRestore` while their live-elsewhere check and open are awaited, even across two overlapping restores), otherwise any click or close would erase them from `openWorkingSet` before they are reached; see `test/restore-pending-persist.test.js`.
 
 - **Neither the working-set restore nor the reload path resumes a session that is live in another process.** `runRestore` and the post-`loadProjects` re-open of `sessionStorage.activeSessionId` call `openSession(..., { automatic: true })`, which skips the session without a prompt when `guardResume` reports it live elsewhere; the skipped entry is not activated, stays in the persisted working set at its saved position, and is reported by a one-line notice. See `.ai/contexts/cli-session-state.md` ("Live elsewhere").
+
+- **SDK-launched sessions are hidden from the project list, not from the index.** Programs driving Claude through the Agent SDK (the brain-runner's `claude -p` episodes, a Python review tool spawning one session per file batch, strap's developers) write ordinary top-level transcripts in the project's folder: `isSidechain: false`, no `subagents/` directory, and no record pointing back at the session that started them. They cannot be nested under a parent the way Task subagents are; the only reliable marker is the `entrypoint` field the CLI stamps on every record (`cli` when typed in a terminal, `sdk-cli` / `sdk-py` / `sdk-ts` for the SDK; measured 2026-10-07: ~4 500 SDK transcripts against ~540 interactive ones on one machine). Rows stay in `session_cache`, `session_metrics` and FTS, so the heatmap and token totals still count that activity.
+  - **What `session_cache.entrypoint` holds.** The first `type: 'user'` record's `entrypoint`, or `cli` as soon as any user record says `cli` (an SDK session someone resumed and typed into is theirs again — 5 strap developer transcripts measured). `''` when the first user record carries none: a scheduled run is pre-seeded by `createScheduleSession` without one, then resumed by `claude --resume -p` whose records say `sdk-cli`, and must stay visible. A non-string value counts as none. `NULL` means not read yet.
+  - **The column is added without a cache wipe.** Unlike the other reconciliation columns it does not set `mustReindex`: `db.js` runs before `requestSingleInstanceLock` in `main.js`, so a refused second launch would empty the running instance's cache, and a scan failing after the wipe would leave the app empty. Existing rows keep `NULL`, which `buildProjectsFromCache` treats as visible, and `backfillEntrypoints()` (started from `get-projects`, once per process, 200 rows per `setImmediate` tick) fills them with `readSessionEntrypoint`.
+  - **`readSessionEntrypoint` avoids reading interactive transcripts.** It reads 256 KB chunks until the first user turn (an SDK prompt is first written as a `queue-operation` line that can exceed 256 KB on its own: 190 of ~4 500 SDK transcripts measured); a non-SDK one is returned as is (so a session pre-seeded without an entrypoint and later typed into stores `''` here but `cli` from `readSessionFile`; both are visible, only `sdk-*` matters), and only an `sdk-*` one is scanned further for a `cli` user turn, in full up to 2 MB, and beyond that only its first and last 256 KB on the live path (`refreshFolder` runs it at every watcher flush, and the turn just typed is at the end; a full read of a 14 MB transcript costs ~250 ms of main thread), but in full from `backfillEntrypoints`, which runs once per row (sizes measured over 4 495 SDK transcripts: p50 44 KB, p99 711 KB, max 13 MB). `refreshFolder` calls it on the header-only branch for a cached `sdk-*` row, because a turn typed in a terminal lands at the end of the file, beyond the header.
+  - **What stays listed.** `hiddenSdkSessionIds` hides `sdk-*` rows while the global `hideSdkSessions` setting (default on) is set, except a session open in a terminal (`activeSessions`, not exited) or in the saved working set (`global.openWorkingSet`), so neither disappears from under the user nor fails to restore, and except a parent whose compaction mirror (`mergedIntoSessionId`) is not SDK. Subagent rows of a hidden session are dropped too (they would otherwise land in "Orphan subagents"), and a project left with only hidden rows gets no empty header from the on-disk folder pass. Because `activeSessions` is read when the list is built, opening an SDK session afterwards (a resume from search, a trigger, a remote attach) calls `revealIfSdkSession`, which sends `projects-changed` so the renderer reloads the list with it. The saved-working-set exemption only holds while the entry stays in `openWorkingSet`: `persistWorkingSet` (`public/app.js`) re-adds the entries the restore has not resolved yet (`restorePlanner.pending()`, and `restoreAwaitingConsent` while the restore toast is unanswered), so a persist in the middle of a cold restore does not drop a saved SDK session that is not indexed yet.
 
 ## Remote SSH hosts (issue #201)
 
@@ -1502,8 +1529,111 @@ stayed empty, one warn line in `main.log` and no user-visible error.
 The tests that hold this: "restart() after adding a host keeps the transport
 usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 
+## Archived projects (issue #473)
+
+**Archive folder** on a project header hides the folder, and its nested
+worktree folders, until a session it did not hold at archive time appears in
+it. The state is the `archivedProjects` settings row:
+`{ [entry]: { archivedAt, knownSessionIds } }`.
+
+- **Entry.** `archivedEntry(alias, projectPath)` in `archived-projects.js`:
+  `path.resolve(projectPath)` for a local group,
+  `<alias>::<posix-normalised path without trailing slash>` for a remote one.
+  A bare entry matches the local group only, unlike a bare `hiddenProjects`
+  entry, which matches every host.
+- **Rule.** `applyArchivedProjects(projects, archived, showArchived)` is pure
+  and runs in `get-projects` (through `applyAndPersistArchived`) on the output
+  of `mergePlaceholderSessions(buildProjectsFromCache(showArchived))`:
+  1. a group whose entry is stored comes back when it holds a session with no
+     `parentSessionId`, not archived, and not in `knownSessionIds`; its entry
+     is cleared;
+  2. a visible worktree group (`worktreeParentPath`, same alias) clears its
+     parent's entry, so the parent header comes back to hold it. A cleared
+     parent does not clear its children;
+  3. a group whose entry remains is dropped unless `showArchived`, so Show
+     archived and search (which renders from `cachedAllProjects`) still see it.
+  The setting is written back only when an entry was cleared.
+- **Main-process side.** `archiveProjectFolders`, `reenableOfferedSchedules`
+  and `dismissReenableOffer` in `archived-projects.js` hold the logic of the
+  `archive-project`, `reenable-project-schedules` and
+  `dismiss-schedule-reenable-offer` handlers, with every effect injected
+  (`archiveDeps()` in `main.js`); they are synchronous, so no read-modify-write
+  of a setting has an `await` in it.
+- **Snapshot.** `archiveProjectFolders` computes `knownSessionIds` per group,
+  after `refreshFolder` of every folder of the group (the `row.folder` of its
+  cached rows with the same alias and entry, plus its encoded folder, kept when
+  the directory exists): the top-level ids of the group in
+  `mergePlaceholderSessions(buildProjectsFromCache(true))` (archived rows, plain
+  terminals, remote placeholders), the `activeSessions` keys of the group and
+  their `realSessionId`, and the `*.jsonl` basenames on disk. A running
+  session belongs to the group when `archivedEntry(session.host, projectPath)`
+  equals the group's entry: a local entry is an absolute path and a remote one
+  starts with `<alias>::`, and an alias holds no `:`, so the entry comparison
+  already separates hosts.
+- **Order.** The snapshot is taken and the entries written before any schedule
+  is disabled, so a failure while taking it disables nothing; each disabled
+  file is then added to its entry and the entries written again. If that second
+  write fails, the error response carries `disabled` and the renderer's alert
+  names the schedules that were turned off.
+- **Refusal while indexing.** `get-project-archive-plan` and `archive-project`
+  refuse while `!isInitialScanComplete()`: a snapshot taken from a partial cache
+  would miss sessions and the folder would reappear on its own.
+- **Schedules.** `archivePlanForGroups` lists the enabled schedules of the
+  local groups in the schedule registry; `archive-project` re-scans and disables
+  only the ones the renderer confirmed — see
+  [schedule-runner.md](schedule-runner.md) ("Disabling a schedule file").
+- **Clearing by hand.** `add-project` and `delete-worktree` call
+  `clearArchivedEntry`.
+- **Re-enable offers.** An entry records `disabledSchedules`, the files the
+  archive actually disabled. When an entry leaves `archivedProjects` (a
+  reappearance in `get-projects`, or `clearArchivedEntry`), a non-empty list
+  moves to the `scheduleReenableOffers` setting, `{ [entry]: { disabledSchedules,
+  archivedAt, failed? } }`, in the same synchronous step. `get-projects` marks
+  each listed project holding an offer with `reenableOffer: { names, failed? }`,
+  names read from the files still present. The sidebar shows it as an inline
+  notice in the group (`buildReenableNotice`); **Turn back on** calls
+  `reenable-project-schedules`, which turns back on the files still reading
+  `enabled: false` and keeps only the failures in the offer, so the notice
+  stays and reports them; **Dismiss** calls `dismiss-schedule-reenable-offer`.
+  Archiving the folder again deletes its offer and carries the offered files
+  that still read `enabled: false` into the new entry's `disabledSchedules`,
+  so they are offered again on the next reappearance. A group holding an offer
+  is never auto-collapsed, so the notice stays in view.
+- **Differences from `hiddenProjects`.** `archive-project` deletes no setting,
+  cache row, search row or schedule registration, and a new session brings the
+  folder back; Hide Project does both and never comes back on its own.
+- **Renderer.** `archiveProjectFolder` (`public/sidebar.js`) reads the groups
+  and sessions from `cachedAllProjects`, never from the rendered list, which is
+  a search projection during a search; with no matching cached group it only
+  reloads. The stop is all-or-nothing: every session is stopped first, and one
+  refusal leaves everything unarchived. The dialog is `showChoiceDialog`
+  (`public/choice-dialog.js`).
+- **Worktree nesting.** `renderProjects` nests a worktree group only under a
+  listed group of the same alias and repository path
+  (`public/worktree-nesting.js`, a classic `<script>` in the renderer that
+  `archived-projects.js` also `require()`s, so both sides follow the same
+  regex). A worktree whose repository is hidden on its host (`hiddenProjects`,
+  bare or `<alias>::` entry, matched exactly as `isProjectHidden` does) carries
+  `hiddenRepository`, set in `applyAndPersistArchived`, and is drawn nowhere:
+  `isProjectHidden` hides exact paths only, so hiding a repository has to hide
+  its worktree groups this way. The rule is `isHiddenRepositoryWorktree`
+  (`public/worktree-nesting.js`); `loadProjects` (`public/app.js`) applies it
+  too to the group it builds for a pending session, reading
+  `global.hiddenProjects` only when that session is in a worktree. Any other
+  worktree whose repository is not listed is drawn at top level.
+- **Cold scan.** A folder not yet in `cache_meta` during the initial scan shows
+  empty under its decoded path, which does not match its entry; it hides again
+  once indexed. Matching on the folder key instead would break the remote and
+  merged-folder cases.
+
 ## If you change this, also check
 
+- `archived-projects.test.js` — covers the archived-folder rule, the snapshot sources, the worktree step, the archive plan and the re-enable offers
+- `dom-project-archive-folder.test.js` — covers the **Archive folder** flow and the alias-aware worktree nesting
+- `dom-choice-dialog.test.js` — covers `showChoiceDialog`
+- `archive-project-wiring.test.js` — covers the `main.js`, `preload.js` and `dialogs.js` wiring of archived folders
+- `archive-project-assembly.test.js` — covers `archiveProjectFolders`, `reenableOfferedSchedules` and `dismissReenableOffer` with their effects injected
+- `app-pending-hidden-repository.test.js` — covers the pending-session group of a hidden repository's worktree
 - `remote-hosts.test.js` — covers folder-key parsing, alias validation and the `isSafeRelPath` guard
 - `remote-mirror.test.js` — covers the inventory diff, the no-op second pull, deletions, and both failure modes, against a fake transport
 - `remote-transport.test.js` — covers the ssh/scp argv, inventory parsing, the timeout kill and `dispose()`, with `spawn` injected; also covers `LIST_COMMAND`'s exact text (issue #211's `.key`-exclusion and single-ssh-call pins), `splitListOutput()` and `parseSessions()`; and (issue #278) `listFiles()` marking a live descriptor `descriptorOnly` against the same call's own inventory, keeping a descriptor-only entry while still dropping a dead (`ALIVE:0`) one
@@ -1533,7 +1663,7 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 session_cache(sessionId PK, folder, projectPath, summary, firstPrompt,
               created, modified, messageCount, slug, aiTitle,
               parentSessionId, agentId, subagentType, description,
-              fileMtime, bridgeSessionId, mergedIntoSessionId)
+              fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint)
 session_meta(sessionId PK, customTitle, starred, archived)
 cache_meta(folder PK, projectPath, indexMtimeMs)
 search_fts USING fts5(id, type, folder, title, body, tokenize='trigram')

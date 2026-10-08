@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { StringDecoder } = require('string_decoder');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -179,6 +180,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let agentId = null;
     let bridgeSessionId = null;
     let sidechainSeen = false;
+    // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+    let entrypoint;
+    let typedInTerminal = false;
     // Real conversation time bounds. Resuming a session appends untimestamped
     // bookkeeping records (last-prompt, mode, ai-title, …) which bump the file's
     // mtime without any actual activity, so mtime can't be the displayed time.
@@ -199,6 +203,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (entry.slug && !slug) slug = entry.slug;
       if (entry.agentId && !agentId) agentId = entry.agentId;
       if (entry.isSidechain) sidechainSeen = true;
+      if (entrypoint === undefined && entry.type === 'user') entrypoint = entrypointOf(entry);
+      if (isTerminalTurn(entry)) typedInTerminal = true;
       // Compaction mirror dedup key -- see .ai/contexts/session-cache.md
       if (entry.type === 'bridge-session' && typeof entry.bridgeSessionId === 'string' &&
           entry.bridgeSessionId && !bridgeSessionId) {
@@ -282,6 +288,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, customTitle, aiTitle,
       bridgeSessionId,
+      entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,
     };
   } catch {
@@ -585,4 +592,80 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   }
 }
 
-module.exports = { readSessionFile, readSessionDisplayHeader, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };
+// see .ai/contexts/session-cache.md ("SDK-launched sessions")
+const SDK_FULL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
+const SDK_TAIL_SCAN_BYTES = 256 * 1024;
+
+function entrypointOf(entry) {
+  return typeof entry.entrypoint === 'string' ? entry.entrypoint : '';
+}
+
+function isTerminalTurn(entry) {
+  return entry.type === 'user' && entry.entrypoint === 'cli';
+}
+
+function isSdkEntrypoint(entrypoint) {
+  return typeof entrypoint === 'string' && entrypoint.startsWith('sdk-');
+}
+
+function readTextRange(fd, start, length) {
+  const buf = Buffer.alloc(length);
+  const n = fs.readSync(fd, buf, 0, length, start);
+  return buf.toString('utf8', 0, n);
+}
+
+function hasTerminalTurn(text) {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"cli"')) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (isTerminalTurn(entry)) return true;
+  }
+  return false;
+}
+
+function firstUserEntrypointIn(lines) {
+  for (const line of lines) {
+    if (!line) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry.type === 'user') return entrypointOf(entry);
+  }
+  return undefined;
+}
+
+function readFirstUserEntrypoint(fd, size) {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  for (let pos = 0; pos < size; pos += SDK_TAIL_SCAN_BYTES) {
+    const length = Math.min(SDK_TAIL_SCAN_BYTES, size - pos);
+    const buf = Buffer.alloc(length);
+    const n = fs.readSync(fd, buf, 0, length, pos);
+    const lines = (pending + decoder.write(buf.subarray(0, n))).split('\n');
+    pending = lines.pop();
+    const found = firstUserEntrypointIn(lines);
+    if (found !== undefined) return found;
+  }
+  return firstUserEntrypointIn([pending + decoder.end()]);
+}
+
+function readSessionEntrypoint(filePath, { full = false } = {}) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const first = readFirstUserEntrypoint(fd, size);
+    if (first === undefined) return null;
+    if (!isSdkEntrypoint(first)) return first;
+    if (full || size <= SDK_FULL_SCAN_MAX_BYTES) return hasTerminalTurn(readTextRange(fd, 0, size)) ? 'cli' : first;
+    const head = readTextRange(fd, 0, SDK_TAIL_SCAN_BYTES);
+    const tail = readTextRange(fd, size - SDK_TAIL_SCAN_BYTES, SDK_TAIL_SCAN_BYTES);
+    return hasTerminalTurn(head) || hasTerminalTurn(tail) ? 'cli' : first;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };

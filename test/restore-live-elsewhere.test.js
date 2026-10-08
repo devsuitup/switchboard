@@ -66,6 +66,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     var sessionMap = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;
+    var restorePlanner = null;
     var sessionOpenedOutsideRestore = false;
     var _persistChain = Promise.resolve();
     var RESTORE_STAGGER_MS = 0;
@@ -87,9 +88,9 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
-  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex'])
+  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  for (const name of ['persistWorkingSet', 'runRestore', 'openSession']) {
+  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession']) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {

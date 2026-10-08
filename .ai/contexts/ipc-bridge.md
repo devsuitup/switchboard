@@ -11,6 +11,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `preload.js` | ~150 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
 | `main.js` | ~2600 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
 | `schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
+| `bg-agents-ipc.js` | ~25 | **Also registers IPC handlers** (`get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these four. Audit both files. |
 
 ## Public surface (IPC inventory)
 
@@ -115,6 +116,17 @@ design (parser, runner, quoting, cwd resolution, refresh triggers, editing):
 boundary in either direction: the session's cwd is re-resolved main-side on
 every call, and the absolute path built from it is used and discarded there.
 
+### Background agents (see `.ai/contexts/bg-agents.md`)
+
+| IPC | Args | Returns | Notes |
+|---|---|---|---|
+| `get-bg-agents` | — | `{roster, daemonReachable}` | Arms the watchers on first call, re-subscribes the `bg-agents-changed` push on every call, then reconciles through `claude agents --json --all`. Handler in `bg-agents-ipc.js`. |
+| `bg-agent-verb` | `(verb, id)` | `{ok, error?}` | `stop` \| `respawn` \| `rm`; id validated against `JOB_ID_RE`; `respawn`/`rm` refused on a live (`working`/`blocked`) job. |
+| `dispatch-bg-agent` | `(fields)` | `{ok, id?, error?}` | `claude --bg …` in `fields.cwd`. |
+| `bg-agent-live-job` | `(sessionId)` | `{known, job} \| {known:false, reason}` | `liveJobCheck`; `stopBeforeArchive` refuses on a live job or an unknown answer. |
+
+`open-terminal` accepts `sessionOptions = {type: 'attach', jobId, cwd}` and runs `claude attach <jobId>`; `stop-session` on such a session detaches (`{ok, detached: true}`).
+
 ### Touched files (issue #309)
 
 | IPC | Args | Returns | Notes |
@@ -147,7 +159,7 @@ through `read-file-for-panel` and its guards, never through this IPC.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`
 
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id

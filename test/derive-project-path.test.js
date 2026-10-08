@@ -162,29 +162,46 @@ test('extractCwdFromJsonl: finds cwd when file is larger than 256 KB and cwd is 
   }
 });
 
-test('extractCwdFromJsonl: returns null when cwd only appears beyond the 256 KB scan window', () => {
-  // Documented accepted trade-off: real Claude Code transcripts always carry
-  // `cwd` on the very first JSONL line (the session-start summary record), so
-  // a cwd that lives only past the scan window indicates a malformed or exotic
-  // file that we deliberately do not support to avoid the re-read hot-loop.
+test('deriveProjectPath: returns null when cwd only appears between the head and tail scan windows', () => {
+  // see .ai/contexts/session-cache.md ("Bounded cwd scan")
   const tmp = mkTmp();
   try {
     const folder = path.join(tmp, encodeProjectPath(path.join(tmp, 'hidden-project')));
     fs.mkdirSync(folder);
     const cwd = path.join(tmp, 'hidden-project');
-    // Fill more than 256 KB with lines that have NO cwd field, then append
-    // the one line that has cwd — it lands beyond the scan window.
     const noHeader = JSON.stringify({ type: 'assistant', message: 'x'.repeat(80) }) + '\n';
     const filePath = path.join(folder, 'late-cwd.jsonl');
     const fillerCount = Math.ceil((CWD_SCAN_BYTES + 1024) / noHeader.length) + 10;
     const fd = fs.openSync(filePath, 'w');
-    for (let i = 0; i < fillerCount; i++) {
-      fs.writeSync(fd, noHeader);
-    }
-    // cwd line is appended after the scan window
+    for (let i = 0; i < fillerCount; i++) fs.writeSync(fd, noHeader);
     fs.writeSync(fd, JSON.stringify({ type: 'summary', cwd }) + '\n');
+    for (let i = 0; i < fillerCount; i++) fs.writeSync(fd, noHeader);
     fs.closeSync(fd);
-    assert.ok(fs.statSync(filePath).size > CWD_SCAN_BYTES, 'precondition: file must exceed scan window');
+    assert.ok(fs.statSync(filePath).size > 2 * CWD_SCAN_BYTES, 'precondition: file must exceed both scan windows');
+    assert.equal(deriveProjectPath(folder), null);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
+test('deriveProjectPath: reads the tail window only after a head cwd naming the folder\'s repository', () => {
+  // see .ai/contexts/session-cache.md ("A transcript moved into a worktree folder")
+  const tmp = mkTmp();
+  try {
+    const cwd = path.join(tmp, 'tail-project');
+    const folder = path.join(tmp, encodeProjectPath(cwd));
+    fs.mkdirSync(folder);
+    const filler = JSON.stringify({ type: 'assistant', message: 'x'.repeat(80) }) + '\n';
+    const fillerCount = Math.ceil((CWD_SCAN_BYTES + 1024) / filler.length) + 10;
+    const write = (name, headCwd) => {
+      const fd = fs.openSync(path.join(folder, name), 'w');
+      if (headCwd) fs.writeSync(fd, JSON.stringify({ type: 'user', cwd: headCwd }) + '\n');
+      for (let i = 0; i < fillerCount; i++) fs.writeSync(fd, filler);
+      fs.writeSync(fd, JSON.stringify({ type: 'summary', cwd }) + '\n');
+      fs.closeSync(fd);
+    };
+    write('unrelated-head.jsonl', path.join(tmp, 'elsewhere'));
+    write('no-head-cwd.jsonl', null);
     assert.equal(deriveProjectPath(folder), null);
   } finally {
     cleanup(tmp);

@@ -2,13 +2,14 @@
 
 "Primary" below is `Cmd` on macOS and `Ctrl` on Windows and Linux.
 
-## Rebindable: sessions and grid
+## Rebindable: sessions, grid and agents
 
 | Action | Default | Effect |
 |---|---|---|
 | Navigate sessions / grid | Primary+Shift+↑/↓/←/→ | In the grid, move between cards in two dimensions; in single view, ← and ↑ go to the previous session, → and ↓ to the next |
 | Previous / next session | Primary+Shift+`[` / `]` | Cycle through the sessions |
 | Toggle grid view | Primary+Shift+`G` | Show or hide the [grid](grid-overview.md) |
+| Toggle agents view | Primary+Shift+`A` | Show or hide the [background agents](background-agents.md) view |
 
 These work with the focus in a terminal, where they are caught before the
 program sees them, and anywhere else in the window. Shift, not Alt, avoids the

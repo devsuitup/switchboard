@@ -316,6 +316,8 @@ if (migrations.length > currentDbVersion) {
       mustReindex = true;
     }
   }
+  // see .ai/contexts/session-cache.md ("SDK-launched sessions")
+  if (!cols.has('entrypoint')) db.exec('ALTER TABLE session_cache ADD COLUMN entrypoint TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
   // Fork table (shipped in our v5), referenced unconditionally by prepare()
   // below — must exist whatever db_version claims.
@@ -418,8 +420,8 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
@@ -429,7 +431,8 @@ const stmts = {
       parentSessionId = excluded.parentSessionId, agentId = excluded.agentId,
       subagentType = excluded.subagentType, description = excluded.description,
       bridgeSessionId = excluded.bridgeSessionId,
-      mergedIntoSessionId = excluded.mergedIntoSessionId
+      mergedIntoSessionId = excluded.mergedIntoSessionId,
+      entrypoint = excluded.entrypoint
   `),
   cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
   // Kept as SELECT * (upstream narrowed this to sessionId+fileMtime): our
@@ -437,6 +440,8 @@ const stmts = {
   // refresh can merge display fields without re-reading the transcript body.
   // fileMtime still comes through, so upstream's invalidation key works.
   cacheGetByFolder: db.prepare('SELECT * FROM session_cache WHERE folder = ?'),
+  cacheGetMissingEntrypoint: db.prepare('SELECT sessionId, folder FROM session_cache WHERE entrypoint IS NULL AND parentSessionId IS NULL'),
+  cacheSetEntrypoint: db.prepare('UPDATE session_cache SET entrypoint = ? WHERE sessionId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
@@ -556,7 +561,8 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.slug || null, s.aiTitle || null,
       s.parentSessionId || null, s.agentId || null,
       s.subagentType || null, s.description || null,
-      s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null
+      s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
+      typeof s.entrypoint === 'string' ? s.entrypoint : null
     );
   }
 });
@@ -587,6 +593,14 @@ function getCachedByParent(parentSessionId) {
 function upsertCachedSessions(sessions) {
   upsertCachedSessionsBatch(sessions);
 }
+
+function getCachedMissingEntrypoint() {
+  return stmts.cacheGetMissingEntrypoint.all();
+}
+
+const setCachedEntrypoints = db.transaction((pairs) => {
+  for (const { sessionId, entrypoint } of pairs) stmts.cacheSetEntrypoint.run(entrypoint, sessionId);
+});
 
 function getCachedByFolder(folder) {
   return stmts.cacheGetByFolder.all(folder);
@@ -886,7 +900,7 @@ function closeDb() {
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,

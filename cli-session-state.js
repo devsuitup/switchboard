@@ -38,6 +38,10 @@ const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
 const lastProbeAt = new Map();
+const statusKey = (sessionId) => String(sessionId).toLowerCase();
+const MAX_DESCRIPTOR_SCAN = 1000;
+// Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
+const descriptorListeners = new Set();
 
 function defaultIsProcessAlive(pid) {
   try {
@@ -145,12 +149,60 @@ function parseState(text) {
   };
 }
 
+// The descriptor subset the agents view reads -- see .ai/contexts/bg-agents.md
+function parseDescriptor(text) {
+  let raw;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  if (!Number.isInteger(raw.pid) || raw.pid <= 0) return null;
+  if (typeof raw.sessionId !== 'string' || !raw.sessionId) return null;
+  const s = (v) => (typeof v === 'string' && v ? v : null);
+  return {
+    pid: raw.pid,
+    sessionId: raw.sessionId,
+    kind: s(raw.kind),
+    jobId: s(raw.jobId),
+    agent: s(raw.agent),
+    name: s(raw.name),
+    cwd: s(raw.cwd),
+    status: KNOWN_STATUSES.has(raw.status) ? raw.status : null,
+    startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+  };
+}
+
+function readAllDescriptors() {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  let seen = 0;
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    if (++seen > MAX_DESCRIPTOR_SCAN) break;
+    let text;
+    try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
+    const d = parseDescriptor(text);
+    if (d && isProcessAlive(d.pid)) out.push(d);
+  }
+  return out;
+}
+
+function onDescriptorsChanged(listener) {
+  descriptorListeners.add(listener);
+  return () => { descriptorListeners.delete(listener); };
+}
+
+function notifyDescriptorsChanged() {
+  for (const listener of descriptorListeners) {
+    try { listener(); } catch (err) { log.warn(`[cli-state] descriptor listener failed: ${err.message}`); }
+  }
+}
+
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
     if (!session || session.exited || session.isPlainTerminal || !session.projectFolder) continue;
     const effectiveId = session.realSessionId || key;
-    if (effectiveId === sessionId) return { sessionId: effectiveId, session };
+    if (statusKey(effectiveId) === statusKey(sessionId)) return { sessionId: effectiveId, session };
   }
   return null;
 }
@@ -170,10 +222,10 @@ function handleFile(name) {
   if (!state) return;
 
   const prev = known.get(name);
-  if (prev && prev.sessionId && prev.sessionId !== state.sessionId) forgetSession(prev.sessionId);
+  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
   known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+    statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
     forgetSession(state.sessionId);
   }
@@ -191,9 +243,9 @@ function handleFile(name) {
   }
 
   const now = Date.now();
-  const last = lastRescanAt.get(match.sessionId) || 0;
+  const last = lastRescanAt.get(statusKey(match.sessionId)) || 0;
   if (now - last < MIN_RESCAN_INTERVAL_MS) return;
-  lastRescanAt.set(match.sessionId, now);
+  lastRescanAt.set(statusKey(match.sessionId), now);
 
   try {
     onIdle(match.sessionId, match.session);
@@ -207,6 +259,7 @@ function flush() {
   const batch = [...pending];
   pending.clear();
   for (const name of batch) handleFile(name);
+  if (batch.length > 0) notifyDescriptorsChanged();
 }
 
 function seed() {
@@ -221,15 +274,15 @@ function seed() {
     if (state) {
       known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(state.sessionId, { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+        statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       }
     }
   }
 }
 
 function forgetSession(sessionId) {
-  statusBySession.delete(sessionId);
-  lastProbeAt.delete(sessionId);
+  statusBySession.delete(statusKey(sessionId));
+  lastProbeAt.delete(statusKey(sessionId));
 }
 
 function ensureWatching() {
@@ -280,13 +333,14 @@ function stop() {
 
 // Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
 function getStatus(sessionId) {
-  const entry = statusBySession.get(sessionId);
+  const key = statusKey(sessionId);
+  const entry = statusBySession.get(key);
   if (!entry) return undefined;
 
   const t = now();
-  const last = lastProbeAt.get(sessionId) || 0;
+  const last = lastProbeAt.get(key) || 0;
   if (t - last >= GET_STATUS_PROBE_THROTTLE_MS) {
-    lastProbeAt.set(sessionId, t);
+    lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
       forgetSession(sessionId);
       return undefined;
@@ -307,17 +361,23 @@ function canCompareProcStart(raw) {
 }
 
 // On-demand scan, independent of the watcher -- see .ai/contexts/cli-session-state.md ("Live elsewhere")
-async function scanLiveProcesses(sessionIds, exclude) {
+async function scanLiveProcessesChecked(sessionIds, exclude) {
   const found = new Map();
-  if (sessionIds.size === 0) return found;
+  if (sessionIds.size === 0) return { found, unreadable: null };
   let names;
-  try { names = fs.readdirSync(dir).sort(); } catch { return found; }
+  try { names = fs.readdirSync(dir).sort(); } catch (err) {
+    return { found, unreadable: err && err.code === 'ENOENT' ? null : `cannot read ${dir}: ${err && err.message}` };
+  }
+  let unreadable = null;
   const candidates = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
-    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-    if (!raw || typeof raw !== 'object' || !sessionIds.has(raw.sessionId)) continue;
+    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch (err) {
+      if (!(err && err.code === 'ENOENT')) unreadable = unreadable || `cannot read ${path.join(dir, name)}`;
+      continue;
+    }
+    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string' || !sessionIds.has(raw.sessionId.toLowerCase())) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     if (exclude(raw.pid)) continue;
@@ -335,23 +395,31 @@ async function scanLiveProcesses(sessionIds, exclude) {
   }
 
   for (const raw of candidates) {
-    if (found.has(raw.sessionId)) continue;
+    const key = raw.sessionId.toLowerCase();
+    if (found.has(key)) continue;
     if (canCompareProcStart(raw) && toProbe.includes(raw.pid)) {
       const actual = actualByPid.get(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
     }
-    found.set(raw.sessionId, {
+    found.set(key, {
       pid: raw.pid,
       cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
       startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+      kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : null,
+      jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
     });
   }
-  return found;
+  return { found, unreadable };
+}
+
+async function scanLiveProcesses(sessionIds, exclude) {
+  return (await scanLiveProcessesChecked(sessionIds, exclude)).found;
 }
 
 async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
-  return (await scanLiveProcesses(new Set([sessionId]), exclude)).get(sessionId) || null;
+  const key = sessionId.toLowerCase();
+  return (await scanLiveProcesses(new Set([key]), exclude)).get(key) || null;
 }
 
 function ownProcessFilter(ptyPids) {
@@ -365,15 +433,26 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
 }
 
+async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
+  if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
+  if (hasPty(sessionId)) return { known: true, live: null };
+  const key = sessionId.toLowerCase();
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownProcessFilter(ptyPids));
+  const live = found.get(key) || null;
+  if (live) return { known: true, live };
+  return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };
+}
+
 async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
   const result = {};
   if (!Array.isArray(sessionIds)) return result;
-  const wanted = new Set();
+  const wanted = new Map();
   for (const id of sessionIds) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
-    if (typeof id === 'string' && id && !hasPty(id)) wanted.add(id);
+    if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
-  for (const [id, live] of await scanLiveProcesses(wanted, ownProcessFilter(ptyPids))) result[id] = live;
+  const found = await scanLiveProcesses(new Set(wanted.values()), ownProcessFilter(ptyPids));
+  for (const [id, key] of wanted) if (found.has(key)) result[id] = found.get(key);
   return result;
 }
 
@@ -382,12 +461,17 @@ module.exports = {
   findLiveProcess,
   liveElsewhere,
   liveElsewhereMany,
+  liveElsewhereChecked,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,
   ensureWatching,
   stop,
   parseState,
+  onDescriptorsChanged,
+  readAllDescriptors,
+  parseDescriptor,
+  ownProcessFilter,
   getStatus,
   KNOWN_STATUSES,
   DEFAULT_DIR,
