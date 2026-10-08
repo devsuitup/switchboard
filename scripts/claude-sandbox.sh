@@ -486,6 +486,7 @@ bind_user_claude_dir() {
         STATE_LINK_TARGET=""
         bind_state_link_target "$e" "$kind"
         if [ -n "$STATE_LINK_TARGET" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+          OPT_IN_BINDS+=("user:$((${#M_DEST[@]} - 1))")
           protect_tree "$STATE_LINK_TARGET" nocreate
         fi
       else
@@ -494,6 +495,7 @@ bind_user_claude_dir() {
     elif in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
       mount_op --bind "$e" "$e"
       if [ -d "$e" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+        OPT_IN_BINDS+=("user:$((${#M_DEST[@]} - 1))")
         protect_tree "$e" nocreate
       fi
     else
@@ -523,6 +525,7 @@ bind_project_claude_dir() {
         debug "state link $e left as is"
       else
         mount_op --bind "$e" "$e"
+        in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && OPT_IN_BINDS+=("project:$((${#M_DEST[@]} - 1))")
       fi
     elif [ -L "$e" ]; then
       protect_link_target "$e"
@@ -693,6 +696,34 @@ pin_protected_paths() {
   done
 }
 
+# see docs/sandbox.md, "Writable skills and agents"
+check_opt_in_binds() {
+  local b k t i d best best_len r
+  for b in ${OPT_IN_BINDS[@]+"${OPT_IN_BINDS[@]}"}; do
+    k="${b#*:}"; t="${M_DEST[k]}"
+    best=""; best_len=-1
+    for i in "${!M_DEST[@]}"; do
+      [ "$i" = "$k" ] && continue
+      case "${M_OP[i]}" in --symlink|--file) continue ;; esac
+      d="${M_DEST[i]}"
+      case "$t/" in "$d"/*) ;; *) continue ;; esac
+      [ "${#d}" -ge "$best_len" ] && { best="$i"; best_len="${#d}"; }
+    done
+    if [ "${b%%:*}" = user ] && [ -n "$best" ] && [ "${M_OP[best]}" = --ro-bind ]; then
+      opt_in_refuse "$t" "${M_DEST[best]}"
+    fi
+    for r in "${!PROTECTED_SEEN[@]}"; do
+      case "$t/" in "$r"/*) opt_in_refuse "$t" "$r" ;; esac
+    done
+  done
+}
+
+opt_in_refuse() {
+  local where="inside"
+  [ "$1" = "$2" ] && where="also"
+  fail "refusing to launch: $1, which SWITCHBOARD_SANDBOX_RW_$(printf '%s' "${1##*/}" | tr a-z A-Z)=1 makes writable, is $where $2, which the sandbox keeps read-only; the session could change it through ${1##*/}. Give ${1##*/} a directory of its own, or turn the flag off for this session."
+}
+
 # Fills BWRAP_ARGS from what exists now, and MISSING_DIRS with what must be
 # created before the real launch. Run once for the pre-flight, then again once
 # the missing directories exist.
@@ -702,6 +733,7 @@ build_bwrap_args() {
   PIN_VIEWS=(); PIN_IDX=()
   MISSING_DIRS=()
   GIT_WORKTREES=()
+  OPT_IN_BINDS=()
   local d name i
   mount_op --dev "" /dev
   mount_op --proc "" /proc
@@ -748,6 +780,7 @@ build_bwrap_args() {
     protect_git "$d"
   done
   pin_protected_paths
+  check_opt_in_binds
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
   local order

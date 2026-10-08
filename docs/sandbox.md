@@ -203,6 +203,15 @@ directory's `.claude`, as session state:
   `~/.claude` into it, such as a `settings.json` kept in the same dotfiles
   repository, stays read-only too. No `.claude` is created there. Other links
   inside it are not followed.
+- The launch is refused when the writable directory is also, or lies inside,
+  something the sandbox keeps read-only: the target of another `~/.claude`
+  entry (`hooks` and `skills` linked to the same directory, or `skills` linked
+  inside the target of `hooks`), a repository's hooks directory, or a read-only
+  entry such as `~/.claude/plugins`. Two mounts on the same path, or a writable
+  one inside a read-only one, would leave the protected files writable through
+  the opted-in directory. A read-only path inside the writable directory is
+  fine: the deeper mount wins. The check runs on the finished mount list, so
+  the order in which the entries are bound does not matter.
 
 This gives up part of the protection: what the session writes there is loaded,
 and its scripts run, by every later session outside the sandbox, other

@@ -586,6 +586,98 @@ test('sandbox wrapper: an opted-in skills in a project\'s .claude that links out
     }
   });
 
+test('sandbox wrapper: refuses an opted-in skills or agents that is, or is inside, a path another entry keeps read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      const flags = { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' };
+      const reset = () => {
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(path.join(rig.proj, '.claude'), { recursive: true, force: true });
+        fs.rmSync(path.join(rig.proj, '.git'), { recursive: true, force: true });
+        fs.rmSync(path.join(rig.root, 'x'), { recursive: true, force: true });
+        fs.mkdirSync(dir);
+      };
+      const refuses = (what) => {
+        const { status, stderr } = rig.run(['--version'], flags);
+        assert.equal(status, 125, `${what}: must be refused\n${stderr}`);
+        assert.match(stderr, /refusing to launch: .*skills.* read-only/, what);
+      };
+      const x = path.join(rig.root, 'x');
+
+      for (const other of ['hooks', 'agents', 'commands', 'statusline']) {
+        reset();
+        fs.mkdirSync(path.join(x, 'skills'), { recursive: true });
+        fs.symlinkSync(path.join(x, 'skills'), path.join(dir, other));
+        fs.symlinkSync(path.join(x, 'skills'), path.join(dir, 'skills'));
+        refuses(`${other} and skills linked to the same directory`);
+      }
+
+      reset();
+      fs.mkdirSync(path.join(dir, 'skills'));
+      fs.symlinkSync(path.join(dir, 'skills'), path.join(dir, 'commands'));
+      refuses('commands linked to a real ~/.claude/skills');
+
+      reset();
+      fs.mkdirSync(path.join(x, 'h', 'skills'), { recursive: true });
+      fs.symlinkSync(path.join(x, 'h'), path.join(dir, 'hooks'));
+      fs.symlinkSync(path.join(x, 'h', 'skills'), path.join(dir, 'skills'));
+      refuses('skills linked inside the target of hooks, which the sandbox does not otherwise see');
+
+      reset();
+      fs.mkdirSync(path.join(dir, 'plugins', 'skills'), { recursive: true });
+      fs.symlinkSync(path.join(dir, 'plugins', 'skills'), path.join(dir, 'skills'));
+      refuses('skills linked inside the read-only ~/.claude/plugins');
+
+      reset();
+      git(rig.proj, 'init', '-q');
+      fs.mkdirSync(path.join(rig.proj, '.git', 'hooks', 'skills'), { recursive: true });
+      fs.symlinkSync(path.join(rig.proj, '.git', 'hooks', 'skills'), path.join(dir, 'skills'));
+      refuses('skills linked inside the project\'s git hooks');
+
+      reset();
+      fs.mkdirSync(path.join(rig.proj, '.claude', 'skills'), { recursive: true });
+      fs.symlinkSync('skills', path.join(rig.proj, '.claude', 'hooks'));
+      refuses('the project\'s .claude/hooks linked to its .claude/skills');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: an opted-in skills may contain a read-only path, or share its target with the project\'s own skills',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const skills = path.join(rig.root, 'x', 'skills');
+      fs.mkdirSync(path.join(skills, 'hk'), { recursive: true });
+      fs.symlinkSync(skills, path.join(dir, 'skills'));
+      fs.symlinkSync(path.join(skills, 'hk'), path.join(dir, 'hooks'));
+
+      let res = rig.run(['--version']);
+      assert.equal(res.status, 0, `with the flag off nothing is writable, so nothing is refused\n${res.stderr}`);
+      res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' });
+      assert.equal(res.status, 0, res.stderr);
+      let ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(skills, 'mine')), '--bind');
+      assert.equal(accessAt(ops, path.join(skills, 'hk', 'h.sh')), '--ro-bind', 'a deeper read-only mount wins');
+
+      fs.rmSync(path.join(dir, 'skills'));
+      fs.rmSync(path.join(dir, 'hooks'));
+      const own = path.join(rig.proj, '.claude', 'skills');
+      fs.mkdirSync(own, { recursive: true });
+      fs.symlinkSync(own, path.join(dir, 'skills'));
+      res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_RW_SKILLS: '1' });
+      assert.equal(res.status, 0, res.stderr);
+      ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(mountAt(ops, own)?.op, '--bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a symlinked ~/.claude entry is recreated as a link, and its target is read-only wherever the sandbox could write it',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
