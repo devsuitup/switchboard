@@ -4233,6 +4233,15 @@ body { display: flex; flex-direction: column; }
   width: 100%;
 }
 
+.dispatch-agent-dialog .permission-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dispatch-agent-dialog .permission-option {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .dispatch-agent-dialog textarea {
   resize: vertical;
 }

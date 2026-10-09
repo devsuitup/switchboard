@@ -723,7 +723,8 @@ async function showDispatchAgentDialog(project) {
   function renderModeGrid() {
     return BACKGROUND_PERMISSION_MODES.map(m => {
       const isSelected = selectedMode === m.value;
-      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
+      const danger = m.value === 'bypassPermissions' ? ' dangerous' : '';
+      return `<button class="permission-option${danger}${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
     }).join('');
   }
 
@@ -804,7 +805,8 @@ async function showDispatchAgentDialog(project) {
   let refusal = null;
 
   function applyEffective() {
-    selectedMode = BACKGROUND_PERMISSION_MODES[0].value;
+    selectedMode = BACKGROUND_PERMISSION_MODES.some(m => m.value === effective.permissionMode)
+      ? effective.permissionMode : BACKGROUND_PERMISSION_MODES[0].value;
     modeGrid.innerHTML = renderModeGrid();
     dialog.querySelector('#dad-add-dirs').value = (effective.addDirs || SETTING_DEFAULTS.addDirs || '')
       .split(',').map(dir => dir.trim()).filter(Boolean).join('\n');

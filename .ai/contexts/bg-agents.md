@@ -182,9 +182,9 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 ## Dispatch
 
 `showDispatchAgentDialog` offers Accept Edits, Auto, Plan and Bypass from
-`BACKGROUND_PERMISSION_MODES` in `public/dialogs.js`. Accept Edits is selected
-on opening and on project changes, independently of foreground session
-permission settings. This four-mode set follows the maintainer's proposed
+`BACKGROUND_PERMISSION_MODES` in `public/dialogs.js`. On opening and on each
+project change the project's own permission mode is preselected when it is one
+of the four; otherwise Accept Edits is. Bypass carries the `dangerous` style. This four-mode set follows the maintainer's proposed
 background choices for #501; it is kept in one constant so it can be revised.
 Accept Edits and Auto can still stop for actions requiring approval; offering
 them does not guarantee an unattended run finishes. The dialog sends the

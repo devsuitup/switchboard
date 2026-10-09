@@ -28,7 +28,7 @@ function setup({ dispatchResult = { ok: true, id: 'cccccccc' }, projects, effect
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   for (const f of ['setting-defaults.js', 'utils.js', 'icons.js', 'dialogs.js']) {
-    vm.runInContext(fs.readFileSync(path.join(PUBLIC, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
+    vm.runInContext(fs.readFileSync(path.join(PUBLIC, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, f) });
   }
   return { window, document: window.document, calls, destroy: () => window.close() };
 }
@@ -150,7 +150,7 @@ test('the dialog scrolls inside the window when it is taller than the screen', a
   assert.match(rule[1], /overflow-y:\s*auto/);
 });
 
-test('switching project re-reads directories and resets background permissions to Accept Edits', async (t) => {
+test('switching project re-reads directories and takes the background mode of the new project when it is offered', async (t) => {
   const byProject = {
     '/w/one': { dangerouslySkipPermissions: true, addDirs: '/srv/one' },
     '/w/two': { permissionMode: 'plan', dangerouslySkipPermissions: false, addDirs: '' },
@@ -165,14 +165,14 @@ test('switching project re-reads directories and resets background permissions t
   select.dispatchEvent(new ctx.window.Event('change'));
   await tick(); await tick();
   assert.equal(d.querySelector('.permission-option[data-mode="bypassPermissions"]').classList.contains('selected'), false);
-  assert.ok(d.querySelector('.permission-option[data-mode="acceptEdits"]').classList.contains('selected'));
+  assert.ok(d.querySelector('.permission-option[data-mode="plan"]').classList.contains('selected'));
   assert.equal(d.querySelector('#dad-add-dirs').value, '');
   d.querySelector('#dad-prompt').value = 'go';
   d.querySelector('.new-session-start-btn').click();
   await tick(); await tick();
   assert.equal(ctx.calls.dispatched[0].cwd, '/w/two');
   assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
-  assert.equal(ctx.calls.dispatched[0].permissionMode, 'acceptEdits');
+  assert.equal(ctx.calls.dispatched[0].permissionMode, 'plan');
   assert.equal(ctx.calls.dispatched[0].addDirs, '');
 });
 
@@ -268,19 +268,27 @@ test('a failed lookup for the opening project keeps Start disabled too', async (
   assert.match(ctx.document.querySelector('#dad-error').textContent, /boom/);
 });
 
-test('background permissions offer only Accept Edits, Auto, Plan and Bypass, with Accept Edits selected', async (t) => {
-  const ctx = setup(); t.after(ctx.destroy);
+test('background permissions offer only Accept Edits, Auto, Plan and Bypass, with Accept Edits selected when the project mode is not offered', async (t) => {
+  const ctx = setup({ effective: { permissionMode: 'default', addDirs: '' } }); t.after(ctx.destroy);
   await ctx.window.showDispatchAgentDialog(null);
   const buttons = [...ctx.document.querySelectorAll('#dad-mode-grid .permission-option')];
   assert.deepEqual(buttons.map(b => [b.dataset.mode, b.querySelector('.perm-name').textContent]), [
     ['acceptEdits', 'Accept Edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Bypass'],
   ]);
   assert.deepEqual(buttons.filter(b => b.classList.contains('selected')).map(b => b.dataset.mode), ['acceptEdits']);
+  assert.deepEqual(buttons.filter(b => b.classList.contains('dangerous')).map(b => b.dataset.mode), ['bypassPermissions']);
   ctx.document.querySelector('#dad-prompt').value = 'go';
   ctx.document.querySelector('.new-session-start-btn').click();
   await tick();
   assert.equal(ctx.calls.dispatched[0].permissionMode, 'acceptEdits');
   assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
+});
+
+test('a project whose mode is offered opens with that mode selected', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const selected = [...ctx.document.querySelectorAll('#dad-mode-grid .permission-option.selected')].map(b => b.dataset.mode);
+  assert.deepEqual(selected, ['auto']);
 });
 
 test('every offered background mode sends its value without the dangerous-skip flag', async (t) => {
@@ -334,7 +342,7 @@ test('Additional Directories is multiline and dispatch preserves commas within p
   const fields = ctx.calls.dispatched[0];
   assert.equal(typeof fields.addDirs, 'string');
   assert.deepEqual(dispatchArgs(fields).args, [
-    '--bg', '--permission-mode', 'acceptEdits', '--add-dir', '/srv/a,b',
+    '--bg', '--permission-mode', 'auto', '--add-dir', '/srv/a,b',
     '--add-dir', 'C:\\work\\shared files', '--', 'go',
   ]);
 });
