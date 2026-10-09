@@ -120,17 +120,17 @@ across tool switches and shell-only fill, tool-only layout, Refresh beside
 the id, the 32-case narrow-window/zoom matrix, ordered shrinking and restored
 widths, vertical zoom, focused-grid ownership, and native Tab traversal.
 Run each mutation independently on the corrected implementation in the
-CI `e2e` job, preserving the journey's assertions. Replace the pending cells
-below with immutable run links after reading the failed assertion.
+CI `e2e` job, preserving the journey's assertions. Each run below failed its
+journey on that mutation, applied alone on top of 69610d2 (draft PR #514).
 
 | Journey | Mutation | Red run |
 |---|---|---|
-| E1: single/grid bar geometry | Position `#tool-bar` absolutely at `top: 0` | Pending; not observed |
-| E2a-E2c: shell height and tool switches | Initialize the shell before Touched, reverting their DOM order | Pending; not observed |
-| E3: tool without a shell | Show the shell region even when no shell is open | Pending; not observed |
-| E4: Refresh beside id | Restore `justify-content: space-between` on `#terminal-header` | Pending; not observed |
-| E5: 32-case overflow matrix | Disable `#sidebar` shrinking | Pending; not observed |
-| E5b: ordered shrinking and restoration | Force the expanded sidebar to `200px` | Pending; not observed |
-| E6: vertical zoom | Give `#tool-bar` a negative strip-height top margin | Pending; not observed |
-| E7: focused grid card | Hide `#tool-bar` in grid mode | Pending; not observed |
-| E8: native Tab traversal | Set every visible enabled tool button's `tabindex` to `0` | Pending; not observed |
+| E1: single/grid bar geometry | Position `#tool-bar` absolutely at `top: 0` | [run](https://github.com/devsuitup/switchboard/actions/runs/37948454932) |
+| E2a-E2c: shell height and tool switches | Initialize the shell before Touched, reverting their DOM order | [run](https://github.com/devsuitup/switchboard/actions/runs/37948732830) |
+| E3: tool without a shell | Show the shell region even when no shell is open | [run](https://github.com/devsuitup/switchboard/actions/runs/37948998990) |
+| E4: Refresh beside id | Restore `justify-content: space-between` on `#terminal-header` | [run](https://github.com/devsuitup/switchboard/actions/runs/37949270438) |
+| E5: 32-case overflow matrix | Disable `#sidebar` shrinking | [run](https://github.com/devsuitup/switchboard/actions/runs/37949662714) |
+| E5b: ordered shrinking and restoration | Force the expanded sidebar to `200px` | [run](https://github.com/devsuitup/switchboard/actions/runs/37949662714), from the E5 sidebar-shrink mutation; the 200px mutation itself was not run |
+| E6: vertical zoom | Give `#tool-bar` a negative strip-height top margin | [run](https://github.com/devsuitup/switchboard/actions/runs/37949930693) |
+| E7: focused grid card | Hide `#tool-bar` in grid mode | [run](https://github.com/devsuitup/switchboard/actions/runs/37950194588) |
+| E8: native Tab traversal | Set every visible enabled tool button's `tabindex` to `0` | [run](https://github.com/devsuitup/switchboard/actions/runs/37950466975) |
