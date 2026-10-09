@@ -34,7 +34,6 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    `control.key` are never touched.
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
-   `spawnPty` registers `guardPtyInputErrors` immediately on both spawn paths: asynchronous Windows `_agent.inSocket` errors are debug-logged and absorbed; absent internals and failing access or logging never throw (#517).
 4. No steady-state cost before the view is first opened: the watchers are
    armed by the first `get-bg-agents`. Closing the view keeps them so the
    sidebar badge stays current; the window's `closed` handler releases them.

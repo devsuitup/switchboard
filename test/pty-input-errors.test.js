@@ -81,6 +81,28 @@ test('input errors remain handled when the debug logger throws', () => {
   assert.doesNotThrow(() => input.emit('error', new Error('write EPIPE')));
 });
 
+test('input errors use warn when the logger provides it', () => {
+  const input = new EventEmitter();
+  const warnings = [];
+  setPtyOpLogger({
+    warn(line) { warnings.push(line); },
+    debug() { assert.fail('warn must take precedence over debug'); },
+  });
+  guardPtyInputErrors({ pid: 517, _agent: { inSocket: input } });
+  input.emit('error', new Error('write EPIPE'));
+  assert.deepEqual(warnings, ['[pty] input error pid=517 reason=write EPIPE']);
+});
+
+test('input errors remain handled when the warn logger throws', () => {
+  const input = new EventEmitter();
+  setPtyOpLogger({
+    warn() { throw new Error('logger unavailable'); },
+    debug() { assert.fail('warn must take precedence over debug'); },
+  });
+  guardPtyInputErrors({ _agent: { inSocket: input } });
+  assert.doesNotThrow(() => input.emit('error', new Error('write EPIPE')));
+});
+
 test('the input error listener survives repeated failures with logging disabled', () => {
   assert.equal(typeof guardPtyInputErrors, 'function');
   const input = new EventEmitter();

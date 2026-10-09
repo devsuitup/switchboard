@@ -21,7 +21,9 @@ function guardPtyInputErrors(pty) {
         try {
           if (logger) {
             const reason = (err && err.message) || String(err);
-            logger.debug(`[pty] input error pid=${pty.pid || '?'} reason=${reason}`);
+            const line = `[pty] input error pid=${pty.pid || '?'} reason=${reason}`;
+            if (typeof logger.warn === 'function') logger.warn(line);
+            else logger.debug(line);
           }
         } catch {}
       });

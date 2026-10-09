@@ -263,6 +263,13 @@ write is bounded by the try/catch on the write"). Callers get a boolean instead
 of an exception; the first-resize nudge uses it to skip its follow-up when the
 PTY is already gone.
 
+`spawnPty` registers `guardPtyInputErrors` immediately on both spawn paths for
+every PTY (sessions, shells, SSH attach clients). Asynchronous Windows
+`_agent.inSocket` errors are logged at warn, falling back to debug, and absorbed;
+absent internals and failing access or logging never throw (#517).
+`test/pty-input-errors-conpty.test.js` checks the real node-pty input socket in
+a Windows child process, including immediate listener registration and EPIPE.
+
 A kill is once-only. With `useConptyDll`, node-pty's `kill` ends in
 `ConptyClosePseudoConsole(hpc)`, and the native handle is only dropped when the
 shell's exit thread runs; a second kill before that finds the handle still
