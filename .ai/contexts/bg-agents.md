@@ -162,12 +162,14 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   `overflow: hidden`. `#main` now shrinks to the space left, the list
   scrolls sideways, and the header wraps its controls (`flex-wrap`, New
   agent `flex-shrink: 0`) onto extra rows.
-- Dispatch dialog height: it reuses `.new-session-dialog`, which has no
-  height limit, so on a short screen the bottom (Start / Cancel) left the
-  window. The dispatch dialog adds `dispatch-agent-dialog`
-  (`max-height: calc(100vh - 32px)`, `overflow-y: auto`) and scrolls inside
-  the window. The class is scoped on purpose: the other dialogs share
-  `.new-session-dialog` and may hold popovers that an `overflow` would clip.
+- Dispatch dialog layout: `.dispatch-agent-dialog` scrolls inside the
+  window (`max-height: calc(100vh - 32px)`, `overflow-y: auto`). Its direct
+  children do not shrink in the flex column: a short window scrolls instead
+  of compressing rows until textareas and the mode grid cross separators.
+  Rows use a grid with labels aligned at the top; Project, Name, Agent and
+  the permission grid fill the same right column. Prompt and Additional
+  Directories span the row. Project reuses `.settings-select`, the shared
+  Settings select style (#467/#468). All overrides are scoped to this dialog.
 - Window controls: the frameless window draws the system buttons over the
   top-right corner, and `#agents-viewer-header` is the top row of `#main`.
   It is in the `window-frameless` header lists of `style.css` (right inset
@@ -176,6 +178,40 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
   "Finished" or "Group" does not start a window drag. A new view that
   reaches the top of `#main` must join those lists; see
   [window-frame.md](window-frame.md).
+
+## Dispatch
+
+`showDispatchAgentDialog` offers Accept Edits, Auto, Plan and Bypass from
+`BACKGROUND_PERMISSION_MODES` in `public/dialogs.js`. On opening and on each
+project change the project's own permission mode is preselected when it is one
+of the four; otherwise Accept Edits is. Bypass carries the `dangerous` style. This four-mode set follows the maintainer's proposed
+background choices for #501; it is kept in one constant so it can be revised.
+Accept Edits and Auto can still stop for actions requiring approval; offering
+them does not guarantee an unattended run finishes. The dialog sends the
+selected `permissionMode` and `dangerouslySkipPermissions: false`.
+
+Agent remains an optional text field: no agent-definition catalogue is
+exposed by `preload.js`. `getBgAgents` returns daemon jobs and interactive
+sessions, while `listSubagents` returns recorded transcripts; neither lists
+available definitions. Their names/types cannot safely populate an agent
+select. An empty Agent field omits the agent option. A catalogue IPC would
+be separate work; the text fallback is allowed by #501.
+
+Additional Directories is a textarea with one path per line. The IPC payload
+retains its existing fields and types (`addDirs` is a string).
+`splitAddDirs` in `bg-agents-roster.js` trims each line, drops empty lines and
+preserves commas inside paths, yielding one directory argument per path.
+Existing session settings still use commas; the dialog converts those
+inherited settings to lines when a project is selected. Sandbox and pre-launch
+refusals, lookup error handling and stale-project lookup guards still apply.
+
+`test/dom-dispatch-dialog.test.js` evaluates the shipped dialog and exercises
+its payload through `dispatchArgs`; `test/bg-agents-roster.test.js` checks the
+directory argv. `e2e/dispatch-dialog.spec.js` opens the dialog through the
+Agents view at 1400×900 and 900×700, checking row containment, separators,
+top alignment and matching Project/Name/Agent edges. Its isolated Electron
+instance replaces the roster IPC with an empty snapshot before opening the
+view, so the journey never invokes the real Claude CLI.
 
 ## Group by
 

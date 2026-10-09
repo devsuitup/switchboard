@@ -188,7 +188,7 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
 
 function splitAddDirs(value) {
   if (typeof value !== 'string') return [];
-  return value.split(',').map(s => s.trim()).filter(Boolean);
+  return value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 }
 
 function dispatchArgs(fields) {

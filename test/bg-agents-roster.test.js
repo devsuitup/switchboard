@@ -132,10 +132,16 @@ test('mergeRoster without the CLI lists the jobs on disk instead', () => {
 });
 
 test('dispatchArgs builds the argv in a fixed order and omits empty options', () => {
-  const r = dispatchArgs({ prompt: '  do the thing  ', name: 'n1', agent: 'fleet:em', permissionMode: 'auto', addDirs: '/a, /b', cwd: '/proj' });
+  const r = dispatchArgs({ prompt: '  do the thing  ', name: 'n1', agent: 'fleet:em', permissionMode: 'auto', addDirs: '/a\n /b', cwd: '/proj' });
   assert.deepEqual(r, { ok: true, cwd: '/proj', args: ['--bg', '--name', 'n1', '--agent', 'fleet:em', '--permission-mode', 'auto', '--add-dir', '/a', '--add-dir', '/b', '--', 'do the thing'] });
   const bare = dispatchArgs({ prompt: 'p', cwd: '/proj', name: '', agent: '  ', dangerouslySkipPermissions: true, permissionMode: 'auto' });
   assert.deepEqual(bare.args, ['--bg', '--dangerously-skip-permissions', '--', 'p']);
+});
+
+test('dispatchArgs ignores blank directory lines and preserves commas, spaces and Windows paths', () => {
+  const result = dispatchArgs({ prompt: 'go', cwd: '/proj', addDirs: '\n /srv/a,b \r\n\r\n  \r\n C:\\work\\shared files \r\n' });
+  assert.deepEqual(result.args, ['--bg', '--add-dir', '/srv/a,b', '--add-dir', 'C:\\work\\shared files', '--', 'go']);
+  assert.deepEqual(dispatchArgs({ prompt: 'go', cwd: '/proj', addDirs: ' \n\r\n ' }).args, ['--bg', '--', 'go']);
 });
 
 test('dispatchArgs refuses an empty prompt, a missing cwd, and a prompt that looks like a flag', () => {

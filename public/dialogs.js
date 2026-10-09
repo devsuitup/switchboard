@@ -688,6 +688,13 @@ function showAddProjectDialog() {
 }
 
 // see .ai/contexts/bg-agents.md
+const BACKGROUND_PERMISSION_MODES = [
+  { value: 'acceptEdits', label: 'Accept Edits', desc: 'Accept file edits automatically; other actions may need approval' },
+  { value: 'auto', label: 'Auto', desc: 'Allow routine work; stop for risky actions' },
+  { value: 'plan', label: 'Plan', desc: 'Explore and plan without changing files' },
+  { value: 'bypassPermissions', label: 'Bypass', desc: 'Allow all tool calls without approval' },
+];
+
 async function showDispatchAgentDialog(project) {
   const projects = (typeof cachedAllProjects !== 'undefined' ? cachedAllProjects : [])
     .filter(p => p && p.projectPath && !p.remoteAlias).map(p => p.projectPath);
@@ -711,15 +718,14 @@ async function showDispatchAgentDialog(project) {
   const dialog = document.createElement('div');
   dialog.className = 'new-session-dialog dispatch-agent-dialog';
 
-  let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = !!effective.dangerouslySkipPermissions;
+  let selectedMode = BACKGROUND_PERMISSION_MODES[0].value;
 
   function renderModeGrid() {
-    return PERMISSION_MODES.map(m => {
-      const isSelected = !dangerousSkip && selectedMode === m.value;
-      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
-    }).join('') +
-    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
+    return BACKGROUND_PERMISSION_MODES.map(m => {
+      const isSelected = selectedMode === m.value;
+      const danger = m.value === 'bypassPermissions' ? ' dangerous' : '';
+      return `<button class="permission-option${danger}${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
+    }).join('');
   }
 
   dialog.innerHTML = `
@@ -727,7 +733,7 @@ async function showDispatchAgentDialog(project) {
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
         <span class="settings-label">Prompt</span>
-        <div class="settings-description">The task the agent runs, in the background, under the claude daemon</div>
+        <div class="settings-description">The task to run in the background</div>
       </div>
       <div class="settings-field-control">
         <textarea class="settings-input" id="dad-prompt" rows="4"></textarea>
@@ -739,13 +745,13 @@ async function showDispatchAgentDialog(project) {
         <div class="settings-description">Working directory of the agent</div>
       </div>
       <div class="settings-field-control">
-        <select class="settings-input" id="dad-project"></select>
+        <select class="settings-select" id="dad-project"></select>
       </div>
     </div>
     <div class="settings-field">
       <div class="settings-field-info">
         <span class="settings-label">Name</span>
-        <div class="settings-description">--name; empty lets the CLI pick one</div>
+        <div class="settings-description">A name to identify this run; leave empty for an automatic name</div>
       </div>
       <div class="settings-field-control">
         <input type="text" class="settings-input" id="dad-name" placeholder="optional">
@@ -754,23 +760,28 @@ async function showDispatchAgentDialog(project) {
     <div class="settings-field">
       <div class="settings-field-info">
         <span class="settings-label">Agent</span>
-        <div class="settings-description">--agent, e.g. fleet:em; empty for none</div>
+        <div class="settings-description">Agent definition to use for the task; leave empty for none</div>
       </div>
       <div class="settings-field-control">
         <input type="text" class="settings-input" id="dad-agent" placeholder="optional">
       </div>
     </div>
     <div class="settings-field">
-      <div class="settings-label">Permission Mode</div>
-      <div class="permission-grid" id="dad-mode-grid">${renderModeGrid()}</div>
+      <div class="settings-field-info">
+        <span class="settings-label">Permission Mode</span>
+        <div class="settings-description">Which actions the agent may take</div>
+      </div>
+      <div class="settings-field-control">
+        <div class="permission-grid" id="dad-mode-grid">${renderModeGrid()}</div>
+      </div>
     </div>
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
         <span class="settings-label">Additional Directories</span>
-        <div class="settings-description">Extra directories to include (comma-separated)</div>
+        <div class="settings-description">Other directories the agent may access, one path per line</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="dad-add-dirs" placeholder="/path/to/dir1, /path/to/dir2">
+        <textarea class="settings-input" id="dad-add-dirs" rows="3" placeholder="/path/to/directory"></textarea>
       </div>
     </div>
     <div id="dad-error" class="agents-detail-error"></div>
@@ -794,10 +805,11 @@ async function showDispatchAgentDialog(project) {
   let refusal = null;
 
   function applyEffective() {
-    selectedMode = effective.permissionMode || null;
-    dangerousSkip = !!effective.dangerouslySkipPermissions;
+    selectedMode = BACKGROUND_PERMISSION_MODES.some(m => m.value === effective.permissionMode)
+      ? effective.permissionMode : BACKGROUND_PERMISSION_MODES[0].value;
     modeGrid.innerHTML = renderModeGrid();
-    dialog.querySelector('#dad-add-dirs').value = effective.addDirs || SETTING_DEFAULTS.addDirs || '';
+    dialog.querySelector('#dad-add-dirs').value = (effective.addDirs || SETTING_DEFAULTS.addDirs || '')
+      .split(',').map(dir => dir.trim()).filter(Boolean).join('\n');
     if (effective.lookupError) refusal = `Could not read this project's settings (${effective.lookupError}); close and reopen this dialog to retry.`;
     else if (effective.sandbox) refusal = 'This project runs its sessions sandboxed; a background agent would run outside the sandbox.';
     else if (typeof effective.preLaunchCmd === 'string' && effective.preLaunchCmd.trim()) refusal = 'This project has a pre-launch command, which a background agent would not run.';
@@ -834,14 +846,7 @@ async function showDispatchAgentDialog(project) {
   modeGrid.addEventListener('click', (e) => {
     const btn = e.target.closest('.permission-option');
     if (!btn) return;
-    const mode = btn.dataset.mode;
-    if (mode === 'dangerous-skip') {
-      dangerousSkip = !dangerousSkip;
-      if (dangerousSkip) selectedMode = null;
-    } else {
-      dangerousSkip = false;
-      selectedMode = mode === 'null' ? null : mode;
-    }
+    selectedMode = btn.dataset.mode;
     modeGrid.innerHTML = renderModeGrid();
   });
 
@@ -859,8 +864,8 @@ async function showDispatchAgentDialog(project) {
       name: dialog.querySelector('#dad-name').value.trim(),
       agent: dialog.querySelector('#dad-agent').value.trim(),
       cwd: effectiveProject,
-      permissionMode: dangerousSkip ? null : selectedMode,
-      dangerouslySkipPermissions: dangerousSkip,
+      permissionMode: selectedMode,
+      dangerouslySkipPermissions: false,
       addDirs: dialog.querySelector('#dad-add-dirs').value.trim(),
     };
     errorEl.textContent = '';
