@@ -247,6 +247,14 @@ Remote sessions get no [IDE emulation](ide-emulation.md), no
 [path links](terminal.md#clickable-paths). The [Changes view](changes-view.md)
 works, read-only, by running git over ssh in the session's directory.
 
+The [Touched list](touched-files.md) also works for remote sessions. It reads
+the mirrored transcripts and checks the listed paths in one remote batch on
+open or Refresh. If the host is unreachable, the list stays visible and the
+disk state says **unknown**. Clicking a present file opens it read-only in
+the shared editor, with its HEAD diff when it belongs to the session's
+repository; other files open as plain text. Files over 2 MiB are refused.
+Disk checks and reads require the host's POSIX shell and GNU coreutils.
+
 Returning to an attached terminal refreshes its screen automatically only
 when it is solo, including after the other clients leave during an attach.
 **Refresh screen**, beside Stop in the terminal header and in the sidebar

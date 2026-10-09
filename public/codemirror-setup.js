@@ -473,7 +473,7 @@ function resetHistory(view) {
 
 // ── Diff / Merge Viewer ─────────────────────────────────────────────
 
-function createMergeViewer(parent, originalContent, modifiedContent, filename, { onChange } = {}) {
+function createMergeViewer(parent, originalContent, modifiedContent, filename, { onChange, readOnly = false } = {}) {
   const langExt = getLanguageExt(filename);
   const sharedExts = [
     lineNumbers(),
@@ -505,6 +505,8 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename, {
       doc: modifiedContent,
       extensions: [
         ...sharedExts,
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
         history(),
         drawSelection(),
         indentOnInput(),
@@ -522,11 +524,13 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename, {
   });
 }
 
-function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true, onChange } = {}) {
+function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { mergeControls = true, onChange, readOnly = false } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: modifiedContent,
     extensions: [
+      EditorState.readOnly.of(readOnly),
+      EditorView.editable.of(!readOnly),
       lineNumbers(),
       highlightSpecialChars(),
       foldGutter(),

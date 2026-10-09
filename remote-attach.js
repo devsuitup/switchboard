@@ -295,7 +295,7 @@ function buildRemoteCommandArgs(alias, command, { input } = {}) {
 const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach") and .ai/contexts/changes-view.md ("Remote transport stdout cap"); `input` — .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
-function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, spawnFn, input, resolveSshPath = defaultResolveSshPath } = {}) {
+function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, rawStdout = false, spawnFn, input, resolveSshPath = defaultResolveSshPath } = {}) {
   const spawn = spawnFn || require('child_process').spawn;
   const stdoutCap = typeof maxStdoutBytes === 'number' ? maxStdoutBytes : DEFAULT_MAX_STDOUT_BYTES;
   const hasInput = typeof input === 'string';
@@ -310,6 +310,7 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, sp
       return;
     }
     let stdout = '';
+    const stdoutChunks = [];
     let stdoutBytes = 0;
     let stderr = '';
     let settled = false;
@@ -324,7 +325,8 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, sp
         resolve({ code: -1, stdout: '', stderr: `stdout exceeded ${stdoutCap} bytes` });
         return;
       }
-      resolve(timedOut ? { code, stdout, stderr: stderr.slice(0, 4096), timedOut: true } : { code, stdout, stderr: stderr.slice(0, 4096) });
+      const output = rawStdout ? Buffer.concat(stdoutChunks, stdoutBytes) : stdout;
+      resolve(timedOut ? { code, stdout: output, stderr: stderr.slice(0, 4096), timedOut: true } : { code, stdout: output, stderr: stderr.slice(0, 4096) });
     };
     if (hasInput && child.stdin) {
       child.stdin.on('error', () => {});
@@ -338,7 +340,9 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, sp
         try { child.kill('SIGKILL'); } catch {}
         return;
       }
-      stdout += c;
+      if (rawStdout) {
+        if (Buffer.byteLength(c) > 0) stdoutChunks.push(Buffer.from(c));
+      } else stdout += c;
     });
     if (child.stderr) child.stderr.on('data', (c) => { if (stderr.length < 4096) stderr += c; });
     child.on('error', (err) => { stderr += err.message; finish(-1); });

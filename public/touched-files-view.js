@@ -50,6 +50,7 @@ const TOUCHED_UNRESOLVED_REASONS = {
   'unsupported-form': 'network or device path, not followed',
   'drive-relative': 'drive-relative path, not resolved',
   'rooted-no-drive': 'no drive letter, not resolved',
+  'invalid-remote-path': 'remote paths must be absolute and have no .. segment or control character',
 };
 
 function initTouchedView(parentEl) {
@@ -320,7 +321,7 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   tab.opening = true;
   let result;
   try {
-    result = await window.api.readFileForPanel(filePath, { editor: true });
+    result = await window.api.readFileForPanel(filePath, { editor: true, ...(tab.data?.kind === 'remote' ? { sessionId } : {}) });
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'could not read the file' };
   }

@@ -1114,6 +1114,7 @@ function applyChangesPair(tab, pair) {
   tab.diffLoading = false;
   tab.editable = true;
   tab.readOnly = !!pair.readOnly;
+  if (pair.kind === 'remote') tab.remote = true;
   tab.original = pair.original;
   tab.current = pair.current;
   tab.savedContent = pair.current;
@@ -1127,7 +1128,7 @@ function applyChangesPair(tab, pair) {
 async function readChangesPair(sessionId, tab, file) {
   try {
     return tab.absolutePath
-      ? await window.api.readFileForPanel(tab.absolutePath, { editor: true })
+      ? await window.api.readFileForPanel(tab.absolutePath, { editor: true, ...(tab.remote ? { sessionId } : {}) })
       : await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
   } catch (err) {
     return { ok: false, error: err?.message || 'this file could not be read' };
@@ -1228,6 +1229,7 @@ function handleChangesFileChanged(sessionId, filePath) {
 
 function watchChangesFile(sessionId, tab, filePath) {
   unwatchChangesFile(sessionId, tab);
+  if (tab.remote) return;
   tab.watchedPath = filePath;
   const watch = tab.absolutePath ? window.api.watchFile : window.api.gitChangesWatch;
   if (watch) Promise.resolve(tab.absolutePath ? watch(filePath) : watch(sessionId, filePath)).catch(() => {});
@@ -1847,7 +1849,7 @@ function renderChangesNotice(tab) {
   const listFailed = !!tab.error && !tab.notARepo;
   const alarming = !!(tab.saveError || tab.fileError || listFailed || tab.externalChange || tab.restoredEdits);
   if (tab.remote) notes.push('Remote session — read-only.');
-  if (tab.readOnly) notes.push('Symbolic link — read-only.');
+  if (tab.readOnly && !tab.remote) notes.push('Symbolic link — read-only.');
   if (tab.fallbackReason) notes.push(`${tab.fallbackReason} — showing the diff read-only.`);
   if (tab.diffTruncated) notes.push('Diff truncated at 512 KB.');
   if (tab.restoredEdits) notes.push('Unsaved edits kept from when the session opened something else in this panel have been restored.');
@@ -1888,15 +1890,15 @@ function ensureChangesEditor(sessionId, tab) {
 
     const filename = tab.selectedFile.path;
     const onChange = () => updateChangesSaveButton(sessionId, tab);
-    if (tab.readOnly) {
+    if (tab.readOnly && (!tab.remote || mode === 'plain')) {
       tab.editorView = window.createReadOnlyViewer(changesDiffHostEl, tab.current, filename);
     } else if (mode === 'plain') {
       tab.editorView = window.createEditableViewer(changesDiffHostEl, tab.current, filename, { onChange });
     } else if (mode === 'inline') {
       // mergeControls: false — this panel is not a git client, see .ai/contexts/changes-view.md
-      tab.editorView = window.createUnifiedMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { mergeControls: false, onChange });
+      tab.editorView = window.createUnifiedMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { mergeControls: false, onChange, readOnly: !!tab.readOnly });
     } else {
-      tab.editorView = window.createMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { onChange });
+      tab.editorView = window.createMergeViewer(changesDiffHostEl, tab.original, tab.current, filename, { onChange, readOnly: !!tab.readOnly });
     }
     tab.editorKey = key;
     tab.editorMode = mode;

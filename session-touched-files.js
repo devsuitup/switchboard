@@ -9,6 +9,8 @@ const { enumerateSessionFiles, readSubagentMeta } = require('./read-session-file
 const { isValidChangesSessionId } = require('./git-changes-target');
 const { extractCwdFromJsonl } = require('./derive-project-path');
 const { verifiedTranscriptCwd } = require('./encode-project-path');
+const { parseFolderKey, mirrorProjectsDirFor } = require('./remote-hosts');
+const { isRemoteTouchedPath, inspectRemoteTouchedPaths } = require('./remote-touched-files');
 
 const TOUCH_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -236,7 +238,9 @@ async function collectCachedTouches(options, cache, session) {
     let label;
     try { label = safeLabel(labelOf(entry)); } catch { label = defaultLabel(entry); }
     for (const touch of snapshot.rows) {
-      const resolved = resolveTouchedPath(touch.path, { cwd, pathOps });
+      const resolved = options.remoteAlias && !isRemoteTouchedPath(touch.path)
+        ? { unresolved: 'invalid-remote-path' }
+        : resolveTouchedPath(touch.path, { cwd, pathOps });
       if (resolved.path !== undefined) {
         const key = caseFold ? resolved.path.toLowerCase() : resolved.path;
         tally(resolvedRows, key, () => ({ path: resolved.path, tools: new Set(), count: 0, sources: new Set() }), touch, label);
@@ -254,13 +258,21 @@ async function collectCachedTouches(options, cache, session) {
   omitted += [...resolved.slice(maxFiles), ...unresolved.slice(maxFiles)].reduce((n, row) => n + row.count, 0);
   const files = resolved.slice(0, maxFiles).map((row) => ({ path: row.path, state: 'unknown', openable: false, ...present(row) }));
   const cachedUnresolved = unresolved.slice(0, maxFiles).map(row => ({ raw: row.raw, reason: row.reason, ...present(row) }));
-  const gate = { timedOut: 0 };
-  await mapLimit(files, STAT_CONCURRENCY, async (file) => {
-    const inspection = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
-    file.state = typeof inspection === 'string' ? inspection : inspection.state;
-    file.diskMtime = typeof inspection === 'string' ? null : inspection.diskMtime;
-    file.openable = file.state === 'present';
-  });
+  if (options.remoteAlias) {
+    const inspections = await inspectRemoteTouchedPaths(options.remoteAlias, files.map(f => f.path), options);
+    for (const file of files) {
+      Object.assign(file, inspections.get(file.path));
+      file.openable = file.state === 'present';
+    }
+  } else {
+    const gate = { timedOut: 0 };
+    await mapLimit(files, STAT_CONCURRENCY, async (file) => {
+      const inspection = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
+      file.state = typeof inspection === 'string' ? inspection : inspection.state;
+      file.diskMtime = typeof inspection === 'string' ? null : inspection.diskMtime;
+      file.openable = file.state === 'present';
+    });
+  }
 
   return {
     ok: true,
@@ -302,7 +314,23 @@ async function listSessionTouchedFiles(sessionId, deps) {
   let folder = null;
   try { folder = deps.getCachedFolder(sessionId); } catch { folder = null; }
   if (deps.isRemoteFolder(folder)) {
-    return { ok: false, reason: 'remote', error: 'the touched files of a remote session are not available' };
+    const remote = parseFolderKey(folder);
+    if (!remote.alias || !plainFolderName(remote.folder) || typeof deps.dataDir !== 'string') {
+      return { ok: false, reason: 'no-transcript', error: 'this session has no transcript on disk' };
+    }
+    const result = await collectSessionTouchedFiles({
+      folderPath: path.join(mirrorProjectsDirFor(deps.dataDir, remote.alias), remote.folder),
+      sessionId,
+      cache: deps.cache || mainTouchedCache,
+      windowDays: deps.windowDays,
+      now: deps.now,
+      pathOps: path.posix,
+      remoteAlias: remote.alias,
+      runRemoteCommand: deps.runRemoteCommand,
+      isSensitive: async () => false,
+      labelOf: (entry) => (entry.parentSessionId ? subagentLabel(entry) : 'session'),
+    });
+    return { ...result, kind: 'remote' };
   }
   if (!plainFolderName(folder)) return { ok: false, reason: 'no-transcript', error: 'this session has no transcript on disk' };
   return collectSessionTouchedFiles({

@@ -158,4 +158,4 @@ function isKnownProjectRoot(candidatePath, knownProjectPaths) {
   return false;
 }
 
-module.exports = { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot };
+module.exports = { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot, matchesDenylist };
