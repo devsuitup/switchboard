@@ -13,6 +13,23 @@ function setPtyOpLogger(next) {
   logger = next && typeof next.debug === 'function' ? next : null;
 }
 
+function guardPtyInputErrors(pty) {
+  try {
+    const inputSocket = pty?._agent?.inSocket;
+    if (inputSocket && typeof inputSocket.on === 'function') {
+      inputSocket.on('error', (err) => {
+        try {
+          if (logger) {
+            const reason = (err && err.message) || String(err);
+            logger.debug(`[pty] input error pid=${pty.pid || '?'} reason=${reason}`);
+          }
+        } catch {}
+      });
+    }
+  } catch {}
+  return pty;
+}
+
 /**
  * Run `fn` against `session.pty`, absorbing the throw of an already-exited PTY.
  *
@@ -76,4 +93,4 @@ function ptyExitSignalName(signal, signals = os.constants.signals) {
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, guardPtyInputErrors, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };

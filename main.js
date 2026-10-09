@@ -58,13 +58,13 @@ const cleanPtyEnv = cleanEnv(process.env);
 function spawnPty(file, args, opts) {
   if (process.platform === 'win32' && !process.env.SWITCHBOARD_NO_CONPTY_DLL) {
     try {
-      return pty.spawn(file, args, { ...opts, useConptyDll: true });
+      return guardPtyInputErrors(pty.spawn(file, args, { ...opts, useConptyDll: true }));
     } catch (err) {
       // e.g. conpty.dll not found next to the binding — inbox ConPTY still works
       log.warn(`[pty] useConptyDll spawn failed, falling back to inbox ConPTY: ${err.message}`);
     }
   }
-  return pty.spawn(file, args, opts);
+  return guardPtyInputErrors(pty.spawn(file, args, opts));
 }
 
 // Shell profiles → shell-profiles.js
@@ -79,7 +79,7 @@ const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');

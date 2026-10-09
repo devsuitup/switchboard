@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- On Windows, writing to a terminal that is closing no longer raises an uncaught main-process exception, including when closing an attached agent tab. (#517)
+
 ## v0.0.91 — 2026-10-09
 
 ### New
