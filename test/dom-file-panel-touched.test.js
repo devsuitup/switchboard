@@ -2047,7 +2047,7 @@ test(`a link over an unanswered diff keeps the diff, answers nothing, and opens 
 });
 }
 
-test('a deferred open survives parking and replays when the returned diff closes', async () => {
+test('R2 M2: a deferred open survives parking and replays only when its own diff ends', async () => {
   const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
@@ -2059,6 +2059,10 @@ test('a deferred open survives parking and replays when the returned diff closes
     assert.equal(ctx.stateOf('s1').parkedDiff, diff);
     assert.deepEqual(ctx.calls.readFile, []);
     assert.deepEqual(ctx.calls.diffResponse, []);
+    ctx.window.openDiffTab('s1', 'd2', DIFF);
+    ctx.window.closeDiffByDiffId('s1', 'd2');
+    await flush();
+    assert.deepEqual(ctx.calls.readFile, [], 'd2 ending cannot replay the open belonging to parked d1');
     ctx.document.getElementById('diff-toggle-btn').click();
     ctx.window.closeDiffByDiffId('s1', 'd1');
     await flush();

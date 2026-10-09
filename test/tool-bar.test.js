@@ -213,6 +213,119 @@ function disabled(ctx) {
   }
 }
 
+for (const listener of ['onSessionDetected', 'onSessionForked']) {
+  test(`R2 B2: ${listener} enables tools after activation then terminal registration`, async () => {
+    const ctx = setup();
+    try {
+      const { window } = ctx;
+      let receive;
+      window.api[listener] = cb => { receive = cb; };
+      window.activeSessionId = 's1';
+      const order = [];
+      window.setActiveSession = id => {
+        order.push(['activate', window.openSessions.has(id)]);
+        window.activeSessionId = id;
+        window.switchPanel(id);
+      };
+      const register = window.openSessions.set.bind(window.openSessions);
+      window.openSessions.set = (id, entry) => {
+        order.push(['register', id]);
+        return register(id, entry);
+      };
+      window.rekeyActivityState = () => {};
+      window.loadProjects = () => Promise.resolve();
+      window.pollActiveSessions = () => {};
+      window.schedulePersistWorkingSet = () => {};
+      window.pendingSessions = new Map();
+      window.terminalHeaderId = window.document.createElement('span');
+      window.terminalHeaderName = window.document.createElement('span');
+      const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+      const start = src.indexOf(`window.api.${listener}(`);
+      assert.ok(start >= 0);
+      const end = src.indexOf('\n});', start) + '\n});'.length;
+      ctx.inCtx(src.slice(start, end));
+      receive('s1', 'real');
+      await flush();
+      assert.deepEqual(order, [['activate', false], ['register', 'real']]);
+      assert.ok(window.openSessions.has('real'));
+      for (const id of [IDS[0], IDS[2], IDS[3]]) {
+        assert.equal(window.document.getElementById(id).disabled, false, id);
+        assert.equal(window.document.getElementById(id).getAttribute('aria-disabled'), 'false', id);
+      }
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('R2 M1: parking a second diff preserves both edited proposals until each is answered', async () => {
+  const ctx = setup();
+  try {
+    const tabs = [];
+    for (const id of ['d1', 'd2']) {
+      ctx.window.openDiffTab('s1', id, DIFF);
+      await flush();
+      tabs.push(ctx.state().currentTab);
+      ctx.window.document.getElementById('changes-toggle-btn').click();
+      await flush();
+    }
+    assert.deepEqual(ctx.responses, []);
+    for (const tab of tabs) {
+      ctx.window.document.getElementById('diff-toggle-btn').click();
+      await flush();
+      assert.equal(ctx.state().currentTab, tab, `${tab.diffId} remains retrievable`);
+      assert.ok(tab.editorView.dom.isConnected);
+      ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    }
+    assert.deepEqual(ctx.responses, [['s1', 'd1', 'accept-edited', 'edited'], ['s1', 'd2', 'accept-edited', 'edited']]);
+  } finally { ctx.destroy(); }
+});
+
+test('R2 M1: Diff returns the parked proposal over an answered diff', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const tab = ctx.state().currentTab;
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    ctx.window.openDiffTab('s1', 'd2', DIFF);
+    await flush();
+    ctx.window.document.querySelector('.file-panel-reject-btn').click();
+    ctx.window.document.getElementById('diff-toggle-btn').click();
+    await flush();
+    assert.equal(ctx.state().currentTab, tab);
+    assert.deepEqual(ctx.responses, [['s1', 'd2', 'reject', null]]);
+  } finally { ctx.destroy(); }
+});
+
+for (const route of ['MCP off', 'session exit']) {
+  test(`R2 m6: ${route} clears parked proposals and their waiting badge`, async () => {
+    const ctx = setup();
+    try {
+      ctx.window.setSessionMcpState('s1', 'connected');
+      ctx.window.openDiffTab('s1', 'd1', DIFF);
+      await flush();
+      ctx.window.document.getElementById('changes-toggle-btn').click();
+      await flush();
+      if (route === 'MCP off') ctx.window.setSessionMcpState('s1', 'off');
+      else {
+        Object.assign(ctx.window, {
+          noteSessionExit() {}, dropLocalPtySession() {}, sessionItemEl: () => null,
+          lastSessionExit: () => ({}), exitBannerColour: () => '', exitBannerPhrase: () => 'exited',
+          schedulePersistWorkingSet() {}, pollActiveSessions() {},
+        });
+        loadAppFunctions(ctx.context, { functions: ['applyProcessExit'] }).applyProcessExit('s1', 0, null, false);
+      }
+      const btn = ctx.window.document.getElementById('diff-toggle-btn');
+      assert.equal(btn.hidden, true, 'the stopped CLI is no longer waiting');
+      assert.equal(btn.dataset.badge, undefined);
+      assert.equal(btn.getAttribute('aria-description'), null);
+      assert.equal(ctx.destroys(), 1);
+      assert.deepEqual(ctx.responses, []);
+      assert.equal(ctx.state().currentTab.type, 'changes');
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('J5(i): switching to no owner disables every button and clears pressed states', async () => {
   const ctx = setup();
   try {
