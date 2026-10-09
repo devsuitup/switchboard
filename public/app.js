@@ -198,11 +198,14 @@ function persistWorkingSet({ final = false } = {}) {
         active: sessionId === activeSessionId,
       });
     }
-    const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
+    const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
+    const heldActive = notStarted.find(({ item }) => item.active);
+    if (heldActive) for (const e of set) e.active = false;
+    const held = [...skippedWorkingSetEntries.values(), ...notStarted]
       .filter(({ item }) => !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index } of held) {
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: heldActive?.item === item });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);

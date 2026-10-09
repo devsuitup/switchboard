@@ -48,6 +48,7 @@ function setup() {
   window.api = new Proxy({
     onMcpOpenFile: (cb) => { calls.openFile = cb; },
     onUnsavedCheck: (cb) => { calls.check = cb; },
+    onUnsavedCheckReason: (cb) => { calls.reason = cb; },
     unsavedCheckAck: (id) => { calls.acks.push({ id, at: calls.answers.length, dialog: !!window.document.getElementById('unsaved-edits-dialog') }); },
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
     watchFile: () => Promise.resolve({ ok: true }),
@@ -240,18 +241,41 @@ test('the check is acknowledged on receipt, before any dialog is shown', async (
 });
 
 // see docs/session-restore.md ("Closing the app")
-test('a confirmed close or quit flushes the app state before answering; a reload does not', async () => {
+test('a confirmed close or quit answers only once the app state is written; a reload does not flush', async () => {
   const ctx = setup();
   try {
-    const flushed = [];
-    ctx.window.flushStateForExit = () => { flushed.push(ctx.calls.answers.length); return Promise.resolve(); };
+    const flushes = [];
+    ctx.window.flushStateForExit = () => new Promise((resolve) => flushes.push(resolve));
     ctx.calls.check(1, 'quit');
     await flush();
-    assert.deepEqual(flushed, [0], 'flushed before the answer was sent');
+    assert.equal(flushes.length, 1);
+    assert.deepEqual(ctx.calls.answers, [], 'no answer while the write is in flight');
+    flushes[0]();
+    await flush();
     assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: true }]);
     ctx.calls.check(2, 'reload');
     await flush();
-    assert.equal(flushed.length, 1);
+    assert.equal(flushes.length, 1);
+    assert.deepEqual(ctx.calls.answers[1], { id: 2, proceed: true });
+  } finally { ctx.destroy(); }
+});
+
+test('a reload check that a quit joins before it is answered flushes once', async () => {
+  const ctx = setup();
+  try {
+    let flushed = 0;
+    ctx.window.flushStateForExit = () => { flushed++; return Promise.resolve(); };
+    await dirtyTab(ctx, 's1', A);
+    ctx.calls.check(4, 'reload');
+    await flush();
+    ctx.calls.reason(4, 'quit');
+    button(ctx, 'unsaved-discard').click();
+    await flush();
+    assert.equal(flushed, 1);
+    assert.deepEqual(ctx.calls.answers, [{ id: 4, proceed: true }]);
+    ctx.calls.check(5, 'reload');
+    await flush();
+    assert.equal(flushed, 1, 'a later reload is not taken for a quit');
   } finally { ctx.destroy(); }
 });
 

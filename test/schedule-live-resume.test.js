@@ -101,7 +101,7 @@ function setup(t, { sandbox = false } = {}) {
   `, ctx);
   const app = loadAppFunctions(ctx, {
     functions: ['openSession', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice'],
-    declarations: ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight'],
+    declarations: ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'exitingApp', 'persistSkippedWhileExiting'],
   });
   ctx.sessionMap.set(SID, session);
   t.after(() => {

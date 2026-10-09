@@ -150,12 +150,21 @@ function initFilePanel() {
     event.returnValue = false;
   });
   if (window.api.onUnsavedCheck) {
+    const unsavedCheckReasons = new Map();
+    if (window.api.onUnsavedCheckReason) {
+      window.api.onUnsavedCheckReason((id, reason) => {
+        if (unsavedCheckReasons.has(id)) unsavedCheckReasons.set(id, reason);
+      });
+    }
     window.api.onUnsavedCheck(async (id, reason) => {
+      unsavedCheckReasons.set(id, reason);
       window.api.unsavedCheckAck(id);
       let proceed = true;
       try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
+      const finalReason = unsavedCheckReasons.get(id);
+      unsavedCheckReasons.delete(id);
       // see docs/session-restore.md ("Closing the app")
-      if (proceed && reason !== 'reload' && typeof window.flushStateForExit === 'function') {
+      if (proceed && finalReason !== 'reload' && typeof window.flushStateForExit === 'function') {
         const bound = new Promise((resolve) => setTimeout(resolve, EXIT_FLUSH_BOUND_MS));
         try { await Promise.race([window.flushStateForExit(), bound]); } catch (err) { console.error('[exit-flush]', err); }
       }
