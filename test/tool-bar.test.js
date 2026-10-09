@@ -213,6 +213,67 @@ function disabled(ctx) {
   }
 }
 
+test('R3 N1: forking with Changes open keeps panel visibility and pressed state aligned', async () => {
+  const ctx = setup();
+  try {
+    const { window } = ctx;
+    let receive;
+    window.api.onSessionForked = cb => { receive = cb; };
+    Object.assign(window, {
+      rekeyActivityState() {}, reportActivityFocus() {},
+      loadProjects: () => Promise.resolve(), pollActiveSessions() {},
+      schedulePersistWorkingSet() {}, pendingSessions: new Map(),
+      terminalHeaderId: window.document.createElement('span'),
+      terminalHeaderName: window.document.createElement('span'),
+    });
+    loadAppFunctions(ctx.context, { functions: ['setActiveSession'] });
+    window.setActiveSession('s1');
+    await window.openChangesTab('s1');
+    const panel = window.document.getElementById('file-panel');
+    const changes = window.document.getElementById('changes-toggle-btn');
+    assert.equal(panel.classList.contains('open'), true);
+    assert.equal(changes.getAttribute('aria-pressed'), 'true');
+    const state = ctx.state();
+    const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+    const start = src.indexOf('window.api.onSessionForked(');
+    assert.ok(start >= 0);
+    const end = src.indexOf('\n});', start) + '\n});'.length;
+    ctx.inCtx(src.slice(start, end));
+    receive('s1', 'forked');
+    await flush();
+    assert.equal(ctx.inCtx("filePanelState.get('forked')"), state);
+    assert.equal(changes.getAttribute('aria-pressed'), 'true');
+    assert.equal(panel.classList.contains('open'), true, 'fork must keep the pressed Changes panel open');
+    changes.click();
+    await flush();
+    assert.equal(panel.classList.contains('open'), false);
+    assert.equal(changes.getAttribute('aria-pressed'), 'false');
+  } finally { ctx.destroy(); }
+});
+
+test('R3 N3: switching a shown diff to Changes after MCP off leaves no parked proposal or waiting badge', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.setSessionMcpState('s1', 'connected');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const tab = ctx.state().currentTab;
+    ctx.window.setSessionMcpState('s1', 'off');
+    assert.equal(ctx.state().currentTab, tab, 'MCP off leaves the shown proposal until the tool switch');
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.equal(ctx.state().currentTab.type, 'changes');
+    assert.equal(ctx.state().parkedDiffs.size, 0, 'a stopped CLI cannot acquire a parked unanswered diff');
+    const btn = ctx.window.document.getElementById('diff-toggle-btn');
+    assert.equal(btn.hidden, true);
+    assert.equal(btn.dataset.badge, undefined);
+    assert.equal(btn.getAttribute('aria-description'), null);
+    assert.equal(ctx.destroys(), 1);
+    assert.equal(tab.editorView, null);
+    assert.deepEqual(ctx.responses, []);
+  } finally { ctx.destroy(); }
+});
+
 for (const listener of ['onSessionDetected', 'onSessionForked']) {
   test(`R2 B2: ${listener} enables tools after activation then terminal registration`, async () => {
     const ctx = setup();
