@@ -223,7 +223,12 @@ The renderer requests `diskInfo: false` to display mirror rows immediately,
 then requests their disk info. Remote inspection runs after the serialized
 transcript-cache queue is released. Concurrent requests for the same session
 and path set share one in-flight batch; completed batches are not cached.
-Refresh is guarded while either phase is pending.
+Requests made while either phase is pending queue one follow-up refresh, using
+the latest requested window. Each mirror/disk pair uses one window snapshot;
+an older answer cannot reset a window expanded during inspection. The queued
+refresh runs only if its list is still the session's current tab or return list.
+Remote rows with unknown state show `checking` while `diskInfoPending` is set,
+then their final state, including `unknown` after an unreachable host.
 The batch uses a POSIX shell and GNU coreutils (`realpath`, `stat`, `tr`);
 mtime is returned as epoch seconds and converted to milliseconds. Its stdout
 is capped at 64 KiB and its timeout is 20 seconds. Results are positional,
@@ -231,7 +236,17 @@ so filenames cannot inject output records. Literal credential and .git paths
 are refused before transport; canonical paths are checked on the host before
 stat or read, and both operations use that resolved path. The remote denylist
 also refuses `/etc/shadow`, `/etc/gshadow`, `/etc/ssh/ssh_host_*`, `*.pem`,
-`*.key` and `id_*` filenames, both literally and after host resolution.
+`*.key` and exact SSH key basenames `id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?`,
+both literally and after host resolution. JS and shell derive those basenames
+from the same list. Ordinary source names such as `id_generator.py` and files
+inside an `id_utils` directory are allowed.
+There is an accepted residual check-then-read race: a process with write access
+as the same remote user can replace a directory with a symlink between
+`realpath -e`, the canonical-path guard and `head`. Reading the resolved path
+prevents changes to the original spelling from redirecting the read, but does
+not bind the checked directory components to the later file open. This route
+does not provide an atomic open of the checked inode; its protection assumes
+those components are not being concurrently replaced by that user.
 Missing and unreadable rows stay distinct. Unsupported GNU stat/realpath flags
 leave every row unknown rather than claiming a file is unreadable. Transport failures,
 timeouts and malformed or oversized answers leave the mirrored rows `unknown`,
@@ -252,7 +267,7 @@ reported as too large, preserving the byte cap without blaming the connection.
 The session's repository root comes from a quoted, literal-pathspec Git probe.
 A file under that root gets its HEAD pair in the shared Changes editor;
 an untracked file has an empty original side. A file outside that root, or
-with a Git probe that fails outside the transport, opens as plain content.
+with a Git probe or HEAD read that fails outside the transport, opens as plain content.
 All remote files are read-only, as in remote Changes; files outside a
 repository have no remote edit route. A removed session cwd, absent Git or
 dubious ownership does not discard a successful read. Probe code -1, SSH code
@@ -261,10 +276,10 @@ accept `readOnly` so the HEAD diff remains visible without enabling edits.
 Reload retains the remote target; local watchers are not armed and no remote
 watcher is added. Missing or unreadable opens keep their refusal message.
 Main rejects saves addressed to remote sessions regardless of renderer edit
-flags. It also remembers paths opened through the remote panel route for the
-app lifetime and refuses their saves when options are omitted or forged.
-On a POSIX client, a local file with that same spelling is also refused for
-the remainder of the app run.
+flags. The guard is based on the resolved session target and keeps no set of
+remote path strings. Saves without a remote session ID use the existing local
+guards, so opening a remote file does not disable a local save with the same
+path spelling.
 
 Tests use disposable mirrors, injected transports, shipped IPC handlers and
 the real CodeMirror factories. A local fake host executes the exact shell

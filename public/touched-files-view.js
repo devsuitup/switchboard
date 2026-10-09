@@ -232,8 +232,12 @@ async function refreshTouched(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state?.currentTab?.returnList || state?.currentTab;
   if (tab?.type !== 'touched') return;
-  if (tab.refreshing) return;
+  if (tab.refreshing) {
+    tab.refreshPending = true;
+    return;
+  }
   tab.refreshing = true;
+  const windowDays = tab.windowDays;
 
   tab.loading = true;
   tab.openError = null;
@@ -241,14 +245,14 @@ async function refreshTouched(sessionId) {
 
   let result;
   try {
-    result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays, diskInfo: false });
+    result = await window.api.sessionTouchedFiles(sessionId, { windowDays, diskInfo: false });
     if (result?.ok && result.diskInfoPending) {
       tab.data = result;
       tab.error = null;
       tab.loading = false;
-      if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
+      if (tab.windowDays === windowDays && Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
       if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
-      result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays });
+      result = await window.api.sessionTouchedFiles(sessionId, { windowDays });
     }
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'failed to read the transcripts' };
@@ -262,9 +266,13 @@ async function refreshTouched(sessionId) {
   } else {
     tab.error = null;
     tab.data = result;
-    if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
+    if (tab.windowDays === windowDays && Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
   }
   if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
+  if (tab.refreshPending) {
+    tab.refreshPending = false;
+    if (state.currentTab === tab || state.currentTab?.returnList === tab) return refreshTouched(sessionId);
+  }
 }
 
 // see .ai/contexts/touched-files.md ("One route into Touched")
@@ -411,14 +419,15 @@ function buildTouchedFileRow(sessionId, tab, file) {
   rowEl.className = 'touched-file-row';
   rowEl.dataset.path = file.path;
   const openable = file.openable === true && file.state === 'present';
+  const checking = file.state === 'unknown' && tab.data?.diskInfoPending;
   if (openable) rowEl.classList.add('touched-openable');
-  rowEl.title = TOUCHED_STATE_TITLES[file.state] || 'State unknown.';
+  rowEl.title = checking ? 'Checking the file on the remote host.' : TOUCHED_STATE_TITLES[file.state] || 'State unknown.';
   if (Number.isFinite(file.diskMtime)) rowEl.title += ' Modified: ' + new Date(file.diskMtime).toLocaleString();
   rowEl.classList.toggle('selected', isTouchedSelection(tab, file.path));
 
   const stateEl = document.createElement('span');
   stateEl.className = 'touched-file-state touched-state-' + String(file.state).replace(/[^a-z-]/g, '');
-  stateEl.textContent = TOUCHED_STATE_LABELS[file.state] || 'unknown';
+  stateEl.textContent = checking ? 'checking' : TOUCHED_STATE_LABELS[file.state] || 'unknown';
   rowEl.appendChild(stateEl);
 
   const pathEl = document.createElement('span');

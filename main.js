@@ -1030,15 +1030,12 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
-const remotePanelPaths = new Set();
-
 ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
   try {
     if (opts?.sessionId !== undefined) {
       const target = resolveGitChangesTarget(opts.sessionId);
       if (!target.ok) return target;
       if (target.kind !== 'remote') return { ok: false, error: 'invalid remote session' };
-      remotePanelPaths.add(filePath);
       return await readRemoteTouchedFile({ target, absolutePath: filePath });
     }
     const resolved = path.resolve(filePath);
@@ -1078,7 +1075,6 @@ const panelSaves = createMainPanelSaves({
 
 ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected, opts) => {
   try {
-    if (remotePanelPaths.has(filePath)) return { ok: false, reason: 'remote', error: 'remote files are read-only' };
     if (opts?.sessionId !== undefined) {
       const target = resolveGitChangesTarget(opts.sessionId);
       if (!target.ok) return target;

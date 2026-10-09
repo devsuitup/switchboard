@@ -12,6 +12,8 @@ const REMOTE_TOUCHED_READ_MAX_BYTES = 2 * 1024 * 1024;
 const REMOTE_TOUCHED_STAT_MAX_BYTES = 64 * 1024;
 const REMOTE_TOUCHED_TIMEOUT_MS = 20000;
 const REMOTE_TOUCHED_MAX_FILES = 500;
+const REMOTE_KEY_NAMES = ['rsa', 'dsa', 'ecdsa', 'ed25519'].flatMap(algorithm =>
+  ['', '_sk', '.pub', '_sk.pub'].map(suffix => 'id_' + algorithm + suffix));
 
 function isRemoteTouchedPath(p) {
   return typeof p === 'string' && p.length > 0 && p.length <= 4096 && p.startsWith('/')
@@ -24,12 +26,13 @@ function isProtectedRemotePath(p) {
   return p.split('/').includes('.git') || matchesDenylist([p])
     || normalized === '/etc/shadow' || normalized === '/etc/gshadow'
     || normalized.startsWith('/etc/ssh/ssh_host_')
-    || /\/(?:id_[^/]*|[^/]*\.(?:pem|key))$/.test(normalized);
+    || REMOTE_KEY_NAMES.includes(path.posix.basename(normalized))
+    || /\.(?:pem|key)$/.test(normalized);
 }
 
 const PROTECTED_CHECK = `protected() {
   case "$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
-    /etc/shadow|/etc/gshadow|/etc/ssh/ssh_host_*|*.pem|*.key|*/id_*|*/.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.config/gcloud/*) return 0 ;;
+    /etc/shadow|/etc/gshadow|/etc/ssh/ssh_host_*|*.pem|*.key|${REMOTE_KEY_NAMES.map(name => '*/' + name).join('|')}|*/.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.config/gcloud/*) return 0 ;;
     */.env.example|*/.env.sample|*/.env.template) return 1 ;;
     */.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.aws/credentials|*/.env|*/.env.*|*/.netrc|*/.docker/config.json|*/.kube/config|*/.claude/.credentials.json|*/.git-credentials|*/.config/gh/hosts.yml|*/.config/gh/hosts.yaml|*/.config/gcloud/*|*/.npmrc|*/.pypirc|*/.pgpass|*/.my.cnf) return 0 ;;
   esac
@@ -141,11 +144,12 @@ async function readRemoteTouchedFile({ target, absolutePath }, deps = {}) {
     if (!rel || rel.startsWith('../') || !isSafeGitPath(rel)) return plain;
     const originalResult = await run(target.alias, buildRemoteGitCommand(root, buildGitArgs(['show', 'HEAD:' + rel])), options);
     if (originalResult.overflow) return checkedContent(originalResult);
-    if (originalResult.code !== 0) {
+    if (originalResult.code !== 0 || originalResult.timedOut) {
       if (originalResult.code === 128 && !originalResult.timedOut
           && /path .* does not exist in 'HEAD'|invalid object name 'HEAD'/i.test(originalResult.stderr || '')) {
         return { ...plain, git: true, original: '' };
       }
+      if (originalResult.code !== -1 && originalResult.code !== 255 && !originalResult.timedOut) return plain;
       return readFailure(originalResult);
     }
     const original = checkedContent(originalResult);
