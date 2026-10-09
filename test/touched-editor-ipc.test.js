@@ -174,6 +174,59 @@ tr() { text=; IFS= read -r text; printf '%s' "${'$'}{text,,}"; }
   }
 });
 
+for (const key of ['deploy/id_ed25519_deploy', 'keys/id_rsa_github', 'backup/id_rsa.bak']) {
+  test('round 4 s2 JS: renamed private key is refused before transport: ' + key, async () => {
+    let calls = 0;
+    const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => {
+      calls++;
+      return command.includes('rev-parse') ? { code: 128, stderr: 'not a git repository' }
+        : { code: 0, stdout: 'source' };
+    });
+    for (const safe of ['/outside/id_generator.py', '/outside/id_utils/x.js']) {
+      assert.equal((await api.read(safe, { sessionId: 'R1' })).current, 'source');
+    }
+    const before = calls;
+    const filePath = '/outside/' + key;
+    assert.equal((await api.read(filePath, { sessionId: 'R1' })).reason, 'refused', filePath);
+    const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+    const states = await inspectRemoteTouchedPaths('host', [filePath], {
+      runRemoteCommand: async () => { calls++; return { code: 0, stdout: 'present\t123\n' }; },
+    });
+    assert.equal(states.get(filePath).state, 'refused');
+    assert.equal(calls, before, 'neither literal read nor inspection reaches transport');
+  });
+
+  test('round 4 s2 shell: resolved private key is refused on read and inspection: ' + key, async t => {
+    const shell = fakeTouchedShell(t);
+    const { shQuote } = require('../git-changes-runner');
+    const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+    for (const name of ['id_generator.py', 'id_utils/x.js', key]) {
+      const file = path.join(shell.dir, name);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'source');
+    }
+    let resolved;
+    shell.setFunctions(`sh() { shift; script=$1; shift; shift; eval "$script"; }
+realpath() { printf '%s\\n' "${'$'}{RESOLVED:-$3}"; }
+stat() { printf '123\\n'; }
+tr() { text=; IFS= read -r text; printf '%s' "${'$'}{text,,}"; }
+`);
+    const run = (alias, command, options) => command.includes('rev-parse')
+      ? { code: 128, stderr: 'not a git repository' }
+      : shell.run(alias, 'RESOLVED=' + shQuote(resolved) + '; ' + command, options);
+    const api = panelHandlers(fs, fixtureGitFiles, run);
+    for (const safe of [shell.root + '/id_generator.py', shell.root + '/id_utils/x.js']) {
+      resolved = safe;
+      assert.equal((await api.read(safe, { sessionId: 'R1' })).current, 'source');
+      assert.equal((await inspectRemoteTouchedPaths('host', [safe], { runRemoteCommand: run })).get(safe).state, 'present');
+    }
+    resolved = shell.root + '/' + key;
+    const alias = shell.root + '/id_generator.py';
+    assert.equal((await api.read(alias, { sessionId: 'R1' })).reason, 'refused', resolved);
+    assert.equal((await inspectRemoteTouchedPaths('host', [alias], { runRemoteCommand: run })).get(alias).state, 'refused');
+  });
+}
+
 test('round 3 m3: Git blob errors fall back to plain text while transport failures stay unreachable', async () => {
   for (const failure of [
     { code: 128, stderr: 'fatal: bad object HEAD:file' },

@@ -127,6 +127,91 @@ test('round 3 m1: Refresh and Load older during disk info queue one refresh of t
   } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
 });
 
+test('round 4 m1: Show more during the mirror phase applies the window and queues one refresh', async () => {
+  const requests = [];
+  const day = 24 * 60 * 60 * 1000;
+  const anchor = Date.now();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const answer = options => result({ kind: 'remote', diskInfoPending: options.diskInfo === false,
+    windowStart: anchor - options.windowDays * day, loadedWindowStart: anchor - options.windowDays * day,
+    hasOlder: options.windowDays === 1, files: [row({ lastTouched: anchor })] });
+  const ctx = setupDom({ touchedImpl: (_id, options) => {
+    requests.push({ ...options });
+    return requests.length === 3 ? pending : answer(options);
+  } });
+  let refreshing;
+  try {
+    await openTab(ctx);
+    refreshing = ctx.window.refreshTouched('s1');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab.loading, true, 'the mirror request is pending');
+    ctx.document.getElementById('touched-more-btn').click();
+    ctx.document.getElementById('touched-more-btn').click();
+    assert.equal(tab.windowDays, 21, 'both clicks apply while the mirror is loading');
+    assert.equal(tab.windowStart, anchor - 21 * day);
+    assert.equal(tab.refreshPending, true);
+    assert.equal(requests.length, 3, 'no overlapping request');
+    release(answer({ windowDays: 1, diskInfo: false }));
+    await refreshing;
+    assert.deepEqual(requests.slice(2), [
+      { windowDays: 1, diskInfo: false }, { windowDays: 1 },
+      { windowDays: 21, diskInfo: false }, { windowDays: 21 },
+    ], 'one follow-up pair uses the latest window; the pending pair keeps its snapshot');
+    assert.equal(tab.windowDays, 21);
+    assert.equal(tab.windowStart, anchor - 21 * day);
+  } finally { release(answer({ windowDays: 1 })); await refreshing; ctx.destroy(); }
+});
+
+for (const [label, pair] of [
+  ['remote read-only', { kind: 'remote', readOnly: true }],
+  ['remote', { kind: 'remote', readOnly: false }],
+  ['local read-only', { readOnly: true }],
+]) {
+  for (const listType of ['touched', 'changes']) {
+    test(`round 4 s1: a dirty ${label} ${listType} tab is never stashed`, async () => {
+      const ctx = setupDom({ touchedImpl: () => result({ kind: pair.kind }),
+        readImpl: () => ({ ok: true, git: true, original: 'base', current: 'text', ...pair }) });
+      try {
+        await openTab(ctx);
+        clickRow(ctx, '/work/a.txt');
+        await flush();
+        if (listType === 'changes') ctx.stateOf('s1').currentTab.returnList = null;
+        ctx.editors.at(-1).setText('unexpected dirty text');
+        ctx.window.openDiffTab('s1', 'd1', DIFF);
+        assert.equal(stashes(ctx).size, 0, 'a protected buffer cannot become an editable local stash');
+        assert.equal(ctx.stateOf('s1').changesStash ?? null, null);
+        ctx.window.closeDiffByDiffId('s1', 'd1');
+        await flush();
+        assert.notEqual(ctx.stateOf('s1').currentTab?.absolutePath, '/work/a.txt');
+        assert.equal(ctx.calls.save.length, 0);
+      } finally { ctx.destroy(); }
+    });
+  }
+}
+
+test('round 4 s1: quit Save after replacing a dirty remote tab never sends a local panel save', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
+    readImpl: () => ({ ok: true, kind: 'remote', readOnly: true, git: true, original: 'base', current: 'text' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.editors.at(-1).setText('unexpected dirty text');
+    await ctx.window.handleChangesSave('s1');
+    assert.equal(ctx.calls.save.length, 0, 'the active read-only editor refuses Save');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    const quitting = ctx.window.askAboutUnsavedEdits();
+    const save = ctx.document.getElementById('unsaved-save');
+    if (save) save.click();
+    assert.equal(await quitting, true);
+    assert.equal(ctx.calls.save.some(call => !call.options?.sessionId), false,
+      'a remote buffer must never reach saveFileForPanel without its sessionId');
+    assert.equal(ctx.calls.save.length, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('remote Touched row and Reload retain the remote session in the shared read-only editor', async () => {
   const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
     readImpl: () => ({ ok: true, kind: 'remote', git: true, readOnly: true, original: 'base', current: 'remote text' }) });
