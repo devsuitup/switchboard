@@ -7,8 +7,41 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
+const os = require('node:os');
+const { listSessionTouchedFiles } = require('../session-touched-files');
+const { isRemoteFolder } = require('../remote-hosts');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+test('shipped Touched list IPC reads the mirror under DB_PATH and makes one fake transport call', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-remote-touched-wire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mirror = path.join(root, 'remote', 'host', 'projects', '-repo');
+  fs.mkdirSync(mirror, { recursive: true });
+  fs.writeFileSync(path.join(mirror, 'S1.jsonl'), JSON.stringify({ type: 'assistant', message: { content: [
+    { type: 'tool_use', name: 'Write', input: { file_path: '/repo/a' } },
+  ] } }) + '\n');
+  const handlers = new Map();
+  let attempts = 0;
+  const src = read('main.js');
+  const start = src.indexOf("ipcMain.handle('session-touched-files'");
+  const end = src.indexOf('\n});', start) + '\n});'.length;
+  vm.runInNewContext(src.slice(start, end), {
+    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, path,
+    PROJECTS_DIR: path.join(root, 'local-projects'), DB_PATH: path.join(root, 'switchboard.db'),
+    getCachedFolder: () => 'host::-repo', isRemoteFolder,
+    isSensitivePathAsync: () => { assert.fail('remote paths must not be inspected on the local disk'); },
+    listSessionTouchedFiles: (id, deps) => listSessionTouchedFiles(id, { ...deps, runRemoteCommand: async () => {
+      attempts++; return { code: 0, stdout: 'present\t1700000000\n' };
+    } }),
+  });
+  const result = await handlers.get('session-touched-files')(null, 'S1');
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.files[0].path, '/repo/a');
+  assert.equal(result.files[0].diskMtime, 1700000000000);
+  assert.equal(attempts, 1);
+});
 
 test('main.js serves session-touched-files through the sensitive-path guard and the cached folder', () => {
   const src = read('main.js');
@@ -19,6 +52,7 @@ test('main.js serves session-touched-files through the sensitive-path guard and 
   assert.match(body, /getCachedFolder/);
   assert.match(body, /isRemoteFolder/);
   assert.match(body, /projectsDir:\s*PROJECTS_DIR/);
+  assert.match(body, /dataDir:\s*path\.dirname\(DB_PATH\)/);
 });
 
 test('preload.js exposes sessionTouchedFiles on the same channel and nothing that reads a path', () => {

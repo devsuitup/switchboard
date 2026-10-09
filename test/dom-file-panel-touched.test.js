@@ -49,6 +49,48 @@ function result(over = {}) {
   };
 }
 
+test('remote Touched row and Reload retain the remote session in the shared read-only editor', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
+    readImpl: () => ({ ok: true, kind: 'remote', git: true, readOnly: true, original: 'base', current: 'remote text' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(ctx.calls.readOptions[0].sessionId, 's1');
+    assert.equal(tab.type, 'changes');
+    assert.equal(tab.remote, true);
+    assert.equal(tab.returnList.type, 'touched');
+    assert.equal(tab.readOnly, true);
+    assert.equal(ctx.editors.at(-1).current, 'remote text');
+    assert.equal(ctx.editors.at(-1).mode, 'inline');
+    assert.equal(ctx.editors.at(-1).options.readOnly, true);
+    assert.deepEqual(ctx.watchCalls, []);
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Remote session/);
+    assert.doesNotMatch(ctx.document.getElementById('changes-diff-notice').textContent, /Symbolic link/);
+    await ctx.window.reloadChangesFile('s1');
+    assert.equal(ctx.calls.readOptions.at(-1).sessionId, 's1');
+    assert.equal(ctx.calls.status.length, 0);
+    assert.equal(ctx.calls.save.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('an unreachable remote Touched list shows unknown rows without reads or automatic retries', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote', files: [row({ state: 'unknown', openable: false, diskMtime: null })] }) });
+  try {
+    await openTab(ctx);
+    const el = rows(ctx)[0];
+    assert.equal(el.querySelector('.touched-file-state').textContent, 'unknown');
+    el.click();
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 0);
+    assert.equal(ctx.calls.touched.length, 1);
+    ctx.document.getElementById('touched-refresh-btn').click();
+    await flush();
+    assert.equal(ctx.calls.touched.length, 2);
+  } finally { ctx.destroy(); }
+});
+
 function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThrows = false, resolveImpl, ownerOf, saveImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
@@ -109,7 +151,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     const dom = window.document.createElement('div');
     dom.className = 'cm-editor test-' + mode;
     parent.appendChild(dom);
-    const view = { dom, original, current, mode, setText(value) { view.current = value; options.onChange(); }, destroy() { dom.remove(); } };
+    const view = { dom, original, current, mode, options, setText(value) { view.current = value; options.onChange(); }, destroy() { dom.remove(); } };
     const state = { doc: { toString: () => view.current } };
     if (mode === 'side-by-side') view.b = { state }; else view.state = state;
     editors.push(view);
