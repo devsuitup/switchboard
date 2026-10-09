@@ -30,7 +30,7 @@ function initToolBar(split) {
   for (const spec of TOOL_BAR) createToolToggle({ ...spec, onClick: () => activateTool(spec.shortcut) });
   toolBarEl.addEventListener('focusin', e => {
     if (e.target.parentElement !== toolBarEl) return;
-    for (const btn of toolBarEl.children) btn.tabIndex = btn === e.target ? 0 : -1;
+    for (const btn of toolBarEl.children) btn.tabIndex = !btn.hidden && !btn.disabled ? 0 : -1;
   });
   toolBarEl.addEventListener('keydown', e => {
     const buttons = enabledToolButtons();
@@ -80,7 +80,7 @@ function syncToolBar() {
   }
   const enabled = enabledToolButtons();
   const focusTarget = enabled.includes(active) ? active : enabled.find(btn => btn.tabIndex === 0) || enabled[0];
-  for (const btn of toolBarEl.children) btn.tabIndex = btn === focusTarget ? 0 : -1;
+  for (const btn of toolBarEl.children) btn.tabIndex = !btn.hidden && !btn.disabled ? 0 : -1;
   if (hadFocus && !enabled.includes(active)) {
     if (focusTarget) enabled[0].focus();
     else {
