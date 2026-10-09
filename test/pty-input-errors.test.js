@@ -95,12 +95,14 @@ test('input errors use warn when the logger provides it', () => {
 
 test('input errors remain handled when the warn logger throws', () => {
   const input = new EventEmitter();
+  const debugs = [];
   setPtyOpLogger({
     warn() { throw new Error('logger unavailable'); },
-    debug() { assert.fail('warn must take precedence over debug'); },
+    debug(line) { debugs.push(line); },
   });
   guardPtyInputErrors({ _agent: { inSocket: input } });
   assert.doesNotThrow(() => input.emit('error', new Error('write EPIPE')));
+  assert.deepEqual(debugs, []);
 });
 
 test('the input error listener survives repeated failures with logging disabled', () => {
