@@ -722,7 +722,7 @@ function endCurrentTab(sessionId, state, { pending = null, restoreStash = false 
 
 // see .ai/contexts/changes-view.md ("A dirty buffer is never overwritten, and never lied to")
 function stashChangesEdits(state, tab) {
-  if (!tab || tab.type !== 'changes' || !tab.selectedFile) return;
+  if (!tab || tab.type !== 'changes' || !tab.selectedFile || tab.remote || tab.readOnly) return;
   const content = readChangesEditorContent(tab);
   if (content == null || content === tab.savedContent) return;
   const entry = {

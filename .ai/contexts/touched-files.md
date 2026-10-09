@@ -223,8 +223,9 @@ The renderer requests `diskInfo: false` to display mirror rows immediately,
 then requests their disk info. Remote inspection runs after the serialized
 transcript-cache queue is released. Concurrent requests for the same session
 and path set share one in-flight batch; completed batches are not cached.
-Requests made while either phase is pending queue one follow-up refresh, using
-the latest requested window. Each mirror/disk pair uses one window snapshot;
+Refresh and older-history requests made while either phase is pending queue
+one follow-up refresh, using the latest requested window. Each mirror/disk pair
+uses one window snapshot;
 an older answer cannot reset a window expanded during inspection. The queued
 refresh runs only if its list is still the session's current tab or return list.
 Remote rows with unknown state show `checking` while `diskInfoPending` is set,
@@ -236,7 +237,7 @@ so filenames cannot inject output records. Literal credential and .git paths
 are refused before transport; canonical paths are checked on the host before
 stat or read, and both operations use that resolved path. The remote denylist
 also refuses `/etc/shadow`, `/etc/gshadow`, `/etc/ssh/ssh_host_*`, `*.pem`,
-`*.key` and exact SSH key basenames `id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?`,
+`*.key` and SSH key basenames `id_(rsa|dsa|ecdsa|ed25519)([._-].*)?`,
 both literally and after host resolution. JS and shell derive those basenames
 from the same list. Ordinary source names such as `id_generator.py` and files
 inside an `id_utils` directory are allowed.
@@ -470,7 +471,9 @@ per path, labelled `opened`, no time, no tools, its path by `textContent` in a
 ## Stashed edits (#472)
 
 `state.touchedStashes` is a `Map` keyed by `filePathKey(absolutePath)`, oldest
-first. `stashChangesEdits` on a dirty Touched editor (a tab with a
+first. Remote and read-only tabs are never stashed, even if their buffer becomes
+dirty, so restoring or saving a stash cannot turn them into editable local files.
+`stashChangesEdits` on a dirty Touched editor (a tab with a
 `returnList`) adds the entry for its path, newest last: a stashed file is never
 also in an editor, since opening it restores the entry and removes it. Each entry
 is the stash object plus `type: 'touched-stash'` and `filePath`. An entry exists

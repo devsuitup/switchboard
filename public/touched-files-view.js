@@ -543,7 +543,7 @@ function renderTouchedContent(sessionId, tab) {
 
 function extendTouchedWindow(sessionId, tab) {
   const current = filePanelState.get(sessionId)?.currentTab;
-  if (tab.loading || (current !== tab && current?.returnList !== tab)) return;
+  if (current !== tab && current?.returnList !== tab) return;
   tab.windowDays += TOUCHED_WINDOW_STEP_DAYS;
   tab.windowStart -= TOUCHED_WINDOW_STEP_DAYS * TOUCHED_DAY_MS;
   const older = [tab.data?.nextOlderTimestamp, ...(tab.data?.cachedFiles || tab.data?.files || []).map(f => f.lastTouched), ...(tab.data?.cachedUnresolved || []).map(f => f.lastTouched)]
@@ -553,6 +553,10 @@ function extendTouchedWindow(sessionId, tab) {
     const anchor = tab.windowStart + tab.windowDays * TOUCHED_DAY_MS;
     tab.windowDays = Math.ceil((anchor - newestOlder) / TOUCHED_DAY_MS);
     tab.windowStart = anchor - tab.windowDays * TOUCHED_DAY_MS;
+  }
+  if (tab.refreshing) {
+    tab.refreshPending = true;
+    return;
   }
   const loaded = tab.data?.loadedWindowStart;
   if (tab.data?.hasOlder && (loaded == null || tab.windowStart < loaded)) return refreshTouched(sessionId);
