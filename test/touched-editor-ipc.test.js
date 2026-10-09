@@ -108,15 +108,94 @@ test('round 2 s2: main refuses remote panel saves before touching the local disk
   }
 });
 
-test('round 2 s2: an opened remote path cannot be saved with omitted or forged options', async () => {
-  let accesses = 0;
-  const api = panelHandlers({ realpathSync: { native() { accesses++; throw new Error('local disk accessed'); } } }, fixtureGitFiles,
-    async (_alias, command) => ({ code: 0, stdout: command.includes('rev-parse') ? '/repo\n' : 'content' }));
-  assert.equal((await api.read('/repo/file', { sessionId: 'R1' })).ok, true);
-  for (const opts of [undefined, {}, { sessionId: 'missing', git: true }, { remote: false, readOnly: false }]) {
-    const result = await api.save('/repo/file', 'overwrite', 'content', opts);
-    assert.equal(result.reason, 'remote');
-    assert.equal(accesses, 0);
+test('round 3 M1: opening a remote path leaves the same local file saveable', async t => {
+  const { dir } = fixture(t);
+  const nativePath = path.join(dir, 'file.txt');
+  const filePath = process.platform === 'win32' ? nativePath.slice(2).replace(/\\/g, '/') : nativePath;
+  fs.writeFileSync(nativePath, 'local content');
+  const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => command.includes('rev-parse')
+    ? { code: 128, stderr: 'not a git repository' } : { code: 0, stdout: 'remote content' });
+  assert.equal((await api.read(filePath, { sessionId: 'R1' })).ok, true);
+  const refused = await api.save(filePath, 'overwrite', 'local content', { sessionId: 'R1' });
+  assert.equal(refused.reason, 'remote');
+  assert.equal(fs.readFileSync(nativePath, 'utf8'), 'local content');
+  const saved = await api.save(filePath, 'saved locally', 'local content');
+  assert.equal(saved.ok, true, saved.error);
+  assert.equal(fs.readFileSync(nativePath, 'utf8'), 'saved locally');
+  assert.equal((await api.save(filePath, 'saved again', 'saved locally', {})).ok, true);
+  assert.equal(fs.readFileSync(nativePath, 'utf8'), 'saved again');
+});
+
+test('round 3 m2: ordinary id_ source paths open but exact SSH key names stay refused on both guards', async t => {
+  const shell = fakeTouchedShell(t);
+  const safePaths = [shell.root + '/id_generator.py', shell.root + '/src/id_utils/x.js'];
+  fs.writeFileSync(path.join(shell.dir, 'id_generator.py'), 'source');
+  fs.mkdirSync(path.join(shell.dir, 'src', 'id_utils'), { recursive: true });
+  fs.writeFileSync(path.join(shell.dir, 'src', 'id_utils', 'x.js'), 'source');
+  let resolved = safePaths[0];
+  let calls = 0;
+  shell.setFunctions(`sh() { shift; script=$1; shift; shift; eval "$script"; }
+realpath() { printf '%s\\n' "${'$'}{RESOLVED:-$3}"; }
+stat() { printf '123\\n'; }
+tr() { text=; IFS= read -r text; printf '%s' "${'$'}{text,,}"; }
+`);
+  const api = panelHandlers(fs, fixtureGitFiles, (alias, command, options) => {
+    calls++;
+    return command.includes('rev-parse') ? { code: 128, stderr: 'not a git repository' }
+      : shell.run(alias, 'RESOLVED=' + require('../git-changes-runner').shQuote(resolved) + '; ' + command, options);
+  });
+  for (const filePath of safePaths) {
+    resolved = filePath;
+    const pair = await api.read(filePath, { sessionId: 'R1' });
+    assert.equal(pair.ok, true, filePath + ': ' + pair.error);
+    assert.equal(pair.current, 'source');
+    assert.equal(pair.readOnly, true);
+  }
+  const keys = ['rsa', 'dsa', 'ecdsa', 'ed25519'].flatMap(algorithm =>
+    ['', '_sk', '.pub', '_sk.pub'].map(suffix => '/outside/id_' + algorithm + suffix));
+  for (const key of keys) {
+    const before = calls;
+    assert.equal((await api.read(key, { sessionId: 'R1' })).reason, 'refused', key);
+    assert.equal(calls, before, 'literal key must not reach transport');
+  }
+  const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+  const states = await inspectRemoteTouchedPaths('host', [...safePaths, ...keys], {
+    runRemoteCommand: shell.run,
+  });
+  for (const filePath of safePaths) assert.equal(states.get(filePath).state, 'present', filePath);
+  for (const key of keys) assert.equal(states.get(key).state, 'refused', key);
+  for (const key of keys) {
+    resolved = key;
+    assert.equal((await api.read(safePaths[0], { sessionId: 'R1' })).reason, 'refused', key);
+  }
+});
+
+test('round 3 m3: Git blob errors fall back to plain text while transport failures stay unreachable', async () => {
+  for (const failure of [
+    { code: 128, stderr: 'fatal: bad object HEAD:file' },
+    { code: 128, stderr: 'fatal: could not fetch missing object from promisor remote' },
+    { code: 127, stderr: 'git: command not found' },
+    { code: -1 }, { code: 255 }, { code: 128, timedOut: true }, { code: 0, timedOut: true },
+  ]) {
+    let calls = 0;
+    const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => {
+      calls++;
+      if (command.includes('rev-parse')) return { code: 0, stdout: '/repo\n' };
+      return command.includes("'show'") ? failure : { code: 0, stdout: 'working text' };
+    });
+    const pair = await api.read('/repo/file', { sessionId: 'R1' });
+    const unreachable = failure.code === -1 || failure.code === 255 || failure.timedOut;
+    if (unreachable) {
+      assert.equal(pair.ok, false);
+      assert.equal(pair.reason, 'unknown');
+    } else {
+      assert.equal(pair.ok, true, pair.error);
+      assert.equal(pair.git, false);
+      assert.equal(pair.readOnly, true);
+      assert.equal(pair.current, 'working text');
+      assert.equal(pair.original, 'working text');
+    }
+    assert.equal(calls, 3);
   }
 });
 

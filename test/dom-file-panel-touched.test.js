@@ -49,7 +49,7 @@ function result(over = {}) {
   };
 }
 
-test('round 2 M2: the mirror renders before delayed disk info and Refresh coalesces', async () => {
+test('round 2 M2: the mirror renders before delayed disk info and Refresh does not overlap it', async () => {
   let release;
   const pending = new Promise(resolve => { release = resolve; });
   const ctx = setupDom({ touchedImpl: (_id, options) => options?.diskInfo === false
@@ -60,12 +60,69 @@ test('round 2 M2: the mirror renders before delayed disk info and Refresh coales
     opening = ctx.window.openTouchedTab('s1');
     await flush();
     assert.equal(rows(ctx).length, 1, 'mirror rows must be visible before disk info');
-    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'unknown');
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'checking');
     ctx.document.getElementById('touched-refresh-btn').click();
     await flush();
     assert.equal(ctx.calls.touched.length, 2, 'one mirror request and one disk request');
     release(result({ kind: 'remote', files: [row({ diskMtime: 123000 })] }));
     await opening;
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'present');
+  } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
+});
+
+test('round 3 s2: a pending disk check becomes unknown after an unreachable host without a retry', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const unknown = result({ kind: 'remote', files: [row({ state: 'unknown', openable: false })] });
+  const ctx = setupDom({ touchedImpl: (_id, options) => options.diskInfo === false
+    ? { ...unknown, diskInfoPending: true } : pending });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'checking');
+    release(unknown);
+    await opening;
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'unknown');
+    rows(ctx)[0].click();
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 0);
+    assert.equal(ctx.calls.touched.length, 2);
+  } finally { release(unknown); await opening; ctx.destroy(); }
+});
+
+test('round 3 m1: Refresh and Load older during disk info queue one refresh of the expanded window', async () => {
+  const requests = [];
+  const day = 24 * 60 * 60 * 1000;
+  const anchor = Date.now();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: (_id, options) => {
+    requests.push({ ...options });
+    if (requests.length === 2) return pending;
+    return result({ kind: 'remote', diskInfoPending: options.diskInfo === false,
+      windowStart: anchor - options.windowDays * day, loadedWindowStart: anchor - options.windowDays * day,
+      hasOlder: options.windowDays === 1,
+      files: [row({ state: options.diskInfo === false ? 'unknown' : 'present', lastTouched: anchor })] });
+  } });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    ctx.document.getElementById('touched-refresh-btn').click();
+    ctx.document.getElementById('touched-refresh-btn').click();
+    ctx.document.getElementById('touched-more-btn').click();
+    await flush();
+    assert.equal(requests.length, 2, 'no overlapping disk request');
+    assert.equal(ctx.stateOf('s1').currentTab.windowDays, 11);
+    release(result({ kind: 'remote', windowStart: anchor - day, loadedWindowStart: anchor - day, hasOlder: true }));
+    await opening;
+    await flush();
+    assert.equal(requests.length, 4, 'one queued mirror/disk pair must run after disk info');
+    assert.deepEqual(requests.slice(2), [{ windowDays: 11, diskInfo: false }, { windowDays: 11 }]);
+    assert.equal(ctx.stateOf('s1').currentTab.windowStart, anchor - 11 * day);
     assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'present');
   } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
 });
