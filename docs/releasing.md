@@ -58,6 +58,11 @@ request first, because `main` is protected.
      The fix is then in `CHANGELOG.md`, through a PR; `gh release edit
      --notes-file` can fill in the draft by hand meanwhile.
 
+   CI refuses to overwrite a published release. For a retry that needs a fresh
+   draft or a different commit, delete the draft or move the tag only while the
+   release is still a draft. The workflow token has `contents: read`; only the
+   publish job has `contents: write`, and no checkout persists credentials.
+
 5. **Publish the draft**, after checking its assets:
 
    ```bash
