@@ -88,6 +88,7 @@ function setup() {
   let exitHandler = null;
   const h = { whileOpening: null };
   window.api = {
+    getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     onProcessExited: (cb) => { exitHandler = cb; },
     openTerminal: async () => {
       if (h.whileOpening) h.whileOpening();

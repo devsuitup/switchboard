@@ -353,21 +353,31 @@ for an assumption a normal unit test can pin.
 CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,
 continuedInSessionId:<new>, timestamp:...}` to the old transcript. These records
 can be mid-file and repeated; the new transcript has no back-link. This is an
-observed interface, pinned by `test/canary-cli-continuations.test.js` with a live
-sample bounded to 8 MiB / 3 seconds (skipped when no record is available).
-`test/session-continuation-index.test.js` always runs an observed-format fixture;
-that fixture proves parser agreement, not CLI drift.
+observed interface, pinned by an always-running synthetic fixture in
+`test/session-continuation-index.test.js`. That fixture proves parser agreement,
+not CLI drift; the test suite does not sample real conversation transcripts.
 
 `session-continuations` IPC calls `sessionCache.resolveSessionContinuations`.
 It traverses indexed links in record order, deduplicates terminal ids and bounds
-traversal to 32 edges / 128 node visits. Cycles, missing rows/files, malformed
-records and scan limits return `unresolved`, preventing any old-id resume.
+traversal to 32 edges / 128 node visits. Cycles, missing continuation rows/files
+and malformed continuation records return `unresolved`. Unrelated JSON parse
+failures and incomplete tails do not block resume. File scanning yields between
+chunks and has no total byte cap; chunk size only controls pacing.
+
 `resolveResumeSession` is shared by restore and sidebar clicks. An automatic
-restore selects exactly one terminal id; manual opens offer it. Several ids
-use the existing confirm UI, listing every candidate and last activity before
-asking whether to open each one. Declining all choices keeps the saved entry.
-An unresolved graph asks for retry/sidebar selection without spawning. Remote
-sessions retain their existing attach behavior.
+restore selects exactly one terminal id. Several ids, unresolved graphs and
+failed lookups hold the saved entry and join the non-blocking restore notice,
+which names the original entry and tells the user to open it from the sidebar
+to choose. No continuation confirmation runs during automatic restore. Manual
+opens list each candidate's id and last activity before asking whether to open
+it. Declining all candidates offers an explicit original-session choice; an
+unresolved graph or failed lookup offers the same choice with a warning.
+Cancellation keeps the held entry. Remote sessions retain their attach behavior.
+
+`restoreStartupSessions` shares a map of lookup promises between the remembered
+active-session open and working-set restore. Each original id is resolved once
+during that startup pass; the map is discarded afterward so subsequent manual
+opens and indexing retries re-check the transcript.
 
 After resolution, `runRestore` checks the final id's liveness; a background
 continuation requests the guard's existing `{attach}` verdict. Other live kinds

@@ -41,6 +41,7 @@ async function withHarness(setup, fn) {
       schedulePersistWorkingSet: () => {},
       pollActiveSessions: () => {},
       api: {
+        getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
         openTerminal: async (sessionId, projectPath, isNew, sessionOptions, initialSize) => {
           calls.openTerminal.push({ sessionId, projectPath, isNew, sessionOptions, initialSize });
           return { ok: true };

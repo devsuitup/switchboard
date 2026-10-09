@@ -46,13 +46,23 @@ its previous launch. Sessions reopen one after another, half a second apart.
 
 If a conversation continued under another id, restore follows its continuation
 chain and saves the final id with the saved entry's project and active state.
-Several distinct final ids prompt for a choice, listing each id and its last
-activity. Dismissing the choices keeps the saved entry without launching it.
-A cycle, missing transcript or incomplete bounded scan asks you to retry after
-indexing or open a candidate from the sidebar; it never resumes the old id.
-Clicking an old sidebar row offers its continuation before opening it. A live
-background continuation uses the existing attach path and its final id stays
-in the saved working set for a later restore.
+One final id is selected automatically. Several final ids, a cycle, a missing
+continuation transcript or a malformed continuation record hold the saved entry
+without launching it. A non-blocking notice names the held conversation and
+asks you to open it from the sidebar to choose; other saved sessions continue
+restoring. Automatic restore never displays a continuation confirmation dialog.
+
+Clicking an old sidebar row offers its continuations, listing each id and its
+last activity. After declining the candidates, you can explicitly choose
+**Open the original session** or cancel. An unresolved continuation also offers
+this explicit original-session choice, with a warning and any known candidates.
+The original id is never silently selected when continuation information exists.
+Ordinary malformed lines, incomplete tails and oversized records without
+continuation bytes do not block opening the original session. Large transcripts
+are indexed in yielded chunks without a total byte limit.
+
+A live background continuation uses the existing attach path and its final id
+stays in the saved working set for a later restore.
 
 Within one run of the app, going back to a session whose process still runs is
 a reattach: the terminal replays its buffered output onto the same process.

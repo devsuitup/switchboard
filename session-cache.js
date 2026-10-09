@@ -20,7 +20,7 @@ let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSes
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
-let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession;
+let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
 
 function init(ctx) {
@@ -51,6 +51,7 @@ function init(ctx) {
   setInitialScanComplete = ctx.db.setInitialScanComplete;
   getCachedMissingEntrypoint = ctx.db.getCachedMissingEntrypoint;
   getCachedSession = ctx.db.getCachedSession;
+  setCachedContinuationIndex = ctx.db.setCachedContinuationIndex;
   setCachedEntrypoints = ctx.db.setCachedEntrypoints;
   entrypointBackfill = null;
 }
@@ -238,6 +239,7 @@ function refreshFolder(folder, opts = {}) {
     filesToScan = enumerateSessionFiles(folderPath);
   }
 
+  let continuationBytesLeft = 1024 * 1024;
   const currentIds = new Set();
   let changed = false;
 
@@ -288,10 +290,16 @@ function refreshFolder(folder, opts = {}) {
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
       if (h) {
+        let continuationIndex = cachedEntry.continuationIndex;
+        if (parentSessionId || cachedEntry.parentSessionId) continuationIndex = null;
+        else if (continuationBytesLeft) {
+          continuationIndex = scanContinuationIndex(filePath, cachedEntry.sessionId, continuationIndex, continuationBytesLeft);
+          continuationBytesLeft = 0;
+        }
         // Merge: keep cached body/messageCount/created, overlay fresh display fields.
         const merged = {
           ...cachedEntry,
-          continuationIndex: scanContinuationIndex(filePath, cachedEntry.sessionId, cachedEntry.continuationIndex),
+          continuationIndex,
           folder, projectPath,
           summary: h.summary || cachedEntry.summary,
           firstPrompt: h.firstPrompt || cachedEntry.firstPrompt,
@@ -1071,32 +1079,25 @@ function populateCacheViaWorker() {
   return populatePromise;
 }
 
-async function resolveSessionContinuations(sessionId) {
-  let scanBudget = 128 * 1024 * 1024;
+async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024 } = {}) {
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   return resolveContinuations(sessionId, async id => {
     if (!validId(id)) return null;
     const row = getCachedSession?.(id);
-    if (!row) return null;
+    if (!row || row.parentSessionId) return null;
     const file = resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' });
     const stat = fs.statSync(file);
-    let index;
-    try { index = JSON.parse(row.continuationIndex); } catch {}
-    if (!index?.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
-      const start = index && index.bytes < stat.size ? index.bytes : 0;
-      let remaining = Math.min(scanBudget, stat.size - start);
+    let serialized = row.continuationIndex, index;
+    try { index = JSON.parse(serialized); } catch {}
+    if (index?.format !== 2 || !index.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
       do {
-        const bytes = Math.min(remaining, 4 * 1024 * 1024);
-        remaining -= bytes;
-        scanBudget -= bytes;
-        const before = index?.bytes || 0;
-        row.continuationIndex = scanContinuationIndex(file, id, row.continuationIndex, bytes);
-        index = JSON.parse(row.continuationIndex);
+        serialized = scanContinuationIndex(file, id, serialized, chunkBytes);
+        index = JSON.parse(serialized);
         await new Promise(resolve => setImmediate(resolve));
-        if (index.bytes === before) break;
-      } while (remaining > 0 && !index.complete);
-      upsertCachedSessions([row]);
+      } while (!index.complete && index.bytes < index.size);
+      setCachedContinuationIndex(id, serialized);
     }
-    return { index, modified: row.modified };
+    return { index, modified: getCachedSession(id)?.modified || row.modified };
   });
 }
 

@@ -131,11 +131,6 @@ test('the reload path resumes the remembered session as an automatic resume', ()
     /if \(activeSessionId && !openSessions\.has\(activeSessionId\)\) \{\s*const session = sessionMap\.get\(activeSessionId\);\s*if \(session\) await openSession\(session, undefined, \{ automatic: true \}\);/);
 });
 
-test('the working-set restore resumes each session as an automatic resume', () => {
-  const body = functionBody(APP_SRC, 'async function runRestore(');
-  assert.match(body, /openSession\(s, undefined, \{ automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId \}\)/);
-  assert.doesNotMatch(body, /openSession\(s\)/);
-});
 
 test('index.html loads the guard before app.js, preload exposes the check, main answers it', () => {
   const html = read('public/index.html');

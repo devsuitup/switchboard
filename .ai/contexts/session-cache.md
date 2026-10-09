@@ -1674,21 +1674,38 @@ settings(key PK, value JSON)
 
 ## Continuation index (#518B)
 
-`session_cache.continuationIndex` is nullable JSON `{ids, bytes, complete,
-mtime, unresolved, skipLine?}`. Schema reconciliation adds it without wiping
-old rows. Full transcript scans in `read-session-file.js` collect links while
-already parsing the file, including worker scans. Header-only refresh also
-updates this index with a bounded 4 MiB chunk scan, starting at the previous
-safe cursor for appended transcripts. Same-size/shrunken changes restart at
-byte zero; the CLI's append-only history is assumed for growth.
+`session_cache.continuationIndex` is nullable JSON with `format:2`, `ids`,
+`bytes`, `complete`, `mtime` and `unresolved`. Schema reconciliation adds the
+column without wiping old rows. Full transcript scans collect links while
+already parsing the file, including worker scans. Missing or older-format
+indexes are rebuilt lazily, including indexes that previously marked ordinary
+parse errors as unresolved.
 
-`resolveSessionContinuations` verifies size/mtime before trusting the index.
-A legacy/incomplete/stale index uses bounded chunk reads, yielding between
-4 MiB chunks with a shared 128 MiB budget for the entire traversal; it writes
-progress back to the row. A complete fresh index only needs stat, without
-reading transcript contents. A partial trailing JSON record retains the
-last complete-line cursor, so an append retries it. Lines over 1 MiB are
-skipped only when their top-level type in the first 64 KiB is known and is
-not continued-in; skipLine persists across chunks. An unclassifiable oversized
-line stays unresolved until full indexing replaces the index. No transcript
-content is sent through this IPC, only candidate ids and activity times.
+Header-only refresh skips subagent continuation indexes and shares a 1 MiB
+synchronous continuation budget across all changed parent files in that refresh.
+Other files retain their stale index until a later refresh or resume lookup.
+Existing display-header and SDK-entrypoint reads keep their own budgets.
+
+`resolveSessionContinuations` verifies format, size and mtime before trusting
+an index. A complete fresh index requires only stat. A legacy, incomplete or
+stale index is read in 1 MiB chunks, yielding with `setImmediate` between chunks,
+with no total scan cap. Tests can inject smaller `chunkBytes`. Persistence uses
+`setCachedContinuationIndex`, which updates only that column, preserving display
+fields written by a concurrent refresh; it does not upsert an old row snapshot.
+
+Chunk indexes also carry `version:2`, `size`, `sealedIds`, a bounded base64
+`pending` line, and the last 64 indexed bytes as hexadecimal `tail`. The tail is
+verified before reusing a cursor after growth; mismatch, shrink or a same-size
+mtime change starts at byte zero. This is a local tail check, not a proof that
+an arbitrary rewrite preserved the entire prefix. Full-scan indexes lack
+a cursor witness and restart from zero when stale.
+
+Lines are retained up to 1 MiB. Oversized records are streamed with `skipLine`,
+`lineContinued` and an 11-byte `patternTail`, detecting literal `continued-in`
+bytes anywhere in the record, including across chunks. A malformed or oversized
+record is unresolved only if it contains these bytes. Valid continuation records
+with invalid targets also remain unresolved. An incomplete tail without those
+bytes never blocks the original session. Partial tails remain buffered for a
+later append; tail errors are recomputed rather than carried forward forever.
+No transcript content is sent through the IPC, only candidate ids and activity
+times.

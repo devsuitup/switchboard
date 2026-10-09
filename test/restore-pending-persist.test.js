@@ -23,6 +23,7 @@ function setup() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
   const settings = { global: { openWorkingSet: SAVED } };
   dom.window.api = {
+    getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
     setSetting: async (key, value) => { settings[key] = JSON.parse(JSON.stringify(value)); },
   };

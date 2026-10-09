@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Restoring a conversation that continued under another id now opens its continuation and saves the new id. Multiple continuations offer a choice with their last activity, and clicking the old session offers the continuation. (#518)
+- Restoring a conversation that continued under another id now opens its continuation and saves the new id, including with large transcripts or unrelated damaged records. Multiple or unresolved continuations stay in the saved set with a non-blocking notice; open the old session to choose a continuation or explicitly reopen the original. (#518)
 
 ## v0.0.91 — 2026-10-09
 

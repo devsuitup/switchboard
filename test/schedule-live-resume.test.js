@@ -64,6 +64,7 @@ function setup(t, { sandbox = false } = {}) {
   const settings = { global: {} };
   const session = { sessionId: SID, projectPath: dir, name: 'Scheduled task' };
   dom.window.api = {
+    getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSessionLiveElsewhere: (id) => handlers.get('session-live-elsewhere')(null, id),
     getSessionsLiveElsewhere: (ids) => handlers.get('sessions-live-elsewhere')(null, ids),
     openTerminal: async (...args) => { openTerminalCalls.push(args); return { ok: true }; },

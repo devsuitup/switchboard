@@ -3,85 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { JSDOM } = require('jsdom');
-const { loadAppFunctions } = require('./app-source');
 const cache = require('../session-cache');
-const { encodeProjectPath } = require('../encode-project-path');
 
-function setup(t, graph, { live = {}, answer = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-continuations-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const folder = encodeProjectPath(root);
-  fs.mkdirSync(path.join(root, folder));
-  for (const [id, children] of Object.entries(graph)) {
-    const records = [
-      { type: 'user', cwd: root, timestamp: '2026-10-09T12:00:00Z', message: { content: 'hello' } },
-      ...children.map(child => ({ type: 'continued-in', sessionId: id, continuedInSessionId: child, timestamp: '2026-10-09T12:01:00Z' })),
-      { type: 'assistant', timestamp: '2026-10-09T12:02:00Z', message: { content: 'after continuation' } },
-    ];
-    fs.writeFileSync(path.join(root, folder, id + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
-  }
-  const rows = new Map();
-  const db = {
-    getSetting: () => ({}), getAllFolderMeta: () => new Map(), getAllMeta: () => new Map(),
-    getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.get(id),
-    upsertCachedSessions: entries => entries.forEach(row => rows.set(row.sessionId, row)),
-    setFolderMeta() {}, getMeta() {}, setName() {}, upsertSearchEntries() {}, replaceSessionMetrics() {},
-    deleteCachedFolder() {}, deleteCachedSession() {}, deleteSearchFolder() {}, deleteSearchSession() {},
-  };
-  cache.init({ PROJECTS_DIR: root, db, activeSessions: new Map(), getMainWindow: () => null, log: console });
-  cache.refreshFolder(folder);
-  const dom = new JSDOM('<body></body>', { runScripts: 'outside-only' });
-  t.after(() => dom.window.close());
-  const ctx = dom.getInternalVMContext();
-  const settingsFile = path.join(root, 'settings.json');
-  const saved = [{ sessionId: 'old', projectPath: root, active: true }];
-  fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
-  const spawned = [], prompts = [];
-  dom.window.confirm = message => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
-  dom.window.api = {
-    getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
-    setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),
-    getSessionContinuations: async id => typeof cache.resolveSessionContinuations === 'function'
-      ? cache.resolveSessionContinuations(id) : { candidates: [], unresolved: false },
-    getSessionLiveElsewhere: async id => live[id] || null,
-    getSessionsLiveElsewhere: async ids => Object.fromEntries(ids.filter(id => live[id]).map(id => [id, live[id]])),
-    openTerminal: async (id, project, isNew, options) => { spawned.push({ id, project, options }); return { ok: true }; },
-  };
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
-  vm.runInContext(`
-    var openSessions = new Map(), sessionMap = new Map();
-    var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;
-    var sessionOpenedOutsideRestore = false, _persistChain = Promise.resolve();
-    var RESTORE_STAGGER_MS = 0;
-    function createTerminalEntry(session) {
-      const entry = { session, terminal: { write() {} }, initialSize: {} };
-      openSessions.set(session.sessionId, entry); return entry;
-    }
-    function showSession(id) { activeSessionId = id; }
-    function destroySession(id) { openSessions.delete(id); }
-    async function resolveDefaultSessionOptions() { return {}; }
-    function syncPtySizeAfterOpen() {} function setSessionSandboxed() {}
-    function forgetSessionExit() {} function beginPtyOpen() {} function settlePtyOpen() {}
-    function schedulePersistWorkingSet() {} function pollActiveSessions() {}
-    function showLiveElsewhereNotice() {}
-  `, ctx);
-  ctx.rows = [...rows.values()];
-  vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
-  const app = loadAppFunctions(ctx, {
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight'],
-    functions: ['runRestore', 'openSession', 'persistWorkingSet', 'pendingRestoreEntries'],
-  });
-  return {
-    spawned, prompts, rows, root, db, folder, ctx,
-    restore: async () => { await app.runRestore(saved); await app.persistWorkingSet(); },
-    click: async () => { await app.openSession(rows.get('old')); await app.persistWorkingSet(); },
-    settings: () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
-  };
-}
+const { setup } = require('./continuations-harness');
 
 for (const [name, graph, expected] of [
   ['one continuation', { old: ['new'], new: [] }, 'new'],
@@ -104,16 +30,15 @@ for (const [name, graph] of [
   ['a cycle', { old: ['mid'], mid: ['old'] }],
   ['a missing continuation', { old: ['missing'] }],
 ]) {
-  test(`restore asks before ${name} and spawns nothing on dismissal`, { timeout: 9000 }, async t => {
+  test(`restore holds ${name} and spawns nothing on dismissal`, { timeout: 9000 }, async t => {
     const h = setup(t, graph);
     await h.restore();
     assert.deepEqual(h.spawned, []);
-    assert.ok(h.prompts.length > 0);
+    assert.equal(h.prompts.length, 0);
+    assert.match(h.dom.window.notice, /sidebar/);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
     if (name === 'two terminal continuations') {
-      assert.match(h.prompts[0], /a/);
-      assert.match(h.prompts[0], /b/);
-      assert.match(h.prompts[0], /2026-10-09T12:02:00Z/);
+      assert.match(h.dom.window.notice, /old/);
     }
   });
 }
@@ -127,7 +52,7 @@ test('manual click offers the continuation before opening it', { timeout: 9000 }
 
 test('choosing the second continuation opens only that candidate and persists it', { timeout: 9000 }, async t => {
   const h = setup(t, { old: ['a', 'b'], a: [], b: [] }, { answer: message => /Open b\?/.test(message) });
-  await h.restore();
+  await h.click();
   assert.deepEqual(h.spawned.map(call => call.id), ['b']);
   assert.equal(h.settings().openWorkingSet[0].sessionId, 'b');
 });
@@ -142,14 +67,15 @@ test('a fresh continuation index resolves without reading transcript contents ag
   assert.equal(full.mock.callCount(), 0);
 });
 
-test('a malformed continuation target asks rather than resuming the old id', { timeout: 9000 }, async t => {
+test('a malformed continuation target holds rather than resuming the old id', { timeout: 9000 }, async t => {
   const h = setup(t, { old: [] });
   const file = path.join(h.root, h.folder, 'old.jsonl');
   fs.appendFileSync(file, '{"type":"continued-in","sessionId":"old","continuedInSessionId":"../escape"}\n');
   delete h.rows.get('old').continuationIndex;
   await h.restore();
   assert.deepEqual(h.spawned, []);
-  assert.ok(h.prompts.length);
+  assert.equal(h.prompts.length, 0);
+  assert.match(h.dom.window.notice, /sidebar/);
 });
 
 test('restore attaches to the continued background job', { timeout: 9000 }, async t => {
@@ -208,13 +134,14 @@ test('a partial continuation recovers once the CLI finishes its record', { timeo
   assert.deepEqual(h.spawned.map(call => call.id), ['new']);
 });
 
-test('depth limit asks without resuming the original id', { timeout: 9000 }, async t => {
+test('depth limit holds without resuming the original id', { timeout: 9000 }, async t => {
   const graph = { old: ['n0'] };
   for (let i = 0; i < 35; i++) graph['n' + i] = i === 34 ? [] : ['n' + (i + 1)];
   const h = setup(t, graph);
   await h.restore();
   assert.deepEqual(h.spawned, []);
-  assert.ok(h.prompts.length);
+  assert.equal(h.prompts.length, 0);
+  assert.match(h.dom.window.notice, /sidebar/);
 });
 
 test('refresh indexes a continuation appended beyond the display header', { timeout: 9000 }, async t => {

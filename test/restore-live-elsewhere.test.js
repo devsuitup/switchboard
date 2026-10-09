@@ -47,6 +47,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   const liveQueries = { single: [], batch: [] };
 
   dom.window.api = {
+    getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
     setSetting: async (key, value) => { settings[key] = JSON.parse(JSON.stringify(value)); },
     getSessionLiveElsewhere: async (id) => { liveQueries.single.push(id); return liveIds.includes(id) ? LIVE : null; },

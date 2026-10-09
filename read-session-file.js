@@ -201,7 +201,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       let entry;
       try { entry = JSON.parse(line); } catch {
         if (line === lines.at(-1) && !content.endsWith('\n')) incompleteTail = true;
-        else continuationUnresolved = true;
+        if (line.includes('continued-in')) continuationUnresolved = true;
         continue;
       }
       const continuation = continuationId(entry, fileBase);
@@ -300,7 +300,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
-      continuationIndex: JSON.stringify({ ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
+      continuationIndex: JSON.stringify({ format: 2, ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
       bridgeSessionId,
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,

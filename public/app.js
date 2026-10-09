@@ -233,10 +233,12 @@ async function runRestore(list) {
       // Resume with the project's current "new session" defaults, exactly like a
       // manual session relaunch — not options frozen from a previous launch.
       const originalId = item.sessionId;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg) });
+      const originalSession = s;
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index });
+        skippedNow.push({ session: originalSession, continuation: true });
         restoreInFlight.delete(originalId);
         continue;
       }
@@ -406,11 +408,15 @@ function showNotRestoredNotice(unavailable) {
 }
 
 function showLiveElsewhereNotice(skipped) {
-  const pids = skipped.map(({ live }) => (live ? live.pid : '?')).join(', ');
-  const text = skipped.length === 1
-    ? `Not reopened: ${cleanDisplayName(skipped[0].session.name || skipped[0].session.aiTitle || skipped[0].session.summary) || skipped[0].session.sessionId} is live in pid ${pids}`
-    : `Not reopened: ${skipped.length} sessions live in pids ${pids}`;
-  showRestoreNotice('restore-live-elsewhere-toast', text);
+  const live = skipped.filter(item => !item.continuation);
+  const held = skipped.filter(item => item.continuation);
+  const label = ({ session }) => cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
+  const parts = [];
+  if (live.length === 1) parts.push('Not reopened: ' + label(live[0]) + ' is live in pid ' + (live[0].live?.pid || '?'));
+  else if (live.length) parts.push('Not reopened: ' + live.length + ' sessions live in pids ' + live.map(item => item.live?.pid || '?').join(', '));
+  if (held.length) parts.push('Not reopened: ' + held.map(item => label(item) + ' (' + item.session.sessionId + ')').join(', ')
+    + ' needs a continuation choice. Open it from the sidebar to choose.');
+  showRestoreNotice('restore-live-elsewhere-toast', parts.join('. '));
 }
 
 async function markRestoreIndexingDone() {
@@ -1363,7 +1369,7 @@ async function openSession(session, customOptions, { automatic = false, live, co
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg) });
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
     if (!session) return false;
     if (session.sessionId !== originalId) {
       live = undefined;
@@ -1682,23 +1688,21 @@ setTimeout(() => {
 // Let the settings panel push updated key bindings live (no restart needed).
 window._applyShortcuts = (stored) => setAppShortcuts(stored);
 
-loadProjects().then(async () => {
-  // Restore grid view preference before opening sessions so they enter grid mode
-  if (localStorage.getItem('gridViewActive') === '1') {
-    showGridView();
-  }
-  // Restore active session after reload (sessionStorage — lost on full restart).
-  // Must be awaited so openSessions is populated before restoreWorkingSet runs its
-  // !openSessions.has(id) filter — otherwise the session can pass the filter and
-  // be opened a second time (duplicate PTY / duplicate claude --resume).
-  if (activeSessionId && !openSessions.has(activeSessionId)) {
-    const session = sessionMap.get(activeSessionId);
-    if (session) await openSession(session, undefined, { automatic: true });
-  }
-  // Restore working set (persisted across full restarts via global settings)
-  await restoreWorkingSet();
-  restoreAgentsViewAtStartup();
-});
+// see .ai/contexts/cli-session-state.md ("Conversation continuations")
+async function restoreStartupSessions() {
+  window._startupResumeResolutions = new Map();
+  try {
+    if (localStorage.getItem('gridViewActive') === '1') showGridView();
+    if (activeSessionId && !openSessions.has(activeSessionId)) {
+      const session = sessionMap.get(activeSessionId);
+      if (session) await openSession(session, undefined, { automatic: true });
+    }
+    await restoreWorkingSet();
+    restoreAgentsViewAtStartup();
+  } finally { window._startupResumeResolutions = null; }
+}
+
+loadProjects().then(restoreStartupSessions);
 
 // Live-reload sidebar when filesystem changes are detected
 let projectsChangedTimer = null;

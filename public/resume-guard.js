@@ -43,27 +43,33 @@ async function guardResume(session, { automatic = false, api, confirm, live, all
 }
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
-async function resolveResumeSession(session, { automatic = false, api, confirm } = {}) {
-  if (!session || session.type === 'terminal' || session.remoteAlias || !api.getSessionContinuations) return session;
+async function resolveResumeSession(session, { automatic = false, api, confirm, resolutions } = {}) {
+  if (!session || session.type === 'terminal' || session.remoteAlias) return session;
   let result;
-  try { result = await api.getSessionContinuations(session.sessionId); }
-  catch { confirm('Could not check this conversation for continuations. Try opening it again after indexing.'); return null; }
-  if (!result || result.unresolved) {
-    const candidates = (result?.candidates || []).map(c => `${c.sessionId} (last activity: ${c.modified || 'unknown'})`).join('\n');
-    confirm('This conversation has an unresolved continuation (cycle, missing transcript or scan limit).\n'
-      + candidates + '\nTry again after indexing or open a candidate from the sidebar.');
-    return null;
+  try {
+    if (automatic && resolutions) {
+      if (!resolutions.has(session.sessionId)) resolutions.set(session.sessionId, api.getSessionContinuations(session.sessionId));
+      result = await resolutions.get(session.sessionId);
+    } else result = await api.getSessionContinuations(session.sessionId);
+  } catch {
+    if (automatic) return null;
+    return confirm('Could not check this conversation for continuations.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
   }
-  const candidates = result.candidates || [];
+  const candidates = result?.candidates || [];
+  const listing = candidates.map(c => c.sessionId + ' (last activity: ' + (c.modified || 'unknown') + ')').join('\n');
+  if (!result || result.unresolved) {
+    if (automatic) return null;
+    return confirm('This conversation has an unresolved continuation (cycle, missing transcript or malformed continuation record).\n'
+      + listing + '\nYou can retry after indexing or open a candidate from the sidebar.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
+  }
   if (!candidates.length) return session;
-  if (automatic && candidates.length === 1) return { ...session, sessionId: candidates[0].sessionId };
-  const listing = candidates.map(c => `${c.sessionId} (last activity: ${c.modified || 'unknown'})`).join('\n');
+  if (automatic) return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : null;
   for (const candidate of candidates) {
-    if (confirm(`This conversation continued under another id:\n${listing}\n\nOpen ${candidate.sessionId}?`)) {
+    if (confirm('This conversation continued under another id:\n' + listing + '\n\nOpen ' + candidate.sessionId + '?')) {
       return { ...session, sessionId: candidate.sessionId };
     }
   }
-  return null;
+  return confirm('No continuation selected.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
