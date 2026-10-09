@@ -196,7 +196,10 @@ directory's `.claude`, as session state:
   be created from inside the sandbox: create it once outside.
 - A `~/.claude/skills` or `~/.claude/agents` that is a symbolic link is
   followed like the other state links: only to a directory of the same name,
-  elsewhere, and never to `$HOME` or a parent of it.
+  elsewhere, and never to `$HOME` or a parent of it. The launch is refused when
+  the way to that directory goes through a symbolic link in a directory the
+  sandbox can write: the session could re-point it, and the next launch would
+  make another directory writable.
 - Inside the writable directory, or the directory it links to, every
   repository keeps its config and hooks read-only and every `.claude` stays
   read-only, as in a bound directory (see [Git](#git)); a file linked from
@@ -211,7 +214,10 @@ directory's `.claude`, as session state:
   one inside a read-only one, would leave the protected files writable through
   the opted-in directory. A read-only path inside the writable directory is
   fine: the deeper mount wins. The check runs on the finished mount list, so
-  the order in which the entries are bound does not matter.
+  the order in which the entries are bound does not matter, and it compares
+  resolved paths: the directory is refused wherever the sandbox sees it
+  read-only, also when the project, an Additional Directory or `$HOME` is
+  reached through a symbolic link.
 
 This gives up part of the protection: what the session writes there is loaded,
 and its scripts run, by every later session outside the sandbox, other
@@ -246,7 +252,10 @@ nested repositories, submodules — `node_modules` excepted:
 
 The paths come from `git rev-parse --git-dir --git-common-dir --git-path hooks`
 run in the directory before launch; a repository it cannot read is refused
-rather than guessed at.
+rather than guessed at. A protected path is mounted read-only at every place
+the sandbox sees it: a repository reached both through an Additional Directory
+that is a symbolic link and through its real path, or through an opted-in
+`skills`, is protected at each.
 
 The search below a bound directory does not enter `node_modules`, and does not
 cross into another filesystem (`find -xdev`): a `.git` or `.claude` inside a

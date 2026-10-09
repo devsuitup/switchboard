@@ -381,16 +381,27 @@ check_chain() {
   done
 }
 
-# Mounts the resolved host path $1 read-only where the sandbox sees it, when
-# it lies under a writable root, and remembers it for the pins below.
+# Mounts the resolved host path $1 read-only at every place the sandbox sees
+# it, under each writable root that contains it, and remembers each for the
+# pins below.
 protect_resolved() {
-  local real="$1"
+  local real="$1" i root view found=1
   [ -n "${PROTECTED_SEEN[$real]:-}" ] && return 1
   PROTECTED_SEEN["$real"]=1
-  sandbox_view "$real" || { debug "$real is not visible in the sandbox"; return 1; }
-  mount_op --ro-bind "$real" "$SV_VIEW"
-  PIN_VIEWS+=("$SV_VIEW"); PIN_IDX+=("$SV_IDX")
-  return 0
+  for i in "${!WRITABLE_ROOTS[@]}"; do
+    root="${WRITABLE_REALS[i]}"
+    [ -n "$root" ] || continue
+    case "$real" in
+      "$root") view="${WRITABLE_ROOTS[i]}" ;;
+      "$root"/*) view="${WRITABLE_ROOTS[i]}${real#"$root"}" ;;
+      *) continue ;;
+    esac
+    found=0
+    mount_op --ro-bind "$real" "$view"
+    PIN_VIEWS+=("$view"); PIN_IDX+=("$i")
+  done
+  [ "$found" = 0 ] || debug "$real is not visible in the sandbox"
+  return "$found"
 }
 
 # Link $1, resolved to $2: its target read-only, and every link below that
@@ -469,7 +480,7 @@ bind_projects_dir() {
 # read-write when listed as state, empty and private when listed as private,
 # read-only otherwise. Anything created at its top level is discarded.
 bind_user_claude_dir() {
-  local dir="$1" e name restore_glob kind
+  local dir="$1" e name restore_glob kind text
   mount_op --tmpfs "" "$dir"
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
@@ -484,6 +495,11 @@ bind_user_claude_dir() {
       if in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
         case "$name" in *.json|*.jsonl|.last-*) kind=file ;; *) kind=dir ;; esac
         STATE_LINK_TARGET=""
+        if in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+          text="$(readlink "$e")"
+          case "$text" in /*) ;; *) text="$dir/$text" ;; esac
+          check_chain "$text"
+        fi
         bind_state_link_target "$e" "$kind"
         if [ -n "$STATE_LINK_TARGET" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
           OPT_IN_BINDS+=("user:$((${#M_DEST[@]} - 1))")
@@ -637,7 +653,7 @@ protect_tree() {
       .claude) protect_claude_dir "$n" "$create" ;;
       .git) protect_repo_root "$(dirname "$n")" "$create" ;;
     esac
-  done < <(find "$d" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
+  done < <(find "$d/" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \
              \( -name .claude -type l -print0 \) 2>/dev/null)
 }
@@ -698,24 +714,43 @@ pin_protected_paths() {
 
 # see docs/sandbox.md, "Writable skills and agents"
 check_opt_in_binds() {
-  local b k t i d best best_len r
+  [ "${#OPT_IN_BINDS[@]}" -gt 0 ] || return 0
+  local -a reals=()
+  local b k tr t i r v
+  for i in "${!M_DEST[@]}"; do
+    case "${M_OP[i]}" in
+      --bind|--ro-bind) reals[i]="$(readlink -m -- "${M_SRC[i]}")" ;;
+    esac
+  done
   for b in ${OPT_IN_BINDS[@]+"${OPT_IN_BINDS[@]}"}; do
-    k="${b#*:}"; t="${M_DEST[k]}"
-    best=""; best_len=-1
-    for i in "${!M_DEST[@]}"; do
-      [ "$i" = "$k" ] && continue
-      case "${M_OP[i]}" in --symlink|--file) continue ;; esac
-      d="${M_DEST[i]}"
-      case "$t/" in "$d"/*) ;; *) continue ;; esac
-      [ "${#d}" -ge "$best_len" ] && { best="$i"; best_len="${#d}"; }
+    k="${b#*:}"; t="${M_DEST[k]}"; tr="${reals[k]}"
+    for i in "${!reals[@]}"; do
+      r="${reals[i]}"
+      case "$tr/" in "$r"/*) ;; *) continue ;; esac
+      v="${M_DEST[i]}${tr#"$r"}"
+      [ "$v" = "$t" ] && [ "${b%%:*}" = project ] && continue
+      opt_in_access_at "$v" "$k"
+      [ "${M_OP[OA_IDX]}" = --ro-bind ] && opt_in_refuse "$t" "${M_DEST[OA_IDX]}"
     done
-    if [ "${b%%:*}" = user ] && [ -n "$best" ] && [ "${M_OP[best]}" = --ro-bind ]; then
-      opt_in_refuse "$t" "${M_DEST[best]}"
-    fi
     for r in "${!PROTECTED_SEEN[@]}"; do
-      case "$t/" in "$r"/*) opt_in_refuse "$t" "$r" ;; esac
+      case "$tr/" in "$r"/*) opt_in_refuse "$t" "$r" ;; esac
     done
   done
+}
+
+# Sets OA_IDX to the mount that decides access at sandbox path $1, mount $2
+# left out: the deepest at or above it, the later one on the same path.
+opt_in_access_at() {
+  local i d best_len=-1
+  OA_IDX=""
+  for i in "${!M_DEST[@]}"; do
+    [ "$i" = "$2" ] && continue
+    case "${M_OP[i]}" in --symlink|--file) continue ;; esac
+    d="${M_DEST[i]}"
+    case "$1/" in "$d"/*) ;; *) continue ;; esac
+    [ "${#d}" -ge "$best_len" ] && { OA_IDX="$i"; best_len="${#d}"; }
+  done
+  [ -n "$OA_IDX" ] || OA_IDX="$2"
 }
 
 opt_in_refuse() {
