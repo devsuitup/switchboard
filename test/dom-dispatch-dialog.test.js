@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { dispatchArgs } = require('../bg-agents-roster');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -149,7 +150,7 @@ test('the dialog scrolls inside the window when it is taller than the screen', a
   assert.match(rule[1], /overflow-y:\s*auto/);
 });
 
-test('switching project re-reads its settings: mode, Dangerous Skip and directories follow the new project', async (t) => {
+test('switching project re-reads directories and resets background permissions to Accept Edits', async (t) => {
   const byProject = {
     '/w/one': { dangerouslySkipPermissions: true, addDirs: '/srv/one' },
     '/w/two': { permissionMode: 'plan', dangerouslySkipPermissions: false, addDirs: '' },
@@ -157,20 +158,21 @@ test('switching project re-reads its settings: mode, Dangerous Skip and director
   const ctx = setup({ effective: (p) => byProject[p] }); t.after(ctx.destroy);
   await ctx.window.showDispatchAgentDialog(null);
   const d = ctx.document;
-  assert.ok(d.querySelector('.permission-option.dangerous').classList.contains('selected'));
+  assert.ok(d.querySelector('.permission-option[data-mode="acceptEdits"]').classList.contains('selected'));
+  d.querySelector('.permission-option[data-mode="bypassPermissions"]').click();
   const select = d.querySelector('#dad-project');
   select.value = '/w/two';
   select.dispatchEvent(new ctx.window.Event('change'));
   await tick(); await tick();
-  assert.equal(d.querySelector('.permission-option.dangerous').classList.contains('selected'), false);
-  assert.ok(d.querySelector('.permission-option[data-mode="plan"]').classList.contains('selected'));
+  assert.equal(d.querySelector('.permission-option[data-mode="bypassPermissions"]').classList.contains('selected'), false);
+  assert.ok(d.querySelector('.permission-option[data-mode="acceptEdits"]').classList.contains('selected'));
   assert.equal(d.querySelector('#dad-add-dirs').value, '');
   d.querySelector('#dad-prompt').value = 'go';
   d.querySelector('.new-session-start-btn').click();
   await tick(); await tick();
   assert.equal(ctx.calls.dispatched[0].cwd, '/w/two');
   assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
-  assert.equal(ctx.calls.dispatched[0].permissionMode, 'plan');
+  assert.equal(ctx.calls.dispatched[0].permissionMode, 'acceptEdits');
   assert.equal(ctx.calls.dispatched[0].addDirs, '');
 });
 
@@ -264,4 +266,87 @@ test('a failed lookup for the opening project keeps Start disabled too', async (
   await ctx.window.showDispatchAgentDialog(null);
   assert.equal(ctx.document.querySelector('.new-session-start-btn').disabled, true);
   assert.match(ctx.document.querySelector('#dad-error').textContent, /boom/);
+});
+
+test('background permissions offer only Accept Edits, Auto, Plan and Bypass, with Accept Edits selected', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const buttons = [...ctx.document.querySelectorAll('#dad-mode-grid .permission-option')];
+  assert.deepEqual(buttons.map(b => [b.dataset.mode, b.querySelector('.perm-name').textContent]), [
+    ['acceptEdits', 'Accept Edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Bypass'],
+  ]);
+  assert.deepEqual(buttons.filter(b => b.classList.contains('selected')).map(b => b.dataset.mode), ['acceptEdits']);
+  ctx.document.querySelector('#dad-prompt').value = 'go';
+  ctx.document.querySelector('.new-session-start-btn').click();
+  await tick();
+  assert.equal(ctx.calls.dispatched[0].permissionMode, 'acceptEdits');
+  assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
+});
+
+test('every offered background mode sends its value without the dangerous-skip flag', async (t) => {
+  for (const mode of ['acceptEdits', 'auto', 'plan', 'bypassPermissions']) {
+    const ctx = setup(); t.after(ctx.destroy);
+    await ctx.window.showDispatchAgentDialog(null);
+    ctx.document.querySelector('#dad-prompt').value = 'go';
+    ctx.document.querySelector(`.permission-option[data-mode="${mode}"]`).click();
+    ctx.document.querySelector('.new-session-start-btn').click();
+    await tick();
+    assert.equal(ctx.calls.dispatched[0].permissionMode, mode);
+    assert.equal(ctx.calls.dispatched[0].dangerouslySkipPermissions, false);
+  }
+});
+
+test('Agent keeps the text fallback when no definition catalogue is exposed, and an empty value selects none', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const agent = ctx.document.querySelector('#dad-agent');
+  assert.equal(agent.tagName, 'INPUT');
+  assert.equal(agent.type, 'text');
+  assert.equal(agent.value, '');
+  ctx.document.querySelector('#dad-prompt').value = 'go';
+  ctx.document.querySelector('.new-session-start-btn').click();
+  await tick();
+  assert.equal(ctx.calls.dispatched[0].agent, '');
+  assert.equal(dispatchArgs(ctx.calls.dispatched[0]).args.includes('--agent'), false);
+});
+
+test('field descriptions explain the task without CLI flags and Project uses the shared select style', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  for (const description of ctx.document.querySelectorAll('.dispatch-agent-dialog .settings-description')) {
+    assert.doesNotMatch(description.textContent, /--[a-z]/);
+  }
+  assert.ok(ctx.document.querySelector('#dad-project').classList.contains('settings-select'));
+});
+
+test('Additional Directories is multiline and dispatch preserves commas within paths while ignoring empty lines', async (t) => {
+  const ctx = setup(); t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  const dirs = ctx.document.querySelector('#dad-add-dirs');
+  assert.equal(dirs.tagName, 'TEXTAREA');
+  dirs.value = '  /srv/a,b  \n\n   \n C:\\work\\shared files \n';
+  ctx.document.querySelector('#dad-prompt').value = 'go';
+  dirs.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await tick();
+  assert.equal(ctx.calls.dispatched.length, 0);
+  ctx.document.querySelector('.new-session-start-btn').click();
+  await tick();
+  const fields = ctx.calls.dispatched[0];
+  assert.equal(typeof fields.addDirs, 'string');
+  assert.deepEqual(dispatchArgs(fields).args, [
+    '--bg', '--permission-mode', 'acceptEdits', '--add-dir', '/srv/a,b',
+    '--add-dir', 'C:\\work\\shared files', '--', 'go',
+  ]);
+});
+
+test('comma-separated directories from existing session settings are shown one per line on project changes', async (t) => {
+  const ctx = setup({ effective: p => ({ addDirs: p === '/w/one' ? '/srv/one, /srv/two' : '/srv/three, /srv/four' }) });
+  t.after(ctx.destroy);
+  await ctx.window.showDispatchAgentDialog(null);
+  assert.equal(ctx.document.querySelector('#dad-add-dirs').value, '/srv/one\n/srv/two');
+  const project = ctx.document.querySelector('#dad-project');
+  project.value = '/w/two';
+  project.dispatchEvent(new ctx.window.Event('change'));
+  await tick();
+  assert.equal(ctx.document.querySelector('#dad-add-dirs').value, '/srv/three\n/srv/four');
 });
