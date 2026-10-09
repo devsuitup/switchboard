@@ -68,8 +68,8 @@ function syncToolBar() {
     setHeaderToggle(btn, !!owner && pressed[spec.shortcut]);
     btn.title = spec.title + ' (' + formatBinding(spec.shortcut, isMac, appShortcuts) + ')';
     if (spec.shortcut === 'diffToggle') {
-      btn.hidden = !(tab?.type === 'diff' || state?.parkedDiff);
-      if (state?.parkedDiff) {
+      btn.hidden = !(tab?.type === 'diff' || state?.parkedDiffs.size);
+      if (state?.parkedDiffs.size) {
         btn.dataset.badge = 'pending';
         btn.setAttribute('aria-description', 'Claude is waiting for your answer');
       } else {
@@ -100,7 +100,7 @@ function activateTool(action) {
   if (!owner) return false;
   if (action === 'diffToggle') {
     const state = filePanelState.get(owner);
-    if (state?.currentTab?.type !== 'diff' && !state?.parkedDiff) return false;
+    if (state?.currentTab?.type !== 'diff' && !state?.parkedDiffs.size) return false;
     showPendingDiff(owner);
   } else if (action === 'changesToggle') toggleChangesTab(owner);
   else if (action === 'touchedToggle') toggleTouchedTab(owner);
@@ -115,7 +115,7 @@ function handleToolShortcut(e) {
   if (!spec) return false;
   if (spec.shortcut === 'diffToggle') {
     const state = filePanelState.get(toolBarOwner());
-    if (state?.currentTab?.type !== 'diff' && !state?.parkedDiff) return false;
+    if (state?.currentTab?.type !== 'diff' && !state?.parkedDiffs.size) return false;
   }
   if (e.type === 'keydown') {
     e._handled = true;

@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { registerPanelTerminals } = require('./terminal-manager-harness');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
@@ -266,11 +267,11 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     };
     window.Storage.prototype.setItem = () => { throw new Error('storage unavailable'); };
   }
-  let resize;
-  const observed = new Set();
+  const observed = new Map();
   window.ResizeObserver = class {
-    constructor(callback) { resize = callback; }
-    observe(element) { observed.add(element); }
+    constructor(callback) { this.callback = callback; this.targets = new Set(); }
+    observe(element) { observed.set(element, this.callback); this.targets.add(element); }
+    disconnect() { for (const element of this.targets) observed.delete(element); }
   };
   const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0 };
   let mcpOpenFile = null;
@@ -340,11 +341,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   window.isMac = false;
   window.appShortcuts = {};
   window.initFilePanel();
-  const switchPanel = window.switchPanel;
-  window.switchPanel = id => {
-    if (id) window.openSessions.set(id, { terminal: { focus() {} } });
-    switchPanel(id);
-  };
+  registerPanelTerminals(dom, ['owner', 'r1', 's1', 's2']);
 
   const ctx = dom.getInternalVMContext();
   return {
@@ -354,7 +351,8 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     editors,
     watchCalls,
     resize: element => {
-      if (!element || observed.has(element)) resize();
+      if (element) observed.get(element)?.();
+      else for (const callback of new Set(observed.values())) callback();
     },
     changed: filePath => changeListeners.forEach(handler => handler(filePath)),
     mcpOpenFile: (sessionId, data) => mcpOpenFile(sessionId, data),
@@ -2056,7 +2054,7 @@ test('R2 M2: a deferred open survives parking and replays only when its own diff
     const diff = ctx.stateOf('s1').currentTab;
     ctx.document.getElementById('touched-toggle-btn').click();
     await flush();
-    assert.equal(ctx.stateOf('s1').parkedDiff, diff);
+    assert.equal(ctx.stateOf('s1').parkedDiffs.get('d1'), diff);
     assert.deepEqual(ctx.calls.readFile, []);
     assert.deepEqual(ctx.calls.diffResponse, []);
     ctx.window.openDiffTab('s1', 'd2', DIFF);

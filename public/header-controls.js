@@ -38,7 +38,7 @@ function placeHeaderControl(el, doc = document) {
 function createHeaderToggle({ id, label, title, icon, onClick }, doc = document) {
   const tools = typeof TOOL_BAR !== 'undefined' ? TOOL_BAR : typeof module !== 'undefined' && module.exports ? require('./tool-bar').TOOL_BAR : [];
   const spec = tools.find(c => c.id === id);
-  if (!spec) throw new Error(`#${id} is not a header toggle`);
+  if (!spec) throw new Error(`#${id} is not a declared tool toggle`);
   const btn = doc.createElement('button');
   btn.type = 'button';
   btn.id = id;

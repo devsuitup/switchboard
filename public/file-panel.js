@@ -309,8 +309,8 @@ function handleClose() {
       window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
     }
     if (tab.type === 'diff') {
-      pending = state.pendingTouchedOpen || null;
-      state.pendingTouchedOpen = null;
+      pending = tab.pendingTouchedOpen || null;
+      tab.pendingTouchedOpen = null;
     }
     if (tab.type === 'diff' && tab.editorView) {
       tab.editorView.destroy();
@@ -514,7 +514,7 @@ function getSessionState(sessionId) {
   if (!filePanelState.has(sessionId)) {
     filePanelState.set(sessionId, {
       currentTab: null,
-      parkedDiff: null,
+      parkedDiffs: new Map(),
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
       mcpState: 'off',
@@ -528,6 +528,7 @@ function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
   state.mcpState = mcpState || 'off';
   state.mcpDetail = detail || '';
+  if (state.mcpState === 'off') clearParkedDiffs(sessionId, state);
   if (currentPanelSessionId === sessionId) updateMcpIndicator();
 }
 
@@ -786,7 +787,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
   const tab = state.currentTab;
   if (!tab) return;
   if (stash) stashChangesEdits(state, tab);
-  if (tab.type === 'diff') state.pendingTouchedOpen = null;
+  if (tab.type === 'diff') tab.pendingTouchedOpen = null;
   if (tab.type === 'diff' && tab.editorView) {
     tab.editorView.destroy();
     tab.editorView = null;
@@ -805,7 +806,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
 function leaveToolTab(state) {
   const tab = state.currentTab;
   if (tab?.type === 'diff' && !tab.resolved) {
-    state.parkedDiff = tab;
+    state.parkedDiffs.set(tab.diffId, tab);
     tab.editorView?.dom.remove();
     state.currentTab = null;
     return;
@@ -815,10 +816,11 @@ function leaveToolTab(state) {
 
 function showPendingDiff(sessionId) {
   const state = getSessionState(sessionId);
-  if (state.currentTab?.type === 'diff' || !state.parkedDiff) return;
+  if ((state.currentTab?.type === 'diff' && !state.currentTab.resolved) || !state.parkedDiffs.size) return;
+  const tab = state.parkedDiffs.values().next().value;
   destroyCurrentTab(state);
-  state.currentTab = state.parkedDiff;
-  state.parkedDiff = null;
+  state.currentTab = tab;
+  state.parkedDiffs.delete(tab.diffId);
   state.panelVisible = true;
   if (currentPanelSessionId === sessionId) {
     showPanel(state);
@@ -826,10 +828,14 @@ function showPendingDiff(sessionId) {
   }
 }
 
-function clearParkedDiff(sessionId, state) {
-  state.parkedDiff?.editorView?.destroy();
-  state.parkedDiff = null;
-  state.pendingTouchedOpen = null;
+function clearParkedDiffs(sessionId, state, diffId) {
+  for (const [id, tab] of state.parkedDiffs) {
+    if (diffId !== undefined && id !== diffId) continue;
+    tab.editorView?.destroy();
+    tab.editorView = null;
+    tab.pendingTouchedOpen = null;
+    state.parkedDiffs.delete(id);
+  }
   if (currentPanelSessionId === sessionId && typeof syncToolBar === 'function') syncToolBar();
 }
 
@@ -842,15 +848,15 @@ function openFileInPanel(sessionId, filePath, opts = {}) {
 function closeAllDiffs(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state) return;
-  if (state.parkedDiff) clearParkedDiff(sessionId, state);
+  clearParkedDiffs(sessionId, state);
 
   if (state.currentTab?.type === 'diff') endDiffTab(sessionId, state, { restoreStash: true });
 }
 
 function closeDiffByDiffId(sessionId, diffId) {
   const state = filePanelState.get(sessionId);
-  if (state?.parkedDiff?.diffId === diffId) {
-    clearParkedDiff(sessionId, state);
+  if (state?.parkedDiffs.has(diffId)) {
+    clearParkedDiffs(sessionId, state, diffId);
     return;
   }
   if (!state || !state.currentTab) return;
@@ -862,8 +868,7 @@ function closeDiffByDiffId(sessionId, diffId) {
 
 // see .ai/contexts/viewer-panel.md ("An open that arrives over a diff")
 function endDiffTab(sessionId, state, { restoreStash }) {
-  const pending = state.pendingTouchedOpen || null;
-  state.pendingTouchedOpen = null;
+  const pending = state.currentTab?.pendingTouchedOpen || null;
   destroyCurrentTab(state);
   state.currentTab = null;
   endCurrentTab(sessionId, state, { pending, restoreStash });
@@ -1062,7 +1067,7 @@ function handleDiffAction(sessionId, tab, action) {
 
   diffActionsEl.style.display = 'none';
   const state = getSessionState(sessionId);
-  if (state.currentTab === tab && state.pendingTouchedOpen) endDiffTab(sessionId, state, { restoreStash: true });
+  if (state.currentTab === tab && tab.pendingTouchedOpen) endDiffTab(sessionId, state, { restoreStash: true });
 }
 
 // ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────

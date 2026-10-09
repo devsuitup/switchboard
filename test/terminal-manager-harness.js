@@ -110,7 +110,7 @@ const HARNESS_HTML = `<!DOCTYPE html><html><body>
 //   run initFilePanel() — the panel-shell region lives there.
 // opts.openTerminal: (sessionId, projectPath, isNew, sessionOptions) => result
 function setupTerminalDom(opts = {}) {
-  const dom = new JSDOM(HARNESS_HTML, {
+  const dom = opts.dom || new JSDOM(HARNESS_HTML, {
     url: 'http://localhost/',
     runScripts: 'outside-only',
     pretendToBeVisual: true,
@@ -131,7 +131,7 @@ function setupTerminalDom(opts = {}) {
     stopSession: [],
   };
 
-  window.api = new Proxy({ platform: 'linux' }, {
+  if (!opts.dom) window.api = new Proxy({ platform: 'linux' }, {
     get(target, prop) {
       if (opts.api && Object.prototype.hasOwnProperty.call(opts.api, prop)) return opts.api[prop];
       if (prop in target) return target[prop];
@@ -209,6 +209,7 @@ function setupTerminalDom(opts = {}) {
     jsonlViewer: window.document.createElement('div'),
   };
   for (const [k, v] of Object.entries(stubGlobals)) {
+    if (opts.dom && k in window) continue;
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
 
@@ -224,7 +225,11 @@ function setupTerminalDom(opts = {}) {
   }
 
   const ctx = dom.getInternalVMContext();
-  const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
+  const files = ['utils.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js'];
+  if (!opts.dom) {
+    files.splice(1, 0, 'shortcuts.js');
+    files.push('grid-view.js');
+  }
   // Same order as index.html: header-controls.js, process-exit.js and file-panel.js first, the panel-shell pair last.
   if (opts.filePanel) files.unshift('header-controls.js', 'tool-bar.js', 'process-exit.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
@@ -239,4 +244,9 @@ function setupTerminalDom(opts = {}) {
   return { window, spies, inCtx, context: ctx, destroy: () => window.close() };
 }
 
-module.exports = { setupTerminalDom, PUBLIC_DIR };
+function registerPanelTerminals(dom, ids) {
+  const { window } = setupTerminalDom({ dom });
+  for (const sessionId of ids) window.createTerminalEntry({ sessionId });
+}
+
+module.exports = { setupTerminalDom, registerPanelTerminals, PUBLIC_DIR };

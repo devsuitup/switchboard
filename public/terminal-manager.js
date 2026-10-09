@@ -108,9 +108,9 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
-    // Shift+Enter → newline (kitty protocol CSI 13;2u) so Claude Code treats it as newline, not submit.
     if (typeof handleToolShortcut === 'function' && handleToolShortcut(e)) return false;
 
+    // Shift+Enter → newline (kitty protocol CSI 13;2u) so Claude Code treats it as newline, not submit.
     if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.type === 'keydown') {
         window.api.sendInput(getSessionId(), '\x1b[13;2u');

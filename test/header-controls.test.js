@@ -142,7 +142,7 @@ test('a header toggle is an icon button with a tooltip, and shows its on state',
   assert.doesNotThrow(() => setHeaderToggle(null, true));
 
   assert.throws(() => createHeaderToggle({ id: 'terminal-stop-btn', label: 'x', title: 'x', icon: 'shell', onClick() {} }, doc),
-    /not a header toggle/);
+    /not a declared tool toggle/);
   assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'diff', 'shell', 'touched']);
 });
 

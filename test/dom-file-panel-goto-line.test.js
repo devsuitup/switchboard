@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { registerPanelTerminals } = require('./terminal-manager-harness');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -61,11 +62,7 @@ function setup({ pair } = {}) {
   window.isMac = false;
   window.appShortcuts = {};
   window.initFilePanel();
-  const switchPanel = window.switchPanel;
-  window.switchPanel = id => {
-    if (id) window.openSessions.set(id, { terminal: { focus() {} } });
-    switchPanel(id);
-  };
+  registerPanelTerminals(dom, ['s1']);
   const ctx = dom.getInternalVMContext();
   return { window, document: window.document, calls, stateOf: id => vm.runInContext('filePanelState', ctx).get(id), destroy: () => window.close() };
 }

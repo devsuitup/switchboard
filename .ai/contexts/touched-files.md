@@ -416,8 +416,9 @@ the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
   DOM is never consulted. `'mcp'` skips the check: remote sessions never get
   the bridge.
 - **An unanswered MCP diff in the slot** keeps the slot: the open is stored in
-  `state.pendingTouchedOpen` (a later one replaces it) and replayed when the
-  diff ends (see `.ai/contexts/viewer-panel.md`, "An open that arrives over a
+  `tab.pendingTouchedOpen` on that diff (a later one replaces it) and replayed
+  only when its own tab ends in the slot; another diff ending cannot consume
+  it (see `.ai/contexts/viewer-panel.md`, "An open that arrives over a
   diff").
 - **Touched not in the slot**: a fresh Touched list is opened
   (`openTouchedTab(id, {restoreStash: false})`), whatever the slot held; a dirty

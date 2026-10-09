@@ -10,7 +10,6 @@
 | Previous / next session | Primary+Shift+`[` / `]` | Cycle through the sessions |
 | Toggle grid view | Primary+Shift+`G` | Show or hide the [grid](grid-overview.md) |
 | Toggle agents view | Primary+Shift+`A` | Show or hide the [background agents](background-agents.md) view |
-
 | Toggle Changes | Primary+Shift+`E` | Show the working tree changes |
 | Show Diff | Primary+Shift+`D` | Return to a proposed diff; with none, the key goes to the terminal |
 | Toggle Touched | Primary+Shift+`T` | Show this session's touched files |

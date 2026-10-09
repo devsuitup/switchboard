@@ -74,7 +74,7 @@ for (const [route, invoke] of [
       await flush();
       invoke(ctx);
       await flush();
-      assert.ok(ctx.responses.some(r => r[1] === 'd1') || ctx.state().currentTab?.diffId === 'd1' || ctx.state().parkedDiff?.diffId === 'd1', 'd1 dropped without an answer to the CLI');
+      assert.ok(ctx.responses.some(r => r[1] === 'd1') || ctx.state().currentTab?.diffId === 'd1' || ctx.state().parkedDiffs.has('d1'), 'd1 dropped without an answer to the CLI');
       assert.equal(ctx.state().currentTab?.type, route.startsWith('Changes') ? 'changes' : 'touched', 'the route must actually open its tool');
     } finally { ctx.destroy(); }
   });
@@ -121,7 +121,7 @@ for (const route of ['close_tab', 'closeAllDiffTabs']) {
       else ctx.window.closeAllDiffs('s1');
       assert.equal(ctx.state().currentTab.type, 'changes');
       assert.ok(ctx.window.document.getElementById('diff-toggle-btn')?.hidden);
-      assert.equal(ctx.state().parkedDiff, null);
+      assert.equal(ctx.state().parkedDiffs.size, 0);
       assert.equal(ctx.destroys(), 1);
       assert.deepEqual(ctx.responses, []);
     } finally { ctx.destroy(); }
@@ -147,7 +147,7 @@ test('Da3: the icon is absent from focus order without a diff, shown while pendi
   } finally { ctx.destroy(); }
 });
 
-test('a panel close over Changes leaves the parked diff and its deferred open retrievable', async () => {
+test('a panel close over Changes leaves the parked diff retrievable', async () => {
   const ctx = setup();
   try {
     ctx.window.openDiffTab('s1', 'd1', DIFF);
@@ -155,7 +155,7 @@ test('a panel close over Changes leaves the parked diff and its deferred open re
     ctx.window.document.getElementById('changes-toggle-btn').click();
     await flush();
     ctx.window.handleClose();
-    assert.equal(ctx.state().parkedDiff?.diffId, 'd1');
+    assert.ok(ctx.state().parkedDiffs.has('d1'));
     ctx.window.document.getElementById('diff-toggle-btn').click();
     ctx.window.handleClose();
     assert.deepEqual(ctx.responses, [['s1', 'd1', 'reject', null]]);

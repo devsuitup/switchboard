@@ -277,7 +277,7 @@ async function openTouchedPath(sessionId, filePath, { line = null, origin = 'lin
   const state = getSessionState(ownerId);
   const current = state.currentTab;
   if (current?.type === 'diff' && !current.resolved) {
-    state.pendingTouchedOpen = { filePath, line, origin };
+    current.pendingTouchedOpen = { filePath, line, origin };
     return;
   }
   let listTab = current?.type === 'touched' ? current : current?.returnList;
