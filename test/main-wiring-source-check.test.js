@@ -100,6 +100,10 @@ test('main-wiring source check: trigger-watcher.start is handed createTriggerCon
     mainSrc, /require\('\.\/trigger-context'\)/,
     'main.js must require ./trigger-context',
   );
+  assert.match(
+    args, /getLiveDescriptor:\s*\(\s*id\s*\)\s*=>\s*cliSessionState\.findLiveProcess\(\s*id\s*\)/,
+    'the trigger context must be handed getLiveDescriptor so a background session is named, not reported as session not found',
+  );
 });
 
 /** Slice the balanced `{...}` object literal that starts at the first `{` at or after `from`. */

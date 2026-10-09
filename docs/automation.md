@@ -590,7 +590,8 @@ never in `error`: `not sent: input pending` is not `not sent`.
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
 
 A trigger to a live local background session without an attach tab returns
-`{ ok: false, submitted: "no", error: "background session, not attached here", jobId, sessionId }`.
+`{ ok: false, submitted: "no", error: "background session, not attached here", jobId, sessionId }`
+(`jobId` is `null` when the descriptor carries none).
 The error string is a contract compared by strict equality. No headless attach
 is started. Once its attach tab is open, the trigger uses that tab's PTY and
 the background session's descriptor for readiness; `/compact` also needs
