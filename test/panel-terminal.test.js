@@ -14,6 +14,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 
+test('every tool precedes the shell splitter and the shell region is last (#503)', () => {
+  const ctx = setupTerminalDom({ filePanel: true });
+  try {
+    const ids = [...ctx.window.document.getElementById('file-panel-content').children].map(el => el.id);
+    for (const tool of ['file-panel-diff', 'file-panel-changes', 'file-panel-touched']) {
+      assert.ok(ids.indexOf(tool) < ids.indexOf('panel-terminal-handle'), `${tool} is below the shell: ${ids}`);
+    }
+    assert.equal(ids.at(-1), 'panel-terminal-region');
+  } finally { ctx.destroy(); }
+});
+
 function withDims(cols, rows) {
   return { proposeDimensions: () => ({ cols, rows }) };
 }
