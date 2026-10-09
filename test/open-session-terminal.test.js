@@ -27,6 +27,7 @@ async function withHarness(setup, fn) {
       destroySession: (id) => calls.destroyed.push(id),
       showSession: (id) => calls.shown.push(id),
       guardResume: async () => true,
+      resolveResumeSession: require('../public/resume-guard').resolveResumeSession,
       createTerminalEntry: (session) => {
         calls.created.push(session.sessionId);
         return { initialSize: { cols: 80, rows: 24 }, terminal: { write: (text) => calls.written.push(text) } };

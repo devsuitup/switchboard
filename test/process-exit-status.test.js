@@ -84,6 +84,7 @@ const PRELUDE = `
 function setup() {
   const dom = new JSDOM('<!DOCTYPE html><body><button id="terminal-refresh-btn"></button></body>', { runScripts: 'outside-only' });
   const { window } = dom;
+  window.resolveResumeSession = require('../public/resume-guard').resolveResumeSession;
   let exitHandler = null;
   const h = { whileOpening: null };
   window.api = {

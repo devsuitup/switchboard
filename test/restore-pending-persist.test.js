@@ -20,6 +20,7 @@ const SAVED = [
 function setup() {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
   const settings = { global: { openWorkingSet: SAVED } };
   dom.window.api = {
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
