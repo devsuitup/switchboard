@@ -119,7 +119,7 @@ untracked journey green, because status has already counted the file.
 across tool switches and shell-only fill, tool-only layout, Refresh beside
 the id, the 32-case narrow-window/zoom matrix, ordered shrinking and restored
 widths, vertical zoom, focused-grid ownership, and native Tab traversal.
-Run each mutation independently on the corrected implementation in the required
+Run each mutation independently on the corrected implementation in the
 CI `e2e` job, preserving the journey's assertions. Replace the pending cells
 below with immutable run links after reading the failed assertion.
 

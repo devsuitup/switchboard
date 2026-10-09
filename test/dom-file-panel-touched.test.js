@@ -2049,6 +2049,7 @@ test('R2 M2: a deferred open survives parking and replays only when its own diff
   const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
+    ctx.window.setSessionMcpState('s1', 'connected');
     ctx.window.openDiffTab('s1', 'd1', DIFF);
     await openLink(ctx, '/work/notes.txt');
     const diff = ctx.stateOf('s1').currentTab;

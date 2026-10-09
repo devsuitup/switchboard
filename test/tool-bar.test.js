@@ -27,6 +27,9 @@ test('the live header can shrink its titles and sidebar tabs without hiding fixe
     for (const id of ['terminal-header-name', 'terminal-header-pty-title']) {
       assert.equal(dom.window.getComputedStyle(document.getElementById(id)).minWidth, '0px', id);
     }
+    const label = document.getElementById('terminal-header-label');
+    assert.equal(dom.window.getComputedStyle(label).minWidth, '0px');
+    assert.equal(dom.window.getComputedStyle(label).overflow, 'hidden');
     const tab = document.querySelector('.sidebar-tab');
     assert.equal(dom.window.getComputedStyle(tab).minWidth, '0px');
     assert.equal(dom.window.getComputedStyle(document.getElementById('sidebar-collapse-btn')).flexShrink, '0');
@@ -47,6 +50,7 @@ function setup() {
   const { window } = ctx;
   window.createTerminalEntry({ sessionId: 's1' });
   window.switchPanel('s1');
+  window.setSessionMcpState('s1', 'connected');
   window.loadCodeMirrorBundle = () => Promise.resolve();
   let destroys = 0;
   window.createMergeViewer = (parent) => {
@@ -271,6 +275,53 @@ test('R3 N3: switching a shown diff to Changes after MCP off leaves no parked pr
     assert.equal(ctx.destroys(), 1);
     assert.equal(tab.editorView, null);
     assert.deepEqual(ctx.responses, []);
+  } finally { ctx.destroy(); }
+});
+
+test('R3 N2: close_tab removes only its parked diff and leaves the other proposal answerable', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.setSessionMcpState('s1', 'connected');
+    const tabs = [];
+    for (const id of ['d1', 'd2']) {
+      ctx.window.openDiffTab('s1', id, DIFF);
+      await flush();
+      tabs.push(ctx.state().currentTab);
+      ctx.window.document.getElementById('changes-toggle-btn').click();
+      await flush();
+    }
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    assert.equal(ctx.state().currentTab.type, 'changes');
+    assert.equal(ctx.state().parkedDiffs.has('d1'), false);
+    assert.equal(ctx.state().parkedDiffs.get('d2'), tabs[1], 'close_tab d1 must retain the unanswered d2');
+    assert.equal(tabs[0].editorView, null);
+    assert.ok(tabs[1].editorView);
+    assert.equal(ctx.destroys(), 1);
+    assert.deepEqual(ctx.responses, []);
+    const btn = ctx.window.document.getElementById('diff-toggle-btn');
+    assert.equal(btn.hidden, false);
+    assert.equal(btn.dataset.badge, 'pending');
+    btn.click();
+    await flush();
+    assert.equal(ctx.state().currentTab, tabs[1]);
+    assert.equal(tabs[1].editorView.dom.isConnected, true);
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.deepEqual(ctx.responses, [['s1', 'd2', 'accept-edited', 'edited']]);
+  } finally { ctx.destroy(); }
+});
+
+test('R3 N5: process exit without a file panel state does not allocate one', () => {
+  const ctx = setup();
+  try {
+    Object.assign(ctx.window, {
+      noteSessionExit() {}, dropLocalPtySession() {}, sessionItemEl: () => null,
+      lastSessionExit: () => ({}), schedulePersistWorkingSet() {}, pollActiveSessions() {},
+    });
+    const before = ctx.inCtx('filePanelState.size');
+    assert.equal(ctx.inCtx("filePanelState.has('unopened')"), false);
+    loadAppFunctions(ctx.context, { functions: ['applyProcessExit'] }).applyProcessExit('unopened', 0, null, false);
+    assert.equal(ctx.inCtx("filePanelState.has('unopened')"), false, 'process exit must not create panel state');
+    assert.equal(ctx.inCtx('filePanelState.size'), before);
   } finally { ctx.destroy(); }
 });
 

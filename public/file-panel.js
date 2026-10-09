@@ -805,7 +805,7 @@ function destroyCurrentTab(state, { stash = true } = {}) {
 
 function leaveToolTab(state) {
   const tab = state.currentTab;
-  if (tab?.type === 'diff' && !tab.resolved) {
+  if (tab?.type === 'diff' && !tab.resolved && state.mcpState !== 'off') {
     state.parkedDiffs.set(tab.diffId, tab);
     tab.editorView?.dom.remove();
     state.currentTab = null;

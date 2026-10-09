@@ -8,7 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Remote sessions now have a Touched list and can open its files read-only, with their HEAD diff inside the session's repository. The list stays visible with unknown disk states when the host cannot be reached. Password databases and private keys on the host are refused. (#454)
 
 ### Changed
-- Changes, a pending Diff, Touched and Shell move to a vertical bar on the right, with rebindable Ctrl/Cmd+Shift+E/D/T/S shortcuts; Refresh and Stop sit beside the session id. Switching tools keeps an unanswered Diff and your edits, the shell stays below every tool, and narrow windows keep the bar visible while restoring your chosen widths when there is room. (#506)
+- Changes, a pending Diff, Touched and Shell move to a vertical bar on the right, with rebindable Ctrl/Cmd+Shift+E/D/T/S shortcuts; Refresh and Stop sit beside the session id. Switching tools keeps your edits and an unanswered Diff while the CLI is connected, forking keeps Changes open, the shell stays below every tool, and narrow windows keep the bar and session id visible while restoring your chosen widths when there is room. (#506)
 
 ## v0.0.90 — 2026-10-09
 

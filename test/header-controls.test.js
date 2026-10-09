@@ -200,7 +200,8 @@ test('Stop is set apart from the toggles by a divider that is not part of its hi
 test('the process status is a dot right before the session name, with its words in the tooltip', () => {
   const doc = new JSDOM(HTML).window.document;
   const dot = doc.getElementById('terminal-header-status');
-  assert.equal(dot.parentElement.id, 'terminal-header-info');
+  assert.equal(dot.parentElement.id, 'terminal-header-label');
+  assert.equal(dot.parentElement.parentElement.id, 'terminal-header-info');
   assert.equal(dot.nextElementSibling.id, 'terminal-header-name', 'the dot sits right before the name');
   assert.equal(dot.textContent, '', 'no text beside the dot');
   assert.equal(dot.getAttribute('role'), 'img', 'so that its aria-label is read');

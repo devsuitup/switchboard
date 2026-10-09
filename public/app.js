@@ -495,13 +495,12 @@ window.api.onSessionForked((oldId, newId) => {
   if (!entry) return;
 
   entry.session.sessionId = newId;
+  if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
   if (activeSessionId === oldId) setActiveSession(newId);
 
   openSessions.delete(oldId);
   openSessions.set(newId, entry);
 
-  // Re-key file panel state for the new session ID
-  if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
   if (typeof syncToolBar === 'function') syncToolBar();
 
   rekeyActivityState(oldId, newId);
@@ -542,7 +541,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     return;
   }
   noteSessionExit(sessionId, exitCode, signal, stopped);
-  if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, 'off');
+  if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
   activePtyIds.delete(sessionId);
   if (!sessionItemEl(sessionId)?.dataset.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');

@@ -7,8 +7,11 @@ then `#terminal-header-session`: Refresh, Stop/Detach, Sandbox and IDE Emulation
 Its remaining right side is the window drag area. Caption overlay padding is
 unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
 left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles
-can shrink to zero, and the PTY title yields first, keeping the fixed-width id
-inside the info group rather than clipping it behind Refresh.
+can shrink to zero, and the PTY title yields first. The status and titles share
+the shrinkable `#terminal-header-label` container, which clips the titles'
+internal gaps and PTY separator too. This leaves the fixed-width id inside
+the info group at 800 px with the 96 px Linux caption overlay; separate
+shrinking titles left a fixed floor wider than the group's available space.
 
 `public/tool-bar.js` declares the frozen `TOOL_BAR` and builds
 `#tool-bar` as the last child of `#terminal-split`, after the file panel.
@@ -22,8 +25,9 @@ declared separately and refuse undeclared ids.
 terminal area, and its card in grid mode. Every button and shortcut uses that
 predicate. Missing owners disable every button and clear pressed states.
 `switchPanel`, session destruction and grid layout/card removal synchronize
-the bar. Session detection and forking activate the new id before registering
-its terminal, then synchronize again after the re-key. A MutationObserver on the terminal area's style covers hiding and
+the bar. Forking re-keys the file panel state before activating the new id,
+so Changes remains open. Detection and forking activate before registering
+the terminal, then synchronize the tools after registration. A MutationObserver on the terminal area's style covers hiding and
 returning from Agents, Stats, Settings, transcripts and file viewers.
 
 One visible enabled button is a Tab stop. Up/Down wrap; Home/End select the
@@ -54,6 +58,9 @@ shown Diff rejects it. CLI close_tab/closeAllDiffTabs clear and destroy the
 parked editor by id (all parked editors for closeAllDiffTabs), without closing
 the shown tool or sending a second response. MCP off and process exit clear
 all parked editors and their waiting badge without sending another answer.
+Switching away from a shown unanswered diff after MCP off destroys it instead
+of parking it, so an exited CLI cannot acquire another waiting badge. Process
+exit updates MCP only for an existing file panel state; it allocates no state.
 A deferred file open belongs to `tab.pendingTouchedOpen`, survives parking,
 and replays only when that tab ends in the slot. Ending another diff cannot
 replay or clear it; closing its parked tab drops only that tab's deferred open.

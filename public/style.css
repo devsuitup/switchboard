@@ -1435,6 +1435,15 @@ body { display: flex; flex-direction: column; }
   overflow: hidden;
 }
 
+#terminal-header-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
 #terminal-header-name {
   font-size: 13px;
   color: #b0b0c4;
