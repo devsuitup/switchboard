@@ -8,7 +8,7 @@ local session it is an editor for those files. It works the same for local and
 
 ## Opening it
 
-**Changes** in the terminal header opens the panel; clicking it again closes
+**Changes** on the right-hand tool bar (Ctrl+Shift+E, Cmd+Shift+E on macOS) opens the panel; clicking it again closes
 it. Every session has the button. The panel shows one of:
 
 - the list of changed files;

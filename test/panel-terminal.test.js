@@ -197,6 +197,8 @@ test('the LRU cap never evicts a panel terminal with a live PTY', async () => {
 test('opening the panel shell opens the file panel and shows the region', async () => {
   const ctx = setupPanel();
   try {
+    ctx.window.createTerminalEntry({ sessionId: 'owner' });
+    ctx.window.switchPanel('owner');
     const { window, document } = ctx;
     await window.togglePanelTerminal('owner');
 
@@ -587,6 +589,8 @@ test('re-opening while a spawn is in flight waits for the close instead of racin
   const gates = [];
   const ctx = setupPanel({ openTerminal: () => new Promise((resolve) => { gates.push(resolve); }) });
   try {
+    ctx.window.createTerminalEntry({ sessionId: 'owner' });
+    ctx.window.switchPanel('owner');
     const { window, spies, document } = ctx;
     const opening = window.togglePanelTerminal('owner');
     window.togglePanelTerminal('owner'); // close
@@ -659,6 +663,8 @@ test('the region is laid out before the shell is measured, so the PTY is born at
 test('the Shell button toggles the shell for the session the panel is showing', async () => {
   const ctx = setupPanel();
   try {
+    ctx.window.createTerminalEntry({ sessionId: 'owner' });
+    ctx.window.switchPanel('owner');
     const { window, document, spies } = ctx;
     window.switchPanel('owner');
     const btn = document.getElementById('panel-terminal-toggle-btn');

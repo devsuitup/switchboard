@@ -268,7 +268,7 @@ test('Refresh header control uses the shipped markup and issues one local refres
     assert.ok(button, 'the running-app header offers Refresh');
     const stop = holder.querySelector('#terminal-stop-btn');
     assert.equal(button.nextElementSibling, stop, 'Refresh sits next to Stop');
-    ctx.window.document.querySelector('#terminal-header-controls').append(button);
+    ctx.window.document.querySelector('#terminal-header-session').append(button);
     const { initTerminalRefreshControl } = loadAppFunctions(ctx.context, { functions: ['initTerminalRefreshControl'] });
     initTerminalRefreshControl();
     button.click();

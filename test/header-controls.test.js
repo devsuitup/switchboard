@@ -25,7 +25,7 @@ const HTML = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 const RAW_CSS = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
 const CSS = RAW_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
-const KIND_RANK = { indicator: 0, toggle: 1, action: 2 };
+const KIND_RANK = { action: 0, indicator: 1 };
 
 test('header Refresh is disabled with an accessible reason until the session is running', () => {
   const ctx = setupTerminalDom();
@@ -34,7 +34,7 @@ test('header Refresh is disabled with an accessible reason until the session is 
     const holder = window.document.createElement('div');
     holder.innerHTML = HTML;
     const button = holder.querySelector('#terminal-refresh-btn');
-    window.document.querySelector('#terminal-header-controls').append(button);
+    window.document.querySelector('#terminal-header-session').append(button);
     window.activeSessionId = 's';
     window.terminalHeaderStatus = window.document.createElement('span');
     window.terminalStopBtn = window.document.getElementById('terminal-stop-btn');
@@ -59,23 +59,20 @@ test('header Refresh is disabled with an accessible reason until the session is 
 });
 
 function emptyRow() {
-  const dom = new JSDOM('<!DOCTYPE html><body><div id="terminal-header-controls"></div></body>');
+  const dom = new JSDOM('<!DOCTYPE html><body><div id="terminal-header-session"></div><div id="tool-bar"></div></body>');
   return dom.window.document;
 }
 
 function rowIds(doc) {
-  return [...doc.getElementById('terminal-header-controls').children].map((e) => e.id);
+  return [...doc.getElementById('terminal-header-session').children].map((e) => e.id);
 }
 
-test('the row is declared once: indicators, then panel toggles, then Stop last', () => {
+test('the row is declared once: Refresh, Stop, then indicators', () => {
   assert.deepEqual(HEADER_CONTROLS.map((c) => [c.id, c.kind]), [
-    ['terminal-header-sandbox', 'indicator'],
-    ['ide-emulation-indicator', 'indicator'],
-    ['panel-terminal-toggle-btn', 'toggle'],
-    ['changes-toggle-btn', 'toggle'],
-    ['touched-toggle-btn', 'toggle'],
     ['terminal-refresh-btn', 'action'],
     ['terminal-stop-btn', 'action'],
+    ['terminal-header-sandbox', 'indicator'],
+    ['ide-emulation-indicator', 'indicator'],
   ]);
   const ranks = HEADER_CONTROLS.map((c) => KIND_RANK[c.kind]);
   assert.deepEqual(ranks, [...ranks].sort(), 'each kind is one contiguous group');
@@ -84,11 +81,11 @@ test('the row is declared once: indicators, then panel toggles, then Stop last',
 
 test('index.html carries its static controls in the declared order, marked with their kind', () => {
   const doc = new JSDOM(HTML).window.document;
-  const controls = doc.getElementById('terminal-header-controls');
+  const controls = doc.getElementById('terminal-header-session');
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-header-sandbox', 'terminal-refresh-btn', 'terminal-stop-btn']);
+  assert.deepEqual(staticIds, ['terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -98,8 +95,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['terminal-stop-btn', 'terminal-refresh-btn', 'touched-toggle-btn', 'changes-toggle-btn', 'panel-terminal-toggle-btn', 'ide-emulation-indicator', 'terminal-header-sandbox'],
-    ['touched-toggle-btn', 'changes-toggle-btn', 'terminal-stop-btn', 'ide-emulation-indicator', 'panel-terminal-toggle-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
+    ['ide-emulation-indicator', 'terminal-stop-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
+    ['terminal-header-sandbox', 'ide-emulation-indicator', 'terminal-stop-btn', 'terminal-refresh-btn'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {
@@ -146,7 +143,7 @@ test('a header toggle is an icon button with a tooltip, and shows its on state',
 
   assert.throws(() => createHeaderToggle({ id: 'terminal-stop-btn', label: 'x', title: 'x', icon: 'shell', onClick() {} }, doc),
     /not a header toggle/);
-  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'shell', 'touched']);
+  assert.deepEqual(Object.keys(HEADER_TOGGLE_ICONS).sort(), ['changes', 'diff', 'shell', 'touched']);
 });
 
 test('the live row, built by the modules in their start-up order, reads in the declared order', () => {
@@ -154,7 +151,7 @@ test('the live row, built by the modules in their start-up order, reads in the d
   try {
     const doc = ctx.window.document;
     const present = HEADER_CONTROLS.map((c) => c.id).filter((id) => doc.getElementById(id));
-    assert.deepEqual(present, ['ide-emulation-indicator', 'panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn', 'terminal-stop-btn']);
+    assert.deepEqual(present, ['terminal-stop-btn', 'ide-emulation-indicator']);
     assert.deepEqual(rowIds(doc), present);
     for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn']) {
       assert.equal(doc.getElementById(id).className, 'icon-btn', `#${id}`);
@@ -181,7 +178,7 @@ test('the header toggles share the sidebar filter buttons\' rule, on state inclu
 });
 
 test('an indicator reads as state: no hover, no pointer, no border', () => {
-  const indicator = ruleBodies(/^#terminal-header-controls \[data-header-kind="indicator"\]$/);
+  const indicator = ruleBodies(/^#terminal-header-session \[data-header-kind="indicator"\]$/);
   assert.equal(indicator.length, 1);
   assert.match(indicator[0].body, /cursor:\s*default/);
   assert.doesNotMatch(indicator[0].body, /border|background/);
@@ -227,7 +224,7 @@ test('the process status is a dot right before the session name, with its words 
 function cascadedRow() {
   const dom = new JSDOM(`<!DOCTYPE html><head><style>${RAW_CSS}</style></head><body class="window-frameless platform-linux">
     <div id="terminal-header"><div id="terminal-header-info"><span id="terminal-header-status"></span><span id="terminal-header-name">n</span></div>
-    <div id="terminal-header-controls">
+    <div id="terminal-header-session">
       <button id="panel-terminal-toggle-btn" class="icon-btn active"></button>
       <button id="changes-toggle-btn" class="icon-btn active"></button>
       <button id="running-toggle" class="active"></button>

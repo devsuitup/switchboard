@@ -113,12 +113,19 @@ sessions are the two named in the table, and only those two need the predicate.
 
 ## Layout
 
+Shell opens from the right-hand tool bar. `initTouchedView` runs before
+`initPanelTerminal`: every tool precedes the handle, and the shell region is
+always the last child. The bar stays after the file panel, below the strip.
+Narrow windows shrink the terminal, then the panel to 280, then the sidebar
+to 200, then the panel below 280; widths restore without storage writes. See
+[tool-bar.md](tool-bar.md) for the CSS thresholds and keyboard contract.
+
 `.terminal-container` is `position: absolute; inset: -5px 20px 0 0` inside
 `#terminals` (`position: relative`); it does not flow. `#panel-terminal-region`
 is therefore its own positioning context (`position: relative`, explicit pixel
 height) and `.terminal-container.panel-terminal` overrides the inset to `0`.
 The region and its handle live at the end of `#file-panel-content`, after the
-viewer/diff/changes children, and are `display: none` until `.open`.
+diff/changes/touched children, and are `display: none` until `.open`.
 
 `#panel-terminal-handle` carries `margin-top: auto`, which is what pins the
 handle and the region to the bottom of the panel while a tab is shown: the tab

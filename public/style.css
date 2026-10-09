@@ -2,6 +2,12 @@
    draw from the same set rather than repeating the values.
    see .ai/contexts/changes-view.md ("The list and the editor") */
 :root {
+  --tool-bar-width: 34px;
+  --tool-panel-floor: 280px;
+  --tool-main-floor: 214px;
+  --tool-open-main-floor: 498px;
+  --tool-sidebar-offset: 204px;
+  --tool-panel-offset: 422px;
   --surface-chrome: #18181f;
   --surface-sunken: #111118;
   --hairline: rgba(255,255,255,0.06);
@@ -256,7 +262,7 @@ body { display: flex; flex-direction: column; }
   flex-direction: column;
   height: 100%;
   border-right: none;
-  flex-shrink: 0;
+  flex-shrink: 1;
 }
 
 #sidebar-resize-handle {
@@ -1330,12 +1336,12 @@ body { display: flex; flex-direction: column; }
 
 /* ========== MAIN AREA ========== */
 #main {
+  min-width: var(--tool-main-floor);
   flex: 1;
   display: flex;
   flex-direction: column;
   position: relative;
   min-height: 0;
-  min-width: 0;
   background: var(--surface-sunken);
 }
 
@@ -1410,7 +1416,7 @@ body { display: flex; flex-direction: column; }
 #terminal-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 2px 16px;
   background: var(--surface-chrome);
   border-bottom: 1px solid var(--hairline);
@@ -1422,7 +1428,7 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   gap: 10px;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
   overflow: hidden;
 }
 
@@ -1435,7 +1441,7 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
   flex-shrink: 1;
   min-width: 60px;
-  max-width: 30%;
+  max-width: 30vw;
 }
 
 #terminal-header-pty-title {
@@ -1468,14 +1474,15 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
-#terminal-header-controls {
+#terminal-header-session {
+  margin-left: 8px;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
 }
 
-#terminal-header-controls [data-header-kind="indicator"] {
+#terminal-header-session [data-header-kind="indicator"] {
   font-size: 11px;
   font-weight: 500;
   display: flex;
@@ -1485,17 +1492,13 @@ body { display: flex; flex-direction: column; }
   cursor: default;
 }
 
-#terminal-header-controls [data-header-kind="indicator"]::before {
+#terminal-header-session [data-header-kind="indicator"]::before {
   content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
   display: inline-block;
   background: currentColor;
-}
-
-#terminal-header-controls [data-header-kind="indicator"] + [data-header-kind="toggle"] {
-  margin-left: 8px;
 }
 
 #terminal-header-status {
@@ -1513,11 +1516,11 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
 
-#terminal-header-controls #terminal-header-sandbox {
+#terminal-header-session #terminal-header-sandbox {
   color: #7fd7a4;
 }
 
-#terminal-header-controls #ide-emulation-indicator {
+#terminal-header-session #ide-emulation-indicator {
   color: var(--accent);
 }
 
@@ -4756,7 +4759,7 @@ body { display: flex; flex-direction: column; }
 }
 
 #file-panel.open {
-  min-width: 280px;
+  min-width: min(var(--tool-panel-floor), calc(100vw - var(--tool-panel-offset)));
   border-left: 1px solid var(--hairline);
 }
 
@@ -5486,7 +5489,7 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
 }
 
 body.window-frameless :is(button, input, select, textarea, a, [role="button"], [contenteditable]),
-body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-controls [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path, #agents-viewer-header label),
+body.window-frameless :is(#terminal-header-status, #terminal-header-id, #terminal-header-session [data-header-kind], #jsonl-viewer-session-id, .viewer-toolbar-path, #agents-viewer-header label),
 body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .modal-overlay, .jsonl-screenshot-fullscreen, #update-toast, .restore-toast) {
   -webkit-app-region: no-drag;
 }
@@ -5520,4 +5523,54 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* see .ai/contexts/tool-bar.md */
+#main:has(#file-panel.open) {
+  min-width: min(var(--tool-open-main-floor), calc(100vw - var(--tool-sidebar-offset)));
+}
+
+#tool-bar {
+  box-sizing: border-box;
+  flex: 0 0 var(--tool-bar-width);
+  width: var(--tool-bar-width);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  overflow-y: auto;
+  background: var(--surface-chrome);
+  -webkit-app-region: no-drag;
+}
+
+#tool-bar .icon-btn {
+  flex-shrink: 0;
+  position: relative;
+}
+
+#tool-bar .icon-btn[hidden] {
+  display: none;
+}
+
+#tool-bar .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#tool-bar #panel-terminal-toggle-btn {
+  margin-top: 8px;
+}
+
+#tool-bar [data-badge]::after {
+  content: '';
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
 }

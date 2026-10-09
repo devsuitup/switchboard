@@ -1553,6 +1553,25 @@ initAgentsView();
   });
 }
 
+function handleGlobalShortcut(e) {
+  if (e._handled || e.type !== 'keydown') return;
+  if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
+    e.preventDefault();
+    toggleAgentsView();
+    return;
+  }
+  if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
+    e.preventDefault();
+    toggleGridView();
+    return;
+  }
+  if (isSessionNavKey(e)) {
+    handleSessionNavKey(e);
+    return;
+  }
+  if (typeof handleToolShortcut === 'function') handleToolShortcut(e);
+}
+
 // --- Grid view toggle button (next to resort button in sidebar filters) ---
 {
   const gridToggleBtn = document.createElement('button');
@@ -1573,22 +1592,7 @@ initAgentsView();
   // Global keyboard shortcuts (covers non-terminal focus)
   // When a terminal is focused, xterm's customKeyEventHandler fires first and sets
   // e._handled to prevent the document listener from double-firing the same action.
-  document.addEventListener('keydown', (e) => {
-    if (e._handled) return;
-    if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
-      e.preventDefault();
-      toggleAgentsView();
-      return;
-    }
-    // Toggle grid view (default Cmd/Ctrl+Shift+G)
-    if (matchShortcut('gridToggle', e, isMac, appShortcuts)) {
-      e.preventDefault();
-      toggleGridView();
-      return;
-    }
-    // Session navigation: Cmd+Shift+[/], Cmd+Arrow
-    handleSessionNavKey(e);
-  });
+  document.addEventListener('keydown', handleGlobalShortcut);
 }
 
 // Warm up xterm.js renderer so first terminal open is fast

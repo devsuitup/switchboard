@@ -272,17 +272,16 @@ function initFilePanel() {
   changesContainerEl.appendChild(changesDiffEl);
 
   buildChangesDiffChrome();
-  // Shell region below every tab type — see .ai/contexts/panel-terminal.md
-  if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
-
   terminalSplitEl.appendChild(filePanelEl);
   terminalArea.appendChild(terminalSplitEl);
-
+  if (typeof initToolBar === 'function') initToolBar(terminalSplitEl);
+  if (typeof initTouchedView === 'function') initTouchedView(filePanelContentEl);
+  // see .ai/contexts/panel-terminal.md
+  if (typeof initPanelTerminal === 'function') initPanelTerminal(filePanelContentEl);
   wireIpcListeners();
   setupPanelResizeHandle();
   addMcpToggle();
   addChangesToggle();
-  if (typeof initTouchedView === 'function') initTouchedView(filePanelContentEl);
   setupChangesListSplitter();
 
   // see .ai/contexts/changes-view.md ("Refresh triggers")
@@ -515,6 +514,7 @@ function getSessionState(sessionId) {
   if (!filePanelState.has(sessionId)) {
     filePanelState.set(sessionId, {
       currentTab: null,
+      parkedDiff: null,
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
       mcpState: 'off',
@@ -802,6 +802,37 @@ function destroyCurrentTab(state, { stash = true } = {}) {
   }
 }
 
+function leaveToolTab(state) {
+  const tab = state.currentTab;
+  if (tab?.type === 'diff' && !tab.resolved) {
+    state.parkedDiff = tab;
+    tab.editorView?.dom.remove();
+    state.currentTab = null;
+    return;
+  }
+  destroyCurrentTab(state);
+}
+
+function showPendingDiff(sessionId) {
+  const state = getSessionState(sessionId);
+  if (state.currentTab?.type === 'diff' || !state.parkedDiff) return;
+  destroyCurrentTab(state);
+  state.currentTab = state.parkedDiff;
+  state.parkedDiff = null;
+  state.panelVisible = true;
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
+function clearParkedDiff(sessionId, state) {
+  state.parkedDiff?.editorView?.destroy();
+  state.parkedDiff = null;
+  state.pendingTouchedOpen = null;
+  if (currentPanelSessionId === sessionId && typeof syncToolBar === 'function') syncToolBar();
+}
+
 // see .ai/contexts/touched-files.md ("One route into Touched") and .ai/contexts/terminal-path-links.md
 function openFileInPanel(sessionId, filePath, opts = {}) {
   const line = Number.isInteger(opts.line) && opts.line > 0 ? opts.line : null;
@@ -811,12 +842,17 @@ function openFileInPanel(sessionId, filePath, opts = {}) {
 function closeAllDiffs(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state) return;
+  if (state.parkedDiff) clearParkedDiff(sessionId, state);
 
   if (state.currentTab?.type === 'diff') endDiffTab(sessionId, state, { restoreStash: true });
 }
 
 function closeDiffByDiffId(sessionId, diffId) {
   const state = filePanelState.get(sessionId);
+  if (state?.parkedDiff?.diffId === diffId) {
+    clearParkedDiff(sessionId, state);
+    return;
+  }
   if (!state || !state.currentTab) return;
   if (state.currentTab.type !== 'diff' || state.currentTab.diffId !== diffId) return;
 
@@ -845,6 +881,7 @@ function showPanel(state) {
 
 function hidePanel() {
   if (!filePanelEl) return;
+  if (typeof syncToolBar === 'function') syncToolBar();
   // The shell region keeps the panel open with no tab — see .ai/contexts/panel-terminal.md
   if (typeof panelTerminalIsOpen === 'function' && panelTerminalIsOpen(currentPanelSessionId)) {
     renderTabContent(currentPanelSessionId, null);
@@ -861,6 +898,7 @@ function hidePanel() {
 
 function switchPanel(sessionId) {
   currentPanelSessionId = sessionId;
+  if (typeof syncToolBar === 'function') syncToolBar();
   updateMcpIndicator();
   if (typeof syncPanelTerminal === 'function') syncPanelTerminal(sessionId);
 
@@ -909,6 +947,7 @@ function renderPanel(sessionId) {
 }
 
 function renderTabContent(sessionId, tab) {
+  if (typeof syncToolBar === 'function') syncToolBar();
   const diffContainer = document.getElementById('file-panel-diff');
   panelBackBtn.style.display = tab && tab.returnList?.type !== 'touched' && (tab.returnList || (tab.type === 'changes' && tab.selectedFile)) ? '' : 'none';
   // see .ai/contexts/panel-terminal.md ("Layout")
@@ -973,7 +1012,7 @@ function renderDiffContent(sessionId, tab) {
 
   // Defer merge-viewer creation until codemirror-bundle.js is available.
   window.loadCodeMirrorBundle().then(() => {
-    if (tab.resolved) return;  // tab was accepted/rejected before bundle loaded
+    if (tab.resolved || getSessionState(sessionId).currentTab !== tab || currentPanelSessionId !== sessionId) return;
     if (!tab.editorView) {
       if (diffMode === 'inline') {
         tab.editorView = window.createUnifiedMergeViewer(
@@ -1075,7 +1114,7 @@ function createChangesTab() {
 
 function openChangesTab(sessionId) {
   const state = getSessionState(sessionId);
-  destroyCurrentTab(state);
+  leaveToolTab(state);
   state.currentTab = createChangesTab();
   state.panelVisible = true;
   restoreChangesEdits(sessionId, state, state.currentTab);
@@ -2100,17 +2139,9 @@ function addMcpToggle() {
   placeHeaderControl(mcpIndicatorEl);
 }
 
-// Terminal header entry point for Changes mode — see .ai/contexts/changes-view.md
+// see .ai/contexts/tool-bar.md
 function addChangesToggle() {
-  changesToggleBtn = createHeaderToggle({
-    id: 'changes-toggle-btn',
-    label: 'Changes',
-    title: 'Show working tree changes for this session',
-    icon: 'changes',
-    onClick: () => {
-      if (currentPanelSessionId) toggleChangesTab(currentPanelSessionId);
-    },
-  });
+  changesToggleBtn = document.getElementById('changes-toggle-btn');
 }
 
 // ── Resize Handle ───────────────────────────────────────────────────

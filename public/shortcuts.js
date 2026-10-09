@@ -12,6 +12,10 @@
 // The user customises the *modifiers*; `primary` is Cmd on macOS / Ctrl elsewhere.
 
 const DEFAULT_SHORTCUTS = {
+  changesToggle: { primary: true, alt: false, shift: true, key: 'e' },
+  diffToggle: { primary: true, alt: false, shift: true, key: 'd' },
+  touchedToggle: { primary: true, alt: false, shift: true, key: 't' },
+  shellToggle: { primary: true, alt: false, shift: true, key: 's' },
   // Ctrl/Cmd+Shift+Arrows — moved off bare Ctrl+Arrows so the terminal keeps
   // word-jump (Ctrl+Left/Right) for editing. Shift (not Alt) avoids the
   // Ctrl+Alt+Arrow workspace-switch binding common on Linux desktops.
@@ -26,6 +30,10 @@ const DEFAULT_SHORTCUTS = {
 
 // Metadata for rendering the settings UI and resolving each action's key family.
 const SHORTCUT_DEFS = [
+  { id: 'changesToggle', label: 'Toggle Changes', description: 'Show working tree changes', family: 'key' },
+  { id: 'diffToggle', label: 'Show pending Diff', description: 'Return to the change proposed by Claude', family: 'key' },
+  { id: 'touchedToggle', label: 'Toggle Touched', description: 'Show files touched by this session', family: 'key' },
+  { id: 'shellToggle', label: 'Toggle Shell', description: 'Open or close the panel shell', family: 'key' },
   {
     id: 'sessionNavArrows',
     label: 'Navigate sessions / grid',

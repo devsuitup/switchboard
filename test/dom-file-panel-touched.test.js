@@ -23,7 +23,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div id="terminals"></div>
     </div>
     <div id="terminal-header" style="display:none;">
-      <div id="terminal-header-controls">
+      <div id="terminal-header-session">
         <button id="terminal-stop-btn"></button>
       </div>
     </div>
@@ -126,10 +126,20 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   const bundledMarked = window.marked;
   delete window.marked;
   window.loadCodeMirrorBundle = () => { window.marked = bundledMarked; return Promise.resolve(); };
-  for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
+  window.openSessions = new Map();
+  window.gridViewActive = false;
+  window.gridCards = new Map();
+  window.isMac = false;
+  window.appShortcuts = {};
   window.initFilePanel();
+  const switchPanel = window.switchPanel;
+  window.switchPanel = id => {
+    if (id) window.openSessions.set(id, { terminal: { focus() {} } });
+    switchPanel(id);
+  };
 
   const ctx = dom.getInternalVMContext();
   return {
@@ -944,11 +954,11 @@ test('the toggle closes the tab, and the refresh button asks again', async () =>
   } finally { ctx.destroy(); }
 });
 
-test('the touched toggle sits after Changes and before Stop in the header', () => {
+test('the touched toggle sits after Diff and before Shell in the bar', () => {
   const ctx = setupDom();
   try {
-    const ids = [...ctx.document.getElementById('terminal-header-controls').children].map((e) => e.id);
-    assert.deepEqual(ids, ['ide-emulation-indicator', 'changes-toggle-btn', 'touched-toggle-btn', 'terminal-stop-btn']);
+    const ids = [...ctx.document.getElementById('tool-bar').children].map((e) => e.id);
+    assert.deepEqual(ids, ['changes-toggle-btn', 'diff-toggle-btn', 'touched-toggle-btn', 'panel-terminal-toggle-btn']);
   } finally { ctx.destroy(); }
 });
 
@@ -1832,23 +1842,23 @@ test(`a link over an unanswered diff keeps the diff, answers nothing, and opens 
 });
 }
 
-test('a deferred open is dropped when another route takes the diff out of the slot', async () => {
+test('a deferred open survives parking and replays when the returned diff closes', async () => {
   const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
     ctx.window.openDiffTab('s1', 'd1', DIFF);
     await openLink(ctx, '/work/notes.txt');
-    const toggle = ctx.document.getElementById('touched-toggle-btn');
-    toggle.click();
+    const diff = ctx.stateOf('s1').currentTab;
+    ctx.document.getElementById('touched-toggle-btn').click();
     await flush();
-    toggle.click();
-    await flush();
-    assert.equal(ctx.document.getElementById('file-panel').classList.contains('open'), false);
-    ctx.window.openDiffTab('s1', 'd2', DIFF);
-    ctx.window.closeDiffByDiffId('s1', 'd2');
-    await flush();
+    assert.equal(ctx.stateOf('s1').parkedDiff, diff);
     assert.deepEqual(ctx.calls.readFile, []);
-    assert.notEqual(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
+    assert.deepEqual(ctx.calls.diffResponse, []);
+    ctx.document.getElementById('diff-toggle-btn').click();
+    ctx.window.closeDiffByDiffId('s1', 'd1');
+    await flush();
+    assert.deepEqual(ctx.calls.readFile, ['/work/notes.txt']);
+    assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/notes.txt');
   } finally { ctx.destroy(); }
 });
 

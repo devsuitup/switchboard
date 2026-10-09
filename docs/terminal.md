@@ -17,16 +17,25 @@ On the left, the header above the terminal shows:
   latest notification), the session id, and the shell profile's name when it is
   not **Auto**.
 
-On the right, one row, always in this order:
+Immediately after the session id, **Refresh screen** redraws the terminal and
+**Stop** stops its process (**Detach** leaves an attached background session
+running). The Sandbox and IDE Emulation indicators follow them. The top-right
+corner holds the window controls.
 
-1. **Indicators** — a coloured dot and a word, with a tooltip and no action:
-   **Sandbox** for a [sandboxed](sandbox.md) session, and **IDE Emulation**
-   while the session is connected to Switchboard as its IDE
-   ([IDE emulation](ide-emulation.md)).
-2. **Toggles** — square icon buttons, highlighted while on: **Shell**
-   ([below](#panel-shell)) and **Changes** ([Changes view](changes-view.md)).
-   Changes is on while the panel shows this session's Changes tab.
-3. **Stop** — a red icon, set apart by a divider.
+## Session tools
+
+The vertical bar at the right edge holds **Changes**, **Diff** when a proposed
+change exists, **Touched**, then **Shell**. It acts on the shown session, or
+the focused card in the grid. With no open session its controls are disabled.
+
+The rebindable defaults are Ctrl+Shift+E/D/T/S (Cmd on macOS). Tab enters the
+bar once; Up/Down, Home/End move between its buttons. Changing from an
+unanswered Diff to Changes or Touched keeps the Diff, including your edits;
+its dot says Claude is waiting, and **Diff** returns to it.
+
+The shell stays below the open tool. On narrow windows or at high zoom, the
+terminal shrinks first, then the panel, then the sidebar, then the panel
+further. Your chosen widths return when there is room.
 
 When the process ends, the terminal prints a banner in the same words —
 `session stopped`, `session killed (SIGKILL)`, `session exited (code 1)` — dim
@@ -125,7 +134,7 @@ Claude's prompt instead of submitting it.
 
 ## Panel shell
 
-**Shell** in the terminal header opens a shell in the right-hand panel, under
+**Shell** on the right-hand tool bar opens a shell in the right-hand panel, under
 whatever the panel shows — the Changes list, a file, a diff. Both stay visible;
 drag the handle between them to share the height, which is remembered. With
 nothing open above it, the shell takes the whole panel.

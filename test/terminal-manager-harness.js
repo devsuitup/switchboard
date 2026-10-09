@@ -102,7 +102,7 @@ function makeResizeObserverStub(spies) {
 // and are what public/file-panel.js builds its panel around (opts.filePanel).
 const HARNESS_HTML = `<!DOCTYPE html><html><body>
   <div id="terminal-area"><div id="terminals"></div></div>
-  <div id="terminal-header"><div id="terminal-header-controls"><button id="terminal-stop-btn"></button></div></div>
+  <div id="terminal-header"><div id="terminal-header-session"><button id="terminal-stop-btn"></button></div></div>
 </body></html>`;
 
 // opts.proposeDimensions: (fitAddonInstance) => {cols, rows} | undefined
@@ -226,7 +226,7 @@ function setupTerminalDom(opts = {}) {
   const ctx = dom.getInternalVMContext();
   const files = ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js'];
   // Same order as index.html: header-controls.js, process-exit.js and file-panel.js first, the panel-shell pair last.
-  if (opts.filePanel) files.unshift('header-controls.js', 'process-exit.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js');
+  if (opts.filePanel) files.unshift('header-controls.js', 'tool-bar.js', 'process-exit.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
   for (const file of files) {
     const fullPath = path.join(PUBLIC_DIR, file);

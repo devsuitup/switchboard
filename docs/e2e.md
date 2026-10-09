@@ -112,3 +112,13 @@ Each journey was turned red by reverting the behaviour it pins:
 
 With up-front untracked counting on, removing only the count on open leaves the
 untracked journey green, because status has already counted the file.
+
+## Session tool bar (#506)
+
+`e2e/tool-bar.spec.js` covers E1-E8: single/grid bar geometry, shell height
+across tool switches and shell-only fill, tool-only layout, Refresh beside
+the id, the 32-case narrow-window/zoom matrix, ordered shrinking and restored
+widths, vertical zoom, focused-grid ownership, and native Tab traversal.
+These journeys are CI-only for this dispatch. Their red mutation runs are
+not yet observed; the acceptance matrix and mutations are recorded in
+`.work-files/spec-506.md` and the implementation report.

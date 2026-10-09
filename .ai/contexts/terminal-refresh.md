@@ -1,6 +1,6 @@
 # Terminal screen refresh
 
-Issue #446 adds **Refresh screen** beside Stop in the terminal header and in
+Issue #446 adds **Refresh screen** immediately after the session id, beside Stop in `#terminal-header-session` and in
 the sidebar session context menu. Both apply to open local and remote
 terminals. The header disables the button when the selected process is not
 running, with `aria-disabled` and a tooltip explaining why. The sidebar menu

@@ -102,19 +102,12 @@ function reclampPanelTerminalHeight() {
 }
 
 function addPanelTerminalToggle() {
-  panelTerminalToggleBtn = createHeaderToggle({
-    id: 'panel-terminal-toggle-btn',
-    label: 'Shell',
-    title: 'Open a shell in this session\'s working directory',
-    icon: 'shell',
-    onClick: () => {
-      if (panelTerminalOwnerId) togglePanelTerminal(panelTerminalOwnerId);
-    },
-  });
+  panelTerminalToggleBtn = document.getElementById('panel-terminal-toggle-btn');
 }
 
 function updatePanelTerminalToggle() {
   setHeaderToggle(panelTerminalToggleBtn, panelTerminalIsOpen(panelTerminalOwnerId));
+  if (typeof syncToolBar === 'function') syncToolBar();
 }
 
 // ── Height ──────────────────────────────────────────────────────────

@@ -109,6 +109,8 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
     }
 
     // Shift+Enter → newline (kitty protocol CSI 13;2u) so Claude Code treats it as newline, not submit.
+    if (typeof handleToolShortcut === 'function' && handleToolShortcut(e)) return false;
+
     if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.type === 'keydown') {
         window.api.sendInput(getSessionId(), '\x1b[13;2u');
@@ -1238,6 +1240,7 @@ function destroySession(sessionId) {
   getTerminalPathResolver().forget(sessionId);
   entry.element.remove();
   openSessions.delete(sessionId);
+  if (typeof syncToolBar === 'function') syncToolBar();
   const li = lruOrder.indexOf(sessionId);
   if (li !== -1) lruOrder.splice(li, 1);
   if (destroyGridCard(sessionId) && gridViewActive) {

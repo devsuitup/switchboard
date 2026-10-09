@@ -18,7 +18,7 @@ const INDEX_HTML = `<!DOCTYPE html>
   <body>
     <div id="terminal-area"><div id="terminals"></div></div>
     <div id="terminal-header" style="display:none;">
-      <div id="terminal-header-controls"><button id="terminal-stop-btn"></button></div>
+      <div id="terminal-header-session"><button id="terminal-stop-btn"></button></div>
     </div>
   </body>
 </html>`;
@@ -83,10 +83,20 @@ function setup() {
     return el;
   };
 
-  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
+  window.openSessions = new Map();
+  window.gridViewActive = false;
+  window.gridCards = new Map();
+  window.isMac = false;
+  window.appShortcuts = {};
   window.initFilePanel();
+  const switchPanel = window.switchPanel;
+  window.switchPanel = id => {
+    if (id) window.openSessions.set(id, { terminal: { focus() {} } });
+    switchPanel(id);
+  };
   return { window, disk, calls, editor: () => editor, destroy: () => window.close() };
 }
 

@@ -2,7 +2,7 @@
 
 "Primary" below is `Cmd` on macOS and `Ctrl` on Windows and Linux.
 
-## Rebindable: sessions, grid and agents
+## Rebindable: sessions, grid, agents and tools
 
 | Action | Default | Effect |
 |---|---|---|
@@ -10,6 +10,11 @@
 | Previous / next session | Primary+Shift+`[` / `]` | Cycle through the sessions |
 | Toggle grid view | Primary+Shift+`G` | Show or hide the [grid](grid-overview.md) |
 | Toggle agents view | Primary+Shift+`A` | Show or hide the [background agents](background-agents.md) view |
+
+| Toggle Changes | Primary+Shift+`E` | Show the working tree changes |
+| Show Diff | Primary+Shift+`D` | Return to a proposed diff; with none, the key goes to the terminal |
+| Toggle Touched | Primary+Shift+`T` | Show this session's touched files |
+| Toggle Shell | Primary+Shift+`S` | Open or close the panel shell |
 
 These work with the focus in a terminal, where they are caught before the
 program sees them, and anywhere else in the window. Shift, not Alt, avoids the
@@ -70,3 +75,7 @@ carry Electron's default keys for their roles. There is no reload shortcut: `Cmd
 
 In the New Session, Resume and Add Project dialogs, Enter confirms and Esc
 cancels (Enter inside a text field does not start a session).
+
+Tool shortcuts act on the shown terminal or focused grid card and are inactive
+in other views. If a tool chord conflicts with an existing session, grid or
+agents binding, the existing binding takes precedence.

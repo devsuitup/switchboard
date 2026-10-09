@@ -123,15 +123,7 @@ function initTouchedView(parentEl) {
   touchedListEl.id = 'touched-list';
   touchedContainerEl.appendChild(touchedListEl);
 
-  touchedToggleBtn = createHeaderToggle({
-    id: 'touched-toggle-btn',
-    label: 'Touched',
-    title: "Show the files this session's file tools touched",
-    icon: 'touched',
-    onClick: () => {
-      if (currentPanelSessionId) toggleTouchedTab(currentPanelSessionId);
-    },
-  });
+  touchedToggleBtn = document.getElementById('touched-toggle-btn');
 }
 
 function showTouchedInfo(button) {
@@ -202,7 +194,7 @@ function toggleTouchedTab(sessionId) {
 
 function openTouchedTab(sessionId, { restoreStash = true } = {}) {
   const state = getSessionState(sessionId);
-  destroyCurrentTab(state);
+  leaveToolTab(state);
   if (restoreStash && state.touchedStashes?.size) {
     restoreTouchedStash(sessionId, state);
     return;

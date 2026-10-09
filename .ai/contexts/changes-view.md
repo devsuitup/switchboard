@@ -847,7 +847,7 @@ Switching rows is an exit like Back, the tab toggle and the panel's close button
 
 The panel draws only from the app's existing tokens and palette. Every colour in its CSS is a `:root` token or a value `public/style.css` already uses elsewhere; none is its own. The app has one theme, dark, so there are no light variants to keep in step.
 
-- **Buttons.** Every action in the list toolbar, the editor toolbar, the MCP diff toolbar and `ViewerPanel`'s toolbar is `.icon-btn`: the sidebar filter row's 26px outlined square, carrying a 14px icon, named by its `title` (and by `aria-label` in this panel, since it has no visible word), `.active` when it is on. `.icon-btn` sits in the filter row's own selector lists in `public/style.css` (`#star-toggle, …, .icon-btn`), so the two cannot drift apart; the session header's toggles use it too. `.fp-save-btn`, `.fp-close-btn` and `.fp-delete-btn` stay on as modifiers for their hover colour, and `.fp-save-btn` is also what `handleDiffSave` finds the MCP diff's Save by. `flashButtonText` recognises `.icon-btn` as an icon and flashes its colour instead of replacing its content. The icons live in `FP_ICONS` in `public/file-panel.js`.
+- **Buttons.** Every action in the list toolbar, the editor toolbar, the MCP diff toolbar and `ViewerPanel`'s toolbar is `.icon-btn`: the sidebar filter row's 26px outlined square, carrying a 14px icon, named by its `title` (and by `aria-label` in this panel, since it has no visible word), `.active` when it is on. `.icon-btn` sits in the filter row's own selector lists in `public/style.css` (`#star-toggle, …, .icon-btn`), so the two cannot drift apart; the session tool bar's toggles use it too. `.fp-save-btn`, `.fp-close-btn` and `.fp-delete-btn` stay on as modifiers for their hover colour, and `.fp-save-btn` is also what `handleDiffSave` finds the MCP diff's Save by. `flashButtonText` recognises `.icon-btn` as an icon and flashes its colour instead of replacing its content. The icons live in `FP_ICONS` in `public/file-panel.js`.
 - **The mode button** shows the mode the editor is in, not the one a click moves to. Its tooltip names both (`CHANGES_DIFF_MODE_LABELS`), and `data-mode` carries the current one. The MCP diff tab's two-way toggle follows the same rule (`setModeButton`).
 - **Save** is `disabled` and dimmed while the buffer is clean or a write is in flight, and carries `.active` — the accent treatment a toggle uses for "on" — once there is something to save. Both are set in `updateChangesSaveButton`, from the same `onChange` path as before.
 - **Surfaces.** The editor sits on `--surface-sunken`, as the Memory, Work Files and Stats viewers' content does, under toolbars on `--surface-chrome`. That overrides the CodeMirror theme's own background, gutter and active-line gutter, for every host at once: `.viewer-panel-editor` (Memory, Work Files), `#file-panel-body` (MCP diff) and `#changes-diff-host`. The host's id, or `.viewer-panel-editor .cm-editor`, outranks the single generated class the theme scopes its rules with. The gutter is separated from the text by a `--hairline` rule.
@@ -976,7 +976,7 @@ editor host uses its plain factory without changing the stored diff mode.
 Changes and Touched keep separate unsaved-edit stashes. Opening Changes never
 restores a Touched target; opening Touched restores its own buffer and original
 return list. Save state is recalculated once a restored editor mounts. The
-Changes header toggle and busy-to-idle refresh apply only to a Changes tab
+Changes tool-bar toggle and busy-to-idle refresh apply only to a Changes tab
 without a return list. Touched continues to reread on watcher events, Reload
 and Save, rather than on each session idle.
 
@@ -1000,5 +1000,9 @@ save-file-for-panel, including Windows 8.3 aliases, for every
 caller, including terminal links. This is an intended change from the earlier
 ordinary viewer policy. A save after deletion returns "File does not exist".
 A probe exit 128 is a non-repository result only with
-the matching stderr diagnostic. The Touched header toggle keys on returnList
+the matching stderr diagnostic. The Touched tool-bar toggle keys on returnList
 and uses the Changes discard guard when closing its editor.
+
+The tool entry point is the right-hand bar, using the shown terminal owner.
+Changes and Touched park an unanswered Diff; its conditional button restores
+the same editor. See [tool-bar.md](tool-bar.md).

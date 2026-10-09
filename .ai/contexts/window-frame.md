@@ -75,7 +75,7 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 - every interactive element: `button, input, select, textarea, a, [role="button"], [contenteditable]`;
 - the text a user copies from a header, or whose `title` tooltip must show (the
   renderer gets no hover inside a drag region): `#terminal-header-id`,
-  every session-header control (`#terminal-header-controls [data-header-kind]`),
+  every session-header control (`#terminal-header-session [data-header-kind]`),
   `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
   `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`, `.whats-new-overlay`,
@@ -87,29 +87,22 @@ listener) placed in a drag region needs `no-drag` of its own.
 
 ## The session header's controls
 
-The right-hand side of `#terminal-header` is one row, `#terminal-header-controls`,
-whose order is declared once in `HEADER_CONTROLS` (`public/header-controls.js`)
-and pinned by `test/header-controls.test.js`:
+Immediately after `#terminal-header-info`, `#terminal-header-session` holds
+Refresh, Stop/Detach, Sandbox and IDE Emulation, in that order. The action ids,
+disabled logic, red Stop styling and divider are retained. The indicators are
+state only: coloured dots and words, with tooltips and no click action.
+`HEADER_CONTROLS` declares this order; `placeHeaderControl` inserts a declared
+control and refuses unknown ids. No tool toggle lives in the header.
 
-| Kind | Controls, left to right | Look |
-|---|---|---|
-| `indicator` | `#terminal-header-sandbox`, `#ide-emulation-indicator` | A coloured dot and a word. No border, no background, no hover, `cursor: default`. The tooltip is the only interaction. |
-| `toggle` | `#panel-terminal-toggle-btn` (Shell), `#changes-toggle-btn` (Changes) | `.icon-btn`: the sidebar filter row's square outlined button (`#running-toggle` and its siblings share the rule), a 14 px icon, the name in `title` and `aria-label`, and the filter buttons' accent `.active` state with `aria-pressed`. |
-| `action` | `#terminal-refresh-btn`, `#terminal-stop-btn` | Refresh is a neutral borderless icon; Stop is red and last, set apart by a gap three times the row's and a hairline divider in it. The divider is a `::before` with `pointer-events: none`, so the gap never counts as a click on Stop. |
+Changes, the conditional Diff, Touched and Shell are in `#tool-bar`, outside
+the strip, below the header and after the file panel. Their shared creation
+primitive is `createHeaderToggle`, exported by the bar as the same function
+object `createToolToggle`. See [tool-bar.md](tool-bar.md) for ownership,
+shortcuts, focus, Diff parking and overflow.
 
-Each element carries its kind as `data-header-kind`. The static ones (sandbox,
-Refresh, Stop) are written in `index.html` in the declared order. The modules
-that build the others (`addMcpToggle` and `addChangesToggle` in `file-panel.js`,
-`addPanelTerminalToggle` in `panel-terminal.js`) hand their element to
-`placeHeaderControl()`, which inserts it before the next declared control
-already in the row, so the order does not depend on which module starts
-first. `createHeaderToggle()` builds a toggle and `setHeaderToggle()` sets its
-on state. A new control is added to `HEADER_CONTROLS` first: `placeHeaderControl`
-throws for an id the list does not declare.
-
-The Changes toggle is on while the panel shows the Changes tab of the session
-in the header: `renderTabContent` sets it from the tab it renders, and
-`hidePanel` clears it when the panel closes.
+The header aligns from the left, the info group shrinks without taking spare
+space, and the name has a `30vw` maximum. Refresh remains beside the session
+id while the header's right part stays a drag area with the overlay inset.
 
 The session process's state is not in that row: `#terminal-header-status` is
 an 8 px dot right before `#terminal-header-name`, with no text, green with a

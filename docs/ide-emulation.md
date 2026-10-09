@@ -62,6 +62,12 @@ remembered (`localStorage.filePanelDiffMode`):
 - **Inline**: one column with the changes marked, and accept/reject buttons on
   each change, so part of an edit can be kept.
 
+The right-hand tool bar shows **Diff** while a proposed diff exists. Switching
+to Changes or Touched keeps an unanswered diff and your edits; a dot on Diff
+says Claude is waiting. Click **Diff**, or Ctrl+Shift+D (Cmd+Shift+D on macOS),
+to return. Closing the shown Diff rejects it. Closing another tool leaves the
+parked Diff waiting.
+
 ## File viewer
 
 Files Claude opens, files you open from a terminal link (see

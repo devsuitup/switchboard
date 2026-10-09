@@ -26,7 +26,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div id="terminals"></div>
     </div>
     <div id="terminal-header" style="display:none;">
-      <div id="terminal-header-controls">
+      <div id="terminal-header-session">
         <button id="terminal-stop-btn"></button>
       </div>
     </div>
@@ -204,12 +204,24 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'header-controls.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'tool-bar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'viewer-toolbar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'file-panel.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'touched-files-view.js'));
 
+  window.openSessions = new Map();
+  window.gridViewActive = false;
+  window.gridCards = new Map();
+  window.isMac = false;
+  window.appShortcuts = {};
   window.initFilePanel();
+  const switchPanel = window.switchPanel;
+  window.switchPanel = id => {
+    if (id) window.openSessions.set(id, { terminal: { focus() {} } });
+    switchPanel(id);
+  };
 
   const ctx = dom.getInternalVMContext();
   const read = (expr) => vm.runInContext(expr, ctx);

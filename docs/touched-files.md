@@ -17,7 +17,7 @@ working tree.
 
 ## Opening it
 
-**Touched** in the terminal header, next to **Changes**, opens the panel; clicking
+**Touched** on the right-hand tool bar (Ctrl+Shift+T, Cmd+Shift+T on macOS) opens the panel; clicking
 it again closes it. Each row shows the path, what Switchboard found on disk, the
 tools used, how many times, and who made the calls: the session or a subagent.
 The list is read when the panel opens and on **Refresh**; it does not update by

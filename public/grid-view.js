@@ -370,6 +370,7 @@ function setGridGroupByProject(on) {
   const restoreId = gridFocusedSessionId || activeSessionId;
   unwrapGridCards();
   const sessionIds = layoutGridCards(openGridSessionIds());
+  if (typeof syncToolBar === 'function') syncToolBar();
   for (const sid of sessionIds) {
     const entry = openSessions.get(sid);
     if (entry) fitAndScroll(entry);
@@ -410,6 +411,7 @@ function showGridView() {
   terminalsEl.classList.add('grid-layout');
 
   const sessionIds = layoutGridCards(openGridSessionIds());
+  if (typeof syncToolBar === 'function') syncToolBar();
 
   // Show grid header bar with session count
   gridViewer.style.display = 'block';
@@ -467,6 +469,7 @@ function destroyGridCard(sessionId) {
   if (gridCardObserver) gridCardObserver.unobserve(card);
   card.remove();
   gridCards.delete(sessionId);
+  if (typeof syncToolBar === 'function') syncToolBar();
   return true;
 }
 
@@ -625,6 +628,7 @@ function navigateGrid(direction) {
 let appShortcuts = normalizeShortcuts(null);
 function setAppShortcuts(stored) {
   appShortcuts = normalizeShortcuts(stored);
+  if (typeof syncToolBar === 'function') syncToolBar();
 }
 
 // Returns true if the key combo is a session nav shortcut (used by xterm to block without acting)
