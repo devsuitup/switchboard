@@ -121,7 +121,7 @@ test('buildBlobRev names the index for the unstaged view and HEAD for the staged
 
 test('every Changes handler that touches the filesystem refuses a remote session (mutation target: the wiring)', () => {
   const main = mainSource();
-  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch', 'git-changes-locate']) {
+  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch']) {
     const body = handlerBody(main, channel);
     assert.match(body, /requireLocalTarget\(resolveGitChangesTarget\(sessionId\)\)/,
       `${channel} must resolve the session through the local-only guard`);
@@ -136,7 +136,7 @@ test('only the read-only status and diff handlers admit a subagent id (mutation 
     assert.match(handlerBody(main, channel), /resolveGitChangesTarget\(sessionId, \{ allowSubagent: true \}\)/,
       `${channel} must opt in to a subagent id`);
   }
-  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch', 'git-changes-locate']) {
+  for (const channel of ['git-changes-file', 'git-changes-save', 'git-changes-watch']) {
     assert.doesNotMatch(handlerBody(main, channel), /allowSubagent/, `${channel} must keep refusing a subagent id`);
   }
   assert.match(main, /readSubagentMeta/, 'main must inject the sidecar reader');
@@ -149,16 +149,6 @@ test('only the read-only status and diff handlers admit a subagent id (mutation 
   const status = handlerBody(main, 'git-changes-status');
   assert.match(status, /await gitChangesTarget.listSubagentWorktrees\(sessionId/, 'the status handler lists the parent subagent worktrees');
   assert.match(status, /collectSubagentChanges\(/, 'and attaches their changes to the result');
-});
-
-test('git-changes-locate is the one handler that takes an absolute path, and it maps it main-side', () => {
-  const main = mainSource();
-  const body = handlerBody(main, 'git-changes-locate');
-  assert.match(body, /locateChangesFile\(\{ cwd: target\.cwd, absolutePath: filePath \}\)/,
-    'the mapping runs against the session\'s own resolved cwd');
-
-  const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
-  assert.match(preload, /gitChangesLocate: \(sessionId, filePath\) => ipcRenderer\.invoke\('git-changes-locate', sessionId, filePath\)/);
 });
 
 test('Touched rejects invalid absolute paths before asking git', async () => {

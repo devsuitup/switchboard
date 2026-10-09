@@ -125,12 +125,12 @@ Everything below is presentation; none of it carries the rule.
 
 ## Snapshots and save tokens
 
-`snapshot()` returns the buffer, `_agreedBase` and `_lastSeenDisk` of the file on screen, and `open(title, path, buffer, restore)` reopens a file from one. No caller restores a snapshot at present.
+`snapshot()` returns the buffer, `_agreedBase` and `_lastSeenDisk` of the file on screen, and `open(title, path, buffer, restore)` reopens a file from one. The only caller is `rereadFromDisk`, which reopens the panel from its own snapshot while the document is not yet in the editor.
 
 Each showing of a file carries a token (`_token`): a fresh `open()` makes a new one, and a restore takes back the one in the snapshot, so the token names the showing, not the path. A save captures the token when it starts, and when it resolves:
 
 - if the viewer holds that token, the result is applied directly: a success moves the base to what was written, a failure shows `Save failed: <reason>`;
-- otherwise the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`), reported through `opts.onDetachedSave`, and applied, once, when that snapshot is restored.
+- otherwise the outcome is recorded under its token (`_detachedSaves`, a `WeakMap`), and applied, once, when that snapshot is restored.
 
 Keying by path would hand one showing's result to another on the same file, which would take the saving one's base while still showing the old content.
 

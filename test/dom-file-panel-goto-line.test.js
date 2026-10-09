@@ -25,12 +25,11 @@ const INDEX_HTML = `<!DOCTYPE html>
 function setup({ pair } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
-  const calls = { revealed: [], locate: [], modes: [] };
+  const calls = { revealed: [], modes: [] };
 
   window.api = {
     onMcpOpenDiff: () => {}, onMcpOpenFile: () => {}, onMcpCloseAllDiffs: () => {}, onMcpCloseTab: () => {},
     mcpDiffResponse: () => {},
-    gitChangesLocate: (_s, filePath) => { calls.locate.push(filePath); return Promise.resolve({ ok: true, changed: true, relPath: 'src/a.js' }); },
     resolveTerminalPaths: (_s, texts) => Promise.resolve(texts.map(p => ({ ok: true, path: p }))),
     sessionTouchedFiles: () => Promise.resolve({ ok: true, files: [], unresolved: [], omitted: 0, coverage: {} }),
     readFileForPanel: () => Promise.resolve(pair || { ok: true, git: false, original: 'one\ntwo\nthree\n', current: 'one\ntwo\nthree\n' }),
@@ -95,7 +94,6 @@ test('a changed file opens its diff in the Touched editor and is scrolled to the
     ctx.window.switchPanel('s1');
     await ctx.window.openFileInPanel('s1', '/repo/src/a.js', { line: 7 });
     await flush();
-    assert.deepStrictEqual(ctx.calls.locate, []);
     assert.notDeepStrictEqual(ctx.calls.modes, ['plain']);
     assert.strictEqual(ctx.calls.revealed.length, 1);
     assert.strictEqual(ctx.calls.revealed[0].line, 7);

@@ -49,7 +49,7 @@ function result(over = {}) {
   };
 }
 
-function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThrows = false, resolveImpl, ownerOf, locateImpl, saveImpl } = {}) {
+function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThrows = false, resolveImpl, ownerOf, saveImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   if (storedRatio != null) window.localStorage.setItem('touchedListRatio', storedRatio);
@@ -67,7 +67,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     constructor(callback) { resize = callback; }
     observe(element) { observed.add(element); }
   };
-  const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0, locate: [] };
+  const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0 };
   let mcpOpenFile = null;
 
   window.api = {
@@ -80,7 +80,6 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
       calls.resolve.push([sessionId, texts]);
       return Promise.resolve((resolveImpl || ((_id, t) => t.map(p => ({ ok: true, path: p }))))(sessionId, texts));
     },
-    gitChangesLocate: (sessionId, filePath) => { calls.locate.push(filePath); return Promise.resolve((locateImpl || (() => ({ ok: true, changed: false })))(filePath)); },
     sessionTouchedFiles: (sessionId, options) => {
       calls.touched.push(sessionId);
       return Promise.resolve((touchedImpl || (() => result()))(sessionId, options));
@@ -1714,11 +1713,10 @@ test('a path:line link to a markdown file opens the source at that line and leav
 });
 
 test('a link to a file the working tree reports changed opens in Touched with its diff, not in Changes', async () => {
-  const ctx = setupDom({ locateImpl: () => ({ ok: true, changed: true, relPath: 'notes.txt', staged: false, untracked: false }) });
+  const ctx = setupDom();
   try {
     ctx.window.switchPanel('s1');
     await openLink(ctx, '/work/notes.txt');
-    assert.deepEqual(ctx.calls.locate, []);
     assert.deepEqual(ctx.calls.gitFile, []);
     assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
     assert.equal(ctx.document.getElementById('changes-diff-mode-btn').style.display, '');

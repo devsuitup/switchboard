@@ -117,11 +117,11 @@ function makeEditorStub(window, mode, doc, created, onChange) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, locateImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
 
-  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], locate: [], readFile: [] };
+  const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], readFile: [] };
   const editors = [];
   const fileChangedListeners = [];
 
@@ -156,10 +156,6 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
       return Promise.resolve({ ok: true });
     },
     onGitChangesFileChanged: (cb) => { fileChangedListeners.push(cb); },
-    gitChangesLocate: (sessionId, filePath) => {
-      calls.locate.push({ sessionId, filePath });
-      return Promise.resolve((locateImpl || (() => ({ ok: false, reason: 'outside' })))(sessionId, filePath));
-    },
     readFileForPanel: (filePath) => {
       calls.readFile.push(filePath);
       return Promise.resolve({ ok: true, git: true, original: 'old\n', current: 'new\n', version: 'v1' });
@@ -1810,28 +1806,20 @@ test('the panel close button destroys the editor too', async () => {
 
 // --- A file link from the terminal ----------------------------------------
 
-for (const answer of [
-  { ok: true, relPath: 'src/a.js', changed: true, staged: true, untracked: false },
-  { ok: true, relPath: 'new.txt', changed: true, staged: false, untracked: true },
-  { ok: true, relPath: 'clean.txt', changed: false },
-  { ok: false, reason: 'outside', error: 'path is outside this session\'s repository' },
-]) {
-  test(`a link opens the file in Touched and never asks the Changes list (${answer.relPath || answer.reason})`, async () => {
-    const ctx = setupFilePanelDom({ locateImpl: () => answer });
-    try {
-      ctx.window.switchPanel('s1');
-      await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
-      await flush();
+test('a link opens the file in Touched and never opens a Changes editor', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openFileInPanel('s1', '/repo/src/a.js');
+    await flush();
 
-      assert.deepEqual(ctx.calls.locate, []);
-      assert.equal(ctx.calls.file.length, 0, 'no Changes editor is opened');
-      assert.deepEqual(ctx.calls.readFile, ['/repo/src/a.js']);
-      assert.equal(ctx.document.getElementById('file-panel-touched').style.display, 'flex');
-      assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'none');
-      assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
-    } finally { ctx.destroy(); }
-  });
-}
+    assert.equal(ctx.calls.file.length, 0, 'no Changes editor is opened');
+    assert.deepEqual(ctx.calls.readFile, ['/repo/src/a.js']);
+    assert.equal(ctx.document.getElementById('file-panel-touched').style.display, 'flex');
+    assert.equal(ctx.document.getElementById('file-panel-changes').style.display, 'none');
+    assert.equal(ctx.stateOf('s1').currentTab.returnList?.type, 'touched');
+  } finally { ctx.destroy(); }
+});
 
 test('a link over a dirty Changes editor asks nothing, and Changes gives the buffer back', async () => {
   const ctx = setupFilePanelDom({ confirmImpl: () => false });

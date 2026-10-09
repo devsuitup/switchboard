@@ -451,10 +451,6 @@ class ViewerPanel {
     this.toolbar.setWrapMode(this.wrapMode);
   }
 
-  saveNow() {
-    return this._save();
-  }
-
   // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
   async _save() {
     if (!this.opts.onSave || !this.filePath || this._pendingContent !== null) return;
@@ -513,7 +509,6 @@ class ViewerPanel {
   _recordDetachedSave(token, content, result) {
     if (result && result.ok !== false) this._detachedSaves.set(token, { written: asEditorText(content) });
     else this._detachedSaves.set(token, { error: (result && result.error) || 'unknown error' });
-    if (this.opts.onDetachedSave) this.opts.onDetachedSave(token);
   }
 
   getContent() {
@@ -621,12 +616,6 @@ class ViewerPanel {
   // see .ai/contexts/viewer-panel.md ("An open aimed at a file tab")
   hasUnsavedEdits() {
     return this._isDirty();
-  }
-
-  snapshotHasUnsavedEdits(state) {
-    const detached = this._detachedSaves.get(state.token);
-    return state.content !== state.agreedBase && state.content !== state.lastSeenDisk
-      && !(detached && detached.written === asEditorText(state.content));
   }
 
   rereadFromDisk() {
