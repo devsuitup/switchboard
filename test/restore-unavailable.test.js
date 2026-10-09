@@ -84,6 +84,7 @@ function setupTick({ mode, indexed, late = [], preplanned = true, finished = fal
     var sessionMap = new Map(${JSON.stringify(indexed.map((id) => [id, { sessionId: id, name: 'name-' + id }]))});
     var restorePlanner = ${preplanned ? `createRestorePlanner({ savedSet: ${JSON.stringify(SAVED)}, askOnce: ${mode === 'ask'} })` : 'null'};
     var restoreSavedIndex = new Map();
+    var skippedWorkingSetEntries = new Map();
     var SETTING_DEFAULTS = { restoreOnStartup: 'off' };
     var loadProjects = async () => { for (const id of ${JSON.stringify(late)}) sessionMap.set(id, { sessionId: id, name: 'name-' + id }); };
     var restoreMode = ${JSON.stringify(mode)};

@@ -190,7 +190,7 @@ test('restore refreshes a new remote terminal once even when its saved id is alr
     ctx.window.activeSessionId = 'remote';
     const guardPath = path.join(__dirname, '../public/resume-guard.js');
     vm.runInContext(fs.readFileSync(guardPath, 'utf8'), ctx.context, { filename: guardPath });
-    const { runRestore } = loadAppFunctions(ctx.context, { functions: ['runRestore'], declarations: ['restoreInFlight'] });
+    const { runRestore } = loadAppFunctions(ctx.context, { functions: ['runRestore'], declarations: ['restoreInFlight', 'restoreIndexingDone'] });
     await runRestore([{ sessionId: 'remote', active: true }]);
     await flush(ctx);
     assert.deepEqual(ctx.refreshes, [{ id: 'remote', cols: 120, rows: 40 }]);

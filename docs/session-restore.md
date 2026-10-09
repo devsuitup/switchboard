@@ -46,10 +46,11 @@ its previous launch. Sessions reopen one after another, half a second apart.
 
 If a conversation continued under another id, restore follows its continuation
 chain and saves the final id with the saved entry's project and active state.
-One final id is selected automatically. A target absent from both the index and
-the transcripts on disk is ignored when its parent has another existing
+One final id is selected automatically. A target absent from the index, the
+transcripts on disk and live CLI processes is ignored when its parent has another existing
 continuation. A transcript present on disk but not yet indexed still holds
-restore until indexing catches up. If all of a node's targets are missing,
+restore with a waiting-for-indexing notice; held entries retry once when indexing
+finishes. If all of a node's targets are missing,
 restore stays unresolved rather than reopening that node automatically.
 Several final ids, a cycle or a malformed continuation record hold the saved entry
 without launching it. A non-blocking notice names the held conversation and
@@ -61,11 +62,12 @@ last activity. After declining the candidates, you can explicitly choose
 **Open the original session** or cancel. An unresolved continuation also offers
 this explicit original-session choice, with a warning and any known candidates.
 The original id is never silently selected when continuation information exists.
-Ordinary malformed lines, incomplete tails and oversized records without
-continuation bytes do not block opening the original session. Large transcripts
+Ordinary malformed lines that mention continuations, unrelated incomplete tails
+and oversized records do not block opening the original session. Large transcripts
 are indexed in yielded chunks without a total byte limit.
 
-A live background continuation uses the existing attach path and its final id
+A live continuation remains a candidate even before its first transcript record
+exists. A live background continuation uses the existing attach path and its final id
 stays in the saved working set for a later restore.
 
 Within one run of the app, going back to a session whose process still runs is

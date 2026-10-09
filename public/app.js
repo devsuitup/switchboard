@@ -218,7 +218,7 @@ function schedulePersistWorkingSet() {
   }, 500);
 }
 
-async function runRestore(list) {
+async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
@@ -234,11 +234,12 @@ async function runRestore(list) {
       // manual session relaunch — not options frozen from a previous launch.
       const originalId = item.sessionId;
       const originalSession = s;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
+      let waitingForIndex = false;
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
-        skippedWorkingSetEntries.set(originalId, { item, index });
-        skippedNow.push({ session: originalSession, continuation: true });
+        skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
+        skippedNow.push({ session: originalSession, continuation: true, waitingForIndex, retryAfterIndexing });
         restoreInFlight.delete(originalId);
         continue;
       }
@@ -276,6 +277,9 @@ async function runRestore(list) {
   const activeItem = list.find(i => i.active) || list[list.length - 1];
   if (activeItem && openSessions.has(activeItem.sessionId)) {
     showSession(activeItem.sessionId);
+  }
+  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation) && !sessionOpenedOutsideRestore) {
+    await markRestoreIndexingDone();
   }
 }
 
@@ -409,11 +413,14 @@ function showNotRestoredNotice(unavailable) {
 
 function showLiveElsewhereNotice(skipped) {
   const live = skipped.filter(item => !item.continuation);
-  const held = skipped.filter(item => item.continuation);
+  const held = skipped.filter(item => item.continuation && !item.waitingForIndex);
+  const waiting = skipped.filter(item => item.waitingForIndex);
   const label = ({ session }) => cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
   const parts = [];
   if (live.length === 1) parts.push('Not reopened: ' + label(live[0]) + ' is live in pid ' + (live[0].live?.pid || '?'));
   else if (live.length) parts.push('Not reopened: ' + live.length + ' sessions live in pids ' + live.map(item => item.live?.pid || '?').join(', '));
+  if (waiting.length) parts.push('Not reopened: ' + waiting.map(label).join(', ') + ' is waiting for indexing. '
+    + (waiting.some(item => item.retryAfterIndexing) ? 'Restore will retry when indexing finishes' : 'Open it from the sidebar to retry'));
   if (held.length) parts.push('Not reopened: ' + held.map(item => label(item) + ' (' + item.session.sessionId + ')').join(', ')
     + ' needs a continuation choice. Open it from the sidebar to choose.');
   showRestoreNotice('restore-live-elsewhere-toast', parts.join('. '));
@@ -421,7 +428,8 @@ function showLiveElsewhereNotice(skipped) {
 
 async function markRestoreIndexingDone() {
   restoreIndexingDone = true;
-  if (!restorePlanner || restorePlanner.isSettled()) return;
+  const held = () => [...skippedWorkingSetEntries.values()].filter(entry => entry.retryContinuation);
+  if ((!restorePlanner || restorePlanner.isSettled()) && !held().length) return;
   let reloaded = false;
   for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
     try {
@@ -429,7 +437,20 @@ async function markRestoreIndexingDone() {
       reloaded = true;
     } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
   }
-  if (reloaded) await tickRestorePlanner();
+  if (!reloaded) return;
+  await tickRestorePlanner();
+  const retry = held();
+  if (!retry.length || sessionOpenedOutsideRestore) return;
+  for (const entry of retry) {
+    entry.retryContinuation = false;
+    window._startupResumeResolutions?.delete(entry.item.sessionId);
+  }
+  document.getElementById('restore-live-elsewhere-toast')?.remove();
+  restoringWorkingSet = true;
+  try {
+    await runRestore(retry.map(entry => entry.item), { retryAfterIndexing: false });
+  } finally { restoringWorkingSet = false; }
+  await persistWorkingSet();
 }
 
 async function maybeRetryRestoreWorkingSet() {
@@ -1366,7 +1387,7 @@ async function showTerminalHeader(session) {
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
 async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
-  if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
+  if (!restoringWorkingSet && !automatic) sessionOpenedOutsideRestore = true;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });

@@ -1079,7 +1079,7 @@ function populateCacheViaWorker() {
   return populatePromise;
 }
 
-async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024 } = {}) {
+async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024, getSessionLiveElsewhere } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   let diskEntries;
   return resolveContinuations(sessionId, async id => {
@@ -1087,18 +1087,19 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     const row = getCachedSession?.(id);
     if (!row) {
       const { alias } = parseFolderKey(getCachedSession?.(sessionId)?.folder || '');
+      if (alias === null && getSessionLiveElsewhere && await getSessionLiveElsewhere(id)) return { index: { ids: [] } };
       const root = alias === null ? PROJECTS_DIR : remoteRoots.get(alias);
       diskEntries ||= fs.promises.readdir(root, { recursive: true, withFileTypes: true });
       const entries = await diskEntries;
-      return entries.some(entry => entry.isSymbolicLink() || (entry.isFile() && entry.name === id + '.jsonl'))
-        ? null : { missing: true };
+      if (entries.some(entry => entry.isFile() && entry.name === id + '.jsonl')) return { waitingForIndex: true };
+      return entries.some(entry => entry.isSymbolicLink()) ? null : { missing: true };
     }
     if (row.parentSessionId) return null;
     const file = resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' });
     const stat = fs.statSync(file);
     let serialized = row.continuationIndex, index;
     try { index = JSON.parse(serialized); } catch {}
-    if (index?.format !== 2 || !index.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
+    if (index?.format !== 3 || !index.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
       do {
         serialized = scanContinuationIndex(file, id, serialized, chunkBytes);
         index = JSON.parse(serialized);

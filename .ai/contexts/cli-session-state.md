@@ -367,8 +367,10 @@ chunks and has no total byte cap; chunk size only controls pacing.
 `resolveResumeSession` is shared by restore and sidebar clicks. An automatic
 restore selects exactly one terminal id. Several ids, unresolved graphs and
 failed lookups hold the saved entry and join the non-blocking restore notice,
-which names the original entry and tells the user to open it from the sidebar
-to choose. No continuation confirmation runs during automatic restore. Manual
+which names the original entry. A disk-present, unindexed continuation says
+it is waiting for indexing; held entries retry once when indexing finishes,
+even when the ordinary planner already settled. Ambiguous graphs ask for a
+sidebar choice. No continuation confirmation runs during automatic restore. Manual
 opens list each candidate's id and last activity before asking whether to open
 it. Declining all candidates offers an explicit original-session choice; an
 unresolved graph or failed lookup offers the same choice with a warning.
@@ -378,6 +380,19 @@ Cancellation keeps the held entry. Remote sessions retain their attach behavior.
 active-session open and working-set restore. Each original id is resolved once
 during that startup pass; the map is discarded afterward so subsequent manual
 opens and indexing retries re-check the transcript.
+
+The remembered active-session `openSession` must be awaited before working-set
+restore starts. Continuation and live-elsewhere checks are asynchronous: before
+they finish, no terminal entry has been inserted into `openSessions`. Starting
+`restoreWorkingSet` concurrently can see the same session as unopened and launch
+a second PTY / duplicate `claude --resume`. Awaiting that first open also lets the
+working-set pass reuse its completed continuation lookup. An automatic remembered
+open does not count as the manual action that cancels later indexing retries.
+
+For uncached local targets, continuation IPC checks the same live-elsewhere
+descriptor lookup before declaring the transcript missing. A live target remains
+a candidate before its first transcript record is written. An indexed sibling
+therefore cannot silently win over a live new continuation.
 
 After resolution, `runRestore` checks the final id's liveness; a background
 continuation requests the guard's existing `{attach}` verdict. Other live kinds

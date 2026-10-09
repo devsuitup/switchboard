@@ -177,16 +177,15 @@ test('R2 append indexing rejects a rewritten indexed tail', { timeout: 9000 }, t
   assert.deepEqual(current.ids, ['b']);
 });
 
-test('R2 small chunks retain split continuation byte patterns in oversized records', { timeout: 9000 }, async t => {
+test('R2 small chunks ignore split continuation byte patterns in oversized records', { timeout: 9000 }, async t => {
   const h = setup(t, { old: [] }, { chunkBytes: 65536 });
   const prefix = '{"padding":"', suffix = '","type":"continued-in",broken}\n';
   const pad = 2 * 1024 * 1024 + 65530 - prefix.length - suffix.indexOf('continued-in');
   append(h, prefix + 'x'.repeat(pad) + suffix);
   delete h.rows.get('old').continuationIndex;
   await h.restore();
-  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.spawned.map(call => call.id), ['old']);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /old/);
 });
 
 test('R2 startup resolves an active continued session only once', { timeout: 9000 }, async t => {

@@ -194,6 +194,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let firstTimestamp = null;
     let lastTimestamp = null;
     for (const line of lines) {
+      const continuationLine = Buffer.byteLength(line) <= 1024 * 1024;
       // Per-line try/catch: a JSONL file being written concurrently by a live
       // Claude CLI session can have its tail captured mid-write — one truncated
       // line should not invalidate the whole file. Skip the malformed line and
@@ -201,12 +202,12 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       let entry;
       try { entry = JSON.parse(line); } catch {
         if (line === lines.at(-1) && !content.endsWith('\n')) incompleteTail = true;
-        if (line.includes('continued-in')) continuationUnresolved = true;
+        if (continuationLine && /"type"\s*:\s*"continued-in"/.test(line)) continuationUnresolved = true;
         continue;
       }
-      const continuation = continuationId(entry, fileBase);
+      const continuation = continuationLine ? continuationId(entry, fileBase) : null;
       if (continuation) continuationIds.add(continuation);
-      if (entry.type === 'continued-in' && entry.sessionId === fileBase && !continuation) continuationUnresolved = true;
+      if (continuationLine && entry.type === 'continued-in' && entry.sessionId === fileBase && !continuation) continuationUnresolved = true;
       if (entry.timestamp) {
         // ISO-8601 UTC strings — lexicographic comparison is chronological
         if (!firstTimestamp || entry.timestamp < firstTimestamp) firstTimestamp = entry.timestamp;
@@ -300,7 +301,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
-      continuationIndex: JSON.stringify({ format: 2, ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
+      continuationIndex: JSON.stringify({ format: 3, ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
       bridgeSessionId,
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,

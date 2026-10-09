@@ -1674,12 +1674,12 @@ settings(key PK, value JSON)
 
 ## Continuation index (#518B)
 
-`session_cache.continuationIndex` is nullable JSON with `format:2`, `ids`,
+`session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
 `bytes`, `complete`, `mtime` and `unresolved`. Schema reconciliation adds the
 column without wiping old rows. Full transcript scans collect links while
 already parsing the file, including worker scans. Missing or older-format
-indexes are rebuilt lazily, including indexes that previously marked ordinary
-parse errors as unresolved.
+indexes are rebuilt lazily, including format-2 indexes that marked a mere
+`continued-in` mention in an unrelated malformed or oversized record unresolved.
 
 Header-only refresh skips subagent continuation indexes and shares a 1 MiB
 synchronous continuation budget across all changed parent files in that refresh.
@@ -1699,26 +1699,44 @@ This asynchronous directory inventory is shared within one resolution and reads
 no transcript contents. A file found anywhere in that root remains unresolved
 until indexed; resolution does not index it on demand. Directory read failures
 or symbolic links that may hide files also keep absence unconfirmed.
-Only a target absent from both the cache and this inventory is marked missing.
+For a local target without a cache row, the IPC also supplies the existing
+CLI live-elsewhere lookup. A live descriptor keeps the target as a terminal
+candidate even before its first transcript record exists; lookup failures
+remain unresolved. Remote mirror targets never query local CLI descriptors.
+Only a target absent from the cache, liveness lookup and inventory is marked missing.
 The graph drops that target if its parent has another existing continuation.
 If every child is confirmed missing, that parent remains unresolved, including
 inside a longer chain: silently resuming a discontinued branch is unsafe, and
 manual opening already offers an explicit original-id choice. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
-Chunk indexes also carry `version:2`, `size`, `sealedIds`, a bounded base64
+Chunk indexes also carry `version:3`, `size`, `sealedIds`, a bounded base64
 `pending` line, and the last 64 indexed bytes as hexadecimal `tail`. The tail is
 verified before reusing a cursor after growth; mismatch, shrink or a same-size
 mtime change starts at byte zero. This is a local tail check, not a proof that
 an arbitrary rewrite preserved the entire prefix. Full-scan indexes lack
 a cursor witness and restart from zero when stale.
 
-Lines are retained up to 1 MiB. Oversized records are streamed with `skipLine`,
-`lineContinued` and an 11-byte `patternTail`, detecting literal `continued-in`
-bytes anywhere in the record, including across chunks. A malformed or oversized
-record is unresolved only if it contains these bytes. Valid continuation records
-with invalid targets also remain unresolved. An incomplete tail without those
-bytes never blocks the original session. Partial tails remain buffered for a
+Lines are retained up to 1 MiB. Oversized records are ignored by both continuation
+indexers; chunk scans carry `skipLine` until the newline, including across appends.
+Actual CLI continuation records are small bookkeeping records. Malformed lines
+only hold resolution when they match `"type"\s*:\s*"continued-in"`; an unrelated
+mention of the word does not. Valid continuation records with invalid targets
+also remain unresolved. Partial tails remain buffered for a
 later append; tail errors are recomputed rather than carried forward forever.
 No transcript content is sent through the IPC, only candidate ids and activity
 times.
+
+A disk-present target without a cache row returns `waitingForIndex` with the
+unresolved graph. Automatic restore uses this to show a waiting notice instead
+of a continuation-choice notice. `markRestoreIndexingDone` reloads projects and
+retries held continuation entries, including after the ordinary restore planner
+has settled. If completion arrived during an in-flight resolution before it could
+be held, that restore pass notices completion and performs the same retry when
+it returns. Passes starting after completion do not schedule another retry.
+It invalidates their startup lookup promises before resolving again,
+persists the resolved id and active state, and consumes each retry once. A failed
+project reload leaves retries available for the next completion event. A manual
+open cancels automatic retry; a remembered automatic open does not. Entries still
+ambiguous after indexing retain the sidebar-choice notice. Entries still unindexed
+after the retry name that state and offer a manual sidebar retry.

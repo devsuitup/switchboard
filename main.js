@@ -3139,7 +3139,9 @@ const localTranscriptTracker = createLocalTranscriptTracker({ hasPty: sessionHas
 
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 ipcMain.handle('session-live-elsewhere', (_event, sessionId) => cliSessionState.liveElsewhere(sessionId, sessionHasPty, ptyPids));
-ipcMain.handle('session-continuations', (_event, sessionId) => sessionCache.resolveSessionContinuations(sessionId));
+ipcMain.handle('session-continuations', (_event, sessionId) => sessionCache.resolveSessionContinuations(sessionId, {
+  getSessionLiveElsewhere: id => cliSessionState.liveElsewhere(id, sessionHasPty, ptyPids),
+}));
 ipcMain.handle('sessions-live-elsewhere', (_event, sessionIds) => cliSessionState.liveElsewhereMany(sessionIds, sessionHasPty, ptyPids));
 
 // see .ai/contexts/bg-agents.md

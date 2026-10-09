@@ -20,7 +20,7 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
     return tail.toString('hex');
   };
   try {
-    const reuse = index?.version === 2 && index.bytes <= stat.size && index.size <= stat.size
+    const reuse = index?.version === 3 && index.bytes <= stat.size && index.size <= stat.size
       && (index.size !== stat.size || index.mtime === mtime) && index.tail === tailAt(index.bytes);
     if (reuse && index.complete && index.bytes === stat.size && index.mtime === mtime) return previous;
     const ids = new Set(reuse ? index.sealedIds : []);
@@ -28,8 +28,6 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
     let pending = reuse ? Buffer.from(index.pending || '', 'base64') : Buffer.alloc(0);
     let oversized = reuse ? !!index.skipLine : false;
     let invalid = reuse ? !!index.invalid : false;
-    let lineContinued = reuse ? !!index.lineContinued : false;
-    let patternTail = reuse ? index.patternTail || '' : '';
     const end = Math.min(stat.size, position + maxBytes), buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes));
     const consume = line => {
       if (!line.length) return true;
@@ -40,20 +38,14 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
         if (entry?.type === 'continued-in' && entry.sessionId === sessionId && !id) invalid = true;
         return true;
       } catch {
-        if (line.includes('continued-in')) invalid = true;
+        if (/"type"\s*:\s*"continued-in"/.test(line.toString('utf8'))) invalid = true;
         return false;
       }
     };
     const segment = bytes => {
-      if (oversized) {
-        const text = patternTail + bytes.toString('latin1');
-        lineContinued ||= text.includes('continued-in');
-        patternTail = text.slice(-11);
-      } else {
+      if (!oversized) {
         pending = Buffer.concat([pending, bytes]);
         if (pending.length > 1024 * 1024) {
-          lineContinued = pending.includes('continued-in');
-          patternTail = pending.subarray(-11).toString('latin1');
           pending = Buffer.alloc(0);
           oversized = true;
         }
@@ -66,12 +58,9 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
       let start = 0, newline;
       while ((newline = buffer.indexOf(10, start)) !== -1 && newline < n) {
         segment(buffer.subarray(start, newline));
-        if (oversized) invalid ||= lineContinued;
-        else consume(pending);
+        if (!oversized) consume(pending);
         pending = Buffer.alloc(0);
         oversized = false;
-        lineContinued = false;
-        patternTail = '';
         start = newline + 1;
       }
       segment(buffer.subarray(start, n));
@@ -84,22 +73,23 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
       tailUnresolved = invalid && !before;
       invalid = before;
     }
-    return JSON.stringify({ format: 2, version: 2, ids: [...ids], sealedIds, bytes: position,
+    return JSON.stringify({ format: 3, version: 3, ids: [...ids], sealedIds, bytes: position,
       complete: position === stat.size && (!pending.length || tailValid || oversized), size: stat.size, mtime,
-      unresolved: invalid || tailUnresolved || (oversized && lineContinued), invalid,
-      skipLine: oversized, lineContinued, patternTail, pending: pending.toString('base64'), tail: tailAt(position) });
+      unresolved: invalid || tailUnresolved, invalid,
+      skipLine: oversized, pending: pending.toString('base64'), tail: tailAt(position) });
   } finally { fs.closeSync(fd); }
 }
 
 async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNodes = 128 } = {}) {
   const candidates = new Map(), visiting = new Set(), visited = new Set();
-  let unresolved = false, nodes = 0, continued = false;
+  let unresolved = false, nodes = 0, continued = false, waitingForIndex = false;
   async function visit(id, depth) {
     if (visiting.has(id) || depth > maxDepth || ++nodes > maxNodes) { unresolved = true; return; }
     if (visited.has(id)) return;
     let node;
     try { node = await getNode(id); } catch { unresolved = true; return; }
     if (!node) { unresolved = true; return; }
+    if (node.waitingForIndex) { unresolved = true; waitingForIndex = true; return; }
     if (node.missing) return false;
     const index = node.index;
     if (index?.unresolved) unresolved = true;
@@ -121,7 +111,7 @@ async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNode
   }
   if (!validId(sessionId)) return { candidates: [], unresolved: true, continued: false };
   if (await visit(sessionId, 0) === false) unresolved = true;
-  return { candidates: [...candidates.values()], unresolved, continued };
+  return { candidates: [...candidates.values()], unresolved, continued, waitingForIndex };
 }
 
 module.exports = { continuationId, scanContinuationIndex, resolveContinuations, validId };

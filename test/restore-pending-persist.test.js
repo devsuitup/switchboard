@@ -46,7 +46,7 @@ function setup() {
   `, ctx);
   const fns = loadAppFunctions(ctx, {
     functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore'],
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight'],
+    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone'],
   });
   vm.runInContext(`restoreSavedIndex = new Map(${JSON.stringify(SAVED.map((item, i) => [item.sessionId, i]))});`, ctx);
   const stored = () => settings.global.openWorkingSet.map(i => i.sessionId);

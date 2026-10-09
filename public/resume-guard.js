@@ -43,7 +43,7 @@ async function guardResume(session, { automatic = false, api, confirm, live, all
 }
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
-async function resolveResumeSession(session, { automatic = false, api, confirm, resolutions } = {}) {
+async function resolveResumeSession(session, { automatic = false, api, confirm, resolutions, onHold } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
   let result;
   try {
@@ -58,7 +58,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   const candidates = result?.candidates || [];
   const listing = candidates.map(c => c.sessionId + ' (last activity: ' + (c.modified || 'unknown') + ')').join('\n');
   if (!result || result.unresolved) {
-    if (automatic) return null;
+    if (automatic) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
     return confirm('This conversation has an unresolved continuation (cycle, missing transcript or malformed continuation record).\n'
       + listing + '\nYou can retry after indexing or open a candidate from the sidebar.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
   }

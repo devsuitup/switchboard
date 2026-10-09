@@ -38,7 +38,7 @@ for (const location of ['same folder', 'other folder', 'nested folder']) {
     assert.deepEqual(h.spawned, []);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
-    assert.match(h.dom.window.notice, /sidebar/);
+    assert.match(h.dom.window.notice, /waiting for indexing/);
   });
 }
 
