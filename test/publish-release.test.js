@@ -20,11 +20,11 @@ const shellPath = (value) => value.replace(/\\/g, '/');
 const GH_STUB = `#!/bin/sh
 printf '%s\\t' "$@" >> "$GH_STUB_LOG"
 printf '\\n' >> "$GH_STUB_LOG"
-if [ "$1 $2" = "release view" ]; then
+if [ "$1" = api ]; then
   case "$GH_STUB_MODE" in
-    missing) echo 'release not found' >&2; exit 1 ;;
+    missing) exit 0 ;;
     draft) echo true; exit 0 ;;
-    published) echo false; exit 0 ;;
+    published) printf '%s\\n' "$GH_STUB_DRAFT"; exit 0 ;;
     transient) echo 'network connection failed' >&2; exit 1 ;;
   esac
 elif [ "$1 $2" = "release create" ]; then
@@ -45,7 +45,7 @@ echo 'unexpected gh invocation' >&2
 exit 2
 `;
 
-function runRelease(t, mode, failOnce = false) {
+function runRelease(t, mode, failOnce = false, draftValue = 'false') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-release-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const bin = path.join(temp, 'bin');
@@ -70,6 +70,7 @@ function runRelease(t, mode, failOnce = false) {
     DIST_DIR: shellPath(dist),
     RETRY_DELAY: '0',
     GH_STUB_MODE: mode,
+    GH_STUB_DRAFT: draftValue,
     GH_STUB_LOG: shellPath(log),
     GH_STUB_FAIL_ONCE: failOnce ? '1' : '0',
     GH_STUB_RETRY_FILE: shellPath(path.join(temp, 'retried')),
@@ -102,7 +103,11 @@ test('given a missing release, publishing creates a draft and uploads both asset
   const result = runRelease(t, 'missing');
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [
-    ['release', 'view'], ['release', 'create'], ['release', 'upload'], ['release', 'upload'],
+    ['api', '--paginate'], ['release', 'create'], ['release', 'upload'], ['release', 'upload'],
+  ]);
+  assert.deepEqual(result.calls[0], [
+    'api', '--paginate', `repos/${REPOSITORY}/releases?per_page=100`, '--jq',
+    `.[] | select(.tag_name == "${TAG}") | .draft`,
   ]);
   assert.deepEqual(result.calls[1], ['release', 'create', TAG, '--draft', '--title', '0.1.0', '--notes', '']);
   assertUploads(result, ['one.zip', 'two.exe']);
@@ -118,17 +123,21 @@ test('given a draft, publishing tolerates an existing release and uploads both a
 
 test('given a published release, publishing exits 1 without creating or uploading', (t) => {
   if (!requireBash(t)) return;
-  const result = runRelease(t, 'published');
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stdout, /already published; refusing to overwrite its assets/);
-  assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['release', 'view']]);
+  for (const draftValue of ['false', 'unexpected', 'true\ntrue']) {
+    const result = runRelease(t, 'published', false, draftValue);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /already published; refusing to overwrite its assets/);
+    assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['api', '--paginate']]);
+  }
 });
 
 test('given a transient read failure, publishing exits 1 without creating or uploading', (t) => {
   if (!requireBash(t)) return;
   const result = runRelease(t, 'transient');
   assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['release', 'view']]);
+  assert.match(result.stderr, /network connection failed/);
+  assert.match(result.stdout, /could not read the releases .* refusing to publish blind/);
+  assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['api', '--paginate']]);
 });
 
 test('given a draft and one failed upload, publishing retries and exits 0', (t) => {

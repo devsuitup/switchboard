@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 set -e
 
-# A published release is never overwritten; a missing one is created below.
-is_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft 2>/dev/null || true)"
-if [ "$is_draft" = false ]; then
-  echo "::error::release ${GITHUB_REF_NAME} is already published; refusing to overwrite its assets"
+# see docs/releasing.md
+if ! draft="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .draft")"; then
+  echo "::error::could not read the releases of ${GITHUB_REPOSITORY}; refusing to publish blind"
   exit 1
 fi
-# Create the draft once. Tolerate "already exists" so a re-run after a
-# partial failure still proceeds to (re-)upload the assets.
+case "$draft" in
+  "") ;;
+  true) ;;
+  *) echo "::error::release ${GITHUB_REF_NAME} is already published; refusing to overwrite its assets"; exit 1 ;;
+esac
 gh release create "${GITHUB_REF_NAME}" \
   --draft \
   --title "${GITHUB_REF_NAME#v}" \
   --notes "" \
   || echo "release already exists — proceeding to asset upload"
-# Upload each asset individually with retries. A single whole-batch
-# `gh release create ... dist/*` aborts entirely when uploads.github.com
-# returns an intermittent 401 on one asset (typically a .blockmap),
-# leaving a partial release. Per-file + retry makes publishing reliable.
 rc=0
 for f in "${DIST_DIR:-dist}"/*; do
   [ -f "$f" ] || continue
