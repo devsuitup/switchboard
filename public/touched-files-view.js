@@ -50,6 +50,7 @@ const TOUCHED_UNRESOLVED_REASONS = {
   'unsupported-form': 'network or device path, not followed',
   'drive-relative': 'drive-relative path, not resolved',
   'rooted-no-drive': 'no drive letter, not resolved',
+  'invalid-remote-path': 'remote paths must be absolute and have no .. segment or control character',
 };
 
 function initTouchedView(parentEl) {
@@ -223,6 +224,12 @@ async function refreshTouched(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state?.currentTab?.returnList || state?.currentTab;
   if (tab?.type !== 'touched') return;
+  if (tab.refreshing) {
+    tab.refreshPending = true;
+    return;
+  }
+  tab.refreshing = true;
+  const windowDays = tab.windowDays;
 
   tab.loading = true;
   tab.openError = null;
@@ -230,21 +237,34 @@ async function refreshTouched(sessionId) {
 
   let result;
   try {
-    result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays });
+    result = await window.api.sessionTouchedFiles(sessionId, { windowDays, diskInfo: false });
+    if (result?.ok && result.diskInfoPending) {
+      tab.data = result;
+      tab.error = null;
+      tab.loading = false;
+      if (tab.windowDays === windowDays && Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
+      if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
+      result = await window.api.sessionTouchedFiles(sessionId, { windowDays });
+    }
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'failed to read the transcripts' };
   }
 
   tab.loading = false;
+  tab.refreshing = false;
   if (!result || result.ok === false) {
     tab.error = (result && result.error) || 'failed to read the transcripts';
     tab.data = null;
   } else {
     tab.error = null;
     tab.data = result;
-    if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
+    if (tab.windowDays === windowDays && Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
   }
   if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
+  if (tab.refreshPending) {
+    tab.refreshPending = false;
+    if (state.currentTab === tab || state.currentTab?.returnList === tab) return refreshTouched(sessionId);
+  }
 }
 
 // see .ai/contexts/touched-files.md ("One route into Touched")
@@ -312,7 +332,7 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   tab.opening = true;
   let result;
   try {
-    result = await window.api.readFileForPanel(filePath, { editor: true });
+    result = await window.api.readFileForPanel(filePath, { editor: true, ...(tab.data?.kind === 'remote' ? { sessionId } : {}) });
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'could not read the file' };
   }
@@ -391,14 +411,15 @@ function buildTouchedFileRow(sessionId, tab, file) {
   rowEl.className = 'touched-file-row';
   rowEl.dataset.path = file.path;
   const openable = file.openable === true && file.state === 'present';
+  const checking = file.state === 'unknown' && tab.data?.diskInfoPending;
   if (openable) rowEl.classList.add('touched-openable');
-  rowEl.title = TOUCHED_STATE_TITLES[file.state] || 'State unknown.';
+  rowEl.title = checking ? 'Checking the file on the remote host.' : TOUCHED_STATE_TITLES[file.state] || 'State unknown.';
   if (Number.isFinite(file.diskMtime)) rowEl.title += ' Modified: ' + new Date(file.diskMtime).toLocaleString();
   rowEl.classList.toggle('selected', isTouchedSelection(tab, file.path));
 
   const stateEl = document.createElement('span');
   stateEl.className = 'touched-file-state touched-state-' + String(file.state).replace(/[^a-z-]/g, '');
-  stateEl.textContent = TOUCHED_STATE_LABELS[file.state] || 'unknown';
+  stateEl.textContent = checking ? 'checking' : TOUCHED_STATE_LABELS[file.state] || 'unknown';
   rowEl.appendChild(stateEl);
 
   const pathEl = document.createElement('span');
@@ -514,7 +535,7 @@ function renderTouchedContent(sessionId, tab) {
 
 function extendTouchedWindow(sessionId, tab) {
   const current = filePanelState.get(sessionId)?.currentTab;
-  if (tab.loading || (current !== tab && current?.returnList !== tab)) return;
+  if (current !== tab && current?.returnList !== tab) return;
   tab.windowDays += TOUCHED_WINDOW_STEP_DAYS;
   tab.windowStart -= TOUCHED_WINDOW_STEP_DAYS * TOUCHED_DAY_MS;
   const older = [tab.data?.nextOlderTimestamp, ...(tab.data?.cachedFiles || tab.data?.files || []).map(f => f.lastTouched), ...(tab.data?.cachedUnresolved || []).map(f => f.lastTouched)]
@@ -524,6 +545,10 @@ function extendTouchedWindow(sessionId, tab) {
     const anchor = tab.windowStart + tab.windowDays * TOUCHED_DAY_MS;
     tab.windowDays = Math.ceil((anchor - newestOlder) / TOUCHED_DAY_MS);
     tab.windowStart = anchor - tab.windowDays * TOUCHED_DAY_MS;
+  }
+  if (tab.refreshing) {
+    tab.refreshPending = true;
+    return;
   }
   const loaded = tab.data?.loadedWindowStart;
   if (tab.data?.hasOlder && (loaded == null || tab.windowStart < loaded)) return refreshTouched(sessionId);

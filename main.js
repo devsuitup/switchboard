@@ -99,6 +99,7 @@ const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-termin
 const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
 const gitChangesFile = require('./git-changes-file');
 const { listSessionTouchedFiles, mainTouchedCache } = require('./session-touched-files');
+const { readRemoteTouchedFile } = require('./remote-touched-files');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
@@ -1031,6 +1032,12 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
   try {
+    if (opts?.sessionId !== undefined) {
+      const target = resolveGitChangesTarget(opts.sessionId);
+      if (!target.ok) return target;
+      if (target.kind !== 'remote') return { ok: false, error: 'invalid remote session' };
+      return await readRemoteTouchedFile({ target, absolutePath: filePath });
+    }
     const resolved = path.resolve(filePath);
     if (gitChangesFile.hasGitSegment(filePath) || gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) {
       return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
@@ -1068,6 +1075,11 @@ const panelSaves = createMainPanelSaves({
 
 ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected, opts) => {
   try {
+    if (opts?.sessionId !== undefined) {
+      const target = resolveGitChangesTarget(opts.sessionId);
+      if (!target.ok) return target;
+      if (target.kind === 'remote') return { ok: false, reason: 'remote', error: 'remote files are read-only' };
+    }
     if (gitChangesFile.hasGitSegment(filePath) || gitChangesFile.hasGitSegment(fs.realpathSync.native(filePath))) {
       return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
     }
@@ -2004,9 +2016,11 @@ ipcMain.handle('session-touched-files', async (_event, sessionId, options = {}) 
   try {
     return await listSessionTouchedFiles(sessionId, {
       projectsDir: PROJECTS_DIR,
+      dataDir: path.dirname(DB_PATH),
       getCachedFolder,
       isRemoteFolder,
       isSensitive: isSensitivePathAsync,
+      diskInfo: options?.diskInfo !== false,
       windowDays: Number.isFinite(options?.windowDays) && options.windowDays >= 1 ? options.windowDays : undefined,
     });
   } catch (err) {

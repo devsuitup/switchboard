@@ -41,6 +41,69 @@ const {
 // "<drive>:\repo" on Windows.
 const REPO = path.resolve('/repo');
 
+test('remote Touched executes its quoted stat and bounded read scripts through a local fake host', async t => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { runToExit } = require('../run-to-exit');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-touched-fake-host-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const posix = p => process.platform === 'win32' ? '/' + p[0].toLowerCase() + p.slice(2).replaceAll('\\', '/') : p;
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'sh';
+  let attempts = 0;
+  const exec = async (alias, command, options) => {
+    attempts++;
+    assert.equal(alias, 'fake-host');
+    const env = { ...process.env, LC_ALL: 'C', HOME: root, USERPROFILE: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(root, 'empty-config'), GIT_CEILING_DIRECTORIES: fs.realpathSync(os.tmpdir()) };
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE']) delete env[key];
+    const result = await runToExit(bash, ['-c', command], { cwd: root, env,
+      timeoutMs: options.timeoutMs, maxBuffer: options.maxStdoutBytes, input: options.input });
+    return { ...result, stdout: result.stdout.toString('utf8') };
+  };
+  const names = ['back`tick', '$(touch owned)', "one'quote", 'two"quotes'];
+  const paths = [];
+  for (const name of names) {
+    if (process.platform === 'win32' && name.includes('"')) continue;
+    const local = path.join(root, name);
+    fs.writeFileSync(local, 'fixture text\n');
+    paths.push(posix(local));
+  }
+  const dir = path.join(root, 'directory');
+  fs.mkdirSync(dir);
+  const secret = path.join(root, '.ssh', '.env.example');
+  fs.mkdirSync(path.dirname(secret));
+  fs.writeFileSync(secret, 'private');
+  const alias = path.join(root, 'alias');
+  fs.symlinkSync(secret, alias, 'file');
+  const all = [...paths, posix(path.join(root, 'missing')), posix(dir), posix(alias)];
+  const mirror = path.join(root, 'remote', 'fake-host', 'projects', '-repo');
+  fs.mkdirSync(mirror, { recursive: true });
+  fs.writeFileSync(path.join(mirror, 'S1.jsonl'), JSON.stringify({ type: 'assistant', message: { content:
+    all.map(p => ({ type: 'tool_use', name: 'Write', input: { file_path: p } })),
+  } }) + '\n');
+  const { listSessionTouchedFiles } = require('../session-touched-files');
+  const listed = await listSessionTouchedFiles('S1', { dataDir: root, getCachedFolder: () => 'fake-host::-repo',
+    isRemoteFolder: () => true, runRemoteCommand: exec });
+  assert.equal(listed.ok, true, listed.error);
+  const states = new Map(listed.files.map(f => [f.path, f]));
+  assert.equal(attempts, 1);
+  for (const p of paths) {
+    assert.equal(states.get(p).state, 'present');
+    assert.ok(Number.isFinite(states.get(p).diskMtime));
+  }
+  assert.equal(states.get(posix(path.join(root, 'missing'))).state, 'gone');
+  assert.equal(states.get(posix(dir)).state, 'not-file');
+  assert.equal(states.get(posix(alias)).state, 'refused');
+  const { readRemoteTouchedFile } = require('../remote-touched-files');
+  const target = { ok: true, kind: 'remote', alias: 'fake-host', cwd: posix(root) };
+  const pair = await readRemoteTouchedFile({ target, absolutePath: paths[0] }, { runRemoteCommand: exec });
+  assert.equal(pair.ok, true, pair.error);
+  assert.equal(pair.current, 'fixture text\n');
+  assert.equal(pair.git, false);
+  assert.equal(pair.readOnly, true);
+  assert.equal((await readRemoteTouchedFile({ target, absolutePath: posix(alias) }, { runRemoteCommand: exec })).reason, 'refused');
+  assert.equal(fs.existsSync(path.join(root, 'owned')), false);
+});
+
 // The runner asks git for the repository root before any path-taking command — see .ai/contexts/changes-view.md
 const isRootLookup = (c) => (Array.isArray(c) ? c.includes('--show-toplevel') : String(c).includes("'--show-toplevel'"));
 const sent = (calls) => calls.filter((c) => !isRootLookup(c));

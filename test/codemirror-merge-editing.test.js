@@ -19,6 +19,26 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const SETUP = path.join(__dirname, '..', 'public', 'codemirror-setup.js');
 
+for (const mode of ['inline', 'side-by-side']) {
+  test('real CodeMirror: a remote Touched ' + mode + ' diff keeps HEAD and disables editing', async () => {
+    const window = await loadCodeMirror();
+    const host = window.document.createElement('div');
+    window.document.body.appendChild(host);
+    const view = mode === 'inline'
+      ? window.createUnifiedMergeViewer(host, 'head\n', 'remote\n', 'file.txt', { mergeControls: false, readOnly: true })
+      : window.createMergeViewer(host, 'head\n', 'remote\n', 'file.txt', { readOnly: true });
+    try {
+      const current = mode === 'inline' ? view : view.b;
+      assert.equal(current.state.doc.toString(), 'remote\n');
+      assert.equal(current.state.readOnly, true);
+      assert.equal(current.contentDOM.getAttribute('contenteditable'), 'false');
+      assert.doesNotMatch(host.innerHTML, /cm-chunkButtons/);
+      if (mode === 'side-by-side') assert.equal(view.a.state.doc.toString(), 'head\n');
+      assertOnlyLayoutNoise();
+    } finally { view.destroy(); host.remove(); }
+  });
+}
+
 let cmWindow = null;
 const jsdomErrors = [];
 

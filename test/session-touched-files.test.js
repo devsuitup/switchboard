@@ -445,6 +445,196 @@ test('a stat that never answers leaves the row unreadable instead of holding the
 
 const { listSessionTouchedFiles } = require('../session-touched-files');
 const { encodeProjectPath } = require('../encode-project-path');
+const { fakeTouchedShell } = require('./remote-touched-shell');
+const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+
+test('round 2 M1: 100 long paths travel intact on stdin with a short command', async t => {
+  const shell = fakeTouchedShell(t);
+  const paths = Array.from({ length: 100 }, (_, i) => '/repo/' + String(i).padStart(3, '0') + '-'.repeat(110));
+  paths[42] = "/repo/space and 'single' and \"double\" quotes";
+  shell.setFunctions(`sh() { shift; script=$1; shift; shift; eval "$script"; }
+realpath() { [ "$3" = / ] || printf '%s\\n' "$3" >> seen; printf '%s\\n' "$3"; }
+stat() { printf '123\\n'; }
+tr() { text=; IFS= read -r text; printf '%s' "$text"; }
+`);
+  let length;
+  const states = await inspectRemoteTouchedPaths('host', paths, { runRemoteCommand: async (...args) => {
+    length = args[1].length;
+    if (length >= 8192) return { code: 0, stdout: paths.map(() => 'gone\t-').join('\n') + '\n' };
+    return shell.run(...args);
+  } });
+  assert.ok(length < 8192, `command length ${length}`);
+  assert.ok(fs.existsSync(path.join(shell.dir, 'seen')), 'no path reached the remote script');
+  assert.deepEqual(fs.readFileSync(path.join(shell.dir, 'seen'), 'utf8').trimEnd().split('\n'), paths);
+  assert.equal(states.size, 100);
+  assert.ok([...states.values()].every(s => s.state === 'gone'));
+});
+
+test('round 2 M2: a local list resolves while the remote batch is pending', async t => {
+  const { w, deps: remoteDeps } = remoteListWorld454(t, ['/repo/a']);
+  const cache = require('../session-touched-files').createTouchedFilesCache();
+  let release, started;
+  const batchStarted = new Promise(resolve => { started = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  remoteDeps.cache = cache;
+  remoteDeps.runRemoteCommand = () => { started(); return pending; };
+  const remote = listSessionTouchedFiles('S1', remoteDeps);
+  t.after(() => release({ code: 0, stdout: 'present\t1\n' }));
+  await batchStarted;
+  w.write('projects/-proj/L1.jsonl', lines(assistantLine(toolUse('Write', { file_path: w.write('work/local', 'local') }))));
+  let timer;
+  try {
+    const local = await Promise.race([
+      listSessionTouchedFiles('L1', listDeps(w, { cache })),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 500); }),
+    ]);
+    assert.ok(local?.ok, 'local listing waited for remote transport');
+    assert.equal(local.files[0].state, 'present');
+  } finally { clearTimeout(timer); release({ code: 0, stdout: 'present\t1\n' }); await remote; }
+});
+
+test('round 2 M2: concurrent remote refreshes share one pending batch and the next refresh retries', async t => {
+  const { deps: remoteDeps } = remoteListWorld454(t, ['/repo/a']);
+  let release, attempts = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  remoteDeps.runRemoteCommand = () => { attempts++; return pending; };
+  const calls = Array.from({ length: 3 }, () => listSessionTouchedFiles('S1', remoteDeps));
+  try {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    release({ code: 0, stdout: 'present\t1\n' });
+    const results = await Promise.all(calls);
+    assert.equal(attempts, 1);
+    assert.ok(results.every(r => r.files[0].state === 'present'));
+    await listSessionTouchedFiles('S1', remoteDeps);
+    assert.equal(attempts, 2);
+  } finally { release({ code: 0, stdout: 'present\t1\n' }); await Promise.all(calls); }
+});
+
+test('round 2 m3: unsupported GNU stat flags leave every remote row unknown', async t => {
+  const shell = fakeTouchedShell(t);
+  shell.tool('stat', 'printf "stat: illegal option -- c\\nusage: stat ...\\n" >&2; exit 1');
+  fs.writeFileSync(path.join(shell.dir, 'a'), 'a');
+  fs.writeFileSync(path.join(shell.dir, 'b'), 'b');
+  const states = await inspectRemoteTouchedPaths('host', [shell.root + '/a', shell.root + '/b'], { runRemoteCommand: shell.run });
+  assert.deepEqual([...states.values()], [{ state: 'unknown', diskMtime: null }, { state: 'unknown', diskMtime: null }]);
+});
+
+test('round 2 m1: the stat uses the checked resolved path', async t => {
+  const shell = fakeTouchedShell(t);
+  fs.writeFileSync(path.join(shell.dir, 'original'), 'old');
+  fs.writeFileSync(path.join(shell.dir, 'resolved'), 'safe');
+  shell.tool('realpath', 'printf "%s/resolved\\n" "$PWD"');
+  shell.tool('stat', 'case "$*" in *"$PWD/resolved") printf "123\\n";; *) printf "999\\n";; esac');
+  const states = await inspectRemoteTouchedPaths('host', [shell.root + '/original'], { runRemoteCommand: shell.run });
+  assert.equal(states.get(shell.root + '/original').diskMtime, 123000);
+});
+
+function remoteListWorld454(t, paths) {
+  const w = makeWorld();
+  t.after(() => w.cleanup());
+  const content = lines(...paths.map(p => assistantLine(toolUse('Write', { file_path: p }))));
+  w.write('remote/host/projects/-repo/S1.jsonl', content);
+  return { w, content, deps: listDeps(w, {
+    dataDir: w.root, getCachedFolder: () => 'host::-repo',
+    isRemoteFolder: f => typeof f === 'string' && f.startsWith('host::'),
+  }) };
+}
+
+for (const count of [1, 500]) {
+  test('remote Touched uses exactly one bounded disk batch for ' + count + ' paths', async t => {
+    const paths = Array.from({ length: count }, (_, i) => '/repo/f' + i);
+    const { deps: remoteDeps } = remoteListWorld454(t, paths);
+    let attempts = 0;
+    remoteDeps.runRemoteCommand = async () => { attempts++; return { code: 0, stdout: paths.map(() => 'present\t1700000000').join('\n') + '\n' }; };
+    const result = await listSessionTouchedFiles('S1', remoteDeps);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.files.length, count);
+    assert.ok(result.files.every(f => f.state === 'present'));
+    assert.equal(attempts, 1);
+  });
+}
+
+test('remote Touched makes no transport call for empty, invalid or protected-only lists', async t => {
+  for (const paths of [[], ['relative', '/repo/../escape', '/new\nline'], ['/home/user/.ssh/id_rsa', '/repo/.git/config']]) {
+    const { deps: remoteDeps } = remoteListWorld454(t, paths);
+    remoteDeps.runRemoteCommand = async () => { assert.fail('no accepted path may reach the transport'); };
+    const result = await listSessionTouchedFiles('S1', remoteDeps);
+    assert.equal(result.ok, true, result.error);
+    assert.ok(result.files.every(f => f.state === 'refused'));
+  }
+});
+
+test('remote Touched mirror equals the local parser and batches disk info once on every refresh', async t => {
+  const paths = ['/repo/a', '/repo/b', '/repo/c'];
+  const { w, content, deps: remoteDeps } = remoteListWorld454(t, paths);
+  w.write('projects/-repo/S1.jsonl', content);
+  let attempts = 0;
+  remoteDeps.runRemoteCommand = async (alias, command, options) => {
+    attempts++;
+    assert.equal(alias, 'host');
+    assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 20000);
+    assert.ok(options.maxStdoutBytes > 0 && options.maxStdoutBytes <= 65536);
+    assert.deepEqual(options.input.trimEnd().split('\n'), paths);
+    for (const p of paths) assert.ok(!command.includes(p));
+    return { code: 0, stdout: paths.map(() => 'present\t1700000000').join('\n') + '\n' };
+  };
+  const local = await collectSessionTouchedFiles({ folderPath: path.join(w.root, 'projects/-repo'), sessionId: 'S1',
+    pathOps: path.posix, isSensitive: async () => false, statPath: async () => ({ isFile: () => true, mtimeMs: 1700000000000 }) });
+  const remote = await listSessionTouchedFiles('S1', remoteDeps);
+  assert.equal(remote.ok, true, remote.error);
+  assert.deepEqual(remote.files, local.files);
+  assert.equal(remote.kind, 'remote');
+  assert.equal(attempts, 1);
+  const again = await listSessionTouchedFiles('S1', remoteDeps);
+  assert.deepEqual(again.files, remote.files);
+  assert.equal(attempts, 2);
+});
+
+test('remote Touched refuses relative, newline and traversal paths before one literal stdin batch', async t => {
+  const safe = ['/repo/back`tick', '/repo/$(touch owned)', "/repo/one'quote", '/repo/two"quotes'];
+  const bad = ['/repo/../escape', 'relative', '/repo/new\nline'];
+  const { deps: remoteDeps } = remoteListWorld454(t, [...safe, ...bad]);
+  let attempts = 0;
+  remoteDeps.runRemoteCommand = async (_alias, command, options) => {
+    attempts++;
+    assert.deepEqual(options.input.trimEnd().split('\n').sort(), [...safe].sort());
+    for (const p of safe) assert.ok(!command.includes(p), p + ' must only travel as stdin data');
+    for (const p of bad) assert.ok(!options.input.includes(p), p + ' must never reach the batch');
+    return { code: 0, stdout: safe.map(() => 'present\t1700000000').join('\n') + '\n' };
+  };
+  const result = await listSessionTouchedFiles('S1', remoteDeps);
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.files.length, safe.length);
+  assert.ok(result.files.every(f => f.state === 'present'));
+  assert.equal(result.unresolved.length, bad.length);
+  assert.equal(attempts, 1);
+});
+
+test('remote Touched preserves mirrored rows as unknown with one unreachable attempt per refresh', async t => {
+  const { deps: remoteDeps } = remoteListWorld454(t, ['/repo/a', '/repo/b']);
+  let attempts = 0;
+  remoteDeps.runRemoteCommand = async () => { attempts++; return { code: 255, stdout: '', stderr: 'offline' }; };
+  const result = await listSessionTouchedFiles('S1', remoteDeps);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(result.files.map(f => f.state), ['unknown', 'unknown']);
+  assert.ok(result.files.every(f => f.diskMtime === null && !f.openable));
+  assert.equal(attempts, 1);
+  await listSessionTouchedFiles('S1', remoteDeps);
+  assert.equal(attempts, 2);
+});
+
+test('remote Touched keeps gone and unreadable distinct and rejects malformed or oversized batch answers', async t => {
+  const { deps: remoteDeps } = remoteListWorld454(t, ['/repo/a', '/repo/b']);
+  remoteDeps.runRemoteCommand = async () => ({ code: 0, stdout: 'gone\t-\nunreadable\t-\n' });
+  const inspected = await listSessionTouchedFiles('S1', remoteDeps);
+  assert.equal(inspected.ok, true, inspected.error);
+  assert.deepEqual(inspected.files.map(f => f.state), ['gone', 'unreadable']);
+  for (const response of [{ code: 0, stdout: 'present\tbogus\n' }, { code: 0, stdout: 'x'.repeat(65537) }, new Error('timeout')]) {
+    remoteDeps.runRemoteCommand = async () => { if (response instanceof Error) throw response; return response; };
+    const result = await listSessionTouchedFiles('S1', remoteDeps);
+    assert.ok(result.files.every(f => f.state === 'unknown'));
+  }
+});
 
 function listDeps(world, over = {}) {
   return {
@@ -460,7 +650,7 @@ function cwdLine(cwd) {
   return JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'hi' } });
 }
 
-test('listSessionTouchedFiles refuses a subagent id, a bad id and a remote session before reading anything', async () => {
+test('listSessionTouchedFiles refuses a subagent id, a bad id and a malformed remote folder before reading anything', async () => {
   const w = makeWorld();
   try {
     w.write('projects/-proj/S1.jsonl', lines());
@@ -471,7 +661,7 @@ test('listSessionTouchedFiles refuses a subagent id, a bad id and a remote sessi
     }
     const remote = await listSessionTouchedFiles('S1', listDeps(w, { isRemoteFolder: () => true }));
     assert.equal(remote.ok, false);
-    assert.equal(remote.reason, 'remote');
+    assert.equal(remote.reason, 'no-transcript');
   } finally { w.cleanup(); }
 });
 

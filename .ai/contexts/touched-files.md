@@ -1,7 +1,7 @@
 # Context: touched-files
 
 **Purpose**: a per-session list of the files the session's *file tools* touched,
-in the right-hand file panel, for a local session. It answers "who touched what"
+in the right-hand file panel, for local and remote sessions. It answers "who touched what"
 where Changes cannot: outside any repository, in a directory with no git, when
 sessions share a tree, and after a change was committed or reverted. Issue #309.
 User-facing behavior: `docs/touched-files.md`. IPC and its guard row:
@@ -76,7 +76,8 @@ listing *does* with it.
   click calls the same function, through the same guards.
 - **The folder** comes from `getCachedFolder` and must be a plain name (no
   separator, not `.` or `..`) before it is joined to the projects directory; a
-  `sub:` session id and a remote folder are refused.
+  `sub:` session id is refused. A remote folder key is split into its validated
+  host alias and plain folder name before joining the mirror directory.
 - **Rendering** is `textContent` throughout, an unresolved path shows its unsafe code points as visible escapes (`\u202E`, `\u{E0041}`), `.touched-file-path` is `unicode-bidi: isolate`; sources (subagent type from the
   `.meta.json` sidecar) are stripped of control characters and cut to 80.
 
@@ -107,7 +108,7 @@ and session ID. Each has at most 1024 transcript records, 1000 path/tool
 summaries per transcript and 4000 summaries in total. Cached raw paths are
 bounded to 4097 characters, preserving the invalid-path guard. Requests are
 serialized so an append or extension cannot be counted twice by concurrent
-opens. The disk guard and stat still run on every request; cached transcript
+opens. Local disk guards and stats still run on every request; cached transcript
 content never caches permission to open a file.
 
 A transcript record is keyed by path, size and mtime. It holds its verified
@@ -187,11 +188,10 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 - **Placement**: its own tab and tool-bar toggle (`Touched`, after the conditional `Diff`),
   not a section of the Changes list; the issue puts changing the Changes panel
   out of scope.
-- **Remote sessions**: the issue is silent; local only. The IPC answers
-  `reason: 'remote'` and the tab shows the message. Remote transcripts are
-  mirrored copies, but their paths name the host's disk, which cannot be stat-ed
-  from here. A clicked file in a remote session opens nothing (see "One route
-  into Touched").
+- **Remote sessions**: the list reads the local mirror with the same parser,
+  cache, window and ordering. Disk inspection and opening use the remote
+  transport, described below. Terminal links remain unavailable remotely
+  (see "One route into Touched").
 - **Ordering**: latest file-tool timestamp first, with a path tie-breaker;
   the toolbar can sort by path instead. Unknown timestamps are displayed
   explicitly and sort after dated entries.
@@ -203,6 +203,89 @@ is recorded in the test diagnostic and `.work-files/pr-body.md`.
 - Files touched through `Bash`, MCP tools or any tool other than the four.
 - Attribution between sessions sharing a directory, beyond the `sources` labels.
 - A tool result that says the call failed (`is_error`) is not read.
+
+## Remote sessions (#454)
+
+`listSessionTouchedFiles` reads `<dataDir>/remote/<alias>/projects/<folder>`.
+It uses the same incremental cache and transcript enumeration as local lists,
+including subagents, and POSIX path rules even on a Windows client. Remote
+paths must already be absolute, have no control characters and contain no
+`..` segment; this is checked before normalization. Relative paths stay
+unresolved even when the transcript records a cwd. Local filesystem guards
+and stats never inspect a remote path.
+
+`remote-touched-files.js` sends at most one batch per refresh for up to 500
+accepted paths, through Changes' `defaultRunRemoteCommand`. Paths travel as
+newline-delimited stdin (`input`), read with `IFS= read -r`; the quoted command
+contains only the fixed script, so a long list cannot exceed the client's
+command-line limit. Control characters, including newlines, are refused first.
+The renderer requests `diskInfo: false` to display mirror rows immediately,
+then requests their disk info. Remote inspection runs after the serialized
+transcript-cache queue is released. Concurrent requests for the same session
+and path set share one in-flight batch; completed batches are not cached.
+Refresh and older-history requests made while either phase is pending queue
+one follow-up refresh, using the latest requested window. Each mirror/disk pair
+uses one window snapshot;
+an older answer cannot reset a window expanded during inspection. The queued
+refresh runs only if its list is still the session's current tab or return list.
+Remote rows with unknown state show `checking` while `diskInfoPending` is set,
+then their final state, including `unknown` after an unreachable host.
+The batch uses a POSIX shell and GNU coreutils (`realpath`, `stat`, `tr`);
+mtime is returned as epoch seconds and converted to milliseconds. Its stdout
+is capped at 64 KiB and its timeout is 20 seconds. Results are positional,
+so filenames cannot inject output records. Literal credential and .git paths
+are refused before transport; canonical paths are checked on the host before
+stat or read, and both operations use that resolved path. The remote denylist
+also refuses `/etc/shadow`, `/etc/gshadow`, `/etc/ssh/ssh_host_*`, `*.pem`,
+`*.key` and SSH key basenames `id_(rsa|dsa|ecdsa|ed25519)([._-].*)?`,
+both literally and after host resolution. JS and shell derive those basenames
+from the same list. Ordinary source names such as `id_generator.py` and files
+inside an `id_utils` directory are allowed.
+There is an accepted residual check-then-read race: a process with write access
+as the same remote user can replace a directory with a symlink between
+`realpath -e`, the canonical-path guard and `head`. Reading the resolved path
+prevents changes to the original spelling from redirecting the read, but does
+not bind the checked directory components to the later file open. This route
+does not provide an atomic open of the checked inode; its protection assumes
+those components are not being concurrently replaced by that user.
+Missing and unreadable rows stay distinct. Unsupported GNU stat/realpath flags
+leave every row unknown rather than claiming a file is unreadable. Transport failures,
+timeouts and malformed or oversized answers leave the mirrored rows `unknown`,
+with no mtime and no click handler. No batch retries or background polling run;
+empty or entirely refused lists make no remote call.
+
+Opening a remote row carries its session ID on `readFileForPanel`. Main
+resolves it through `resolveGitChangesTarget`; an unknown target fails without
+falling back to local IO. The read checks the canonical credential/metadata
+guard, regular-file-ness and readability on the host, then reads at most
+`REMOTE_TOUCHED_READ_MAX_BYTES + 1`. The named cap is 2 MiB: oversize files are
+refused, rather than presenting an incomplete file as complete. The transport's
+`rawStdout` option preserves bytes across UTF-8 chunk boundaries; working text
+and HEAD both use the existing strict UTF-8 decoder and binary refusal.
+The transport exposes stdout overflow explicitly; an oversized HEAD blob is
+reported as too large, preserving the byte cap without blaming the connection.
+
+The session's repository root comes from a quoted, literal-pathspec Git probe.
+A file under that root gets its HEAD pair in the shared Changes editor;
+an untracked file has an empty original side. A file outside that root, or
+with a Git probe or HEAD read that fails outside the transport, opens as plain content.
+All remote files are read-only, as in remote Changes; files outside a
+repository have no remote edit route. A removed session cwd, absent Git or
+dubious ownership does not discard a successful read. Probe code -1, SSH code
+255 and timeouts still report the connection failure. The inline and side-by-side CodeMirror factories
+accept `readOnly` so the HEAD diff remains visible without enabling edits.
+Reload retains the remote target; local watchers are not armed and no remote
+watcher is added. Missing or unreadable opens keep their refusal message.
+Main rejects saves addressed to remote sessions regardless of renderer edit
+flags. The guard is based on the resolved session target and keeps no set of
+remote path strings. Saves without a remote session ID use the existing local
+guards, so opening a remote file does not disable a local save with the same
+path spelling.
+
+Tests use disposable mirrors, injected transports, shipped IPC handlers and
+the real CodeMirror factories. A local fake host executes the exact shell
+scripts against disposable files, including hostile filenames and a credential
+symlink. No real host, SSH client or Electron process is launched.
 
 ## If you change this, also check
 
@@ -388,7 +471,9 @@ per path, labelled `opened`, no time, no tools, its path by `textContent` in a
 ## Stashed edits (#472)
 
 `state.touchedStashes` is a `Map` keyed by `filePathKey(absolutePath)`, oldest
-first. `stashChangesEdits` on a dirty Touched editor (a tab with a
+first. Remote and read-only tabs are never stashed, even if their buffer becomes
+dirty, so restoring or saving a stash cannot turn them into editable local files.
+`stashChangesEdits` on a dirty Touched editor (a tab with a
 `returnList`) adds the entry for its path, newest last: a stashed file is never
 also in an editor, since opening it restores the entry and removes it. Each entry
 is the stash object plus `type: 'touched-stash'` and `filePath`. An entry exists

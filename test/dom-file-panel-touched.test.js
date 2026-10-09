@@ -49,6 +49,211 @@ function result(over = {}) {
   };
 }
 
+test('round 2 M2: the mirror renders before delayed disk info and Refresh does not overlap it', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: (_id, options) => options?.diskInfo === false
+    ? result({ kind: 'remote', diskInfoPending: true, files: [row({ state: 'unknown', openable: false })] }) : pending });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    assert.equal(rows(ctx).length, 1, 'mirror rows must be visible before disk info');
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'checking');
+    ctx.document.getElementById('touched-refresh-btn').click();
+    await flush();
+    assert.equal(ctx.calls.touched.length, 2, 'one mirror request and one disk request');
+    release(result({ kind: 'remote', files: [row({ diskMtime: 123000 })] }));
+    await opening;
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'present');
+  } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
+});
+
+test('round 3 s2: a pending disk check becomes unknown after an unreachable host without a retry', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const unknown = result({ kind: 'remote', files: [row({ state: 'unknown', openable: false })] });
+  const ctx = setupDom({ touchedImpl: (_id, options) => options.diskInfo === false
+    ? { ...unknown, diskInfoPending: true } : pending });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'checking');
+    release(unknown);
+    await opening;
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'unknown');
+    rows(ctx)[0].click();
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 0);
+    assert.equal(ctx.calls.touched.length, 2);
+  } finally { release(unknown); await opening; ctx.destroy(); }
+});
+
+test('round 3 m1: Refresh and Load older during disk info queue one refresh of the expanded window', async () => {
+  const requests = [];
+  const day = 24 * 60 * 60 * 1000;
+  const anchor = Date.now();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: (_id, options) => {
+    requests.push({ ...options });
+    if (requests.length === 2) return pending;
+    return result({ kind: 'remote', diskInfoPending: options.diskInfo === false,
+      windowStart: anchor - options.windowDays * day, loadedWindowStart: anchor - options.windowDays * day,
+      hasOlder: options.windowDays === 1,
+      files: [row({ state: options.diskInfo === false ? 'unknown' : 'present', lastTouched: anchor })] });
+  } });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    ctx.document.getElementById('touched-refresh-btn').click();
+    ctx.document.getElementById('touched-refresh-btn').click();
+    ctx.document.getElementById('touched-more-btn').click();
+    await flush();
+    assert.equal(requests.length, 2, 'no overlapping disk request');
+    assert.equal(ctx.stateOf('s1').currentTab.windowDays, 11);
+    release(result({ kind: 'remote', windowStart: anchor - day, loadedWindowStart: anchor - day, hasOlder: true }));
+    await opening;
+    await flush();
+    assert.equal(requests.length, 4, 'one queued mirror/disk pair must run after disk info');
+    assert.deepEqual(requests.slice(2), [{ windowDays: 11, diskInfo: false }, { windowDays: 11 }]);
+    assert.equal(ctx.stateOf('s1').currentTab.windowStart, anchor - 11 * day);
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'present');
+  } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
+});
+
+test('round 4 m1: Show more during the mirror phase applies the window and queues one refresh', async () => {
+  const requests = [];
+  const day = 24 * 60 * 60 * 1000;
+  const anchor = Date.now();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const answer = options => result({ kind: 'remote', diskInfoPending: options.diskInfo === false,
+    windowStart: anchor - options.windowDays * day, loadedWindowStart: anchor - options.windowDays * day,
+    hasOlder: options.windowDays === 1, files: [row({ lastTouched: anchor })] });
+  const ctx = setupDom({ touchedImpl: (_id, options) => {
+    requests.push({ ...options });
+    return requests.length === 3 ? pending : answer(options);
+  } });
+  let refreshing;
+  try {
+    await openTab(ctx);
+    refreshing = ctx.window.refreshTouched('s1');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab.loading, true, 'the mirror request is pending');
+    ctx.document.getElementById('touched-more-btn').click();
+    ctx.document.getElementById('touched-more-btn').click();
+    assert.equal(tab.windowDays, 21, 'both clicks apply while the mirror is loading');
+    assert.equal(tab.windowStart, anchor - 21 * day);
+    assert.equal(tab.refreshPending, true);
+    assert.equal(requests.length, 3, 'no overlapping request');
+    release(answer({ windowDays: 1, diskInfo: false }));
+    await refreshing;
+    assert.deepEqual(requests.slice(2), [
+      { windowDays: 1, diskInfo: false }, { windowDays: 1 },
+      { windowDays: 21, diskInfo: false }, { windowDays: 21 },
+    ], 'one follow-up pair uses the latest window; the pending pair keeps its snapshot');
+    assert.equal(tab.windowDays, 21);
+    assert.equal(tab.windowStart, anchor - 21 * day);
+  } finally { release(answer({ windowDays: 1 })); await refreshing; ctx.destroy(); }
+});
+
+for (const [label, pair] of [
+  ['remote read-only', { kind: 'remote', readOnly: true }],
+  ['remote', { kind: 'remote', readOnly: false }],
+  ['local read-only', { readOnly: true }],
+]) {
+  for (const listType of ['touched', 'changes']) {
+    test(`round 4 s1: a dirty ${label} ${listType} tab is never stashed`, async () => {
+      const ctx = setupDom({ touchedImpl: () => result({ kind: pair.kind }),
+        readImpl: () => ({ ok: true, git: true, original: 'base', current: 'text', ...pair }) });
+      try {
+        await openTab(ctx);
+        clickRow(ctx, '/work/a.txt');
+        await flush();
+        if (listType === 'changes') ctx.stateOf('s1').currentTab.returnList = null;
+        ctx.editors.at(-1).setText('unexpected dirty text');
+        ctx.window.openDiffTab('s1', 'd1', DIFF);
+        assert.equal(stashes(ctx).size, 0, 'a protected buffer cannot become an editable local stash');
+        assert.equal(ctx.stateOf('s1').changesStash ?? null, null);
+        ctx.window.closeDiffByDiffId('s1', 'd1');
+        await flush();
+        assert.notEqual(ctx.stateOf('s1').currentTab?.absolutePath, '/work/a.txt');
+        assert.equal(ctx.calls.save.length, 0);
+      } finally { ctx.destroy(); }
+    });
+  }
+}
+
+test('round 4 s1: quit Save after replacing a dirty remote tab never sends a local panel save', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
+    readImpl: () => ({ ok: true, kind: 'remote', readOnly: true, git: true, original: 'base', current: 'text' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.editors.at(-1).setText('unexpected dirty text');
+    await ctx.window.handleChangesSave('s1');
+    assert.equal(ctx.calls.save.length, 0, 'the active read-only editor refuses Save');
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    const quitting = ctx.window.askAboutUnsavedEdits();
+    const save = ctx.document.getElementById('unsaved-save');
+    if (save) save.click();
+    assert.equal(await quitting, true);
+    assert.equal(ctx.calls.save.some(call => !call.options?.sessionId), false,
+      'a remote buffer must never reach saveFileForPanel without its sessionId');
+    assert.equal(ctx.calls.save.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('remote Touched row and Reload retain the remote session in the shared read-only editor', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
+    readImpl: () => ({ ok: true, kind: 'remote', git: true, readOnly: true, original: 'base', current: 'remote text' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(ctx.calls.readOptions[0].sessionId, 's1');
+    assert.equal(tab.type, 'changes');
+    assert.equal(tab.remote, true);
+    assert.equal(tab.returnList.type, 'touched');
+    assert.equal(tab.readOnly, true);
+    assert.equal(ctx.editors.at(-1).current, 'remote text');
+    assert.equal(ctx.editors.at(-1).mode, 'inline');
+    assert.equal(ctx.editors.at(-1).options.readOnly, true);
+    assert.deepEqual(ctx.watchCalls, []);
+    assert.match(ctx.document.getElementById('changes-diff-notice').textContent, /Remote session/);
+    assert.doesNotMatch(ctx.document.getElementById('changes-diff-notice').textContent, /Symbolic link/);
+    await ctx.window.reloadChangesFile('s1');
+    assert.equal(ctx.calls.readOptions.at(-1).sessionId, 's1');
+    assert.equal(ctx.calls.status.length, 0);
+    assert.equal(ctx.calls.save.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('an unreachable remote Touched list shows unknown rows without reads or automatic retries', async () => {
+  const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote', files: [row({ state: 'unknown', openable: false, diskMtime: null })] }) });
+  try {
+    await openTab(ctx);
+    const el = rows(ctx)[0];
+    assert.equal(el.querySelector('.touched-file-state').textContent, 'unknown');
+    el.click();
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 0);
+    assert.equal(ctx.calls.touched.length, 1);
+    ctx.document.getElementById('touched-refresh-btn').click();
+    await flush();
+    assert.equal(ctx.calls.touched.length, 2);
+  } finally { ctx.destroy(); }
+});
+
 function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThrows = false, resolveImpl, ownerOf, saveImpl } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
@@ -109,7 +314,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     const dom = window.document.createElement('div');
     dom.className = 'cm-editor test-' + mode;
     parent.appendChild(dom);
-    const view = { dom, original, current, mode, setText(value) { view.current = value; options.onChange(); }, destroy() { dom.remove(); } };
+    const view = { dom, original, current, mode, options, setText(value) { view.current = value; options.onChange(); }, destroy() { dom.remove(); } };
     const state = { doc: { toString: () => view.current } };
     if (mode === 'side-by-side') view.b = { state }; else view.state = state;
     editors.push(view);

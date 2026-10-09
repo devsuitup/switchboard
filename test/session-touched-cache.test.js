@@ -9,6 +9,35 @@ const touched = require('../session-touched-files');
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const DAY = 86400000;
+
+test('remote Touched refresh reuses the transcript cache while repeating one disk batch', async t => {
+  const w = world(t);
+  const mirror = path.join(w.root, 'remote', 'host', 'projects', '-repo');
+  fs.mkdirSync(mirror, { recursive: true });
+  const transcript = path.join(mirror, 'S1.jsonl');
+  fs.writeFileSync(transcript, line('/repo/old', 2) + line('/repo/a', 0));
+  let calls = 0;
+  const deps = { dataDir: w.root, getCachedFolder: () => 'host::-repo', isRemoteFolder: () => true,
+    isSensitive: async () => { throw new Error('remote paths must not reach local sensitivity checks'); },
+    cache: w.cache, now: () => NOW, windowDays: 1,
+    runRemoteCommand: async () => { calls++; return { code: 0, stdout: 'present\t1700000000\n' }; } };
+  const initial = await touched.listSessionTouchedFiles('S1', deps);
+  assert.equal(initial.ok, true, initial.error);
+  assert.deepEqual(initial.files.map(f => f.path), ['/repo/a']);
+  assert.equal(initial.hasOlder, true);
+  w.reads.length = 0;
+  w.parses.length = 0;
+  const refreshed = await touched.listSessionTouchedFiles('S1', deps);
+  assert.deepEqual(refreshed.files, initial.files);
+  assert.equal(w.reads.length, 0);
+  assert.equal(w.parses.length, 0);
+  assert.equal(calls, 2);
+  deps.windowDays = 11;
+  deps.runRemoteCommand = async () => { calls++; return { code: 0, stdout: 'present\t1700000000\npresent\t1700000000\n' }; };
+  const extended = await touched.listSessionTouchedFiles('S1', deps);
+  assert.deepEqual(extended.files.map(f => f.path), ['/repo/a', '/repo/old']);
+  assert.equal(calls, 3);
+});
 function line(name, days = 0, extra = '') {
   return JSON.stringify({ type: 'assistant', timestamp: new Date(NOW - days * DAY).toISOString(), message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: name, content: extra } }] } }) + '\n';
 }

@@ -19,6 +19,29 @@ function fakeChild() {
   return child;
 }
 
+test('a raw remote read preserves UTF-8 bytes across transport chunks', async () => {
+  const child = fakeChild();
+  const pending = defaultRunRemoteCommand('fake-host', 'read fixture', { rawStdout: true, maxStdoutBytes: 2, spawnFn: () => child });
+  child.stdout.emit('data', Buffer.from([0xc3]));
+  child.stdout.emit('data', Buffer.from([0xa9]));
+  child.emit('close', 0);
+  const result = await pending;
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.stdout, Buffer.from('é'));
+});
+
+test('a raw remote read retains the cumulative stdout cap', async () => {
+  const child = fakeChild();
+  const pending = defaultRunRemoteCommand('fake-host', 'read fixture', { rawStdout: true, maxStdoutBytes: 2, spawnFn: () => child });
+  child.stdout.emit('data', Buffer.from([0xc3]));
+  child.stdout.emit('data', Buffer.from([0xa9, 0x61]));
+  child.emit('close', null);
+  const result = await pending;
+  assert.equal(result.code, -1);
+  assert.match(result.stderr, /stdout exceeded 2 bytes/);
+  assert.deepEqual(child.killed, ['SIGKILL']);
+});
+
 test('DEFAULT_MAX_STDOUT_BYTES is 8 MB', () => {
   assert.equal(DEFAULT_MAX_STDOUT_BYTES, 8 * 1024 * 1024);
 });

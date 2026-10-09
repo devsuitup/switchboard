@@ -3,8 +3,8 @@
 **Touched** lists the files a session's file tools touched: what it created or
 edited with Edit, Write, MultiEdit or NotebookEdit, including what its subagents
 did. Unlike [Changes](changes-view.md), it does not need a git repository, so it
-shows files outside any repository too. It is for a local session; a remote
-session has no Touched list.
+shows files outside any repository too. Remote sessions use their mirrored
+transcripts and check files on the host; their editor is read-only.
 
 ## What the list is, and is not
 
@@ -23,6 +23,10 @@ tools used, how many times, and who made the calls: the session or a subagent.
 The list is read when the panel opens and on **Refresh**; it does not update by
 itself.
 
+For a remote session, the mirrored list appears before its disk check finishes.
+Until then, rows say **unknown**. A slow host does not delay a local list;
+refreshes made during the same check share that attempt.
+
 ## What each row says about the disk
 
 The transcript records what the session tried, not what happened, so every row is
@@ -32,6 +36,8 @@ checked against the disk when the list is built:
   list, with its diff against HEAD when it has changed.
 - **gone**: the file no longer exists, or never did (a refused write).
 - **not a file**, **unreadable**: it is a directory, or it could not be read.
+- **unknown**: the remote host could not be reached or its disk check did not
+  return a usable answer. Refresh makes one new attempt.
 - **refused**: the path is in a protected location, such as a credential
   directory. It is listed but never opened.
 
@@ -61,8 +67,11 @@ Refresh and closing Touched, up to the 50 most recent.
 - The panel's checks apply to every file: credential paths, binary files, files
   that are not UTF-8 and files over 2 MB are refused, with the reason above the
   list.
-- In a remote session a clicked file opens nothing: the file is on another
-  machine.
+- In a remote session, a present Touched row opens read-only. Terminal links
+  remain unavailable; files outside the session's repository open as plain text.
+  A successful read also opens as plain text if Git is absent or refuses the
+  session directory. Oversized HEAD versions are refused as too large.
+  Remote password databases and private key filenames are protected.
 
 ## Markdown files
 
