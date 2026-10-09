@@ -4201,6 +4201,42 @@ body { display: flex; flex-direction: column; }
   overflow-y: auto;
 }
 
+.dispatch-agent-dialog > * {
+  flex-shrink: 0;
+}
+
+.dispatch-agent-dialog .settings-field {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.dispatch-agent-dialog .settings-field-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dispatch-agent-dialog .settings-field-control {
+  min-width: 0;
+  width: 100%;
+  margin-top: 0;
+}
+
+.dispatch-agent-dialog .settings-label {
+  display: block;
+}
+
+.dispatch-agent-dialog .settings-input,
+.dispatch-agent-dialog .settings-select,
+.dispatch-agent-dialog .permission-grid {
+  min-width: 0;
+  width: 100%;
+}
+
+.dispatch-agent-dialog textarea {
+  resize: vertical;
+}
+
 .new-session-dialog .new-session-body {
   flex: 1 1 auto;
   min-height: 0;
