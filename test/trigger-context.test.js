@@ -172,3 +172,18 @@ test('getCliStatus is only present when supplied, and answers for local live ses
   assert.equal(ctx.getCliStatus('unknown'), undefined);
   assert.deepEqual(seen, ['local']);
 });
+
+test('a re-keyed id is resolved before every lookup, the live descriptor included', () => {
+  const pty = { pid: 1, write() {} };
+  const asked = [];
+  const ctx = createTriggerContext({
+    activeSessions: new Map([['new-id', { pty, host: null, _cliBusy: true }]]),
+    log: silentLog,
+    getLiveDescriptor: (id) => { asked.push(id); return { id }; },
+    resolveSessionId: (id) => (id === 'old-id' ? 'new-id' : id),
+  });
+  assert.equal(ctx.getPtyForSession('old-id').ptyProcess, pty);
+  assert.equal(ctx.isSessionBusy('old-id'), true);
+  assert.deepEqual(ctx.getLiveDescriptor('old-id'), { id: 'new-id' });
+  assert.deepEqual(asked, ['new-id']);
+});

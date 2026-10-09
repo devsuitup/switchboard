@@ -374,10 +374,27 @@ finds the live pid whose state file names `newId` and walks its parent chain
 
 Re-keying keeps `oldId → newId` (`currentSessionId`), so a trigger chain that
 sent `/clear` reaches the same terminal on its next step (see
-trigger-watcher.md, "Re-keyed sessions"). A `/clear` transcript starts with a
-`file-history-snapshot` record, so the "snapshot-only fork file" matcher
-skips files whose first real turn is `/clear`; otherwise a session waiting for
-its fork would take another session's `/clear` as its fork.
+trigger-watcher.md, "Re-keyed sessions"). On each re-key every older id that
+pointed at `oldId` is moved to `newId`, so any id the session ever had resolves
+in one lookup, however many times it was cleared.
+
+**A file with no turn yet.** The CLI writes a `/clear` transcript in several
+appends: a mode record and a `file-history-snapshot` can land, and be read,
+before the `/clear` record. A new file whose first real turn
+(`readNewSessionSignals().hasTurn`) is not written yet stays out of
+`knownJsonlFiles`, whatever its other signals, until it shows one or is an
+hour old (the same limit as a file with no parseable record). While it is
+under 60 s old, `scheduleRecheck` runs the folder again a second later. The
+session's own transcript is never held this way.
+
+**Snapshot-only fork file.** A session started with `--fork-session` waits
+for its fork's transcript, which holds only snapshots until the first prompt.
+Such a file is taken as the fork only when `clearOwner` (it answers for any
+session id, not only a `/clear`) says the CLI under this PTY writes it. A
+`pending` owner is rechecked like a `/clear`; `other` or `unknown` leave the
+file eligible, and its first turn decides through `forkedFrom` or
+`parentSessionId`, as for any fork. Before, any snapshot-only file in the
+folder was taken, including another session's `/clear` or new session.
 
 `readNewSessionSignals()` recognises the file by its first user record that is
 not local-command bookkeeping, through `classifyUserText()` — the caveat record
@@ -387,10 +404,12 @@ The renderer re-keys as for a fork, and when the old id was not a pending
 (transcript-less) row it adds one for the new id titled "New session": the
 `/clear` transcript is not indexed until its first prompt (see
 session-cache.md), so without it the open terminal would have no row at all
-until then. Like any pending row, it is left out of the saved working set
-until that prompt (docs/session-restore.md, "A session with no transcript
-yet"). The old conversation stays in the list as an ordinary,
-resumable session — it is a real transcript on disk.
+until then. That row is marked `cleared`, and is not re-added to the default
+list when the backend filtered its folder out as archived. Like any local
+pending row, it is saved in the working set as a fresh entry
+(docs/session-restore.md, "A session with no transcript yet"). The old
+conversation stays in the list as an ordinary, resumable session — it is a
+real transcript on disk.
 
 ## Canary tests
 

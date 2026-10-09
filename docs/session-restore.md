@@ -25,9 +25,13 @@ session's id and project, and which one was active — in its global settings
 
 A session started with **+**, or one just cleared with `/clear`, has no
 conversation until its first prompt: the CLI has nothing to resume, and the
-index does not list it. It is left out of the saved set, so the next start
-does not report it as "not in the index". Once its first prompt makes it a
-real session, the set is saved again with it.
+index does not list it. It is saved as a *fresh* entry (`fresh: true`, with
+its project). On the next start a fresh entry needs no index: restore starts
+a new session in that project, with the project's current defaults for a new
+session, except that it never creates a worktree, since the saved project
+path already is the folder to start in. Once its first prompt makes it a real
+session, the set is saved again with it as an ordinary entry. A session
+without a transcript on a remote host is still left out.
 
 ## What restore does
 

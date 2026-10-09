@@ -182,18 +182,20 @@ function persistWorkingSet() {
       if (entry.attach) continue; // attach tabs are not restored
       if (entry.closed) continue;
       // see docs/session-restore.md ("A session with no transcript yet")
-      if (pendingSessions.has(sessionId)) continue;
+      const fresh = pendingSessions.has(sessionId);
+      if (fresh && entry.session.remoteAlias) continue;
       set.push({
         sessionId,
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
+        ...(fresh ? { fresh: true } : {}),
       });
     }
     const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
       .filter(({ item }) => !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index } of held) {
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false, ...(item.fresh ? { fresh: true } : {}) });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -221,12 +223,28 @@ function schedulePersistWorkingSet() {
 }
 
 async function runRestore(list) {
-  const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
+  const pending = list.filter(item => (item.fresh || sessionMap.has(item.sessionId)) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
+  const startedAs = new Map();
   try {
-    const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
+    const liveById = await liveElsewhereMany(pending.filter(item => !item.fresh).map(item => item.sessionId), { api: window.api });
     for (const [position, item] of list.entries()) {
+      if (item.fresh) {
+        if (!restoreInFlight.has(item.sessionId)) continue;
+        try {
+          const project = { projectPath: item.projectPath };
+          const options = await resolveDefaultSessionOptions(project);
+          delete options.worktree;
+          delete options.worktreeName;
+          const newId = await launchNewSession(project, options);
+          if (newId) startedAs.set(item.sessionId, newId);
+        } finally {
+          restoreInFlight.delete(item.sessionId);
+        }
+        await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
+        continue;
+      }
       const s = sessionMap.get(item.sessionId);
       if (!s || openSessions.has(item.sessionId)) {
         restoreInFlight.delete(item.sessionId);
@@ -255,8 +273,9 @@ async function runRestore(list) {
   if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
   const activeItem = list.find(i => i.active) || list[list.length - 1];
-  if (activeItem && openSessions.has(activeItem.sessionId)) {
-    showSession(activeItem.sessionId);
+  const activeId = activeItem && (startedAs.get(activeItem.sessionId) || activeItem.sessionId);
+  if (activeId && openSessions.has(activeId)) {
+    showSession(activeId);
   }
 }
 
@@ -490,7 +509,7 @@ window.api.onSessionDetected((tempId, realId) => {
   pollActiveSessions();
 });
 
-window.api.onSessionForked((oldId, newId) => {
+function applySessionForked(oldId, newId) {
   if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
   const entry = openSessions.get(oldId);
   if (!entry) return;
@@ -516,7 +535,7 @@ window.api.onSessionForked((oldId, newId) => {
     // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
     const projectPath = entry.session.projectPath;
     const session = { ...entry.session, sessionId: newId, summary: 'New session', firstPrompt: '', name: null, messageCount: 0 };
-    pendingSessions.set(newId, { session, projectPath, folder: encodeProjectPath(projectPath) });
+    pendingSessions.set(newId, { session, projectPath, folder: encodeProjectPath(projectPath), cleared: true });
   }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
@@ -534,7 +553,9 @@ window.api.onSessionForked((oldId, newId) => {
   });
   schedulePersistWorkingSet();
   pollActiveSessions();
-});
+}
+
+window.api.onSessionForked(applySessionForked);
 
 function applyProcessExit(sessionId, exitCode, signal, stopped) {
   if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal, stopped });
@@ -1171,6 +1192,8 @@ async function loadProjects({ resort = false } = {}) {
       for (const projList of [cachedProjects, cachedAllProjects]) {
         const pendingAlias = pending.session.remoteAlias || null;
         let proj = projList.find(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias);
+        if (!proj && pending.cleared && projList === cachedProjects
+          && allProjects.some(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias)) continue;
         if (!proj) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
@@ -1255,7 +1278,7 @@ async function launchNewSession(project, sessionOptions) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
     showSession(sessionId);
-    return;
+    return null;
   }
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
@@ -1264,6 +1287,7 @@ async function launchNewSession(project, sessionOptions) {
   showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
+  return sessionId;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
