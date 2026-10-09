@@ -7,15 +7,16 @@ if ! draft="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=10
   exit 1
 fi
 case "$draft" in
-  "") ;;
-  true) ;;
+  "")
+    gh release create "${GITHUB_REF_NAME}" \
+      --draft \
+      --title "${GITHUB_REF_NAME#v}" \
+      --notes ""
+    ;;
+  true) echo "draft ${GITHUB_REF_NAME} already exists; proceeding to asset upload" ;;
+  *$'\n'*) echo "::error::more than one release carries ${GITHUB_REF_NAME}; refusing to pick one"; exit 1 ;;
   *) echo "::error::release ${GITHUB_REF_NAME} is already published; refusing to overwrite its assets"; exit 1 ;;
 esac
-gh release create "${GITHUB_REF_NAME}" \
-  --draft \
-  --title "${GITHUB_REF_NAME#v}" \
-  --notes "" \
-  || echo "release already exists — proceeding to asset upload"
 rc=0
 for f in "${DIST_DIR:-dist}"/*; do
   [ -f "$f" ] || continue

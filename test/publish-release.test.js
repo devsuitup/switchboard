@@ -113,22 +113,33 @@ test('given a missing release, publishing creates a draft and uploads both asset
   assertUploads(result, ['one.zip', 'two.exe']);
 });
 
-test('given a draft, publishing tolerates an existing release and uploads both assets', (t) => {
+test('given a draft, publishing uploads both assets without creating a second draft', (t) => {
   if (!requireBash(t)) return;
   const result = runRelease(t, 'draft');
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /release already exists/);
+  assert.match(result.stdout, /draft .* already exists; proceeding to asset upload/);
+  assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [
+    ['api', '--paginate'], ['release', 'upload'], ['release', 'upload'],
+  ]);
   assertUploads(result, ['one.zip', 'two.exe']);
 });
 
 test('given a published release, publishing exits 1 without creating or uploading', (t) => {
   if (!requireBash(t)) return;
-  for (const draftValue of ['false', 'unexpected', 'true\ntrue']) {
+  for (const draftValue of ['false', 'unexpected']) {
     const result = runRelease(t, 'published', false, draftValue);
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.match(result.stdout, /already published; refusing to overwrite its assets/);
     assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['api', '--paginate']]);
   }
+});
+
+test('given two releases on the tag, publishing exits 1 without creating or uploading', (t) => {
+  if (!requireBash(t)) return;
+  const result = runRelease(t, 'published', false, 'true\ntrue');
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /more than one release carries .*; refusing to pick one/);
+  assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['api', '--paginate']]);
 });
 
 test('given a transient read failure, publishing exits 1 without creating or uploading', (t) => {
