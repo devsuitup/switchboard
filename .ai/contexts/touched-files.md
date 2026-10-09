@@ -108,7 +108,7 @@ and session ID. Each has at most 1024 transcript records, 1000 path/tool
 summaries per transcript and 4000 summaries in total. Cached raw paths are
 bounded to 4097 characters, preserving the invalid-path guard. Requests are
 serialized so an append or extension cannot be counted twice by concurrent
-opens. The disk guard and stat still run on every request; cached transcript
+opens. Local disk guards and stats still run on every request; cached transcript
 content never caches permission to open a file.
 
 A transcript record is keyed by path, size and mtime. It holds its verified
@@ -215,13 +215,25 @@ unresolved even when the transcript records a cwd. Local filesystem guards
 and stats never inspect a remote path.
 
 `remote-touched-files.js` sends at most one batch per refresh for up to 500
-accepted paths, through Changes' `defaultRunRemoteCommand` and `shQuote`.
+accepted paths, through Changes' `defaultRunRemoteCommand`. Paths travel as
+newline-delimited stdin (`input`), read with `IFS= read -r`; the quoted command
+contains only the fixed script, so a long list cannot exceed the client's
+command-line limit. Control characters, including newlines, are refused first.
+The renderer requests `diskInfo: false` to display mirror rows immediately,
+then requests their disk info. Remote inspection runs after the serialized
+transcript-cache queue is released. Concurrent requests for the same session
+and path set share one in-flight batch; completed batches are not cached.
+Refresh is guarded while either phase is pending.
 The batch uses a POSIX shell and GNU coreutils (`realpath`, `stat`, `tr`);
 mtime is returned as epoch seconds and converted to milliseconds. Its stdout
 is capped at 64 KiB and its timeout is 20 seconds. Results are positional,
 so filenames cannot inject output records. Literal credential and .git paths
 are refused before transport; canonical paths are checked on the host before
-stat or read. Missing and unreadable rows stay distinct. Transport failures,
+stat or read, and both operations use that resolved path. The remote denylist
+also refuses `/etc/shadow`, `/etc/gshadow`, `/etc/ssh/ssh_host_*`, `*.pem`,
+`*.key` and `id_*` filenames, both literally and after host resolution.
+Missing and unreadable rows stay distinct. Unsupported GNU stat/realpath flags
+leave every row unknown rather than claiming a file is unreadable. Transport failures,
 timeouts and malformed or oversized answers leave the mirrored rows `unknown`,
 with no mtime and no click handler. No batch retries or background polling run;
 empty or entirely refused lists make no remote call.
@@ -234,17 +246,25 @@ guard, regular-file-ness and readability on the host, then reads at most
 refused, rather than presenting an incomplete file as complete. The transport's
 `rawStdout` option preserves bytes across UTF-8 chunk boundaries; working text
 and HEAD both use the existing strict UTF-8 decoder and binary refusal.
+The transport exposes stdout overflow explicitly; an oversized HEAD blob is
+reported as too large, preserving the byte cap without blaming the connection.
 
 The session's repository root comes from a quoted, literal-pathspec Git probe.
 A file under that root gets its HEAD pair in the shared Changes editor;
 an untracked file has an empty original side. A file outside that root, or
-with a confirmed non-repository probe diagnostic, opens as plain content.
+with a Git probe that fails outside the transport, opens as plain content.
 All remote files are read-only, as in remote Changes; files outside a
-repository have no remote edit route. Remote Git errors are not treated as
-non-repository success. The inline and side-by-side CodeMirror factories
+repository have no remote edit route. A removed session cwd, absent Git or
+dubious ownership does not discard a successful read. Probe code -1, SSH code
+255 and timeouts still report the connection failure. The inline and side-by-side CodeMirror factories
 accept `readOnly` so the HEAD diff remains visible without enabling edits.
 Reload retains the remote target; local watchers are not armed and no remote
 watcher is added. Missing or unreadable opens keep their refusal message.
+Main rejects saves addressed to remote sessions regardless of renderer edit
+flags. It also remembers paths opened through the remote panel route for the
+app lifetime and refuses their saves when options are omitted or forged.
+On a POSIX client, a local file with that same spelling is also refused for
+the remainder of the app run.
 
 Tests use disposable mirrors, injected transports, shipped IPC handlers and
 the real CodeMirror factories. A local fake host executes the exact shell

@@ -56,7 +56,7 @@ test('remote Touched executes its quoted stat and bounded read scripts through a
     const env = { ...process.env, LC_ALL: 'C', HOME: root, USERPROFILE: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(root, 'empty-config'), GIT_CEILING_DIRECTORIES: fs.realpathSync(os.tmpdir()) };
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE']) delete env[key];
     const result = await runToExit(bash, ['-c', command], { cwd: root, env,
-      timeoutMs: options.timeoutMs, maxBuffer: options.maxStdoutBytes });
+      timeoutMs: options.timeoutMs, maxBuffer: options.maxStdoutBytes, input: options.input });
     return { ...result, stdout: result.stdout.toString('utf8') };
   };
   const names = ['back`tick', '$(touch owned)', "one'quote", 'two"quotes'];

@@ -20,12 +20,16 @@ function isRemoteTouchedPath(p) {
 }
 
 function isProtectedRemotePath(p) {
-  return p.split('/').includes('.git') || matchesDenylist([p]);
+  const normalized = path.posix.normalize(p).toLowerCase();
+  return p.split('/').includes('.git') || matchesDenylist([p])
+    || normalized === '/etc/shadow' || normalized === '/etc/gshadow'
+    || normalized.startsWith('/etc/ssh/ssh_host_')
+    || /\/(?:id_[^/]*|[^/]*\.(?:pem|key))$/.test(normalized);
 }
 
 const PROTECTED_CHECK = `protected() {
   case "$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
-    */.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.config/gcloud/*) return 0 ;;
+    /etc/shadow|/etc/gshadow|/etc/ssh/ssh_host_*|*.pem|*.key|*/id_*|*/.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.config/gcloud/*) return 0 ;;
     */.env.example|*/.env.sample|*/.env.template) return 1 ;;
     */.git/*|*/.git|*/.ssh/*|*/.gnupg/*|*/.aws/credentials|*/.env|*/.env.*|*/.netrc|*/.docker/config.json|*/.kube/config|*/.claude/.credentials.json|*/.git-credentials|*/.config/gh/hosts.yml|*/.config/gh/hosts.yaml|*/.config/gcloud/*|*/.npmrc|*/.pypirc|*/.pgpass|*/.my.cnf) return 0 ;;
   esac
@@ -41,14 +45,16 @@ const MISSING_CHECK = `missing_state() {
 
 const STAT_SCRIPT = `${PROTECTED_CHECK}
 ${MISSING_CHECK}
-for p do
-  resolved=$(realpath -m -- "$p" 2>/dev/null) || { printf 'unreadable\\t-\\n'; continue; }
+stat -L -c '%Y' -- / >/dev/null 2>&1 || exit 48
+realpath -m -- / >/dev/null 2>&1 || exit 48
+while IFS= read -r p; do
+  resolved=$(realpath -m -- "$p" 2>/dev/null) || { printf 'unknown\\t-\\n'; continue; }
   if protected "$resolved"; then printf 'refused\\t-\\n'
-  elif [ ! -e "$p" ]; then missing_state "$p"
-  elif [ ! -f "$p" ]; then printf 'not-file\\t-\\n'
-  elif [ ! -r "$p" ]; then printf 'unreadable\\t-\\n'
+  elif [ ! -e "$resolved" ]; then missing_state "$resolved"
+  elif [ ! -f "$resolved" ]; then printf 'not-file\\t-\\n'
+  elif [ ! -r "$resolved" ]; then printf 'unreadable\\t-\\n'
   else
-    mtime=$(stat -L -c '%Y' -- "$p" 2>/dev/null) || { printf 'unreadable\\t-\\n'; continue; }
+    mtime=$(stat -L -c '%Y' -- "$resolved" 2>/dev/null) || { printf 'unreadable\\t-\\n'; continue; }
     printf 'present\\t%s\\n' "$mtime"
   fi
 done`;
@@ -67,13 +73,14 @@ async function inspectRemoteTouchedPaths(alias, paths, deps = {}) {
   if (!isValidAlias(alias) || accepted.length === 0) return states;
   try {
     const run = deps.runRemoteCommand || defaultRunRemoteCommand;
-    const result = await run(alias, shellCommand(STAT_SCRIPT, accepted), {
+    const result = await run(alias, shellCommand(STAT_SCRIPT, []), {
       timeoutMs: REMOTE_TOUCHED_TIMEOUT_MS, maxStdoutBytes: REMOTE_TOUCHED_STAT_MAX_BYTES,
+      input: accepted.join('\n') + '\n',
     });
     if (result.code !== 0 || result.timedOut || Buffer.byteLength(result.stdout || '') > REMOTE_TOUCHED_STAT_MAX_BYTES) return states;
     const lines = String(result.stdout || '').split('\n');
     if (lines.pop() !== '' || lines.length !== accepted.length) return states;
-    const parsed = lines.map(line => /^(present|gone|unreadable|not-file|refused)\t(-|[0-9]+)$/.exec(line));
+    const parsed = lines.map(line => /^(present|gone|unreadable|not-file|refused|unknown)\t(-|[0-9]+)$/.exec(line));
     if (parsed.some(m => !m || (m[1] === 'present' && (m[2] === '-' || !Number.isSafeInteger(Number(m[2]) * 1000))))) return states;
     accepted.forEach((p, i) => states.set(p, { state: parsed[i][1], diskMtime: parsed[i][1] === 'present' ? Number(parsed[i][2]) * 1000 : null }));
   } catch {
@@ -87,9 +94,9 @@ ${MISSING_CHECK}
 p=$1
 resolved=$(realpath -e -- "$p" 2>/dev/null) || { state=$(missing_state "$p"); case "$state" in gone*) exit 44;; *) exit 45;; esac; }
 protected "$resolved" && exit 46
-[ -f "$p" ] || exit 47
-[ -r "$p" ] || exit 45
-head -c ${REMOTE_TOUCHED_READ_MAX_BYTES + 1} -- "$p"`;
+[ -f "$resolved" ] || exit 47
+[ -r "$resolved" ] || exit 45
+head -c ${REMOTE_TOUCHED_READ_MAX_BYTES + 1} -- "$resolved"`;
 
 function readFailure(result) {
   if (result.code === 44) return { ok: false, reason: 'gone', error: 'File does not exist' };
@@ -100,6 +107,7 @@ function readFailure(result) {
 }
 
 function checkedContent(result) {
+  if (result.overflow) return { ok: false, reason: 'too-large', error: 'file too large to display' };
   if (result.code !== 0 || result.timedOut) return readFailure(result);
   const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout || '');
   if (bytes.length > REMOTE_TOUCHED_READ_MAX_BYTES) return { ok: false, reason: 'too-large', error: 'file too large to display' };
@@ -124,7 +132,7 @@ async function readRemoteTouchedFile({ target, absolutePath }, deps = {}) {
     const repo = await run(target.alias, buildRemoteGitCommand(target.cwd, buildGitArgs(['rev-parse', '--show-toplevel'])),
       { ...options, maxStdoutBytes: REMOTE_TOUCHED_STAT_MAX_BYTES });
     if (repo.code !== 0 || repo.timedOut) {
-      if (repo.code === 128 && !repo.timedOut && /not a git repository/i.test(repo.stderr || '')) return plain;
+      if (repo.code !== -1 && repo.code !== 255 && !repo.timedOut) return plain;
       return readFailure(repo);
     }
     const root = String(repo.stdout || '').replace(/\r?\n$/, '');
@@ -132,6 +140,7 @@ async function readRemoteTouchedFile({ target, absolutePath }, deps = {}) {
     const rel = path.posix.relative(root, absolutePath);
     if (!rel || rel.startsWith('../') || !isSafeGitPath(rel)) return plain;
     const originalResult = await run(target.alias, buildRemoteGitCommand(root, buildGitArgs(['show', 'HEAD:' + rel])), options);
+    if (originalResult.overflow) return checkedContent(originalResult);
     if (originalResult.code !== 0) {
       if (originalResult.code === 128 && !originalResult.timedOut
           && /path .* does not exist in 'HEAD'|invalid object name 'HEAD'/i.test(originalResult.stderr || '')) {

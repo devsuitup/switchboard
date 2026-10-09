@@ -469,6 +469,10 @@ counts.
 
 `opts.spawnFn` is dependency injection for tests only (`test/remote-run-command-stdout-cap.test.js`, a fake `child_process`-shaped `EventEmitter` with `stdout`/`stderr`/`kill`) — production code never passes it, and the lazy `require('child_process')` stays the real default.
 
+The transport marks capped stdout with `overflow: true` alongside code -1.
+Remote Touched uses this signal to report an oversized HEAD version as too
+large rather than treating it as an unreachable host.
+
 ## Not a repository
 
 A session's working directory need not be inside a git work tree. The Changes

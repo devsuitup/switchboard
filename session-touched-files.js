@@ -179,8 +179,29 @@ function present(row) {
 
 async function collectSessionTouchedFiles(options) {
   const cache = options.cache || createTouchedFilesCache();
-  return cache.run(options.sessionId, options.folderPath, session => collectCachedTouches(options, cache, session));
+  const result = await cache.run(options.sessionId, options.folderPath, session => collectCachedTouches(options, cache, session));
+  if (!result.ok || !options.remoteAlias) return result;
+  if (options.diskInfo === false) return { ...result, diskInfoPending: true };
+  let batches = remoteTouchedBatches.get(cache);
+  if (!batches) { batches = new Map(); remoteTouchedBatches.set(cache, batches); }
+  const paths = result.cachedFiles.map(f => f.path);
+  const key = JSON.stringify([options.folderPath, options.sessionId, paths]);
+  let batch = batches.get(key);
+  if (!batch) {
+    batch = inspectRemoteTouchedPaths(options.remoteAlias, paths, options);
+    batches.set(key, batch);
+  }
+  try {
+    const inspections = await batch;
+    for (const file of result.cachedFiles) {
+      Object.assign(file, inspections.get(file.path));
+      file.openable = file.state === 'present';
+    }
+    return result;
+  } finally { if (batches.get(key) === batch) batches.delete(key); }
 }
+
+const remoteTouchedBatches = new WeakMap();
 
 async function collectCachedTouches(options, cache, session) {
   const {
@@ -256,15 +277,9 @@ async function collectCachedTouches(options, cache, session) {
   const resolved = [...resolvedRows.values()].sort(newest);
   const unresolved = [...unresolvedRows.values()].sort(newest);
   omitted += [...resolved.slice(maxFiles), ...unresolved.slice(maxFiles)].reduce((n, row) => n + row.count, 0);
-  const files = resolved.slice(0, maxFiles).map((row) => ({ path: row.path, state: 'unknown', openable: false, ...present(row) }));
+  const files = resolved.slice(0, maxFiles).map((row) => ({ path: row.path, state: 'unknown', openable: false, diskMtime: null, ...present(row) }));
   const cachedUnresolved = unresolved.slice(0, maxFiles).map(row => ({ raw: row.raw, reason: row.reason, ...present(row) }));
-  if (options.remoteAlias) {
-    const inspections = await inspectRemoteTouchedPaths(options.remoteAlias, files.map(f => f.path), options);
-    for (const file of files) {
-      Object.assign(file, inspections.get(file.path));
-      file.openable = file.state === 'present';
-    }
-  } else {
+  if (!options.remoteAlias) {
     const gate = { timedOut: 0 };
     await mapLimit(files, STAT_CONCURRENCY, async (file) => {
       const inspection = await diskState(file.path, { isSensitive, statPath, statTimeoutMs, maxTimedOutChecks }, gate);
@@ -327,6 +342,7 @@ async function listSessionTouchedFiles(sessionId, deps) {
       pathOps: path.posix,
       remoteAlias: remote.alias,
       runRemoteCommand: deps.runRemoteCommand,
+      diskInfo: deps.diskInfo,
       isSensitive: async () => false,
       labelOf: (entry) => (entry.parentSessionId ? subagentLabel(entry) : 'session'),
     });

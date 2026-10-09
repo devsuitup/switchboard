@@ -232,6 +232,8 @@ async function refreshTouched(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state?.currentTab?.returnList || state?.currentTab;
   if (tab?.type !== 'touched') return;
+  if (tab.refreshing) return;
+  tab.refreshing = true;
 
   tab.loading = true;
   tab.openError = null;
@@ -239,12 +241,21 @@ async function refreshTouched(sessionId) {
 
   let result;
   try {
-    result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays });
+    result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays, diskInfo: false });
+    if (result?.ok && result.diskInfoPending) {
+      tab.data = result;
+      tab.error = null;
+      tab.loading = false;
+      if (Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
+      if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
+      result = await window.api.sessionTouchedFiles(sessionId, { windowDays: tab.windowDays });
+    }
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'failed to read the transcripts' };
   }
 
   tab.loading = false;
+  tab.refreshing = false;
   if (!result || result.ok === false) {
     tab.error = (result && result.error) || 'failed to read the transcripts';
     tab.data = null;

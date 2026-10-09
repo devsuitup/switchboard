@@ -49,6 +49,27 @@ function result(over = {}) {
   };
 }
 
+test('round 2 M2: the mirror renders before delayed disk info and Refresh coalesces', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: (_id, options) => options?.diskInfo === false
+    ? result({ kind: 'remote', diskInfoPending: true, files: [row({ state: 'unknown', openable: false })] }) : pending });
+  let opening;
+  try {
+    ctx.window.switchPanel('s1');
+    opening = ctx.window.openTouchedTab('s1');
+    await flush();
+    assert.equal(rows(ctx).length, 1, 'mirror rows must be visible before disk info');
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'unknown');
+    ctx.document.getElementById('touched-refresh-btn').click();
+    await flush();
+    assert.equal(ctx.calls.touched.length, 2, 'one mirror request and one disk request');
+    release(result({ kind: 'remote', files: [row({ diskMtime: 123000 })] }));
+    await opening;
+    assert.equal(rows(ctx)[0].querySelector('.touched-file-state').textContent, 'present');
+  } finally { release(result({ kind: 'remote' })); await opening; ctx.destroy(); }
+});
+
 test('remote Touched row and Reload retain the remote session in the shared read-only editor', async () => {
   const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
     readImpl: () => ({ ok: true, kind: 'remote', git: true, readOnly: true, original: 'base', current: 'remote text' }) });

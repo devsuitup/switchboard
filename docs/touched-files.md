@@ -23,6 +23,10 @@ tools used, how many times, and who made the calls: the session or a subagent.
 The list is read when the panel opens and on **Refresh**; it does not update by
 itself.
 
+For a remote session, the mirrored list appears before its disk check finishes.
+Until then, rows say **unknown**. A slow host does not delay a local list;
+refreshes made during the same check share that attempt.
+
 ## What each row says about the disk
 
 The transcript records what the session tried, not what happened, so every row is
@@ -65,6 +69,9 @@ Refresh and closing Touched, up to the 50 most recent.
   list.
 - In a remote session, a present Touched row opens read-only. Terminal links
   remain unavailable; files outside the session's repository open as plain text.
+  A successful read also opens as plain text if Git is absent or refuses the
+  session directory. Oversized HEAD versions are refused as too large.
+  Remote password databases and private key filenames are protected.
 
 ## Markdown files
 

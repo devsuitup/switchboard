@@ -36,6 +36,11 @@ test('shipped Touched list IPC reads the mirror under DB_PATH and makes one fake
       attempts++; return { code: 0, stdout: 'present\t1700000000\n' };
     } }),
   });
+  const mirrorResult = await handlers.get('session-touched-files')(null, 'S1', { diskInfo: false });
+  assert.equal(mirrorResult.ok, true, mirrorResult.error);
+  assert.equal(mirrorResult.files[0].state, 'unknown');
+  assert.equal(mirrorResult.diskInfoPending, true);
+  assert.equal(attempts, 0, 'mirror response must precede any remote inspection');
   const result = await handlers.get('session-touched-files')(null, 'S1');
   assert.equal(result.ok, true, result.error);
   assert.equal(result.files[0].path, '/repo/a');

@@ -29,6 +29,118 @@ const fixtureGitFiles = {
   writeTouchedChangesFile: args => gitChangesFile.writeTouchedChangesFile(args, { runGit: fixtureRunGit }),
 };
 const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const { fakeTouchedShell } = require('./remote-touched-shell');
+
+for (const [label, probe] of [
+  ['removed cwd', { code: 128, stderr: 'fatal: cannot change to cwd: No such file or directory' }],
+  ['missing git', { code: 127, stderr: 'git: command not found' }],
+  ['dubious ownership', { code: 128, stderr: 'fatal: detected dubious ownership in repository' }],
+]) {
+  test('round 2 M3: ' + label + ' falls back to the successful plain read', async () => {
+    let calls = 0;
+    const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => {
+      calls++;
+      return command.includes('rev-parse') ? { ...probe, stdout: '' } : { code: 0, stdout: 'plain text' };
+    });
+    const result = await api.read('/repo/file', { sessionId: 'R1' });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.git, false);
+    assert.equal(result.readOnly, true);
+    assert.equal(result.current, 'plain text');
+    assert.equal(result.original, 'plain text');
+    assert.equal(calls, 2);
+  });
+}
+
+test('round 2 M3: a transport failure after a successful read stays unreachable', async () => {
+  for (const probe of [{ code: -1 }, { code: 255 }, { code: 128, timedOut: true }]) {
+    const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => command.includes('rev-parse')
+      ? { ...probe, stdout: '' } : { code: 0, stdout: 'plain text' });
+    const result = await api.read('/repo/file', { sessionId: 'R1' });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'unknown');
+  }
+});
+
+test('round 2 m1: a read uses the checked resolved path after the original changes', async t => {
+  const shell = fakeTouchedShell(t);
+  fs.writeFileSync(path.join(shell.dir, 'original'), 'safe');
+  fs.writeFileSync(path.join(shell.dir, 'resolved'), 'safe');
+  shell.tool('realpath', 'printf "swapped" > original; printf "%s/resolved\\n" "$PWD"');
+  const api = panelHandlers(fs, fixtureGitFiles, async (alias, command, options) => command.includes('rev-parse')
+    ? { code: 128, stdout: '', stderr: 'not a git repository' } : shell.run(alias, command, options));
+  const result = await api.read(shell.root + '/original', { sessionId: 'R1' });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.current, 'safe');
+});
+
+test('round 2 m2: oversized HEAD is too large at the real transport cap', async () => {
+  const { defaultRunRemoteCommand } = require('../remote-attach');
+  const { PassThrough } = require('node:stream');
+  const { EventEmitter } = require('node:events');
+  const api = panelHandlers(fs, fixtureGitFiles, async (alias, command, options) => {
+    if (command.includes('rev-parse')) return { code: 0, stdout: '/repo\n' };
+    if (!command.includes("'show'")) return { code: 0, stdout: 'working text' };
+    return defaultRunRemoteCommand(alias, command, { ...options, resolveSshPath: () => 'fake-transport', spawnFn: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.kill = () => { setImmediate(() => child.emit('close', -1)); };
+      setImmediate(() => { child.stdout.emit('data', Buffer.alloc(options.maxStdoutBytes + 1, 120)); child.emit('close', 0); });
+      return child;
+    } });
+  });
+  const result = await api.read('/repo/file', { sessionId: 'R1' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'too-large');
+});
+
+test('round 2 s2: main refuses remote panel saves before touching the local disk', async () => {
+  let accesses = 0;
+  const api = panelHandlers({ realpathSync: { native() { accesses++; throw new Error('local disk accessed'); } } });
+  for (const opts of [
+    { sessionId: 'R1' }, { sessionId: 'R1', git: false, readOnly: false, remote: false },
+    { sessionId: 'R1', git: true, version: 'forged', kind: 'local' },
+  ]) {
+    const result = await api.save('/repo/file', 'overwrite', 'before', opts);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'remote');
+    assert.equal(accesses, 0);
+  }
+});
+
+test('round 2 s2: an opened remote path cannot be saved with omitted or forged options', async () => {
+  let accesses = 0;
+  const api = panelHandlers({ realpathSync: { native() { accesses++; throw new Error('local disk accessed'); } } }, fixtureGitFiles,
+    async (_alias, command) => ({ code: 0, stdout: command.includes('rev-parse') ? '/repo\n' : 'content' }));
+  assert.equal((await api.read('/repo/file', { sessionId: 'R1' })).ok, true);
+  for (const opts of [undefined, {}, { sessionId: 'missing', git: true }, { remote: false, readOnly: false }]) {
+    const result = await api.save('/repo/file', 'overwrite', 'content', opts);
+    assert.equal(result.reason, 'remote');
+    assert.equal(accesses, 0);
+  }
+});
+
+test('round 2 s1: remote reads refuse system passwords and private key names before transport', async () => {
+  let calls = 0;
+  const api = panelHandlers(fs, fixtureGitFiles, async () => { calls++; return { code: 0, stdout: 'secret' }; });
+  for (const filePath of ['/etc/shadow', '/etc/gshadow', '/etc/ssh/ssh_host_rsa_key', '/etc/ssh/ssh_host_ed25519_key.pub',
+    '/outside/private.pem', '/outside/private.KEY', '/outside/id_rsa', '/outside/id_ed25519']) {
+    const result = await api.read(filePath, { sessionId: 'R1' });
+    assert.equal(result.reason, 'refused', filePath);
+  }
+  assert.equal(calls, 0);
+});
+
+test('round 2 s1: resolved remote key paths are refused by the shell guard', async t => {
+  const shell = fakeTouchedShell(t);
+  fs.writeFileSync(path.join(shell.dir, 'ordinary'), 'safe');
+  for (const resolved of ['/etc/shadow', '/etc/gshadow', '/etc/ssh/ssh_host_rsa_key', '/outside/private.pem', '/outside/private.key', '/outside/id_rsa']) {
+    shell.tool('realpath', 'printf "%s\\n" "' + resolved + '"');
+    const api = panelHandlers(fs, fixtureGitFiles, shell.run);
+    const result = await api.read(shell.root + '/ordinary', { sessionId: 'R1' });
+    assert.equal(result.reason, 'refused', resolved);
+  }
+});
 
 function panelHandlers(fsOps = fs, gitOps = fixtureGitFiles, remoteExec = null) {
   const handlers = new Map();
@@ -37,6 +149,7 @@ function panelHandlers(fsOps = fs, gitOps = fixtureGitFiles, remoteExec = null) 
     fs: fsOps, path, isSensitivePath, gitChangesFile: gitOps, PANEL_FILE_MAX_BYTES: MAX_BYTES,
     panelSaves: createMainPanelSaves({ getKnownProjectPaths: () => [], invalidateFtsSignature() {} }),
     invalidateFtsSignature() {},
+    remotePanelPaths: new Set(),
     resolveGitChangesTarget: id => id === 'R1' ? { ok: true, kind: 'remote', alias: 'host', cwd: '/repo/sub' } : { ok: false, error: 'invalid remote session' },
     readRemoteTouchedFile: args => require('../remote-touched-files').readRemoteTouchedFile(args, { runRemoteCommand: remoteExec }),
   };

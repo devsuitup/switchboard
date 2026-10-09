@@ -322,7 +322,7 @@ function defaultRunRemoteCommand(alias, command, { timeoutMs, maxStdoutBytes, ra
       settled = true;
       clearTimeout(timer);
       if (overflowed) {
-        resolve({ code: -1, stdout: '', stderr: `stdout exceeded ${stdoutCap} bytes` });
+        resolve({ code: -1, stdout: '', stderr: `stdout exceeded ${stdoutCap} bytes`, overflow: true });
         return;
       }
       const output = rawStdout ? Buffer.concat(stdoutChunks, stdoutBytes) : stdout;

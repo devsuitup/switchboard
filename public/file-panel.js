@@ -1996,7 +1996,7 @@ async function handleChangesSave(sessionId) {
   let result;
   try {
     result = tab.absolutePath
-      ? await window.api.saveFileForPanel(tab.absolutePath, content, tab.savedContent, { git: tab.gitFile, version: tab.version })
+      ? await window.api.saveFileForPanel(tab.absolutePath, content, tab.savedContent, { git: tab.gitFile, version: tab.version, ...(tab.remote ? { sessionId } : {}) })
       : await window.api.gitChangesSave(sessionId, file.path, content, tab.version);
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'the save could not be sent' };
