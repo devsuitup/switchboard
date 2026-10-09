@@ -17,6 +17,7 @@ function fakeBgAgents() {
     start: () => { calls.push('start'); return true; },
     reconcile: async () => { calls.push('reconcile'); return { roster: [], daemonReachable: true }; },
     runVerb: async (verb, id) => { calls.push(['verb', verb, id]); return { ok: true }; },
+    conversationCheck: () => ({ known: true, state: 'working', sessionIds: ['s-1'] }),
     dispatch: async (fields) => { calls.push(['dispatch', fields]); return { ok: true, id: 'aaaaaaaa' }; },
     liveJobCheck: (sessionId) => { calls.push(['liveJobCheck', sessionId]); return { known: true, job: null }; },
     onChange: (l) => { listener = l; return () => { listener = null; }; },
