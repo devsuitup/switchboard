@@ -139,13 +139,14 @@ test('R4 R2 ambiguous continuations still ask for a sidebar choice after indexin
 });
 
 test('R4 R2 a manual open cancels automatic continuation retry', { timeout: 9000 }, async t => {
-  const h = setup(t, { old: ['new'], new: [] });
+  const h = setup(t, { old: ['new'], new: [], other: [] });
   const app = indexingHarness(h);
   h.rows.delete('new');
   await h.restore();
-  vm.runInContext('sessionOpenedOutsideRestore = true;', h.ctx);
+  vm.runInContext('restoringWorkingSet = false;', h.ctx);
+  await h.app.openSession(h.rows.get('other'));
   await app.markRestoreIndexingDone();
-  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.spawned.map(call => call.id), ['other']);
 });
 
 test('R4 R2 remembered automatic open does not cancel the indexing retry', { timeout: 9000 }, async t => {
@@ -189,11 +190,11 @@ test('R4 R3 shipped continuation IPC keeps a live missing sibling', { timeout: 9
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_, callback) => { handler = callback; } },
     sessionCache: cache,
-    cliSessionState: { liveElsewhere: async (id, own, ownPids) => {
+    cliSessionState: { liveElsewhereChecked: async (id, own, ownPids) => {
       lookups.push(id);
       assert.equal(own, hasPty);
       assert.equal(ownPids, pids);
-      return id === 'fresh' ? { kind: 'bg', jobId: '1234abcd', pid: 7 } : null;
+      return { known: true, live: id === 'fresh' ? { kind: 'bg', jobId: '1234abcd', pid: 7 } : null };
     } },
     sessionHasPty: hasPty, ptyPids: pids,
   });
@@ -239,7 +240,7 @@ for (const kind of ['bg', 'interactive', 'schedule']) {
 test('R4 R3 failed live lookup cannot discard a missing target', { timeout: 9000 }, async t => {
   const h = setup(t, { old: ['new', 'fresh'], new: [] });
   const result = await cache.resolveSessionContinuations('old', {
-    getSessionLiveElsewhere: async () => { throw new Error('descriptor unavailable'); },
+    getSessionLiveElsewhere: async () => ({ known: false, reason: 'descriptor unavailable' }),
   });
   assert.equal(result.unresolved, true);
 });

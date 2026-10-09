@@ -167,7 +167,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const cutoff = opts.dedupeSinceTimestamp || null;
   try {
     const stat = fs.statSync(filePath);
-    const content = fs.readFileSync(filePath, 'utf8');
+    const fileBytes = fs.readFileSync(filePath);
+    const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '';
     // Fallback title for a session whose only user turn is a slash command.
@@ -179,6 +180,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let scheduleSlug = null;
     const continuationIds = new Set();
     let continuationUnresolved = false;
+    let sealedContinuationIds = null;
+    let continuationInvalid = false;
     let incompleteTail = false;
     let customTitle = null;
     let aiTitle = null;
@@ -193,15 +196,20 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     // mtime without any actual activity, so mtime can't be the displayed time.
     let firstTimestamp = null;
     let lastTimestamp = null;
-    for (const line of lines) {
+    for (const [lineNumber, line] of lines.entries()) {
       const continuationLine = Buffer.byteLength(line) <= 1024 * 1024;
+      const isTail = lineNumber === lines.length - 1 && !content.endsWith('\n');
+      if (isTail) {
+        sealedContinuationIds = [...continuationIds];
+        continuationInvalid = continuationUnresolved;
+      }
       // Per-line try/catch: a JSONL file being written concurrently by a live
       // Claude CLI session can have its tail captured mid-write — one truncated
       // line should not invalidate the whole file. Skip the malformed line and
       // keep parsing.
       let entry;
       try { entry = JSON.parse(line); } catch {
-        if (line === lines.at(-1) && !content.endsWith('\n')) incompleteTail = true;
+        if (isTail) incompleteTail = true;
         if (continuationLine && /"type"\s*:\s*"continued-in"/.test(line)) continuationUnresolved = true;
         continue;
       }
@@ -291,6 +299,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       };
     }
 
+    const pending = fileBytes.subarray(fileBytes.lastIndexOf(10) + 1);
+    const skipLine = pending.length > 1024 * 1024;
     return {
       sessionId: fileBase, folder, projectPath,
       summary, firstPrompt: summary,
@@ -301,7 +311,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
-      continuationIndex: JSON.stringify({ format: 3, ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
+      continuationIndex: JSON.stringify({ format: 3, version: 3, ids: [...continuationIds],
+        sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
+        complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
+        mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved,
+        invalid: sealedContinuationIds === null ? continuationUnresolved : continuationInvalid,
+        skipLine, pending: skipLine ? '' : pending.toString('base64'),
+        tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex') }),
       bridgeSessionId,
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,

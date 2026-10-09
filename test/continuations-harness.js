@@ -45,7 +45,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
     getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
     setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),
     getSessionContinuations: async id => typeof cache.resolveSessionContinuations === 'function'
-      ? cache.resolveSessionContinuations(id, { chunkBytes, getSessionLiveElsewhere: async target => live[target] || null }) : { candidates: [], unresolved: false },
+      ? cache.resolveSessionContinuations(id, { chunkBytes, getSessionLiveElsewhere: async target => ({ known: true, live: live[target] || null }) }) : { candidates: [], unresolved: false },
     getSessionLiveElsewhere: async id => live[id] || null,
     getSessionsLiveElsewhere: async ids => Object.fromEntries(ids.filter(id => live[id]).map(id => [id, live[id]])),
     openTerminal: async (id, project, isNew, options) => { spawned.push({ id, project, options }); return { ok: true }; },
@@ -72,7 +72,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   const app = loadAppFunctions(ctx, {
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone'],
+    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'],
     functions: ['runRestore', 'openSession', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],
   });
   return {

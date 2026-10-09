@@ -386,11 +386,15 @@ restore starts. Continuation and live-elsewhere checks are asynchronous: before
 they finish, no terminal entry has been inserted into `openSessions`. Starting
 `restoreWorkingSet` concurrently can see the same session as unopened and launch
 a second PTY / duplicate `claude --resume`. Awaiting that first open also lets the
-working-set pass reuse its completed continuation lookup. An automatic remembered
-open does not count as the manual action that cancels later indexing retries.
+working-set pass reuse its completed continuation lookup. The remembered open
+retains the existing renderer-reload behaviour: opening outside restore cancels
+the working-set planner, so it neither prompts nor resumes the other saved entries.
+The separate continuation-retry cancellation flag is set only by non-automatic
+opens; the automatic remembered open does not cancel a held indexing retry.
 
-For uncached local targets, continuation IPC checks the same live-elsewhere
-descriptor lookup before declaring the transcript missing. A live target remains
+For uncached local targets, continuation IPC uses `liveElsewhereChecked` before
+declaring the transcript missing. `known:false` keeps the graph unresolved when
+descriptors cannot be read. A live target remains
 a candidate before its first transcript record is written. An indexed sibling
 therefore cannot silently win over a live new continuation.
 

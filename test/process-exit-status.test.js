@@ -18,6 +18,7 @@ const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
 const MAIN_SRC = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 const PRELOAD_SRC = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
 const { ptyExitSignalName } = require('../pty-ops');
+const { extractDeclaration } = require('./app-source');
 const { processExitLabel, exitBannerPhrase, exitBannerColour } = require('../public/process-exit');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 
@@ -98,6 +99,7 @@ function setup() {
   const ctx = dom.getInternalVMContext();
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
   run(PRELUDE, 'prelude.js');
+  run(extractDeclaration(APP_SRC, 'continuationRetryCancelled'), 'app.js#continuationRetryCancelled');
   run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');
   run(sliceBlock('function updateTerminalHeader() {'), 'app.js#updateTerminalHeader');
   run(sliceBlock('async function openSession(session'), 'app.js#openSession');

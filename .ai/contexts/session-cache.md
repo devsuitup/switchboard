@@ -1700,9 +1700,11 @@ no transcript contents. A file found anywhere in that root remains unresolved
 until indexed; resolution does not index it on demand. Directory read failures
 or symbolic links that may hide files also keep absence unconfirmed.
 For a local target without a cache row, the IPC also supplies the existing
-CLI live-elsewhere lookup. A live descriptor keeps the target as a terminal
-candidate even before its first transcript record exists; lookup failures
-remain unresolved. Remote mirror targets never query local CLI descriptors.
+CLI `liveElsewhereChecked` lookup. A live descriptor keeps the target as a terminal
+candidate even before its first transcript record exists; `known:false`, including
+an unreadable descriptor directory, keeps resolution unresolved. A confirmed
+`known:true, live:null` result permits the disk inventory to check absence.
+Remote mirror targets never query local CLI descriptors.
 Only a target absent from the cache, liveness lookup and inventory is marked missing.
 The graph drops that target if its parent has another existing continuation.
 If every child is confirmed missing, that parent remains unresolved, including
@@ -1710,12 +1712,14 @@ inside a longer chain: silently resuming a discontinued branch is unsafe, and
 manual opening already offers an explicit original-id choice. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
-Chunk indexes also carry `version:3`, `size`, `sealedIds`, a bounded base64
+Full-scan and chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64
 `pending` line, and the last 64 indexed bytes as hexadecimal `tail`. The tail is
 verified before reusing a cursor after growth; mismatch, shrink or a same-size
 mtime change starts at byte zero. This is a local tail check, not a proof that
-an arbitrary rewrite preserved the entire prefix. Full-scan indexes lack
-a cursor witness and restart from zero when stale.
+an arbitrary rewrite preserved the entire prefix. Full reads retain the same
+cursor witness and tail state, so the first scan after an append reads only
+the appended bytes and the bounded witness. Unterminated valid records remain
+tentative until sealed by a newline; partial tails are reprocessed on append.
 
 Lines are retained up to 1 MiB. Oversized records are ignored by both continuation
 indexers; chunk scans carry `skipLine` until the newline, including across appends.
@@ -1737,6 +1741,9 @@ it returns. Passes starting after completion do not schedule another retry.
 It invalidates their startup lookup promises before resolving again,
 persists the resolved id and active state, and consumes each retry once. A failed
 project reload leaves retries available for the next completion event. A manual
-open cancels automatic retry; a remembered automatic open does not. Entries still
+open cancels automatic retry through `continuationRetryCancelled`; a remembered
+automatic open does not. The separate `sessionOpenedOutsideRestore` guard keeps
+its original behaviour: any open outside working-set restore cancels the planner,
+including the automatic remembered open on a renderer reload. Entries still
 ambiguous after indexing retain the sidebar-choice notice. Entries still unindexed
 after the retry name that state and offer a manual sidebar retry.

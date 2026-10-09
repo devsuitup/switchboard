@@ -6,7 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - On Windows, writing to a terminal that is closing no longer raises an uncaught main-process exception, including when closing an attached agent tab. (#517)
-- Restoring a conversation that continued under another id now opens its continuation and saves the new id, waits and retries when indexing finishes, and keeps live continuations available before their first transcript is saved. Unrelated damaged or oversized records no longer block restore; multiple or unresolved continuations stay saved with a notice to open the old session and choose a continuation or explicitly reopen the original. (#518)
+- Restoring a conversation that continued under another id now opens its continuation and saves the new id, waits and retries when indexing finishes, and keeps live continuations available before their first transcript is saved. Unrelated damaged or oversized records no longer block restore; multiple or unresolved continuations, including when process status cannot be read, stay saved with a notice to open the old session and choose a continuation or explicitly reopen the original. (#518)
 
 ## v0.0.91 — 2026-10-09
 

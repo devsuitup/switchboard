@@ -160,6 +160,7 @@ let restorePlanner = null;
 let restoreMode = 'off';
 let restoreIndexingDone = false;
 let sessionOpenedOutsideRestore = false;
+let continuationRetryCancelled = false;
 
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 const skippedWorkingSetEntries = new Map();
@@ -278,7 +279,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   if (activeItem && openSessions.has(activeItem.sessionId)) {
     showSession(activeItem.sessionId);
   }
-  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation) && !sessionOpenedOutsideRestore) {
+  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation) && !continuationRetryCancelled) {
     await markRestoreIndexingDone();
   }
 }
@@ -440,7 +441,7 @@ async function markRestoreIndexingDone() {
   if (!reloaded) return;
   await tickRestorePlanner();
   const retry = held();
-  if (!retry.length || sessionOpenedOutsideRestore) return;
+  if (!retry.length || continuationRetryCancelled) return;
   for (const entry of retry) {
     entry.retryContinuation = false;
     window._startupResumeResolutions?.delete(entry.item.sessionId);
@@ -1387,7 +1388,8 @@ async function showTerminalHeader(session) {
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
 async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
-  if (!restoringWorkingSet && !automatic) sessionOpenedOutsideRestore = true;
+  if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
+  if (!automatic) continuationRetryCancelled = true;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
