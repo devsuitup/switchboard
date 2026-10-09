@@ -111,6 +111,10 @@ test('round 2 s2: main refuses remote panel saves before touching the local disk
 test('round 3 M1: opening a remote path leaves the same local file saveable', async t => {
   const { dir } = fixture(t);
   const nativePath = path.join(dir, 'file.txt');
+  if (process.platform === 'win32' && nativePath.slice(0, 2).toLowerCase() !== process.cwd().slice(0, 2).toLowerCase()) {
+    t.skip('the drive-less spelling only resolves to the temp file when it sits on the current drive');
+    return;
+  }
   const filePath = process.platform === 'win32' ? nativePath.slice(2).replace(/\\/g, '/') : nativePath;
   fs.writeFileSync(nativePath, 'local content');
   const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => command.includes('rev-parse')
