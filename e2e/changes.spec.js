@@ -113,9 +113,11 @@ test('a Touched modified file shows the shared diff below its list and Close res
   }) + '\n');
 
   const { page } = await launch();
-  await openPlainTerminal(page);
-  await page.evaluate(id => window.switchPanel(id), header.sessionId);
-  await page.locator('#touched-toggle-btn').click();
+  await page.locator('[data-session-id="' + header.sessionId + '"]').first().waitFor();
+  await page.evaluate(({ sessionId, projectPath }) => window.openSession({ sessionId, projectPath, name: 'Touched fixture' }, { type: 'terminal' }),
+    { sessionId: header.sessionId, projectPath: repo });
+  await expect(page.locator('#terminals .xterm-screen').first()).toBeVisible();
+  await page.locator('#tool-bar #touched-toggle-btn').click();
   const list = page.locator('#touched-list');
   const row = list.locator('.touched-openable').filter({ hasText: 'alpha.txt' });
   await expect(row).toHaveCount(1);

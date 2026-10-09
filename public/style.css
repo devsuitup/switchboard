@@ -304,7 +304,9 @@ body { display: flex; flex-direction: column; }
   color: #7a7a90;
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 12px;
+  padding: 8px 4px;
+  min-width: 0;
+  flex: 1;
   cursor: pointer;
   transition: all 0.15s;
   font-family: inherit;
@@ -1336,7 +1338,7 @@ body { display: flex; flex-direction: column; }
 
 /* ========== MAIN AREA ========== */
 #main {
-  min-width: var(--tool-main-floor);
+  min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1356,6 +1358,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   transition: color 0.15s, background 0.15s;
 }
 #sidebar-collapse-btn:hover {
@@ -1440,7 +1443,7 @@ body { display: flex; flex-direction: column; }
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
-  min-width: 60px;
+  min-width: 0;
   max-width: 30vw;
 }
 
@@ -1453,6 +1456,8 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
   padding-left: 6px;
   border-left: 1px solid var(--control-border);
+  min-width: 0;
+  flex-shrink: 1000;
 }
 
 #terminal-header-id {
@@ -5428,7 +5433,7 @@ body.window-frameless #sidebar-tabs {
 }
 body.window-frameless #sidebar-tabs .sidebar-tab {
   align-self: stretch;
-  padding: 0 12px;
+  padding: 0 4px;
 }
 
 #app-menu-btn {
@@ -5526,7 +5531,11 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 }
 
 /* see .ai/contexts/tool-bar.md */
-#main:has(#file-panel.open) {
+#main:has(#terminal-area:not([style*="display: none"])) {
+  min-width: var(--tool-main-floor);
+}
+
+#main:has(#terminal-area:not([style*="display: none"]) #file-panel.open) {
   min-width: min(var(--tool-open-main-floor), calc(100vw - var(--tool-sidebar-offset)));
 }
 

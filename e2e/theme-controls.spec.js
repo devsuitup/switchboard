@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { test, expect, makeRepo, openPlainTerminal } = require('./fixtures');
+const { test, expect, makeRepo } = require('./fixtures');
 
 const FILE_COUNT = 80;
 
@@ -31,18 +31,19 @@ function makeTouchedFixture(home, env) {
     records.push(touch(`file-${String(i).padStart(3, '0')}.txt`, now - 60000 + i, i));
   }
   fs.writeFileSync(transcript, records.map(record => JSON.stringify(record)).join('\n') + '\n');
-  return template.sessionId;
+  return { sessionId: template.sessionId, projectPath: repo };
 }
 
 test('the themed file panel shows a long Touched list and scrollable file contents', async ({ home, env, launch }, testInfo) => {
-  const sessionId = makeTouchedFixture(home, env);
+  const { sessionId, projectPath } = makeTouchedFixture(home, env);
   const { page } = await launch();
-  await openPlainTerminal(page);
+  await page.locator('[data-session-id="' + sessionId + '"]').first().waitFor();
+  await page.evaluate(session => window.openSession({ ...session, name: 'Touched fixture' }, { type: 'terminal' }), { sessionId, projectPath });
+  await expect(page.locator('#terminals .xterm-screen').first()).toBeVisible();
   await expect(page.locator('#terminal-header')).toBeVisible();
   await expect(page.locator('.session-item.active')).toHaveCount(1);
-  await page.evaluate(id => { window.setActiveSession(id); }, sessionId);
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('activeSessionId'))).toBe(sessionId);
-  await page.locator('#touched-toggle-btn').click();
+  await page.locator('#tool-bar #touched-toggle-btn').click();
   const panel = page.locator('#file-panel');
   const list = page.locator('#touched-list');
   await expect(panel).toBeVisible();

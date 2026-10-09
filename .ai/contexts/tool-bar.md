@@ -6,7 +6,9 @@ The session header contains the status, name, PTY title, id and shell badge,
 then `#terminal-header-session`: Refresh, Stop/Detach, Sandbox and IDE Emulation.
 Its remaining right side is the window drag area. Caption overlay padding is
 unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
-left, and the name limit is `30vw`, keeping Refresh beside the id.
+left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles
+can shrink to zero, and the PTY title yields first, keeping the fixed-width id
+inside the info group rather than clipping it behind Refresh.
 
 `public/tool-bar.js` declares the frozen `TOOL_BAR` and builds
 `#tool-bar` as the last child of `#terminal-split`, after the file panel.
@@ -65,6 +67,10 @@ It never wraps; a short bar scrolls vertically and stays below the header.
 Overflow gives up width in this order: terminal to 200, panel to 280,
 sidebar to 200, then panel below 280. Only layout shrinks: inline and stored
 sidebar/panel widths stay intact and return when the window widens.
+The main-area floors apply only while the terminal area is shown; Agents and
+other viewers retain `min-width: 0`. Sidebar tabs share the available width
+with 4 px horizontal padding, keeping the non-shrinking collapse button inside
+the sidebar even at its 200 px floor.
 
 The six `--tool-*` variables at the start of `public/style.css` centralize
 the bar width, panel floor and derived offsets. For sidebar 340 and panel 450,

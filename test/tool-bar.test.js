@@ -14,6 +14,29 @@ const IDS = ['changes-toggle-btn', 'diff-toggle-btn', 'touched-toggle-btn', 'pan
 const CHORDS = [['e', 'toggleChangesTab'], ['d', 'showPendingDiff'], ['t', 'toggleTouchedTab'], ['s', 'togglePanelTerminal']];
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
+test('the live header can shrink its titles and sidebar tabs without hiding fixed controls', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+  const dom = new JSDOM(html);
+  try {
+    const { document } = dom.window;
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+    document.body.className = 'window-frameless platform-linux';
+    for (const id of ['terminal-header-name', 'terminal-header-pty-title']) {
+      assert.equal(dom.window.getComputedStyle(document.getElementById(id)).minWidth, '0px', id);
+    }
+    const tab = document.querySelector('.sidebar-tab');
+    assert.equal(dom.window.getComputedStyle(tab).minWidth, '0px');
+    assert.equal(dom.window.getComputedStyle(document.getElementById('sidebar-collapse-btn')).flexShrink, '0');
+    document.getElementById('terminal-area').style.display = 'none';
+    assert.equal(dom.window.getComputedStyle(document.getElementById('main')).minWidth, '0px');
+    document.getElementById('terminal-area').style.display = '';
+    assert.equal(dom.window.getComputedStyle(document.getElementById('main')).minWidth, 'var(--tool-main-floor)');
+  } finally { dom.window.close(); }
+});
+
 function setup() {
   const responses = [];
   const ctx = setupTerminalDom({ filePanel: true, api: {

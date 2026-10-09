@@ -121,9 +121,12 @@ test('E4: Refresh stays beside the id with short and long session and PTY titles
           el.style.display = '';
         }, { name, title });
         const id = await box(page.locator('#terminal-header-id'));
+        const info = await box(page.locator('#terminal-header-info'));
         const refresh = await box(page.locator('#terminal-refresh-btn'));
         const stop = await box(page.locator('#terminal-stop-btn'));
         const header = await box(page.locator('#terminal-header'));
+        expect(id.x).toBeGreaterThanOrEqual(info.x);
+        expect(id.x + id.width).toBeLessThanOrEqual(info.x + info.width + 1);
         expect(refresh.x - id.x - id.width).toBeGreaterThanOrEqual(0);
         expect(refresh.x - id.x - id.width).toBeLessThan(24);
         for (const control of [refresh, stop]) {
@@ -149,6 +152,10 @@ test('E5: all 32 narrow-window and zoom combinations keep the bar and panel boun
         el.classList.remove('collapsed');
         el.style.width = typeof width === 'number' ? width + 'px' : '340px';
       }, sidebar);
+      const sidebarBox = await box(page.locator('#sidebar'));
+      const collapse = await box(page.locator('#sidebar-collapse-btn'));
+      expect(collapse.x).toBeGreaterThanOrEqual(sidebarBox.x);
+      expect(collapse.x + collapse.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 1);
       if (sidebar === 'collapsed') await page.locator('#sidebar-collapse-btn').click();
       for (const open of [false, true]) {
         if (await page.locator('#file-panel').evaluate(el => el.classList.contains('open')) !== open) {

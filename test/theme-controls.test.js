@@ -121,7 +121,7 @@ test('every declared index button and every optional viewer toolbar button has a
 
 function setupPanel() {
   const dom = new JSDOM('<!DOCTYPE html><div id="terminal-area"><div id="terminals"></div></div>'
-    + '<div id="terminal-header"><div id="terminal-header-controls"><button id="terminal-stop-btn"></button></div></div>',
+    + '<div id="terminal-header"><div id="terminal-header-session"><button id="terminal-stop-btn"></button></div></div>',
   { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const context = dom.getInternalVMContext();
@@ -144,8 +144,11 @@ function setupPanel() {
     onGitChangesFileChanged() {},
   };
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true });
+  window.openSessions = new Map(['terminal', 'transcript', 's1'].map(id => [id, { terminal: { focus() {} } }]));
+  window.isMac = false;
+  window.appShortcuts = {};
   for (const file of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js',
-    'session-activity-dom.js', 'session-activity.js', 'header-controls.js', 'file-panel.js', 'touched-files-view.js']) {
+    'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evaluate(source(file));
   }
   evaluate('loadCodeMirrorBundle = () => Promise.resolve()');
