@@ -1081,10 +1081,19 @@ function populateCacheViaWorker() {
 
 async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024 } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
+  let diskEntries;
   return resolveContinuations(sessionId, async id => {
     if (!validId(id)) return null;
     const row = getCachedSession?.(id);
-    if (!row || row.parentSessionId) return null;
+    if (!row) {
+      const { alias } = parseFolderKey(getCachedSession?.(sessionId)?.folder || '');
+      const root = alias === null ? PROJECTS_DIR : remoteRoots.get(alias);
+      diskEntries ||= fs.promises.readdir(root, { recursive: true, withFileTypes: true });
+      const entries = await diskEntries;
+      return entries.some(entry => entry.isSymbolicLink() || (entry.isFile() && entry.name === id + '.jsonl'))
+        ? null : { missing: true };
+    }
+    if (row.parentSessionId) return null;
     const file = resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' });
     const stat = fs.statSync(file);
     let serialized = row.continuationIndex, index;

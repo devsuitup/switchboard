@@ -9,6 +9,65 @@ const cache = require('../session-cache');
 
 const { setup } = require('./continuations-harness');
 
+for (const children of [['new', 'missing'], ['missing', 'new']]) {
+  test(`R3 restore drops a disk-missing sibling (${children.join(', ')}) and persists the existing id`, { timeout: 9000 }, async t => {
+    const h = setup(t, { old: children, new: [] });
+    await h.restore();
+    assert.deepEqual(h.spawned.map(call => call.id), ['new']);
+    assert.deepEqual(h.prompts, []);
+    assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true }]);
+    const result = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(result.unresolved, false);
+    assert.deepEqual(result.candidates.map(candidate => candidate.sessionId), ['new']);
+  });
+}
+
+for (const location of ['same folder', 'other folder', 'nested folder']) {
+  test(`R3 an unindexed transcript in ${location} is not dropped beside an existing target`, { timeout: 9000 }, async t => {
+    const h = setup(t, { old: ['new', 'unindexed'], new: [], unindexed: [] });
+    h.rows.delete('unindexed');
+    if (location !== 'same folder') {
+      const targetDir = path.join(h.root, 'other-project', ...(location === 'nested folder' ? ['legacy'] : []));
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.renameSync(path.join(h.root, h.folder, 'unindexed.jsonl'), path.join(targetDir, 'unindexed.jsonl'));
+    }
+    const result = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(result.unresolved, true);
+    assert.deepEqual(result.candidates.map(candidate => candidate.sessionId), ['new']);
+    await h.restore();
+    assert.deepEqual(h.spawned, []);
+    assert.deepEqual(h.prompts, []);
+    assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
+    assert.match(h.dom.window.notice, /sidebar/);
+  });
+}
+
+for (const graph of [
+  { old: ['missing-a', 'missing-b'] },
+  { old: ['mid', 'missing-a'], mid: ['missing-b'] },
+]) {
+  test(`R3 all targets missing at ${graph.mid ? 'a descendant' : 'the root'} remain unresolved`, { timeout: 9000 }, async t => {
+    const h = setup(t, graph);
+    const result = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(result.unresolved, true);
+    assert.deepEqual(result.candidates, []);
+    await h.restore();
+    assert.deepEqual(h.spawned, []);
+    assert.deepEqual(h.prompts, []);
+    assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
+    assert.match(h.dom.window.notice, /sidebar/);
+  });
+}
+
+test('R3 a failed disk inventory cannot discard an unknown target', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new', 'missing'], new: [] });
+  t.mock.method(fs.promises, 'readdir', async () => { throw Object.assign(new Error('fixture denied'), { code: 'EACCES' }); });
+  await h.restore();
+  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.prompts, []);
+  assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
+});
+
 for (const [name, graph, expected] of [
   ['one continuation', { old: ['new'], new: [] }, 'new'],
   ['a chain old to mid to new', { old: ['mid'], mid: ['new'], new: [] }, 'new'],

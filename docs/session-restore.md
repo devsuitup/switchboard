@@ -46,8 +46,12 @@ its previous launch. Sessions reopen one after another, half a second apart.
 
 If a conversation continued under another id, restore follows its continuation
 chain and saves the final id with the saved entry's project and active state.
-One final id is selected automatically. Several final ids, a cycle, a missing
-continuation transcript or a malformed continuation record hold the saved entry
+One final id is selected automatically. A target absent from both the index and
+the transcripts on disk is ignored when its parent has another existing
+continuation. A transcript present on disk but not yet indexed still holds
+restore until indexing catches up. If all of a node's targets are missing,
+restore stays unresolved rather than reopening that node automatically.
+Several final ids, a cycle or a malformed continuation record hold the saved entry
 without launching it. A non-blocking notice names the held conversation and
 asks you to open it from the sidebar to choose; other saved sessions continue
 restoring. Automatic restore never displays a continuation confirmation dialog.

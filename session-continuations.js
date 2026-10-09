@@ -100,6 +100,7 @@ async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNode
     let node;
     try { node = await getNode(id); } catch { unresolved = true; return; }
     if (!node) { unresolved = true; return; }
+    if (node.missing) return false;
     const index = node.index;
     if (index?.unresolved) unresolved = true;
     const children = index?.ids || [];
@@ -108,16 +109,18 @@ async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNode
     } else {
       continued = true;
       visiting.add(id);
+      let allMissing = true;
       for (const child of children) {
-        await visit(child, depth + 1);
+        if (await visit(child, depth + 1) !== false) allMissing = false;
         if (nodes > maxNodes) break;
       }
+      if (allMissing) unresolved = true;
       visiting.delete(id);
     }
     visited.add(id);
   }
   if (!validId(sessionId)) return { candidates: [], unresolved: true, continued: false };
-  await visit(sessionId, 0);
+  if (await visit(sessionId, 0) === false) unresolved = true;
   return { candidates: [...candidates.values()], unresolved, continued };
 }
 

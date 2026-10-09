@@ -1693,6 +1693,19 @@ with no total scan cap. Tests can inject smaller `chunkBytes`. Persistence uses
 `setCachedContinuationIndex`, which updates only that column, preserving display
 fields written by a concurrent refresh; it does not upsert an old row snapshot.
 
+When a target has no cache row, resolution lazily inventories transcript filenames
+recursively under the source session's projects root (or that host's mirror root).
+This asynchronous directory inventory is shared within one resolution and reads
+no transcript contents. A file found anywhere in that root remains unresolved
+until indexed; resolution does not index it on demand. Directory read failures
+or symbolic links that may hide files also keep absence unconfirmed.
+Only a target absent from both the cache and this inventory is marked missing.
+The graph drops that target if its parent has another existing continuation.
+If every child is confirmed missing, that parent remains unresolved, including
+inside a longer chain: silently resuming a discontinued branch is unsafe, and
+manual opening already offers an explicit original-id choice. Cached rows with
+missing or unreadable transcripts retain the existing unresolved behaviour.
+
 Chunk indexes also carry `version:2`, `size`, `sealedIds`, a bounded base64
 `pending` line, and the last 64 indexed bytes as hexadecimal `tail`. The tail is
 verified before reusing a cursor after growth; mismatch, shrink or a same-size
