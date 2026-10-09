@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   rebuildCache: () => ipcRenderer.invoke('rebuild-cache'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getSessionLiveElsewhere: (id) => ipcRenderer.invoke('session-live-elsewhere', id),
+  getSessionContinuations: (id) => ipcRenderer.invoke('session-continuations', id),
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),

@@ -347,3 +347,31 @@ reader knows immediately to look outward rather than hunt a bug in Switchboard.
 
 Add one whenever you build on an undocumented external artefact; do not add one
 for an assumption a normal unit test can pin.
+
+## Conversation continuations
+
+CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,
+continuedInSessionId:<new>, timestamp:...}` to the old transcript. These records
+can be mid-file and repeated; the new transcript has no back-link. This is an
+observed interface, pinned by `test/canary-cli-continuations.test.js` with a live
+sample bounded to 8 MiB / 3 seconds (skipped when no record is available).
+`test/session-continuation-index.test.js` always runs an observed-format fixture;
+that fixture proves parser agreement, not CLI drift.
+
+`session-continuations` IPC calls `sessionCache.resolveSessionContinuations`.
+It traverses indexed links in record order, deduplicates terminal ids and bounds
+traversal to 32 edges / 128 node visits. Cycles, missing rows/files, malformed
+records and scan limits return `unresolved`, preventing any old-id resume.
+`resolveResumeSession` is shared by restore and sidebar clicks. An automatic
+restore selects exactly one terminal id; manual opens offer it. Several ids
+use the existing confirm UI, listing every candidate and last activity before
+asking whether to open each one. Declining all choices keeps the saved entry.
+An unresolved graph asks for retry/sidebar selection without spawning. Remote
+sessions retain their existing attach behavior.
+
+After resolution, `runRestore` checks the final id's liveness; a background
+continuation requests the guard's existing `{attach}` verdict. Other live kinds
+retain their refusal/confirmation rules. Saved entries are rekeyed before
+opening; background continuation attachments retain the resolved entry in the
+working set. Ordinary attach tabs remain excluded. Part A, live descriptor
+rekeying while the original PTY runs, remains out of scope pending #477.

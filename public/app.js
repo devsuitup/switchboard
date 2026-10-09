@@ -188,10 +188,10 @@ function persistWorkingSet() {
       });
     }
     const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
-      .filter(({ item }) => !openSessions.has(item.sessionId))
+      .filter(({ item, keepAttached }) => !openSessions.has(item.sessionId) || (keepAttached && openSessions.get(item.sessionId).attach))
       .sort((a, b) => a.index - b.index);
-    for (const { item, index } of held) {
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: false });
+    for (const { item, index, keepAttached } of held) {
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: !!keepAttached && item.sessionId === activeSessionId });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -225,25 +225,44 @@ async function runRestore(list) {
   try {
     const liveById = await liveElsewhereMany(pending.map(item => item.sessionId), { api: window.api });
     for (const [position, item] of list.entries()) {
-      const s = sessionMap.get(item.sessionId);
+      let s = sessionMap.get(item.sessionId);
       if (!s || openSessions.has(item.sessionId)) {
         restoreInFlight.delete(item.sessionId);
         continue;
       }
       // Resume with the project's current "new session" defaults, exactly like a
       // manual session relaunch — not options frozen from a previous launch.
-      const live = liveById[item.sessionId] || null;
+      const originalId = item.sessionId;
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg) });
+      if (!s) {
+        const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
+        skippedWorkingSetEntries.set(originalId, { item, index });
+        restoreInFlight.delete(originalId);
+        continue;
+      }
+      if (s.sessionId !== originalId) {
+        restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
+        skippedWorkingSetEntries.delete(originalId);
+        item.sessionId = s.sessionId;
+      }
+      let live = liveById[originalId] || null;
+      if (s.sessionId !== originalId) {
+        try { live = await window.api.getSessionLiveElsewhere(s.sessionId); } catch { live = null; }
+      }
       let opened;
       try {
-        opened = await openSession(s, undefined, { automatic: true, live });
+        opened = await openSession(s, undefined, { automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId });
       } finally {
-        restoreInFlight.delete(item.sessionId);
+        restoreInFlight.delete(originalId);
       }
       if (opened === false) {
         const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
         skippedWorkingSetEntries.set(item.sessionId, { item, index });
-        skippedNow.push({ session: s, live });
+        if (live) skippedNow.push({ session: s, live });
         continue;
+      }
+      if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
+        skippedWorkingSetEntries.set(s.sessionId, { item, index: restoreSavedIndex.get(s.sessionId), keepAttached: true });
       }
       await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
     }
@@ -1340,8 +1359,25 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
-async function openSession(session, customOptions, { automatic = false, live } = {}) {
+async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
+  if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
+    const originalId = session.sessionId;
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg) });
+    if (!session) return false;
+    if (session.sessionId !== originalId) {
+      live = undefined;
+      allowBgAttach = true;
+      const held = skippedWorkingSetEntries.get(originalId);
+      if (held || restoreSavedIndex.has(originalId)) {
+        restoreSavedIndex.set(session.sessionId, held?.index ?? restoreSavedIndex.get(originalId));
+      }
+      if (held) {
+        skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
+      }
+      skippedWorkingSetEntries.delete(originalId);
+    }
+  }
   const { sessionId, projectPath } = session;
 
   // If already open, handle closed-session cleanup or just show it
@@ -1356,7 +1392,7 @@ async function openSession(session, customOptions, { automatic = false, live } =
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, api: window.api, confirm: (msg) => window.confirm(msg) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: (msg) => window.confirm(msg) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
@@ -1387,6 +1423,13 @@ async function openSession(session, customOptions, { automatic = false, live } =
   }
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
+  if (allowBgAttach && entry.attach) {
+    skippedWorkingSetEntries.set(sessionId, {
+      item: { sessionId, projectPath },
+      index: restoreSavedIndex.get(sessionId) ?? Number.MAX_SAFE_INTEGER,
+      keepAttached: true,
+    });
+  }
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);

@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
+const { continuationId } = require('./session-continuations');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -176,6 +177,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let textContent = '';
     let slug = null;
     let scheduleSlug = null;
+    const continuationIds = new Set();
+    let continuationUnresolved = false;
+    let incompleteTail = false;
     let customTitle = null;
     let aiTitle = null;
     let agentId = null;
@@ -195,7 +199,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       // line should not invalidate the whole file. Skip the malformed line and
       // keep parsing.
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
+      try { entry = JSON.parse(line); } catch {
+        if (line === lines.at(-1) && !content.endsWith('\n')) incompleteTail = true;
+        else continuationUnresolved = true;
+        continue;
+      }
+      const continuation = continuationId(entry, fileBase);
+      if (continuation) continuationIds.add(continuation);
+      if (entry.type === 'continued-in' && entry.sessionId === fileBase && !continuation) continuationUnresolved = true;
       if (entry.timestamp) {
         // ISO-8601 UTC strings — lexicographic comparison is chronological
         if (!firstTimestamp || entry.timestamp < firstTimestamp) firstTimestamp = entry.timestamp;
@@ -289,6 +300,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
+      continuationIndex: JSON.stringify({ ids: [...continuationIds], bytes: incompleteTail ? Buffer.byteLength(content.slice(0, content.lastIndexOf('\n') + 1)) : stat.size, complete: !incompleteTail, mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved }),
       bridgeSessionId,
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,

@@ -17,7 +17,7 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, live } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, live, allowBgAttach = false } = {}) {
   if (!session || session.type === 'terminal') return true;
   if (live === undefined) {
     try {
@@ -27,7 +27,7 @@ async function guardResume(session, { automatic = false, api, confirm, live } = 
     }
   }
   if (!live) return true;
-  if (automatic) return false;
+  if (automatic && !(allowBgAttach && live.kind === 'bg')) return false;
   if (live.kind === 'schedule') {
     const where = live.cwd ? ` in ${live.cwd}` : '';
     confirm(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
@@ -42,6 +42,30 @@ async function guardResume(session, { automatic = false, api, confirm, live } = 
   return !!confirm(liveElsewhereMessage(live));
 }
 
+// see .ai/contexts/cli-session-state.md ("Conversation continuations")
+async function resolveResumeSession(session, { automatic = false, api, confirm } = {}) {
+  if (!session || session.type === 'terminal' || session.remoteAlias || !api.getSessionContinuations) return session;
+  let result;
+  try { result = await api.getSessionContinuations(session.sessionId); }
+  catch { confirm('Could not check this conversation for continuations. Try opening it again after indexing.'); return null; }
+  if (!result || result.unresolved) {
+    const candidates = (result?.candidates || []).map(c => `${c.sessionId} (last activity: ${c.modified || 'unknown'})`).join('\n');
+    confirm('This conversation has an unresolved continuation (cycle, missing transcript or scan limit).\n'
+      + candidates + '\nTry again after indexing or open a candidate from the sidebar.');
+    return null;
+  }
+  const candidates = result.candidates || [];
+  if (!candidates.length) return session;
+  if (automatic && candidates.length === 1) return { ...session, sessionId: candidates[0].sessionId };
+  const listing = candidates.map(c => `${c.sessionId} (last activity: ${c.modified || 'unknown'})`).join('\n');
+  for (const candidate of candidates) {
+    if (confirm(`This conversation continued under another id:\n${listing}\n\nOpen ${candidate.sessionId}?`)) {
+      return { ...session, sessionId: candidate.sessionId };
+    }
+  }
+  return null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { guardResume, liveElsewhereMany, liveElsewhereMessage };
+  module.exports = { guardResume, liveElsewhereMany, liveElsewhereMessage, resolveResumeSession };
 }

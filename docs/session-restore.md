@@ -44,5 +44,15 @@ its previous launch. Sessions reopen one after another, half a second apart.
   restoring N session(s) from last time…*.
 - Opening a session yourself while restore is running cancels the rest of it.
 
+If a conversation continued under another id, restore follows its continuation
+chain and saves the final id with the saved entry's project and active state.
+Several distinct final ids prompt for a choice, listing each id and its last
+activity. Dismissing the choices keeps the saved entry without launching it.
+A cycle, missing transcript or incomplete bounded scan asks you to retry after
+indexing or open a candidate from the sidebar; it never resumes the old id.
+Clicking an old sidebar row offers its continuation before opening it. A live
+background continuation uses the existing attach path and its final id stays
+in the saved working set for a later restore.
+
 Within one run of the app, going back to a session whose process still runs is
 a reattach: the terminal replays its buffered output onto the same process.

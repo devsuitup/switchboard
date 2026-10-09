@@ -9,6 +9,7 @@ const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-p
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
+const { scanContinuationIndex, resolveContinuations, validId } = require('./session-continuations');
 
 /**
  * Session cache module.
@@ -290,6 +291,7 @@ function refreshFolder(folder, opts = {}) {
         // Merge: keep cached body/messageCount/created, overlay fresh display fields.
         const merged = {
           ...cachedEntry,
+          continuationIndex: scanContinuationIndex(filePath, cachedEntry.sessionId, cachedEntry.continuationIndex),
           folder, projectPath,
           summary: h.summary || cachedEntry.summary,
           firstPrompt: h.firstPrompt || cachedEntry.firstPrompt,
@@ -1069,7 +1071,37 @@ function populateCacheViaWorker() {
   return populatePromise;
 }
 
+async function resolveSessionContinuations(sessionId) {
+  let scanBudget = 128 * 1024 * 1024;
+  return resolveContinuations(sessionId, async id => {
+    if (!validId(id)) return null;
+    const row = getCachedSession?.(id);
+    if (!row) return null;
+    const file = resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' });
+    const stat = fs.statSync(file);
+    let index;
+    try { index = JSON.parse(row.continuationIndex); } catch {}
+    if (!index?.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
+      const start = index && index.bytes < stat.size ? index.bytes : 0;
+      let remaining = Math.min(scanBudget, stat.size - start);
+      do {
+        const bytes = Math.min(remaining, 4 * 1024 * 1024);
+        remaining -= bytes;
+        scanBudget -= bytes;
+        const before = index?.bytes || 0;
+        row.continuationIndex = scanContinuationIndex(file, id, row.continuationIndex, bytes);
+        index = JSON.parse(row.continuationIndex);
+        await new Promise(resolve => setImmediate(resolve));
+        if (index.bytes === before) break;
+      } while (remaining > 0 && !index.complete);
+      upsertCachedSessions([row]);
+    }
+    return { index, modified: row.modified };
+  });
+}
+
 module.exports = {
+  resolveSessionContinuations,
   init,
   readSessionFile,
   readFolderFromFilesystem,

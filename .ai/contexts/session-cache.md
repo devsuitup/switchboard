@@ -1671,3 +1671,24 @@ search_fts USING fts5(id, type, folder, title, body, tokenize='trigram')
 search_map(id PK, type, folder)   -- backref for FTS delete
 settings(key PK, value JSON)
 ```
+
+## Continuation index (#518B)
+
+`session_cache.continuationIndex` is nullable JSON `{ids, bytes, complete,
+mtime, unresolved, skipLine?}`. Schema reconciliation adds it without wiping
+old rows. Full transcript scans in `read-session-file.js` collect links while
+already parsing the file, including worker scans. Header-only refresh also
+updates this index with a bounded 4 MiB chunk scan, starting at the previous
+safe cursor for appended transcripts. Same-size/shrunken changes restart at
+byte zero; the CLI's append-only history is assumed for growth.
+
+`resolveSessionContinuations` verifies size/mtime before trusting the index.
+A legacy/incomplete/stale index uses bounded chunk reads, yielding between
+4 MiB chunks with a shared 128 MiB budget for the entire traversal; it writes
+progress back to the row. A complete fresh index only needs stat, without
+reading transcript contents. A partial trailing JSON record retains the
+last complete-line cursor, so an append retries it. Lines over 1 MiB are
+skipped only when their top-level type in the first 64 KiB is known and is
+not continued-in; skipLine persists across chunks. An unclassifiable oversized
+line stays unresolved until full indexing replaces the index. No transcript
+content is sent through this IPC, only candidate ids and activity times.

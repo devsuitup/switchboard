@@ -621,3 +621,9 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 3. Renderer: `const result = await window.api.myThing(...)`
 4. Test: prefer a unit test for the main-side logic (extract to a pure function the handler calls); jsdom integration tests for renderer side.
 5. Document here.
+
+### Conversation continuations (#518B)
+
+| IPC | Args | Returns | Notes |
+|---|---|---|---|
+| `session-continuations` | `(sessionId)` | `{candidates:[{sessionId,modified}],unresolved,continued}` | Bounded traversal of the transcript continuation index; exposed as `api.getSessionContinuations`. Restore and manual resume share the renderer resolver. See cli-session-state.md, Conversation continuations. |

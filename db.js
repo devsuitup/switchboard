@@ -319,6 +319,7 @@ if (migrations.length > currentDbVersion) {
   // see .ai/contexts/session-cache.md ("SDK-launched sessions")
   if (!cols.has('entrypoint')) db.exec('ALTER TABLE session_cache ADD COLUMN entrypoint TEXT');
   if (!cols.has('scheduleSlug')) db.exec('ALTER TABLE session_cache ADD COLUMN scheduleSlug TEXT');
+  if (!cols.has('continuationIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN continuationIndex TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
   // Fork table (shipped in our v5), referenced unconditionally by prepare()
   // below — must exist whatever db_version claims.
@@ -421,8 +422,8 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
@@ -433,7 +434,8 @@ const stmts = {
       subagentType = excluded.subagentType, description = excluded.description,
       bridgeSessionId = excluded.bridgeSessionId,
       mergedIntoSessionId = excluded.mergedIntoSessionId,
-      entrypoint = excluded.entrypoint, scheduleSlug = excluded.scheduleSlug
+      entrypoint = excluded.entrypoint, scheduleSlug = excluded.scheduleSlug,
+      continuationIndex = excluded.continuationIndex
   `),
   cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
   // Kept as SELECT * (upstream narrowed this to sessionId+fileMtime): our
@@ -564,7 +566,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
-      s.scheduleSlug || null
+      s.scheduleSlug || null, s.continuationIndex || null
     );
   }
 });
