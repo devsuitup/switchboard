@@ -5,7 +5,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- Remote sessions now have a Touched list and can open its files read-only, with their HEAD diff inside the session's repository. The list stays visible with unknown disk states when the host cannot be reached. (#454)
+- Remote sessions now have a Touched list and can open its files read-only, with their HEAD diff inside the session's repository. The list stays visible with unknown disk states when the host cannot be reached. Password databases and private keys on the host are refused. (#454)
+
+## v0.0.90 — 2026-10-09
+
+### New
 - An Agents view lists the sessions the Claude daemon runs in the background (`claude --bg`) and the interactive sessions running outside Switchboard, grouped by state or by project and worktree. Open it from the people icon in the sidebar or with Ctrl+Shift+A (Cmd+Shift+A on macOS); attach to a live one by double click, stop, respawn or delete one, and start a new one with New agent. A background session that is running shows a `bg` badge in the sidebar and is attached instead of resumed. (#374)
 - **Archive folder** on a project header opens a dialog that archives the folder's sessions and disables its enabled schedules, each optional, and hides the folder with its worktrees. The folder comes back, with its settings, when you add it again or a new session starts in it, and then offers to turn back on the schedules the archive disabled. (#473)
 ### Changed
@@ -14,7 +18,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Clicking a file in the terminal, or a file Claude opens, shows it in Touched, at the top of the list as opened when the file tools did not touch it, with its diff against HEAD when it changed. A `path:line` link opens the source at that line, symbolic links open read-only, and files Claude opens get the panel's checks, which refuse credential paths, binary files and files over 2 MB. (#472)
 - Sessions a program started through the Claude Agent SDK, such as headless runs or review agents, no longer fill the sidebar and grid. Turn off **Hide SDK-launched Sessions** in Global Settings to list them again. Sessions you have open, scheduled tasks and sessions you continued by typing in them stay listed, and the activity heatmap still counts the hidden ones. (#486)
 ### Fixed
-- Remote Touched lists show checks in progress, handle long lists without delaying local sessions, and retain Refresh and older-history requests made while loading. Readable files open when Git fails, ordinary `id_` source files stay accessible, remote and read-only files stay protected when tabs change, opening a remote file leaves local saves available for the same path, oversized HEAD versions show the size limit, and password databases and renamed private keys stay protected. (#454)
 - The New background agent dialog keeps fields inside their rows and aligns Project, Name and Agent. Permissions offer Accept Edits, Auto, Plan and Bypass, preselecting the project's mode when it is one of them and Accept Edits otherwise; additional directories use one path per line, preserving commas in paths. (#501)
 - Automation triggers to a running background session now report `background session, not attached here` with its job id when no attach tab is open. Attach it from the Agents view to deliver the trigger through that tab. (#495)
 - Opening a session while its scheduled task is running asks you to wait instead of starting a second process on the same transcript. Automatic restores skip it until the run finishes. (#484)
