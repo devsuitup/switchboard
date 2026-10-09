@@ -584,9 +584,19 @@ never in `error`: `not sent: input pending` is not `not sent`.
 |---|---|---|
 | `not sent` | **not one byte reached the session**: no idle came, politeness never allowed a write, or the trigger was refused before any write (stale, bad `wait`, bad `expectedCwd`, target guard) | nothing happened; it is safe to send again |
 | `send unconfirmed` | a socket write timed out or returned an unclassified non-zero exit; the line may have reached the session; `written` is `unknown` and `submitted` is `no` | check the session before retrying; a timeout reserves identical text for 30 seconds |
+| `background session, not attached here` | a live local CLI descriptor identifies a background session, but this instance has no attach tab for it; nothing was written, `submitted` is `no`, and `jobId` and `sessionId` identify the target | attach the job in the Agents view before retrying |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
 | `step not confirmed` | text **was written** and nothing more was typed. For a single or chained `/compact`, its boundary evidence was not observed before the deadline; see the [compact evidence contract](#compact-evidence-contract). For an ordinary chain step, submission was not confirmed and recovery Enter was withheld by a busy/waiting descriptor or pending input. A readable local transcript under `busy` allows up to 30 s for the step's own entry, then up to the step deadline for its turn to finish; `reason` identifies the failed wait | inspect the session before retrying: the step may be unsubmitted, queued, running, or completed without readable evidence |
 | anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
+
+A trigger to a live local background session without an attach tab returns
+`{ ok: false, submitted: "no", error: "background session, not attached here", jobId, sessionId }`.
+The error string is a contract compared by strict equality. No headless attach
+is started. Once its attach tab is open, the trigger uses that tab's PTY and
+the background session's descriptor for readiness; `/compact` also needs
+evidence from the background session's transcript. Unknown ids and unresolved
+remote targets still return `session not found`; resolved remote socket targets
+keep their existing delivery path.
 
 The two reserved values mean opposite things:
 

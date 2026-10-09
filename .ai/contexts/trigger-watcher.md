@@ -33,6 +33,23 @@ require('./trigger-watcher').start(createTriggerContext({ activeSessions, log })
 ```
 
 `getPtyForSession` returns `null` when the session is unknown or has already exited.
+When no PTY or remote socket target is found, optional `ctx.getLiveDescriptor`
+calls `cliSessionState.findLiveProcess` through `trigger-context.js` and main's
+wiring. This on-demand descriptor reader checks the live pid and, when
+available, its process start time without requiring a seeded watcher or an
+open Agents view. A descriptor with `kind: "bg"` produces
+`{ ok: false, submitted: "no", error: "background session, not attached here", jobId, sessionId }`.
+The exact error string is matched by the harness. Unknown, dead and non-bg
+targets retain `session not found`; the existing remote path keeps precedence.
+
+An attach tab is an `activeSessions` entry keyed by the bg session id with
+`isAttach: true` and `attachJobId`. It follows the ordinary local PTY path:
+composer checks, the bg descriptor through `getCliStatus`, and the bg transcript
+through `getTranscriptTurn` for compaction evidence. No headless attach is
+attempted. `test/trigger-background.test.js` exercises the real watcher,
+context and descriptor reader with disposable files and an in-memory attach
+PTY, including a compact chain that holds its next step for descriptor idle.
+
 `isSessionBusy` reads `session._cliBusy` — the same flag that tracks OSC 0 title-change spinner chars.
 `getComposerState` reads `session.composerState`, the running model of what the
 user typed and has not submitted (`composer-state.js`, fed from

@@ -1300,6 +1300,15 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         return;
       }
     }
+    const descriptor = typeof ctx.getLiveDescriptor === 'function'
+      ? await ctx.getLiveDescriptor(sessionId) : null;
+    if (descriptor?.kind === 'bg') {
+      await writeResult({
+        ok: false, submitted: SUBMITTED_NO, error: 'background session, not attached here',
+        jobId: descriptor.jobId, sessionId,
+      });
+      return;
+    }
     ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
     await writeResult({ ok: false, error: 'session not found', sessionId });
     return;

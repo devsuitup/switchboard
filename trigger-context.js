@@ -33,7 +33,7 @@ function createLocalSessionHandle(ptyProcess) {
  * @returns {object} ctx
  */
 function createTriggerContext(deps) {
-  const { activeSessions, log, isPtyAlive, getCliStatus, projectsDir } = deps;
+  const { activeSessions, log, isPtyAlive, getCliStatus, getLiveDescriptor, projectsDir } = deps;
   const ctx = {
     log,
     getPtyForSession(sessionId) {
@@ -57,6 +57,7 @@ function createTriggerContext(deps) {
     },
   };
   if (isPtyAlive) ctx.isPtyAlive = isPtyAlive;
+  if (getLiveDescriptor) ctx.getLiveDescriptor = (sessionId) => getLiveDescriptor(sessionId);
   if ('remote' in deps) Object.defineProperty(ctx, 'remote', {
     get() {
       const remote = deps.remote;

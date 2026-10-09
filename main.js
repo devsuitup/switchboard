@@ -3421,6 +3421,7 @@ if (!gotSingleInstanceLock) {
     try {
       require('./trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
+        getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         get remote() {
           const settings = getSetting('global') || {};
           if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
