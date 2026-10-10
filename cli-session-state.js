@@ -574,6 +574,41 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   return (await scanLiveProcesses(new Set([key]), exclude)).get(key) || null;
 }
 
+// see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+function clearOwner(sessionId, ptyPid) {
+  if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return 'pending'; }
+  const key = sessionId.toLowerCase();
+  let pid = null;
+  let found = null;
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    let raw;
+    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    if (!raw || typeof raw.sessionId !== 'string' || raw.sessionId.toLowerCase() !== key) continue;
+    if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
+    if (!isProcessAlive(raw.pid)) continue;
+    pid = raw.pid;
+    found = raw;
+    break;
+  }
+  if (pid == null) return 'pending';
+  if (processTableEnabled) {
+    startProcessTableRefresh();
+    if (!tableEntry(pid)) return 'pending';
+    return conversationOwns(found, new Set([ptyPid])) ? 'mine' : 'other';
+  }
+  let current = pid;
+  for (let depth = 0; depth < 64 && current && current > 1; depth++) {
+    if (current === ptyPid) return 'mine';
+    const parent = readParentPid(current);
+    if (parent == null) return depth === 0 ? 'unknown' : 'other';
+    current = parent;
+  }
+  return 'other';
+}
+
 function ownPidTest(ptyPids) {
   const own = new Set(ptyPids());
   return (pid) => own.has(pid) || descendsFromThisProcess(pid, own);
@@ -646,6 +681,7 @@ module.exports = {
   liveElsewhere,
   liveElsewhereMany,
   liveElsewhereChecked,
+  clearOwner,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,

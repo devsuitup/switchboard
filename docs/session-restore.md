@@ -21,6 +21,22 @@ Each time a session is opened or closed, Switchboard saves the open set — each
 session's id and project, and which one was active — in its global settings
 (`openWorkingSet`).
 
+### A session with no transcript yet
+
+A session started with **+**, or one just cleared with `/clear`, has no
+conversation until its first prompt: the CLI has nothing to resume, and the
+index does not list it. It is saved as a *fresh* entry (`fresh: true`, with
+its project). Restore waits for indexing to finish before it treats a fresh
+entry as having no transcript: one whose first prompt landed before the quit
+is indexed by then and is resumed like any other session. A fresh entry that
+is still not in the index then is started anew: a new session in that project,
+with the project's current defaults for a new session, except that it never
+creates a worktree, since the saved project path already is the folder to
+start in. Once its first prompt makes it a real session, the set is saved
+again with it as an ordinary entry. A session without a transcript is still
+left out when it runs on a remote host, or was started as a fork or in a new
+worktree: starting it anew would not give back the same thing.
+
 ## What restore does
 
 Restore is a respawn, not a reattach: a session's process is a child of the

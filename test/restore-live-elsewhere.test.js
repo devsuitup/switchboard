@@ -64,6 +64,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   vm.runInContext(read('resume-guard.js'), ctx);
   vm.runInContext(`
     var openSessions = new Map();
+    var pendingSessions = new Map();
     var sessionMap = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;

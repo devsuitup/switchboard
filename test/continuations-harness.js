@@ -52,7 +52,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
   vm.runInContext(`
-    var openSessions = new Map(), sessionMap = new Map();
+    var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map();
     var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;
     var sessionOpenedOutsideRestore = false, _persistChain = Promise.resolve();
     var RESTORE_STAGGER_MS = 0;

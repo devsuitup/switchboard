@@ -34,10 +34,13 @@ function createLocalSessionHandle(ptyProcess) {
  */
 function createTriggerContext(deps) {
   const { activeSessions, log, isPtyAlive, getCliStatus, getLiveDescriptor, projectsDir } = deps;
+  // see .ai/contexts/trigger-watcher.md, "Re-keyed sessions"
+  const resolve = deps.resolveSessionId || ((id) => id);
   const ctx = {
     log,
+    resolveSessionId: resolve,
     getPtyForSession(sessionId) {
-      const session = activeSessions.get(sessionId);
+      const session = activeSessions.get(resolve(sessionId));
       if (!session || session.exited) return null;
       const handle = (session.host == null)
         ? createLocalSessionHandle(session.pty)
@@ -46,18 +49,18 @@ function createTriggerContext(deps) {
       return { ptyProcess: session.pty, cwd: session.cwd, handle };
     },
     isSessionBusy(sessionId) {
-      const session = activeSessions.get(sessionId);
+      const session = activeSessions.get(resolve(sessionId));
       return session ? !!session._cliBusy : false;
     },
     getComposerState(sessionId) {
-      const session = activeSessions.get(sessionId);
+      const session = activeSessions.get(resolve(sessionId));
       if (!session || session.exited || !session.composerState) return null;
       const { pending, lastInputAt } = session.composerState;
       return { pending, lastInputAt };
     },
   };
   if (isPtyAlive) ctx.isPtyAlive = isPtyAlive;
-  if (getLiveDescriptor) ctx.getLiveDescriptor = (sessionId) => getLiveDescriptor(sessionId);
+  if (getLiveDescriptor) ctx.getLiveDescriptor = (sessionId) => getLiveDescriptor(resolve(sessionId));
   if ('remote' in deps) Object.defineProperty(ctx, 'remote', {
     get() {
       const remote = deps.remote;
@@ -82,10 +85,12 @@ function createTriggerContext(deps) {
     const reader = createTranscriptTurnReader();
     const readPaths = new Map();
     ctx.getTranscriptTurn = (sessionId, compactionCursor) => {
-      const session = activeSessions.get(sessionId);
+      const session = activeSessions.get(resolve(sessionId));
       if (!session || session.exited || session.host != null || !session.projectFolder) return null;
-      const id = session.realSessionId || sessionId;
+      const id = session.realSessionId || resolve(sessionId);
       const filePath = path.join(projectsDir, session.projectFolder, id + '.jsonl');
+      const previous = readPaths.get(sessionId);
+      if (previous !== undefined && previous !== filePath) reader.forget(previous);
       readPaths.set(sessionId, filePath);
       return reader.read(filePath, compactionCursor);
     };
@@ -98,9 +103,10 @@ function createTriggerContext(deps) {
   }
   if (getCliStatus) {
     ctx.getCliStatus = (sessionId) => {
-      const session = activeSessions.get(sessionId);
+      const id = resolve(sessionId);
+      const session = activeSessions.get(id);
       if (!session || session.host != null) return undefined;
-      return getCliStatus(sessionId);
+      return getCliStatus(id);
     };
   }
   return ctx;

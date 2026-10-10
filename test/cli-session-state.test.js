@@ -535,3 +535,32 @@ test('ownProcessFilter is exported and claims our own PTY pids', () => {
     assert.equal(isOwn(78), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+test('clearOwner: walks the state file pid up to the PTY pid', () => {
+  const dir = mkTmp();
+  try {
+    const parents = { 300: 200, 200: 100, 100: 1, 400: 1 };
+    cliSessionState.init({
+      dir, activeSessions: new Map(), log: silentLog,
+      isProcessAlive: (pid) => pid !== 500,
+      readParentPid: (pid) => parents[pid] ?? null,
+    });
+    writeState(dir, 300, { sessionId: 'cleared', status: 'idle' });
+    writeState(dir, 400, { sessionId: 'elsewhere', status: 'idle' });
+    writeState(dir, 500, { sessionId: 'dead', status: 'idle' });
+    writeState(dir, 600, { sessionId: 'no-proc', status: 'idle' });
+
+    assert.equal(cliSessionState.clearOwner('cleared', 100), 'mine');
+    assert.equal(cliSessionState.clearOwner('CLEARED', 100), 'mine', 'ids compare in any letter case, as elsewhere since #487');
+    assert.equal(cliSessionState.clearOwner('cleared', 300), 'mine', 'the PTY runs claude itself');
+    assert.equal(cliSessionState.clearOwner('elsewhere', 100), 'other');
+    assert.equal(cliSessionState.clearOwner('dead', 100), 'pending', 'a dead pid is no owner');
+    assert.equal(cliSessionState.clearOwner('absent', 100), 'pending');
+    assert.equal(cliSessionState.clearOwner('no-proc', 100), 'unknown', 'parent unreadable');
+    assert.equal(cliSessionState.clearOwner('cleared', undefined), 'pending', 'no PTY pid');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

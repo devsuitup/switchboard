@@ -1923,8 +1923,10 @@ function start(ctx) {
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
   const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
+  const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
   function acquireSessionLock(sessionId) {
-    const previous = sessionLocks.get(sessionId) || Promise.resolve();
+    const target = resolveId(sessionId);
+    const previous = Promise.all([...sessionLocks].filter(([id]) => resolveId(id) === target).map(([, t]) => t));
     let release;
     const held = new Promise((resolve) => { release = resolve; });
     const tail = previous.then(() => held);
