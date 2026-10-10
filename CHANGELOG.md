@@ -6,6 +6,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
+
+## v0.0.92 — 2026-10-10
+
+### Fixed
 - The Agents view shows a finished job whose conversation is still running as one live session, keeps its job id and state, and keeps jobs open here out of External. Respawn and Delete check whether the conversation is still held; Stop checks this only for a known finished job and keeps an attached tab open if refused. Transcript checks its file when clicked and explains when it is missing or not indexed yet. (#522)
 - Conversations sharing a web session now keep their own older messages when another conversation continues later. Continuations stay with the conversation they continue, and previously missing local and remote conversations return after upgrading without blocking the interface while their history is indexed. (#524)
 - On Windows, writing to a terminal that is closing no longer raises an uncaught main-process exception, including when closing an attached agent tab. (#517)
