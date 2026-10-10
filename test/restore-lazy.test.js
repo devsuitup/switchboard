@@ -100,7 +100,9 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
   });
   const gridSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'grid-view.js'), 'utf8');
   vm.runInContext(['var gridViewActive = false;', 'var gridFocusedSessionId = null;',
-    extractFunction(gridSrc, 'getOrderedOpenSessionIds'), extractFunction(gridSrc, 'navigateSession')].join('\n'), context);
+    'var isMac = false;', 'var appShortcuts = {};', 'function matchShortcut(name, e) { return e.shortcut === name; }',
+    extractFunction(gridSrc, 'getOrderedOpenSessionIds'), extractFunction(gridSrc, 'navigateSession'),
+    extractFunction(gridSrc, 'handleSessionNavKey')].join('\n'), context);
   context.savedSet = savedSet;
   run(`
     restoreMode = 'lazy';
@@ -501,4 +503,106 @@ test('lazy: a dormant session that fails to open from the keyboard is logged, no
     process.off('unhandledRejection', onUnhandled);
     h.destroy();
   }
+});
+
+test('lazy: a dormant session whose conversation continues under another id is opened there, and the old id is neither dormant nor saved', async () => {
+  const h = setup();
+  try {
+    h.index(['a', 'x', 'b']);
+    await h.fns.tickRestorePlanner();
+    h.window.resolveResumeSession = async (session) => (session.sessionId === 'a' ? { ...session, sessionId: 'a2' } : session);
+    await h.open('a');
+    assert.deepEqual(h.openTerminalCalls, ['a2']);
+    assert.deepEqual(h.dormantIds(), ['b', 'x']);
+    assert.equal(h.row('a').classList.contains('dormant'), false);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a2', 'x', 'b']);
+  } finally { h.destroy(); }
+
+  const failed = setup({ openResult: { ok: false, error: 'spawn failed' } });
+  try {
+    failed.index(['a', 'x', 'b']);
+    await failed.fns.tickRestorePlanner();
+    failed.window.resolveResumeSession = async (session) => (session.sessionId === 'a' ? { ...session, sessionId: 'a2' } : session);
+    await failed.open('a');
+    assert.deepEqual(failed.dormantIds(), ['a2', 'b', 'x'], 'a continuation that fails to open stays marked under its new id');
+    await failed.fns.persistWorkingSet();
+    assert.deepEqual(failed.savedIds(), ['a2', 'x', 'b']);
+  } finally { failed.destroy(); }
+});
+
+test('lazy: a session the user opens while the marking awaits a reattach is not marked dormant', async () => {
+  for (const stage of ['opened', 'opening', 'checking']) {
+    const releases = {};
+    const h = setup({ livePtys: ['a'], openResult: (id) => new Promise((resolve) => { releases[id] = () => resolve({ ok: true, reattached: id === 'a' }); }) });
+    try {
+      h.index(['a', 'x', 'b']);
+      let check;
+      if (stage === 'checking') h.window.api.getSessionLiveElsewhere = (id) => (id === 'b' ? new Promise((resolve) => { check = () => resolve(null); }) : Promise.resolve(null));
+      const ticking = h.fns.tickRestorePlanner();
+      for (let j = 0; j < 5; j++) await settle();
+      const opening = h.open('b');
+      for (let j = 0; j < 5; j++) await settle();
+      if (stage === 'opened') { releases.b(); await opening; }
+      releases.a();
+      for (let j = 0; j < 5; j++) await settle();
+      if (stage === 'checking') { check(); for (let j = 0; j < 5; j++) await settle(); }
+      if (stage !== 'opened') { releases.b(); await opening; }
+      await ticking;
+      assert.deepEqual(h.dormantIds(), ['x'], stage);
+      assert.equal(h.row('b').classList.contains('dormant'), false, stage);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy: a click during the reattach-only open of the same session opens it when no PTY is left', async () => {
+  let release;
+  const h = setup({
+    livePtys: ['a'],
+    openResult: (_id, options) => (options.reattachOnly ? new Promise((resolve) => { release = () => resolve({ ok: false, notLive: true }); }) : { ok: true }),
+  });
+  try {
+    h.index(['a', 'x', 'b']);
+    const ticking = h.fns.tickRestorePlanner();
+    for (let j = 0; j < 5; j++) await settle();
+    const click = h.open('a');
+    release();
+    await ticking;
+    await click;
+    assert.deepEqual(h.openTerminalCalls, ['a', 'a']);
+    assert.equal(h.openTerminalOptions[1].reattachOnly, undefined, 'the click resumes it');
+    assert.equal(h.window.openSessions.has('a'), true);
+    assert.deepEqual(h.dormantIds(), ['b', 'x']);
+  } finally { h.destroy(); }
+});
+
+test('lazy: the session keys pass an auto-repeat on, so a held key resumes no dormant one', async () => {
+  for (const key of [{ shortcut: 'sessionNavBrackets', code: 'BracketRight' }, { shortcut: 'sessionNavArrows', key: 'ArrowRight' }]) {
+    const h = setup({ savedSet: [...SAVED, { sessionId: 'c', projectPath: PROJECT, active: false }] });
+    try {
+      h.index(['a', 'x', 'b', 'c']);
+      await h.fns.tickRestorePlanner();
+      await h.open('x');
+      await h.open('c');
+      const e = { ...key, type: 'keydown', repeat: true, preventDefault() {} };
+      h.window.handleSessionNavKey(e);
+      h.window.handleSessionNavKey(e);
+      for (let j = 0; j < 5; j++) await settle();
+      assert.deepEqual(h.openTerminalCalls, ['x', 'c'], key.shortcut);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy: a running session is reattached under its own id, not a continuation\'s', async () => {
+  const h = setup({ livePtys: ['a', 'x'], openResult: { ok: true, reattached: true } });
+  try {
+    h.index(['a', 'x', 'b']);
+    h.window.resolveResumeSession = async (session) => ({ ...session, sessionId: session.sessionId + '2' });
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.openTerminalCalls, ['a', 'x']);
+    h.window.openSessions.clear();
+    h.run('activeSessionId = "x"');
+    await h.fns.reopenActiveSessionAfterReload();
+    assert.deepEqual(h.openTerminalCalls, ['a', 'x', 'x'], 'and so after a reload');
+  } finally { h.destroy(); }
 });
