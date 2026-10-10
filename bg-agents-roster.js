@@ -1,5 +1,6 @@
 // bg-agents-roster.js — see .ai/contexts/bg-agents.md
 'use strict';
+const { bridgeSessionKey } = require('./bridge-session-id');
 
 const JOB_STATES = new Set(['working', 'blocked', 'done', 'stopped', 'failed']);
 const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
@@ -49,6 +50,8 @@ function parseJobState(text) {
     model: flagValue(raw.respawnFlags, '--model'),
     name: flagValue(raw.respawnFlags, '--name'),
     sessionId: sessionIdFromLinkScanPath(raw.linkScanPath),
+    transcriptPath: str(raw.linkScanPath),
+    bridgeSessionId: str(raw.bridgeSessionId),
   };
 }
 
@@ -136,6 +139,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     Object.assign(e, {
       sessionId: job.sessionId, name: job.name, state: job.state, agent: job.agent, model: job.model,
       detail: job.detail, tempo: job.tempo, tokens: job.tokens, fan: job.fan, children: job.children, result: job.result,
+      transcriptPath: job.transcriptPath, bridgeSessionId: job.bridgeSessionId,
     });
   }
   if (cliEntry) {
@@ -175,8 +179,30 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
   } else if (jobs) {
     for (const [id, job] of jobs) roster.push(backgroundEntry(id, null, job, byJobId.get(id)));
   }
+  const matched = new Set();
+  for (const e of roster) {
+    const matches = d => d && d.sessionId && ((e.sessionId && d.sessionId.toLowerCase() === e.sessionId.toLowerCase())
+      || (bridgeSessionKey(e.bridgeSessionId) !== null && bridgeSessionKey(e.bridgeSessionId) === bridgeSessionKey(d.bridgeSessionId)));
+    const holder = (descriptors || []).find(matches);
+    if (holder) {
+      e.conversationPid = holder.pid;
+      e.conversationOwn = own(holder.pid);
+    }
+    if (!['stopped', 'done', 'failed'].includes(e.state)) continue;
+    const d = (descriptors || []).find(d => d && d.kind === 'interactive' && matches(d));
+    if (!d) continue;
+    matched.add(d.sessionId.toLowerCase());
+    if (own(d.pid)) continue;
+    Object.assign(e, {
+      kind: 'interactive', state: null, jobState: e.state,
+      sessionId: d.sessionId,
+      name: d.name || e.name, cwd: d.cwd || e.cwd, status: d.status,
+      pid: d.pid, conversationPid: d.pid, conversationOwn: false, startedAt: d.startedAt,
+    });
+  }
   for (const d of descriptors || []) {
     if (!d || d.kind !== 'interactive' || !d.sessionId || own(d.pid)) continue;
+    if (matched.has(d.sessionId.toLowerCase())) continue;
     roster.push({
       ...emptyEntry(), kind: 'interactive', sessionId: d.sessionId, name: d.name, cwd: d.cwd,
       status: d.status, pid: d.pid, startedAt: d.startedAt,

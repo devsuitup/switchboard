@@ -3144,6 +3144,11 @@ bgAgents.init({
   log,
   runClaude: runClaudeCommand,
   cliSessionState,
+  transcriptExists: (sessionId) => {
+    const folder = getCachedFolder(sessionId);
+    const dir = folder && projectsDirForFolder(folder);
+    try { return !!dir && fs.statSync(path.join(dir, sessionId + '.jsonl')).isFile(); } catch { return false; }
+  },
   makeIsOwnPid: () => cliSessionState.ownProcessFilter(ptyPids),
   dispatchSettings: (cwd) => {
     const project = getSetting('project:' + path.resolve(cwd)) || {};
@@ -3159,7 +3164,8 @@ bgAgents.init({
     return false;
   },
 });
-require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log });
+require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
+  activeSessions, cliSessionState, sessionHasPty, ptyPids });
 const deleteSessionGuard = makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids });
 
 // --- fs.watch on projects directory ---

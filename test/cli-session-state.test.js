@@ -504,7 +504,7 @@ test('readAllDescriptors returns the live descriptors with their kind, jobId and
     boot(dir, oneSession(), { isProcessAlive: (pid) => pid !== 12 });
     const all = cliSessionState.readAllDescriptors().sort((a, b) => a.pid - b.pid);
     assert.deepEqual(all.map(d => d.pid), [10, 11]);
-    assert.deepEqual(all[0], { pid: 10, sessionId: 'sess-1', kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', cwd: dir, status: 'idle', startedAt: 5 });
+    assert.deepEqual(all[0], { pid: 10, sessionId: 'sess-1', bridgeSessionId: null, kind: 'bg', jobId: 'bc3fd129', agent: 'fleet:em', name: 'em', cwd: dir, status: 'idle', startedAt: 5 });
     assert.equal(all[1].kind, 'interactive');
     assert.equal(all[1].jobId, null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- The Agents view shows a finished job whose conversation is still running as one live session, keeps its job id and state, and keeps jobs open here out of External. Respawn and Delete check whether the conversation is still held; Stop checks this only for a known finished job and keeps an attached tab open if refused. Transcript checks its file when clicked and explains when it is missing or not indexed yet. (#522)
 - On Windows, writing to a terminal that is closing no longer raises an uncaught main-process exception, including when closing an attached agent tab. (#517)
 - Restoring a conversation that continued under another id now opens its continuation and saves the new id, waits and retries when indexing finishes, and keeps live continuations available before their first transcript is saved. Unrelated damaged or oversized records no longer block restore; multiple or unresolved continuations, including when process status cannot be read, stay saved with a notice to open the old session and choose a continuation or explicitly reopen the original. (#518)
 - On Windows, a session running in one of Switchboard's own tabs no longer shows as an External session in the Agents view, and opening it no longer reports it as running in another process. The Agents header now also counts the External sessions it lists. (#521)

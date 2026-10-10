@@ -39,7 +39,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
   let snapshot = { roster: [], daemonReachable: true };
   window.api = {
     getBgAgents: async () => { calls.fetches++; return snapshot; },
-    bgAgentVerb: async (verb, id) => { calls.verbs.push([verb, id]); return { ok: verb !== 'rm', error: verb === 'rm' ? 'nope' : undefined }; },
+    bgAgentVerb: async (verb, id) => { calls.verbs.push([verb, id]); return { ok: verb !== 'rm', sessionId: verb === 'transcript' ? ROSTER.find(e => e.id === id)?.sessionId : undefined, error: verb === 'rm' ? 'nope' : undefined }; },
     onBgAgentsChanged: (cb) => { changedCb = cb; },
     openExternal: async (href) => calls.external.push(href),
     stopSession: async (id) => { calls.stopped.push(id); return { ok: true }; },
@@ -149,7 +149,7 @@ test('selecting a row renders its detail with the verbs disabled by state, and a
   assert.ok(ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').classList.contains('selected'));
 });
 
-test('the verbs: attach opens a tab keyed by the session id, transcript opens the viewer, stop calls the IPC, a failure shows in the detail', async (t) => {
+test('the verbs: attach opens a tab keyed by the session id, transcript opens the viewer, stop calls the IPC, a failure shows in the detail', { timeout: 9000 }, async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -159,16 +159,21 @@ test('the verbs: attach opens a tab keyed by the session id, transcript opens th
   assert.equal(ctx.calls.opened.length, 1);
   assert.equal(ctx.calls.opened[0][0].sessionId, 's-a');
   assert.deepEqual({ ...ctx.calls.opened[0][1] }, { type: 'attach', jobId: 'aaaaaaaa', cwd: '/w/em' });
+  const viewed = new Promise(resolve => {
+    const show = ctx.window.showJsonlViewer;
+    ctx.window.showJsonlViewer = session => { show(session); resolve(); };
+  });
   detail.querySelector('[data-verb="transcript"]').click();
+  await viewed;
   assert.equal(ctx.calls.jsonl[0].sessionId, 's-a');
   await ctx.window.runAgentVerb('stop', ROSTER[0]);
-  assert.deepEqual(ctx.calls.verbs, [['stop', 'aaaaaaaa']]);
+  assert.deepEqual(ctx.calls.verbs, [['transcript', 'aaaaaaaa'], ['stop', 'aaaaaaaa']]);
   ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]').click();
   await ctx.window.runAgentVerb('rm', ROSTER[1]);
   assert.match(ctx.document.getElementById('agents-detail').textContent, /nope/);
 });
 
-test('stop on a session attached here detaches the tab first', async (t) => {
+test('stop on a session attached here detaches the tab after daemon success', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   await ctx.window.showAgentsView();
   await ctx.window.runAgentVerb('stop', { ...ROSTER[0], attachedHere: true });
