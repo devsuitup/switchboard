@@ -9,7 +9,8 @@ stabilisation tick.
 the `session-live-elsewhere` and `sessions-live-elsewhere` IPCs),
 `public/resume-guard.js`, `test/cli-session-state.test.js`,
 `test/canary-cli-session-state.test.js`,
-`test/cli-session-live-elsewhere.test.js`, `test/resume-guard.test.js`,
+`test/cli-session-live-elsewhere.test.js`, `test/cli-session-process-table.test.js`,
+`test/resume-guard.test.js`,
 `test/restore-live-elsewhere.test.js`.
 
 The module has a second, unrelated consumer: the resume guard described under
@@ -211,8 +212,8 @@ ids past the cap are not looked up and resume as before the guard.
 - A CLI this instance spawned is never live elsewhere either, even while its
   PTY is still keyed by the pending id and `sessionHasPty` misses it: a pid that
   is one of the PTY processes (`ptyPids`), or whose parent chain reaches this
-  main process, is excluded. The chain is read from `/proc/<pid>/stat` on Linux;
-  elsewhere only the PTY pids themselves are recognised.
+  main process or one of the PTY pids, is excluded. The chain is read from
+  `/proc/<pid>/stat` on Linux and from a process snapshot elsewhere (next section).
 - Otherwise `findLiveProcess(sessionId)` reads `~/.claude/sessions/*.json`
   afresh — it does not use the watcher's maps, so it answers before the watcher
   attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file
@@ -320,6 +321,44 @@ manual open of a non-scheduled session does after its confirm.
 The sidebar has no dedicated marker for such a session. Once the watcher has
 seen its state file, `getStatus()` gives it the same state+age line as any live
 session (see the section above).
+
+## Own descendants outside Linux (issue #521)
+
+Without `/proc`, only the PTY pids themselves used to be recognised, so on
+Windows the CLI of a Switchboard tab (measured: `Switchboard.exe` -> `bash.exe`
+(the PTY pid) -> `bash` -> `sh` -> `claude.exe`, three levels under the PTY
+pid) read as another process: an External row in the Agents view and a
+live-elsewhere verdict. The parent chain now comes from one process snapshot.
+
+- **Reader.** `probeProcessTable(platform)` runs one process, bounded by
+  `PROBE_TIMEOUT_MS` (5 s): on Windows `powershell.exe -NoProfile` over
+  `Get-CimInstance Win32_Process` printing `<pid> <ppid>` lines (about 0.7-1.4 s
+  cold, 340 processes, measured 2026-10-10); on macOS `/bin/ps -A -o pid=,ppid=`
+  (same parser, not exercised on a Mac); nothing on Linux, which keeps reading
+  `/proc`. `wmic` is not a fallback: recent Windows 11 no longer ships it (absent
+  on the measured machine). Tests inject `readProcessTable`.
+- **Never synchronous.** The snapshot is always asynchronous. A chain walk is
+  synchronous and reads only the cached snapshot (`defaultReadParentPid`); with no
+  snapshot yet, or a failed one, it behaves as before (PTY pids only). An injected
+  `readParentPid` disables the snapshot entirely.
+- **Cache.** `PROCESS_TABLE_TTL_MS` (3 s). Concurrent callers share the one in-flight
+  read; a failed or empty read is cached for the same window as "unknown", so a
+  broken PowerShell is not respawned per check. `init()` drops the cache.
+- **Async paths** (`liveElsewhere`, `liveElsewhereChecked`, `liveElsewhereMany`):
+  `scanLiveProcessesChecked` awaits the snapshot once, and only when at least one
+  descriptor for an asked session has a live pid, then applies the filter. Nothing
+  is spawned for a session without such a descriptor.
+- **Sync path** (`ownProcessFilter`, used by the Agents view's `rebuild()`): building
+  the filter starts a snapshot when the cache is stale, without waiting for it, and
+  calls the descriptor listeners when it lands; the view's `rebuild({onlyIfChanged})`
+  then drops the row. The first roster after startup can therefore show an own
+  session as External for the length of one snapshot. A CLI started inside the
+  3 s window is not in the cached snapshot and stays External until the next
+  roster rebuild after the window (the view's 30 s re-read at the latest).
+- A chain stops as own at the first ancestor that is `ownPid` or a PTY pid. Windows
+  reports a parent pid that can name a dead process whose pid was reused; no
+  creation-time cross-check is made, so a foreign CLI whose dead parent's pid was
+  reused by this instance's processes would read as own. Not measured to occur.
 
 ## Descriptor hooks for the agents view
 

@@ -350,10 +350,11 @@ function renderAgentsView() {
   if (!listEl || !detailEl) return;
   const visible = sortAgentEntries(agentsRoster.filter(e => agentsShowFinished || agentIsLive(e)));
   const running = agentsRoster.filter(agentJobIsLive).length;
+  const external = agentsRoster.filter(e => e.kind === 'interactive').length;
   const finished = agentsRoster.filter(e => e.kind === 'background' && !agentJobIsLive(e)).length;
   const worktreesBox = document.getElementById('agents-group-worktrees');
   if (worktreesBox) worktreesBox.disabled = agentsGroupBy !== 'project';
-  if (countEl) countEl.textContent = `${running} running · ${finished} finished`;
+  if (countEl) countEl.textContent = `${running} running · ${finished} finished${external ? ` · ${external} external` : ''}`;
   if (bannerEl) {
     bannerEl.textContent = 'The daemon is not answering; state comes from files only.';
     bannerEl.style.display = agentsDaemonReachable ? 'none' : '';

@@ -18,6 +18,8 @@ const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 const MAX_PROBE_PIDS = 64;
 const PROBE_TIMEOUT_MS = 5000;
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
+const PROCESS_TABLE_TTL_MS = 3000;
+const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
@@ -26,6 +28,11 @@ let log = null;
 let isProcessAlive = defaultIsProcessAlive;
 let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
+let readProcessTable = defaultReadProcessTable;
+let processTableEnabled = false;
+let processTableEpoch = 0;
+let processTable = null;
+let processTableInFlight = null;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
@@ -65,6 +72,7 @@ function defaultIsProcessAlive(pid) {
 }
 
 function defaultReadParentPid(pid) {
+  if (processTableEnabled) return processTable && processTable.map ? (processTable.map.get(pid) ?? null) : null;
   if (process.platform !== 'linux') return null;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -75,11 +83,76 @@ function defaultReadParentPid(pid) {
   }
 }
 
+// see .ai/contexts/cli-session-state.md ("Own descendants outside Linux")
+function parseProcessTable(text) {
+  const out = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (m) out.set(Number(m[1]), Number(m[2]));
+  }
+  return out;
+}
+
+function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS, exec = execFile) {
+  return new Promise((resolve, reject) => {
+    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER };
+    const done = (err, stdout) => {
+      if (err) { reject(err); return; }
+      resolve(parseProcessTable(stdout));
+    };
+    if (plat === 'win32') {
+      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }';
+      const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done);
+    } else if (plat === 'darwin') {
+      exec('/bin/ps', ['-A', '-o', 'pid=,ppid='], opts, done);
+    } else {
+      resolve(new Map());
+    }
+  });
+}
+
+function defaultReadProcessTable() {
+  return probeProcessTable(process.platform);
+}
+
+function processTableFresh() {
+  return !!processTable && now() - processTable.at < PROCESS_TABLE_TTL_MS;
+}
+
+function refreshProcessTable() {
+  if (!processTableEnabled) return Promise.resolve(null);
+  if (processTableFresh()) return Promise.resolve(processTable.map);
+  if (processTableInFlight) return processTableInFlight;
+  const epoch = processTableEpoch;
+  const inFlight = (async () => {
+    let map = null;
+    try {
+      const read = await readProcessTable();
+      if (read instanceof Map && read.size > 0) map = read;
+    } catch (err) {
+      log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
+    }
+    if (epoch === processTableEpoch) {
+      processTable = { at: now(), map };
+      processTableInFlight = null;
+    }
+    return map;
+  })();
+  processTableInFlight = inFlight;
+  return inFlight;
+}
+
+function startProcessTableRefresh() {
+  if (!processTableEnabled || processTableFresh() || processTableInFlight) return;
+  refreshProcessTable().then((map) => { if (map) notifyDescriptorsChanged(); }, () => {});
+}
+
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
-function descendsFromThisProcess(pid) {
+function descendsFromThisProcess(pid, own = null) {
   let current = pid;
   for (let depth = 0; depth < 64 && current && current > 1; depth++) {
-    if (current === ownPid) return true;
+    if (current === ownPid || (own && own.has(current))) return true;
     current = readParentPid(current);
   }
   return false;
@@ -138,10 +211,15 @@ function init(ctx) {
     || (ctx.readProcStart
       ? async (pids) => new Map(pids.map((pid) => [pid, ctx.readProcStart(pid)]))
       : defaultReadProcStartMany);
-  readParentPid = ctx.readParentPid || defaultReadParentPid;
-  ownPid = ctx.ownPid || process.pid;
   now = ctx.now || Date.now;
   platform = ctx.platform || process.platform;
+  readParentPid = ctx.readParentPid || defaultReadParentPid;
+  ownPid = ctx.ownPid || process.pid;
+  processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
+  readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
+  processTableEpoch++;
+  processTable = null;
+  processTableInFlight = null;
   stop();
 }
 
@@ -381,7 +459,7 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
     return { found, unreadable: err && err.code === 'ENOENT' ? null : `cannot read ${dir}: ${err && err.message}` };
   }
   let unreadable = null;
-  const candidates = [];
+  const alive = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
@@ -392,9 +470,10 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
     if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string' || !sessionIds.has(raw.sessionId.toLowerCase())) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
-    if (exclude(raw.pid)) continue;
-    candidates.push(raw);
+    alive.push(raw);
   }
+  if (alive.length > 0) await refreshProcessTable();
+  const candidates = alive.filter((raw) => !exclude(raw.pid));
 
   const comparable = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))];
   const toProbe = platform === 'win32' ? comparable.slice(0, MAX_PROBE_PIDS) : comparable;
@@ -434,9 +513,14 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   return (await scanLiveProcesses(new Set([key]), exclude)).get(key) || null;
 }
 
-function ownProcessFilter(ptyPids) {
+function ownPidTest(ptyPids) {
   const own = new Set(ptyPids());
-  return (pid) => own.has(pid) || descendsFromThisProcess(pid);
+  return (pid) => own.has(pid) || descendsFromThisProcess(pid, own);
+}
+
+function ownProcessFilter(ptyPids) {
+  startProcessTableRefresh();
+  return ownPidTest(ptyPids);
 }
 
 async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
@@ -444,14 +528,14 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (hasPty(sessionId)) return null;
   const scheduled = scheduledRuns.get(sessionId.toLowerCase());
   if (scheduled) return scheduled;
-  return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
+  return findLiveProcess(sessionId, { exclude: ownPidTest(ptyPids) });
 }
 
 async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
   if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
   if (hasPty(sessionId)) return { known: true, live: null };
   const key = sessionId.toLowerCase();
-  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownProcessFilter(ptyPids));
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownPidTest(ptyPids));
   const live = found.get(key) || null;
   if (live) return { known: true, live };
   return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };
@@ -465,7 +549,7 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
     if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
-  const found = await scanLiveProcesses(new Set(wanted.values()), ownProcessFilter(ptyPids));
+  const found = await scanLiveProcesses(new Set(wanted.values()), ownPidTest(ptyPids));
   for (const [id, key] of wanted) {
     const live = scheduledRuns.get(key) || found.get(key);
     if (live) result[id] = live;
@@ -490,6 +574,10 @@ module.exports = {
   readAllDescriptors,
   parseDescriptor,
   ownProcessFilter,
+  refreshProcessTable,
+  parseProcessTable,
+  probeProcessTable,
+  PROCESS_TABLE_TTL_MS,
   getStatus,
   KNOWN_STATUSES,
   DEFAULT_DIR,

@@ -24,7 +24,10 @@ name, its `--agent`, its state emoji then `state · status` (see the table
 below), its directory, and its age. Working
 and blocked sessions and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
-the choice is remembered. The list refreshes when the daemon's files change,
+the choice is remembered. The header counts `running` and `finished` background
+sessions, then `N external` when the list holds external sessions (these are
+always shown). A session running in one of Switchboard's own tabs is never listed
+as external. The list refreshes when the daemon's files change,
 and is re-read from the CLI every 30 seconds while the view is open.
 
 **Group**, next to Finished, splits the list into sections with a header
