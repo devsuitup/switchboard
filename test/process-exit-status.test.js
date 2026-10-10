@@ -49,6 +49,7 @@ const PRELUDE = `
   const sessionMap = new Map();
   const pendingSessions = new Map();
   const skippedWorkingSetEntries = new Set();
+  const dormantWorkingSet = new Map();
   const cachedProjects = [];
   const cachedAllProjects = [];
   const gridCards = new Map();

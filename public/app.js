@@ -168,6 +168,15 @@ let restoreSavedIndex = new Map();
 let restoreAwaitingConsent = [];
 const restoreInFlight = new Map();
 
+// see .ai/contexts/session-cache.md ("Restore on click")
+const dormantWorkingSet = new Map();
+
+function dismissDormantSession(sessionId) {
+  if (!dormantWorkingSet.delete(sessionId)) return;
+  persistWorkingSet();
+  refreshSidebar();
+}
+
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
@@ -211,8 +220,12 @@ function persistWorkingSet({ final = false } = {}) {
       .map(entry => ({ ...entry, keepAttached: liveAttach(entry.item.sessionId) }));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
-    const held = [...skippedWorkingSetEntries.values(), ...notStarted]
-      .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) || (item.bg && failedBgAttach(item.sessionId)) : !openSessions.has(item.sessionId))
+    const held = [...skippedWorkingSetEntries.values(), ...dormantWorkingSet.values(), ...notStarted]
+      .filter(({ item, keepAttached }) => {
+        if (keepAttached) return liveAttach(item.sessionId) || (item.bg && failedBgAttach(item.sessionId));
+        const open = openSessions.get(item.sessionId);
+        return !open || open.closed;
+      })
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
@@ -368,6 +381,22 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   }
 }
 
+// see .ai/contexts/session-cache.md ("Restore on click")
+async function reopenActiveSessionAfterReload() {
+  if (!activeSessionId || openSessions.has(activeSessionId)) return;
+  const row = sessionMap.get(activeSessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(activeSessionId));
+  const session = row && (row.sessionId === activeSessionId ? row : { ...row, sessionId: activeSessionId, mergedMemberIds: [] });
+  if (!session) return;
+  const g = await window.api.getSetting('global');
+  if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
+    const live = await window.api.getActiveSessions().catch(() => []);
+    if (!live.some(e => e.sessionId === session.sessionId)) return;
+    await openSession(session, undefined, { automatic: true, reattachOnly: true });
+    return;
+  }
+  await openSession(session, undefined, { automatic: true });
+}
+
 async function restoreWorkingSet() {
   const g = await window.api.getSetting('global');
   restoreMode = (g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup;
@@ -402,7 +431,7 @@ async function tickRestorePlanner() {
     sessionMap,
     openSessions,
     indexingDone: restoreIndexingDone,
-    sessionOpenedOutsideRestore,
+    sessionOpenedOutsideRestore: restoreMode !== 'lazy' && sessionOpenedOutsideRestore,
   });
 
   if (plan.action === 'wait') {
@@ -416,6 +445,21 @@ async function tickRestorePlanner() {
   if (plan.action === 'nothing') return;
 
   const candidates = plan.candidates;
+
+  if (restoreMode === 'lazy') {
+    const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
+    const shown = activeSessionId;
+    for (const [position, item] of candidates.entries()) {
+      if (live.has(item.sessionId) && sessionMap.has(item.sessionId)
+          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true }) !== false) continue;
+      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+      dormantWorkingSet.set(item.sessionId, { item, index });
+    }
+    if (shown && activeSessionId !== shown && openSessions.has(shown)) showSession(shown);
+    refreshSidebar();
+    revealDormantSessions();
+    return;
+  }
 
   if (restoreMode === 'auto') {
     restoringWorkingSet = true;
@@ -1690,7 +1734,7 @@ function openSession(session, customOptions, flags = {}) {
   return open.promise;
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, reattachOnly = false } = {}, open = null) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1745,8 +1789,9 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
-  const resumeOptions = customOptions
+  let resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
   entry.attach = resumeOptions.type === 'attach';
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
@@ -1758,6 +1803,10 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     throw err;
   }
   settlePtyOpen(sessionId, result);
+  if (result.notLive) {
+    destroySession(sessionId);
+    return false;
+  }
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.openError = result.error;
@@ -1773,6 +1822,9 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       index: restoreSavedIndex.get(sessionId) ?? Number.MAX_SAFE_INTEGER,
       keepAttached: true,
     });
+  }
+  if (dormantWorkingSet.delete(sessionId)) {
+    document.getElementById('si-' + sessionId)?.classList.remove('dormant');
   }
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
@@ -2033,11 +2085,7 @@ async function restoreStartupSessions() {
   window._startupResumeResolutions = new Map();
   try {
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
-    if (activeSessionId && !openSessions.has(activeSessionId)) {
-      const row = sessionMap.get(activeSessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(activeSessionId));
-      const session = row && (row.sessionId === activeSessionId ? row : { ...row, sessionId: activeSessionId, mergedMemberIds: [] });
-      if (session) await openSession(session, undefined, { automatic: true });
-    }
+    await reopenActiveSessionAfterReload();
     await restoreWorkingSet();
     restoreAgentsViewAtStartup();
   } finally { window._startupResumeResolutions = null; }

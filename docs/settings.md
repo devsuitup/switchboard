@@ -38,7 +38,7 @@ for one launch — see [Launching sessions](launching-sessions.md).
 |---|---|---|---|
 | Terminal Theme | `terminalTheme` | Switchboard | Terminal colours, applied on save — see [Terminal](terminal.md#theme) |
 | Terminal Right-Click | `terminalRightClick` | Context menu (`menu`) | `menu`, `paste`, `default` (Native), `none` — see [Terminal](terminal.md#right-click) |
-| Restore Sessions on Startup | `restoreOnStartup` | Ask on startup (`ask`) | `off`, `ask`, `auto`; read at launch — see [Session restore](session-restore.md) |
+| Restore Sessions on Startup | `restoreOnStartup` | Ask on startup (`ask`) | `off`, `ask`, `lazy` (Restore on click), `auto`; read at launch — see [Session restore](session-restore.md) |
 | Shell Profile | `shellProfile` | Auto (detect) | The shell for sessions and terminals; new sessions only — see [Launching sessions](launching-sessions.md#how-the-command-is-built) |
 | Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
 | Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |

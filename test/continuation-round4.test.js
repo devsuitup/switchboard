@@ -160,7 +160,7 @@ test('R4 R2 remembered automatic open does not cancel the indexing retry', { tim
     vm.runInContext('restoringWorkingSet = false;', h.ctx);
   };
   h.ctx.restoreAgentsViewAtStartup = () => {};
-  const startup = loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions'] });
+  const startup = loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload'] });
   await startup.restoreStartupSessions();
   await app.markRestoreIndexingDone();
   assert.deepEqual(h.spawned.map(call => call.id), ['new']);

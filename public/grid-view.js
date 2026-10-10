@@ -513,20 +513,21 @@ function toggleGridView() {
 // --- Session navigation (Cmd+Shift+[/], Cmd+Arrow) ---
 
 // Returns ordered list of open (non-closed) session IDs matching sidebar order.
-function getOrderedOpenSessionIds() {
+function getOrderedOpenSessionIds({ includeDormant = false } = {}) {
   const items = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   const ids = [];
   for (const item of items) {
     for (const sid of rowSessionIds({ sessionId: item.dataset.sessionId, mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') })) {
       const entry = openSessions.get(sid);
-      if (entry && !entry.closed) ids.push(sid);
+      if ((entry && !entry.closed) || (includeDormant && isDormantSession(sid))) ids.push(sid);
     }
   }
   return ids;
 }
 
 function navigateSession(direction) {
-  const ids = getOrderedOpenSessionIds();
+  // see .ai/contexts/session-cache.md ("Restore on click")
+  const ids = getOrderedOpenSessionIds({ includeDormant: !gridViewActive });
   const current = gridViewActive ? gridFocusedSessionId : activeSessionId;
   const idx = ids.indexOf(current);
   let next;
@@ -538,6 +539,8 @@ function navigateSession(direction) {
   if (ids.length === 0 || !next) return;
   if (gridViewActive) {
     focusGridCard(next);
+  } else if (isDormantSession(next) && sessionMap.has(next)) {
+    openSession(sessionMap.get(next));
   } else {
     showSession(next);
   }

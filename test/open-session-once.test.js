@@ -58,7 +58,7 @@ function setup() {
   window.sessionMap.set('s1', { sessionId: 's1', projectPath: PROJECT });
   window.sessionMap.set('s2', { sessionId: 's2', projectPath: PROJECT });
   loadAppFunctions(ctx.context, {
-    declarations: ['continuationRetryCancelled', 'openingSessions'],
+    declarations: ['continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet'],
     functions: ['openSession', 'openSessionNow'],
   });
   window.renderProjects(window.cachedProjects, true);
