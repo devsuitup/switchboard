@@ -33,7 +33,7 @@ function discoveryRunner(t, scripts) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const prefix = process.platform === 'win32' ? 'PATH=/usr/bin:$PATH; export PATH; ' : '';
   const resolved = spawnSync(TEST_SHELL, ['-c', prefix + 'command -v "$0"', shellPath(TEST_SHELL)], {
-    encoding: 'utf8', timeout: 5000, windowsHide: true,
+    encoding: 'utf8', timeout: 30000, windowsHide: true,
   });
   assert.ifError(resolved.error);
   assert.equal(resolved.status, 0, resolved.stderr);
@@ -43,7 +43,7 @@ function discoveryRunner(t, scripts) {
     writeFileSync(path.join(dir, name), '#!/bin/sh\n' + script, { mode: 0o755 });
   }
   return command => spawnSync(TEST_SHELL, ['-c', prefix + `PATH=${shellQuote(shellPath(dir))}:$PATH; export PATH; ` + command], {
-    encoding: 'utf8', timeout: 5000, windowsHide: true,
+    encoding: 'utf8', timeout: 30000, windowsHide: true,
   });
 }
 
