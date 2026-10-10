@@ -162,8 +162,14 @@ contextBridge.exposeInMainWorld('api', {
   },
   onUnsavedCheck: (callback) => {
     ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
+    // see .ai/contexts/window-frame.md ("A window that stops answering")
+    ipcRenderer.on('unsaved-ping', (_event, token) => ipcRenderer.send('unsaved-pong', token));
+  },
+  onUnsavedCheckReason: (callback) => {
+    ipcRenderer.on('unsaved-check-reason', (_event, id, reason) => callback(id, reason));
   },
   unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
+  unsavedDialog: (open) => ipcRenderer.send('unsaved-dialog', open === true),
   unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
   onFullScreenChanged: (callback) => {
     ipcRenderer.on('full-screen-changed', (_event, isFullScreen) => callback(isFullScreen));

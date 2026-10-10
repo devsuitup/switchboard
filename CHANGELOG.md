@@ -4,6 +4,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. (#478)
+
+### Fixed
+- Closing the window or quitting no longer leaves Switchboard running when its window has stopped responding: the window closes as before, and once the system reports it not responding, or you close it again, it is closed anyway. A window that is only busy for a moment is left to close normally. (#540)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed

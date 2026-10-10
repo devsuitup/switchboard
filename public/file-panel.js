@@ -148,11 +148,32 @@ function initFilePanel() {
     event.preventDefault();
     event.returnValue = false;
   });
+  if (window.api.unsavedDialog) reportNativeDialogs();
   if (window.api.onUnsavedCheck) {
-    window.api.onUnsavedCheck(async (id) => {
+    const unsavedCheckReasons = new Map();
+    const reasonChanged = new Map();
+    if (window.api.onUnsavedCheckReason) {
+      window.api.onUnsavedCheckReason((id, reason) => {
+        if (!unsavedCheckReasons.has(id)) return;
+        unsavedCheckReasons.set(id, reason);
+        const notify = reasonChanged.get(id);
+        if (notify) notify(reason);
+      });
+    }
+    window.api.onUnsavedCheck(async (id, reason) => {
+      unsavedCheckReasons.set(id, reason);
       window.api.unsavedCheckAck(id);
       let proceed = true;
-      try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
+      try {
+        const asksAboutEdits = collectUnsavedFileTabs().length > 0;
+        proceed = await askAboutUnsavedEdits();
+        // see .ai/contexts/window-frame.md ("Closing the window")
+        if (proceed && unsavedCheckReasons.get(id) === 'close' && !asksAboutEdits) {
+          proceed = await confirmWindowClose(new Promise((resolve) => reasonChanged.set(id, resolve)));
+        }
+      } catch (err) { console.error('[unsaved-check]', err); }
+      unsavedCheckReasons.delete(id);
+      reasonChanged.delete(id);
       window.api.unsavedCheckResult(id, proceed);
     });
   }
@@ -617,6 +638,7 @@ async function saveUnsavedFileTab(tab) {
 }
 
 function showUnsavedEditsDialog(tabs) {
+  const returnFocus = document.activeElement;
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'add-project-overlay';
@@ -669,6 +691,7 @@ function showUnsavedEditsDialog(tabs) {
     function finish(proceed) {
       overlay.remove();
       document.removeEventListener('keydown', onKey);
+      if (!proceed && returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
       resolve(proceed);
     }
     function onKey(e) {
@@ -696,6 +719,38 @@ function showUnsavedEditsDialog(tabs) {
       for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = false;
     };
   });
+}
+
+// see .ai/contexts/window-frame.md ("A native dialog pauses the bounds")
+function reportNativeDialogs() {
+  for (const name of ['alert', 'confirm', 'prompt']) {
+    const native = window[name];
+    if (typeof native !== 'function') continue;
+    window[name] = function (...args) {
+      window.api.unsavedDialog(true);
+      try {
+        return native.apply(window, args);
+      } finally {
+        window.api.unsavedDialog(false);
+      }
+    };
+  }
+}
+
+// see .ai/contexts/window-frame.md ("Closing the window")
+async function confirmWindowClose(quitting = null) {
+  const mac = window.api.platform === 'darwin';
+  const result = await showChoiceDialog({
+    title: mac ? 'Close the window?' : 'Close Switchboard?',
+    message: mac ? 'Every session running in it stops; Switchboard stays in the Dock.' : 'Every session running in it stops.',
+    confirmLabel: 'Close',
+    initialFocus: 'cancel',
+    danger: true,
+    returnFocus: document.activeElement,
+    replace: true,
+    closeWith: quitting && quitting.then(() => ({})),
+  });
+  return result !== null;
 }
 
 function askAboutUnsavedEdits() {

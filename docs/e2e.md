@@ -49,6 +49,9 @@ here.
 | The shell opened with no tab fills the panel and is not a sidebar row | `panel.spec.js` | the `.shell-only` layout, and `buildProjectsFromCache` skipping the panel shell |
 | Changes on a project with no git work tree says so, with no git output | `panel.spec.js` | the not-a-repository note instead of git's raw output |
 | Refresh beside Stop redraws a plain terminal and restores its fitted size | `terminal-refresh.spec.js` | visible header geometry, one refresh IPC, actual PTY size events, and final fitted size |
+| A window close asks first: Cancel keeps the window and its terminal, Close exits | `close-window.spec.js` | the guard holding the real `close` event, the in-page question, a terminal that still runs commands after Cancel, the exit (code 0) after Close |
+| Quit from the menu exits without asking | `close-window.spec.js` | the `quit` role reaching `before-quit`, the guard not asking a quit a second time, and exit code 0 |
+| Closing a window whose page hangs, then closing it again, still ends the app | `hung-window.spec.js` | the close question never shown, the second close after the 2.5 s bound destroying the window, and exit code 0 |
 
 The issue's fifth journey expected the Changes control to disappear. #310 made
 it unconditional, so the journey checks what the panel says instead (see
@@ -94,7 +97,9 @@ the OS temporary directory locally, outside the app directory.
     `taskkill /T /F` on that pid, which kills the process and its descendants.
 
   Then it deletes the temporary `HOME`. If the app exits within the 10 s, no
-  kill is sent.
+  kill is sent. A journey may end the app itself (`hung-window.spec.js` and `close-window.spec.js` do);
+  the fixture then skips the trace, the screenshot and the close, and only
+  deletes the temporary `HOME`.
 
 ## Proving a journey can fail
 

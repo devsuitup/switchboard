@@ -8,9 +8,13 @@ function writeRememberedChoice(rememberKey, checked) {
   try { localStorage.setItem(rememberKey, checked ? '1' : '0'); } catch {}
 }
 
+let closeOpenChoiceDialog = null;
+
 /**
  * A modal with optional checkboxes. Resolves to `{ [choice.id]: boolean }` on
- * confirm, null on cancel, and null at once while another one is open.
+ * confirm, null on cancel, and null at once while another one is open, unless
+ * `replace` cancels the open one and shows this one. `closeWith`, a promise,
+ * closes the dialog with the value it resolves to.
  */
 function showChoiceDialog({
   title,
@@ -21,8 +25,14 @@ function showChoiceDialog({
   initialFocus = 'confirm',
   danger = false,
   returnFocus,
+  replace = false,
+  closeWith = null,
 } = {}) {
-  if (document.querySelector('.choice-dialog-overlay')) return Promise.resolve(null);
+  if (document.querySelector('.choice-dialog-overlay')) {
+    if (!replace || !closeOpenChoiceDialog) return Promise.resolve(null);
+    closeOpenChoiceDialog(null);
+    if (returnFocus && returnFocus.isConnected === false) returnFocus = document.activeElement;
+  }
 
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -87,7 +97,10 @@ function showChoiceDialog({
 
     const buttons = [closeBtn, cancelBtn, confirmBtn];
 
+    let closed = false;
     function close(value) {
+      if (closed) return;
+      closed = true;
       overlay.remove();
       document.removeEventListener('keydown', onKey, true);
       if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
@@ -129,6 +142,8 @@ function showChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
+    closeOpenChoiceDialog = close;
+    if (closeWith) closeWith.then(close, () => {});
     document.addEventListener('keydown', onKey, true);
     (initialFocus === 'cancel' ? cancelBtn : confirmBtn).focus();
   });
