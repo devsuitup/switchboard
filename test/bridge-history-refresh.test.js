@@ -21,11 +21,11 @@ function fixture(t) {
   const reread = (id, cutoff, excludedMessageUuids, excludedMessageSignatures) => readSessionFile(
     path.join(dir, id + '.jsonl'), folder, root,
     { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
-  const rows = new Map(), meta = new Map(), metrics = new Map(), search = new Map();
+  const rows = new Map(), meta = new Map(), metrics = new Map(), search = new Map(), settings = new Map(), activeSessions = new Map();
   const db = {
     getCachedByFolder: key => [...rows.values()].filter(r => r.folder === key),
     getAllCached: () => [...rows.values()], getAllMeta: () => new Map(), getAllFolderMeta: () => meta,
-    getFolderMeta: key => meta.get(key), getSetting: () => null, getMeta: () => null, setName() {},
+    getFolderMeta: key => meta.get(key), getSetting: key => settings.get(key), setSetting: (key, value) => settings.set(key, value), getMeta: () => null, setName() {},
     setFolderMeta: (key, projectPath, indexMtimeMs) => meta.set(key, { projectPath, indexMtimeMs }),
     upsertCachedSessions: fresh => fresh.forEach(r => rows.set(r.sessionId, { ...r })),
     deleteCachedSession: id => { rows.delete(id); metrics.delete(id); },
@@ -35,10 +35,10 @@ function fixture(t) {
     upsertSearchEntries: entries => entries.forEach(e => search.set(e.id, e)),
     replaceSessionMetrics: (id, daily) => metrics.set(id, daily), touchCachedModified() {},
   };
-  cache.init({ PROJECTS_DIR: root, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+  cache.init({ PROJECTS_DIR: root, activeSessions, getMainWindow: () => null, log: console, db });
   cache.setRemoteRoots(new Map());
   t.after(() => cache.setRemoteRoots(new Map()));
-  return { root, folder, dir, write, msg, reread, rows, meta, db, metrics, search };
+  return { root, folder, dir, write, msg, reread, rows, meta, db, metrics, search, settings, activeSessions };
 }
 
 test('a three-member bridge attaches B continuation to B and keeps its sidebar activity there', { timeout: 9000 }, async t => {
@@ -54,7 +54,7 @@ test('a three-member bridge attaches B continuation to B and keeps its sidebar a
   assert.equal(project.sessions.find(r => r.sessionId === 'b').modified, '2026-10-05T10:00:00.000Z');
 });
 
-test('bridge refresh after parent activity agrees with a full scan and performs no main-thread body reads', { timeout: 9000 }, async t => {
+test('ordinary bridge flush uses only header reads and synchronously advances the folder gate', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('opening', '01'), f.msg('a-tail', '02')]);
   f.write('b', [f.msg('b-own', '03')]);
@@ -65,12 +65,14 @@ test('bridge refresh after parent activity agrees with a full scan and performs 
   const reads = [];
   const original = fs.readFileSync;
   fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
-  try { await cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); }
+  let result;
+  try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); await result; }
   finally { fs.readFileSync = original; }
-  assert.equal(f.rows.get('c').mergedIntoSessionId, null);
-  const compact = rows => rows.map(r => [r.sessionId, r.messageCount, r.mergedIntoSessionId || null]).sort();
-  assert.deepEqual(compact([...f.rows.values()]), compact(cache.readFolderFromFilesystem(f.folder).sessions));
-  assert.deepEqual(reads, [], 'bridge bodies belong to the worker');
+  assert.equal(f.rows.get('a').messageCount, 2, 'cached body counts stay unchanged on header refresh');
+  assert.equal(result, undefined, 'refreshFolder has a synchronous contract on every path');
+  assert.deepEqual(reads, [], 'ordinary flush must not read transcript bodies');
+  assert.equal(f.rows.get('c').mergedIntoSessionId, 'a', 'unchanged members are not re-evaluated on ordinary flushes');
+  assert.equal(f.rows.get('a').fileMtime, fs.statSync(path.join(f.dir, 'a.jsonl')).mtime.toISOString());
 });
 
 test('deleting A restores the shared UUIDs of independent B promoted to first member', { timeout: 9000 }, async t => {
@@ -100,7 +102,7 @@ test('mixed UUID coverage excludes a copied legacy tail while retaining its own 
   assert.equal(b.mergedIntoSessionId, null);
 });
 
-test('discovering another bridge member reads predecessors in the worker and drops transient evidence before persistence', { timeout: 9000 }, async t => {
+test('discovering another bridge member merges once and drops transient evidence before persistence', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('shared', '01'), f.msg('a-own', '02')]);
   f.write('b', [f.msg('b-own', '03')]);
@@ -110,7 +112,7 @@ test('discovering another bridge member reads predecessors in the worker and dro
   fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
   try { await cache.refreshFolder(f.folder, { files: new Set(['c.jsonl']) }); }
   finally { fs.readFileSync = original; }
-  assert.deepEqual(reads, []);
+  assert.ok(reads.length > 0, 'rare discovery retains the incremental main-thread merge');
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'b');
   assert.ok([...f.rows.values()].every(r => !('messageUuids' in r) && !('messageSignatures' in r)));
 });
@@ -154,27 +156,118 @@ test('mixed evidence preserves repeated text with distinct known UUIDs', { timeo
   assert.ok(!b.textContent.includes('Copied tail'));
 });
 
-test('warm worker reconciliation drops a cached local folder whose transcripts now reject its cwd', { timeout: 9000 }, async t => {
+test('warm incremental reconciliation drops a cached local folder with an invalid stored project path', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('a-own', '01')]);
   await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
   assert.ok(f.rows.has('a'));
   f.write('a', [{ ...f.msg('a-own', '01'), cwd: path.join(f.root, 'wrong-project') }]);
+  f.meta.set(f.folder, { projectPath: path.join(f.root, 'wrong-project'), indexMtimeMs: 0 });
   await cache.reconcileCacheFromFilesystem();
   assert.ok(!f.rows.has('a'));
   assert.ok(!f.search.has('a'));
 });
 
-test('warm repair reconciliation returns before reading bridged transcript bodies', { timeout: 9000 }, async t => {
+test('one-time repair indexes only repaired folders off-thread and cannot loop through reconcile', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('a-open', '01')]);
   f.write('b', [f.msg('b-own', '02')]);
+  const other = encodeProjectPath(path.join(f.root, 'other'));
+  fs.mkdirSync(path.join(f.root, other));
+  fs.writeFileSync(path.join(f.root, other, 'untouched.jsonl'), JSON.stringify({ ...f.msg('other', '01'), cwd: path.join(f.root, 'other') }) + '\n');
+  f.meta.set(other, { projectPath: path.join(f.root, 'other'), indexMtimeMs: require('../folder-index-state').getFolderIndexMtimeMs(path.join(f.root, other)) });
+  f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
+  const upsert = f.db.upsertCachedSessions;
+  let writes = 0;
+  f.db.upsertCachedSessions = fresh => { writes++; upsert(fresh); };
   const reads = [], original = fs.readFileSync;
   fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
-  try { await cache.reconcileCacheFromFilesystem(); }
+  try {
+    cache.init({ PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: console, db: f.db });
+    const first = cache.reindexRepairedFolders?.();
+    assert.equal(cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }), undefined);
+    assert.deepEqual(reads, [], 'watcher flush during repair must not recreate invalidated rows on the main thread');
+    assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
+    await first;
+    await cache.reindexRepairedFolders();
+  }
   finally { fs.readFileSync = original; }
   assert.deepEqual(reads, []);
   assert.equal(f.rows.size, 2);
+  assert.equal(writes, 1, 'startup repair writes its folder once; neither reconcile nor repeated calls restart it');
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
+});
+
+test('a failed repair write retains its pending gate and retries at next initialization without a reconcile loop', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('own', '01')]);
+  f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
+  const upsert = f.db.upsertCachedSessions;
+  let attempts = 0;
+  f.db.upsertCachedSessions = () => { attempts++; throw new Error('injected repair write failure'); };
+  const ctx = { PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: { warn() {} }, db: f.db };
+  cache.init(ctx);
+  assert.equal((await cache.reindexRepairedFolders()).ok, false);
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), [f.folder]);
+  assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
+  assert.equal(attempts, 1, 'get-projects reconciliation cannot retry repair');
+  f.db.upsertCachedSessions = upsert;
+  cache.init(ctx);
+  assert.equal((await cache.reindexRepairedFolders()).ok, true);
+  assert.ok(f.rows.has('a'));
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
+});
+
+test('reconcile keeps a running row whose transcript vanished and skips unchanged transcript bodies', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('a-own', '01')]);
+  f.write('b', [f.msg('b-own', '02')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  f.activeSessions.set('b', { exited: false });
+  fs.unlinkSync(path.join(f.dir, 'b.jsonl'));
+  f.meta.get(f.folder).indexMtimeMs = 0;
+  const result = cache.reconcileCacheFromFilesystem();
+  await result;
+  assert.ok(f.rows.has('b'), 'running session must stay in the sidebar');
+  assert.ok(f.search.has('b'), 'running search entry survives reconciliation');
+  assert.equal(result, undefined, 'reconcile retains its synchronous contract');
+  f.activeSessions.delete('b');
+  cache.releaseLiveSession('b');
+  assert.ok(!f.rows.has('b'));
+});
+
+test('full and subset worker scans keep running missing rows until release', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('a-own', '01')]);
+  f.write('b', [f.msg('b-own', '02')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  f.activeSessions.set('b', { exited: false });
+  fs.unlinkSync(path.join(f.dir, 'b.jsonl'));
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder], fileSubsets: new Map([[f.folder, new Set(['b.jsonl'])]]) });
+  assert.ok(f.rows.has('b'), 'subset keeps a running missing row');
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  assert.ok(f.rows.has('b'), 'full repair keeps a running missing row');
+});
+
+test('complete UUID histories build no payload signatures, mixed coverage builds them lazily', { timeout: 9000 }, t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('shared', '01')]);
+  f.write('b', [f.msg('shared', '01'), f.msg('own', '02')]);
+  const stringify = JSON.stringify;
+  let signatures = 0;
+  JSON.stringify = (value, ...args) => {
+    if (Array.isArray(value) && ['user', 'assistant'].includes(value[0]) && value[1]?.content) signatures++;
+    return stringify(value, ...args);
+  };
+  try {
+    mergeBridgeGroups([], ['a', 'b'].map(id => f.reread(id)), f.reread);
+    assert.equal(signatures, 0, 'fully identified messages need no payload serialization');
+    f.write('a', [f.msg(undefined, '01', 'Copied legacy'), f.msg('known', '03')]);
+    f.write('b', [f.msg(undefined, '01', 'Copied legacy'), f.msg('own', '02')]);
+    const merged = mergeBridgeGroups([], ['a', 'b'].map(id => f.reread(id)), f.reread);
+    assert.ok(signatures > 0);
+    assert.equal(merged.toUpsert.find(row => row.sessionId === 'b').messageCount, 1);
+  } finally { JSON.stringify = stringify; }
 });
 
 test('sidebar before the first SSH round trip cannot bless a dormant repaired remote folder', { timeout: 9000 }, async t => {
@@ -187,6 +280,7 @@ test('sidebar before the first SSH round trip cannot bless a dormant repaired re
     { type: 'bridge-session', bridgeSessionId: 'cse_remote' },
   ].map(e => JSON.stringify(e)).join('\n') + '\n');
   cache.setRemoteRoots(new Map([['vps', remote]]));
+  f.settings.set('bridge_uuid_reindex_folders', ['vps::-srv-demo']);
   cache.buildProjectsFromCache(false);
   const scans = [];
   const indexer = createRemoteIndexer({
@@ -201,4 +295,5 @@ test('sidebar before the first SSH round trip cannot bless a dormant repaired re
   assert.equal(scans[0].fileSubsets, undefined);
   assert.ok(f.rows.has('dormant'));
   assert.ok(f.meta.has('vps::-srv-demo'));
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
 });

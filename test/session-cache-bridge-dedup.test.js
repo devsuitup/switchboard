@@ -131,7 +131,7 @@ test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId 
     assert.ok(mirrorMetrics, 'the mirror gets its own session_metrics rows');
     const mirrorTotalInput = mirrorMetrics.dailyMetrics.reduce((sum, m) => sum + m.inputTokens, 0);
     assert.equal(mirrorTotalInput, MIRROR_NEW_USAGE.input_tokens, 'mirror tokens are exactly its post-cutoff usage, not the duplicated parent usage too');
-    assert.equal(metricsReplaced.find(m => m.sessionId === 'e4b389ac').dailyMetrics.reduce((sum, m) => sum + m.inputTokens, 0), PARENT_USAGE.input_tokens, 'worker rederivation does not double parent metrics');
+    assert.ok(!metricsReplaced.some(m => m.sessionId === 'e4b389ac'), 'parent was not re-read (unchanged mtime); its metrics are untouched, never doubled');
 
     const mirrorSearch = searchUpserted.find(e => e.id === '1b1def07');
     assert.ok(mirrorSearch, 'the mirror still gets a search entry so its post-compaction content is findable');

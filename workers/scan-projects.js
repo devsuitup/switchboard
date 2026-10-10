@@ -65,11 +65,6 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
   const freshRows = [];
   const goneIds = [];
   const scanFiles = new Set(files || []);
-  if ([...scanFiles].some(file => !String(file).includes('/'))) {
-    for (const row of existingRows || []) {
-      if (!row.parentSessionId && row.bridgeSessionId) scanFiles.add(row.sessionId + '.jsonl');
-    }
-  }
   for (const rel of scanFiles) {
     const parts = String(rel).split('/');
     let parentSessionId = null;
@@ -95,6 +90,13 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
       return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
     } catch { return null; }
   };
+  const deletedBridges = new Set((existingRows || []).filter(row => goneIds.includes(row.sessionId)).map(row => row.bridgeSessionId).filter(Boolean));
+  for (const row of existingRows || []) {
+    if (row.parentSessionId || !deletedBridges.has(row.bridgeSessionId) || goneIds.includes(row.sessionId)) continue;
+    if (freshRows.some(fresh => fresh.sessionId === row.sessionId)) continue;
+    const full = reread(row.sessionId, null);
+    if (full) freshRows.push(full);
+  }
   const { toUpsert, toDelete } = mergeBridgeGroups((existingRows || []).filter(row => !goneIds.includes(row.sessionId)), freshRows, reread);
   return { folder: key, projectPath, sessions: toUpsert, toDelete: [...goneIds, ...toDelete], indexMtimeMs, partial: true };
 }

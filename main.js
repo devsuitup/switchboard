@@ -488,7 +488,7 @@ sessionCache.init({
   db: {
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
+    setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
     isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex,
   },
 });
@@ -1148,7 +1148,9 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     // would find every still-missing folder stat-dirty and re-parse them all
     // synchronously on the main thread — the original multi-minute freeze,
     // reachable by simply relaunching after an interrupted first scan.
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated() || !isInitialScanComplete();
+    const repairFolders = getSetting('bridge_uuid_reindex_folders');
+    const repairPending = Array.isArray(repairFolders) && repairFolders.length > 0;
+    const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
     if (needsPopulate) {
       // First call after a migration that clears session_cache (e.g. v4), or a

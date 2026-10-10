@@ -62,7 +62,7 @@ function makeHandler(mocks) {
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, applyAndPersistArchived, () => null, () => {}, false,
+    annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), () => {}, false,
     mocks.backfillEntrypoints || (() => {})
   );
 }
@@ -103,6 +103,22 @@ test('get-projects on a warm cache still reconciles (stat-gated, cheap when noth
 
   assert.ok(!calls.includes('populate'), 'a warm start must not kick off a fresh worker scan');
   assert.deepEqual(calls, ['reconcile', 'build']);
+});
+
+test('get-projects cannot turn a one-time warm repair into a full cache scan when all rows were invalidated', { timeout: 9000 }, () => {
+  const calls = [];
+  const handler = makeHandler({
+    isCachePopulated: () => false,
+    isSearchIndexPopulated: () => false,
+    isInitialScanComplete: () => true,
+    getSetting: key => key === 'bridge_uuid_reindex_folders' ? ['repaired-folder'] : null,
+    populateCacheViaWorker: () => calls.push('populate'),
+    reconcileCacheFromFilesystem: () => calls.push('reconcile'),
+    buildProjectsFromCache: () => { calls.push('build'); return []; },
+  });
+  handler();
+  handler();
+  assert.deepEqual(calls, ['reconcile', 'build', 'reconcile', 'build']);
 });
 
 // The scenario the row-count check cannot see: the worker streams one DB

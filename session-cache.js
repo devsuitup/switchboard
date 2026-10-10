@@ -18,7 +18,7 @@ const { scanContinuationIndex, resolveContinuations, validId } = require('./sess
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, touchCachedModified, replaceSessionMetrics;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
 let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
@@ -44,6 +44,7 @@ function init(ctx) {
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
   getSetting = ctx.db.getSetting;
+  setSetting = ctx.db.setSetting;
   setRemappedProjectReader((folder) => remappedProjectsSetting()[folder]);
   getMeta = ctx.db.getMeta;
   setName = ctx.db.setName;
@@ -55,6 +56,7 @@ function init(ctx) {
   setCachedEntrypoints = ctx.db.setCachedEntrypoints;
   entrypointBackfill = null;
   lastReconcileAt = 0;
+  reindexRepairedFolders();
 }
 
 // alias -> that host's mirrored projects root; empty unless one is declared.
@@ -168,6 +170,7 @@ function readFolderFromFilesystem(folder) {
  *   folder (used for bootstrap and folder-level events).
  */
 function refreshFolder(folder, opts = {}) {
+  if (pendingRepairFolders().includes(folder)) return;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
@@ -238,24 +241,6 @@ function refreshFolder(folder, opts = {}) {
     }
   } else {
     filesToScan = enumerateSessionFiles(folderPath);
-  }
-
-  // see .ai/contexts/session-cache.md ("Bridge history divergence")
-  if (cachedSessions.some(row => !row.parentSessionId && row.bridgeSessionId)) {
-    const dirtyTopLevel = filesToScan.some(({ filePath, parentSessionId }) => {
-      if (parentSessionId) return false;
-      const cached = cachedMap.get(filePathToDbId.get(filePath));
-      try { return !cached || cached.fileMtime !== fs.statSync(filePath).mtime.toISOString() || cached.projectPath !== projectPath; }
-      catch { return !!cached; }
-    });
-    const goneBridge = !targeted && cachedSessions.some(row => !row.parentSessionId && row.bridgeSessionId && !fs.existsSync(jsonlPathFor(row)));
-    if (dirtyTopLevel || goneBridge) {
-      const files = new Set(filesToScan.map(({ filePath }) => path.relative(folderPath, filePath).split(path.sep).join('/')));
-      for (const row of cachedSessions) {
-        if (!row.parentSessionId && row.bridgeSessionId) files.add(row.sessionId + '.jsonl');
-      }
-      return queueBridgeRefresh(folder, files);
-    }
   }
 
   let continuationBytesLeft = 1024 * 1024;
@@ -404,6 +389,13 @@ function refreshFolder(folder, opts = {}) {
   const reread = (sessionId, cutoff, excludedMessageUuids, excludedMessageSignatures) => readSessionFile(
     jsonlPathFor({ folder, sessionId }), folder, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures }
   );
+  const deletedBridges = new Set(cachedSessions.filter(row => sessionsToDelete.includes(row.sessionId)).map(row => row.bridgeSessionId).filter(Boolean));
+  for (const row of cachedSessions) {
+    if (row.parentSessionId || !deletedBridges.has(row.bridgeSessionId) || sessionsToDelete.includes(row.sessionId)) continue;
+    if (newFileReads.some(fresh => fresh.sessionId === row.sessionId)) continue;
+    const full = reread(row.sessionId, null);
+    if (full) newFileReads.push(full);
+  }
   const { toUpsert: mergedRows, toDelete: mergeDeletes } = newFileReads.length
     ? mergeBridgeGroups(cachedSessions.filter(row => !sessionsToDelete.includes(row.sessionId)), newFileReads, reread)
     : { toUpsert: [], toDelete: [] };
@@ -446,6 +438,7 @@ function refreshFolder(folder, opts = {}) {
     setName(id, name);
   }
   for (const sessionId of sessionsToDelete) {
+    if (keepIfRunning(sessionId, folder)) continue;
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
@@ -477,9 +470,7 @@ function refreshFolder(folder, opts = {}) {
 // cuts idle readdirSync churn by 5x with no user-visible staleness.
 const RECONCILE_THROTTLE_MS = 5000;
 let lastReconcileAt = 0;
-let reconcilePromise = null;
 function reconcileCacheFromFilesystem() {
-  if (reconcilePromise) return reconcilePromise;
   const now = Date.now();
   if (now - lastReconcileAt < RECONCILE_THROTTLE_MS) return;
   lastReconcileAt = now;
@@ -489,23 +480,13 @@ function reconcileCacheFromFilesystem() {
       .filter(d => d.isDirectory() && d.name !== '.git')
       .map(d => d.name);
 
-    const dirtyFolders = [];
     for (const folder of folders) {
       const meta = metaMap.get(folder);
       const folderPath = path.join(PROJECTS_DIR, folder);
       if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder))) {
-        dirtyFolders.push(folder);
+        if (!pendingRepairFolders().includes(folder)) refreshFolder(folder);
       }
-    }
-    if (dirtyFolders.length) {
-      reconcilePromise = scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders: dirtyFolders })
-        .then(result => {
-          if (!result.ok) { lastReconcileAt = 0; log?.warn(`Cache reconcile scan failed: ${result.error}`); }
-          if (getMainWindow()) notifyRendererProjectsChanged();
-          return result;
-        }).finally(() => { reconcilePromise = null; });
-      return reconcilePromise;
     }
   } catch (err) {
     console.error('Error reconciling cache:', err);
@@ -851,8 +832,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
   }
   const { folder, projectPath, sessions, indexMtimeMs } = r;
   stripBridgeEvidence(sessions);
-  deleteCachedFolder(folder);
-  deleteSearchFolder(folder);
+  dropFolderRows(folder, { search: true });
   if (sessions.length > 0) {
     upsertCachedSessions(sessions);
     for (const s of sessions) {
@@ -873,6 +853,9 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     }));
   }
   setFolderMeta(folder, projectPath, indexMtimeMs);
+  if (setSetting && pendingRepairFolders().includes(folder)) {
+    setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
+  }
   return sessions.length;
 }
 
@@ -900,6 +883,7 @@ function writeScannedFolderPartial(r) {
     }));
   }
   for (const sessionId of (toDelete || [])) {
+    if (keepIfRunning(sessionId, folder)) continue;
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
@@ -918,31 +902,31 @@ function stripBridgeEvidence(rows) {
   }
 }
 
-const bridgeRefreshes = new Map();
-function queueBridgeRefresh(folderKey, files) {
-  const pending = bridgeRefreshes.get(folderKey);
-  if (pending) {
-    for (const file of files) pending.files.add(file);
-    return pending.promise;
-  }
-  const state = { files: new Set(files), promise: null };
-  const { alias, folder } = parseFolderKey(folderKey);
-  state.promise = (async () => {
-    let result;
-    do {
-      const batch = state.files;
-      state.files = new Set();
-      result = await scanFoldersViaWorker({
-        projectsDir: alias === null ? PROJECTS_DIR : remoteRoots.get(alias), folderPrefix: alias,
-        folders: [folder], fileSubsets: new Map([[folder, batch]]),
-      });
-      if (!result.ok) log?.warn(`Bridge refresh failed: ${result.error}`);
-    } while (state.files.size);
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+let repairPromise = null;
+function pendingRepairFolders() {
+  const folders = getSetting?.('bridge_uuid_reindex_folders');
+  return Array.isArray(folders) ? folders : [];
+}
+
+function reindexRepairedFolders() {
+  if (repairPromise) return repairPromise;
+  const folders = pendingRepairFolders().filter(key => parseFolderKey(key).alias === null);
+  if (!folders.length || !setSetting) return Promise.resolve({ ok: true, folders: 0 });
+  repairPromise = (async () => {
+    const result = await scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders });
+    if (result.ok) {
+      setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
+    } else {
+      log?.warn(`Bridge repair re-index failed: ${result.error}`);
+    }
     if (getMainWindow()) notifyRendererProjectsChanged();
     return result;
-  })().finally(() => bridgeRefreshes.delete(folderKey));
-  bridgeRefreshes.set(folderKey, state);
-  return state.promise;
+  })().catch(err => {
+    log?.warn(`Bridge repair re-index failed: ${err.message}`);
+    return { ok: false, error: err.message };
+  }).finally(() => { repairPromise = null; });
+  return repairPromise;
 }
 
 /** Index a caller-chosen subset of folders under an arbitrary projects root.
@@ -976,6 +960,7 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets 
     let settled = false;
     let sessions = 0;
     let scanned = 0;
+    let writeError;
     let worker;
     const settle = (value) => {
       if (settled) return;
@@ -1005,11 +990,12 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets 
             ? writeScannedFolderPartial(msg.result)
             : writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
         } catch (err) {
+          writeError = err.message;
           log && log.warn(`[remote] folder write failed: ${err.message}`);
         }
         return;
       }
-      settle({ ok: !!msg.ok, error: msg.error, folders: scanned, sessions });
+      settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, folders: scanned, sessions });
     });
     worker.on('error', (err) => settle({ ok: false, error: err.message, folders: scanned, sessions }));
     worker.on('exit', (code) => settle({ ok: code === 0, error: code === 0 ? undefined : `worker exited ${code}`, folders: scanned, sessions }));
@@ -1203,6 +1189,7 @@ module.exports = {
   populateCacheViaWorker,
   isIndexingFinished,
   scanFoldersViaWorker,
+  reindexRepairedFolders,
   setRemoteRoots,
   getRemoteRoots,
   resolveFolderDir,

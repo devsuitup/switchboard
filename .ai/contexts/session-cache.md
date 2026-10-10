@@ -143,14 +143,24 @@ original timestamps or file mtime. An own assistant reply retains an inherited
 prompt as its display title while excluding that prompt from counts and search.
 The arrays are removed before worker `postMessage` and database upserts.
 
-The worker handles full repair scans and cached bridge refreshes. The main
-thread does only stat/header work to select affected files. A changed top-level
-file causes all cached bridge members to be re-evaluated in the worker, so a
-previously merged continuation can become independent after its predecessor
-receives later activity. New members and predecessor deletions use the same
-route, including deletion-only remote file-subset scans: the worker expands
-top-level subsets to the cached bridge members before merging. The chosen UUID-sharing predecessor resolves to its visible root, rather
-than always attaching to the earliest unrelated member in the bridge group.
+Ordinary watcher flushes retain the incremental strategy: unchanged files are
+skipped, changed cached files use the bounded display header and the existing
+shared continuation-index budget. Neither refresh nor warm reconciliation queues
+a full scan of unchanged bridge members. Both functions return synchronously;
+folder freshness is stamped before they return. Counts, FTS bodies and bridge
+labels stay cached until members are fully read anyway, just as other live
+transcripts do. Full scans and new-member merges attach continuations to the
+UUID-sharing predecessor's visible root rather than the earliest unrelated member.
+
+New-member discovery retains the round-one main-thread merge. A new bridged file
+can cause its predecessors to be read in full to compare UUIDs; this is a rare
+compaction/discovery event, but a 200+ MB predecessor can still block the interface
+and increase main-thread memory. Moving this one-off discovery merge to a worker
+is follow-up work, not part of ordinary flushes. Deleting a predecessor similarly
+re-reads surviving members once, restoring UUIDs and metrics removed by the old
+winner, including an independent promoted member. Remote deletion-only subsets
+perform this restoration in their existing worker; ordinary subsets no longer
+expand to all cached bridged files.
 
 Legacy transcripts with no known UUID evidence retain the timestamp fallback
 when it contributes messages. When the fallback is empty, or any UUID evidence is
@@ -172,14 +182,26 @@ settings and user names/stars/archive state remain. Errors roll back the entire
 transaction, emit a warning and allow `db.js` to load; the version stays unset
 and the next database open retries. Successful subsequent opens are no-ops.
 
-Warm reconciliation batches dirty local folders through `scanFoldersViaWorker`
-and returns immediately to `get-projects`; worker completion refreshes the
-sidebar. An in-flight reconciliation is shared between callers. A failed scan
-clears the throttle for a later retry; a rejected local cwd drops the stale
-folder rows through the worker's `unverifiedLocalFolder` signal. The on-disk project list never stamps
-remote `cache_meta` merely to display a folder: after repair it remains absent
-until the remote indexer fully scans the mirror, even when the first SSH sync
-reports no changed files.
+The repair transaction also saves exactly the affected folder keys in
+`bridge_uuid_reindex_folders`. At cache initialization, one worker scans only
+those local folders. Pending folders are excluded from synchronous reconciliation and watcher refresh
+until their worker write, so a flush during repair cannot recreate invalidated
+rows through a main-thread full read;
+`get-projects` cannot turn an emptied warm cache into a global population scan
+while repair is pending. A successful folder write clears its pending key;
+failed writes remain pending for the next initialization, without a retry loop
+from sidebar refresh. Interrupted cold-start population keeps its existing route.
+
+Repaired remote folder gates remain absent until the remote indexer's existing
+full-folder worker scans the mirror, even if SSH reports no changed files. That
+write clears the remote pending key. Merely listing on-disk projects never stamps
+remote `cache_meta`. Worker full-folder replacement and subset deletions honour
+`keepIfRunning`, preserving active PTY rows, metrics and search until release.
+
+Payload signatures are lazy, non-enumerable transient evidence: fully identified
+UUID histories build none. The mixed-coverage fallback computes them from the
+already-read lines only when needed, and deletes the evidence before persistence
+or worker messages.
 
 ## Remote SSH hosts (issue #201)
 
@@ -1705,8 +1727,9 @@ it. The state is the `archivedProjects` settings row:
 - `main-ctx-db-wiring.test.js` — covers the `ctx.db` allow-list ⊇ session-cache.js usage invariant above
 - `read-session-file-bridge-session.test.js` — covers `bridgeSessionId`/cutoff extraction and `mergeBridgeGroups()`'s grouping/re-derivation/re-parenting rules
 - `bridge-divergent-history.test.js` — covers divergent UUID/legacy histories across full, incremental and worker indexing.
-- `bridge-history-refresh.test.js` — covers three-member continuation ownership, current-state refresh, promotion/deletion, mixed UUID payload exclusion, worker body-read isolation and the dormant remote repair race.
-- `db-bridge-session-migration.test.js` — also covers one-time UUID invalidation of cache/metrics/FTS/folder gates, preservation of user state and subagents, no-op reopen, rollback and retry; covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
+- `bridge-history-refresh.test.js` — covers three-member continuation ownership, header-only synchronous flushes, one-time repaired-folder worker indexing, write-failure retry without reconciliation loops, running-row retention, promotion/deletion, lazy mixed UUID payload exclusion and the dormant remote repair race.
+- `db-bridge-uuid-repair.test.js` — covers one-time UUID invalidation of cache/metrics/FTS/folder gates, preservation of user state and subagents, persisted repaired-folder keys, no-op reopen, rollback and retry in separate top-level tests with independent timeouts.
+- `db-bridge-session-migration.test.js` — covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
 - `session-cache-bridge-dedup.test.js` — covers the compaction-mirror union merge through `refreshFolder()`, `readFolderFromFilesystem()` and `buildProjectsFromCache()`'s rollup, using the real fixture's shape
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
 - IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `get-work-files`, `list-subagents`, `read-session-jsonl`

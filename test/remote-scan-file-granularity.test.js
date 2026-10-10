@@ -186,7 +186,7 @@ test('property 3: a compaction-mirror merge on a file-subset rescan matches a fu
     });
     assert.equal(partialScan.ok, true, partialScan.error);
 
-    assert.deepEqual(upsertedSessionIds.sort(), ['mirror', 'parent'], 'the worker re-evaluates the affected bridge group on a top-level subset scan');
+    assert.deepEqual(upsertedSessionIds, ['mirror'], 'the already-correct parent is never re-read on the restricted pass');
     const mirrorPartial = storePartial.get('mirror');
     assert.ok(mirrorPartial, 'the mirror is still indexed via the file-subset path');
     assert.equal(mirrorPartial.mergedIntoSessionId, mirrorFull.mergedIntoSessionId, 'same winner is computed either way');

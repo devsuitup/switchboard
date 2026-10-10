@@ -193,7 +193,6 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let assistantSeen = false;
     let messageCount = 0;
     const messageUuids = [];
-    const messageSignatures = [];
     let messageUuidsComplete = true;
     let textContent = '';
     let slug = null;
@@ -270,7 +269,6 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       const isMessage = entry.type === 'user' || entry.type === 'assistant' ||
         (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
       if (isMessage) {
-        messageSignatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
         if (typeof entry.uuid === 'string' && entry.uuid) messageUuids.push(entry.uuid);
         else {
           messageUuidsComplete = false;
@@ -337,7 +335,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const pending = fileBytes.subarray(fileBytes.lastIndexOf(10) + 1);
     const skipLine = pending.length > 1024 * 1024;
-    return {
+    const row = {
       sessionId: fileBase, folder, projectPath,
       summary, firstPrompt: summary,
       // created/modified are display+sort values from message timestamps;
@@ -355,10 +353,28 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
         tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex') }),
       bridgeSessionId,
-      ...(bridgeSessionId ? { messageUuids, messageUuidsComplete, messageSignatures } : {}),
+      ...(bridgeSessionId ? { messageUuids, messageUuidsComplete } : {}),
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,
     };
+    if (bridgeSessionId) {
+      Object.defineProperty(row, 'messageSignatures', {
+        configurable: true,
+        get() {
+          const signatures = [];
+          for (const line of lines) {
+            let entry;
+            try { entry = JSON.parse(line); } catch { continue; }
+            if (entry.type !== 'user' && entry.type !== 'assistant' &&
+              !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) continue;
+            signatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
+          }
+          Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
+          return signatures;
+        },
+      });
+    }
+    return row;
   } catch {
     return null;
   }
@@ -420,7 +436,7 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
       if (!hasFreshMember && member.mergedIntoSessionId === winnerId && member.modified > cutoff) continue;
       if (!hasFreshMember && !member.mergedIntoSessionId && !members[0].mergedIntoSessionId) continue;
       const candidate = fullRows.get(member.sessionId);
-      const uuidEvidence = candidate?.messageUuids?.length || candidate?.messageUuidsComplete || members.slice(0, i)
+      const uuidEvidence = candidate?.messageUuids?.length || candidate?.messageUuidsComplete || members
         .some(previous => fullRows.get(previous.sessionId)?.messageUuids?.length || fullRows.get(previous.sessionId)?.messageUuidsComplete);
       const legacy = uuidEvidence ? null : reread(member.sessionId, cutoff);
       if (uuidEvidence || !legacy) {
