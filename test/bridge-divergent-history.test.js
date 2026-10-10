@@ -104,13 +104,13 @@ for (const shared of [false, true]) {
     assert.deepEqual(toDelete, []);
   });
 
-  test(`incremental cached member survives parent discovery, shared UUIDs=${shared}`, { timeout: 9000 }, t => {
+  test(`incremental cached member survives parent discovery, shared UUIDs=${shared}`, { timeout: 9000 }, async t => {
     const f = fixture(t, shared);
     const m = memoryDb();
     init(f, m.db);
-    sessionCache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) });
+    await sessionCache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) });
     assert.ok(m.store.has('b'));
-    sessionCache.refreshFolder(f.folder, { files: new Set(['a.jsonl', 'mirror.jsonl']) });
+    await sessionCache.refreshFolder(f.folder, { files: new Set(['a.jsonl', 'mirror.jsonl']) });
     assertRows([...m.store.values()]);
     assert.ok(!m.deleted.includes('b'), 'the cached member must never be sent to deleteCachedSession');
     assert.equal(m.metrics.get('b').reduce((n, r) => n + r.inputTokens, 0), 9);
@@ -123,7 +123,7 @@ for (const shared of [false, true]) {
       if (path.dirname(String(file)) === f.dir && String(file).endsWith('.jsonl')) bodyReads.push(file);
       return originalRead(file, ...args);
     };
-    try { sessionCache.refreshFolder(f.folder); }
+    try { await sessionCache.refreshFolder(f.folder); }
     finally { fs.readFileSync = originalRead; }
     assertRows([...m.store.values()]);
     assert.deepEqual(bodyReads, [], 'an unchanged bridge group does not repeatedly read full transcripts');

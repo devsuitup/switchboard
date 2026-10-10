@@ -105,11 +105,11 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 
 - **A manual `/compact` leaves a second transcript ("mirror") for the same session; it is merged on `bridgeSessionId`, not on file order, and NEITHER file is discarded (issue #197).** The CLI writes a `{"type":"bridge-session","bridgeSessionId":"cse_..."}` bookkeeping record into a transcript once bridging is established; both the pre-compaction file and the mirror it continues into carry the SAME `bridgeSessionId`. Measured on a real pair (16 MB parent + 3.1 MB mirror, same folder): **neither size nor first-event date tells them apart** — the mirror is *smaller* (it starts fresh at the compaction point) and *looks newer* (its first event is the compaction timestamp, later than the parent's). The parent's very last line is a `{"type":"continued-in","continuedInSessionId":"<mirror>"}` marker, after which the parent file goes quiet; the mirror keeps receiving new lines afterward — **the CLI keeps writing to the mirror, not the parent, once compaction happens.** `continued-in` is NOT a safe merge signal by itself: the same parent file carried a *second* `continued-in` record earlier, pointing at a transcript with a completely different `bridgeSessionId` (a genuinely independent session) — only a `bridgeSessionId` match is trustworthy.
   - **First cut of this fix kept the earliest file and dropped the mirror outright — wrong, caught in review before merge.** Given the CLI keeps writing to the mirror, discarding it forever would make every post-compaction message invisible to the cache: a session that compacts and keeps working loses all *later* activity, which is a worse failure mode than the double-count it replaces (double-count is a visible cost anomaly; silent loss of live activity is not visible at all, and this machine compacts routinely — nominal case, not an edge case). The design below is a real union instead.
-  - **The mirror duplicates its predecessor's tail verbatim — same timestamps — then continues with genuinely new content.** This is the fact that makes an exact, cheap union possible: the overlap is bounded exactly by the predecessor's `modified` (its last real-message timestamp, already computed and stored). Anything in the mirror at or before that timestamp is the recopied duplicate; anything after is new.
+  - **Copied tails often retain timestamps, but time order does not establish identity.** An independent member can have thousands of its own messages before another member's `modified`. Complete conversation UUID coverage permits an exact union: exclude the UUIDs already present in preceding members. Timestamp cutoffs remain a compatibility fallback for legacy transcripts, with the limitations below.
   - **Detection is full-read-only.** `readSessionFile()` extracts `bridgeSessionId` from the first `bridge-session` record it sees; `readSessionDisplayHeader()` (the incremental/header-only refresh path, capped at 256 KB / 500 lines) never attempts it, because the record is not reliably near the head of the file — on the real mirror fixture it sat at byte ~3.08 MB of a 3.08 MB file, past the cap. A `readSessionFile()` full read still happens once per file, the first time it's seen (the "NEW file" branch of `refreshFolder`), so the value is captured and then persisted in `session_cache.bridgeSessionId`, carried forward unchanged by every later header-only merge.
-  - **Every member of a bridgeSessionId group keeps its own `session_cache` row** (own `fileMtime`, own incremental refresh — completely unchanged machinery, so a frozen 16 MB parent is never re-read just because its mirror changed). `mergeBridgeGroups(existingRows, freshRows, reread)` in `read-session-file.js` (shared with `workers/scan-projects.js`) groups top-level sessions (never subagents — `parentSessionId` set is always excluded) by `bridgeSessionId`, sorts by `created` ascending, and marks every member except the earliest with `session_cache.mergedIntoSessionId = <earliest member's sessionId>`. Each non-winner's own `messageCount`/`textContent`/`session_metrics` are recomputed via `reread(sessionId, cutoff)` — a second call to `readSessionFile()` with `opts.dedupeSinceTimestamp` set to its immediate predecessor's `modified` — so its contribution excludes exactly the recopied overlap and nothing else.
-  - **A cached row is never, on its own, proof that its contribution is already deduplicated — the discovery-order bug caught in review before merge.** `mergeBridgeGroups` decides whether to call `reread()` by comparing a member's *recorded* `mergedIntoSessionId` against the role (winner, or child of a specific winner) just computed for it this pass — **not** by whether the member came from `freshRows` or `existingRows`. An earlier draft skipped `reread` for any already-cached row and merely patched its `mergedIntoSessionId` (a "touch"). That is provably wrong whenever the cached row was never derived against a cutoff in the first place: **reachable mechanically** through `refreshFolder`'s targeted path — a watcher flush can name only the mirror as dirty (its sibling not yet in `cachedSessions` at all, e.g. a project folder the cold-start scan hasn't reached yet), so `mergeBridgeGroups` sees a group of exactly one member and applies no cutoff; the mirror's row is written with its full, undeduplicated `messageCount`. A *later* pass that discovers the parent for the first time must then re-derive that already-cached mirror, or the double-count this fix exists to close survives unchanged, just reached from the other file. Fixed by keying the reread decision on `mergedIntoSessionId !== computedRole` for every member, fresh or not — proven red beforehand by `test/read-session-file-bridge-session.test.js`'s "already cached WITHOUT a cutoff" cases and `test/session-cache-bridge-dedup.test.js`'s two-pass (`mirror` then `parent`) reproduction. The same reasoning runs in reverse for the winner: if a group's earliest file is deleted (a real path — session deletion), its former child is promoted to winner on the very next pass, but its stored contribution is still cutoff-filtered against a predecessor that no longer exists and now under-counts — so the winner itself is re-read in full (`cutoff = null`) whenever its recorded `mergedIntoSessionId` is non-null, checked even for a group that has shrunk to one member. The only case that is genuinely free of a re-read is a member whose recorded `mergedIntoSessionId` already equals its just-computed role: that row's stored contribution was necessarily derived against this exact cutoff on some prior pass, so a frozen parent stays untouched on every routine call once the group has settled.
-  - **`mergedIntoSessionId` rows are excluded from sidebar/session-count listings, but count fully in token/message aggregates.** `buildProjectsFromCache()` skips any row with `mergedIntoSessionId` set and rolls its `messageCount` and `modified` up onto the row it merged into (so the sidebar shows one entry, with a `modified` that reflects the mirror's live activity, not the frozen parent's). `db.js`'s `getTotalCounts().totalSessions` excludes them the same way (`AND mergedIntoSessionId IS NULL`). `session_metrics`-based aggregates (`getDailyMetrics`, `getDailyModelTokens`, `getModelUsage`, and `getTotalCounts`'s message/token/tool-call sums) need **no** such exclusion: parent and mirror insert under distinct `sessionId`s with non-overlapping timestamp ranges (the cutoff guarantees this), so a plain `SUM(...) GROUP BY date` already adds them correctly. `getDailyActivity()` (the older, `session_cache`-based heatmap source) also self-corrects on `messageCount` for the same reason, but its `sessionCount` column will count a merged mirror as one more "session" on the day it's active — a pre-existing, disclosed approximation (that function already explicitly aggregates "ALL rows, parents and subagents alike"), not something this fix newly breaks.
+  - **Members with a contribution keep their own `session_cache` rows.** `mergeBridgeGroups` groups top-level rows by `bridgeSessionId` and orders them by `created`, then `sessionId`. With complete UUID coverage, each contribution excludes preceding UUIDs, even when its own messages have older timestamps. A continuation attaches to the predecessor with the most shared UUIDs, breaking ties by the latest shared position in its message sequence and then predecessor `modified`; a merged predecessor resolves to its visible root. If that predecessor has later activity, or there is no shared UUID, the contribution remains independent. Pure duplicates contribute no row.
+  - **Cached merge labels do not prove that a group is still correctly derived.** Top-level changes, new members and deletions in a cached bridge folder queue a file-subset worker scan including all its cached bridge members and the changed files. The worker re-evaluates their current full histories, removes gone predecessors before merging, and rewrites contributions, metrics and search entries together through the existing scan-result path. This also restores shared UUIDs when an independent member is promoted after the earlier owner disappears. Concurrent watcher requests for the same folder are combined into subsequent batches; an unchanged group is stat-only and does not run another worker.
+  - **`mergedIntoSessionId` rows are excluded from sidebar/session-count listings, but their contributions count in message/token aggregates.** `buildProjectsFromCache` rolls the contributions and activity onto their visible root; `getTotalCounts().totalSessions` excludes merged rows. Complete UUID coverage makes the contributions disjoint by message identity, not by timestamp: their date ranges can overlap. A plain `SUM` of `session_metrics` therefore remains correct. The older `getDailyActivity().sessionCount` still counts physical merged rows, its pre-existing disclosed approximation.
   - **Residual gaps, named rather than hidden**: (1) the transcript viewer (`read-session-jsonl`) still resolves a sessionId to exactly one physical file, so opening the *merged* (winner) session shows only its own pre-compaction content — post-compaction content is visible only by separately finding the mirror's own row/search hit, not through a stitched view. (2) FTS search body for the winner is built from its own `textContent` only (pre-compaction text); the mirror keeps its own, separate search entry (its post-compaction `textContent`), so post-compaction text is findable but surfaces as a second, unlabelled-in-the-sidebar search hit rather than under the visible session's own entry. Both are scoped follow-ups, not silently-accepted data loss — nothing here drops tokens, messages, or the ability to eventually find the content, only the "one unified view" polish.
   - **Winner tie-break is `created`, then `sessionId` string order, and can be picked "wrong" in a narrow case**: if a session is short enough that the mirror's recopied context window covers its *entire* history, the mirror's own unfiltered `created` can tie the true parent's. The sessionId string tie-break is then arbitrary. This does not affect correctness of totals (the group still partitions all activity with no double-count either way) — only which of the two sessionIds ends up as the visible "primary" one. Not fixed here; flagged for whoever hits it.
   - **Open question #1 (absence)**: a transcript with no `bridgeSessionId` is never grouped with anything — `mergeBridgeGroups` only builds a group when the field is a non-empty string, so old-format transcripts and any layout that never emits the field simply keep their own row, exactly like today.
@@ -136,57 +136,50 @@ messages after a newer member stops; the timestamp cutoff then discarded every
 message of the newer member, omitting its row on full scans and deleting an
 already-cached row on incremental scans.
 
-`readSessionFile` returns transient `messageUuids` and `messageUuidsComplete`
-for bridged transcripts. When all conversation records of a member and its
-predecessors have UUIDs, `mergeBridgeGroups` excludes the union of the preceding
-members' UUIDs instead of their timestamps. The exclusion applies to the title,
-search body, message count and daily metrics, while original time bounds and
-file mtime remain intact. If only an own assistant reply remains after UUID
-exclusion, the row retains the original prompt as its title; the shared prompt
-is still excluded from the count, search body and metrics. A pure duplicate
-with no remaining messages still returns null. These UUID arrays are not
-stored in SQLite. Fresh
-full reads are reused within one merge; a cached predecessor is read in full
-only when UUID comparison is needed. A member with unique messages whose last
-event precedes another member's last event remains an independent visible row
-(`mergedIntoSessionId = null`). A continuing compaction mirror still rolls up
-onto the earliest member, and a pure duplicate still contributes no row.
+`readSessionFile` returns transient conversation UUIDs, coverage and message
+payload signatures. Complete UUID coverage deduplicates title selection, search
+body, counts and daily metrics against the preceding UUID union without changing
+original timestamps or file mtime. An own assistant reply retains an inherited
+prompt as its display title while excluding that prompt from counts and search.
+The arrays are removed before worker `postMessage` and database upserts.
 
-Old transcripts with missing message UUIDs keep the timestamp rule when that
-read contributes messages, using the latest preceding member's `modified` so
-a divergent intermediate member cannot reintroduce an earlier copied tail.
-For an empty cutoff read, the full read's
-known UUIDs and UUID-less message signatures (role and message payload) are
-compared with all predecessors. Distinct messages recover an independent row;
-a legacy mirror made entirely of copied payloads keeps its existing deletion
-behaviour. Known shared UUIDs are excluded from a recovered row. Identical
-UUID-less payloads cannot establish distinct turn identity, so the fallback
-cannot distinguish an independent repeat from a copied legacy message.
-Settled cached independent members are left untouched when no member of the
-group was read freshly and the winner was not promoted, avoiding full-body
-reads on routine watcher passes. Discovery of another group member retries
-the comparison, so an independent row cannot be deleted merely because the
-transient UUID arrays were not persisted. Missing/unreadable full
-reads retain the existing null behaviour. If a predecessor cannot be read, a
-valid member is retained independently rather than dropped on unproven overlap.
-Complete UUID coverage is required to replace a nonempty legacy cutoff read.
-The same callback contract is wired through the synchronous
-full scan, incremental refresh, full scan worker and file-subset worker.
+The worker handles full repair scans and cached bridge refreshes. The main
+thread does only stat/header work to select affected files. A changed top-level
+file causes all cached bridge members to be re-evaluated in the worker, so a
+previously merged continuation can become independent after its predecessor
+receives later activity. New members and predecessor deletions use the same
+route, including deletion-only remote file-subset scans: the worker expands
+top-level subsets to the cached bridge members before merging. The chosen UUID-sharing predecessor resolves to its visible root, rather
+than always attaching to the earliest unrelated member in the bridge group.
 
-Existing caches need a one-time repair because a dropped file does not change
-the folder's cached mtime gate. At database open, `bridge_uuid_index_version`
-is advanced to 1 in a transaction that removes bridged cached rows, their
-metrics and their FTS entries, and clears the affected folders' `cache_meta`
-gates. Unrelated rows, settings and user names/stars/archive state are kept.
-The next scan/reconcile reads the missing rows even if their files are dormant.
-The version is recorded atomically with the invalidation, so interruptions
-retry safely and subsequent opens do not invalidate repaired rows again.
+Legacy transcripts with no known UUID evidence retain the timestamp fallback
+when it contributes messages. When the fallback is empty, or any UUID evidence is
+available but a predecessor lacks complete coverage, full histories are compared
+using known UUIDs and role/message payload signatures. Distinct known UUIDs
+always remain distinct even when their text is identical. Signatures compare
+payloads only when at least one side lacks a UUID. Copied payloads are
+excluded from a recovered row's title candidates, body, counts and metrics, while
+its distinct messages survive. Equal UUID-less payloads cannot distinguish an
+independent repeated turn from a copy; timestamp fallback on wholly UUID-less
+histories can also omit distinct older turns. This is a disclosed legacy
+limitation, not an exact identity guarantee. An unreadable predecessor does not
+establish overlap; a readable member with its own contribution stays independent.
 
-`test/bridge-divergent-history.test.js` uses temporary JSONL files and the real
-reader, cache entry points and both worker paths. Each case also checks a
-genuine continuing mirror; the older bridge tests cover legacy UUID-less
-mirrors and pure duplicate deletion. The optional orphan-parent placeholder
-was left out to keep the change within the indexing paths.
+At database open, `bridge_uuid_index_version = 1` records a one-time transaction
+that removes only bridged top-level cache rows, their metrics and their FTS
+entries, and clears the affected folder gates. Subagents, unrelated rows,
+settings and user names/stars/archive state remain. Errors roll back the entire
+transaction, emit a warning and allow `db.js` to load; the version stays unset
+and the next database open retries. Successful subsequent opens are no-ops.
+
+Warm reconciliation batches dirty local folders through `scanFoldersViaWorker`
+and returns immediately to `get-projects`; worker completion refreshes the
+sidebar. An in-flight reconciliation is shared between callers. A failed scan
+clears the throttle for a later retry; a rejected local cwd drops the stale
+folder rows through the worker's `unverifiedLocalFolder` signal. The on-disk project list never stamps
+remote `cache_meta` merely to display a folder: after repair it remains absent
+until the remote indexer fully scans the mirror, even when the first SSH sync
+reports no changed files.
 
 ## Remote SSH hosts (issue #201)
 
@@ -1711,7 +1704,9 @@ it. The state is the `archivedProjects` settings row:
 - `db-purge-command-summaries.test.js` — covers migration v9's surgical purge
 - `main-ctx-db-wiring.test.js` — covers the `ctx.db` allow-list ⊇ session-cache.js usage invariant above
 - `read-session-file-bridge-session.test.js` — covers `bridgeSessionId`/cutoff extraction and `mergeBridgeGroups()`'s grouping/re-derivation/re-parenting rules
-- `db-bridge-session-migration.test.js` — covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
+- `bridge-divergent-history.test.js` — covers divergent UUID/legacy histories across full, incremental and worker indexing.
+- `bridge-history-refresh.test.js` — covers three-member continuation ownership, current-state refresh, promotion/deletion, mixed UUID payload exclusion, worker body-read isolation and the dormant remote repair race.
+- `db-bridge-session-migration.test.js` — also covers one-time UUID invalidation of cache/metrics/FTS/folder gates, preservation of user state and subagents, no-op reopen, rollback and retry; covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
 - `session-cache-bridge-dedup.test.js` — covers the compaction-mirror union merge through `refreshFolder()`, `readFolderFromFilesystem()` and `buildProjectsFromCache()`'s rollup, using the real fixture's shape
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
 - IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `get-work-files`, `list-subagents`, `read-session-jsonl`

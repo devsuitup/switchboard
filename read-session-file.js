@@ -57,7 +57,18 @@ function isToolResultOnly(content) {
  *  <= this ISO8601 string. Used to dedupe a compaction mirror's recopied
  *  prefix -- see .ai/contexts/session-cache.md.
  */
-function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids) {
+function messageSignature(entry) {
+  return JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]);
+}
+
+function excludedBySignature(entry, exclusions) {
+  if (!exclusions) return false;
+  const signatures = exclusions instanceof Set ? exclusions
+    : typeof entry.uuid === 'string' && entry.uuid ? exclusions.withUuid : exclusions.withoutUuid;
+  return signatures?.has(messageSignature(entry)) || false;
+}
+
+function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures) {
   const map = new Map();
   const bucket = (date, model) => {
     const key = `${date}|${model}`;
@@ -81,6 +92,7 @@ function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, exclu
 
     if (sinceTimestampExclusive && (!entry.timestamp || entry.timestamp <= sinceTimestampExclusive)) continue;
     if (excludedMessageUuids?.has(entry.uuid)) continue;
+    if (excludedBySignature(entry, excludedMessageSignatures)) continue;
 
     const ts = typeof entry.timestamp === 'string' && entry.timestamp.length >= 10
       ? entry.timestamp.slice(0, 10)
@@ -167,6 +179,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const isSubagent = Boolean(opts.parentSessionId);
   const cutoff = opts.dedupeSinceTimestamp || null;
   const excludedMessageUuids = opts.excludedMessageUuids;
+  const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
     const stat = fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
@@ -249,7 +262,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       const text = typeof msg === 'string' ? msg :
         (typeof msg?.content === 'string' ? msg.content :
         (msg?.content?.[0]?.text || ''));
-      if (excludedMessageUuids && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
+      if ((excludedMessageUuids || excludedMessageSignatures) && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
         const candidate = classifyUserText(text);
         if (candidate.kind === 'prompt' && !inheritedSummary) inheritedSummary = candidate.text;
         else if (candidate.kind === 'command' && !inheritedCommandSummary) inheritedCommandSummary = candidate.text;
@@ -257,14 +270,15 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       const isMessage = entry.type === 'user' || entry.type === 'assistant' ||
         (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
       if (isMessage) {
+        messageSignatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
         if (typeof entry.uuid === 'string' && entry.uuid) messageUuids.push(entry.uuid);
         else {
           messageUuidsComplete = false;
-          messageSignatures.push(JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]));
         }
       }
       if (cutoff && (!entry.timestamp || entry.timestamp <= cutoff)) continue;
       if (excludedMessageUuids?.has(entry.uuid)) continue;
+      if (isMessage && excludedBySignature(entry, excludedMessageSignatures)) continue;
       if (isMessage) {
         messageCount++;
       }
@@ -284,13 +298,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     // do something. Bookkeeping-only transcripts (a bare /clear) have nothing
     // to show and must not be indexed at all.
     if (!summary && assistantSeen) summary = commandSummary;
-    if (!summary && messageCount > 0 && excludedMessageUuids) {
+    if (!summary && messageCount > 0 && (excludedMessageUuids || excludedMessageSignatures)) {
       summary = inheritedSummary || (assistantSeen ? inheritedCommandSummary : '');
     }
     if (!summary || messageCount < 1) return null;
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
-    const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids);
+    const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
 
     if (isSubagent) {
       // Sidechain marker must be present — otherwise the file lives under a
@@ -373,9 +387,6 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
     bySessionId.set(row.sessionId, {
       sessionId: row.sessionId, created: row.created, modified: row.modified,
       bridgeSessionId: row.bridgeSessionId || null,
-      // readSessionFile() never sets this field, so a fresh row's value here
-      // is always null -- a fresh non-winner is therefore always re-derived,
-      // same as before this field-based check existed.
       mergedIntoSessionId: row.mergedIntoSessionId || null,
     });
   }
@@ -387,7 +398,7 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
     groups.get(entry.bridgeSessionId).push(entry);
   }
 
-  const replacements = new Map(); // sessionId -> new row object, or null (nothing survives the cutoff)
+  const replacements = new Map();
 
   for (const members of groups.values()) {
     members.sort((a, b) => {
@@ -396,16 +407,6 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
       return a.sessionId < b.sessionId ? -1 : 1;
     });
     const winnerId = members[0].sessionId;
-    // The winner can itself carry a stale mergedIntoSessionId: if its former
-    // earlier sibling's file was deleted (a real path -- session deletion),
-    // this member is promoted from child to winner on this pass -- including
-    // down to a group of one, once every other member is gone. Its stored
-    // contribution was cutoff-filtered against a predecessor that no longer
-    // exists, so -- unlike an already-settled winner -- it must be re-read in
-    // full (no cutoff) rather than left as first-among-equals untouched. This
-    // check must run even for a size-1 group, so it sits before the
-    // `members.length < 2` guard below (which only concerns the non-winner
-    // loop, meaningless with a single member).
     if (members[0].mergedIntoSessionId) {
       const rederivedWinner = reread(winnerId, null);
       if (rederivedWinner) rederivedWinner.mergedIntoSessionId = null;
@@ -415,12 +416,12 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
     const hasFreshMember = members.some(member => freshSessionIds.has(member.sessionId));
     for (let i = 1; i < members.length; i++) {
       const member = members[i];
-      if (member.mergedIntoSessionId === winnerId) continue; // already correctly derived against this exact cutoff
-      if (!hasFreshMember && !member.mergedIntoSessionId && !members[0].mergedIntoSessionId) continue;
       const cutoff = members.slice(0, i).reduce((latest, previous) => previous.modified > latest ? previous.modified : latest, '');
+      if (!hasFreshMember && member.mergedIntoSessionId === winnerId && member.modified > cutoff) continue;
+      if (!hasFreshMember && !member.mergedIntoSessionId && !members[0].mergedIntoSessionId) continue;
       const candidate = fullRows.get(member.sessionId);
-      const uuidEvidence = candidate?.messageUuidsComplete || members.slice(0, i)
-        .some(previous => fullRows.get(previous.sessionId)?.messageUuidsComplete);
+      const uuidEvidence = candidate?.messageUuids?.length || candidate?.messageUuidsComplete || members.slice(0, i)
+        .some(previous => fullRows.get(previous.sessionId)?.messageUuids?.length || fullRows.get(previous.sessionId)?.messageUuidsComplete);
       const legacy = uuidEvidence ? null : reread(member.sessionId, cutoff);
       if (uuidEvidence || !legacy) {
         const fullMember = fullRead(member.sessionId);
@@ -429,18 +430,31 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
           const excluded = new Set(previousRows.flatMap(row => row.messageUuids));
           const rederived = reread(member.sessionId, null, excluded);
           if (rederived) {
-            rederived.mergedIntoSessionId = previousRows.some(row => row.modified >= fullMember.modified) ? null : winnerId;
+            const ownUuids = new Set(fullMember.messageUuids);
+            const positions = new Map(fullMember.messageUuids.map((uuid, index) => [uuid, index]));
+            const predecessors = previousRows.map(row => {
+              const shared = row.messageUuids.filter(uuid => ownUuids.has(uuid));
+              const lastShared = shared.reduce((last, uuid) => Math.max(last, positions.get(uuid)), -1);
+              return { row, shared: new Set(shared).size, lastShared };
+            }).filter(item => item.shared > 0).sort((a, b) => b.shared - a.shared || b.lastShared - a.lastShared || b.row.modified.localeCompare(a.row.modified));
+            const parent = predecessors[0]?.row;
+            rederived.mergedIntoSessionId = parent && parent.modified < fullMember.modified
+              ? replacements.get(parent.sessionId)?.mergedIntoSessionId || parent.sessionId : null;
           }
           replacements.set(member.sessionId, rederived);
           continue;
         }
         if (!legacy && fullMember) {
           const excluded = new Set(previousRows.flatMap(row => row?.messageUuids || []));
-          const signatures = new Set(previousRows.flatMap(row => row?.messageSignatures || []));
+          const previousSignatures = previousRows.flatMap(row => row?.messageSignatures || []);
+          const signatures = {
+            withUuid: new Set(previousSignatures.filter(record => !record.uuid).map(record => record.signature)),
+            withoutUuid: new Set(previousSignatures.map(record => record.signature)),
+          };
           const hasOwnMessages = fullMember.messageUuids?.some(uuid => !excluded.has(uuid)) ||
-            fullMember.messageSignatures?.some(signature => !signatures.has(signature));
+            fullMember.messageSignatures?.some(record => !(record.uuid ? signatures.withUuid : signatures.withoutUuid).has(record.signature));
           if (hasOwnMessages || previousRows.some(row => !row)) {
-            const recovered = reread(member.sessionId, null, excluded);
+            const recovered = reread(member.sessionId, null, excluded, signatures);
             if (recovered) recovered.mergedIntoSessionId = null;
             replacements.set(member.sessionId, recovered);
             continue;
@@ -455,13 +469,14 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
 
   const toUpsert = [];
   const toDelete = [];
+  const existingIds = new Set((existingRows || []).map(row => row.sessionId));
 
   for (const row of freshRows || []) {
     if (row.parentSessionId) { toUpsert.push(row); continue; }
     if (replacements.has(row.sessionId)) {
       const replacement = replacements.get(row.sessionId);
       if (replacement) toUpsert.push(replacement);
-      // else: nothing new since its predecessor -- never inserted at all.
+      else if (existingIds.has(row.sessionId)) toDelete.push(row.sessionId);
     } else {
       toUpsert.push(row);
     }
@@ -469,8 +484,8 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
 
   for (const row of existingRows || []) {
     if (row.parentSessionId) continue;
-    if (freshSessionIds.has(row.sessionId)) continue; // already handled above
-    if (!replacements.has(row.sessionId)) continue; // winner, or already correctly derived -- no change
+    if (freshSessionIds.has(row.sessionId)) continue;
+    if (!replacements.has(row.sessionId)) continue;
     const replacement = replacements.get(row.sessionId);
     if (replacement) toUpsert.push(replacement);
     else toDelete.push(row.sessionId);

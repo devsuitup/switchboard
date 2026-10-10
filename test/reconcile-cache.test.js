@@ -49,7 +49,7 @@ function makeFakeDb(metaMap) {
   };
 }
 
-test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to-date ones', () => {
+test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to-date ones', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-reconcile-'));
   try {
     const cwdOf = (name) => path.join(projectsDir, name);
@@ -74,7 +74,7 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
       db: fake.db,
     });
 
-    sessionCache.reconcileCacheFromFilesystem();
+    await sessionCache.reconcileCacheFromFilesystem();
 
     // Assert at the observable seam: setFolderMeta was called with a non-zero
     // indexMtimeMs for folders that were (re)indexed, and was NOT called for

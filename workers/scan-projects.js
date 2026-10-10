@@ -34,9 +34,9 @@ function readFolderFromFilesystem(folder) {
 
   // Merge compaction mirrors sharing a bridgeSessionId -- see mergeBridgeGroups.
   // existingRows=[] (fresh scan): every group member is re-derived from scratch.
-  const reread = (sessionId, cutoff, excludedMessageUuids) => {
+  const reread = (sessionId, cutoff, excludedMessageUuids, excludedMessageSignatures) => {
     try {
-      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids });
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
     } catch { return null; }
   };
   const { toUpsert } = mergeBridgeGroups([], sessions, reread);
@@ -64,7 +64,13 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
 
   const freshRows = [];
   const goneIds = [];
-  for (const rel of files || []) {
+  const scanFiles = new Set(files || []);
+  if ([...scanFiles].some(file => !String(file).includes('/'))) {
+    for (const row of existingRows || []) {
+      if (!row.parentSessionId && row.bridgeSessionId) scanFiles.add(row.sessionId + '.jsonl');
+    }
+  }
+  for (const rel of scanFiles) {
     const parts = String(rel).split('/');
     let parentSessionId = null;
     if (parts.length === 3 && parts[1] === 'subagents') parentSessionId = parts[0];
@@ -84,12 +90,12 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
     } catch {}
   }
 
-  const reread = (sessionId, cutoff, excludedMessageUuids) => {
+  const reread = (sessionId, cutoff, excludedMessageUuids, excludedMessageSignatures) => {
     try {
-      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids });
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
     } catch { return null; }
   };
-  const { toUpsert, toDelete } = mergeBridgeGroups(existingRows || [], freshRows, reread);
+  const { toUpsert, toDelete } = mergeBridgeGroups((existingRows || []).filter(row => !goneIds.includes(row.sessionId)), freshRows, reread);
   return { folder: key, projectPath, sessions: toUpsert, toDelete: [...goneIds, ...toDelete], indexMtimeMs, partial: true };
 }
 
@@ -116,15 +122,25 @@ try {
   for (let i = 0; i < folders.length; i++) {
     const result = readFolderFromFilesystem(folders[i]);
     current++;
+    stripBridgeEvidence(result);
     parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected,
       unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
   }
   for (const t of targets) {
     const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);
     current++;
+    stripBridgeEvidence(result);
     parentPort.postMessage({ type: 'folder', result, current, total });
   }
   parentPort.postMessage({ type: 'done', ok: true, total });
 } catch (err) {
   parentPort.postMessage({ type: 'done', ok: false, error: err.message });
+}
+
+function stripBridgeEvidence(result) {
+  for (const row of result?.sessions || []) {
+    delete row.messageUuids;
+    delete row.messageUuidsComplete;
+    delete row.messageSignatures;
+  }
 }

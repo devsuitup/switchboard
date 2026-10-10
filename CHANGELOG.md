@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Conversations sharing a web session now keep their own older messages when another conversation continues later. Previously missing conversations return when the cache is re-indexed after upgrading. (#524)
+- Conversations sharing a web session now keep their own older messages when another conversation continues later. Continuations stay with the conversation they continue, and previously missing local and remote conversations return after upgrading without blocking the interface while their history is indexed. (#524)
 - On Windows, writing to a terminal that is closing no longer raises an uncaught main-process exception, including when closing an attached agent tab. (#517)
 - Restoring a conversation that continued under another id now opens its continuation and saves the new id, waits and retries when indexing finishes, and keeps live continuations available before their first transcript is saved. Unrelated damaged or oversized records no longer block restore; multiple or unresolved continuations, including when process status cannot be read, stay saved with a notice to open the old session and choose a continuation or explicitly reopen the original. (#518)
 

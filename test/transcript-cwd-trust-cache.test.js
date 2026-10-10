@@ -128,7 +128,7 @@ test('buildProjectsFromCache: a forged projectPath stored in cache_meta before t
   } finally { cleanup(tmp); }
 });
 
-test('reconcileCacheFromFilesystem: a folder whose stored projectPath does not verify is refreshed even when its mtime is current', () => {
+test('reconcileCacheFromFilesystem: a folder whose stored projectPath does not verify is refreshed even when its mtime is current', async () => {
   const tmp = mkTmp();
   try {
     const p = project(tmp, 'proj');
@@ -139,7 +139,7 @@ test('reconcileCacheFromFilesystem: a folder whose stored projectPath does not v
     const current = getFolderIndexMtimeMs(path.join(projectsDir, folder));
     const state = makeStatefulDb({ folderMeta: new Map([[folder, { folder, projectPath: evil, indexMtimeMs: current }]]) });
     initCache(projectsDir, state.db);
-    sessionCache.reconcileCacheFromFilesystem();
+    await sessionCache.reconcileCacheFromFilesystem();
     assert.equal(state.folderMeta.get(folder).projectPath, p);
   } finally { cleanup(tmp); }
 });
