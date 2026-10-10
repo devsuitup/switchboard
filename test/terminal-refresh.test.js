@@ -374,6 +374,7 @@ test('shared explicit Refresh redraws locally without fitting, IPC, raw resize o
     const paints = [];
     let atlases = 0;
     e.terminal.refresh = (...args) => paints.push(args);
+    ctx.window.restoreTerminalWebgl('shared');
     e.webglAddon.clearTextureAtlas = () => { atlases++; };
     ctx.window.requestTerminalRefresh('shared');
     ctx.advance(160);

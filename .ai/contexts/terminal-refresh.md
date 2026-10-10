@@ -84,6 +84,64 @@ restoration retry; ordinary resize errors remain absorbed by the adapter.
 An exited or permanently failing PTY cannot be restored, and no continuing
 retry or idle timer is installed.
 
+## WebGL contexts across tab switches
+
+Issue #526: every reveal of a hidden tab blocked the renderer for 8-10 s,
+whatever the replay volume. The old `showSession` disposed the previous
+tab's WebGL addon and created the revealed tab's addon on its still
+`display:none` container, so each switch paid for a context disposal and a
+creation.
+
+Each addon holds a GL context and Chromium allows about 16 per process, so
+the addon is kept only for the `WEBGL_WARM_CAP` (3) most recently shown
+terminals (`webglWarmOrder` in `terminal-manager.js`). The list holds entry
+objects, not session ids, so `onSessionDetected` and `onSessionForked`
+re-keying cannot detach a terminal from it. `showSession` touches the revealed
+entry and disposes the addon of whichever falls off the end; a switch among the
+warm terminals creates and disposes nothing. `suspendTerminalWebgl` (grid
+off-screen cards, leaving the grid) and `destroySession` remove the entry. The
+other per-session maps that are not re-keyed (issue #529) are not touched here. The LRU of live xterms
+(`TERMINAL_LRU_CAP`) is unchanged and still destroys the terminal, addon
+included.
+
+A terminal is created without an addon. One that has none when revealed (never
+shown, evicted from the warm list, suspended by the grid, or after a context
+loss) gets a reveal generation in `webglWanted`. The addon is loaded in the
+reveal's animation frame, after `.visible` is added and `safeFit` has run,
+never on a `display:none` element. The load is skipped when a newer reveal,
+`suspendTerminalWebgl`, grid mode or destruction has superseded that generation,
+or when the entry is no longer the one registered in `openSessions` or is
+detached. `destroySession` also cancels the entry's pending frames. A terminal
+whose process exited is not special-cased: it is a retained terminal like any
+other. Grid cards keep their addon through the intersection observer, which
+loads it immediately. `onContextLoss` is unchanged: it
+disposes the addon and leaves the DOM renderer, and the next reveal recreates it.
+
+`forceRepaint` still clears the texture atlas on every reveal of a kept-alive
+addon: an atlas survives `display:none` and reparenting and shows ghosted glyphs
+(#103). It skips the clear only for an addon created in that same frame, after
+the fit: its renderer and render model are new, and addon-webgl's
+`CharAtlasCache` only shares an atlas whose font size, dpr and theme match.
+That the painted result is correct was not inspected. A hidden terminal with a live addon is not written to (output is
+accumulated, see the hidden-buffer replay) and its fit timer returns on a zero
+height, so keeping the context costs memory only.
+
+Budget: the warm cap is not a global context cap. Live contexts are the warm
+terminals (at most 3), plus a mounted panel shell (it owns an addon, see
+`panel-terminal.md`), plus the visible grid cards; hiding a grid disposes every
+non-panel addon first. A terminal that is created but never shown holds no
+context, so a restore of many sessions no longer takes one each. The soft
+`TERMINAL_LRU_CAP` bounds the number of terminals but not contexts. The measurement behind disposing
+on hide (#115: four streaming sessions with one visible cost the renderer about
+44 % of a core and the GPU about 50 %) concerned terminals that were being
+written to; a hidden terminal is not written to, so a warm hidden addon
+adds memory, not draw work. That reasoning is not re-measured live.
+
+The reveal is timed by the `reveal.timing` trace event
+(`docs/activity-trace.md`). Whether context creation was the stall, and the
+effect of the fix on a live app, are not measured by the jsdom tests: the next
+live reveal trace is the evidence.
+
 ## Measurement and limits
 
 The chosen remote mechanism is the solo resize nudge; shared Refresh is a
@@ -104,6 +162,8 @@ would need resolution beyond the descriptor's pane/window target.
 
 ## Verification
 
+- `test/terminal-webgl-warm.test.js`: warm cap, no recreate across switches,
+  load after `.visible`, context loss, atlas clear rule, `reveal.timing`.
 - `test/terminal-refresh.test.js`: shipped selection, solo/shared return,
   shared local redraw without IPC/ssh/raw resize, sizing capability,
   coalescing, stale hidden/disconnected requests, button and sidebar action.

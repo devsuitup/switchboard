@@ -144,6 +144,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `class.subagent` | A subagent's `running` / `has-running-child` / `has-busy-agents` written | `el` ids, `running` |
 | `class.render` | A full sidebar render rebuilt an item's classes from the stores | `el`, `cls` |
 | `render.stats` | Once per second per session that saw terminal activity, while the trace is on: the terminal render path's counters for that second | `ms` (the window's real length), `chunks`, `chars` (PTY data events received and their length), `hiddenChunks` (of those, received while the session's terminal is not displayed in single view: accumulated, never parsed; grid sessions never count as hidden), `writes`, `writeChars` (calls to `terminal.write`, from the 30 fps flush or a reveal replay, and what they carried), `maxBatchChunks`, `maxBatchChars` (the largest single write), `atlasChanges`, `atlasCanvases` (glyph atlas rebuilds and added atlas pages, each of which repaints every visible row) |
+| `reveal.timing` | A hidden terminal is revealed in single view (`showSession`), once its animation frame has run: where the reveal spent its time | `suspendMs` (the warm-cap check that disposes the least recently shown addon), `replayMs` (the hidden-buffer replay), `restoreMs`, `visibleMs` (adding `.visible`), `focusMs` (focus and scheduling the frame), `rafWaitMs` (from scheduling to the frame callback running: a stall in between shows here), `fitMs` (`safeFit`), `webglMs` (creating the WebGL context, 0 when kept alive), `repaintMs` (`forceRepaint` and scroll), `totalMs`, `webglCreated` (the reveal frame created a context), `webglDisposed` (addons the cap disposed on this reveal), and, when the browser reports one overlapping the reveal (its start to the end of its frame), the longest `long-animation-frame` entry (`longtask` where that type is missing): `longType`, `longMs`, `longStartMs` (from the start of the reveal) and `longScript` (invoker, function and URL of its longest script, `long-animation-frame` only). Durations are `performance.now()` differences in ms, rounded to 0.1. With such an observer the line is written 200 ms after the frame, to let the entry arrive |
 | `poll.recv` | The poll reply reaches the renderer | `sinceSeq`, `entries` |
 | `reconcile.apply` / `reconcile.skip` / `reconcile.noop` | Per session in the poll reply | `backend`, `local`, `reason`, `sinceSeq`, `sessionSeq` |
 
@@ -151,6 +152,12 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 `via`, the caller that asked.
 
 ## What to look for
+
+**Does revealing a tab stall the renderer?** One `reveal.timing` line per reveal. The step with the large value is the cost: `replayMs` is the buffered output parsed, `webglMs` a context created, `fitMs` / `repaintMs` the layout and repaint, `rafWaitMs` time the frame waited behind other work. `webglCreated:false` with a long `fitMs` or `repaintMs` points away from context creation:
+
+```bash
+jq -c 'select(.cat=="reveal.timing") | {sid, totalMs, replayMs, webglMs, fitMs, repaintMs, rafWaitMs, webglCreated}' $TRACE
+```
 
 **Is a terminal burning CPU legitimately?** The volume is one line per active session per second, hidden sessions and sessions without a terminal entry included. A window that straddles a temp-to-real id rekey reports under both ids. `render.stats` has no line for a
 second in which the session saw nothing. Writes per second is `writes * 1000 /
@@ -302,6 +309,8 @@ path: `osc.title` fires only for chunks carrying an OSC introducer, and
 `render.stats`, which counts in memory and sends one line per session per
 second. Off, each of its sites in `public/terminal-manager.js` is one
 `window.ATRACE` read: no counter object, no timer and no clock read per write.
+`reveal.timing` follows the same rule: a reveal reads `window.ATRACE` once, and the
+clock only when it is on.
 On, a write costs an integer increment; the one timer is armed by the first
 event of a window and is not re-armed when nothing happens. This matters because
 of [decision 0002](decisions/0002-discrete-steps-sidebar-animations.md): the

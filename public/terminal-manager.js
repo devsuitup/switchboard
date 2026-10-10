@@ -264,15 +264,29 @@ function safeFit(entry) {
 
 // Fit a terminal that just became visible (from display:none or reparent).
 // Defers to requestAnimationFrame so the container has dimensions.
-function fitAndScroll(entry) {
+function fitAndScroll(entry, tr, wantedGen = 0) {
   const wasAtBottom = isAtBottom(entry.terminal);
-  requestAnimationFrame(() => {
-    safeFit(entry);
-    forceRepaint(entry);
-    if (wasAtBottom) {
-      entry.terminal.scrollToBottom();
+  const frames = entry.frames || (entry.frames = new Set());
+  const id = requestAnimationFrame(() => {
+    frames.delete(id);
+    const t = tr && !tr.abandoned ? tr : null;
+    let finished = false;
+    try {
+      if (t) revealLap(t, 'rafWaitMs');
+      safeFit(entry);
+      if (t) revealLap(t, 'fitMs');
+      const created = loadWantedWebgl(entry, wantedGen);
+      if (t) { revealLap(t, 'webglMs'); t.webglCreated = created; }
+      forceRepaint(entry, created);
+      if (wasAtBottom) {
+        entry.terminal.scrollToBottom();
+      }
+      if (t) { revealLap(t, 'repaintMs'); finishRevealTiming(entry, t); finished = true; }
+    } finally {
+      if (t && !finished) abandonReveal(t);
     }
   });
+  frames.add(id);
 }
 
 // The WebGL renderer keeps a glyph texture atlas that survives display:none and
@@ -281,8 +295,8 @@ function fitAndScroll(entry) {
 // atlas and shows ghosted or vertically misplaced glyphs (a manual resize or a
 // select/deselect clears it). Clear the atlas and force a full row refresh
 // whenever a terminal is revealed.
-function forceRepaint(entry) {
-  if (entry.webglAddon) {
+function forceRepaint(entry, freshAtlas = false) {
+  if (entry.webglAddon && !freshAtlas) {
     try { entry.webglAddon.clearTextureAtlas(); } catch { /* addon disposed mid-flight */ }
   }
   entry.terminal.refresh(0, entry.terminal.rows - 1);
@@ -1128,7 +1142,6 @@ function createTerminalEntry(session, opts = {}) {
 
   openSessions.set(sessionId, entry);
   lruTouch(sessionId);
-  loadTerminalWebgl(entry);
   observeContainerResize(entry);
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
@@ -1159,7 +1172,7 @@ function createTerminalEntry(session, opts = {}) {
 // process — past the cap, contexts are lost and terminals silently degrade.
 // The grid view suspends the addon on off-screen cards (IntersectionObserver
 // in grid-view.js) and restores it when they scroll back in; showSession
-// restores it for single view. Loading must happen after terminal.open()
+// loads it in the reveal frame for single view. Loading must happen after terminal.open()
 // (needs attached DOM); failure falls back to xterm's DOM renderer.
 function loadTerminalWebgl(entry) {
   if (entry.webglAddon || !entry.terminal) return;
@@ -1190,16 +1203,119 @@ function loadTerminalWebgl(entry) {
   }
 }
 
-function suspendTerminalWebgl(sessionId) {
-  const entry = openSessions.get(sessionId);
-  if (!entry || !entry.webglAddon) return;
+function releaseEntryWebgl(entry) {
+  entry.webglWanted = 0;
+  if (!entry.webglAddon) return false;
   try { entry.webglAddon.dispose(); } catch {}
   entry.webglAddon = null; // xterm falls back to its DOM renderer
+  return true;
+}
+
+function suspendTerminalWebgl(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry) return;
+  webglWarmForget(entry);
+  releaseEntryWebgl(entry);
 }
 
 function restoreTerminalWebgl(sessionId) {
   const entry = openSessions.get(sessionId);
   if (entry) loadTerminalWebgl(entry);
+}
+
+// see .ai/contexts/terminal-refresh.md, "WebGL contexts across tab switches"
+const WEBGL_WARM_CAP = 3;
+const webglWarmOrder = [];
+let webglRevealGen = 0;
+
+function webglWarmForget(entry) {
+  const i = webglWarmOrder.indexOf(entry);
+  if (i !== -1) webglWarmOrder.splice(i, 1);
+}
+
+function webglWarmTouch(entry) {
+  webglWarmForget(entry);
+  webglWarmOrder.unshift(entry);
+  let disposed = 0;
+  while (webglWarmOrder.length > WEBGL_WARM_CAP) {
+    if (releaseEntryWebgl(webglWarmOrder.pop())) disposed++;
+  }
+  return disposed;
+}
+
+function loadWantedWebgl(entry, gen) {
+  if (!gen || entry.webglWanted !== gen) return false;
+  entry.webglWanted = 0;
+  const owned = openSessions.get(entry.session.sessionId) === entry && entry.element.isConnected;
+  if (entry.webglAddon || !owned || gridViewActive || !entry.element.classList.contains('visible')) return false;
+  loadTerminalWebgl(entry);
+  return !!entry.webglAddon;
+}
+
+// --- Reveal timing (activity trace) ---
+// see docs/activity-trace.md, "reveal.timing"
+function revealLap(tr, key) {
+  const now = performance.now();
+  tr[key] = now - tr.last;
+  tr.last = now;
+}
+
+const REVEAL_LONG_SETTLE_MS = 200;
+
+function observeRevealLongEntries(tr) {
+  if (typeof PerformanceObserver === 'undefined') return;
+  const types = PerformanceObserver.supportedEntryTypes || [];
+  const type = ['long-animation-frame', 'longtask'].find((t) => types.includes(t));
+  if (!type) return;
+  try {
+    tr.longType = type;
+    tr.longs = [];
+    tr.observer = new PerformanceObserver((list) => collectRevealLongEntries(tr, list.getEntries()));
+    tr.observer.observe({ type });
+  } catch { tr.observer = null; }
+}
+
+function collectRevealLongEntries(tr, entries) {
+  for (const e of entries) tr.longs.push(e);
+}
+
+function abandonReveal(tr) {
+  tr.abandoned = true;
+  if (tr.owner) tr.owner.delete(tr);
+  clearTimeout(tr.timer);
+  try { if (tr.observer) tr.observer.disconnect(); } catch {}
+}
+
+function longEntryFields(tr) {
+  const overlapping = (tr.longs || []).filter((e) => e.startTime <= tr.t0 + tr.totalMs && e.startTime + e.duration >= tr.t0);
+  const e = overlapping.reduce((a, b) => (!a || b.duration > a.duration ? b : a), null);
+  if (!e) return {};
+  const round = (n) => Math.round(n * 10) / 10;
+  const fields = { longType: tr.longType, longMs: round(e.duration), longStartMs: round(e.startTime - tr.t0) };
+  const scripts = Array.isArray(e.scripts) ? e.scripts : [];
+  const top = scripts.reduce((a, b) => (!a || b.duration > a.duration ? b : a), null);
+  if (top) fields.longScript = [top.invoker, top.sourceFunctionName, top.sourceURL].filter(Boolean).join(' ');
+  return fields;
+}
+
+function finishRevealTiming(entry, tr) {
+  tr.totalMs = performance.now() - tr.t0;
+  tr.finished = true;
+  const sid = entry.session.sessionId;
+  if (!tr.observer) { tr.owner.delete(tr); emitRevealTiming(sid, tr); return; }
+  tr.timer = setTimeout(() => {
+    tr.owner.delete(tr);
+    try { collectRevealLongEntries(tr, tr.observer.takeRecords()); tr.observer.disconnect(); } catch {}
+    emitRevealTiming(sid, tr);
+  }, REVEAL_LONG_SETTLE_MS);
+}
+
+function emitRevealTiming(sid, tr) {
+  if (!window.ATRACE) return;
+  const round = (n) => Math.round(n * 10) / 10;
+  const fields = { webglCreated: tr.webglCreated, webglDisposed: tr.webglDisposed };
+  for (const key of ['suspendMs', 'replayMs', 'restoreMs', 'visibleMs', 'focusMs', 'rafWaitMs', 'fitMs', 'webglMs', 'repaintMs', 'totalMs']) fields[key] = round(tr[key]);
+  window.atrace('reveal.timing', sid, { ...fields, ...longEntryFields(tr) });
 }
 
 // Clean up a closed session entry (dispose terminal, remove DOM, remove from maps).
@@ -1243,6 +1359,10 @@ function destroySession(sessionId) {
   if (typeof syncToolBar === 'function') syncToolBar();
   const li = lruOrder.indexOf(sessionId);
   if (li !== -1) lruOrder.splice(li, 1);
+  webglWarmForget(entry);
+  releaseEntryWebgl(entry);
+  if (entry.frames) for (const id of entry.frames) cancelAnimationFrame(id);
+  if (entry.revealTrs) for (const tr of [...entry.revealTrs]) abandonReveal(tr);
   if (destroyGridCard(sessionId) && gridViewActive) {
     // Keep the grid header count honest when a card disappears outside the
     // showGridView/showSession flows (e.g. LRU eviction of a closed session).
@@ -1290,26 +1410,33 @@ function showSession(sessionId) {
     placeholder.style.display = 'none';
     hideAllViewers();
     if (session) showTerminalHeader(session);
-    // Only one terminal is ever visible in single view — suspend the WebGL
-    // context of whatever we're switching away from. This is the single-view
-    // equivalent of the per-card suspend/restore grid-view.js already does
-    // via gridCardObserver; guarded so re-showing the already-active session
-    // doesn't tear down and immediately reload the context it keeps using.
-    if (previousActiveSessionId && previousActiveSessionId !== sessionId) {
-      suspendTerminalWebgl(previousActiveSessionId);
-    }
     if (entry) {
+      const tr = window.ATRACE ? { t0: performance.now(), last: 0, webglCreated: false, webglDisposed: 0 } : null;
+      if (tr) { tr.last = tr.t0; observeRevealLongEntries(tr); }
+      // see .ai/contexts/terminal-refresh.md, "WebGL contexts across tab switches"
+      if (tr) {
+        const open = entry.revealTrs || (entry.revealTrs = new Set());
+        for (const earlier of [...open]) if (!earlier.finished) abandonReveal(earlier);
+        tr.owner = open;
+        open.add(tr);
+      }
+      const disposed = webglWarmTouch(entry);
+      if (tr) { tr.webglDisposed = disposed; revealLap(tr, 'suspendMs'); }
       // The incoming session may have accumulated a hidden buffer while it
       // wasn't visible (see appendToHiddenAccumulator) — replay it now, in
       // one atomic write, before the container becomes visible.
       replayHiddenBuffer(sessionId);
+      if (tr) revealLap(tr, 'replayMs');
       // Restore the full scrollback budget for the focused terminal (the grid
       // may have trimmed it — see showGridView). Growing the limit is lossless.
       entry.terminal.options.scrollback = SCROLLBACK_SINGLE;
-      restoreTerminalWebgl(sessionId); // grid may have suspended the GL context
+      entry.webglWanted = entry.webglAddon ? 0 : ++webglRevealGen;
+      if (tr) revealLap(tr, 'restoreMs');
       entry.element.classList.add('visible');
+      if (tr) revealLap(tr, 'visibleMs');
       entry.terminal.focus();
-      fitAndScroll(entry);
+      fitAndScroll(entry, tr, entry.webglWanted);
+      if (tr) revealLap(tr, 'focusMs');
     }
     refreshRemoteTerminalOnReturn(sessionId, previousActiveSessionId);
   }

@@ -207,11 +207,13 @@ test('hideGridView restores the full scrollback budget on ALL open sessions, not
   }
 });
 
-test('WebGL lifecycle: loaded on create, suspend disposes, restore reloads, showSession restores', () => {
+test('WebGL lifecycle: loaded on create, suspend disposes, restore reloads, showSession restores', async () => {
   const { window, spies, destroy } = setupTerminalDom();
   try {
     const entry = window.createTerminalEntry({ sessionId: 's1' });
-    assert.ok(entry.webglAddon, 'WebGL addon loaded at creation');
+    assert.strictEqual(entry.webglAddon, null, 'no GL context until the terminal is first shown');
+    window.restoreTerminalWebgl('s1');
+    assert.ok(entry.webglAddon, 'restore loads the addon');
 
     window.suspendTerminalWebgl('s1');
     assert.strictEqual(entry.webglAddon, null, 'addon reference cleared');
@@ -228,7 +230,8 @@ test('WebGL lifecycle: loaded on create, suspend disposes, restore reloads, show
 
     window.suspendTerminalWebgl('s1');
     window.showSession('s1');
-    assert.ok(entry.webglAddon, 'showSession restores a suspended GL context');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    assert.ok(entry.webglAddon, 'showSession restores a suspended GL context in its reveal frame');
 
     assert.doesNotThrow(() => window.suspendTerminalWebgl('unknown'));
   } finally {

@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed

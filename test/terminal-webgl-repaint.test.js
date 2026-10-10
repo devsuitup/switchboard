@@ -90,6 +90,7 @@ test('loadTerminalWebgl repaints visible rows when the texture atlas changes or 
       },
     };
     const entry = window.createTerminalEntry({ sessionId: 's1' });
+    window.restoreTerminalWebgl('s1');
     assert.strictEqual(atlasCallbacks.length, 2); // both atlas events are wired
 
     let refreshes = 0;
