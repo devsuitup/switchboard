@@ -233,3 +233,117 @@ controls back, and the restored window keeps its saved bounds.
 If the drag region were unreachable, the window manager's own bindings still
 move and resize the window: `Super`+drag on GNOME, `Alt`+`F7`/`Alt`+`F8`, or
 `Alt`+`Space` then Move/Size on Windows.
+
+## Closing the window
+
+The close button sits a few pixels from the strip's own controls and the
+terminal's top-right corner, so a stray click there ended the app and every
+session in it. A **window close** (the close button, `Alt`+`F4`, the window
+manager's own close) now asks "Close Switchboard?" first; Cancel or `Escape`
+leaves everything running. On macOS closing the window does not quit (the app
+stays in the Dock), but the window's `closed` handler still stops every
+session, so there the question reads "Close the window?" and says the app
+stays in the Dock. The question is the in-page choice dialog
+(`confirmWindowClose` in `file-panel.js`), not a native `confirm()`: Cancel
+has the focus, so `Enter` keeps the app, and the page keeps running while it
+is shown, which the probe below relies on. Only one choice dialog shows at a
+time, so the close question is asked with `replace: true`: another one that is
+open (the Archive folder dialog, say) is cancelled first, and a close is never
+answered with a silent Cancel because something else was on screen.
+
+It rides on the unsaved-edits guard (`unsaved-guard.js`, see
+[viewer-panel](viewer-panel.md), "Unsaved edits on quit, reload and close"):
+the window's `close` event asks the renderer with the reason `'close'`, while
+`before-quit` and the updater ask with `'quit'`. The renderer
+(`file-panel.js`, the `onUnsavedCheck` handler) adds the confirm only for
+`'close'`, and only when the unsaved-edits dialog was not shown: answering
+that dialog with Save or Discard is already a decision to close. A **quit**
+(☰ → Quit, which reads Exit on Windows and has `Ctrl`+`Q` only on Linux and
+`Cmd`+`Q` on macOS; an update install; `SIGTERM`) is not asked about again. A
+Windows logoff or shutdown approves the quit before the question
+(`query-session-end`).
+
+A check for `'close'` has no time bound before the acknowledgement: a page that
+is busy when the close arrives (still starting, `onUnsavedCheck` is registered
+by `initFilePanel`, or stalled on a tab reveal) shows the question once it is
+free, rather than closing without it. A `'quit'` check keeps the 2.5 s bound,
+so a quit never waits for ever on the page.
+
+A quit that arrives while the close question is pending (`SIGTERM`, a Linux or
+macOS logout, an update install) joins the same check, and the guard upgrades
+its reason: main sends `unsaved-check-reason` (`id`, `'quit'`), the
+renderer closes the close question as a yes (or skips it if it is not shown
+yet), and a check not acknowledged yet gets the quit's 2.5 s bound. The
+unsaved-edits dialog stays: Cancel there still keeps the app, as for any quit.
+A reason is only ever upgraded (`'reload'` < `'close'` < `'quit'`): a close
+joining a reload question becomes a close, and a close joining a quit stays a
+quit.
+
+### A window that stops answering
+
+A hung page would hold a close for good: nothing bounds a `'close'` check
+before the acknowledgement, and after it the guard waits for the answer
+without a limit, since a person may take their time. So the guard ends the
+check as a yes and destroys the window (`win.destroy()`; a `close()` would wait
+for the hung page's `beforeunload`) in two cases only:
+
+- **Electron reports the page `unresponsive`** while the check is not
+  acknowledged, or while a ping (below) waits for its answer. An acknowledged
+  check with no ping out ignores it: the user may be reading the question.
+  Electron does not report a page that hung before the close, since the guard
+  holds the close and nothing else is waiting on the page: in CI
+  (`e2e/hung-window.spec.js` with a single close, run 38070586412) the window
+  was still there 60 s later. So in practice a hung page is ended by the next
+  case.
+- **The user closes the window again.** A close that arrives while the check
+  is still not acknowledged 2.5 s after it was sent (`DEFAULT_TIMEOUT_MS`;
+  `entry.overdue`) ends it; one that comes sooner, a double click on the close
+  button, does nothing. Once the page has acknowledged, a close that arrives
+  while the check is pending sends `unsaved-ping`; the preload answers it with
+  `unsaved-pong` on the renderer's main thread (the listener is added with
+  `onUnsavedCheck`), so a page that hangs cannot. Only a pong from the probed
+  window's own `webContents` counts, and it marks the page responsive again.
+  A ping that has gone unanswered for 1.5 s (`DEFAULT_PROBE_MS`) is overdue,
+  and the next close ends the check. Neither delay destroys anything by
+  itself: a page busy for 10 s survives unless the user closes it again. A
+  ping that cannot be sent ends the check at once.
+
+Only the window's own `close` event counts as a repeated close: a quit
+(`before-quit`, `SIGTERM`) or an update install joining the check never pings,
+so neither can be taken for the user insisting.
+
+A check the page never acknowledged for a quit ends at the 2.5 s bound; the
+window is then closed the usual way and destroyed only once Electron reports
+it unresponsive or it is closed again ([viewer-panel](viewer-panel.md),
+"Bounded"). `taskkill` without `/F` sends a close and gets the question like
+any close; `taskkill /F` (and an installer that escalates to it) ends the
+process without the quit cleanup, as it did before.
+
+Cancel on the close question or on the unsaved-edits dialog gives the focus
+back to the element that had it (`returnFocus`), usually the terminal.
+
+### A native dialog pauses the bounds
+
+A native `alert()`, `confirm()` or `prompt()` blocks the page's main thread
+until it is answered, and the preload's listeners run on that thread, so a page
+showing one can neither acknowledge a check nor answer a ping. The check's own
+path shows none (the close question and the unsaved-edits dialog are in-page,
+and their saves report failures in the dialog), but other code does: the
+sidebar's delete and hide confirms, the resume guard, the viewer's overwrite
+and delete confirms.
+
+So the page reports them. `reportNativeDialogs` (`file-panel.js`, run by
+`initFilePanel`) wraps `window.alert`, `window.confirm` and `window.prompt`
+and sends `unsaved-dialog` `true` before the call and `false` after it
+(`window.api.unsavedDialog`); a bare `confirm(…)` resolves to the wrapper too.
+The `true` is sent before the thread blocks, so main has it before the dialog
+shows. Main keeps the reporting `webContents` in a set. While it is there, a
+repeated close sends no ping and ends nothing, `unresponsive` ends nothing,
+and a quit check's 2.5 s bound is replaced by a 5-minute ceiling
+(`DEFAULT_DIALOG_CEILING_MS`): the user can still answer the dialog, and a
+quit (`SIGTERM`, a Linux or macOS logout) cannot wait for ever. When the
+dialog closes, the bound that applies starts again from zero
+(`entry.arm()`), and the page handles the queued check within milliseconds. A
+crash or a navigation of that page clears its entry, so a dialog that never
+reported its end cannot pause the bounds for good. A Windows logoff is not
+affected, it approves the quit first.
