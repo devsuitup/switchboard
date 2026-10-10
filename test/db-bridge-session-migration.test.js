@@ -22,6 +22,7 @@ function runInElectronNode(code, dataDir) {
     cwd: APP_DIR,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dataDir },
     encoding: 'utf8',
+    timeout: 9000,
   });
 }
 
@@ -43,7 +44,7 @@ function inspectDb(dataDir) {
   return JSON.parse(r.stdout.trim().split('\n').pop());
 }
 
-test('fresh database gets the bridgeSessionId and mergedIntoSessionId columns', () => {
+test('fresh database gets the bridgeSessionId and mergedIntoSessionId columns', { timeout: 9000 }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-bridge-fresh-'));
   try {
     const r = loadDbModule(dir);

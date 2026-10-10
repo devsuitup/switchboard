@@ -150,13 +150,18 @@ test('on Linux, the default probes read the real start time of a real process', 
   }
 });
 
-// A session this instance spawned can still be keyed by its pending id when a
-// reload asks, so hasPty misses it; its CLI is still this instance's own.
-test('a CLI this instance spawned is never live elsewhere, even before its PTY is keyed by the real id', () => withDir(async (dir) => {
+test('a CLI under the PTY registered for that conversation is not live elsewhere', () => withDir(async (dir) => {
   writeState(dir, 5001);
-  const parents = { 5001: 5000, 5000: 900 };   // claude -> shell -> this main process
+  const parents = { 5001: 5000, 5000: 900 };   // claude -> shell(PTY) -> this main process
   boot(dir, { ownPid: 900, readParentPid: (pid) => parents[pid] || null });
-  assert.equal(await cliSessionState.liveElsewhere('sess-1', noPty), null);
+  assert.equal(await cliSessionState.liveElsewhere('sess-1', noPty, (id) => (id === 'sess-1' ? [5000] : [])), null);
+}));
+
+test('a CLI under this main process but under no PTY of that conversation is live elsewhere', () => withDir(async (dir) => {
+  writeState(dir, 5001);
+  const parents = { 5001: 5000, 5000: 900 };
+  boot(dir, { ownPid: 900, readParentPid: (pid) => parents[pid] || null });
+  assert.equal((await cliSessionState.liveElsewhere('sess-1', noPty, () => [])).pid, 5001);
 }));
 
 test('a CLI that is the PTY process itself is this instance\'s own', () => withDir(async (dir) => {
@@ -172,14 +177,14 @@ test('a CLI under another process tree is still live elsewhere', () => withDir(a
   assert.equal((await cliSessionState.liveElsewhere('sess-1', noPty, () => [6000])).pid, 5001);
 }));
 
-test('on Linux, a real child of this process is recognised as its own through /proc', { skip: process.platform !== 'linux' }, async () => {
+test('on Linux, a real child of a registered PTY pid is recognised as its own through /proc', { skip: process.platform !== 'linux' }, async () => {
   const dir = mkTmp();
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
   try {
     await new Promise((r) => child.once('spawn', r));
     writeState(dir, child.pid, { procStart: null });
     cliSessionState.init({ dir, activeSessions: new Map(), log: silentLog, onIdle: () => {} });
-    assert.equal(await cliSessionState.liveElsewhere('sess-1', noPty), null);
+    assert.equal(await cliSessionState.liveElsewhere('sess-1', noPty, () => [process.pid]), null);
   } finally {
     child.kill();
     cliSessionState.stop();

@@ -5,6 +5,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { bridgeSessionKey } = require('./bridge-session-id');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.claude', 'sessions');
 const STATE_FILE_RE = /^\d+\.json$/;
@@ -18,6 +19,10 @@ const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 const MAX_PROBE_PIDS = 64;
 const PROBE_TIMEOUT_MS = 5000;
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
+const PROCESS_TABLE_TTL_MS = 3000;
+const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
+const PROC_START_TOLERANCE = 100n;
+const abs = (n) => (n < 0n ? -n : n);
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
@@ -26,6 +31,11 @@ let log = null;
 let isProcessAlive = defaultIsProcessAlive;
 let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
+let readProcessTable = defaultReadProcessTable;
+let processTableEnabled = false;
+let processTableEpoch = 0;
+let processTable = null;
+let processTableInFlight = null;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
@@ -65,6 +75,7 @@ function defaultIsProcessAlive(pid) {
 }
 
 function defaultReadParentPid(pid) {
+  if (processTableEnabled) return tableEntry(pid) ? (tableEntry(pid).ppid ?? null) : null;
   if (process.platform !== 'linux') return null;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -75,14 +86,134 @@ function defaultReadParentPid(pid) {
   }
 }
 
-// see .ai/contexts/cli-session-state.md ("Live elsewhere")
-function descendsFromThisProcess(pid) {
+// see .ai/contexts/cli-session-state.md ("Own descendants outside Linux")
+function toCreated(value) {
+  if (value == null || value === '') return null;
+  try { return BigInt(value); } catch { return null; }
+}
+
+const TABLE_LINE_RE = /^\s*(\d+)\s+(\d+)(?:\s+(\d+))?\s*$/;
+const TABLE_LSTART_RE = /^\s*(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\d{4})\s*$/;
+
+function parseProcessTable(text) {
+  const out = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    let m = TABLE_LINE_RE.exec(line);
+    if (m) { out.set(Number(m[1]), { ppid: Number(m[2]), created: toCreated(m[3]) }); continue; }
+    m = TABLE_LSTART_RE.exec(line);
+    if (m) {
+      const ms = Date.parse(m[3]);
+      out.set(Number(m[1]), { ppid: Number(m[2]), created: Number.isFinite(ms) ? BigInt(ms) : null });
+    }
+  }
+  return out;
+}
+
+function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS, exec = execFile) {
+  return new Promise((resolve, reject) => {
+    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER };
+    const done = (err, stdout) => {
+      if (err) { reject(err); return; }
+      resolve(parseProcessTable(stdout));
+    };
+    if (plat === 'win32') {
+      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { "" }; "$($_.ProcessId) $($_.ParentProcessId) $t" }';
+      const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done);
+    } else if (plat === 'darwin') {
+      exec('/bin/ps', ['-A', '-o', 'pid=,ppid=,lstart='], opts, done);
+    } else {
+      resolve(new Map());
+    }
+  });
+}
+
+function defaultReadProcessTable() {
+  return probeProcessTable(process.platform);
+}
+
+function processTableFresh() {
+  return !!processTable && now() - processTable.at < PROCESS_TABLE_TTL_MS;
+}
+
+function normaliseProcessTable(read) {
+  if (!(read instanceof Map) || read.size === 0) return null;
+  const out = new Map();
+  for (const [pid, value] of read) {
+    if (typeof value === 'number') out.set(pid, { ppid: value, created: null });
+    else if (value && typeof value === 'object') out.set(pid, { ppid: value.ppid, created: toCreated(value.created) });
+  }
+  return out.size > 0 ? out : null;
+}
+
+function refreshProcessTable() {
+  if (!processTableEnabled) return Promise.resolve(null);
+  if (processTableFresh()) return Promise.resolve(processTable.map);
+  if (processTableInFlight) return processTableInFlight;
+  const epoch = processTableEpoch;
+  const inFlight = (async () => {
+    let map = null;
+    try {
+      map = normaliseProcessTable(await readProcessTable());
+    } catch (err) {
+      log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
+    }
+    if (epoch === processTableEpoch) {
+      processTable = { at: now(), map };
+      processTableInFlight = null;
+      if (map) notifyDescriptorsChanged();
+    }
+    return map;
+  })();
+  processTableInFlight = inFlight;
+  return inFlight;
+}
+
+function startProcessTableRefresh() {
+  if (!processTableEnabled || processTableFresh() || processTableInFlight) return;
+  refreshProcessTable().catch(() => {});
+}
+
+function tableEntry(pid) {
+  return processTable && processTable.map ? processTable.map.get(pid) : undefined;
+}
+
+function chainReaches(pid, isAnchor, strict) {
   let current = pid;
   for (let depth = 0; depth < 64 && current && current > 1; depth++) {
-    if (current === ownPid) return true;
-    current = readParentPid(current);
+    if (isAnchor(current)) return true;
+    const parent = readParentPid(current);
+    if (!parent) return false;
+    if (processTableEnabled) {
+      const child = tableEntry(current);
+      const above = tableEntry(parent);
+      const known = !!child && !!above && child.created != null && above.created != null;
+      if (strict && !known) return false;
+      if (known && child.created < above.created) return false;
+    }
+    current = parent;
   }
   return false;
+}
+
+// see .ai/contexts/cli-session-state.md ("Live elsewhere")
+function descendsFromThisProcess(pid, own = null) {
+  return chainReaches(pid, (current) => current === ownPid || (own !== null && own.has(current)), false);
+}
+
+function leafIsTheDescriptorWriter(raw) {
+  const leaf = tableEntry(raw.pid);
+  if (!leaf || leaf.created == null) return false;
+  return raw.pidDomain === 'win32:anchor'
+    && typeof raw.procStart === 'string'
+    && WINDOWS_FILETIME_RE.test(raw.procStart)
+    && abs(leaf.created - BigInt(raw.procStart)) <= PROC_START_TOLERANCE;
+}
+
+function conversationOwns(raw, own) {
+  if (own.size === 0) return false;
+  if (!processTableEnabled) return own.has(raw.pid) || chainReaches(raw.pid, (current) => own.has(current), false);
+  return leafIsTheDescriptorWriter(raw) && chainReaches(raw.pid, (current) => own.has(current), true);
 }
 
 function defaultReadProcStart(pid) {
@@ -138,10 +269,15 @@ function init(ctx) {
     || (ctx.readProcStart
       ? async (pids) => new Map(pids.map((pid) => [pid, ctx.readProcStart(pid)]))
       : defaultReadProcStartMany);
-  readParentPid = ctx.readParentPid || defaultReadParentPid;
-  ownPid = ctx.ownPid || process.pid;
   now = ctx.now || Date.now;
   platform = ctx.platform || process.platform;
+  readParentPid = ctx.readParentPid || defaultReadParentPid;
+  ownPid = ctx.ownPid || process.pid;
+  processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
+  readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
+  processTableEpoch++;
+  processTable = null;
+  processTableInFlight = null;
   stop();
 }
 
@@ -173,6 +309,7 @@ function parseDescriptor(text) {
     pid: raw.pid,
     sessionId: raw.sessionId,
     kind: s(raw.kind),
+    bridgeSessionId: s(raw.bridgeSessionId),
     jobId: s(raw.jobId),
     agent: s(raw.agent),
     name: s(raw.name),
@@ -381,7 +518,7 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
     return { found, unreadable: err && err.code === 'ENOENT' ? null : `cannot read ${dir}: ${err && err.message}` };
   }
   let unreadable = null;
-  const candidates = [];
+  const alive = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
@@ -389,12 +526,16 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
       if (!(err && err.code === 'ENOENT')) unreadable = unreadable || `cannot read ${path.join(dir, name)}`;
       continue;
     }
-    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string' || !sessionIds.has(raw.sessionId.toLowerCase())) continue;
+    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string') continue;
+    const keys = [...sessionIds].filter(key => raw.sessionId.toLowerCase() === key
+      || (bridgeSessionKey(key) !== null && bridgeSessionKey(key) === bridgeSessionKey(raw.bridgeSessionId)));
+    if (!keys.length) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
-    if (exclude(raw.pid)) continue;
-    candidates.push(raw);
+    alive.push({ ...raw, keys });
   }
+  if (typeof exclude.needsProcessTable === 'function' && alive.some((raw) => raw.keys.some((key) => exclude.needsProcessTable(key)))) await refreshProcessTable();
+  const candidates = alive.filter((raw) => !raw.keys.every((key) => exclude(raw.pid, raw, key)));
 
   const comparable = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))];
   const toProbe = platform === 'win32' ? comparable.slice(0, MAX_PROBE_PIDS) : comparable;
@@ -407,19 +548,18 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
   }
 
   for (const raw of candidates) {
-    const key = raw.sessionId.toLowerCase();
-    if (found.has(key)) continue;
     if (canCompareProcStart(raw) && toProbe.includes(raw.pid)) {
       const actual = actualByPid.get(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
     }
-    found.set(key, {
+    const live = {
       pid: raw.pid,
       cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
       startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
       kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : null,
       jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
-    });
+    };
+    for (const key of raw.keys) if (!found.has(key)) found.set(key, live);
   }
   return { found, unreadable };
 }
@@ -434,9 +574,33 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
   return (await scanLiveProcesses(new Set([key]), exclude)).get(key) || null;
 }
 
-function ownProcessFilter(ptyPids) {
+function ownPidTest(ptyPids) {
   const own = new Set(ptyPids());
-  return (pid) => own.has(pid) || descendsFromThisProcess(pid);
+  return (pid) => own.has(pid) || descendsFromThisProcess(pid, own);
+}
+
+function conversationExclusion(ptyPids) {
+  const exclude = (_pid, raw, key) => conversationOwns(raw, new Set(ptyPids(key)));
+  exclude.needsProcessTable = (key) => ptyPids(key).length > 0;
+  return exclude;
+}
+
+function ownProcessFilter(ptyPids) {
+  startProcessTableRefresh();
+  return ownPidTest(ptyPids);
+}
+
+function makePtyPids(activeSessions) {
+  return (sessionId) => {
+    const want = typeof sessionId === 'string' ? sessionId.toLowerCase() : null;
+    const pids = [];
+    for (const [key, session] of activeSessions) {
+      if (!session || session.exited || !session.pty || !Number.isInteger(session.pty.pid)) continue;
+      if (want !== null && String(session.realSessionId || key).toLowerCase() !== want) continue;
+      pids.push(session.pty.pid);
+    }
+    return pids;
+  };
 }
 
 async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
@@ -444,14 +608,16 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (hasPty(sessionId)) return null;
   const scheduled = scheduledRuns.get(sessionId.toLowerCase());
   if (scheduled) return scheduled;
-  return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
+  return findLiveProcess(sessionId, { exclude: conversationExclusion(ptyPids) });
 }
 
-async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
+async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => [], { includeOwnProcesses = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
-  if (hasPty(sessionId)) return { known: true, live: null };
-  const key = sessionId.toLowerCase();
-  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownProcessFilter(ptyPids));
+  if (!includeOwnProcesses && hasPty(sessionId)) return { known: true, live: null };
+  const key = bridgeSessionKey(sessionId) !== null ? sessionId : sessionId.toLowerCase();
+  const scheduled = scheduledRuns.get(sessionId.toLowerCase());
+  if (scheduled) return { known: true, live: scheduled };
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), includeOwnProcesses ? () => false : conversationExclusion(ptyPids));
   const live = found.get(key) || null;
   if (live) return { known: true, live };
   return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };
@@ -465,7 +631,7 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
     if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
-  const found = await scanLiveProcesses(new Set(wanted.values()), ownProcessFilter(ptyPids));
+  const found = await scanLiveProcesses(new Set(wanted.values()), conversationExclusion(ptyPids));
   for (const [id, key] of wanted) {
     const live = scheduledRuns.get(key) || found.get(key);
     if (live) result[id] = live;
@@ -490,6 +656,11 @@ module.exports = {
   readAllDescriptors,
   parseDescriptor,
   ownProcessFilter,
+  makePtyPids,
+  refreshProcessTable,
+  parseProcessTable,
+  probeProcessTable,
+  PROCESS_TABLE_TTL_MS,
   getStatus,
   KNOWN_STATUSES,
   DEFAULT_DIR,

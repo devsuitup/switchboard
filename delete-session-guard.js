@@ -1,7 +1,7 @@
 // delete-session-guard.js — see .ai/contexts/bg-agents.md ("Invariants")
 'use strict';
 
-async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, liveElsewhereChecked }) {
+async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, liveElsewhereChecked, describeLiveProcess = false }) {
   const id = String(sessionId || '');
   const key = id.toLowerCase();
   const same = (v) => typeof v === 'string' && v.toLowerCase() === key;
@@ -14,7 +14,7 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
   if (job.job) return `background job ${job.job.id} is still running this session — stop it first`;
   const other = await liveElsewhereChecked(id);
   if (!other || !other.known) return `cannot tell whether this session is still running elsewhere (${(other && other.reason) || 'unknown'}) — not deleted`;
-  if (other.live) return 'session is still running outside this window — stop it first';
+  if (other.live) return `session is still running outside this window${describeLiveProcess ? ` in pid ${other.live.pid}` : ''} — stop it first`;
   return null;
 }
 

@@ -903,6 +903,25 @@ function closeDb() {
   try { db.close(); } catch {}
 }
 
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+try {
+  if (getSetting('bridge_uuid_index_version') !== 1) {
+    db.transaction(() => {
+      const bridged = db.prepare("SELECT sessionId, folder FROM session_cache WHERE parentSessionId IS NULL AND bridgeSessionId IS NOT NULL AND bridgeSessionId != ''").all();
+      setSetting('bridge_uuid_reindex_folders', [...new Set(bridged.map(row => row.folder))]);
+      const deleteFolderMeta = db.prepare('DELETE FROM cache_meta WHERE folder = ?');
+      for (const { sessionId, folder } of bridged) {
+        deleteSearchSession(sessionId);
+        deleteCachedSession(sessionId);
+        deleteFolderMeta.run(folder);
+      }
+      setSetting('bridge_uuid_index_version', 1);
+    })();
+  }
+} catch (err) {
+  console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
+}
+
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,

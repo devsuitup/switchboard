@@ -69,7 +69,7 @@ function makeFakeDb(opts = {}) {
 const PARENT_USAGE = { input_tokens: 100, output_tokens: 50 };
 const MIRROR_NEW_USAGE = { input_tokens: 9, output_tokens: 4 };
 
-test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId set), contributes only its post-cutoff tokens, and an independent session is untouched', () => {
+test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId set), contributes only its post-cutoff tokens, and an independent session is untouched', async () => {
   const projectsDir = mkTmp();
   try {
     const folder = encodeProjectPath(projectsDir);
@@ -140,7 +140,7 @@ test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId 
   }
 });
 
-test('refreshFolder: a mirror indexed alone before its parent is known is corrected (not merely re-labelled) once the parent is discovered by a later pass', () => {
+test('refreshFolder: a mirror indexed alone before its parent is known is corrected (not merely re-labelled) once the parent is discovered by a later pass', async () => {
   // Reachable via the incremental (targeted) path: a watcher flush names only
   // the mirror as dirty (e.g. a brand-new project folder whose cold-start
   // scan has not reached it yet), so mergeBridgeGroups sees a group of one
@@ -189,7 +189,7 @@ test('refreshFolder: a mirror indexed alone before its parent is known is correc
   }
 });
 
-test('refreshFolder: a mirror indexed alone whose entire content turns out to be a duplicate is deleted once its parent is discovered, end to end', () => {
+test('refreshFolder: a mirror indexed alone whose entire content turns out to be a duplicate is deleted once its parent is discovered, end to end', async () => {
   const projectsDir = mkTmp();
   try {
     const folder = encodeProjectPath(projectsDir);
@@ -270,7 +270,7 @@ test('buildProjectsFromCache: the mirror does not appear as its own sidebar entr
   }
 });
 
-test('refreshFolder: an existing row misidentified as parent is re-parented AND re-derived (not merely re-labelled) once a genuinely earlier file is discovered', () => {
+test('refreshFolder: an existing row misidentified as parent is re-parented AND re-derived (not merely re-labelled) once a genuinely earlier file is discovered', async () => {
   const projectsDir = mkTmp();
   try {
     const folder = encodeProjectPath(projectsDir);
