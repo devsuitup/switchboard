@@ -50,8 +50,8 @@ async function withHarness(setup, fn) {
     });
     setup(window, calls);
     const { openSession } = loadAppFunctions(ctx.context, {
-      declarations: ['ptyGenerations', 'pendingOpens', 'continuationRetryCancelled'],
-      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession'],
+      declarations: ['ptyGenerations', 'pendingOpens', 'continuationRetryCancelled', 'openingSessions'],
+      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession', 'openSessionNow'],
     });
     await fn({ openSession, window, calls });
   } finally {

@@ -20,7 +20,7 @@ test('open-terminal builds `claude attach <id>` for an attach session and never 
 test('a reattach reports whether the live session is an attach, and the renderer keeps it on the tab', () => {
   assert.match(MAIN, /ok: true, reattached: true, attach: !!session\.isAttach,/);
   const APP = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const start = APP.indexOf('async function openSession(');
+  const start = APP.indexOf('async function openSessionNow(');
   const body = APP.slice(start, APP.indexOf('\nasync function ', start + 10));
   const openIdx = body.indexOf('await window.api.openTerminal(sessionId');
   assert.ok(openIdx > 0);

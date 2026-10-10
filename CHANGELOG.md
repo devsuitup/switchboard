@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A double click on a session in the sidebar opens it once, instead of sometimes starting two terminals that resume the same conversation. (#539)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed

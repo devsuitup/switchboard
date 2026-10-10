@@ -118,7 +118,7 @@ function functionBody(src, signature) {
 }
 
 test('openSession runs the guard before it asks main for a PTY', () => {
-  const body = functionBody(APP_SRC, 'async function openSession(');
+  const body = functionBody(APP_SRC, 'async function openSessionNow(');
   const guardAt = body.indexOf('guardResume(');
   const spawnAt = body.indexOf('window.api.openTerminal(');
   assert.notEqual(guardAt, -1, 'openSession must call guardResume');
