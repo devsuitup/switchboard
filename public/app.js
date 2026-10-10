@@ -168,6 +168,15 @@ let restoreSavedIndex = new Map();
 let restoreAwaitingConsent = [];
 const restoreInFlight = new Map();
 
+// see .ai/contexts/session-cache.md ("Restore on click")
+const dormantWorkingSet = new Map();
+
+function dismissDormantSession(sessionId) {
+  if (!dormantWorkingSet.delete(sessionId)) return;
+  persistWorkingSet();
+  refreshSidebar();
+}
+
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
@@ -188,8 +197,11 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
-    const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
-      .filter(({ item, keepAttached }) => !openSessions.has(item.sessionId) || (keepAttached && openSessions.get(item.sessionId).attach))
+    const held = [...skippedWorkingSetEntries.values(), ...dormantWorkingSet.values(), ...pendingRestoreEntries()]
+      .filter(({ item, keepAttached }) => {
+        const open = openSessions.get(item.sessionId);
+        return !open || open.closed || (keepAttached && open.attach);
+      })
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: !!keepAttached && item.sessionId === activeSessionId });
@@ -284,6 +296,21 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   }
 }
 
+// see .ai/contexts/session-cache.md ("Restore on click")
+async function reopenActiveSessionAfterReload() {
+  if (!activeSessionId || openSessions.has(activeSessionId)) return;
+  const session = sessionMap.get(activeSessionId);
+  if (!session) return;
+  const g = await window.api.getSetting('global');
+  if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
+    const live = await window.api.getActiveSessions().catch(() => []);
+    if (!live.some(e => e.sessionId === session.sessionId)) return;
+    await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
+    return;
+  }
+  await openSession(session, undefined, { automatic: true });
+}
+
 async function restoreWorkingSet() {
   const g = await window.api.getSetting('global');
   restoreMode = (g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup;
@@ -317,7 +344,7 @@ async function tickRestorePlanner() {
     sessionMap,
     openSessions,
     indexingDone: restoreIndexingDone,
-    sessionOpenedOutsideRestore,
+    sessionOpenedOutsideRestore: restoreMode !== 'lazy' && sessionOpenedOutsideRestore,
   });
 
   if (plan.action === 'wait') {
@@ -331,6 +358,29 @@ async function tickRestorePlanner() {
   if (plan.action === 'nothing') return;
 
   const candidates = plan.candidates;
+
+  if (restoreMode === 'lazy') {
+    for (const item of candidates) restoreInFlight.set(item.sessionId, item);
+    const shown = activeSessionId;
+    try {
+      const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
+      for (const [position, item] of candidates.entries()) {
+        const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
+          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
+        const open = openSessions.get(item.sessionId);
+        if (!reattached && (!open || open.closed)) {
+          const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+          dormantWorkingSet.set(item.sessionId, { item, index });
+        }
+      }
+    } finally {
+      for (const item of candidates) restoreInFlight.delete(item.sessionId);
+    }
+    if (shown && activeSessionId !== shown && openSessions.has(shown)) showSession(shown);
+    refreshSidebar();
+    revealDormantSessions();
+    return;
+  }
 
   if (restoreMode === 'auto') {
     restoringWorkingSet = true;
@@ -1387,9 +1437,27 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
-async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
+const openingSessions = new Map();
+
+// see .ai/contexts/session-state.md ("Opening a session once")
+function openSession(session, customOptions, flags = {}) {
+  const inFlight = openingSessions.get(session.sessionId);
+  const open = { byUser: !flags.automatic, after: null };
+  if (inFlight) {
+    if (inFlight.byUser || !open.byUser) return inFlight.promise;
+    open.after = inFlight.promise.catch(() => {});
+  }
+  open.promise = openSessionNow(session, customOptions, flags, open).finally(() => {
+    for (const [id, o] of openingSessions) if (o === open) openingSessions.delete(id);
+  });
+  openingSessions.set(session.sessionId, open);
+  return open.promise;
+}
+
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, reattachOnly = false } = {}, open = null) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
+  if (open?.after) await open.after;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
@@ -1405,6 +1473,15 @@ async function openSession(session, customOptions, { automatic = false, live, co
         skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
       }
       skippedWorkingSetEntries.delete(originalId);
+      const dormant = dormantWorkingSet.get(originalId);
+      if (dormant) {
+        dormantWorkingSet.delete(originalId);
+        dormantWorkingSet.set(session.sessionId, { ...dormant, item: { ...dormant.item, sessionId: session.sessionId } });
+        document.getElementById('si-' + originalId)?.classList.remove('dormant');
+      }
+      const other = openingSessions.get(session.sessionId);
+      if (open && other && other !== open) await other.promise.catch(() => {});
+      if (open) openingSessions.set(session.sessionId, open);
     }
   }
   const { sessionId, projectPath } = session;
@@ -1431,8 +1508,9 @@ async function openSession(session, customOptions, { automatic = false, live, co
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
-  const resumeOptions = customOptions
+  let resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
+  if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
   entry.attach = resumeOptions.type === 'attach';
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
@@ -1444,6 +1522,10 @@ async function openSession(session, customOptions, { automatic = false, live, co
     throw err;
   }
   settlePtyOpen(sessionId, result);
+  if (result.notLive) {
+    destroySession(sessionId);
+    return false;
+  }
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
@@ -1458,6 +1540,9 @@ async function openSession(session, customOptions, { automatic = false, live, co
       index: restoreSavedIndex.get(sessionId) ?? Number.MAX_SAFE_INTEGER,
       keepAttached: true,
     });
+  }
+  if (dormantWorkingSet.delete(sessionId)) {
+    document.getElementById('si-' + sessionId)?.classList.remove('dormant');
   }
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
@@ -1716,10 +1801,7 @@ async function restoreStartupSessions() {
   window._startupResumeResolutions = new Map();
   try {
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
-    if (activeSessionId && !openSessions.has(activeSessionId)) {
-      const session = sessionMap.get(activeSessionId);
-      if (session) await openSession(session, undefined, { automatic: true });
-    }
+    await reopenActiveSessionAfterReload();
     await restoreWorkingSet();
     restoreAgentsViewAtStartup();
   } finally { window._startupResumeResolutions = null; }

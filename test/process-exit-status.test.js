@@ -49,6 +49,7 @@ const PRELUDE = `
   const sessionMap = new Map();
   const pendingSessions = new Map();
   const skippedWorkingSetEntries = new Set();
+  const dormantWorkingSet = new Map();
   const cachedProjects = [];
   const cachedAllProjects = [];
   const gridCards = new Map();
@@ -102,7 +103,9 @@ function setup() {
   run(extractDeclaration(APP_SRC, 'continuationRetryCancelled'), 'app.js#continuationRetryCancelled');
   run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');
   run(sliceBlock('function updateTerminalHeader() {'), 'app.js#updateTerminalHeader');
-  run(sliceBlock('async function openSession(session'), 'app.js#openSession');
+  run(extractDeclaration(APP_SRC, 'openingSessions'), 'app.js#openingSessions');
+  run(sliceBlock('function openSession(session'), 'app.js#openSession');
+  run(sliceBlock('async function openSessionNow(session'), 'app.js#openSessionNow');
   run(sliceBlock('function applyProcessExit('), 'app.js#applyProcessExit');
   run(sliceBlock('function handleProcessExited('), 'app.js#handleProcessExited');
   run(sliceBlock('function beginPtyOpen('), 'app.js#beginPtyOpen');

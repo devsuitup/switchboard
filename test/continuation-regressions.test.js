@@ -196,7 +196,7 @@ test('R2 startup resolves an active continued session only once', { timeout: 900
   const end = source.indexOf('\n// Live-reload sidebar');
   const start = source.lastIndexOf('loadProjects().then(', end);
   if (source.includes('async function restoreStartupSessions(')) {
-    loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions'] });
+    loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload'] });
   }
   h.ctx.restoreWorkingSet = h.restore;
   h.ctx.restoreAgentsViewAtStartup = () => {};
