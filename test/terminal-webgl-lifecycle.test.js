@@ -1,7 +1,3 @@
-// Lifecycle of the WebGL addon kept across tab switches (#526): session
-// re-keying, destruction and grid suspension before the reveal frame, process
-// exit, and the reveal.timing long-frame attribution. Frames and timers are
-// driven by hand, so nothing here waits on a real clock.
 // See .ai/contexts/terminal-refresh.md, "WebGL contexts across tab switches".
 'use strict';
 
@@ -264,5 +260,35 @@ test('a newer reveal of the same terminal releases the older trace observer', ()
     f.w.showSession('B');
     f.w.showSession('A');
     assert.ok(first.disconnected);
+  } finally { f.destroy(); }
+});
+
+test('a completed reveal keeps its timing line when the same terminal is revealed again before delivery', () => {
+  const f = fixture({ trace: true });
+  try {
+    f.create('A');
+    f.create('B');
+    f.show('A');
+    f.show('B');
+    f.show('A');
+    f.settle();
+    const lines = f.log.events.filter((e) => e.cat === 'reveal.timing' && e.sid === 'A');
+    assert.strictEqual(lines.length, 2);
+    assert.ok(f.observers.every((o) => o.disconnected), 'every observer is released');
+  } finally { f.destroy(); }
+});
+
+test('destroying a terminal cancels every outstanding trace, finished or not', () => {
+  const f = fixture({ trace: true });
+  try {
+    f.create('A');
+    f.create('B');
+    f.show('A');
+    f.show('B');
+    f.show('A');
+    f.w.destroySession('A');
+    f.settle();
+    assert.ok(f.observers.every((o) => o.disconnected));
+    assert.strictEqual(f.log.events.filter((e) => e.sid === 'A').length, 0);
   } finally { f.destroy(); }
 });
