@@ -128,6 +128,66 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
   - **`readSessionEntrypoint` avoids reading interactive transcripts.** It reads 256 KB chunks until the first user turn (an SDK prompt is first written as a `queue-operation` line that can exceed 256 KB on its own: 190 of ~4 500 SDK transcripts measured); a non-SDK one is returned as is (so a session pre-seeded without an entrypoint and later typed into stores `''` here but `cli` from `readSessionFile`; both are visible, only `sdk-*` matters), and only an `sdk-*` one is scanned further for a `cli` user turn, in full up to 2 MB, and beyond that only its first and last 256 KB on the live path (`refreshFolder` runs it at every watcher flush, and the turn just typed is at the end; a full read of a 14 MB transcript costs ~250 ms of main thread), but in full from `backfillEntrypoints`, which runs once per row (sizes measured over 4 495 SDK transcripts: p50 44 KB, p99 711 KB, max 13 MB). `refreshFolder` calls it on the header-only branch for a cached `sdk-*` row, because a turn typed in a terminal lands at the end of the file, beyond the header.
   - **What stays listed.** `hiddenSdkSessionIds` hides `sdk-*` rows while the global `hideSdkSessions` setting (default on) is set, except a session open in a terminal (`activeSessions`, not exited) or in the saved working set (`global.openWorkingSet`), so neither disappears from under the user nor fails to restore, and except a parent whose compaction mirror (`mergedIntoSessionId`) is not SDK. Subagent rows of a hidden session are dropped too (they would otherwise land in "Orphan subagents"), and a project left with only hidden rows gets no empty header from the on-disk folder pass. Because `activeSessions` is read when the list is built, opening an SDK session afterwards (a resume from search, a trigger, a remote attach) calls `revealIfSdkSession`, which sends `projects-changed` so the renderer reloads the list with it. The saved-working-set exemption only holds while the entry stays in `openWorkingSet`: `persistWorkingSet` (`public/app.js`) re-adds the entries the restore has not resolved yet (`restorePlanner.pending()`, and `restoreAwaitingConsent` while the restore toast is unanswered), so a persist in the middle of a cold restore does not drop a saved SDK session that is not indexed yet.
 
+## Bridge history divergence
+
+Issue #524: a shared `bridgeSessionId` is not proof that all messages before a
+previous member's `modified` are copies. An older member can keep receiving
+messages after a newer member stops; the timestamp cutoff then discarded every
+message of the newer member, omitting its row on full scans and deleting an
+already-cached row on incremental scans.
+
+`readSessionFile` returns transient `messageUuids` and `messageUuidsComplete`
+for bridged transcripts. When all conversation records of a member and its
+predecessors have UUIDs, `mergeBridgeGroups` excludes the union of the preceding
+members' UUIDs instead of their timestamps. The exclusion applies to the title,
+search body, message count and daily metrics, while original time bounds and
+file mtime remain intact. If only an own assistant reply remains after UUID
+exclusion, the row retains the original prompt as its title; the shared prompt
+is still excluded from the count, search body and metrics. A pure duplicate
+with no remaining messages still returns null. These UUID arrays are not
+stored in SQLite. Fresh
+full reads are reused within one merge; a cached predecessor is read in full
+only when UUID comparison is needed. A member with unique messages whose last
+event precedes another member's last event remains an independent visible row
+(`mergedIntoSessionId = null`). A continuing compaction mirror still rolls up
+onto the earliest member, and a pure duplicate still contributes no row.
+
+Old transcripts with missing message UUIDs keep the timestamp rule when that
+read contributes messages, using the latest preceding member's `modified` so
+a divergent intermediate member cannot reintroduce an earlier copied tail.
+For an empty cutoff read, the full read's
+known UUIDs and UUID-less message signatures (role and message payload) are
+compared with all predecessors. Distinct messages recover an independent row;
+a legacy mirror made entirely of copied payloads keeps its existing deletion
+behaviour. Known shared UUIDs are excluded from a recovered row. Identical
+UUID-less payloads cannot establish distinct turn identity, so the fallback
+cannot distinguish an independent repeat from a copied legacy message.
+Settled cached independent members are left untouched when no member of the
+group was read freshly and the winner was not promoted, avoiding full-body
+reads on routine watcher passes. Discovery of another group member retries
+the comparison, so an independent row cannot be deleted merely because the
+transient UUID arrays were not persisted. Missing/unreadable full
+reads retain the existing null behaviour. If a predecessor cannot be read, a
+valid member is retained independently rather than dropped on unproven overlap.
+Complete UUID coverage is required to replace a nonempty legacy cutoff read.
+The same callback contract is wired through the synchronous
+full scan, incremental refresh, full scan worker and file-subset worker.
+
+Existing caches need a one-time repair because a dropped file does not change
+the folder's cached mtime gate. At database open, `bridge_uuid_index_version`
+is advanced to 1 in a transaction that removes bridged cached rows, their
+metrics and their FTS entries, and clears the affected folders' `cache_meta`
+gates. Unrelated rows, settings and user names/stars/archive state are kept.
+The next scan/reconcile reads the missing rows even if their files are dormant.
+The version is recorded atomically with the invalidation, so interruptions
+retry safely and subsequent opens do not invalidate repaired rows again.
+
+`test/bridge-divergent-history.test.js` uses temporary JSONL files and the real
+reader, cache entry points and both worker paths. Each case also checks a
+genuine continuing mirror; the older bridge tests cover legacy UUID-less
+mirrors and pure duplicate deletion. The optional orphan-parent placeholder
+was left out to keep the change within the indexing paths.
+
 ## Remote SSH hosts (issue #201)
 
 A declared SSH host's `~/.claude/projects` is mirrored into

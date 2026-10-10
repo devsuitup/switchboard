@@ -34,9 +34,9 @@ function readFolderFromFilesystem(folder) {
 
   // Merge compaction mirrors sharing a bridgeSessionId -- see mergeBridgeGroups.
   // existingRows=[] (fresh scan): every group member is re-derived from scratch.
-  const reread = (sessionId, cutoff) => {
+  const reread = (sessionId, cutoff, excludedMessageUuids) => {
     try {
-      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff });
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids });
     } catch { return null; }
   };
   const { toUpsert } = mergeBridgeGroups([], sessions, reread);
@@ -84,9 +84,9 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
     } catch {}
   }
 
-  const reread = (sessionId, cutoff) => {
+  const reread = (sessionId, cutoff, excludedMessageUuids) => {
     try {
-      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff });
+      return readSessionFile(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids });
     } catch { return null; }
   };
   const { toUpsert, toDelete } = mergeBridgeGroups(existingRows || [], freshRows, reread);

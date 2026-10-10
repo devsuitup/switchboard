@@ -149,8 +149,8 @@ function readFolderFromFilesystem(folder) {
 
   // Merge compaction mirrors sharing a bridgeSessionId -- see mergeBridgeGroups.
   // existingRows=[] (fresh scan): every group member is re-derived from scratch.
-  const reread = (sessionId, cutoff) => readSessionFile(
-    path.join(folderPath, sessionId + '.jsonl'), folder, projectPath, { dedupeSinceTimestamp: cutoff }
+  const reread = (sessionId, cutoff, excludedMessageUuids) => readSessionFile(
+    path.join(folderPath, sessionId + '.jsonl'), folder, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids }
   );
   const { toUpsert } = mergeBridgeGroups([], sessions, reread);
   return { projectPath, sessions: toUpsert };
@@ -382,8 +382,8 @@ function refreshFolder(folder, opts = {}) {
   // Only newFileReads (this pass's full reads) are eligible for re-derivation;
   // cachedSessions is the folder's full pre-refresh state, independent of
   // `targeted`, so an already-cached parent is recognised without re-reading it.
-  const reread = (sessionId, cutoff) => readSessionFile(
-    jsonlPathFor({ folder, sessionId }), folder, projectPath, { dedupeSinceTimestamp: cutoff }
+  const reread = (sessionId, cutoff, excludedMessageUuids) => readSessionFile(
+    jsonlPathFor({ folder, sessionId }), folder, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids }
   );
   const { toUpsert: mergedRows, toDelete: mergeDeletes } = mergeBridgeGroups(cachedSessions, newFileReads, reread);
 

@@ -57,7 +57,7 @@ function isToolResultOnly(content) {
  *  <= this ISO8601 string. Used to dedupe a compaction mirror's recopied
  *  prefix -- see .ai/contexts/session-cache.md.
  */
-function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive) {
+function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids) {
   const map = new Map();
   const bucket = (date, model) => {
     const key = `${date}|${model}`;
@@ -80,6 +80,7 @@ function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive) {
     try { entry = JSON.parse(line); } catch { continue; }
 
     if (sinceTimestampExclusive && (!entry.timestamp || entry.timestamp <= sinceTimestampExclusive)) continue;
+    if (excludedMessageUuids?.has(entry.uuid)) continue;
 
     const ts = typeof entry.timestamp === 'string' && entry.timestamp.length >= 10
       ? entry.timestamp.slice(0, 10)
@@ -165,6 +166,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const fileBase = path.basename(filePath, '.jsonl');
   const isSubagent = Boolean(opts.parentSessionId);
   const cutoff = opts.dedupeSinceTimestamp || null;
+  const excludedMessageUuids = opts.excludedMessageUuids;
   try {
     const stat = fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
@@ -173,8 +175,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let summary = '';
     // Fallback title for a session whose only user turn is a slash command.
     let commandSummary = '';
+    let inheritedSummary = '';
+    let inheritedCommandSummary = '';
     let assistantSeen = false;
     let messageCount = 0;
+    const messageUuids = [];
+    const messageSignatures = [];
+    let messageUuidsComplete = true;
     let textContent = '';
     let slug = null;
     let scheduleSlug = null;
@@ -238,20 +245,32 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (entry.type === 'ai-title' && entry.aiTitle) {
         aiTitle = entry.aiTitle;
       }
-      // Everything below this line double-counts a compaction mirror's
-      // recopied prefix if not gated: skip entries at/before the cutoff.
+      const msg = entry.message;
+      const text = typeof msg === 'string' ? msg :
+        (typeof msg?.content === 'string' ? msg.content :
+        (msg?.content?.[0]?.text || ''));
+      if (excludedMessageUuids && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
+        const candidate = classifyUserText(text);
+        if (candidate.kind === 'prompt' && !inheritedSummary) inheritedSummary = candidate.text;
+        else if (candidate.kind === 'command' && !inheritedCommandSummary) inheritedCommandSummary = candidate.text;
+      }
+      const isMessage = entry.type === 'user' || entry.type === 'assistant' ||
+        (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
+      if (isMessage) {
+        if (typeof entry.uuid === 'string' && entry.uuid) messageUuids.push(entry.uuid);
+        else {
+          messageUuidsComplete = false;
+          messageSignatures.push(JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]));
+        }
+      }
       if (cutoff && (!entry.timestamp || entry.timestamp <= cutoff)) continue;
-      if (entry.type === 'user' || entry.type === 'assistant' ||
-          (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
+      if (excludedMessageUuids?.has(entry.uuid)) continue;
+      if (isMessage) {
         messageCount++;
       }
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
         assistantSeen = true;
       }
-      const msg = entry.message;
-      const text = typeof msg === 'string' ? msg :
-        (typeof msg?.content === 'string' ? msg.content :
-        (msg?.content?.[0]?.text || ''));
       if (!summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
         const cand = classifyUserText(text);
         if (cand.kind === 'prompt') summary = cand.text;
@@ -265,10 +284,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     // do something. Bookkeeping-only transcripts (a bare /clear) have nothing
     // to show and must not be indexed at all.
     if (!summary && assistantSeen) summary = commandSummary;
+    if (!summary && messageCount > 0 && excludedMessageUuids) {
+      summary = inheritedSummary || (assistantSeen ? inheritedCommandSummary : '');
+    }
     if (!summary || messageCount < 1) return null;
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
-    const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff);
+    const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids);
 
     if (isSubagent) {
       // Sidechain marker must be present — otherwise the file lives under a
@@ -319,6 +341,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
         tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex') }),
       bridgeSessionId,
+      ...(bridgeSessionId ? { messageUuids, messageUuidsComplete, messageSignatures } : {}),
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,
     };
@@ -327,60 +350,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   }
 }
 
-/** Merge top-level sessions sharing a bridgeSessionId within a project folder
- *  (issue #197) -- see .ai/contexts/session-cache.md for the measurement this
- *  is built on.
- *
- *  A compaction mirror duplicates its parent's tail verbatim -- same
- *  timestamps -- up to the compaction point, then keeps receiving genuinely
- *  new content afterward (the CLI writes to the mirror, not the parent, once
- *  compaction happens). Every member of a bridgeSessionId group keeps its OWN
- *  session_cache row (own fileMtime, own incremental refresh -- unchanged),
- *  but every member except the earliest (`created`) gets `mergedIntoSessionId`
- *  set to the earliest member's sessionId, and has its own
- *  messageCount/textContent/dailyMetrics recomputed excluding anything at or
- *  before its immediate predecessor's `modified` -- exactly the recopied
- *  overlap, no more. This way nothing is dropped on either side of a
- *  compaction, and nothing is counted twice. Callers exclude
- *  `mergedIntoSessionId`-tagged rows from sidebar/session-count listings;
- *  session_metrics aggregates need no such exclusion, since parent and mirror
- *  contribute under distinct sessionIds with non-overlapping timestamp
- *  ranges.
- *
- *  Sessions with no bridgeSessionId, and subagents (parentSessionId set), are
- *  left untouched -- absence must never collapse unrelated sessions into one.
- *
- *  existingRows: rows already in session_cache for this folder (DB shape).
- *  freshRows: sessions just produced by readSessionFile() this pass.
- *  reread(sessionId, dedupeSinceTimestamp): re-parses the named session's own
- *    file with a cutoff (null means a full, uncut read), returning a new
- *    session object (or null if nothing survives). Called for ANY group
- *    member -- fresh or already-cached, winner or not -- whose recorded
- *    mergedIntoSessionId disagrees with the role just computed for it here.
- *    That disagreement is the only signal a stored row's
- *    messageCount/session_metrics can be trusted by: a mirror indexed before
- *    its parent was known has mergedIntoSessionId=null and a cutoff that was
- *    never applied, so caching a row is never on its own proof that its
- *    contribution is already correctly deduplicated -- and the reverse case
- *    is just as real: if a group's earliest file is deleted (a real path --
- *    session deletion), its former child is promoted to winner on the next
- *    pass, but its stored contribution is still cutoff-filtered against a
- *    predecessor that no longer exists, under-counting until it is re-read in
- *    full. A member whose mergedIntoSessionId already matches its computed
- *    role (child of the current winner, or winner with no mergedIntoSessionId
- *    at all) is left untouched -- its stored contribution was already
- *    computed against this exact cutoff, so the frozen parent in the common
- *    case is never re-read on a routine pass.
- *
- *  Returns { toUpsert, toDelete }:
- *  - toUpsert: every row that must be written this pass -- unchanged fresh
- *    reads, and any group member (fresh or already-cached) whose
- *    re-derivation produced new content.
- *  - toDelete: sessionIds of already-cached rows whose re-derivation came
- *    back null (nothing survives the newly-applicable cutoff) -- these must
- *    be actively removed, not left with their pre-cutoff stale content.
- */
 function mergeBridgeGroups(existingRows, freshRows, reread) {
+  // see .ai/contexts/session-cache.md ("Bridge history divergence")
+  const fullRows = new Map((freshRows || []).map(row => [row.sessionId, row]));
+  const fullRead = (sessionId) => {
+    if (!fullRows.has(sessionId)) fullRows.set(sessionId, reread(sessionId, null));
+    return fullRows.get(sessionId);
+  };
   const bySessionId = new Map();
   const freshSessionIds = new Set();
   for (const row of existingRows || []) {
@@ -436,11 +412,42 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
       replacements.set(winnerId, rederivedWinner);
     }
     if (members.length < 2) continue;
+    const hasFreshMember = members.some(member => freshSessionIds.has(member.sessionId));
     for (let i = 1; i < members.length; i++) {
       const member = members[i];
       if (member.mergedIntoSessionId === winnerId) continue; // already correctly derived against this exact cutoff
-      const cutoff = members[i - 1].modified;
-      const rederived = reread(member.sessionId, cutoff);
+      if (!hasFreshMember && !member.mergedIntoSessionId && !members[0].mergedIntoSessionId) continue;
+      const cutoff = members.slice(0, i).reduce((latest, previous) => previous.modified > latest ? previous.modified : latest, '');
+      const candidate = fullRows.get(member.sessionId);
+      const uuidEvidence = candidate?.messageUuidsComplete || members.slice(0, i)
+        .some(previous => fullRows.get(previous.sessionId)?.messageUuidsComplete);
+      const legacy = uuidEvidence ? null : reread(member.sessionId, cutoff);
+      if (uuidEvidence || !legacy) {
+        const fullMember = fullRead(member.sessionId);
+        const previousRows = members.slice(0, i).map(previous => fullRead(previous.sessionId));
+        if (fullMember?.messageUuidsComplete && previousRows.every(row => row?.messageUuidsComplete)) {
+          const excluded = new Set(previousRows.flatMap(row => row.messageUuids));
+          const rederived = reread(member.sessionId, null, excluded);
+          if (rederived) {
+            rederived.mergedIntoSessionId = previousRows.some(row => row.modified >= fullMember.modified) ? null : winnerId;
+          }
+          replacements.set(member.sessionId, rederived);
+          continue;
+        }
+        if (!legacy && fullMember) {
+          const excluded = new Set(previousRows.flatMap(row => row?.messageUuids || []));
+          const signatures = new Set(previousRows.flatMap(row => row?.messageSignatures || []));
+          const hasOwnMessages = fullMember.messageUuids?.some(uuid => !excluded.has(uuid)) ||
+            fullMember.messageSignatures?.some(signature => !signatures.has(signature));
+          if (hasOwnMessages || previousRows.some(row => !row)) {
+            const recovered = reread(member.sessionId, null, excluded);
+            if (recovered) recovered.mergedIntoSessionId = null;
+            replacements.set(member.sessionId, recovered);
+            continue;
+          }
+        }
+      }
+      const rederived = uuidEvidence ? reread(member.sessionId, cutoff) : legacy;
       if (rederived) rederived.mergedIntoSessionId = winnerId;
       replacements.set(member.sessionId, rederived);
     }
