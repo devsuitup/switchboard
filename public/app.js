@@ -447,13 +447,20 @@ async function tickRestorePlanner() {
   const candidates = plan.candidates;
 
   if (restoreMode === 'lazy') {
-    const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
+    for (const item of candidates) restoreInFlight.set(item.sessionId, item);
     const shown = activeSessionId;
-    for (const [position, item] of candidates.entries()) {
-      if (live.has(item.sessionId) && sessionMap.has(item.sessionId)
-          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true }) !== false) continue;
-      const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
-      dormantWorkingSet.set(item.sessionId, { item, index });
+    try {
+      const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
+      for (const [position, item] of candidates.entries()) {
+        const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
+          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true }) !== false;
+        if (!reattached) {
+          const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+          dormantWorkingSet.set(item.sessionId, { item, index });
+        }
+      }
+    } finally {
+      for (const item of candidates) restoreInFlight.delete(item.sessionId);
     }
     if (shown && activeSessionId !== shown && openSessions.has(shown)) showSession(shown);
     refreshSidebar();

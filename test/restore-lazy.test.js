@@ -447,3 +447,58 @@ test('lazy sidebar: a group built again after the marking shows its dormant rows
     assert.equal(h.row('w').closest('.worktree-sessions').previousElementSibling.classList.contains('collapsed'), false, 'worktree');
   } finally { h.destroy(); }
 });
+
+test('lazy: a key held down cycles the open sessions and resumes no dormant one', async () => {
+  const h = setup({ savedSet: [...SAVED, { sessionId: 'c', projectPath: PROJECT, active: false }] });
+  try {
+    h.index(['a', 'x', 'b', 'c']);
+    await h.fns.tickRestorePlanner();
+    await h.open('x');
+    await h.open('c');
+    h.run('navigateSession(1, { repeat: true }); navigateSession(1, { repeat: true });');
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, ['x', 'c'], 'no dormant row is resumed by an auto-repeat');
+    assert.deepEqual(h.dormantIds(), ['a', 'b']);
+    assert.equal(h.run('activeSessionId'), 'c', 'two repeats from c go to x and back');
+  } finally { h.destroy(); }
+});
+
+test('lazy: a persist while a running session is being reattached keeps the candidates not handled yet', async () => {
+  let release;
+  const h = setup({ livePtys: ['a'], openResult: () => new Promise((resolve) => { release = () => resolve({ ok: true, reattached: true }); }) });
+  try {
+    h.index(['a', 'x', 'b']);
+    const ticking = h.fns.tickRestorePlanner();
+    for (let j = 0; j < 5; j++) await settle();
+    assert.ok(release, 'the reattach of a is in flight');
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a', 'x', 'b']);
+    release();
+    await ticking;
+    assert.deepEqual(h.dormantIds(), ['b', 'x']);
+    assert.equal(h.run('restoreInFlight.size'), 0);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a', 'x', 'b']);
+  } finally { h.destroy(); }
+});
+
+test('lazy: a dormant session that fails to open from the keyboard is logged, not an unhandled rejection', async () => {
+  const h = setup({ openResult: (id) => (id === 'b' ? Promise.reject(new Error('pty spawn failed')) : { ok: true }) });
+  const unhandled = [];
+  const onUnhandled = (err) => unhandled.push(err);
+  process.on('unhandledRejection', onUnhandled);
+  const logged = [];
+  h.window.console.error = (...args) => logged.push(args.join(' '));
+  try {
+    h.index(['a', 'x', 'b']);
+    await h.fns.tickRestorePlanner();
+    await h.open('x');
+    h.run('navigateSession(1)');
+    for (let j = 0; j < 10; j++) await settle();
+    assert.deepEqual(unhandled, []);
+    assert.ok(logged.some((line) => line.includes('pty spawn failed')), JSON.stringify(logged));
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    h.destroy();
+  }
+});

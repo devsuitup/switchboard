@@ -165,7 +165,9 @@ is selected, the last active one included.
 - A project folded because its sessions are old opens when it holds a marked
   session.
 - The previous/next session keys stop on marked sessions too, and resume the
-  one they land on. The grid has no card for a marked session, so in the grid
+  one they land on. Holding a key down skips them: the repeats cycle through
+  the open sessions only, so they never resume a row of marked sessions one
+  after another. The grid has no card for a marked session, so in the grid
   they skip it.
 - Reloading the window starts nothing. A saved session whose process is still
   running is reattached, the selected one included; the others are marked. A
