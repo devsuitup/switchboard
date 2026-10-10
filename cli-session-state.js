@@ -447,11 +447,11 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   return findLiveProcess(sessionId, { exclude: ownProcessFilter(ptyPids) });
 }
 
-async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
+async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => [], { includeOwnProcesses = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
-  if (hasPty(sessionId)) return { known: true, live: null };
+  if (!includeOwnProcesses && hasPty(sessionId)) return { known: true, live: null };
   const key = sessionId.toLowerCase();
-  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownProcessFilter(ptyPids));
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), includeOwnProcesses ? () => false : ownProcessFilter(ptyPids));
   const live = found.get(key) || null;
   if (live) return { known: true, live };
   return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };

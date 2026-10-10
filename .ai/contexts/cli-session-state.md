@@ -196,6 +196,11 @@ Session ids are matched lowercased, `getStatus` included, and `liveElsewhereMany
 ids it was asked. `liveElsewhereChecked` returns `{known, live}` or `{known:
 false, reason}` when the directory or a descriptor cannot be read (a missing
 directory is known-empty); `delete-session` uses it to fail closed.
+The Agents verb IPC uses the same checked helper with
+`{includeOwnProcesses: true}`: it skips neither an existing PTY nor a process
+this instance started. These exclusions are appropriate for a resume, but a
+job's conversation cannot be respawned/deleted while any process holds it.
+The default checked-helper behavior for the sidebar remains unchanged.
 
 **The check** is main-side, on demand, over IPC `session-live-elsewhere`:
 `liveElsewhere(sessionId, sessionHasPty, ptyPids)` returns `{pid, cwd,

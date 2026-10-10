@@ -83,6 +83,11 @@ Selecting a row opens its detail: the daemon's one-line status, tokens,
 model, start time, pid, the subagents it ran, the links it produced (merge
 requests open in the browser), its last result, and the verbs:
 
+A finished job whose conversation is still running interactively appears as
+one live External row, keeping its job details. It remains visible when
+Finished is unchecked. Its Respawn and Delete buttons are disabled; hover
+them to see the pid holding the conversation.
+
 | Verb | Runs | Available |
 |---|---|---|
 | Attach | `claude attach <id>` in a terminal tab | while the session is live (`working` or `blocked`) |
@@ -94,6 +99,15 @@ requests open in the browser), its last result, and the verbs:
 An external interactive session offers Transcript only. A live session is
 never resumed: attach is the only way into it. To respawn or delete one, stop
 it first.
+Switchboard checks again before Respawn or Delete, and before Stop on a
+finished job. A conversation held by an open terminal or another live process
+is refused even if the job says stopped or done. If the process or job files
+cannot be read, the action is refused with a reason. Stop remains available
+for a working or blocked daemon job.
+
+Transcript stays disabled until its file is available in the session index;
+hover the button for the reason. A file removed after a refresh produces an
+error in the read-only viewer.
 
 ## Attaching
 

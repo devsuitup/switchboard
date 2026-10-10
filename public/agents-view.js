@@ -153,11 +153,11 @@ function agentVerbAvailability(entry, daemonReachable) {
   const live = agentJobIsLive(entry);
   const reachable = !!daemonReachable;
   return {
-    transcript: !!entry.sessionId,
+    transcript: !!entry.sessionId && entry.transcriptAvailable !== false,
     attach: live && reachable,
     stop: live && reachable,
-    respawn: bg && !live && reachable,
-    rm: bg && !live && reachable,
+    respawn: bg && !live && !entry.conversationPid && reachable,
+    rm: bg && !live && !entry.conversationPid && reachable,
   };
 }
 
@@ -309,8 +309,14 @@ function renderAgentDetail(entry) {
   const key = agentsEntryKey(entry);
   const v = agentVerbAvailability(entry, agentsDaemonReachable);
   const pending = agentsPendingVerbs.has(key);
+  const reason = (verb) => {
+    const pid = entry.conversationPid || (entry.kind === 'interactive' && entry.pid);
+    if (verb === 'transcript' && !v.transcript) return 'Transcript does not exist or is not available yet';
+    if ((verb === 'rm' || verb === 'respawn') && pid) return `Conversation is live in pid ${pid}; stop it first`;
+    return '';
+  };
   const btn = (verb, label, enabled) =>
-    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
+    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" title="${agentsEscapeAttr(reason(verb))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');
   if (entry.model) meta.push(entry.model);
@@ -389,6 +395,7 @@ async function runAgentVerb(verb, entry) {
   if (!entry) return;
   const key = agentsEntryKey(entry);
   if (verb === 'transcript') {
+    if (!agentVerbAvailability(entry, agentsDaemonReachable).transcript) return;
     showJsonlViewer(sessionMap.get(entry.sessionId) || { sessionId: entry.sessionId, name: entry.name, projectPath: entry.cwd });
     return;
   }

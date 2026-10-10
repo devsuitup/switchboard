@@ -66,6 +66,17 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    settings cannot be read. A missing directory means nothing
    is live. Ids are compared lowercased everywhere, since Windows resolves a
    transcript path case-insensitively.
+10. `bg-agent-verb` checks the conversation before `rm` or `respawn`, and
+    before `stop` on a finished job. It reads the job file afresh through
+    `conversationCheck`, refusing an unreadable/unknown state or an absent
+    conversation identity. It checks both the transcript session id and any
+    job `bridgeSessionId`, plus the roster's session id, through
+    `deleteSessionRefusal` and `liveElsewhereChecked`. The latter includes
+    this instance's processes for these verbs: being owned here makes a resume
+    a re-attach but does not make a destructive operation safe. Open terminals,
+    live jobs, live descriptor pids and unknown liveness all refuse. The
+    refusal for a descriptor names its pid. `stop` on a working/blocked job
+    remains the daemon's stop operation.
 
 ## Job states
 
@@ -90,6 +101,32 @@ is finished without a list to keep in sync.
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
 cannot bypass it. A blocked row draws as waiting (orange), not as a spinner.
+The shipped IPC adds invariant 10's fresh conversation check; the roster
+state alone cannot authorize a destructive verb. A finished job that matches
+a live interactive descriptor by case-insensitive `sessionId` becomes one
+interactive row (`state: null`, descriptor status/pid/cwd/start time, job
+tokens/model/detail/fan/result retained). Its `conversationPid` disables
+Respawn and Delete and supplies the tooltip's pid. Other interactive sessions
+owned by this instance remain excluded as before. The promoted row remains
+visible with Finished unchecked, groups as External, and offers no Attach or
+daemon Stop.
+Any descriptor holding a row's session id supplies `conversationPid`, even
+when its kind is `bg` and the job file already says finished. Such a row keeps
+its job state but cannot offer destructive verbs while that pid is live.
+
+Roster matching does not use `bridgeSessionId`: job files can carry it, but
+`parseDescriptor` has no such field and the descriptor contract does not
+establish a shared bridge identity. A job's bridge id can still be checked
+against descriptor `sessionId` at verb time, without claiming row identity.
+
+Every roster entry carries `transcriptAvailable`, checked main-side with the
+same cached folder/path as `read-session-jsonl`. No content is read for this
+check. Without an indexed file the button is disabled and its tooltip explains
+why; direct renderer invocation does nothing. `runVerb('transcript', id)`
+also rechecks existence and returns an error instead of spawning. The ordinary
+`read-session-jsonl` handler catches file-read errors if a file disappears
+after the roster snapshot. `test/bg-agents-522.test.js` exercises the shipped
+IPC and renderer functions against disposable job/descriptor/transcript files.
 
 ## Data flow
 
