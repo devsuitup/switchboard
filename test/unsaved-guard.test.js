@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 
 const { createUnsavedGuard } = require('../unsaved-guard');
 
-function setup({ timeoutMs = 1000, quit } = {}) {
+function setup({ timeoutMs = 1000, quit, closeFinishes = false } = {}) {
   const ipcMain = new EventEmitter();
   const timers = [];
   const setTimeoutFn = (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; };
@@ -24,7 +24,15 @@ function setup({ timeoutMs = 1000, quit } = {}) {
     reloads: 0,
   });
   const win = new EventEmitter();
-  Object.assign(win, { webContents: wc, isDestroyed: () => false, close: () => { win.closes += 1; }, closes: 0 });
+  Object.assign(win, {
+    webContents: wc,
+    isDestroyed: () => win.destroys > 0 || win.closed,
+    close: () => { win.closes += 1; if (closeFinishes) win.closed = true; },
+    destroy: () => { win.destroys += 1; },
+    closes: 0,
+    destroys: 0,
+    closed: false,
+  });
   const guard = createUnsavedGuard({ ipcMain, timeoutMs, setTimeoutFn, clearTimeoutFn, quit });
   guard.attach(win);
 
@@ -258,4 +266,102 @@ test('a window close and a quit share one question, and one answer settles both'
   assert.equal(t.win.closes, 1);
   const again = t.closeEvent();
   assert.equal(t.guard.beforeQuit(again, t.win), false, 'the same yes approved the quit');
+});
+
+async function closeUnanswered(t) {
+  t.win.emit('close', t.closeEvent());
+  t.timers.filter((x) => x.ms === 2500 && !x.cleared).pop().fn();
+  await tick();
+}
+
+test('a page that never acknowledges is closed the usual way, and destroyed once reported unresponsive', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  await closeUnanswered(t);
+  assert.equal(t.win.closes, 1, 'a page that is only slow still closes the usual way');
+  assert.equal(t.win.destroys, 0);
+  assert.equal(t.timers.filter((x) => !x.cleared && x.ms !== 2500).length, 0, 'no fixed delay destroys a busy page');
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 1, 'a hung page never runs its beforeunload, so its close would never finish');
+});
+
+test('a busy page that answers again is not destroyed', async () => {
+  const t = setup({ timeoutMs: 2500, closeFinishes: true });
+  await closeUnanswered(t);
+  t.win.emit('responsive');
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 0, 'the close finished, nothing left to force');
+});
+
+test('a page already reported unresponsive is destroyed when its unanswered close does not finish', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 0, 'unresponsive alone never destroys');
+  await closeUnanswered(t);
+  assert.equal(t.win.destroys, 1);
+
+  const recovered = setup({ timeoutMs: 2500 });
+  recovered.win.emit('unresponsive');
+  recovered.win.emit('responsive');
+  await closeUnanswered(recovered);
+  assert.equal(recovered.win.destroys, 0, 'a page that answered again is given its close');
+});
+
+test('closing again a window whose unanswered close did not finish destroys it', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  await closeUnanswered(t);
+  const ours = t.closeEvent();
+  t.win.emit('close', ours);
+  assert.equal(t.win.destroys, 0, 'the close the guard itself started is not a second one');
+  const again = t.closeEvent();
+  t.win.emit('close', again);
+  assert.equal(t.win.destroys, 1);
+});
+
+test('a quit the page never acknowledges goes ahead, and the window is destroyed once reported unresponsive', async () => {
+  let quits = 0;
+  const t = setup({ timeoutMs: 2500, quit: () => { quits += 1; } });
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), true);
+  t.timers.find((x) => x.ms === 2500).fn();
+  await tick();
+  assert.equal(quits, 1);
+  assert.equal(t.win.destroys, 0);
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 1, 'app.quit() closes the window, which a hung page holds');
+});
+
+test('an answered check never destroys the window, even while the user takes time to answer', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  t.win.emit('close', t.closeEvent());
+  t.ack(t.sent[0].args[0]);
+  t.win.emit('unresponsive');
+  t.answer(t.sent[0].args[0], true);
+  await tick();
+  t.win.emit('unresponsive');
+  t.win.emit('close', t.closeEvent());
+  t.win.emit('close', t.closeEvent());
+  assert.equal(t.win.closes, 1);
+  assert.equal(t.win.destroys, 0);
+});
+
+test('a page that acknowledges a check is no longer counted unresponsive', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  t.win.emit('unresponsive');
+  t.win.emit('close', t.closeEvent());
+  t.ack(t.sent[0].args[0]);
+  t.answer(t.sent[0].args[0], false);
+  await tick();
+  await closeUnanswered(t);
+  assert.equal(t.win.closes, 1);
+  assert.equal(t.win.destroys, 0, 'a busy page is given its close');
+});
+
+test('an updater install the page never acknowledges is approved, and the window destroyed once reported unresponsive', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  const confirmed = t.guard.confirmQuit(t.win);
+  t.timers.find((x) => x.ms === 2500).fn();
+  assert.equal(await confirmed, true);
+  assert.equal(t.win.destroys, 0, 'quitAndInstall still closes the window the usual way');
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 1);
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), false, 'the quit that follows is approved');
 });

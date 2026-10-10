@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Closing the window or quitting no longer leaves Switchboard running when its window has stopped responding: the window closes as before, and once the system reports it not responding, or you close it again, it is closed anyway. A window that is only busy for a moment is left to close normally. (#540)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed

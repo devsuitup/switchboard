@@ -102,9 +102,8 @@ function killTree(proc) {
   }
 }
 
-async function closeApp(app) {
-  const proc = app.process();
-  await bounded(app.close(), CLOSE_TIMEOUT_MS);
+async function closeApp(app, proc) {
+  if (!hasExited(proc)) await bounded(Promise.resolve().then(() => app.close()), CLOSE_TIMEOUT_MS);
   if (await waitForExit(proc, CLOSE_TIMEOUT_MS)) return;
   killTree(proc);
   await waitForExit(proc, CLOSE_TIMEOUT_MS);
@@ -126,6 +125,7 @@ const test = base.extend({
 
   launch: async ({ env }, use, testInfo) => {
     let app = null;
+    let proc = null;
     let page = null;
     const launch = async () => {
       app = await electron.launch({
@@ -134,6 +134,7 @@ const test = base.extend({
         cwd: APP_DIR,
         env: { ...env, ELECTRON_IS_DEV: '0' },
       });
+      proc = app.process();
       await app.context().tracing.start({ screenshots: true, snapshots: true });
       page = await app.firstWindow();
       await page.locator('.project-new-btn').first().waitFor();
@@ -145,10 +146,12 @@ const test = base.extend({
       if (app) {
         const failed = testInfo.status !== testInfo.expectedStatus;
         try {
-          if (failed && page) await bounded(page.screenshot({ path: testInfo.outputPath('failure.png'), timeout: CLOSE_TIMEOUT_MS }), CLOSE_TIMEOUT_MS);
-          await bounded(app.context().tracing.stop(failed ? { path: testInfo.outputPath('trace.zip') } : undefined), CLOSE_TIMEOUT_MS * 3);
+          if (!hasExited(proc)) {
+            if (failed && page) await bounded(page.screenshot({ path: testInfo.outputPath('failure.png'), timeout: CLOSE_TIMEOUT_MS }), CLOSE_TIMEOUT_MS);
+            await bounded(app.context().tracing.stop(failed ? { path: testInfo.outputPath('trace.zip') } : undefined), CLOSE_TIMEOUT_MS * 3);
+          }
         } finally {
-          await closeApp(app);
+          await closeApp(app, proc);
         }
       }
     }
