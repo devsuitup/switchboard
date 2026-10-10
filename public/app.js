@@ -391,7 +391,7 @@ async function reopenActiveSessionAfterReload() {
   if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
     const live = await window.api.getActiveSessions().catch(() => []);
     if (!live.some(e => e.sessionId === session.sessionId)) return;
-    await openSession(session, undefined, { automatic: true, reattachOnly: true });
+    await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
     return;
   }
   await openSession(session, undefined, { automatic: true });
@@ -453,8 +453,9 @@ async function tickRestorePlanner() {
       const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
       for (const [position, item] of candidates.entries()) {
         const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
-          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true }) !== false;
-        if (!reattached) {
+          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
+        const open = openSessions.get(item.sessionId);
+        if (!reattached && (!open || open.closed)) {
           const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
           dormantWorkingSet.set(item.sessionId, { item, index });
         }
@@ -1767,6 +1768,12 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
         skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
       }
       skippedWorkingSetEntries.delete(originalId);
+      const dormant = dormantWorkingSet.get(originalId);
+      if (dormant) {
+        dormantWorkingSet.delete(originalId);
+        dormantWorkingSet.set(session.sessionId, { ...dormant, item: { ...dormant.item, sessionId: session.sessionId } });
+        document.getElementById('si-' + originalId)?.classList.remove('dormant');
+      }
       const other = openingSessions.get(session.sessionId);
       if (open && other && other !== open) await other.promise.catch(() => {});
       if (open) openingSessions.set(session.sessionId, open);
