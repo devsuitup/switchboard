@@ -915,9 +915,7 @@ function reindexRepairedFolders() {
   if (!folders.length || !setSetting) return Promise.resolve({ ok: true, folders: 0 });
   repairPromise = (async () => {
     const result = await scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders });
-    if (result.ok) {
-      setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
-    } else {
+    if (!result.ok) {
       log?.warn(`Bridge repair re-index failed: ${result.error}`);
     }
     if (getMainWindow()) notifyRendererProjectsChanged();
@@ -925,7 +923,10 @@ function reindexRepairedFolders() {
   })().catch(err => {
     log?.warn(`Bridge repair re-index failed: ${err.message}`);
     return { ok: false, error: err.message };
-  }).finally(() => { repairPromise = null; });
+  }).finally(() => {
+    setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
+    repairPromise = null;
+  });
   return repairPromise;
 }
 

@@ -139,7 +139,7 @@ test('reconcileCacheFromFilesystem: a folder whose stored projectPath does not v
     const current = getFolderIndexMtimeMs(path.join(projectsDir, folder));
     const state = makeStatefulDb({ folderMeta: new Map([[folder, { folder, projectPath: evil, indexMtimeMs: current }]]) });
     initCache(projectsDir, state.db);
-    await sessionCache.reconcileCacheFromFilesystem();
+    sessionCache.reconcileCacheFromFilesystem();
     assert.equal(state.folderMeta.get(folder).projectPath, p);
   } finally { cleanup(tmp); }
 });

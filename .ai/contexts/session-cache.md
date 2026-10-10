@@ -188,20 +188,25 @@ those local folders. Pending folders are excluded from synchronous reconciliatio
 until their worker write, so a flush during repair cannot recreate invalidated
 rows through a main-thread full read;
 `get-projects` cannot turn an emptied warm cache into a global population scan
-while repair is pending. A successful folder write clears its pending key;
-failed writes remain pending for the next initialization, without a retry loop
-from sidebar refresh. Interrupted cold-start population keeps its existing route.
+while local repair is pending. A successful folder write clears its pending key;
+the worker's completion also releases local gates on failure, allowing watcher
+refresh and stat-gated reconciliation to recover without restarting the app or
+retrying the repair worker. Interrupted cold-start population keeps its existing route.
 
 Repaired remote folder gates remain absent until the remote indexer's existing
 full-folder worker scans the mirror, even if SSH reports no changed files. That
-write clears the remote pending key. Merely listing on-disk projects never stamps
+write clears the remote pending key. Dropping a cached remote folder clears its
+key, and `get-projects` removes pending keys of aliases no longer declared, even
+without folder metadata. Remote pending keys never block local cache/search
+population. Merely listing on-disk projects never stamps
 remote `cache_meta`. Worker full-folder replacement and subset deletions honour
 `keepIfRunning`, preserving active PTY rows, metrics and search until release.
 
 Payload signatures are lazy, non-enumerable transient evidence: fully identified
-UUID histories build none. The mixed-coverage fallback computes them from the
-already-read lines only when needed, and deletes the evidence before persistence
-or worker messages.
+UUID histories retain no transcript lines and build no signatures. Their getter
+is created outside the reader's scope and re-reads the file only if a mixed-coverage
+comparison needs signatures. Incomplete UUID histories keep the already-read lines
+for that lazy fallback. Evidence is deleted before persistence or worker messages.
 
 ## Remote SSH hosts (issue #201)
 
@@ -1727,7 +1732,7 @@ it. The state is the `archivedProjects` settings row:
 - `main-ctx-db-wiring.test.js` — covers the `ctx.db` allow-list ⊇ session-cache.js usage invariant above
 - `read-session-file-bridge-session.test.js` — covers `bridgeSessionId`/cutoff extraction and `mergeBridgeGroups()`'s grouping/re-derivation/re-parenting rules
 - `bridge-divergent-history.test.js` — covers divergent UUID/legacy histories across full, incremental and worker indexing.
-- `bridge-history-refresh.test.js` — covers three-member continuation ownership, header-only synchronous flushes, one-time repaired-folder worker indexing, write-failure retry without reconciliation loops, running-row retention, promotion/deletion, lazy mixed UUID payload exclusion and the dormant remote repair race.
+- `bridge-history-refresh.test.js` — covers three-member continuation ownership, header-only synchronous flushes, one-time repaired-folder worker indexing, incremental recovery after write failure, remote repair pruning, running-row retention, promotion/deletion, lazy mixed UUID payload exclusion, complete-UUID signature re-reads and the dormant remote repair race.
 - `db-bridge-uuid-repair.test.js` — covers one-time UUID invalidation of cache/metrics/FTS/folder gates, preservation of user state and subagents, persisted repaired-folder keys, no-op reopen, rollback and retry in separate top-level tests with independent timeouts.
 - `db-bridge-session-migration.test.js` — covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
 - `session-cache-bridge-dedup.test.js` — covers the compaction-mirror union merge through `refreshFolder()`, `readFolderFromFilesystem()` and `buildProjectsFromCache()`'s rollup, using the real fixture's shape

@@ -66,7 +66,7 @@ test('ordinary bridge flush uses only header reads and synchronously advances th
   const original = fs.readFileSync;
   fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
   let result;
-  try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); await result; }
+  try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); }
   finally { fs.readFileSync = original; }
   assert.equal(f.rows.get('a').messageCount, 2, 'cached body counts stay unchanged on header refresh');
   assert.equal(result, undefined, 'refreshFolder has a synchronous contract on every path');
@@ -83,7 +83,7 @@ test('deleting A restores the shared UUIDs of independent B promoted to first me
   assert.equal(f.rows.get('b').messageCount, 1);
   assert.equal(f.rows.get('b').mergedIntoSessionId, null);
   fs.unlinkSync(path.join(f.dir, 'a.jsonl'));
-  await cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) });
+  cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) });
   assert.ok(!f.rows.has('a'));
   assert.equal(f.rows.get('b').messageCount, 2);
   assert.equal(f.metrics.get('b').reduce((n, r) => n + r.messageCount, 0), 2);
@@ -110,7 +110,7 @@ test('discovering another bridge member merges once and drops transient evidence
   f.write('c', [f.msg('b-own', '03'), f.msg('c-own', '04')]);
   const reads = [], original = fs.readFileSync;
   fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
-  try { await cache.refreshFolder(f.folder, { files: new Set(['c.jsonl']) }); }
+  try { cache.refreshFolder(f.folder, { files: new Set(['c.jsonl']) }); }
   finally { fs.readFileSync = original; }
   assert.ok(reads.length > 0, 'rare discovery retains the incremental main-thread merge');
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'b');
@@ -163,7 +163,7 @@ test('warm incremental reconciliation drops a cached local folder with an invali
   assert.ok(f.rows.has('a'));
   f.write('a', [{ ...f.msg('a-own', '01'), cwd: path.join(f.root, 'wrong-project') }]);
   f.meta.set(f.folder, { projectPath: path.join(f.root, 'wrong-project'), indexMtimeMs: 0 });
-  await cache.reconcileCacheFromFilesystem();
+  cache.reconcileCacheFromFilesystem();
   assert.ok(!f.rows.has('a'));
   assert.ok(!f.search.has('a'));
 });
@@ -198,24 +198,81 @@ test('one-time repair indexes only repaired folders off-thread and cannot loop t
   assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
 });
 
-test('a failed repair write retains its pending gate and retries at next initialization without a reconcile loop', { timeout: 9000 }, async t => {
+test('a failed repair write releases its gate so watcher and reconcile discover sessions without a restart', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('own', '01')]);
   f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
   const upsert = f.db.upsertCachedSessions;
   let attempts = 0;
-  f.db.upsertCachedSessions = () => { attempts++; throw new Error('injected repair write failure'); };
+  let failWrite = true;
+  f.db.upsertCachedSessions = fresh => {
+    if (failWrite) { attempts++; throw new Error('injected repair write failure'); }
+    upsert(fresh);
+  };
   const ctx = { PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: { warn() {} }, db: f.db };
   cache.init(ctx);
   assert.equal((await cache.reindexRepairedFolders()).ok, false);
-  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), [f.folder]);
-  assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
-  assert.equal(attempts, 1, 'get-projects reconciliation cannot retry repair');
-  f.db.upsertCachedSessions = upsert;
-  cache.init(ctx);
-  assert.equal((await cache.reindexRepairedFolders()).ok, true);
-  assert.ok(f.rows.has('a'));
   assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
+  failWrite = false;
+  f.write('new', [f.msg('new-own', '02')]);
+  assert.equal(cache.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), undefined);
+  assert.ok(f.rows.has('new'), 'watcher discovers a new session after repair failure');
+  f.meta.get(f.folder).indexMtimeMs = 0;
+  assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
+  assert.ok(f.rows.has('a'));
+  assert.ok(f.search.has('a'));
+  assert.equal(attempts, 1, 'incremental recovery does not restart the repair worker');
+  assert.equal((await cache.reindexRepairedFolders()).folders, 0);
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
+});
+
+test('pruning an undeclared host clears its pending repair through the main dropFolder callback', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  const key = 'gone::-srv-old';
+  f.rows.set('remote', { sessionId: 'remote', folder: key });
+  f.search.set('remote', { id: 'remote', folder: key });
+  f.meta.set(key, {});
+  f.settings.set('bridge_uuid_reindex_folders', [key, f.folder, 'vps::-srv-demo']);
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  const body = source.match(/dropFolder: \(folderKey\) => \{([\s\S]*?)\n?\s*\},/)[1];
+  const drop = new Function('deleteCachedFolder', 'deleteSearchFolder', 'getSetting', 'setSetting', 'folderKey', body);
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }], dataDir: f.root, transport: {},
+    sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+    listIndexedFolderKeys: () => [...f.meta.keys()],
+    dropFolder: folder => drop(f.db.deleteCachedFolder, f.db.deleteSearchFolder, f.db.getSetting, f.db.setSetting, folder),
+  });
+  t.after(() => indexer.dispose());
+  await indexer.refreshNow();
+  assert.ok(!f.rows.has('remote'));
+  assert.ok(!f.search.has('remote'));
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), [f.folder, 'vps::-srv-demo']);
+});
+
+test('a UUID-complete bridge row gets signatures by re-reading instead of retaining original lines', { timeout: 9000 }, t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Original synthetic payload')]);
+  const row = f.reread('a');
+  assert.equal(row.messageUuidsComplete, true);
+  f.write('a', [f.msg('known', '01', 'Re-read synthetic payload')]);
+  const reads = [], original = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => { reads.push(file); return original(file, ...args); };
+  try {
+    assert.ok(row.messageSignatures[0].signature.includes('Re-read synthetic payload'));
+    assert.deepEqual(reads, [path.join(f.dir, 'a.jsonl')]);
+    assert.equal(row.messageSignatures.length, 1);
+    assert.equal(reads.length, 1, 'computed signatures are memoized');
+  } finally { fs.readFileSync = original; }
+});
+
+test('mixed coverage still compares a complete predecessor with a legacy copied message', { timeout: 9000 }, t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Copied payload')]);
+  f.write('b', [f.msg(undefined, '01', 'Copied payload'), f.msg('own', '02')]);
+  const merged = mergeBridgeGroups([], ['a', 'b'].map(id => f.reread(id)), f.reread);
+  const b = merged.toUpsert.find(row => row.sessionId === 'b');
+  assert.equal(b.messageCount, 1);
+  assert.ok(!b.textContent.includes('Copied payload'));
 });
 
 test('reconcile keeps a running row whose transcript vanished and skips unchanged transcript bodies', { timeout: 9000 }, async t => {
@@ -227,7 +284,6 @@ test('reconcile keeps a running row whose transcript vanished and skips unchange
   fs.unlinkSync(path.join(f.dir, 'b.jsonl'));
   f.meta.get(f.folder).indexMtimeMs = 0;
   const result = cache.reconcileCacheFromFilesystem();
-  await result;
   assert.ok(f.rows.has('b'), 'running session must stay in the sidebar');
   assert.ok(f.search.has('b'), 'running search entry survives reconciliation');
   assert.equal(result, undefined, 'reconcile retains its synchronous contract');

@@ -516,7 +516,14 @@ const remoteIndexer = createRemoteIndexer({
   transport: remoteTransport,
   scanFolders: scanFoldersViaWorker,
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
-  dropFolder: (folderKey) => { deleteCachedFolder(folderKey); deleteSearchFolder(folderKey); },
+  dropFolder: (folderKey) => {
+    deleteCachedFolder(folderKey);
+    deleteSearchFolder(folderKey);
+    const pending = getSetting('bridge_uuid_reindex_folders');
+    if (Array.isArray(pending) && pending.includes(folderKey)) {
+      setSetting('bridge_uuid_reindex_folders', pending.filter(key => key !== folderKey));
+    }
+  },
   setRemoteRoots,
   notify: notifyRendererProjectsChanged,
   log,
@@ -1149,7 +1156,16 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     // synchronously on the main thread — the original multi-minute freeze,
     // reachable by simply relaunching after an interrupted first scan.
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
-    const repairPending = Array.isArray(repairFolders) && repairFolders.length > 0;
+    let repairPending = false;
+    if (Array.isArray(repairFolders) && repairFolders.length) {
+      const aliases = new Set(normalizeHosts((getSetting('global') || {}).remoteHosts).map(host => host.alias));
+      const declared = repairFolders.filter(key => {
+        const { alias } = parseFolderKey(key);
+        if (alias === null) { repairPending = true; return true; }
+        return aliases.has(alias);
+      });
+      if (declared.length !== repairFolders.length) setSetting('bridge_uuid_reindex_folders', declared);
+    }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
     if (needsPopulate) {

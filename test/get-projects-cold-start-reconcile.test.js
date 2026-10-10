@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
+const { normalizeHosts, parseFolderKey } = require('../remote-hosts');
 
 function extractGetProjectsHandlerBody() {
   const src = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
@@ -47,7 +48,7 @@ function makeHandler(mocks) {
     'populateCacheViaWorker',
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
     'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
-    'backfillEntrypoints',
+    'backfillEntrypoints', 'normalizeHosts', 'parseFolderKey',
     body
   );
   // annotateRemoteAttachable (remote-attach join, issue #221),
@@ -62,8 +63,8 @@ function makeHandler(mocks) {
     mocks.isCachePopulated, mocks.isSearchIndexPopulated,
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), () => {}, false,
-    mocks.backfillEntrypoints || (() => {})
+    annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), mocks.setSetting || (() => {}), false,
+    mocks.backfillEntrypoints || (() => {}), normalizeHosts, parseFolderKey
   );
 }
 
@@ -119,6 +120,51 @@ test('get-projects cannot turn a one-time warm repair into a full cache scan whe
   handler();
   handler();
   assert.deepEqual(calls, ['reconcile', 'build', 'reconcile', 'build']);
+});
+
+test('pending unreachable remote repairs cannot block empty local cache or search population', { timeout: 9000 }, () => {
+  for (const empty of ['cache', 'search']) {
+    const calls = [];
+    const handler = makeHandler({
+      isCachePopulated: () => empty !== 'cache',
+      isSearchIndexPopulated: () => empty !== 'search',
+      isInitialScanComplete: () => true,
+      getSetting: key => key === 'global' ? { remoteHosts: [{ alias: 'vps', enabled: empty === 'cache' }] }
+        : key === 'bridge_uuid_reindex_folders' ? ['vps::-srv-demo'] : null,
+      setSetting: () => assert.fail('a declared remote repair must remain pending'),
+      populateCacheViaWorker: () => calls.push('populate'),
+      reconcileCacheFromFilesystem: () => calls.push('reconcile'),
+      buildProjectsFromCache: () => { calls.push('build'); return []; },
+    });
+    handler();
+    assert.deepEqual(calls, ['populate', 'build'], empty);
+  }
+});
+
+test('get-projects clears undeclared remote repairs even without cached folder metadata', { timeout: 9000 }, () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [{ alias: 'vps' }] }],
+    ['bridge_uuid_reindex_folders', ['gone::-srv-old', 'vps::-srv-demo', 'local-repair']],
+  ]);
+  const calls = [];
+  const handler = makeHandler({
+    isCachePopulated: () => false,
+    isSearchIndexPopulated: () => false,
+    isInitialScanComplete: () => true,
+    getSetting: key => settings.get(key),
+    setSetting: (key, value) => settings.set(key, value),
+    populateCacheViaWorker: () => calls.push('populate'),
+    reconcileCacheFromFilesystem: () => calls.push('reconcile'),
+    buildProjectsFromCache: () => { calls.push('build'); return []; },
+  });
+  handler();
+  assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), ['vps::-srv-demo', 'local-repair']);
+  assert.deepEqual(calls, ['reconcile', 'build'], 'the pending local repair still prevents a duplicate full scan');
+  settings.set('bridge_uuid_reindex_folders', ['gone::-srv-old']);
+  calls.length = 0;
+  handler();
+  assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), []);
+  assert.deepEqual(calls, ['populate', 'build']);
 });
 
 // The scenario the row-count check cannot see: the worker streams one DB

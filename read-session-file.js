@@ -61,6 +61,24 @@ function messageSignature(entry) {
   return JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]);
 }
 
+function attachMessageSignatures(row, filePath, lines) {
+  Object.defineProperty(row, 'messageSignatures', {
+    configurable: true,
+    get() {
+      const signatures = [];
+      for (const line of lines || fs.readFileSync(filePath, 'utf8').split('\n')) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry.type !== 'user' && entry.type !== 'assistant' &&
+          !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) continue;
+        signatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
+      }
+      Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
+      return signatures;
+    },
+  });
+}
+
 function excludedBySignature(entry, exclusions) {
   if (!exclusions) return false;
   const signatures = exclusions instanceof Set ? exclusions
@@ -358,21 +376,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       dailyMetrics,
     };
     if (bridgeSessionId) {
-      Object.defineProperty(row, 'messageSignatures', {
-        configurable: true,
-        get() {
-          const signatures = [];
-          for (const line of lines) {
-            let entry;
-            try { entry = JSON.parse(line); } catch { continue; }
-            if (entry.type !== 'user' && entry.type !== 'assistant' &&
-              !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) continue;
-            signatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
-          }
-          Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
-          return signatures;
-        },
-      });
+      attachMessageSignatures(row, filePath, messageUuidsComplete ? null : lines);
     }
     return row;
   } catch {

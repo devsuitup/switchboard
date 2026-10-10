@@ -74,7 +74,7 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
       db: fake.db,
     });
 
-    await sessionCache.reconcileCacheFromFilesystem();
+    sessionCache.reconcileCacheFromFilesystem();
 
     // Assert at the observable seam: setFolderMeta was called with a non-zero
     // indexMtimeMs for folders that were (re)indexed, and was NOT called for

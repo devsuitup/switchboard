@@ -108,9 +108,9 @@ for (const shared of [false, true]) {
     const f = fixture(t, shared);
     const m = memoryDb();
     init(f, m.db);
-    await sessionCache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) });
+    sessionCache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) });
     assert.ok(m.store.has('b'));
-    await sessionCache.refreshFolder(f.folder, { files: new Set(['a.jsonl', 'mirror.jsonl']) });
+    sessionCache.refreshFolder(f.folder, { files: new Set(['a.jsonl', 'mirror.jsonl']) });
     assertRows([...m.store.values()]);
     assert.ok(!m.deleted.includes('b'), 'the cached member must never be sent to deleteCachedSession');
     assert.equal(m.metrics.get('b').reduce((n, r) => n + r.inputTokens, 0), 9);
@@ -123,7 +123,7 @@ for (const shared of [false, true]) {
       if (path.dirname(String(file)) === f.dir && String(file).endsWith('.jsonl')) bodyReads.push(file);
       return originalRead(file, ...args);
     };
-    try { await sessionCache.refreshFolder(f.folder); }
+    try { sessionCache.refreshFolder(f.folder); }
     finally { fs.readFileSync = originalRead; }
     assertRows([...m.store.values()]);
     assert.deepEqual(bodyReads, [], 'an unchanged bridge group does not repeatedly read full transcripts');

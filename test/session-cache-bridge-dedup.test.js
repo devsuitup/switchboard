@@ -119,7 +119,7 @@ test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId 
     sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
 
     // Watcher-style targeted refresh: only the two brand-new files were seen.
-    await sessionCache.refreshFolder(folder, { files: new Set(['1b1def07.jsonl', '2932029d.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['1b1def07.jsonl', '2932029d.jsonl']) });
 
     assert.ok(store.has('1b1def07'), 'the mirror keeps its own session_cache row');
     assert.equal(store.get('1b1def07').mergedIntoSessionId, 'e4b389ac');
@@ -173,13 +173,13 @@ test('refreshFolder: a mirror indexed alone before its parent is known is correc
 
     // Pass 1: only the mirror is dirty. Its sibling is nowhere in the cache,
     // so mergeBridgeGroups sees a group of exactly one -- no cutoff applied.
-    await sessionCache.refreshFolder(folder, { files: new Set(['mirror.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['mirror.jsonl']) });
     assert.ok(store.has('mirror'));
     assert.equal(store.get('mirror').mergedIntoSessionId, undefined, 'not yet grouped -- its sibling is unknown');
     assert.equal(store.get('mirror').messageCount, 3, 'read with no cutoff: includes the turn that will later turn out to be a duplicate');
 
     // Pass 2: the parent is discovered for the first time.
-    await sessionCache.refreshFolder(folder, { files: new Set(['parent.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['parent.jsonl']) });
 
     assert.equal(store.get('mirror').mergedIntoSessionId, 'parent', 'now correctly grouped');
     assert.equal(store.get('mirror').messageCount, 2,
@@ -218,12 +218,12 @@ test('refreshFolder: a mirror indexed alone whose entire content turns out to be
 
     // Pass 1: mirror alone, no sibling known -- its (only) turn stands on its
     // own, so it gets a real row with no cutoff, same as any normal session.
-    await sessionCache.refreshFolder(folder, { files: new Set(['mirror.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['mirror.jsonl']) });
     assert.ok(store.has('mirror'));
 
     // Pass 2: parent discovered -- the mirror's sole turn turns out to be
     // entirely the recopied duplicate; nothing survives the new cutoff.
-    await sessionCache.refreshFolder(folder, { files: new Set(['parent.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['parent.jsonl']) });
 
     assert.ok(!store.has('mirror'), 'the stale row is removed, not left with its pre-cutoff content');
     assert.ok(deleted.includes('mirror'), 'deleteCachedSession is actually invoked, not just omitted from the next upsert');
@@ -314,7 +314,7 @@ test('refreshFolder: an existing row misidentified as parent is re-parented AND 
     const { db, store, deleted, metricsReplaced } = makeFakeDb({ cachedRows });
     sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
 
-    await sessionCache.refreshFolder(folder, { files: new Set(['true-parent.jsonl']) });
+    sessionCache.refreshFolder(folder, { files: new Set(['true-parent.jsonl']) });
 
     assert.ok(store.has('true-parent'), 'the genuinely earlier file becomes its own row');
     assert.equal(store.get('true-parent').mergedIntoSessionId, undefined);
