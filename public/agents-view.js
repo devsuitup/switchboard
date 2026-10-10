@@ -153,11 +153,11 @@ function agentVerbAvailability(entry, daemonReachable) {
   const live = agentJobIsLive(entry);
   const reachable = !!daemonReachable;
   return {
-    transcript: !!entry.sessionId,
+    transcript: !!entry.sessionId && entry.transcriptAvailable !== false,
     attach: live && reachable,
     stop: live && reachable,
-    respawn: bg && !live && reachable,
-    rm: bg && !live && reachable,
+    respawn: bg && !live && !entry.conversationPid && reachable,
+    rm: bg && !live && !entry.conversationPid && reachable,
   };
 }
 
@@ -309,9 +309,17 @@ function renderAgentDetail(entry) {
   const key = agentsEntryKey(entry);
   const v = agentVerbAvailability(entry, agentsDaemonReachable);
   const pending = agentsPendingVerbs.has(key);
+  const reason = (verb) => {
+    const pid = entry.conversationPid || (entry.kind === 'interactive' && entry.pid);
+    if (verb === 'transcript' && !v.transcript) return 'Transcript does not exist or is not available yet';
+    if ((verb === 'rm' || verb === 'respawn') && pid) return entry.conversationOwn
+      ? `Conversation is open in Switchboard in pid ${pid}; close it first` : `Conversation is live in pid ${pid}; stop it first`;
+    return '';
+  };
   const btn = (verb, label, enabled) =>
-    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
+    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" title="${agentsEscapeAttr(reason(verb))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
+  if (entry.id) meta.push('job ' + entry.id + (entry.jobState || entry.state ? ' · ' + (entry.jobState || entry.state) : ''));
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');
   if (entry.model) meta.push(entry.model);
   if (Number.isFinite(entry.startedAt)) meta.push('started ' + new Date(entry.startedAt).toLocaleString());
@@ -350,10 +358,11 @@ function renderAgentsView() {
   if (!listEl || !detailEl) return;
   const visible = sortAgentEntries(agentsRoster.filter(e => agentsShowFinished || agentIsLive(e)));
   const running = agentsRoster.filter(agentJobIsLive).length;
-  const finished = agentsRoster.filter(e => e.kind === 'background' && !agentJobIsLive(e)).length;
+  const external = agentsRoster.filter(e => e.kind === 'interactive' && !e.jobState).length;
+  const finished = agentsRoster.filter(e => e.jobState || (e.kind === 'background' && !agentJobIsLive(e))).length;
   const worktreesBox = document.getElementById('agents-group-worktrees');
   if (worktreesBox) worktreesBox.disabled = agentsGroupBy !== 'project';
-  if (countEl) countEl.textContent = `${running} running · ${finished} finished`;
+  if (countEl) countEl.textContent = `${running} running · ${finished} finished${external ? ` · ${external} external` : ''}`;
   if (bannerEl) {
     bannerEl.textContent = 'The daemon is not answering; state comes from files only.';
     bannerEl.style.display = agentsDaemonReachable ? 'none' : '';
@@ -389,7 +398,20 @@ async function runAgentVerb(verb, entry) {
   if (!entry) return;
   const key = agentsEntryKey(entry);
   if (verb === 'transcript') {
-    showJsonlViewer(sessionMap.get(entry.sessionId) || { sessionId: entry.sessionId, name: entry.name, projectPath: entry.cwd });
+    if (!agentVerbAvailability(entry, agentsDaemonReachable).transcript) return;
+    if (!entry.id) {
+      showJsonlViewer(sessionMap.get(entry.sessionId) || { sessionId: entry.sessionId, name: entry.name, projectPath: entry.cwd });
+      return;
+    }
+    let result;
+    try { result = await window.api.bgAgentVerb(verb, entry.id); } catch (err) { result = { ok: false, error: err.message }; }
+    if (result && result.ok && result.sessionId) {
+      agentsVerbErrors.delete(key);
+      showJsonlViewer(sessionMap.get(result.sessionId) || { sessionId: result.sessionId, name: entry.name, projectPath: entry.cwd });
+    } else {
+      agentsVerbErrors.set(key, (result && result.error) || 'Transcript does not exist or is not available yet');
+      if (agentsViewActive) renderAgentsView();
+    }
     return;
   }
   if (verb === 'attach') {
@@ -397,9 +419,6 @@ async function runAgentVerb(verb, entry) {
     return;
   }
   if (verb === 'rm' && !window.confirm('Delete this background session? Its conversation goes, and its worktree when that is safe.')) return;
-  if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
-    try { await window.api.stopSession(entry.sessionId); } catch {}
-  }
   agentsPendingVerbs.add(key);
   agentsVerbErrors.delete(key);
   if (agentsViewActive) renderAgentsView();
@@ -411,6 +430,9 @@ async function runAgentVerb(verb, entry) {
   }
   agentsPendingVerbs.delete(key);
   if (!result || result.ok === false) agentsVerbErrors.set(key, (result && result.error) || 'unknown error');
+  else if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
+    try { await window.api.stopSession(entry.sessionId); } catch {}
+  }
   await refreshAgentsRoster();
 }
 

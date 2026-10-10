@@ -103,16 +103,32 @@ test('a whole batch is decided with one probe call covering every candidate pid'
 test('no probe is spawned when no candidate needs one', () => withDir(async (dir) => {
   writeState(dir, 4242, { procStart: null });
   writeState(dir, 4343);
-  let calls = 0;
-  cliSessionState.init({
-    dir, activeSessions: new Map(), log: silentLog, onIdle: () => {},
-    isProcessAlive: (pid) => pid === 4242,
-    ownPid: -1,
-    readProcStartMany: async () => { calls++; return new Map(); },
-  });
-  const found = await cliSessionState.liveElsewhereMany(['sess-4242', 'sess-4343'], noPty);
-  assert.deepEqual(Object.keys(found), ['sess-4242']);
-  assert.equal(calls, 0);
+  const cp = require('child_process');
+  const realExecFile = cp.execFile;
+  const modulePath = require.resolve('../cli-session-state');
+  const cached = require.cache[modulePath];
+  let spawned = 0;
+  cp.execFile = (...args) => { spawned++; return realExecFile(...args); };
+  delete require.cache[modulePath];
+  try {
+    const fresh = require('../cli-session-state');
+    let calls = 0;
+    fresh.init({
+      dir, activeSessions: new Map(), log: silentLog, onIdle: () => {},
+      isProcessAlive: (pid) => pid === 4242,
+      ownPid: -1,
+      platform: 'win32',
+      readProcStartMany: async () => { calls++; return new Map(); },
+    });
+    const found = await fresh.liveElsewhereMany(['sess-4242', 'sess-4343'], noPty);
+    assert.deepEqual(Object.keys(found), ['sess-4242']);
+    assert.equal(calls, 0);
+    assert.equal(spawned, 0);
+    fresh.stop();
+  } finally {
+    cp.execFile = realExecFile;
+    require.cache[modulePath] = cached;
+  }
 }));
 
 test('on Windows, candidates past the probe cap are not asked about and stay live', () => withDir(async (dir) => {

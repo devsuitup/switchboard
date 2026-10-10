@@ -96,13 +96,13 @@ function extractDeclaration(src, name) {
 
 // Evaluates the named declarations and functions of public/app.js in `context`
 // (a jsdom VM context) and returns the functions by name.
-function loadAppFunctions(context, { functions, declarations = [] }) {
-  const src = readAppSource();
+function loadAppFunctions(context, { functions, declarations = [], sourcePath = APP_PATH }) {
+  const src = fs.readFileSync(sourcePath, 'utf8');
   const parts = [
     ...declarations.map((n) => extractDeclaration(src, n)),
     ...functions.map((n) => extractFunction(src, n)),
   ];
-  vm.runInContext(parts.join('\n'), context, { filename: APP_PATH });
+  vm.runInContext(parts.join('\n'), context, { filename: sourcePath });
   const out = {};
   for (const n of functions) out[n] = vm.runInContext(n, context);
   return out;

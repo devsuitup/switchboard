@@ -24,7 +24,11 @@ name, its `--agent`, its state emoji then `state · status` (see the table
 below), its directory, and its age. Working
 and blocked sessions and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
-the choice is remembered. The list refreshes when the daemon's files change,
+the choice is remembered. The header counts `running` and `finished` background
+sessions, then `N external` when the list holds external sessions (these are
+always shown). A session running in one of Switchboard's own tabs is not listed
+as external once the app has read the process list, which can take a second or
+two after start-up or after a tab opens. The list refreshes when the daemon's files change,
 and is re-read from the CLI every 30 seconds while the view is open.
 
 **Group**, next to Finished, splits the list into sections with a header
@@ -91,9 +95,25 @@ requests open in the browser), its last result, and the verbs:
 | Respawn | `claude respawn <id>` | a background session that is not live |
 | Delete | `claude rm <id>`, after confirmation; the worktree goes too when that is safe | a background session that is not live |
 
+A finished job whose conversation is still running interactively appears as
+one live External row, keeping its job details, id and finished state. It remains
+visible when Finished is unchecked and still counts as finished. A conversation
+open in this Switchboard keeps its job row. Respawn and Delete are disabled in
+both cases; hover them to see the pid and where the conversation is open.
+
 An external interactive session offers Transcript only. A live session is
 never resumed: attach is the only way into it. To respawn or delete one, stop
 it first.
+Switchboard checks again before Respawn or Delete, and before Stop on a
+finished job. A conversation held by an open terminal or another live process
+is refused even if the job says stopped or done. If the process or job files
+cannot be read, the action is refused with a reason. Stop remains available
+for a working or blocked daemon job, including when its job file is missing or
+its fresh state is unknown. A refused Stop keeps an attached tab open.
+
+Transcript checks the session index when clicked and shows a reason if the file
+is missing or not indexed yet. Click again after indexing to open it. A file
+removed after this check produces an error in the read-only viewer.
 
 ## Attaching
 

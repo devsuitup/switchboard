@@ -15,7 +15,7 @@ const FLUSH_MS = 250;
 const MAX_JOBS = 200;
 const LIST_TIMEOUT_MS = 20000;
 const VERB_TIMEOUT_MS = 60000;
-const VERBS = new Set(['stop', 'respawn', 'rm']);
+const VERBS = new Set(['stop', 'respawn', 'rm', 'transcript']);
 const ROOT_CACHE_MAX = 500;
 const ROOT_CONCURRENCY = 4;
 
@@ -28,6 +28,7 @@ let makeIsOwnPid = () => () => false;
 let isAttachedHere = () => false;
 let resolveRoots = resolveProjectRoots;
 let dispatchSettings = () => ({});
+let transcriptExists = null;
 const rootCache = new Map();
 const rootPending = new Set();
 const rootQueue = [];
@@ -56,6 +57,7 @@ function init(ctx) {
   isAttachedHere = ctx.isAttachedHere || (() => false);
   resolveRoots = ctx.resolveProjectRoots || resolveProjectRoots;
   dispatchSettings = ctx.dispatchSettings || (() => ({}));
+  transcriptExists = ctx.transcriptExists || null;
 }
 
 function onChange(listener) {
@@ -243,23 +245,56 @@ async function reconcile() {
 }
 
 function cwdFor(id) {
-  const entry = roster.find(e => e.kind === 'background' && e.id === id);
+  const entry = roster.find(e => e.id === id);
   if (entry && entry.cwd && fs.existsSync(entry.cwd)) return entry.cwd;
   return homeDir;
+}
+
+function transcriptAvailable(entry) {
+  try {
+    if (!entry || !entry.sessionId) return false;
+    if (transcriptExists) return !!transcriptExists(entry.sessionId);
+    return !!entry.transcriptPath && fs.statSync(entry.transcriptPath).isFile();
+  } catch { return false; }
+}
+
+function conversationCheck(id) {
+  if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
+  let job;
+  try { job = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
+    return { known: false, reason: `cannot read job ${id}: ${err.message}` };
+  }
+  if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state` };
+  const entry = roster.find(e => e.id === id);
+  const sessionIds = [...new Set([job.sessionId, job.bridgeSessionId, entry && entry.sessionId]
+    .filter(Boolean))];
+  if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
+  return { known: true, sessionIds, state: job.state };
 }
 
 async function runVerb(verb, id) {
   if (!VERBS.has(verb)) return { ok: false, error: `unknown verb: ${String(verb)}` };
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
+  if (verb === 'transcript') {
+    readJob(id);
+    const entry = roster.find(e => e.id === id) || backgroundTranscriptEntry(id);
+    return transcriptAvailable(entry) ? { ok: true, sessionId: entry.sessionId }
+      : { ok: false, error: 'transcript does not exist or is not available yet' };
+  }
   const live = roster.find(e => e.kind === 'background' && e.id === id);
   if (verb !== 'stop' && live && isLiveJobState(live.state)) {
-    return { ok: false, error: `cannot ${verb} a ${live.state} session; stop it first` };
+    return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${live.state} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;
   const error = ok ? null : (stripShellNoise(result.stderr) || `claude ${verb} exited with ${result.code}`);
   await reconcile();
   return ok ? { ok: true } : { ok: false, error };
+}
+
+function backgroundTranscriptEntry(id) {
+  const job = jobs.get(id);
+  return job ? { sessionId: job.sessionId, transcriptPath: job.transcriptPath } : null;
 }
 
 async function dispatch(fields) {
@@ -311,6 +346,6 @@ function liveJobCheck(sessionId) {
 }
 
 module.exports = {
-  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobCheck,
+  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };
