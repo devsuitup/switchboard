@@ -4,6 +4,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
+
+### Fixed
+- In a sandboxed session, a repository or a `.claude` folder below an Additional Directory that is a symbolic link now has its Git config, hooks and Claude settings read-only, like one below a plain directory. Before, they were writable from inside the sandbox. Such a directory holding a `.claude` that is itself a symbolic link, or a repository Git cannot read, now refuses to start the session (status 125), as a plain directory already did, instead of starting it unprotected. (#538)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed
