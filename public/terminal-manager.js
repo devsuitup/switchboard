@@ -1281,6 +1281,7 @@ function collectRevealLongEntries(tr, entries) {
 
 function abandonReveal(tr) {
   tr.abandoned = true;
+  if (tr.owner) tr.owner.delete(tr);
   clearTimeout(tr.timer);
   try { if (tr.observer) tr.observer.disconnect(); } catch {}
 }
@@ -1299,9 +1300,11 @@ function longEntryFields(tr) {
 
 function finishRevealTiming(entry, tr) {
   tr.totalMs = performance.now() - tr.t0;
+  tr.finished = true;
   const sid = entry.session.sessionId;
-  if (!tr.observer) { emitRevealTiming(sid, tr); return; }
+  if (!tr.observer) { tr.owner.delete(tr); emitRevealTiming(sid, tr); return; }
   tr.timer = setTimeout(() => {
+    tr.owner.delete(tr);
     try { collectRevealLongEntries(tr, tr.observer.takeRecords()); tr.observer.disconnect(); } catch {}
     emitRevealTiming(sid, tr);
   }, REVEAL_LONG_SETTLE_MS);
@@ -1359,7 +1362,7 @@ function destroySession(sessionId) {
   webglWarmForget(entry);
   releaseEntryWebgl(entry);
   if (entry.frames) for (const id of entry.frames) cancelAnimationFrame(id);
-  if (entry.revealTr) abandonReveal(entry.revealTr);
+  if (entry.revealTrs) for (const tr of [...entry.revealTrs]) abandonReveal(tr);
   if (destroyGridCard(sessionId) && gridViewActive) {
     // Keep the grid header count honest when a card disappears outside the
     // showGridView/showSession flows (e.g. LRU eviction of a closed session).
@@ -1412,8 +1415,10 @@ function showSession(sessionId) {
       if (tr) { tr.last = tr.t0; observeRevealLongEntries(tr); }
       // see .ai/contexts/terminal-refresh.md, "WebGL contexts across tab switches"
       if (tr) {
-        if (entry.revealTr) abandonReveal(entry.revealTr);
-        entry.revealTr = tr;
+        const open = entry.revealTrs || (entry.revealTrs = new Set());
+        for (const earlier of [...open]) if (!earlier.finished) abandonReveal(earlier);
+        tr.owner = open;
+        open.add(tr);
       }
       const disposed = webglWarmTouch(entry);
       if (tr) { tr.webglDisposed = disposed; revealLap(tr, 'suspendMs'); }
