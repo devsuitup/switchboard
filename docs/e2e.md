@@ -49,6 +49,7 @@ here.
 | The shell opened with no tab fills the panel and is not a sidebar row | `panel.spec.js` | the `.shell-only` layout, and `buildProjectsFromCache` skipping the panel shell |
 | Changes on a project with no git work tree says so, with no git output | `panel.spec.js` | the not-a-repository note instead of git's raw output |
 | Refresh beside Stop redraws a plain terminal and restores its fitted size | `terminal-refresh.spec.js` | visible header geometry, one refresh IPC, actual PTY size events, and final fitted size |
+| Closing a window whose page hangs still ends the app | `hung-window.spec.js` | the 2.5 s bound on an unacknowledged check, the window destroyed once Electron reports the page unresponsive, and exit code 0 |
 
 The issue's fifth journey expected the Changes control to disappear. #310 made
 it unconditional, so the journey checks what the panel says instead (see

@@ -310,7 +310,7 @@ test('a logoff that never ends the session stops approving quits after a while; 
 
 async function closeUnanswered(t) {
   t.win.emit('close', t.closeEvent());
-  t.timers.find((x) => x.ms === 2500).fn();
+  t.timers.filter((x) => x.ms === 2500 && !x.cleared).pop().fn();
   await tick();
 }
 
@@ -381,4 +381,27 @@ test('an answered check never destroys the window, even while the user takes tim
   t.win.emit('close', t.closeEvent());
   assert.equal(t.win.closes, 1);
   assert.equal(t.win.destroys, 0);
+});
+
+test('a page that acknowledges a check is no longer counted unresponsive', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  t.win.emit('unresponsive');
+  t.win.emit('close', t.closeEvent());
+  t.ack(t.sent[0].args[0]);
+  t.answer(t.sent[0].args[0], false);
+  await tick();
+  await closeUnanswered(t);
+  assert.equal(t.win.closes, 1);
+  assert.equal(t.win.destroys, 0, 'a busy page is given its close');
+});
+
+test('an updater install the page never acknowledges is approved, and the window destroyed once reported unresponsive', async () => {
+  const t = setup({ timeoutMs: 2500 });
+  const confirmed = t.guard.confirmQuit(t.win);
+  t.timers.find((x) => x.ms === 2500).fn();
+  assert.equal(await confirmed, true);
+  assert.equal(t.win.destroys, 0, 'quitAndInstall still closes the window the usual way');
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 1);
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), false, 'the quit that follows is approved');
 });

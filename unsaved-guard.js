@@ -14,12 +14,15 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
   let quitAsking = false;
   let inflight = null;
   const approvedToQuit = () => quitApproved || logoffApproved;
+  const windows = new WeakMap();
 
   ipcMain.on('unsaved-check-ack', (_event, id) => {
     const entry = pending.get(id);
     if (!entry || entry.acked) return;
     entry.acked = true;
     clearTimeoutFn(entry.timer);
+    const state = windows.get(entry.win);
+    if (state) state.unresponsive = false;
   });
 
   ipcMain.on('unsaved-check-result', (_event, id, proceed) => {
@@ -28,7 +31,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     entry.finish(proceed === true);
   });
 
-  function ask(win, reason) {
+  function askFull(win, reason) {
     if (inflight) {
       if (inflight.reason === 'reload') {
         inflight.reason = reason;
@@ -37,13 +40,13 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
       return inflight.asked;
     }
     const wc = win.webContents;
-    if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
+    if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve({ proceed: true, unanswered: false });
     let settled = false;
     const id = nextId++;
     const asked = new Promise((resolve) => {
-      const entry = { acked: false, timer: null, finish: null };
+      const entry = { win, acked: false, timer: null, finish: null };
       const onGone = () => entry.finish(true);
-      entry.finish = (proceed) => {
+      entry.finish = (proceed, unanswered = false) => {
         if (!pending.has(id)) return;
         pending.delete(id);
         clearTimeoutFn(entry.timer);
@@ -51,9 +54,9 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
         wc.removeListener('destroyed', onGone);
         settled = true;
         inflight = null;
-        resolve(proceed);
+        resolve({ proceed, unanswered });
       };
-      entry.timer = setTimeoutFn(() => entry.finish(true), timeoutMs);
+      entry.timer = setTimeoutFn(() => entry.finish(true, true), timeoutMs);
       pending.set(id, entry);
       wc.on('render-process-gone', onGone);
       wc.on('destroyed', onGone);
@@ -67,16 +70,36 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     return asked;
   }
 
+  function ask(win, reason) {
+    return askFull(win, reason).then(({ proceed }) => proceed);
+  }
+
+  function force(win) {
+    if (!win.isDestroyed()) win.destroy();
+  }
+
+  function markUnanswered(win) {
+    const state = windows.get(win);
+    if (state) state.unanswered = true;
+  }
+
+  function forceIfUnresponsive(win) {
+    const state = windows.get(win);
+    if (state && state.unresponsive) force(win);
+  }
+
   function beforeQuit(event, win) {
     if (approvedToQuit() || !win || win.isDestroyed()) return false;
     event.preventDefault();
     if (quitAsking) return true;
     quitAsking = true;
-    ask(win, 'quit').then((proceed) => {
+    askFull(win, 'quit').then(({ proceed, unanswered }) => {
       quitAsking = false;
       if (!proceed) return;
       quitApproved = true;
+      if (unanswered) markUnanswered(win);
       quit();
+      if (unanswered) forceIfUnresponsive(win);
     });
     return true;
   }
@@ -86,6 +109,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     let closing = false;
     let reloading = false;
     let allowNextUnload = false;
+    const state = { unanswered: false, unresponsive: false, closesSeen: 0 };
+    windows.set(win, state);
 
     const endSession = (final) => {
       logoffApproved = true;
@@ -100,17 +125,31 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     };
     win.on('query-session-end', () => endSession(false));
     win.on('session-end', () => endSession(true));
+    win.on('unresponsive', () => {
+      state.unresponsive = true;
+      if (state.unanswered) force(win);
+    });
+    win.on('responsive', () => { state.unresponsive = false; });
 
     win.on('close', (event) => {
-      if (approved || approvedToQuit()) return;
+      if (approved || approvedToQuit()) {
+        if (state.unanswered && ++state.closesSeen > 1) {
+          event.preventDefault();
+          force(win);
+        }
+        return;
+      }
       event.preventDefault();
       if (closing) return;
       closing = true;
-      ask(win, 'quit').then((proceed) => {
+      askFull(win, 'quit').then(({ proceed, unanswered }) => {
         closing = false;
         if (!proceed) return;
         approved = true;
-        if (!win.isDestroyed()) win.close();
+        if (win.isDestroyed()) return;
+        if (unanswered) markUnanswered(win);
+        win.close();
+        if (unanswered) forceIfUnresponsive(win);
       });
     });
 
@@ -132,9 +171,11 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
   }
 
   function confirmQuit(win) {
-    return ask(win, 'quit').then((proceed) => {
-      if (proceed) quitApproved = true;
-      return proceed;
+    return askFull(win, 'quit').then(({ proceed, unanswered }) => {
+      if (!proceed) return false;
+      quitApproved = true;
+      if (unanswered) markUnanswered(win);
+      return true;
     });
   }
 
