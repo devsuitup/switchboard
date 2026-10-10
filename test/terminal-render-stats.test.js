@@ -27,6 +27,7 @@ function setup({ on }) {
   };
   window.activeSessionId = 's1';
   window.createTerminalEntry({ sessionId: 's1' });
+  window.restoreTerminalWebgl('s1');
   const stats = () => traced.filter((t) => t.cat === 'render.stats');
   return {
     ...h, traced, timers, stats, realSetTimeout,

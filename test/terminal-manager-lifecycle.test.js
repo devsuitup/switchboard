@@ -211,7 +211,9 @@ test('WebGL lifecycle: loaded on create, suspend disposes, restore reloads, show
   const { window, spies, destroy } = setupTerminalDom();
   try {
     const entry = window.createTerminalEntry({ sessionId: 's1' });
-    assert.ok(entry.webglAddon, 'WebGL addon loaded at creation');
+    assert.strictEqual(entry.webglAddon, null, 'no GL context until the terminal is first shown');
+    window.restoreTerminalWebgl('s1');
+    assert.ok(entry.webglAddon, 'restore loads the addon');
 
     window.suspendTerminalWebgl('s1');
     assert.strictEqual(entry.webglAddon, null, 'addon reference cleared');

@@ -16,7 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 
-test('session switch in single view keeps the outgoing session warm and gives the incoming one a live context', () => {
+test('session switch in single view keeps the outgoing session warm and gives the incoming one a live context', async () => {
   const { window, destroy } = setupTerminalDom();
   try {
     const s1 = window.createTerminalEntry({ sessionId: 's1' });
@@ -24,7 +24,10 @@ test('session switch in single view keeps the outgoing session warm and gives th
     window.activeSessionId = 's1'; // s1 is the session currently shown
     window.gridViewActive = false;
 
+    window.showSession('s1');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
     window.showSession('s2');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 
     assert.ok(s1.webglAddon, 'outgoing session is among the most recently shown — keeps its context');
     assert.ok(s2.webglAddon, 'incoming session has a live GL context');
@@ -33,7 +36,7 @@ test('session switch in single view keeps the outgoing session warm and gives th
   }
 });
 
-test('re-showing the already-active session does not suspend or reload its own WebGL', () => {
+test('re-showing the already-active session does not suspend or reload its own WebGL', async () => {
   const { window, spies, destroy } = setupTerminalDom();
   try {
     const entry = window.createTerminalEntry({ sessionId: 's1' });
@@ -41,6 +44,9 @@ test('re-showing the already-active session does not suspend or reload its own W
     window.gridViewActive = false;
 
     window.showSession('s1');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    window.showSession('s1');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 
     assert.strictEqual(spies.webglDispose, 0, 'no suspend when incoming === outgoing session');
     assert.ok(entry.webglAddon, 'GL context still live');
@@ -49,13 +55,14 @@ test('re-showing the already-active session does not suspend or reload its own W
   }
 });
 
-test('opening a new session while one is already shown keeps the previous one warm (mirrors session-restore reopening several sessions)', () => {
+test('opening a new session while one is already shown keeps the previous one warm (mirrors session-restore reopening several sessions)', async () => {
   const { window, destroy } = setupTerminalDom();
   try {
     const s1 = window.createTerminalEntry({ sessionId: 's1' });
     window.activeSessionId = 's1';
     window.gridViewActive = false;
     window.showSession('s1');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
     assert.ok(s1.webglAddon, 's1 has a live GL context while shown');
 
     // A second session opens in the background (as runRestore's staggered
@@ -64,6 +71,7 @@ test('opening a new session while one is already shown keeps the previous one wa
     const s2 = window.createTerminalEntry({ sessionId: 's2' });
     window.activeSessionId = 's1'; // showSession captures the OUTGOING id before switching
     window.showSession('s2');
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 
     assert.ok(s1.webglAddon, 's1 stays within the warm cap once s2 becomes the visible session');
     assert.ok(s2.webglAddon, 's2 has a live GL context');

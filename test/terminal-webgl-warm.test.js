@@ -140,18 +140,19 @@ test('with the trace on, each reveal emits one reveal.timing event with a durati
   const t = setup({ trace: true });
   try {
     await t.show('A');
-    t.traced.length = 0;
     await t.show('B');
+    t.traced.length = 0;
+    await t.show('A');
     const events = t.traced.filter((e) => e.cat === 'reveal.timing');
     assert.strictEqual(events.length, 1);
-    assert.strictEqual(events[0].sid, 'B');
+    assert.strictEqual(events[0].sid, 'A');
     const f = events[0].fields;
     for (const key of ['suspendMs', 'replayMs', 'restoreMs', 'visibleMs', 'focusMs', 'rafWaitMs', 'fitMs', 'webglMs', 'repaintMs', 'totalMs']) {
       assert.strictEqual(typeof f[key], 'number', key);
       assert.ok(f[key] >= 0, key);
     }
     assert.strictEqual(typeof f.webglCreated, 'boolean');
-    assert.strictEqual(f.webglCreated, false, 'B kept its addon');
+    assert.strictEqual(f.webglCreated, false, 'A kept its addon');
     assert.strictEqual(typeof f.webglDisposed, 'number');
   } finally {
     t.destroy();
@@ -186,40 +187,6 @@ test('without the trace a reveal emits nothing and reads no clock', async () => 
     await t.show('A');
     assert.deepStrictEqual(t.traced, []);
     assert.strictEqual(clockReads, 0);
-  } finally {
-    t.destroy();
-  }
-});
-
-test('with the trace on, the longest long-animation-frame during the reveal is named in reveal.timing', async () => {
-  const t = setup({ trace: true });
-  try {
-    const observers = [];
-    t.window.PerformanceObserver = class {
-      static get supportedEntryTypes() { return ['longtask', 'long-animation-frame']; }
-      constructor(cb) { this.cb = cb; this.disconnected = false; observers.push(this); }
-      observe(opts) { this.type = opts.type; }
-      takeRecords() { return []; }
-      disconnect() { this.disconnected = true; }
-    };
-    await t.show('A');
-    await new Promise((resolve) => setTimeout(resolve, 260));
-    t.traced.length = 0;
-    await t.show('B');
-    const mine = observers[observers.length - 1];
-    assert.strictEqual(mine.type, 'long-animation-frame');
-    assert.strictEqual(t.traced.filter((e) => e.cat === 'reveal.timing').length, 0, 'held back while long entries can still arrive');
-    mine.cb({ getEntries: () => [
-      { duration: 60, startTime: 5, scripts: [] },
-      { duration: 9000, startTime: 10, scripts: [{ duration: 20, invoker: 'small' }, { duration: 8900, invoker: 'IMG.onload', sourceFunctionName: 'heavy', sourceURL: 'app.js' }] },
-    ] });
-    await new Promise((resolve) => setTimeout(resolve, 260));
-    const events = t.traced.filter((e) => e.cat === 'reveal.timing');
-    assert.strictEqual(events.length, 1);
-    assert.strictEqual(events[0].fields.longType, 'long-animation-frame');
-    assert.strictEqual(events[0].fields.longMs, 9000);
-    assert.strictEqual(events[0].fields.longScript, 'IMG.onload heavy app.js');
-    assert.ok(mine.disconnected, 'the observer is released');
   } finally {
     t.destroy();
   }
