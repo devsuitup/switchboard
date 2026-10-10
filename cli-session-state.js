@@ -178,7 +178,6 @@ function tableEntry(pid) {
   return processTable && processTable.map ? processTable.map.get(pid) : undefined;
 }
 
-// Walks pid's parents until isAnchor holds. With a table, a child older than its parent breaks the chain (a reused pid); strict also needs every creation time known.
 function chainReaches(pid, isAnchor, strict) {
   let current = pid;
   for (let depth = 0; depth < 64 && current && current > 1; depth++) {
@@ -211,7 +210,6 @@ function leafIsTheDescriptorWriter(raw) {
     && abs(leaf.created - BigInt(raw.procStart)) <= PROC_START_TOLERANCE;
 }
 
-// The descriptor's writer is this conversation's own CLI only when it descends from a PTY registered for that conversation.
 function conversationOwns(raw, own) {
   if (own.size === 0) return false;
   if (!processTableEnabled) return own.has(raw.pid) || chainReaches(raw.pid, (current) => own.has(current), false);

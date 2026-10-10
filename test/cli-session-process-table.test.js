@@ -28,12 +28,10 @@ function writeState(dir, pid, fields = {}) {
   }), 'utf8');
 }
 
-// pid -> [ppid, creation order]
 function table(rows) {
   return new Map(Object.entries(rows).map(([pid, [ppid, created]]) => [Number(pid), { ppid, created: created == null ? null : ft(created) }]));
 }
 
-// Switchboard.exe(900) -> bash(5001, a PTY pid) -> bash(5002) -> sh(5003) -> claude(5004); a foreign claude 7004
 const OWN_TREE = () => table({ 900: [4, 10], 5001: [900, 20], 5002: [5001, 30], 5003: [5002, 40], 5004: [5003, 50], 7003: [1, 55], 7004: [7003, 60] });
 const convPty = (pids) => (id) => (id === undefined || id === 'sess-1' ? pids : []);
 
