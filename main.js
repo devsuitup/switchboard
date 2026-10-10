@@ -2439,7 +2439,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && !appQuitting) {
       mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
@@ -2586,6 +2586,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       generation: session.generation,
     };
   }
+
+  // see .ai/contexts/session-cache.md ("Restore on click")
+  if (sessionOptions?.reattachOnly) return { ok: false, notLive: true };
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
   if (!isNew) {
@@ -3122,6 +3125,7 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
+  clearOwner: (sessionId, ptyPid) => cliSessionState.clearOwner(sessionId, ptyPid),
 });
 const { detectSessionTransitions } = sessionTransitions;
 
@@ -3444,6 +3448,7 @@ if (!gotSingleInstanceLock) {
       require('./trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
+        resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {
           const settings = getSetting('global') || {};
           if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
@@ -3504,6 +3509,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+let appQuitting = false;
+
 // see .ai/contexts/activitywatch.md ("Quitting")
 app.on('before-quit', (event) => {
   if (unsavedGuard.beforeQuit(event, mainWindow)) return;
@@ -3532,6 +3539,8 @@ app.on('before-quit', (event) => {
   remoteWatcher.stopAll();
 
   // Kill all PTY processes on quit
+  // see docs/session-restore.md ("Closing the app")
+  appQuitting = true;
   for (const [id, session] of activeSessions) {
     if (!session.exited) killPty(session, id);
   }

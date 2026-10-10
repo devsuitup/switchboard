@@ -4,6 +4,20 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
+- **Restore Sessions on Startup** has a new **Restore on click** option: the sessions open when Switchboard last closed are marked in the sidebar with an outlined dot, and each one is resumed only when you open it, by a click or with the previous/next session keys, instead of starting a `claude` process for every one at launch. **Don't restore** in a marked session's right-click menu removes it without starting it. (#441)
+
+### Changed
+- Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. (#478)
+
+### Fixed
+- In a sandboxed session, a repository or a `.claude` folder below an Additional Directory that is a symbolic link now has its Git config, hooks and Claude settings read-only, like one below a plain directory. Before, they were writable from inside the sandbox. Such a directory holding a `.claude` that is itself a symbolic link, or a repository Git cannot read, now refuses to start the session (status 125), as a plain directory already did, instead of starting it unprotected. (#538)
+- A double click on a session in the sidebar opens it once, instead of sometimes starting two terminals that resume the same conversation. (#539)
+- Quitting or closing the window saves the open sessions right away, so the next start restores the sessions that were open, not an empty or out-of-date list. (#479)
+- Closing the window or quitting no longer leaves Switchboard running when its window has stopped responding: the window closes as before, and once the system reports it not responding, or you close it again, it is closed anyway. A window that is only busy for a moment is left to close normally. (#540)
+- On Linux and Windows, `/clear` (or `/reset`, `/new`) in a session keeps the open terminal on its sidebar row, which now follows the new conversation, instead of listing that conversation as a separate session. The cleared conversation stays in the list as a past session, and a session quit after `/clear` before its first prompt comes back on restore as a new session in the same project. On macOS the new conversation is still listed apart. (#477)
+
 ## v0.0.92 — 2026-10-10
 
 ### Fixed

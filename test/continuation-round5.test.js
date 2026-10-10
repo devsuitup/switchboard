@@ -50,7 +50,7 @@ for (const mode of ['ask', 'auto']) {
     vm.runInContext('restoringWorkingSet = false; activeSessionId = "old";', h.ctx);
     const app = loadAppFunctions(h.ctx, {
       declarations: ['restoreMode'],
-      functions: ['restoreStartupSessions', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone', 'showColdCacheNotice', 'showNotRestoredNotice'],
+      functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone', 'showColdCacheNotice', 'showNotRestoredNotice'],
     });
     await app.restoreStartupSessions();
     assert.equal(h.dom.window.document.getElementById('restore-toast'), null, 'reload must not ask to restore saved sessions');

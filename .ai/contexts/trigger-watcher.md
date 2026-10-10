@@ -57,6 +57,26 @@ user typed and has not submitted (`composer-state.js`, fed from
 `null` for an unknown or exited session, and **a `null` — or an absent `getComposerState` — means busy, never
 free**.
 
+### Re-keyed sessions
+
+A fork or a `/clear` re-keys the open session in `activeSessions` under its new
+id (`session-transitions.js`; see cli-session-state.md, "Owner of a /clear
+transcript"), while a chain keeps the id it was given, and `/clear` is one of
+the commands a chain may send. `createTriggerContext` takes `resolveSessionId`
+(`sessionTransitions.currentSessionId` in main), and every lookup it makes
+(`getPtyForSession`, `isSessionBusy`, `getComposerState`, `getTranscriptTurn`,
+`getCliStatus`) goes through it, so the old id keeps reaching the same terminal
+and the CLI status is read under the id the CLI now writes, as is
+`getLiveDescriptor`. Results still carry the id the trigger named. An id a
+live session holds itself resolves to that session, so a trigger aimed at a
+cleared conversation that was reopened reaches its own terminal. When a lookup
+finds the transcript under a new id, the turn reader forgets the file it read
+under the old one.
+`test/trigger-clear-chain.test.js` runs `[/clear, reply]` through the shipped
+watcher, with the re-key done by `session-transitions.js` while step 0 is
+verified; without the resolution that chain ends with "session exited during
+wait" at step 0.
+
 ### Session handle (2026-09-08, issue #220)
 
 `trigger-watcher.js` never touches `session.pty` or a raw pid.  It writes and
@@ -333,7 +353,10 @@ other is a worse failure than anything `submitted` reports: corrupted input,
 not just a wrong report field.
 
 `start()` keeps `sessionLocks`, a `Map<sessionId, Promise>` used as a FIFO
-mutex queue (`acquireSessionLock`). `processTriggerFile` awaits it right after
+mutex queue (`acquireSessionLock`). A fork or `/clear` gives one terminal a new
+id, so a trigger waits for every queued id that resolves (`ctx.resolveSessionId`,
+see "Re-keyed sessions") to the same session as its own: the old and the new id
+share one queue, and a PTY replaced under the same id keeps it. `processTriggerFile` awaits it right after
 `sessionId` is known to be a non-empty string — before any wait, any PTY
 lookup, any write — and releases it in the function's own `finally`, so every
 exit path (success, validation refusal, thrown exception) releases exactly

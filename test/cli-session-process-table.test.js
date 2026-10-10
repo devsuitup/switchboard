@@ -378,3 +378,23 @@ test('probeProcessTable rejects when the command fails', async () => {
   const exec = (exe, args, opts, cb) => cb(Object.assign(new Error('killed'), { killed: true }), '');
   await assert.rejects(cliSessionState.probeProcessTable('win32', 10, exec));
 });
+
+// see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
+test('clearOwner on Windows reads ownership from the process table, and waits for it', () => withDir(async (dir) => {
+  writeState(dir, 5004, { sessionId: 'cleared' });
+  writeState(dir, 7004, { sessionId: 'stranger', procStart: ft(60) });
+  boot(dir);
+  assert.equal(cliSessionState.clearOwner('cleared', 5001), 'pending', 'no table yet: asked again later, not given up');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cliSessionState.clearOwner('cleared', 5001), 'mine');
+  assert.equal(cliSessionState.clearOwner('stranger', 5001), 'other');
+  assert.equal(cliSessionState.clearOwner('cleared', 7003), 'other');
+}));
+
+test('clearOwner on macOS never claims a /clear: the descriptor carries no anchor to check the pid against', () => withDir(async (dir) => {
+  writeState(dir, 5004, { sessionId: 'cleared', pidDomain: undefined, procStart: undefined });
+  boot(dir, { platform: 'darwin' });
+  cliSessionState.clearOwner('cleared', 5001);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cliSessionState.clearOwner('cleared', 5001), 'other');
+}));

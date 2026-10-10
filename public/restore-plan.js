@@ -37,7 +37,7 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
       return { action: 'nothing', candidates: [], remaining: 0, unavailable: [] };
     }
 
-    const indexedIds = [...remaining].filter(id => sessionMap && sessionMap.has(id));
+    const indexedIds = [...remaining].filter(id => (sessionMap && sessionMap.has(id)) || (indexingDone && items.get(id).fresh));
     const allIndexed = indexedIds.length === remaining.size;
 
     if (askOnce) {

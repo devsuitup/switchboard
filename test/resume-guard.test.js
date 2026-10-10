@@ -118,7 +118,7 @@ function functionBody(src, signature) {
 }
 
 test('openSession runs the guard before it asks main for a PTY', () => {
-  const body = functionBody(APP_SRC, 'async function openSession(');
+  const body = functionBody(APP_SRC, 'async function openSessionNow(');
   const guardAt = body.indexOf('guardResume(');
   const spawnAt = body.indexOf('window.api.openTerminal(');
   assert.notEqual(guardAt, -1, 'openSession must call guardResume');
@@ -127,8 +127,12 @@ test('openSession runs the guard before it asks main for a PTY', () => {
 });
 
 test('the reload path resumes the remembered session as an automatic resume', () => {
-  assert.match(APP_SRC,
-    /if \(activeSessionId && !openSessions\.has\(activeSessionId\)\) \{\s*const session = sessionMap\.get\(activeSessionId\);\s*if \(session\) await openSession\(session, undefined, \{ automatic: true \}\);/);
+  const startup = functionBody(APP_SRC, 'async function restoreStartupSessions(');
+  assert.match(startup, /await reopenActiveSessionAfterReload\(\);[\s\S]*await restoreWorkingSet\(\);/);
+  const body = functionBody(APP_SRC, 'async function reopenActiveSessionAfterReload(');
+  assert.match(body, /if \(!activeSessionId \|\| openSessions\.has\(activeSessionId\)\) return;/);
+  assert.match(body, /await openSession\(session, undefined, \{ automatic: true \}\);/);
+  assert.doesNotMatch(body, /openSession\(session\)/);
 });
 
 

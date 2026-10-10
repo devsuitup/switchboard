@@ -722,14 +722,15 @@ function renderProjects(projects, resort) {
     const allItems = [];
     for (const session of ungrouped) {
       const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
-      allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
+      allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: isDormantSession(session.sessionId), element: buildSessionItem(session) });
     }
     for (const { slug, scheduled, sessions } of slugMap.values()) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
+      const hasDormant = sessions.some(s => isDormantSession(s.sessionId));
       const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project, legacyScheduleScopes);
-      allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
+      allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, dormant: hasDormant, element });
     }
 
     // Sort render items
@@ -762,7 +763,7 @@ function renderProjects(projects, resort) {
       let count = 0;
       const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
       for (const item of allItems) {
-        if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
+        if (item.running || item.pinned || item.dormant || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
           visible.push(item);
           count++;
         } else {
@@ -1026,6 +1027,8 @@ function renderProjects(projects, resort) {
     const activeItem = newSidebar.querySelector(`[data-session-id="${activeSessionId}"]`);
     if (activeItem) activeItem.classList.add('active');
   }
+
+  revealDormantSessions(newSidebar);
 
   morphdom(sidebarContent, newSidebar, {
     childrenOnly: true,
@@ -1545,6 +1548,7 @@ function rebindSidebarEvents(projects) {
         // The sidebar re-injects transcript-less sessions from pendingSessions on
         // every load, so forget it here or a deleted placeholder card comes back.
         if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
+        if (typeof dismissDormantSession === 'function') dismissDormantSession(session.sessionId);
         if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
         // Close the tab too — otherwise it stays open pointing at a transcript
         // that no longer exists for the rest of this run.
@@ -1623,6 +1627,18 @@ function showSessionContextMenu(event, sessionId) {
     requestTerminalRefresh(sessionId);
   };
   menu.appendChild(button);
+  if (isDormantSession(sessionId)) {
+    const dismiss = document.createElement('button');
+    dismiss.className = 'popover-option session-dismiss-dormant-btn';
+    dismiss.setAttribute('role', 'menuitem');
+    dismiss.textContent = "Don't restore";
+    dismiss.title = 'Remove this session from the sessions to restore, without starting it';
+    dismiss.onclick = () => {
+      closeSessionContextMenu();
+      dismissDormantSession(sessionId);
+    };
+    menu.appendChild(dismiss);
+  }
   document.body.appendChild(menu);
   menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - SESSION_MENU_EDGE_MARGIN)) + 'px';
   menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - SESSION_MENU_EDGE_MARGIN)) + 'px';
@@ -1641,6 +1657,26 @@ function remoteAttentionSnapshot(sessionId) {
   return !snapshot.attached && snapshot.attention ? snapshot : null;
 }
 
+// see .ai/contexts/session-cache.md ("Restore on click")
+function revealDormantSessions(root = sidebarContent) {
+  for (const row of root.querySelectorAll('.session-item.dormant')) {
+    let el = row;
+    while (el && el !== root) {
+      if (el.classList.contains('slug-group')) el.classList.remove('collapsed');
+      const header = el.previousElementSibling;
+      if ((el.classList.contains('project-sessions') || el.classList.contains('worktree-sessions'))
+          && header && header.classList.contains('collapsed')) {
+        header.classList.remove('collapsed');
+      }
+      el = el.parentElement;
+    }
+  }
+}
+
+function isDormantSession(sessionId) {
+  return typeof dormantWorkingSet !== 'undefined' && dormantWorkingSet.has(sessionId);
+}
+
 function buildSessionItem(session) {
   const item = document.createElement('div');
   item.className = 'session-item js-stateful';
@@ -1648,6 +1684,7 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
+  if (isDormantSession(session.sessionId)) item.classList.add('dormant');
   const remoteAttention = remoteAttentionSnapshot(session.sessionId);
   setNeedsAttention(item, attentionSessions.has(session.sessionId) || !!remoteAttention);
   setResponseReady(item, responseReadySessions.has(session.sessionId));

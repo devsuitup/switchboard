@@ -1018,6 +1018,11 @@ body { display: flex; flex-direction: column; }
   background: #3ecf5a;
 }
 
+.session-item.dormant .session-icon {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #3ecf5a;
+}
+
 /* ---- Icon slot rungs ---- keyed on session-icon--<rung> alone, no :not() chains — see .ai/contexts/session-state.md */
 
 /* ---- CLI busy spinner (braille spinner detected) ---- */

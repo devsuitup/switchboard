@@ -20,7 +20,8 @@ project files and stay writable), and changes to ~/.claude.json (MCP servers) ar
 isolated: network, environment, the project's own files and build scripts, the
 project's CLAUDE.md and memory files, a new .git/commondir or repository or
 worktree the session creates (git follows their config and hooks), the claude
-binary of the native installer.* The
+binary of the native installer, and skills and agents when
+SWITCHBOARD_SANDBOX_RW_SKILLS=1 or SWITCHBOARD_SANDBOX_RW_AGENTS=1 is set.* The
 badge is also shown when Switchboard reattaches to a running sandboxed session.
 
 ## Turning it on
@@ -137,7 +138,8 @@ with its listed state mounted back read-write on top.
 Only the state the CLI writes during a session is read-write; every other
 entry is read-only, whatever it is — settings, hooks, commands, agents,
 skills, plugins, `keybindings.json`, `CLAUDE.md`, `rules`, `output-styles`, a
-status-line script with no extension, a directory a future CLI version adds.
+status-line script with no extension, a directory a future CLI version adds. Skills and agents can be made
+writable on request: see [Writable skills and agents](#writable-skills-and-agents).
 
 | Entry | Inside the sandbox |
 |---|---|
@@ -145,6 +147,7 @@ status-line script with no extension, a directory a future CLI version adds.
 | In `~/.claude`: `projects` | read-only, except the session's own transcript folder, `projects/<the working directory, every character but letters and digits replaced by ->`, which is read-write; see [Schedules](#schedules) |
 | In `~/.claude`: `shell-snapshots`, `session-env`, `backups`, `state` | an empty private tmpfs. Other sessions source the shell snapshots and session hooks kept there before each Bash command, and the CLI offers the backups there as what to copy back over a broken `~/.claude.json`; the session gets its own |
 | In a project's `.claude`: `worktrees`, `agent-memory`, `agent-memory-local` | read-write |
+| `skills` in `~/.claude` and in a project's `.claude`, only with `SWITCHBOARD_SANDBOX_RW_SKILLS=1`; `agents` likewise, only with `SWITCHBOARD_SANDBOX_RW_AGENTS=1` | read-write; see [Writable skills and agents](#writable-skills-and-agents) |
 | Any other file or directory | read-only |
 | A symbolic link to one of the read-write entries of `~/.claude` (`todos` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves — only when the target is a directory (a file, for `*.json`, `*.jsonl` and `.last-*`) of the same name, and neither `$HOME` nor a parent of it. Any other target is refused |
 | A symbolic link to one of the read-write entries of a project's `.claude` | left as it is and not followed: a repository can carry such a link, so it resolves only to what the sandbox sees anyway |
@@ -179,6 +182,64 @@ A `.claude` that is itself a symbolic link is refused: the link lives in a
 writable directory, and the session could replace it with a directory of its
 own.
 
+### Writable skills and agents
+
+Skills and agents are read-only by default: an unsandboxed `claude` started
+later loads them, and a skill can carry scripts it tells Claude to run. To
+write them from a sandboxed session, put `SWITCHBOARD_SANDBOX_RW_SKILLS=1`,
+`SWITCHBOARD_SANDBOX_RW_AGENTS=1` or both in the session's Pre-launch Command.
+Each makes that directory read-write in `~/.claude` and in every bound
+directory's `.claude`, as session state:
+
+- `~/.claude/skills` or `~/.claude/agents` is created before launch when
+  missing. In a project's `.claude`, which stays read-only, a missing one cannot
+  be created from inside the sandbox: create it once outside.
+- A `~/.claude/skills` or `~/.claude/agents` that is a symbolic link is
+  followed like the other state links: only to a directory of the same name,
+  elsewhere, and never to `$HOME` or a parent of it. The launch is refused when
+  the way to that directory goes through a symbolic link in a directory the
+  sandbox can write: the session could re-point it, and the next launch would
+  make another directory writable.
+- Inside the writable directory, or the directory it links to, every
+  repository keeps its config and hooks read-only and every `.claude` stays
+  read-only, as in a bound directory (see [Git](#git)); a file linked from
+  `~/.claude` into it, such as a `settings.json` kept in the same dotfiles
+  repository, stays read-only too. A repository root there that has no
+  `.claude` gets an empty one before launch, read-only like the others, so the
+  session cannot give the repository settings that a `claude` started there
+  later would load. No `.claude` is created in a folder that is not a
+  repository: one the session creates there is loaded by a `claude` started in
+  that folder later. Other links inside it are not followed.
+- The launch is refused when the writable directory is also, or lies inside,
+  something the sandbox keeps read-only: the target of another `~/.claude`
+  entry (`hooks` and `skills` linked to the same directory, or `skills` linked
+  inside the target of `hooks`), a repository's hooks directory, or a read-only
+  entry such as `~/.claude/plugins`. Two mounts on the same path, or a writable
+  one inside a read-only one, would leave the protected files writable through
+  the opted-in directory. A read-only path inside the writable directory is
+  fine: the deeper mount wins. The check runs on the finished mount list, so
+  the order in which the entries are bound does not matter, and it compares
+  resolved paths: the directory is refused wherever the sandbox sees it
+  read-only, also when the project, an Additional Directory or `$HOME` is
+  reached through a symbolic link. It is also refused when a directory the
+  sandbox binds read-only (the node install, `$NVM_DIR`) lies inside the
+  writable directory under another spelling, where the writable mount would
+  cover it.
+- The launch is also refused when the target of a private entry
+  (`shell-snapshots`, `session-env`, `backups`, `state`) or of a
+  `~/.claude.json` that is a symbolic link is the writable directory, lies
+  inside it or contains it. The sandbox gives those entries a private copy, so
+  no mount of theirs is there to compare, while other sessions outside the
+  sandbox source the snapshots and session hooks and load the MCP servers of
+  `~/.claude.json`: written through the opted-in directory, they would run
+  unsandboxed.
+
+This gives up part of the protection: what the session writes there is loaded,
+and its scripts run, by every later session outside the sandbox, other
+projects' included for `~/.claude`. A hook in a read-only `settings.json` that
+runs a script kept under `skills/` or `agents/` runs whatever the session wrote
+there.
+
 ### `~/.claude.json`
 
 This file holds the MCP server definitions, and the CLI rewrites it throughout
@@ -208,7 +269,10 @@ nested repositories, submodules — `node_modules` excepted:
 
 The paths come from `git rev-parse --git-dir --git-common-dir --git-path hooks`
 run in the directory before launch; a repository it cannot read is refused
-rather than guessed at.
+rather than guessed at. A protected path is mounted read-only at every place
+the sandbox sees it: a repository reached both through an Additional Directory
+that is a symbolic link and through its real path, or through an opted-in
+`skills`, is protected at each.
 
 The search below a bound directory does not enter `node_modules`, and does not
 cross into another filesystem (`find -xdev`): a `.git` or `.claude` inside a
@@ -341,6 +405,9 @@ whatever they hold.
   Pre-launch Command, the rootless podman API socket is bound, and through it
   the session can start a container with any host path mounted
   (`podman run -v $HOME:/h …`): enabling it gives up the filesystem boundary.
+- **Skills and agents, when enabled.** With `SWITCHBOARD_SANDBOX_RW_SKILLS=1`
+  or `SWITCHBOARD_SANDBOX_RW_AGENTS=1`, see
+  [Writable skills and agents](#writable-skills-and-agents).
 - **Session status.** `~/.claude/sessions` is read-write, and a sandboxed CLI
   records its PID as seen inside its PID namespace, so Switchboard's check of
   whether a session is live elsewhere can be misled for a sandboxed session.

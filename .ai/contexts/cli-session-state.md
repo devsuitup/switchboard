@@ -414,6 +414,105 @@ The Agents view (`.ai/contexts/bg-agents.md`) reads the same
   `jobId`, so `guardResume` can answer a `kind: 'bg'` session with an attach
   instead of a resume confirmation.
 
+## Owner of a /clear transcript
+
+`/clear` does not continue the open transcript: the CLI opens a **new jsonl
+under a new session id** in the same project folder, and writes into it only
+the bookkeeping of the command (a `<local-command-caveat>` record, then the
+`<command-name>/clear</command-name>` record). Nothing in that file names the
+session it replaced — no `forkedFrom`, and the `sessionId` on every record is
+the new one. `detectSessionTransitions()` (`session-transitions.js`) used to
+match new files by those two fields only, so after a `/clear` the open
+terminal stayed on the old row and the new conversation, once its first prompt
+made it indexable, showed up as a second, unattached row.
+
+The state file is what links the two: the CLI rewrites
+`~/.claude/sessions/<pid>.json` with the new `sessionId` on `/clear` (checked
+2026-10-05 on CLI 2.1.28x: live state files whose `sessionId` names a
+transcript that starts with the `/clear` record). `clearOwner(newId, ptyPid)`
+finds the live pid whose state file names `newId` and walks its parent chain
+(`/proc/<pid>/stat`) up to the PTY's pid. Verdicts:
+
+- `mine` — the CLI runs under this PTY: re-key, exactly like a fork
+  (`session-forked` to the renderer).
+- `other` — another process (a CLI started outside Switchboard, another tab in
+  the same folder): not this session's file.
+- `pending` — no live state file names `newId` yet (the jsonl can land before
+  the state file is rewritten): the file stays out of `knownJsonlFiles`, and
+  `scheduleRecheck` runs the folder's detection again a second later, while
+  the file is less than 60 s old. Nothing else would: the state file is not in
+  the watched folder, and the transcript gets no other write before the first
+  prompt. A new file whose first records are not written yet is rechecked the
+  same way.
+- `unknown` — the pid is found but its parent cannot be read. Never matched,
+  not even when this is the only Claude PTY in the folder: a `claude` run
+  outside the app in the same folder would be taken over. The file is recorded
+  and not rechecked.
+
+On Windows and macOS there is no `/proc`; `clearOwner` uses the process table
+of "Own descendants outside Linux" instead and gives the same answer as
+`conversationOwns`: `mine` only when the descriptor's pid is the writer the
+table names (`pidDomain: 'win32:anchor'`, `procStart`) and its chain reaches
+the PTY's pid with creation times that only go back in time. A pid the table
+does not list yet is `pending` (the table refreshes in the background, and the
+recheck asks again). The CLI on macOS writes no anchor, so there a `/clear` is
+`other` and never followed: the new conversation is listed apart, as before;
+the follow-up for #518 may re-key it from the descriptor's `sessionId`.
+
+Re-keying keeps `oldId → newId` (`currentSessionId`), so a trigger chain that
+sent `/clear` reaches the same terminal on its next step (see
+trigger-watcher.md, "Re-keyed sessions"). On each re-key every older id that
+pointed at `oldId` is moved to `newId`, so any id the session ever had resolves
+in one lookup, however many times it was cleared. An id that a live session
+holds itself is never redirected: reopening the cleared conversation starts a
+terminal under the old id, and from then on that id is its own (the alias is
+dropped). An alias whose target is gone or exited is dropped too.
+
+**A file with no turn yet.** The CLI writes a `/clear` transcript in several
+appends: a mode record and a `file-history-snapshot` can land, and be read,
+before the `/clear` record. A new file whose first real turn
+(`readNewSessionSignals().hasTurn`) is not written yet stays out of
+`knownJsonlFiles`, whatever its other signals, until it shows one or is an
+hour old (the same limit as a file with no parseable record). While it is
+under 60 s old, `scheduleRecheck` runs the folder again a second later. The
+session's own transcript is never held this way. A held file is read again
+only when its size or mtime changes (the signals are cached by path), and the
+"NO MATCH" line of a session awaiting a fork is logged once per file.
+
+**Snapshot-only fork file.** A session started with `--fork-session` waits
+for its fork's transcript, which holds only snapshots until the first prompt.
+Such a file is taken as the fork only when `clearOwner` (it answers for any
+session id, not only a `/clear`) says the CLI under this PTY writes it. A
+`pending` owner is rechecked like a `/clear`; `other` or `unknown` leave the
+file eligible, and its first turn decides through `forkedFrom` or
+`parentSessionId`, as for any fork. Before, any snapshot-only file in the
+folder was taken, including another session's `/clear` or new session.
+
+`readNewSessionSignals()` recognises the file by its first user record that is
+not local-command bookkeeping, through `classifyUserText()` — the caveat record
+comes first and must be skipped, not taken as the file's first turn. The
+command may be `/clear`, or its aliases `/reset` and `/new` (CLI 2.1.296:
+`name:"clear"`, `aliases:["reset","new"]`), with or without a name argument.
+The owner and match lines are logged when they change, not on every recheck.
+`/clear` writes no `continued-in` record (checked on CLI 2.1.296: the only
+writer is the background-session handoff; none of 41 local `/clear`
+transcripts is the target of one), so #518's continuation restore does not
+redirect a click on the cleared conversation to the new one.
+
+`session-forked` carries the kind of re-key, `'clear'` or `'fork'`. The
+renderer re-keys as for a fork, and for a `/clear` whose old id was not a
+pending (transcript-less) row it replaces the open entry's session with a new
+one for the new id, built as `launchNewSession` builds one (titled "New
+session", not starred, no title, bridge or dates of the old conversation): the
+`/clear` transcript is not indexed until its first prompt (see
+session-cache.md), so without it the open terminal would have no row at all
+until then. That row is marked `cleared`, and is not re-added to the default
+list when the backend filtered its folder out as archived. Like any local
+pending row, it is saved in the working set as a fresh entry
+(docs/session-restore.md, "A session with no transcript yet"). The old
+conversation stays in the list as an ordinary, resumable session — it is a
+real transcript on disk.
+
 ## Canary tests
 
 `test/canary-*.test.js` is a convention this module introduces. A canary

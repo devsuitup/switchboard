@@ -104,6 +104,15 @@ PROJECT_STATE_ENTRIES=(worktrees agent-memory agent-memory-local)
 # Created in ~/.claude before launch when missing, so that they are mounted
 # from the host rather than left to the tmpfs.
 USER_PRECREATED_DIRS=(projects todos statsig file-history sessions plans tasks ide)
+# see docs/sandbox.md, "Writable skills and agents"
+OPT_IN_ENTRIES=()
+[ "${SWITCHBOARD_SANDBOX_RW_SKILLS:-0}" = "1" ] && OPT_IN_ENTRIES+=(skills)
+[ "${SWITCHBOARD_SANDBOX_RW_AGENTS:-0}" = "1" ] && OPT_IN_ENTRIES+=(agents)
+for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
+  USER_STATE_ENTRIES+=("$_e")
+  PROJECT_STATE_ENTRIES+=("$_e")
+  USER_PRECREATED_DIRS+=("$_e")
+done
 
 # Project directory plus whatever Switchboard forwarded. These must already
 # exist — creating a mistyped "Additional Directory" on the host would be worse
@@ -286,6 +295,9 @@ fi
 
 # The host paths the sandbox can write, as bound, and their resolved form.
 WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
+for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
+  [ -L "$CLAUDE_DIR/$_e" ] && [ -d "$CLAUDE_DIR/$_e" ] && WRITABLE_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
+done
 WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
   WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
@@ -369,16 +381,27 @@ check_chain() {
   done
 }
 
-# Mounts the resolved host path $1 read-only where the sandbox sees it, when
-# it lies under a writable root, and remembers it for the pins below.
+# Mounts the resolved host path $1 read-only at every place the sandbox sees
+# it, under each writable root that contains it, and remembers each for the
+# pins below.
 protect_resolved() {
-  local real="$1"
+  local real="$1" i root view found=1
   [ -n "${PROTECTED_SEEN[$real]:-}" ] && return 1
   PROTECTED_SEEN["$real"]=1
-  sandbox_view "$real" || { debug "$real is not visible in the sandbox"; return 1; }
-  mount_op --ro-bind "$real" "$SV_VIEW"
-  PIN_VIEWS+=("$SV_VIEW"); PIN_IDX+=("$SV_IDX")
-  return 0
+  for i in "${!WRITABLE_ROOTS[@]}"; do
+    root="${WRITABLE_REALS[i]}"
+    [ -n "$root" ] || continue
+    case "$real" in
+      "$root") view="${WRITABLE_ROOTS[i]}" ;;
+      "$root"/*) view="${WRITABLE_ROOTS[i]}${real#"$root"}" ;;
+      *) continue ;;
+    esac
+    found=0
+    mount_op --ro-bind "$real" "$view"
+    PIN_VIEWS+=("$view"); PIN_IDX+=("$i")
+  done
+  [ "$found" = 0 ] || debug "$real is not visible in the sandbox"
+  return "$found"
 }
 
 # Link $1, resolved to $2: its target read-only, and every link below that
@@ -457,7 +480,7 @@ bind_projects_dir() {
 # read-write when listed as state, empty and private when listed as private,
 # read-only otherwise. Anything created at its top level is discarded.
 bind_user_claude_dir() {
-  local dir="$1" e name restore_glob kind
+  local dir="$1" e name restore_glob kind text
   mount_op --tmpfs "" "$dir"
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
@@ -467,16 +490,31 @@ bind_user_claude_dir() {
       bind_projects_dir "$e"
     elif in_list "$name" "${USER_PRIVATE_ENTRIES[@]}"; then
       mount_op --tmpfs "" "$e"
+      [ -L "$e" ] && PRIVATE_LINKS+=("$e")
     elif [ -L "$e" ]; then
       mount_op --symlink "$(readlink "$e")" "$e"
       if in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
         case "$name" in *.json|*.jsonl|.last-*) kind=file ;; *) kind=dir ;; esac
+        STATE_LINK_TARGET=""
+        if in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+          text="$(readlink "$e")"
+          case "$text" in /*) ;; *) text="$dir/$text" ;; esac
+          check_chain "$text"
+        fi
         bind_state_link_target "$e" "$kind"
+        if [ -n "$STATE_LINK_TARGET" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+          OPT_IN_BINDS+=("user:$((${#M_DEST[@]} - 1))")
+          protect_tree "$STATE_LINK_TARGET" repo
+        fi
       else
         protect_link_target "$e"
       fi
     elif in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
       mount_op --bind "$e" "$e"
+      if [ -d "$e" ] && in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
+        OPT_IN_BINDS+=("user:$((${#M_DEST[@]} - 1))")
+        protect_tree "$e" repo
+      fi
     else
       mount_op --ro-bind "$e" "$e"
       [ -d "$e" ] && protect_links_below "$e"
@@ -504,6 +542,7 @@ bind_project_claude_dir() {
         debug "state link $e left as is"
       else
         mount_op --bind "$e" "$e"
+        in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && OPT_IN_BINDS+=("project:$((${#M_DEST[@]} - 1))")
       fi
     elif [ -L "$e" ]; then
       protect_link_target "$e"
@@ -574,7 +613,7 @@ protect_git() {
 
 # The .git and .claude of a directory, bound or found below one.
 protect_repo_root() {
-  local d="$1"
+  local d="$1" create="${2:-create}"
   if [ -L "$d/.git" ]; then
     fail "refusing to launch: $d/.git is a symbolic link. The sandbox protects the repository's config and hooks with read-only mounts, which cannot stop the link itself from being replaced. Turn Sandbox off for this session."
   elif [ -d "$d/.git" ]; then
@@ -583,36 +622,42 @@ protect_repo_root() {
     mount_op --ro-bind "$d/.git" "$d/.git"
     GIT_WORKTREES+=("$d")
   fi
-  protect_claude_dir "$d/.claude"
+  if [ "$create" = repo ]; then
+    if [ -e "$d/.git" ]; then create=create; else create=nocreate; fi
+  fi
+  protect_claude_dir "$d/.claude" "$create"
 }
 
 protect_claude_dir() {
-  local c="$1"
+  local c="$1" create="${2:-create}"
   if [ -L "$c" ]; then
     fail "refusing to launch: $c is a symbolic link. The sandbox protects it with read-only mounts, which cannot stop the link itself from being replaced. Replace the link with the directory it points to, or turn Sandbox off for this session."
   elif [ -d "$c" ]; then
     bind_project_claude_dir "$c"
   elif [ -e "$c" ]; then
     mount_op --ro-bind "$c" "$c"
-  elif [ -w "$(dirname "$c")" ]; then
+  elif [ "$create" = create ] && [ -w "$(dirname "$c")" ]; then
     MISSING_DIRS+=("$c")
   fi
 }
 
 bind_project_dir() {
-  local d="$1" n
-  mount_op --bind "$d" "$d"
-  [ -d "$d" ] || return 0
-  protect_repo_root "$d"
-  # Every .claude and repository below, worktrees included; see
-  # docs/sandbox.md, "Git".
+  mount_op --bind "$1" "$1"
+  [ -d "$1" ] || return 0
+  protect_tree "$1" create
+}
+
+# .git and .claude at and below $1; see docs/sandbox.md, "Git".
+protect_tree() {
+  local d="$1" create="$2" n
+  protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
     inside_ro_area "$n" && continue
     case "${n##*/}" in
-      .claude) protect_claude_dir "$n" ;;
-      .git) protect_repo_root "$(dirname "$n")" ;;
+      .claude) protect_claude_dir "$n" "$create" ;;
+      .git) protect_repo_root "$(dirname "$n")" "$create" ;;
     esac
-  done < <(find "$d" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
+  done < <(find "$d/" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \
              \( -name .claude -type l -print0 \) 2>/dev/null)
 }
@@ -671,6 +716,75 @@ pin_protected_paths() {
   done
 }
 
+# see docs/sandbox.md, "Writable skills and agents"
+check_opt_in_binds() {
+  [ "${#OPT_IN_BINDS[@]}" -gt 0 ] || return 0
+  local -a reals=() idx=() srcs=() out=()
+  local b k tr t i j r v
+  for i in "${!M_DEST[@]}"; do
+    case "${M_OP[i]}" in --bind|--ro-bind) idx+=("$i"); srcs+=("${M_SRC[i]}") ;; esac
+  done
+  [ "${#srcs[@]}" -gt 0 ] && mapfile -d '' out < <(readlink -m -z -- "${srcs[@]}")
+  for j in "${!idx[@]}"; do reals[idx[j]]="${out[j]}"; done
+  local -a privs=()
+  [ "${#PRIVATE_LINKS[@]}" -gt 0 ] && mapfile -d '' privs < <(readlink -m -z -- "${PRIVATE_LINKS[@]}")
+  for b in ${OPT_IN_BINDS[@]+"${OPT_IN_BINDS[@]}"}; do
+    k="${b#*:}"; t="${M_DEST[k]}"; tr="${reals[k]}"
+    for i in "${!reals[@]}"; do
+      r="${reals[i]}"
+      case "$tr/" in "$r"/*) ;; *) continue ;; esac
+      v="${M_DEST[i]}${tr#"$r"}"
+      [ "$v" = "$t" ] && [ "${b%%:*}" = project ] && continue
+      opt_in_access_at "$v" "$k"
+      [ "${M_OP[OA_IDX]}" = --ro-bind ] && opt_in_refuse "$t" "${M_DEST[OA_IDX]}"
+    done
+    for r in "${!PROTECTED_SEEN[@]}"; do
+      case "$tr/" in "$r"/*) opt_in_refuse "$t" "$r" ;; esac
+    done
+    for j in "${!privs[@]}"; do
+      r="${privs[j]}"
+      case "$tr/" in "$r"/*) opt_in_refuse_private "$t" "${PRIVATE_LINKS[j]}" "$r" ;; esac
+      case "$r/" in "$tr"/*) opt_in_refuse_private "$t" "${PRIVATE_LINKS[j]}" "$r" ;; esac
+    done
+    for i in "${!reals[@]}"; do
+      [ "${M_OP[i]}" = --ro-bind ] || continue
+      r="${reals[i]}"
+      case "$r" in "$tr"/*) ;; *) continue ;; esac
+      opt_in_access_at "$t${r#"$tr"}" ""
+      [ "${M_OP[OA_IDX]}" = --ro-bind ] || opt_in_refuse_below "$t" "$r"
+    done
+  done
+}
+
+# Sets OA_IDX to the mount that decides access at sandbox path $1, mount $2
+# left out: the deepest at or above it, the later one on the same path.
+opt_in_access_at() {
+  local i d best_len=-1
+  OA_IDX=""
+  for i in "${!M_DEST[@]}"; do
+    [ "$i" = "$2" ] && continue
+    case "${M_OP[i]}" in --symlink|--file) continue ;; esac
+    d="${M_DEST[i]}"
+    case "$1/" in "$d"/*) ;; *) continue ;; esac
+    [ "${#d}" -ge "$best_len" ] && { OA_IDX="$i"; best_len="${#d}"; }
+  done
+  [ -n "$OA_IDX" ] || OA_IDX="$2"
+}
+
+opt_in_refuse() {
+  local where="inside"
+  [ "$1" = "$2" ] && where="also"
+  fail "refusing to launch: $1, which SWITCHBOARD_SANDBOX_RW_$(printf '%s' "${1##*/}" | tr a-z A-Z)=1 makes writable, is $where $2, which the sandbox keeps read-only; the session could change it through ${1##*/}. Give ${1##*/} a directory of its own, or turn the flag off for this session."
+}
+
+opt_in_refuse_private() {
+  fail "refusing to launch: $2 links to $3, which overlaps $1, which SWITCHBOARD_SANDBOX_RW_$(printf '%s' "${1##*/}" | tr a-z A-Z)=1 makes writable; the sandbox gives $2 a private copy, and the session could change the host's through ${1##*/}. Move $2's target out of ${1##*/}, or turn the flag off for this session."
+}
+
+opt_in_refuse_below() {
+  fail "refusing to launch: $2, which the sandbox keeps read-only, lies inside $1, which SWITCHBOARD_SANDBOX_RW_$(printf '%s' "${1##*/}" | tr a-z A-Z)=1 makes writable; the session could change it through ${1##*/}. Move it out of ${1##*/}, or turn the flag off for this session."
+}
+
 # Fills BWRAP_ARGS from what exists now, and MISSING_DIRS with what must be
 # created before the real launch. Run once for the pre-flight, then again once
 # the missing directories exist.
@@ -680,6 +794,8 @@ build_bwrap_args() {
   PIN_VIEWS=(); PIN_IDX=()
   MISSING_DIRS=()
   GIT_WORKTREES=()
+  OPT_IN_BINDS=()
+  PRIVATE_LINKS=()
   local d name i
   mount_op --dev "" /dev
   mount_op --proc "" /proc
@@ -722,10 +838,12 @@ build_bwrap_args() {
   bind_user_claude_dir "$CLAUDE_DIR"
   # fd 9 carries the private copy; see claude_json_source.
   mount_op --file 9 "$CLAUDE_JSON"
+  [ -L "$CLAUDE_JSON" ] && PRIVATE_LINKS+=("$CLAUDE_JSON")
   for d in ${GIT_WORKTREES[@]+"${GIT_WORKTREES[@]}"}; do
     protect_git "$d"
   done
   pin_protected_paths
+  check_opt_in_binds
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
   local order
