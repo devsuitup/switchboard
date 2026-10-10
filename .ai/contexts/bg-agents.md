@@ -462,7 +462,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - Liveness of interactive descriptors is pid-only (`isProcessAlive`): a
   reused pid shows an external session that is gone.
 - An interactive descriptor is External unless `ownProcessFilter` claims its pid:
-  a PTY pid of this instance, or a descendant of one or of the main process. On
+  a PTY pid of this instance, or a descendant of one or of the main process (the
+  roster's broad visibility rule; the resume and delete guards use a narrower one,
+  see cli-session-state.md). On
   Windows and macOS the parent chain comes from a cached, asynchronous process
   snapshot (`.ai/contexts/cli-session-state.md`, "Own descendants outside
   Linux"), so the first roster after startup can list an own tab as External until

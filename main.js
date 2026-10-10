@@ -3120,13 +3120,7 @@ cliSessionState.init({
 });
 
 // a session with a live PTY is owned by the OSC path — see .ai/contexts/session-state.md
-function ptyPids() {
-  const pids = [];
-  for (const session of activeSessions.values()) {
-    if (session && !session.exited && session.pty && Number.isInteger(session.pty.pid)) pids.push(session.pty.pid);
-  }
-  return pids;
-}
+const ptyPids = cliSessionState.makePtyPids(activeSessions);
 
 function sessionHasPty(sessionId) {
   for (const [key, session] of activeSessions) {

@@ -26,8 +26,9 @@ and blocked sessions and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
 the choice is remembered. The header counts `running` and `finished` background
 sessions, then `N external` when the list holds external sessions (these are
-always shown). A session running in one of Switchboard's own tabs is never listed
-as external. The list refreshes when the daemon's files change,
+always shown). A session running in one of Switchboard's own tabs is not listed
+as external once the app has read the process list, which can take a second or
+two after start-up or after a tab opens. The list refreshes when the daemon's files change,
 and is re-read from the CLI every 30 seconds while the view is open.
 
 **Group**, next to Finished, splits the list into sections with a header

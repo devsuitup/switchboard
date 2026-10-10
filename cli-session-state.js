@@ -20,6 +20,8 @@ const PROBE_TIMEOUT_MS = 5000;
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 const PROCESS_TABLE_TTL_MS = 3000;
 const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
+const PROC_START_TOLERANCE = 100n;
+const abs = (n) => (n < 0n ? -n : n);
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
@@ -72,7 +74,7 @@ function defaultIsProcessAlive(pid) {
 }
 
 function defaultReadParentPid(pid) {
-  if (processTableEnabled) return processTable && processTable.map ? (processTable.map.get(pid) ?? null) : null;
+  if (processTableEnabled) return tableEntry(pid) ? (tableEntry(pid).ppid ?? null) : null;
   if (process.platform !== 'linux') return null;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -84,11 +86,24 @@ function defaultReadParentPid(pid) {
 }
 
 // see .ai/contexts/cli-session-state.md ("Own descendants outside Linux")
+function toCreated(value) {
+  if (value == null || value === '') return null;
+  try { return BigInt(value); } catch { return null; }
+}
+
+const TABLE_LINE_RE = /^\s*(\d+)\s+(\d+)(?:\s+(\d+))?\s*$/;
+const TABLE_LSTART_RE = /^\s*(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\d{4})\s*$/;
+
 function parseProcessTable(text) {
   const out = new Map();
   for (const line of String(text).split(/\r?\n/)) {
-    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
-    if (m) out.set(Number(m[1]), Number(m[2]));
+    let m = TABLE_LINE_RE.exec(line);
+    if (m) { out.set(Number(m[1]), { ppid: Number(m[2]), created: toCreated(m[3]) }); continue; }
+    m = TABLE_LSTART_RE.exec(line);
+    if (m) {
+      const ms = Date.parse(m[3]);
+      out.set(Number(m[1]), { ppid: Number(m[2]), created: Number.isFinite(ms) ? BigInt(ms) : null });
+    }
   }
   return out;
 }
@@ -101,11 +116,11 @@ function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS
       resolve(parseProcessTable(stdout));
     };
     if (plat === 'win32') {
-      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }';
+      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { "" }; "$($_.ProcessId) $($_.ParentProcessId) $t" }';
       const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done);
     } else if (plat === 'darwin') {
-      exec('/bin/ps', ['-A', '-o', 'pid=,ppid='], opts, done);
+      exec('/bin/ps', ['-A', '-o', 'pid=,ppid=,lstart='], opts, done);
     } else {
       resolve(new Map());
     }
@@ -120,6 +135,16 @@ function processTableFresh() {
   return !!processTable && now() - processTable.at < PROCESS_TABLE_TTL_MS;
 }
 
+function normaliseProcessTable(read) {
+  if (!(read instanceof Map) || read.size === 0) return null;
+  const out = new Map();
+  for (const [pid, value] of read) {
+    if (typeof value === 'number') out.set(pid, { ppid: value, created: null });
+    else if (value && typeof value === 'object') out.set(pid, { ppid: value.ppid, created: toCreated(value.created) });
+  }
+  return out.size > 0 ? out : null;
+}
+
 function refreshProcessTable() {
   if (!processTableEnabled) return Promise.resolve(null);
   if (processTableFresh()) return Promise.resolve(processTable.map);
@@ -128,14 +153,14 @@ function refreshProcessTable() {
   const inFlight = (async () => {
     let map = null;
     try {
-      const read = await readProcessTable();
-      if (read instanceof Map && read.size > 0) map = read;
+      map = normaliseProcessTable(await readProcessTable());
     } catch (err) {
       log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
     }
     if (epoch === processTableEpoch) {
       processTable = { at: now(), map };
       processTableInFlight = null;
+      if (map) notifyDescriptorsChanged();
     }
     return map;
   })();
@@ -145,17 +170,51 @@ function refreshProcessTable() {
 
 function startProcessTableRefresh() {
   if (!processTableEnabled || processTableFresh() || processTableInFlight) return;
-  refreshProcessTable().then((map) => { if (map) notifyDescriptorsChanged(); }, () => {});
+  refreshProcessTable().catch(() => {});
+}
+
+function tableEntry(pid) {
+  return processTable && processTable.map ? processTable.map.get(pid) : undefined;
+}
+
+// Walks pid's parents until isAnchor holds. With a table, a child older than its parent breaks the chain (a reused pid); strict also needs every creation time known.
+function chainReaches(pid, isAnchor, strict) {
+  let current = pid;
+  for (let depth = 0; depth < 64 && current && current > 1; depth++) {
+    if (isAnchor(current)) return true;
+    const parent = readParentPid(current);
+    if (!parent) return false;
+    if (processTableEnabled) {
+      const child = tableEntry(current);
+      const above = tableEntry(parent);
+      const known = !!child && !!above && child.created != null && above.created != null;
+      if (strict && !known) return false;
+      if (known && child.created < above.created) return false;
+    }
+    current = parent;
+  }
+  return false;
 }
 
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 function descendsFromThisProcess(pid, own = null) {
-  let current = pid;
-  for (let depth = 0; depth < 64 && current && current > 1; depth++) {
-    if (current === ownPid || (own && own.has(current))) return true;
-    current = readParentPid(current);
-  }
-  return false;
+  return chainReaches(pid, (current) => current === ownPid || (own !== null && own.has(current)), false);
+}
+
+function leafIsTheDescriptorWriter(raw) {
+  const leaf = tableEntry(raw.pid);
+  if (!leaf || leaf.created == null) return false;
+  return raw.pidDomain === 'win32:anchor'
+    && typeof raw.procStart === 'string'
+    && WINDOWS_FILETIME_RE.test(raw.procStart)
+    && abs(leaf.created - BigInt(raw.procStart)) <= PROC_START_TOLERANCE;
+}
+
+// The descriptor's writer is this conversation's own CLI only when it descends from a PTY registered for that conversation.
+function conversationOwns(raw, own) {
+  if (own.size === 0) return false;
+  if (!processTableEnabled) return own.has(raw.pid) || chainReaches(raw.pid, (current) => own.has(current), false);
+  return leafIsTheDescriptorWriter(raw) && chainReaches(raw.pid, (current) => own.has(current), true);
 }
 
 function defaultReadProcStart(pid) {
@@ -472,8 +531,8 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
     if (!isProcessAlive(raw.pid)) continue;
     alive.push(raw);
   }
-  if (alive.length > 0) await refreshProcessTable();
-  const candidates = alive.filter((raw) => !exclude(raw.pid));
+  if (typeof exclude.needsProcessTable === 'function' && alive.some((raw) => exclude.needsProcessTable(raw.sessionId.toLowerCase()))) await refreshProcessTable();
+  const candidates = alive.filter((raw) => !exclude(raw.pid, raw, raw.sessionId.toLowerCase()));
 
   const comparable = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))];
   const toProbe = platform === 'win32' ? comparable.slice(0, MAX_PROBE_PIDS) : comparable;
@@ -518,9 +577,28 @@ function ownPidTest(ptyPids) {
   return (pid) => own.has(pid) || descendsFromThisProcess(pid, own);
 }
 
+function conversationExclusion(ptyPids) {
+  const exclude = (_pid, raw, key) => conversationOwns(raw, new Set(ptyPids(key)));
+  exclude.needsProcessTable = (key) => ptyPids(key).length > 0;
+  return exclude;
+}
+
 function ownProcessFilter(ptyPids) {
   startProcessTableRefresh();
   return ownPidTest(ptyPids);
+}
+
+function makePtyPids(activeSessions) {
+  return (sessionId) => {
+    const want = typeof sessionId === 'string' ? sessionId.toLowerCase() : null;
+    const pids = [];
+    for (const [key, session] of activeSessions) {
+      if (!session || session.exited || !session.pty || !Number.isInteger(session.pty.pid)) continue;
+      if (want !== null && String(session.realSessionId || key).toLowerCase() !== want) continue;
+      pids.push(session.pty.pid);
+    }
+    return pids;
+  };
 }
 
 async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
@@ -528,14 +606,17 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
   if (hasPty(sessionId)) return null;
   const scheduled = scheduledRuns.get(sessionId.toLowerCase());
   if (scheduled) return scheduled;
-  return findLiveProcess(sessionId, { exclude: ownPidTest(ptyPids) });
+  return findLiveProcess(sessionId, { exclude: conversationExclusion(ptyPids) });
 }
 
-async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => []) {
+async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => [], { includeOwnProcesses = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
-  if (hasPty(sessionId)) return { known: true, live: null };
+  if (!includeOwnProcesses && hasPty(sessionId)) return { known: true, live: null };
   const key = sessionId.toLowerCase();
-  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), ownPidTest(ptyPids));
+  const scheduled = scheduledRuns.get(key);
+  if (scheduled) return { known: true, live: scheduled };
+  const exclude = includeOwnProcesses ? () => false : conversationExclusion(ptyPids);
+  const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), exclude);
   const live = found.get(key) || null;
   if (live) return { known: true, live };
   return unreadable ? { known: false, reason: unreadable } : { known: true, live: null };
@@ -549,7 +630,7 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
     if (wanted.size >= MAX_LIVE_QUERY_IDS) break;
     if (typeof id === 'string' && id && !hasPty(id)) wanted.set(id, id.toLowerCase());
   }
-  const found = await scanLiveProcesses(new Set(wanted.values()), ownPidTest(ptyPids));
+  const found = await scanLiveProcesses(new Set(wanted.values()), conversationExclusion(ptyPids));
   for (const [id, key] of wanted) {
     const live = scheduledRuns.get(key) || found.get(key);
     if (live) result[id] = live;
@@ -574,6 +655,7 @@ module.exports = {
   readAllDescriptors,
   parseDescriptor,
   ownProcessFilter,
+  makePtyPids,
   refreshProcessTable,
   parseProcessTable,
   probeProcessTable,

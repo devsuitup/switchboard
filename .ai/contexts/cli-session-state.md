@@ -209,11 +209,21 @@ ids past the cap are not looked up and resume as before the guard.
 - A session this instance holds a PTY for (`sessionHasPty`, which matches
   `realSessionId` too) is never live elsewhere: opening it is a re-attach, the
   case a renderer reload relies on.
-- A CLI this instance spawned is never live elsewhere either, even while its
-  PTY is still keyed by the pending id and `sessionHasPty` misses it: a pid that
-  is one of the PTY processes (`ptyPids`), or whose parent chain reaches this
-  main process or one of the PTY pids, is excluded. The chain is read from
-  `/proc/<pid>/stat` on Linux and from a process snapshot elsewhere (next section).
+- A CLI under the PTY registered for **that conversation** is never live elsewhere
+  either, even while `sessionHasPty` misses it: the checks call `ptyPids(id)` (main
+  passes `makePtyPids(activeSessions)`, which returns only the PTYs whose
+  `realSessionId || key` is that id) and exclude a descriptor that is one of those
+  pids or whose parent chain reaches one. A CLI started by hand in a panel shell or
+  a plain-terminal tab, a scheduled child, and any other descendant of this main
+  process are **not** excluded: nothing can re-attach to them under that
+  conversation id, so they stay live. The chain is read from `/proc/<pid>/stat` on
+  Linux and from a process snapshot elsewhere (next section). A PTY still keyed by a
+  pending id (a fork before `realSessionId` is known) is therefore reported live
+  elsewhere for that short window, on every platform: the guard fails closed.
+- `liveElsewhereChecked` answers a tracked scheduled run exactly like
+  `liveElsewhere` (`kind: 'schedule'`, known), so the delete guard refuses it. Its
+  4th argument `{ includeOwnProcesses }` bypasses the `hasPty` short-circuit and the
+  exclusion.
 - Otherwise `findLiveProcess(sessionId)` reads `~/.claude/sessions/*.json`
   afresh — it does not use the watcher's maps, so it answers before the watcher
   attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file
@@ -330,11 +340,23 @@ Windows the CLI of a Switchboard tab (measured: `Switchboard.exe` -> `bash.exe`
 pid) read as another process: an External row in the Agents view and a
 live-elsewhere verdict. The parent chain now comes from one process snapshot.
 
+Two rules share that snapshot and must not be confused:
+
+- **Roster visibility** (`ownProcessFilter`, the External label): broad. A pid is
+  own when its chain reaches this main process or any PTY pid of this instance
+  (conversation tabs, panel shells, plain terminals).
+- **Safety guards** (`liveElsewhere*`, the delete guard, the continuation lookup):
+  narrow, as described under "Live elsewhere". Only a descriptor under the PTY of
+  the asked conversation is own, and on Windows that must be proven by identity
+  (below).
+
 - **Reader.** `probeProcessTable(platform)` runs one process, bounded by
   `PROBE_TIMEOUT_MS` (5 s): on Windows `powershell.exe -NoProfile` over
   `Get-CimInstance Win32_Process` printing `<pid> <ppid>` lines (about 0.7-1.4 s
-  cold, 340 processes, measured 2026-10-10); on macOS `/bin/ps -A -o pid=,ppid=`
-  (same parser, not exercised on a Mac); nothing on Linux, which keeps reading
+  cold, 340 processes, measured 2026-10-10) with the process's `CreationDate` as a
+  FILETIME (within 5 ticks of `Get-Process`'s `StartTime.ToFileTimeUtc()`, the descriptor's
+  value: CIM keeps microseconds; measured 2026-10-10); on macOS `/bin/ps -A -o pid=,ppid=,lstart=` (seconds
+  resolution, same parser, not exercised on a Mac); nothing on Linux, which keeps reading
   `/proc`. `wmic` is not a fallback: recent Windows 11 no longer ships it (absent
   on the measured machine). Tests inject `readProcessTable`.
 - **Never synchronous.** The snapshot is always asynchronous. A chain walk is
@@ -345,20 +367,32 @@ live-elsewhere verdict. The parent chain now comes from one process snapshot.
   read; a failed or empty read is cached for the same window as "unknown", so a
   broken PowerShell is not respawned per check. `init()` drops the cache.
 - **Async paths** (`liveElsewhere`, `liveElsewhereChecked`, `liveElsewhereMany`):
-  `scanLiveProcessesChecked` awaits the snapshot once, and only when at least one
-  descriptor for an asked session has a live pid, then applies the filter. Nothing
-  is spawned for a session without such a descriptor.
+  `scanLiveProcessesChecked` awaits the snapshot once, and only when a live
+  descriptor of an asked session belongs to a conversation that has a PTY
+  (`exclude.needsProcessTable`), then applies the filter. Nothing is spawned
+  otherwise.
+- **Identity, for the guards.** Pid numbers are not identities. A guard treats a
+  descriptor as own only when: the table holds its pid with a creation time within
+  `PROC_START_TOLERANCE` (100 ticks, 10 us) of the descriptor's `procStart` (`pidDomain: "win32:anchor"` FILETIME); every link up
+  to the conversation's PTY pid has known creation times; and no child is older than
+  its parent (a reused pid number is always newer than the children it orphaned).
+  An unknown time, a missing row, a descriptor without a comparable `procStart` or a
+  failed snapshot all keep the writer **visible** (live). On macOS the descriptor's
+  `procStart` is not comparable to `lstart`, so the guards never take the narrow own
+  path there; on Linux `/proc` is read live and the existing `procStart` check applies.
+  The roster applies only the child-not-older-than-parent test, and only when both
+  times are known.
 - **Sync path** (`ownProcessFilter`, used by the Agents view's `rebuild()`): building
   the filter starts a snapshot when the cache is stale, without waiting for it, and
-  calls the descriptor listeners when it lands; the view's `rebuild({onlyIfChanged})`
-  then drops the row. The first roster after startup can therefore show an own
+  calls the descriptor listeners when it lands (the notification comes from the shared
+  refresh itself, so a snapshot started by an async check notifies too); the view's
+  `rebuild({onlyIfChanged})` then drops the row. The first roster after startup can therefore show an own
   session as External for the length of one snapshot. A CLI started inside the
   3 s window is not in the cached snapshot and stays External until the next
   roster rebuild after the window (the view's 30 s re-read at the latest).
-- A chain stops as own at the first ancestor that is `ownPid` or a PTY pid. Windows
-  reports a parent pid that can name a dead process whose pid was reused; no
-  creation-time cross-check is made, so a foreign CLI whose dead parent's pid was
-  reused by this instance's processes would read as own. Not measured to occur.
+- A chain stops as own at the first ancestor that is a PTY pid (and, for the roster,
+  the main process). Windows reports a parent pid that can name a dead process whose
+  pid was reused; the creation-order test above rejects that chain.
 
 ## Descriptor hooks for the agents view
 
