@@ -94,7 +94,9 @@ the OS temporary directory locally, outside the app directory.
     `taskkill /T /F` on that pid, which kills the process and its descendants.
 
   Then it deletes the temporary `HOME`. If the app exits within the 10 s, no
-  kill is sent.
+  kill is sent. A journey may end the app itself (`hung-window.spec.js` does);
+  the fixture then skips the trace, the screenshot and the close, and only
+  deletes the temporary `HOME`.
 
 ## Proving a journey can fail
 
