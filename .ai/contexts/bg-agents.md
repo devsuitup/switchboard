@@ -15,6 +15,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
 | `bg-agents-ipc.js` | `get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
+| `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; `bgAgents.stop()` in the window's `closed` handler |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
@@ -68,15 +69,19 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    transcript path case-insensitively.
 10. `bg-agent-verb` checks the conversation before `rm` or `respawn`, and
     before `stop` on a finished job. It reads the job file afresh through
-    `conversationCheck`, refusing an unreadable/unknown state or an absent
-    conversation identity. It checks both the transcript session id and any
+    `conversationCheck`; `rm`/`respawn` refuse an unreadable/unknown state or
+    an absent conversation identity. Stop goes to the daemon unless the fresh
+    check identifies a finished job and its conversation. It checks both the transcript session id and any
     job `bridgeSessionId`, plus the roster's session id, through
     `deleteSessionRefusal` and `liveElsewhereChecked`. The latter includes
     this instance's processes for these verbs: being owned here makes a resume
     a re-attach but does not make a destructive operation safe. Open terminals,
     live jobs, live descriptor pids and unknown liveness all refuse. The
     refusal for a descriptor names its pid. `stop` on a working/blocked job
-    remains the daemon's stop operation.
+    remains the daemon's stop operation, including missing or unknown job files.
+    The check and CLI invocation are separate: a process can start after the
+    check but before the CLI runs. This reduces stale-roster mistakes; it is
+    not an atomic lock on the conversation.
 
 ## Job states
 
@@ -103,27 +108,35 @@ The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 cannot bypass it. A blocked row draws as waiting (orange), not as a spinner.
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches
-a live interactive descriptor by case-insensitive `sessionId` becomes one
+a live interactive descriptor by case-insensitive `sessionId` or by the same
+case-sensitive bridge suffix (`cse_` on jobs, `session_` on descriptors) becomes one
 interactive row (`state: null`, descriptor status/pid/cwd/start time, job
-tokens/model/detail/fan/result retained). Its `conversationPid` disables
+tokens/model/detail/fan/result retained; the live UUID becomes its `sessionId`). Its `conversationPid` disables
 Respawn and Delete and supplies the tooltip's pid. Other interactive sessions
 owned by this instance remain excluded as before. The promoted row remains
 visible with Finished unchecked, groups as External, and offers no Attach or
-daemon Stop.
+daemon Stop. Detail shows the job id and `jobState`; the job still counts as
+finished. When the matching descriptor belongs to this instance, it keeps its
+background job row instead of becoming External. `conversationOwn` supplies
+the "open in Switchboard" reason; `conversationPid` still disables destructive verbs.
 Any descriptor holding a row's session id supplies `conversationPid`, even
 when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
 
-Roster matching does not use `bridgeSessionId`: job files can carry it, but
-`parseDescriptor` has no such field and the descriptor contract does not
-establish a shared bridge identity. A job's bridge id can still be checked
-against descriptor `sessionId` at verb time, without claiming row identity.
+`parseDescriptor` retains `bridgeSessionId`. `bridge-session-id.js` strips only
+the `cse_` / `session_` prefixes and preserves the opaque suffix's case. The
+shared lineage is measured in `.ai/contexts/session-cache.md`, "Open on
+claude.ai". Roster merging and the checked process scan both use it; a bridge id
+is not a descriptor's UUID. `liveElsewhereChecked(..., { includeOwnProcesses:
+true })` explicitly bypasses both the has-PTY shortcut and own-process filtering
+for destructive-verb checks. Ordinary resume checks keep excluding own processes.
 
-Every roster entry carries `transcriptAvailable`, checked main-side with the
-same cached folder/path as `read-session-jsonl`. No content is read for this
-check. Without an indexed file the button is disabled and its tooltip explains
-why; direct renderer invocation does nothing. `runVerb('transcript', id)`
-also rechecks existence and returns an error instead of spawning. The ordinary
+Roster rebuilds do not query SQLite or stat transcript files. For a job or a
+merged row, Transcript calls `runVerb('transcript', id)` through the shipped IPC;
+main lazily checks the same cached folder/path as `read-session-jsonl` and returns
+the UUID or a clear missing/unindexed-file error without spawning. A retry sees
+newly indexed files without rebuilding the roster. External rows with no job id
+use the ordinary read-only viewer directly. The ordinary
 `read-session-jsonl` handler catches file-read errors if a file disappears
 after the roster snapshot. `test/bg-agents-522.test.js` exercises the shipped
 IPC and renderer functions against disposable job/descriptor/transcript files.
@@ -190,8 +203,8 @@ dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 - An attach tab's `cli-session-state` status comes from the daemon worker's
   descriptor (same `sessionId`), so busy/idle needs no special path.
 - When a row is attached here and the user runs Stop or Delete on it, the
-  renderer stops the local attach pty first (`stopSession`), so the client
-  does not outlive the job.
+  renderer calls the main-side verb first and stops the local attach pty
+  (`stopSession`) only after success. A refused verb keeps the tab open.
 - Narrow widths: a row's grid columns add up to ~670 px of minimum width.
   Without `min-width: 0` on `#main` that minimum became `#main`'s own, so
   with a narrow window or a wide sidebar `#main` ran past the window edge

@@ -128,7 +128,7 @@ function rebuild({ onlyIfChanged = false } = {}) {
     descriptors,
     isOwnPid: makeIsOwnPid(),
     isAttachedHere,
-  }).map(e => ({ ...e, ...rootsFor(e.cwd), transcriptAvailable: transcriptAvailable(e) }));
+  }).map(e => ({ ...e, ...rootsFor(e.cwd) }));
   if (onlyIfChanged && JSON.stringify(previous) === JSON.stringify(roster)) return;
   emit();
   resolveMissingRoots(roster);
@@ -267,7 +267,7 @@ function conversationCheck(id) {
   if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state` };
   const entry = roster.find(e => e.id === id);
   const sessionIds = [...new Set([job.sessionId, job.bridgeSessionId, entry && entry.sessionId]
-    .filter(Boolean).map(s => s.toLowerCase()))];
+    .filter(Boolean))];
   if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
   return { known: true, sessionIds, state: job.state };
 }
@@ -283,7 +283,7 @@ async function runVerb(verb, id) {
   }
   const live = roster.find(e => e.kind === 'background' && e.id === id);
   if (verb !== 'stop' && live && isLiveJobState(live.state)) {
-    return { ok: false, error: `cannot ${verb} a ${live.state} session; stop it first` };
+    return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${live.state} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;

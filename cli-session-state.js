@@ -5,6 +5,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { bridgeSessionKey } = require('./bridge-session-id');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.claude', 'sessions');
 const STATE_FILE_RE = /^\d+\.json$/;
@@ -173,6 +174,7 @@ function parseDescriptor(text) {
     pid: raw.pid,
     sessionId: raw.sessionId,
     kind: s(raw.kind),
+    bridgeSessionId: s(raw.bridgeSessionId),
     jobId: s(raw.jobId),
     agent: s(raw.agent),
     name: s(raw.name),
@@ -389,11 +391,14 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
       if (!(err && err.code === 'ENOENT')) unreadable = unreadable || `cannot read ${path.join(dir, name)}`;
       continue;
     }
-    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string' || !sessionIds.has(raw.sessionId.toLowerCase())) continue;
+    if (!raw || typeof raw !== 'object' || typeof raw.sessionId !== 'string') continue;
+    const keys = [...sessionIds].filter(key => raw.sessionId.toLowerCase() === key
+      || (bridgeSessionKey(key) !== null && bridgeSessionKey(key) === bridgeSessionKey(raw.bridgeSessionId)));
+    if (!keys.length) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     if (exclude(raw.pid)) continue;
-    candidates.push(raw);
+    candidates.push({ ...raw, keys });
   }
 
   const comparable = [...new Set(candidates.filter(canCompareProcStart).map((raw) => raw.pid))];
@@ -407,19 +412,18 @@ async function scanLiveProcessesChecked(sessionIds, exclude) {
   }
 
   for (const raw of candidates) {
-    const key = raw.sessionId.toLowerCase();
-    if (found.has(key)) continue;
     if (canCompareProcStart(raw) && toProbe.includes(raw.pid)) {
       const actual = actualByPid.get(raw.pid);
       if (actual != null && String(actual) !== String(raw.procStart)) continue;
     }
-    found.set(key, {
+    const live = {
       pid: raw.pid,
       cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
       startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
       kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : null,
       jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
-    });
+    };
+    for (const key of raw.keys) if (!found.has(key)) found.set(key, live);
   }
   return { found, unreadable };
 }
@@ -450,7 +454,7 @@ async function liveElsewhere(sessionId, hasPty, ptyPids = () => []) {
 async function liveElsewhereChecked(sessionId, hasPty, ptyPids = () => [], { includeOwnProcesses = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
   if (!includeOwnProcesses && hasPty(sessionId)) return { known: true, live: null };
-  const key = sessionId.toLowerCase();
+  const key = bridgeSessionKey(sessionId) !== null ? sessionId : sessionId.toLowerCase();
   const { found, unreadable } = await scanLiveProcessesChecked(new Set([key]), includeOwnProcesses ? () => false : ownProcessFilter(ptyPids));
   const live = found.get(key) || null;
   if (live) return { known: true, live };
