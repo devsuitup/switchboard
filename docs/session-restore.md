@@ -21,6 +21,48 @@ Each time a session is opened or closed, Switchboard saves the open set — each
 session's id and project, and which one was active — in its global settings
 (`openWorkingSet`).
 
+## Closing the app
+
+The saved set is written on each open and close half a second later, so
+the last change before quitting could be lost, and so could the whole set:
+quitting stops every session, and each of those exits was itself a "session
+closed" that saved the set again — empty, if the app took longer than that
+half second to go away.
+
+Once a close or quit is confirmed (the window's close, ☰ → Quit, an update
+install; see the unsaved-edits guard in `.ai/contexts/viewer-panel.md`), the
+renderer writes the set at once, before it answers main (`flushStateForExit`
+in `public/app.js`, called by the `unsaved-check` handler in
+`public/file-panel.js`, bounded to 2 s so a stuck write cannot hold the
+window open), and stops saving it for the next 10 s. Main stops sending
+`process-exited` once `before-quit` starts killing the sessions
+(`appQuitting`), so the shutdown cannot record them as closed. A reload is
+not an exit and does neither. A quit or close that arrives while a reload's
+question is still open joins it, and main tells the renderer the question is
+now an exit (`unsaved-check-reason`), so the answer still waits for the write,
+and the page is not reloaded before the quit. If the page had already answered
+the reload when the upgrade reaches it, it writes the set then, best effort as
+for a logoff below.
+
+The write keeps the saved sessions that are not open yet: those the index has
+not reached, those offered by the Restore prompt and not answered, and those
+the restore is still starting (`pendingRestoreEntries`). So quitting during a
+cold index, before answering the prompt, or in the middle of a restore keeps
+them for the next start, while a session you stopped during the restore is
+left out. The saved active marker stays on its session until the restore has
+opened it. An exit before the saved set has even been read writes nothing.
+
+If the exit does not happen after all (an installer that fails to start),
+saving resumes after the 10 s, and the set is written then if anything asked
+for a save in the meantime.
+
+A Windows logoff or shutdown (`query-session-end`, `session-end`) does not
+ask about unsaved edits; main sends `exit-flush` instead, and the renderer
+writes the set without waiting for an answer. That write is best effort:
+Windows may end the app before it lands. A `query-session-end` approves quits
+for 60 s only: if the logoff is cancelled and no `session-end` follows, later
+quits ask about unsaved edits and write the set again.
+
 ## What restore does
 
 Restore is a respawn, not a reattach: a session's process is a child of the

@@ -3,13 +3,17 @@
 // see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
 
 const DEFAULT_TIMEOUT_MS = 2500;
+const LOGOFF_CANCEL_MS = 60000;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {} }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {} }) {
   const pending = new Map();
   let nextId = 1;
   let quitApproved = false;
+  let logoffApproved = false;
+  let logoffTimer = null;
   let quitAsking = false;
   let inflight = null;
+  const approvedToQuit = () => quitApproved || logoffApproved;
 
   ipcMain.on('unsaved-check-ack', (_event, id) => {
     const entry = pending.get(id);
@@ -25,12 +29,18 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
   });
 
   function ask(win, reason) {
-    if (inflight) return inflight;
+    if (inflight) {
+      if (inflight.reason === 'reload') {
+        inflight.reason = reason;
+        try { win.webContents.send('unsaved-check-reason', inflight.id, reason); } catch {}
+      }
+      return inflight.asked;
+    }
     const wc = win.webContents;
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve(true);
     let settled = false;
+    const id = nextId++;
     const asked = new Promise((resolve) => {
-      const id = nextId++;
       const entry = { acked: false, timer: null, finish: null };
       const onGone = () => entry.finish(true);
       entry.finish = (proceed) => {
@@ -53,12 +63,12 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
         entry.finish(true);
       }
     });
-    if (!settled) inflight = asked;
+    if (!settled) inflight = { asked, id, reason };
     return asked;
   }
 
   function beforeQuit(event, win) {
-    if (quitApproved || !win || win.isDestroyed()) return false;
+    if (approvedToQuit() || !win || win.isDestroyed()) return false;
     event.preventDefault();
     if (quitAsking) return true;
     quitAsking = true;
@@ -77,11 +87,22 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     let reloading = false;
     let allowNextUnload = false;
 
-    win.on('query-session-end', approveQuit);
-    win.on('session-end', approveQuit);
+    const endSession = (final) => {
+      logoffApproved = true;
+      if (logoffTimer) clearTimeoutFn(logoffTimer);
+      logoffTimer = final ? null : setTimeoutFn(() => {
+        logoffTimer = null;
+        logoffApproved = false;
+      }, logoffCancelMs);
+      const wc = win.webContents;
+      if (win.isDestroyed() || !wc || wc.isDestroyed()) return;
+      try { wc.send('exit-flush'); } catch {}
+    };
+    win.on('query-session-end', () => endSession(false));
+    win.on('session-end', () => endSession(true));
 
     win.on('close', (event) => {
-      if (approved || quitApproved) return;
+      if (approved || approvedToQuit()) return;
       event.preventDefault();
       if (closing) return;
       closing = true;
@@ -94,15 +115,18 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
     });
 
     win.webContents.on('will-prevent-unload', (event) => {
-      if (approved || quitApproved || allowNextUnload) {
+      if (approved || approvedToQuit() || allowNextUnload) {
         allowNextUnload = false;
         event.preventDefault();
         return;
       }
       if (reloading) return;
       reloading = true;
-      ask(win, 'reload').then((proceed) => {
+      const asked = ask(win, 'reload');
+      const check = inflight;
+      asked.then((proceed) => {
         reloading = false;
+        if (check && check.reason !== 'reload') return;
         if (!proceed || win.isDestroyed() || win.webContents.isDestroyed()) return;
         allowNextUnload = true;
         win.webContents.reload();
@@ -124,4 +148,4 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, setTimeou
   return { attach, beforeQuit, confirmQuit, approveQuit };
 }
 
-module.exports = { createUnsavedGuard, DEFAULT_TIMEOUT_MS };
+module.exports = { createUnsavedGuard, DEFAULT_TIMEOUT_MS, LOGOFF_CANCEL_MS };

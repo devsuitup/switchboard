@@ -53,6 +53,7 @@ let changesListSplitterEl = null;
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
 const MAX_CHANGES_ROWS = 500;
 const MAX_SUBAGENT_GROUP_ROWS = 100;
+const EXIT_FLUSH_BOUND_MS = 2000;
 
 const CHANGES_LIST_HEIGHT_KEY = 'changesListHeight';
 const DEFAULT_CHANGES_LIST_HEIGHT = 200;
@@ -149,10 +150,29 @@ function initFilePanel() {
     event.returnValue = false;
   });
   if (window.api.onUnsavedCheck) {
-    window.api.onUnsavedCheck(async (id) => {
+    const unsavedCheckReasons = new Map();
+    const answeredReloads = new Set();
+    if (window.api.onUnsavedCheckReason) {
+      window.api.onUnsavedCheckReason((id, reason) => {
+        if (unsavedCheckReasons.has(id)) unsavedCheckReasons.set(id, reason);
+        else if (answeredReloads.delete(id) && typeof window.flushStateForExit === 'function') {
+          window.flushStateForExit().catch((err) => console.error('[exit-flush]', err));
+        }
+      });
+    }
+    window.api.onUnsavedCheck(async (id, reason) => {
+      unsavedCheckReasons.set(id, reason);
       window.api.unsavedCheckAck(id);
       let proceed = true;
       try { proceed = await askAboutUnsavedEdits(); } catch (err) { console.error('[unsaved-check]', err); }
+      const finalReason = unsavedCheckReasons.get(id);
+      unsavedCheckReasons.delete(id);
+      // see docs/session-restore.md ("Closing the app")
+      if (proceed && finalReason !== 'reload' && typeof window.flushStateForExit === 'function') {
+        const bound = new Promise((resolve) => setTimeout(resolve, EXIT_FLUSH_BOUND_MS));
+        try { await Promise.race([window.flushStateForExit(), bound]); } catch (err) { console.error('[exit-flush]', err); }
+      }
+      if (proceed && finalReason === 'reload') answeredReloads.add(id);
       window.api.unsavedCheckResult(id, proceed);
     });
   }

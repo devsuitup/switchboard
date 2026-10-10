@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
-const { createUnsavedGuard } = require('../unsaved-guard');
+const { createUnsavedGuard, LOGOFF_CANCEL_MS } = require('../unsaved-guard');
 
 function setup({ timeoutMs = 1000, quit } = {}) {
   const ipcMain = new EventEmitter();
@@ -234,7 +234,7 @@ test('an updater install asks before the installer starts: a no leaves it unstar
   assert.equal(c.prevented, false);
 });
 
-test('a Windows session end approves the quit so logoff never waits on the dialog', () => {
+test('a Windows session end approves the quit so logoff never waits on the dialog, and asks the renderer to save', () => {
   for (const name of ['query-session-end', 'session-end']) {
     const t = setup();
     t.win.emit(name, {});
@@ -243,7 +243,7 @@ test('a Windows session end approves the quit so logoff never waits on the dialo
     const c = t.closeEvent();
     t.win.emit('close', c);
     assert.equal(c.prevented, false, name);
-    assert.equal(t.sent.length, 0, name);
+    assert.deepEqual(t.sent.map((m) => m.channel), ['exit-flush'], `${name}: no dialog, one save request`);
   }
 });
 
@@ -258,4 +258,56 @@ test('a window close and a quit share one question, and one answer settles both'
   assert.equal(t.win.closes, 1);
   const again = t.closeEvent();
   assert.equal(t.guard.beforeQuit(again, t.win), false, 'the same yes approved the quit');
+});
+
+test('a quit that joins an unanswered reload check tells the renderer it is now an exit, once', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  assert.equal(t.sent[0].args[1], 'reload');
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), true);
+  t.win.emit('close', t.closeEvent());
+  assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check', 'unsaved-check-reason'], 'one upgrade, no second question');
+  assert.deepEqual(t.sent[1].args, [id, 'quit']);
+  t.answer(id, true);
+  await tick();
+  assert.equal(quits.length, 1);
+});
+
+test('a reload check that a quit joined quits without reloading first', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(id, true);
+  await tick();
+  assert.equal(t.wc.reloads, 0);
+  assert.equal(quits.length, 1);
+});
+
+test('a reload joining a quit check leaves it a quit', () => {
+  const t = setup();
+  t.win.emit('close', t.closeEvent());
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check']);
+});
+
+test('a logoff that never ends the session stops approving quits after a while; a session end keeps it', () => {
+  const t = setup();
+  t.win.emit('query-session-end', {});
+  const revert = t.timers.find((x) => x.ms === LOGOFF_CANCEL_MS && !x.cleared);
+  assert.ok(revert, 'the approval is temporary');
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), false);
+  revert.fn();
+  const e = t.closeEvent();
+  assert.equal(t.guard.beforeQuit(e, t.win), true, 'a cancelled logoff asks again on the next quit');
+  assert.equal(e.prevented, true);
+
+  const s = setup();
+  s.win.emit('query-session-end', {});
+  s.win.emit('session-end', {});
+  assert.ok(s.timers.filter((x) => x.ms === LOGOFF_CANCEL_MS).every((x) => x.cleared));
+  assert.equal(s.guard.beforeQuit(s.closeEvent(), s.win), false);
 });

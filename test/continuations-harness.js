@@ -72,7 +72,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   const app = loadAppFunctions(ctx, {
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'],
+    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['runRestore', 'openSession', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],
   });
   return {

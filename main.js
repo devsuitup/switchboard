@@ -2439,7 +2439,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && !appQuitting) {
       mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
       // If a fork transition re-keyed this session under realId but the PTY
       // exited before transition detection ran, also notify the renderer for
@@ -3504,6 +3504,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+let appQuitting = false;
+
 // see .ai/contexts/activitywatch.md ("Quitting")
 app.on('before-quit', (event) => {
   if (unsavedGuard.beforeQuit(event, mainWindow)) return;
@@ -3532,6 +3534,8 @@ app.on('before-quit', (event) => {
   remoteWatcher.stopAll();
 
   // Kill all PTY processes on quit
+  // see docs/session-restore.md ("Closing the app")
+  appQuitting = true;
   for (const [id, session] of activeSessions) {
     if (!session.exited) killPty(session, id);
   }

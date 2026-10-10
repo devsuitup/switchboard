@@ -173,7 +173,18 @@ const restoreInFlight = new Map();
 // cannot interleave and silently drop each other's keys.
 let _persistChain = Promise.resolve();
 
-function persistWorkingSet() {
+// see docs/session-restore.md ("Closing the app")
+let exitingApp = false;
+let exitingAppTimer = null;
+let persistSkippedWhileExiting = false;
+let savedWorkingSetRead = false;
+const EXIT_FLUSH_GRACE_MS = 10000;
+
+function persistWorkingSet({ final = false } = {}) {
+  if (exitingApp && !final) {
+    persistSkippedWhileExiting = true;
+    return _persistChain;
+  }
   _persistChain = _persistChain.then(async () => {
     const g = await window.api.getSetting('global');
     const global = g || {};
@@ -188,11 +199,15 @@ function persistWorkingSet() {
         active: sessionId === activeSessionId,
       });
     }
-    const held = [...skippedWorkingSetEntries.values(), ...pendingRestoreEntries()]
+    const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
+    const heldActive = notStarted.find(({ item }) => item.active);
+    if (heldActive) for (const e of set) e.active = false;
+    const held = [...skippedWorkingSetEntries.values(), ...notStarted]
       .filter(({ item, keepAttached }) => !openSessions.has(item.sessionId) || (keepAttached && openSessions.get(item.sessionId).attach))
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: !!keepAttached && item.sessionId === activeSessionId });
+      const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -212,12 +227,38 @@ function pendingRestoreEntries() {
 
 function schedulePersistWorkingSet() {
   if (restoringWorkingSet) return;
+  if (exitingApp) {
+    persistSkippedWhileExiting = true;
+    return;
+  }
   if (persistWorkingSetTimer) clearTimeout(persistWorkingSetTimer);
   persistWorkingSetTimer = setTimeout(() => {
     persistWorkingSetTimer = null;
     persistWorkingSet();
   }, 500);
 }
+
+async function flushStateForExit() {
+  if (persistWorkingSetTimer) {
+    clearTimeout(persistWorkingSetTimer);
+    persistWorkingSetTimer = null;
+  }
+  exitingApp = true;
+  persistSkippedWhileExiting = false;
+  if (exitingAppTimer) clearTimeout(exitingAppTimer);
+  exitingAppTimer = setTimeout(() => {
+    exitingApp = false;
+    exitingAppTimer = null;
+    if (persistSkippedWhileExiting) {
+      persistSkippedWhileExiting = false;
+      persistWorkingSet();
+    }
+  }, EXIT_FLUSH_GRACE_MS);
+  if (!savedWorkingSetRead) return _persistChain;
+  return persistWorkingSet({ final: true });
+}
+window.flushStateForExit = flushStateForExit;
+if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
 
 async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
   const pending = list.filter(item => sessionMap.has(item.sessionId) && !openSessions.has(item.sessionId));
@@ -289,6 +330,7 @@ async function restoreWorkingSet() {
   restoreMode = (g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup;
   const savedSet = (g && g.openWorkingSet) || [];
   restoreSavedIndex = new Map(savedSet.map((item, index) => [item.sessionId, index]));
+  savedWorkingSetRead = true;
 
   document.getElementById('restore-cold-toast')?.remove();
 
