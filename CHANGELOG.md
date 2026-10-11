@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.94 — 2026-10-11
+
 ### Fixed
 - Restoring sessions at startup reopens saved conversations that share a web-session row in the sidebar, keeping the saved conversation and its active tab. (#558)
 
