@@ -188,7 +188,8 @@ reattached, never respawned.
 |---|---|
 | Session switch | Kept running. The container is unmounted (`.visible` off, `panelMounted` false), output accumulates, and replays in one write on return. |
 | Panel shell closed (the Shell button) | Stopped. `close-terminal` only *detaches* the renderer, so `stopSession` is called explicitly — otherwise the PTY would outlive its only UI. |
-| Session's terminal destroyed (relaunch, stop, LRU eviction) | Stopped with it, from `destroySession`. |
+| Session's terminal destroyed (re-click of an ended session, LRU eviction of a closed entry, Delete, a plain terminal's shell exiting) | Stopped with it, from `destroySession` (for a plain terminal, `onProcessExited` destroys the entry at once). |
+| Claude session's process stopped or exited | Kept running. Stop (`confirmAndStopSession`) and `onProcessExited` leave a Claude session's entry mounted and `closed`, so `destroySession` does not run until one of the events above. |
 | The shell exits on its own | The region keeps it, with a banner naming the exit code and the Shell toggle. Toggling Shell off and on spawns a new one. |
 | App quit | Killed by the main process with every other PTY (`before-quit`, and the window's `closed` handler). |
 

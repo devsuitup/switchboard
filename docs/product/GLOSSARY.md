@@ -177,8 +177,7 @@ concept. Each entry gives:
   `public/worktree-nesting.js`; worktree header buttons
   `public/sidebar.js:988-1001`.
 - **Today**: actions **Hide worktree**, **Delete worktree from disk**,
-  **New session in worktree**. `docs/worktrees.md:62` still says "Switchboard
-  does not remove worktrees" (doc drift). The Agents view groups by worktree
+  **New session in worktree**. The Agents view groups by worktree
   separately (`docs/background-agents.md:43-50`).
 
 ---
@@ -237,8 +236,7 @@ concept. Each entry gives:
 - **Don't say**: "shell session", "console".
 - **Code**: `type: 'terminal'`; `plain-terminal-shell.js`;
   `public/app.js:686-707` (removed on exit).
-- **Today**: `docs/launching-sessions.md:122` says clicking an exited terminal
-  row restarts it; the code removes the row (doc drift). Its only row action
+- **Today**: its only row action
   is Stop (`public/sidebar.js:1808-1818`).
 
 ### Panel shell

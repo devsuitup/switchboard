@@ -59,8 +59,22 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
 
 ## Cleaning up
 
-Switchboard does not remove worktrees. When the work is merged or abandoned,
-remove the worktree with git from the repository:
+When the work is merged or abandoned, remove the worktree from Switchboard or
+with git.
+
+**From Switchboard.** A worktree the sidebar shows as a nested header, under
+its repository, has a delete button in that header (**Delete worktree from
+disk**).
+The dialog warns that uncommitted changes are lost and lists the worktree's
+uncommitted files, ten at most. **Delete anyway** runs
+`git worktree remove -f` from the repository, with a second `-f` when the
+worktree is locked, so those changes go with it. The branch is kept. The
+worktree's sessions move under the repository's header, at once or at the
+next refresh, since their transcripts are still on disk. Deleting a
+finished background session in the [Agents view](background-agents.md) also
+removes its worktree when that is safe.
+
+**With git**, from the repository:
 
 ```bash
 git worktree list
@@ -69,10 +83,9 @@ git branch -d <branch>                             # the branch stays after the 
 git worktree prune                                 # after deleting a worktree directory by hand
 ```
 
-The sessions stay in the sidebar: their transcripts are the CLI's and are not
-touched. Once its worktree is gone, a session is resumed from the repository
-root, where the CLI does not find it; [delete](session-browser.md#delete) or
-archive it.
+Either way, the sessions' transcripts are the CLI's and are not deleted. Once
+its worktree is gone, a session is resumed from the repository root, where the
+CLI does not find it; [delete](session-browser.md#delete) or archive it.
 
 Add `.claude/worktrees/` to the repository's `.gitignore`, or the worktrees
 show up as untracked files in the main working tree.
