@@ -395,6 +395,25 @@ test('the page tells main when the save a late upgrade asked for is done, and at
   } finally { ctx.destroy(); }
 });
 
+test('a check sent again while the page writes the app state for it is not asked or written a second time', async () => {
+  const ctx = setup();
+  try {
+    let flushes = 0;
+    let finish = null;
+    ctx.window.flushStateForExit = () => { flushes++; return new Promise((resolve) => { finish = resolve; }); };
+    ctx.calls.check(10, 'quit');
+    await flush();
+    assert.equal(flushes, 1);
+    ctx.calls.check(10, 'quit');
+    await flush();
+    assert.equal(flushes, 1, 'one write for one check');
+    assert.equal(ctx.calls.acks.length, 1);
+    finish();
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 10, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
+
 test('a cancelled close does not flush', async () => {
   const ctx = setup();
   try {
