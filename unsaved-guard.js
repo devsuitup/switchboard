@@ -83,6 +83,11 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     if (state) state.unanswered = true;
   }
 
+  function markQuitUnanswered(win) {
+    const state = windows.get(win);
+    if (state) state.quitUnanswered = true;
+  }
+
   function forceIfUnresponsive(win) {
     const state = windows.get(win);
     if (state && state.unresponsive) force(win);
@@ -97,9 +102,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
       quitAsking = false;
       if (!proceed) return;
       quitApproved = true;
-      if (unanswered) markUnanswered(win);
+      if (unanswered) markQuitUnanswered(win);
       quit();
-      if (unanswered) forceIfUnresponsive(win);
     });
     return true;
   }
@@ -109,7 +113,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     let closing = false;
     let reloading = false;
     let allowNextUnload = false;
-    const state = { unanswered: false, unresponsive: false, closesSeen: 0 };
+    const state = { unanswered: false, quitUnanswered: false, unresponsive: false, closesSeen: 0 };
     windows.set(win, state);
 
     const endSession = (final) => {
@@ -133,6 +137,14 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
 
     win.on('close', (event) => {
       if (approved || approvedToQuit()) {
+        if (state.quitUnanswered && !state.unanswered) {
+          state.unanswered = true;
+          if (state.unresponsive) {
+            event.preventDefault();
+            force(win);
+            return;
+          }
+        }
         if (state.unanswered && ++state.closesSeen > 1) {
           event.preventDefault();
           force(win);
@@ -174,7 +186,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     return askFull(win, 'quit').then(({ proceed, unanswered }) => {
       if (!proceed) return false;
       quitApproved = true;
-      if (unanswered) markUnanswered(win);
+      if (unanswered) markQuitUnanswered(win);
       return true;
     });
   }
