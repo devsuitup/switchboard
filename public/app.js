@@ -265,8 +265,14 @@ window.flushStateForExit = flushStateForExit;
 if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
 
 async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
-  const startsFresh = item => item.fresh && !sessionMap.has(item.sessionId);
-  const pending = list.filter(item => (startsFresh(item) || sessionMap.has(item.sessionId)) && !openSessions.has(item.sessionId));
+  const indexedSessions = new Map(sessionMap);
+  for (const row of sessionMap.values()) {
+    for (const sessionId of row.mergedMemberIds || []) {
+      if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, { ...row, sessionId, mergedMemberIds: [] });
+    }
+  }
+  const startsFresh = item => item.fresh && !indexedSessions.has(item.sessionId);
+  const pending = list.filter(item => (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
   const startedAs = new Map();
@@ -288,7 +294,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
         continue;
       }
-      let s = sessionMap.get(item.sessionId);
+      let s = indexedSessions.get(item.sessionId);
       if (!s || openSessions.has(item.sessionId)) {
         restoreInFlight.delete(item.sessionId);
         continue;
@@ -298,7 +304,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -1828,7 +1834,8 @@ async function restoreStartupSessions() {
   try {
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
     if (activeSessionId && !openSessions.has(activeSessionId)) {
-      const session = sessionMap.get(activeSessionId);
+      const row = sessionMap.get(activeSessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(activeSessionId));
+      const session = row && (row.sessionId === activeSessionId ? row : { ...row, sessionId: activeSessionId, mergedMemberIds: [] });
       if (session) await openSession(session, undefined, { automatic: true });
     }
     await restoreWorkingSet();

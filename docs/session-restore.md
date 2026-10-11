@@ -81,6 +81,12 @@ quits ask about unsaved edits and write the set again.
 
 ## What restore does
 
+When several conversations share one web-session row in the sidebar, restore
+also finds saved members of that row. It reopens and saves each member under
+its own id, checks that member for continuations and processes live elsewhere,
+and shows its running and active state on the shared sidebar row. This applies
+to both automatic restore and the startup Restore prompt.
+
 Restore is a respawn, not a reattach: a session's process is a child of the
 app and ends when the app quits. Each restored Claude session is started again
 with `claude --resume <id>` and the project's **current** effective settings —
