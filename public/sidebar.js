@@ -1526,7 +1526,7 @@ function rebindSidebarEvents(projects) {
     if (deleteBtn) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
-        if (session.mergedMemberIds?.length && rowSessionIds(session).some(id =>
+        if (session.mergedMemberIds?.some(id =>
           activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
           || storedActivitySnapshot(id)?.liveness === 'alive')) {
           surfaceStopFailure(deleteBtn, 'session is still running — close it first');
@@ -1692,7 +1692,8 @@ function buildSessionItem(session) {
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
-  paintSessionIcon(icon, session.sessionId, session);
+  if (snapshot) paintSessionIconFromSnapshot(icon, snapshot);
+  else paintSessionIcon(icon, session.sessionId, session);
   if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block

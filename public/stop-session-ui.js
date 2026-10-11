@@ -42,12 +42,12 @@ async function stopBeforeArchive(session) {
   const alias = session.remoteAlias;
   if (alias) {
     for (const id of ids) {
-      const member = id === session.sessionId ? session : { sessionId: id, remoteAlias: alias };
+      const member = id === session.sessionId ? session : { ...session, sessionId: id };
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
       if (!isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
       const result = await window.api.remoteStopSession(alias, id);
-      if (!result || result.ok === false) {
+      if (!result || (result.ok === false && result.error !== 'session not found on that host')) {
         return { ok: false, error: (result && result.error) || 'unknown error' };
       }
       if (typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
@@ -62,7 +62,7 @@ async function stopBeforeArchive(session) {
     const open = typeof openSessions !== 'undefined' && openSessions.get(id);
     if (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(id)) && !(open && !open.closed)) continue;
     const result = await window.api.stopSession(id);
-    if (result && result.ok === false) {
+    if (result && result.ok === false && result.error !== 'not running') {
       return { ok: false, error: result.error || 'unknown error' };
     }
     if (typeof activePtyIds !== 'undefined') activePtyIds.delete(id);

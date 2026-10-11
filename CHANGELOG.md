@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- A merged web conversation follows its running continuation in the sidebar and grid, and clicking it focuses the open tab without asking again. Refresh and Stop target its open or live continuation; Archive stops all its open or running parts, and Delete refuses while any part is live. (#547)
+- Merged web conversations show their continuations' activity and focus the open tab on click, Refresh and Stop target the open or live continuation, Archive handles running parts and ended tabs, Delete stops a running representative but refuses open or live merged members, and remote sessions confirmed stopped no longer appear alive because of a stale descriptor. (#547)
 - Switching terminal tabs no longer freezes the window for about two seconds, a regression introduced in v0.0.91. (#541)
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
 - In a sandboxed session, a repository or a `.claude` folder below an Additional Directory that is a symbolic link now has its Git config, hooks and Claude settings read-only, like one below a plain directory. Before, they were writable from inside the sandbox. Such a directory holding a `.claude` that is itself a symbolic link, or a repository Git cannot read, now refuses to start the session (status 125), as a plain directory already did, instead of starting it unprotected. (#538)
