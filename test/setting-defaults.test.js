@@ -50,7 +50,7 @@ function panelFields() {
   return fields;
 }
 
-function setupPanel(stored = {}) {
+function setupPanel(stored = {}, onSave = async () => ({ ok: true })) {
   const dom = new JSDOM(`<!DOCTYPE html><html><body>
     <div id="settings-viewer"></div>
     <div id="settings-viewer-title"></div>
@@ -68,6 +68,7 @@ function setupPanel(stored = {}) {
     get(target, prop) {
       if (prop === 'platform') return target.platform;
       if (prop === 'getSetting') return async (key) => stored[key] || {};
+      if (prop === 'setSetting') return onSave;
       if (prop === 'getShellProfiles') return async () => [];
       if (prop === 'getAppVersion') return async () => '0.0.0';
       if (prop === 'onUpdaterEvent') return () => {};
@@ -82,7 +83,7 @@ function setupPanel(stored = {}) {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'terminal-themes.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'settings-panel.js'));
 
-  return { window, document: window.document, destroy() { window.close(); } };
+  return { window, context: dom.getInternalVMContext(), document: window.document, destroy() { window.close(); } };
 }
 
 // get-effective-settings merges the stored rows over SETTING_DEFAULTS, so with
@@ -127,6 +128,57 @@ test('an explicitly saved permissionMode of null still displays as Default, neve
     await ctx.window.openSettingsViewer('global');
     assert.equal(ctx.document.querySelector('#sv-perm-mode').value, '',
       'a stored null is a deliberate "Default (none)" and must not fall through to SETTING_DEFAULTS');
+  } finally {
+    ctx.destroy();
+  }
+});
+
+test('the beta toggle is off by default and follows the shared table rather than a literal', async () => {
+  assert.equal(SETTING_DEFAULTS.receiveBetaVersions, false);
+  const ctx = setupPanel();
+  try {
+    await ctx.window.openSettingsViewer('global');
+    const toggle = () => ctx.document.querySelector('#sv-receive-beta-versions');
+    assert.equal(toggle().checked, false);
+    assert.equal(toggle().closest('.settings-section').querySelector('.settings-section-title').textContent, 'Updates');
+    vm.runInContext('SETTING_DEFAULTS.receiveBetaVersions = true;', ctx.context);
+    await ctx.window.openSettingsViewer('global');
+    assert.equal(toggle().checked, true);
+  } finally {
+    ctx.destroy();
+  }
+});
+
+for (const storedValue of [true, false]) {
+  test(`the beta toggle reads ${storedValue} and saves its inverse through the global settings IPC`, { timeout: 1000 }, async () => {
+    let saved;
+    const done = new Promise(resolve => { saved = resolve; });
+    const ctx = setupPanel({ global: { receiveBetaVersions: storedValue, untouched: 'keep' } }, async (key, settings) => {
+      saved({ key, settings });
+      return { ok: true };
+    });
+    try {
+      await ctx.window.openSettingsViewer('global');
+      const toggle = ctx.document.querySelector('#sv-receive-beta-versions');
+      assert.equal(toggle.checked, storedValue);
+      toggle.click();
+      ctx.document.querySelector('#sv-save-btn').click();
+      const { key, settings } = await done;
+      assert.equal(key, 'global');
+      assert.equal(settings.receiveBetaVersions, !storedValue);
+      assert.equal(settings.untouched, 'keep');
+      await new Promise(resolve => ctx.window.setTimeout(resolve, 0));
+    } finally {
+      ctx.destroy();
+    }
+  });
+}
+
+test('project settings do not offer the beta toggle', async () => {
+  const ctx = setupPanel();
+  try {
+    await ctx.window.openSettingsViewer('project', '/example');
+    assert.equal(ctx.document.querySelector('#sv-receive-beta-versions'), null);
   } finally {
     ctx.destroy();
   }

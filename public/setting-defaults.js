@@ -29,6 +29,7 @@ const SETTING_DEFAULTS = {
   // unchanged; off means the app never fetches or swaps its own binary without
   // being asked. The manual "Check for Updates" button still works either way.
   autoUpdate: true,
+  receiveBetaVersions: false,
   shellProfile: 'auto',
   activityReporting: false, // see .ai/contexts/activitywatch.md
   remoteTriggers: false,

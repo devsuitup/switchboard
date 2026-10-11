@@ -116,6 +116,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater.logger = log;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = SETTING_DEFAULTS.receiveBetaVersions;
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
 
   function sendUpdaterEvent(type, data) {
@@ -1664,12 +1665,23 @@ ipcMain.handle('search', (_event, type, query, titleOnly) => {
 });
 
 // --- IPC: settings ---
+function applyUpdateChannel() {
+  if (!autoUpdater) return;
+  const settings = getSetting('global') || {};
+  const beta = settings.receiveBetaVersions ?? SETTING_DEFAULTS.receiveBetaVersions;
+  if (applyUpdateChannel.logged && autoUpdater.allowPrerelease === beta) return;
+  autoUpdater.allowPrerelease = beta;
+  applyUpdateChannel.logged = true;
+  log.info(`[updater] channel: ${beta ? 'beta' : 'stable'}`);
+}
+
 ipcMain.handle('get-setting', (_event, key) => {
   return getSetting(key);
 });
 
 ipcMain.handle('set-setting', (_event, key, value) => {
   setSetting(key, value);
+  if (key === 'global') applyUpdateChannel();
   return { ok: true };
 });
 
@@ -3485,6 +3497,7 @@ if (!gotSingleInstanceLock) {
 
     // Check for updates after launch
     if (autoUpdater) {
+      applyUpdateChannel();
       // Read the setting here rather than at the updater's construction: that
       // block runs before db.js is required, so getSetting isn't available yet.
       // Nothing checks for updates before this point, so overriding the flags
