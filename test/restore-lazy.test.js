@@ -570,6 +570,46 @@ test('lazy: a session the user opens under its continuation while the marking aw
   } finally { h.destroy(); }
 });
 
+test('lazy: a session the user opens under its continuation during the marking stays saved when that continuation is refused or fails', async () => {
+  for (const outcome of ['refused', 'failed']) {
+    const releases = {};
+    const h = setup({
+      livePtys: ['a'],
+      liveElsewhere: outcome === 'refused' ? { b2: { pid: 4242 } } : {},
+      confirmAnswer: false,
+      openResult: (id) => (id === 'b2'
+        ? { ok: false, error: 'spawn failed' }
+        : new Promise((resolve) => { releases[id] = () => resolve({ ok: true, reattached: true }); })),
+    });
+    try {
+      h.index(['a', 'x', 'b']);
+      const ticking = h.fns.tickRestorePlanner();
+      for (let j = 0; j < 5; j++) await settle();
+      h.window.resolveResumeSession = async (session) => (session.sessionId === 'b' ? { ...session, sessionId: 'b2' } : session);
+      await h.open('b');
+      releases.a();
+      await ticking;
+      assert.deepEqual(h.dormantIds(), ['b2', 'x'], outcome);
+      await h.fns.persistWorkingSet();
+      assert.deepEqual(h.savedIds().sort(), ['a', 'b2', 'x'], outcome);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy: a save while the marking awaits a later reattach writes each saved session once', async () => {
+  let release;
+  const h = setup({ livePtys: ['b'], openResult: () => new Promise((resolve) => { release = () => resolve({ ok: true, reattached: true }); }) });
+  try {
+    h.index(['a', 'x', 'b']);
+    const ticking = h.fns.tickRestorePlanner();
+    for (let j = 0; j < 5; j++) await settle();
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a', 'x', 'b']);
+    release();
+    await ticking;
+  } finally { h.destroy(); }
+});
+
 test('lazy: a session the user opens while the marking awaits a reattach is not marked dormant', async () => {
   for (const stage of ['opened', 'opening', 'checking']) {
     const releases = {};
