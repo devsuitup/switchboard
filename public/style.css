@@ -5540,11 +5540,11 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 }
 
 /* see .ai/contexts/tool-bar.md */
-#main:has(#terminal-area:not([style*="display: none"])) {
+#main.terminal-area-shown {
   min-width: var(--tool-main-floor);
 }
 
-#main:has(#terminal-area:not([style*="display: none"]) #file-panel.open) {
+#main.terminal-area-shown.file-panel-open {
   min-width: min(var(--tool-open-main-floor), calc(100vw - var(--tool-sidebar-offset)));
 }
 

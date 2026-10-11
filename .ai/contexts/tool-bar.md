@@ -86,6 +86,13 @@ other viewers retain `min-width: 0`. Sidebar tabs share the available width
 with 4 px horizontal padding, keeping the non-shrinking collapse button inside
 the sidebar even at its 200 px floor.
 
+`syncToolBar` mirrors terminal visibility and the panel's `open` state onto
+`#main.terminal-area-shown` and `#main.file-panel-open`, at startup, through
+the terminal area's style observer, and synchronously from `showPanel` and
+`hidePanel`. Do not use `:has()` on `#main` or another terminal ancestor for
+these floors: each DOM mutation invalidates style over the terminals' subtree,
+which caused measured freezes of about two seconds per tab switch (#541).
+
 The six `--tool-*` variables at the start of `public/style.css` centralize
 the bar width, panel floor and derived offsets. For sidebar 340 and panel 450,
 the breakpoints are approximately 1012, 842 and 702 CSS px, with 2 px box

@@ -50,6 +50,10 @@ function enabledToolButtons() {
 
 function syncToolBar() {
   if (!toolBarEl) return;
+  const main = document.getElementById('main');
+  const area = document.getElementById('terminal-area');
+  main?.classList.toggle('terminal-area-shown', !!area && area.style.display !== 'none');
+  main?.classList.toggle('file-panel-open', !!document.getElementById('file-panel')?.classList.contains('open'));
   const owner = toolBarOwner();
   const state = owner ? filePanelState.get(owner) : null;
   const tab = state?.currentTab;

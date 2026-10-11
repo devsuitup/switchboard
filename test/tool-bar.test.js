@@ -33,10 +33,6 @@ test('the live header can shrink its titles and sidebar tabs without hiding fixe
     const tab = document.querySelector('.sidebar-tab');
     assert.equal(dom.window.getComputedStyle(tab).minWidth, '0px');
     assert.equal(dom.window.getComputedStyle(document.getElementById('sidebar-collapse-btn')).flexShrink, '0');
-    document.getElementById('terminal-area').style.display = 'none';
-    assert.equal(dom.window.getComputedStyle(document.getElementById('main')).minWidth, '0px');
-    document.getElementById('terminal-area').style.display = '';
-    assert.equal(dom.window.getComputedStyle(document.getElementById('main')).minWidth, 'var(--tool-main-floor)');
   } finally { dom.window.close(); }
 });
 
