@@ -460,6 +460,7 @@ async function tickRestorePlanner() {
         if (!reattached && (!open || open.closed)) {
           const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
           dormantWorkingSet.set(item.sessionId, { item, index });
+          restoreInFlight.delete(item.sessionId);
         }
       }
     } finally {
@@ -1739,9 +1740,20 @@ function openSession(session, customOptions, flags = {}) {
   }
   open.promise = openSessionNow(session, customOptions, flags, open).finally(() => {
     for (const [id, o] of openingSessions) if (o === open) openingSessions.delete(id);
+    if (open.continuedInFlight) settleContinuedInFlight(open.continuedInFlight);
   });
   openingSessions.set(session.sessionId, open);
   return open.promise;
+}
+
+// see docs/session-restore.md ("Restore on click")
+function settleContinuedInFlight(item) {
+  restoreInFlight.delete(item.sessionId);
+  const entry = openSessions.get(item.sessionId);
+  if (entry && !entry.closed) return;
+  dormantWorkingSet.set(item.sessionId, { item, index: restoreSavedIndex.get(item.sessionId) ?? Number.MAX_SAFE_INTEGER });
+  document.getElementById('si-' + item.sessionId)?.classList.add('dormant');
+  schedulePersistWorkingSet();
 }
 
 async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, reattachOnly = false } = {}, open = null) {
@@ -1770,7 +1782,12 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
         skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
       }
       skippedWorkingSetEntries.delete(originalId);
-      restoreInFlight.delete(originalId);
+      const inFlight = restoreMode === 'lazy' && restoreInFlight.get(originalId);
+      if (inFlight && open) {
+        restoreInFlight.delete(originalId);
+        open.continuedInFlight = { ...inFlight, sessionId: session.sessionId };
+        restoreInFlight.set(session.sessionId, open.continuedInFlight);
+      }
       const dormant = dormantWorkingSet.get(originalId);
       if (dormant) {
         dormantWorkingSet.delete(originalId);

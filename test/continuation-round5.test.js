@@ -49,7 +49,6 @@ for (const mode of ['ask', 'auto']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/restore-plan.js'), 'utf8'), h.ctx);
     vm.runInContext('restoringWorkingSet = false; activeSessionId = "old";', h.ctx);
     const app = loadAppFunctions(h.ctx, {
-      declarations: ['restoreMode'],
       functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone', 'showColdCacheNotice', 'showNotRestoredNotice'],
     });
     await app.restoreStartupSessions();

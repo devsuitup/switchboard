@@ -96,7 +96,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
       'sessionOpenedOutsideRestore', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight',
       'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['dismissDormantSession', 'persistWorkingSet', 'pendingRestoreEntries', 'tickRestorePlanner', 'openSession', 'openSessionNow',
-      'reopenActiveSessionAfterReload'],
+      'reopenActiveSessionAfterReload', 'settleContinuedInFlight'],
   });
   const gridSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'grid-view.js'), 'utf8');
   vm.runInContext(['var gridViewActive = false;', 'var gridFocusedSessionId = null;',
@@ -594,6 +594,19 @@ test('lazy: a session the user opens under its continuation during the marking s
       assert.deepEqual(h.savedIds().sort(), ['a', 'b2', 'x'], outcome);
     } finally { h.destroy(); }
   }
+});
+
+test('outside Restore on click, a click resolved to a continuation leaves the restore\'s in-flight entry and marks nothing', async () => {
+  const h = setup({ mode: 'auto' });
+  try {
+    h.index(['a', 'x', 'b']);
+    h.run('restoreMode = "auto"; restoreInFlight.set("b", savedSet[2])');
+    h.window.resolveResumeSession = async (session) => (session.sessionId === 'b' ? { ...session, sessionId: 'b2' } : session);
+    h.window.api.openTerminal = async () => ({ ok: false, error: 'spawn failed' });
+    await h.open('b');
+    assert.deepEqual([...h.run('[...restoreInFlight.keys()]')], ['b']);
+    assert.deepEqual(h.dormantIds(), []);
+  } finally { h.destroy(); }
 });
 
 test('lazy: a save while the marking awaits a later reattach writes each saved session once', async () => {
