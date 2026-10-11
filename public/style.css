@@ -19,6 +19,7 @@
   --accent-wash: rgba(120,130,255,0.06);
   --accent-wash-strong: rgba(120,130,255,0.12);
   --text-muted: #9090a8;
+  --state-waiting: #f0a050;
   /* The window strip: see .ai/contexts/window-frame.md */
   --strip-height: 32px;
   --strip-min-height: max(var(--strip-height), env(titlebar-area-height, 0px));
@@ -1020,6 +1021,30 @@ body { display: flex; flex-direction: column; }
 
 /* ---- Icon slot rungs ---- keyed on session-icon--<rung> alone, no :not() chains — see .ai/contexts/session-state.md */
 
+.session-icon--idle {}
+
+.session-icon--waiting {
+  background: transparent !important;
+  box-shadow: none !important;
+  animation: none;
+  position: relative;
+}
+
+.session-icon--waiting::before {
+  content: attr(data-glyph);
+  color: var(--state-waiting);
+  font-size: 11px;
+  line-height: 6px;
+  position: absolute;
+  left: -2px;
+  top: 0;
+}
+
+.session-icon--stale,
+.session-icon--archived {
+  opacity: 0.5;
+}
+
 /* ---- CLI busy spinner (braille spinner detected) ---- */
 /* Braille spinner via content keyframes — see docs/decisions/0002 */
 .session-icon--busy {
@@ -1316,7 +1341,7 @@ body { display: flex; flex-direction: column; }
 /* ---- Needs attention indicator (blinking LED + halo) ---- */
 /* Replaces the ripple — see docs/decisions/0002. background is !important — see .ai/contexts/session-state.md */
 .session-icon--attention {
-  background: #f0a050 !important;
+  background: var(--state-waiting) !important;
   box-shadow: 0 0 0 3px rgba(240,160,80,0.25);
   animation: led-blink 1s steps(1) infinite;
   position: relative;
@@ -1328,7 +1353,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-item.needs-attention .session-summary {
-  color: #f0a050;
+  color: var(--state-waiting);
 }
 
 .session-item.needs-attention .session-summary::before {

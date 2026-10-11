@@ -219,7 +219,6 @@ test('renderSessionIcon: every rung returns a distinct, well-shaped icon', () =>
     assert.equal(icon.glyph, glyph);
     assert.ok(typeof icon.title === 'string' && icon.title.length > 0);
   }
-  // The three non-CSS rungs carry no legacy class (no sidebar HTML shape change yet).
   for (const snap of [{ waitingForInput: true }, { stale: true }, { archived: true }, {}]) {
     assert.deepEqual(renderSessionIcon(snap).classes, []);
   }

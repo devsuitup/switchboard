@@ -19,7 +19,8 @@ restarts.
 ## The list
 
 One row per session: a state glyph (the same rungs as the sidebar: spinner
-while busy, orange while waiting, green when idle, grey when finished), its
+while busy, an orange hollow ring while waiting, a green filled dot when idle,
+a dim grey dot when finished), its
 name, its `--agent`, its state emoji then `state · status` (see the table
 below), its directory, and its age. Working
 and blocked sessions and external interactive sessions come first, newest

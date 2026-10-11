@@ -107,6 +107,52 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('Agents rows supply the waiting, idle and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
+  const { window, document, setSnapshot, destroy } = setup();
+  try {
+    setSnapshot({ daemonReachable: true, roster: [
+      { id: 'waiting', kind: 'background', state: 'blocked', status: 'waiting' },
+      { id: 'idle', kind: 'background', state: 'working', status: 'idle' },
+      { id: 'finished', kind: 'background', state: 'done', status: 'idle' },
+    ] });
+    await window.showAgentsView();
+    const { renderSessionIcon } = require('../public/session-state');
+    for (const [rung, snapshot] of [['waiting', { waitingForInput: true }], ['idle', {}], ['stale', { stale: true }]]) {
+      const slot = document.querySelector(`.agents-row .session-icon--${rung}`);
+      assert.ok(slot, `${rung} row must have the shared slot class`);
+      assert.equal(slot.dataset.glyph, renderSessionIcon(snapshot).glyph, `${rung} glyph must reach the rendered row`);
+    }
+  } finally {
+    destroy();
+  }
+});
+
+test('Agents rows mark only live jobs as running', { timeout: 1000 }, async () => {
+  const { window, document, setSnapshot, destroy } = setup();
+  try {
+    const roster = [
+      { id: 'busy', kind: 'background', state: 'working', status: 'busy' },
+      { id: 'waiting', kind: 'background', state: 'blocked', status: 'waiting' },
+      { id: 'idle', kind: 'background', state: 'working', status: 'idle' },
+      { sessionId: 'external', kind: 'interactive', status: 'idle' },
+      { id: 'done', kind: 'background', state: 'done', status: 'idle' },
+      { id: 'stopped', kind: 'background', state: 'stopped', status: 'idle' },
+      { id: 'failed', kind: 'background', state: 'failed', status: 'busy' },
+    ];
+    setSnapshot({ daemonReachable: true, roster });
+    await window.showAgentsView();
+    const slots = [...document.querySelectorAll('.agents-row .session-icon')];
+    assert.equal(slots.length, roster.length);
+    for (const slot of slots) {
+      const stale = slot.classList.contains('session-icon--stale');
+      assert.equal(slot.classList.contains('running'), !stale, slot.closest('.agents-row').dataset.key);
+    }
+    assert.equal(slots.filter(slot => slot.classList.contains('running')).length, 4);
+  } finally {
+    destroy();
+  }
+});
+
 test('showing the view hides the terminal area, lists the roster sorted, and counts running/finished', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
