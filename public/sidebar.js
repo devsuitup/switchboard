@@ -1661,16 +1661,15 @@ function buildSessionItem(session) {
   if (rowSessionIds(session).some(id => activePtyIds.has(id))) item.classList.add('has-running-pty');
   const ids = rowSessionIds(session);
   if (session.mergedMemberIds?.length) item.dataset.mergedMemberIds = session.mergedMemberIds.join(' ');
-  const snapshot = ids.length > 1
-    ? mergedRowSnapshot(ids, session.sessionId, storedActivitySnapshot(session.sessionId) || snapshotForLocal(session.sessionId, session))
-    : null;
+  const snapshot = mergedRowSnapshot(ids, session.sessionId,
+    storedActivitySnapshot(session.sessionId, session));
   const remoteAttention = ids.map(remoteAttentionSnapshot).find(Boolean);
-  setNeedsAttention(item, (snapshot ? snapshot.attention : attentionSessions.has(session.sessionId)) || !!remoteAttention);
-  setResponseReady(item, snapshot ? snapshot.responseReady : responseReadySessions.has(session.sessionId));
-  setCliBusy(item, snapshot ? snapshot.busy : !!sessionBusyState.get(session.sessionId));
+  setNeedsAttention(item, snapshot.attention || !!remoteAttention);
+  setResponseReady(item, snapshot.responseReady);
+  setCliBusy(item, snapshot.busy);
   setHasBusyAgents(item, ids.some(id => parentHasActiveSubagent(id)));
   // initial-paint mirror of the remote-ssh adapter's liveness — see .ai/contexts/session-state.md
-  setIsAlive(item, (snapshot && snapshot.liveness === 'alive') || (session.remoteAlias && isRemoteSessionAlive(session)));
+  setIsAlive(item, snapshot.liveness === 'alive' || (session.remoteAlias && isRemoteSessionAlive(session)));
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
   if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;
@@ -1692,8 +1691,7 @@ function buildSessionItem(session) {
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
-  if (snapshot) paintSessionIconFromSnapshot(icon, snapshot);
-  else paintSessionIcon(icon, session.sessionId, session);
+  paintSessionIconFromSnapshot(icon, snapshot);
   if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block

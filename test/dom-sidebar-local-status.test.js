@@ -7,6 +7,18 @@ const assert = require('node:assert/strict');
 
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
+test('a rebuilt local row refreshes liveness when its descriptor appears after an idle render', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = { sessionId: 'descriptor-arrives', summary: 'local session', modified: new Date().toISOString() };
+    ctx.sidebar.buildSessionItem(session);
+    session.status = 'idle';
+    session.statusUpdatedAt = Date.now();
+    ctx.sidebar.buildSessionItem(session);
+    assert.equal(ctx.read('localPtyStates.get("descriptor-arrives").snapshot().liveness'), 'alive');
+  } finally { ctx.destroy(); }
+});
+
 test('a local session with a status renders the state+age line', () => {
   const ctx = setupSidebarDom();
   try {

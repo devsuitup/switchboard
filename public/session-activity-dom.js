@@ -16,12 +16,14 @@ function sessionItemEl(sessionId, container = document) {
     || container.querySelector(`.session-item[data-merged-member-ids~="${sessionId}"]`);
 }
 
-function storedActivitySnapshot(sessionId) {
+function storedActivitySnapshot(sessionId, session) {
+  const local = snapshotForLocal(sessionId, session);
   if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return localPtyStates.get(sessionId)?.snapshot();
   const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
   if (remote && !remote.attached) return remote;
+  if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session);
   const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
-  return transcript || localPtyStates.get(sessionId)?.snapshot();
+  return transcript || local;
 }
 
 function mergedRowSnapshot(ids, sessionId, snapshot) {
@@ -97,12 +99,17 @@ function writeIconSlot(el, icon) {
 
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session) {
-  const state = localPtyState(sessionId);
+  let state = localPtyState(sessionId);
   const sess = session || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
     state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt });
+  } else if (!sess?.remoteAlias && state.snapshot().liveness === 'alive'
+    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
+    localPtyStates.delete(sessionId);
+    state = localPtyState(sessionId);
+    state.apply({ type: 'liveness', value: 'dead' });
   }
   return state.snapshot();
 }
@@ -113,10 +120,10 @@ function paintSessionIconFromSnapshot(el, snapshot) {
   writeIconSlot(el, renderSessionIcon(snapshot));
 }
 
-// Paints a local-pty row's icon slot — see .ai/contexts/session-state.md
+// see .ai/contexts/session-state.md
 function paintSessionIcon(el, sessionId, session) {
   if (!el) return;
-  const snapshot = snapshotForLocal(sessionId, session);
+  const snapshot = storedActivitySnapshot(sessionId, session);
   const item = el.closest('.session-item');
   const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
   writeIconSlot(el, renderSessionIcon(mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot)));

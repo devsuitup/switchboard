@@ -298,8 +298,10 @@ Two more releases keep it from freezing:
 
 The sidebar render replaces row classes from the rebuilt row (morphdom takes the
 new element's classes), so `buildSessionItem` reads the unattached remote
-state's attention for the row class and the icon slot, as it does for
-`agentsBusy`; seeding alone would be wiped at the next render.
+adapter's snapshot for attention, busy, response-ready and the icon slot on
+every fresh build, through `storedActivitySnapshot`. A sidebar refresh now
+preserves those indicators for unattached remote rows as well as local
+transcript rows; seeding alone would be wiped at the next render.
 
 Attached rows are untouched: `projectRemoteState` still refuses to paint them,
 and the local-pty path owns their attention. The sidebar's status line appends
@@ -429,16 +431,13 @@ same file red.
 **`setActivity()` is still called for remote ids in parallel**
 (`markRemoteBusy`/`decayRemoteBusy` call both, when not attached) — see "The
 local-pty adapter" below for what `setActivity` now writes underneath
-`sessionBusyState`/`responseReadySessions`. Two readers were not migrated
-onto a persistent adapter snapshot in this step, so removing the dual-feed
-would regress them:
-- `sidebar.js`'s `buildSessionItem` reads `sessionBusyState`/
-  `responseReadySessions`/`attentionSessions` directly at initial paint.
-- `app.js`'s grid-card busy dot (`updateRunningIndicators`'s `gridCards`
-  loop) reads `sessionBusyState` directly.
+`sessionBusyState`/`responseReadySessions`. `app.js`'s grid-card busy dot
+(`updateRunningIndicators`'s `gridCards` loop) still reads `sessionBusyState`
+directly, so removing the dual-feed would regress it. `buildSessionItem`
+now reads the selected adapter snapshot at initial paint.
 
-Both are driven by the same `active`/`armReady` inputs as the adapter, so the
-two projections never disagree in practice; the dual-feed is a known,
+The grid view is driven by the same `active`/`armReady` inputs as the adapter;
+the dual-feed is a known,
 temporary duplication, not a race.
 
 ### The local-pty adapter
@@ -493,12 +492,12 @@ Inputs:
   `session-activity-dom.js`), the same two calls `applyRemoteDescriptor`/
   `seedLocalTranscriptDescriptor` make for the other two kinds.
 
-**Two readers still bypass the adapter's snapshot on purpose** — see "Row
-ownership" above for why removing them isn't free in this pass:
-`sidebar.js`'s `buildSessionItem`/`buildSubagentItem` (initial paint of
-`cli-busy`/`response-ready`/`needs-attention`/`has-busy-agents`) and `app.js`'s
-grid-card busy dot read `sessionBusyState`/`responseReadySessions`/
-`attentionSessions` directly rather than `localPtyState(id).snapshot()`. Those
+**Some readers still use the local-pty views** — see "Row ownership" above:
+`buildSubagentItem`'s row classes and `app.js`'s grid-card busy dot read
+`sessionBusyState`/`responseReadySessions`/`attentionSessions` directly.
+`buildSessionItem` uses `storedActivitySnapshot` and `mergedRowSnapshot`
+for its activity classes and icon; subagent attribution still supplies its
+`has-busy-agents` class. Those
 three names are no longer independent `Map`/`Set` instances, though — they are
 thin views over `localPtyStates` (`.get`/`.has`/`.set`/`.add`/`.delete`/`.size`),
 so a direct write through them (as `reconcileBusyState`'s initial poll, or a
@@ -643,9 +642,17 @@ watch-channel descriptor list to poll; its only inputs are:
   constants) applies `busy: false, armReady: false` — never
   `responseReady`, exactly like the remote-ssh decay, because this adapter
   has no PTY to confirm a turn actually ended either.
+  The reducer sets `waitingForInput: true` on that busy-false event, so silence
+  displays **Waiting for input**, without claiming a completed response.
+  A fresh sidebar row and later icon repaints read `storedActivitySnapshot`
+  (including `localTranscriptStates`) before falling back to `snapshotForLocal`;
+  `mergedRowSnapshot` uses that same adapter selection for merged members.
+  Re-rendering preserves the adapter's state and its pending decay timer
+  while its process has not been observed to end.
 - **The session object's own `status`/`statusUpdatedAt`**
-  (`seedLocalTranscriptDescriptor`, called from inside the activity handler,
-  reading `sessionMap.get(sessionId)`): `liveness: 'alive'` +
+  (`seedLocalTranscriptDescriptor`, called by activity/decay handlers and
+  `storedActivitySnapshot` on every build or repaint, using the supplied
+  session or `sessionMap.get(sessionId)`): `liveness: 'alive'` +
   `descriptorStatus(status, at)`, the same two calls `applyRemoteDescriptor`
   makes for remote-ssh. **This is a deliberate widening of the issue's
   original ports table**, which listed `descriptorStatus`/`liveness` as "no
@@ -654,11 +661,20 @@ watch-channel descriptor list to poll; its only inputs are:
   can still be a live CLI process elsewhere, discoverable via
   `~/.claude/sessions/<pid>.json` exactly the way `snapshotForLocal` already
   reads it for the local-pty kind. Feeding it here keeps the two kinds'
-  snapshots consistent when a row transitions between them; neither field is
-  consumed by `renderSessionIcon`'s priority ladder yet (see "Ports table"
-  below), so this has no visible effect today beyond that consistency.
-- **Nothing else.** No `attention`, no `waitingForInput` claimed from a
-  completion signal — see the ports-table note below the table.
+  snapshots consistent when a row transitions between them. Liveness drives
+  `is-alive`, including on the first render before any transcript activity:
+  the descriptor's PID is checked by `cli-session-state.js`, so it is a real
+  live-process signal, independent of whether the CLI is writing.
+  If a previously alive session loses its status or session entry, the
+  transcript state and both decay timers are dropped. Late decay callbacks
+  cannot recreate the state. `snapshotForLocal` also replaces the local-pty
+  cache with a blank, dead state when that signal disappears and no PTY is
+  active. Busy, waiting, response-ready and subagent-busy then clear on render.
+  A session that never had a descriptor stays unknown; its transcript-driven
+  Working/Waiting state still survives refreshes. An active PTY keeps ownership.
+- **Nothing else.** No attention or verified completion signal. Waiting for
+  input is the silence inference described above, not proof that a response
+  completed — see the ports-table note below the table.
 
 **Registration waits for `app.js`.** The adapter script loads before `app.js`, and its handler reads `activePtyIds` (declared in `app.js`), so the script does not register the listener itself: `app.js` calls `initLocalTranscriptAdapter()` right after its own state exists, next to the other `window.api.on*` listeners (`test/local-transcript-adapter.test.js` pins the order). A `session-transcript-activity` message sent before that point reaches no listener and is dropped, which loses at most one busy signal: the main-process tracker emits at most once per second per session, has no trailing emission, and re-emits on the next transcript write, so a session still writing is marked busy within about a second of `app.js` loading. Before this, such a message threw `activePtyIds is not defined` in the renderer (issue #415). The other `window.api.on*` registrations in scripts loaded before `app.js` read only state owned by those scripts or by earlier ones, so none needed the same change.
 
@@ -836,12 +852,17 @@ Running/Stopped indicators.
   signal; `session` is optional and falls back to a `sessionMap` lookup for
   call sites that only have a sessionId. `busy`/`attention`/`responseReady`/
   `agentsBusy` are already on the persisted state (fed by `setActivity`/
-  `setAttention`/`syncLocalPtyAgentsBusy`), not recomputed here.
-- `paintSessionIcon(el, sessionId, session)` composes the two:
-  `writeIconSlot(el, renderSessionIcon(snapshotForLocal(sessionId, session)))`.
-  Called from `sidebar.js` at row construction (both `buildSessionItem` and
-  `buildSubagentItem`) and from `reflectSubagentRunningState` on the
-  **parent** row (agentsBusy is part of the priority ladder the slot
+  `setAttention`/`syncLocalPtyAgentsBusy`). If a previously alive local session
+  loses its status and has no active PTY, the cache is replaced by a blank dead
+  state, clearing those flags and waiting-for-input.
+- `storedActivitySnapshot(sessionId, session)` refreshes the local descriptor
+  state, then selects active PTY, unattached remote, local transcript, or local
+  fallback, in that order. It also reconciles a cached transcript descriptor.
+- `paintSessionIcon(el, sessionId, session)` uses that selection and
+  `mergedRowSnapshot`, then writes the resolved icon slot. `buildSessionItem`
+  uses the same selection directly for row construction. `buildSubagentItem`
+  calls `paintSessionIcon` for the child; `reflectSubagentRunningState` calls
+  it on the **parent** row (agentsBusy is part of the priority ladder the slot
   resolves, so a subagent spawn/complete must repaint the parent's slot, not
   just its `has-busy-agents` row class).
 - `applyStateClasses(sessionId, snapshot)` — the single projection path all
@@ -988,11 +1009,12 @@ the others assert on the dot/slot element itself, only on row classes and
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition; also the row-ownership arbiter since #273 (see "Row ownership" above) |
 | `subagentSpawned` / `subagentCompleted` | yes — `syncLocalPtyAgentsBusy`, mirroring `activeSubagentsByParent` (fed by `detectSubagentTransitions()` IPC) rather than a second IPC feed — see "The local-pty adapter" above | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 
-An adapter without a PTY must never claim `waitingForInput` or `responseReady`
-from a completion signal it cannot verify — that is why the remote-ssh and
-local-transcript `busy: false` transitions always pass `armReady: false` (see
-"The remote-ssh adapter" and "The local-transcript adapter" above), not a
-tri-state `busy: unknown`.
+An adapter without a PTY cannot verify a completed response, so remote-ssh
+and local-transcript decay pass `busy: false, armReady: false`. The reducer
+still sets `waitingForInput: true`: silence displays Waiting for input as an
+inference, while `responseReady` stays false. Loss of a previously observed
+local live descriptor clears that inference rather than leaving a dead
+process permanently waiting.
 
 ## Placeholder rows (issue #278)
 
