@@ -3185,7 +3185,12 @@ bgAgents.init({
 });
 require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
-const deleteSessionGuard = makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids });
+const deleteSessionGuard = makeDeleteSessionGuard({
+  activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
+  getMergedMemberIds: id => getAllCached()
+    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
+    .map(row => row.sessionId),
+});
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;

@@ -18,12 +18,18 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
   return null;
 }
 
-function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids }) {
-  return (sessionId) => deleteSessionRefusal(sessionId, {
-    activeSessions,
-    liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
-    liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
-  });
+function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids, getMergedMemberIds = () => [] }) {
+  return async (sessionId) => {
+    for (const id of [sessionId, ...getMergedMemberIds(sessionId)]) {
+      const refusal = await deleteSessionRefusal(id, {
+        activeSessions,
+        liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
+        liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
+      });
+      if (refusal) return refusal;
+    }
+    return null;
+  };
 }
 
 module.exports = { deleteSessionRefusal, makeDeleteSessionGuard };

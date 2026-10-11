@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { JSDOM } = require('jsdom');
 const { setupTerminalDom, PUBLIC_DIR } = require('./terminal-manager-harness');
+const { loadAppFunctions } = require('./app-source');
 
 test('destroySession clears maps, pending write buffer, DOM, and disposes the terminal', () => {
   const { window, spies, inCtx, destroy } = setupTerminalDom();
@@ -564,6 +565,9 @@ test('safeFit: clamps rows to content box when cell height is available via _cor
   const fs2 = require('node:fs');
   const path2 = require('node:path');
   const vm2 = require('node:vm');
+  loadAppFunctions(ctx, {
+    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path2.join(PUBLIC_DIR, 'session-activity-dom.js'),
+  });
   for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js', 'grid-view.js']) {
     const src = fs2.readFileSync(path2.join(PUBLIC_DIR, file), 'utf8');
     vm2.runInContext(src, ctx, { filename: file });

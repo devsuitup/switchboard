@@ -13,6 +13,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { loadAppFunctions } = require('./app-source');
 const { JSDOM } = require('jsdom');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -225,6 +226,9 @@ function setupTerminalDom(opts = {}) {
   }
 
   const ctx = dom.getInternalVMContext();
+  loadAppFunctions(dom.getInternalVMContext(), {
+    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
+  });
   const files = ['utils.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js'];
   if (!opts.dom) {
     files.splice(1, 0, 'shortcuts.js');

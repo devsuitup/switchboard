@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -58,6 +59,9 @@ function setupGridDom() {
   }
 
   const ctx = dom.getInternalVMContext();
+  loadAppFunctions(ctx, {
+    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
+  });
   for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8'), ctx, { filename: file });
   }

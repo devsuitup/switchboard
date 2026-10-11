@@ -280,8 +280,9 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   // whether the subagent group is expanded or collapsed. CSS gives the
   // session's own states (needs-attention, response-ready, cli-busy)
   // precedence over it.
-  const parentEl = document.getElementById('si-' + parentSessionId);
-  setHasBusyAgents(parentEl, parentHasActiveSubagent(parentSessionId));
+  const parentEl = sessionItemEl(parentSessionId);
+  const parentRow = parentEl && sessionMap.get(parentEl.dataset.sessionId);
+  setHasBusyAgents(parentEl, rowSessionIds(parentRow || { sessionId: parentSessionId }).some(parentHasActiveSubagent));
   // parent slot repainted only when local-pty owns it — see .ai/contexts/subagent-observability.md
   const remoteOwned = typeof isRemoteRowOwned === 'function' && isRemoteRowOwned(parentSessionId);
   const localTranscriptOwned = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(parentSessionId);
@@ -537,7 +538,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
   nameEl.className = 'slug-group-name';
   nameEl.textContent = displayName;
 
-  const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId));
+  const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
 
   const meta = document.createElement('div');
   meta.className = 'slug-group-meta';
@@ -561,7 +562,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
   const promoted = [];
   const rest = [];
   for (const session of sessions) {
-    if (activePtyIds.has(session.sessionId)) {
+    if (rowSessionIds(session).some(id => activePtyIds.has(id))) {
       promoted.push(session);
     } else {
       rest.push(session);
@@ -680,7 +681,7 @@ function renderProjects(projects, resort) {
     const subagentIndex = buildSubagentIndex(allSessions);
     let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-    if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
+    if (showRunningOnly) filtered = filtered.filter(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
     if (showTodayOnly) {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -697,8 +698,8 @@ function renderProjects(projects, resort) {
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
-      const aRunning = activePtyIds.has(a.sessionId) || pendingSessions.has(a.sessionId);
-      const bRunning = activePtyIds.has(b.sessionId) || pendingSessions.has(b.sessionId);
+      const aRunning = rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const bRunning = rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
       const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
       if (aPri !== bPri) return bPri - aPri;
@@ -721,12 +722,12 @@ function renderProjects(projects, resort) {
     }
     const allItems = [];
     for (const session of ungrouped) {
-      const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
+      const isRunning = rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
     }
     for (const { slug, scheduled, sessions } of slugMap.values()) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
+      const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
       const hasPinned = sessions.some(s => s.starred);
       const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project, legacyScheduleScopes);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
@@ -1023,7 +1024,7 @@ function renderProjects(projects, resort) {
 
   // Re-apply active state
   if (activeSessionId) {
-    const activeItem = newSidebar.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const activeItem = sessionItemEl(activeSessionId, newSidebar);
     if (activeItem) activeItem.classList.add('active');
   }
 
@@ -1465,7 +1466,11 @@ function rebindSidebarEvents(projects) {
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
-        confirmAndStopSession(session.sessionId, stopBtn);
+        const ids = rowSessionIds(session);
+        const runningId = ids.find(id => activePtyIds.has(id))
+          || (ids.length > 1 && ids.find(id => storedActivitySnapshot(id)?.liveness === 'alive'))
+          || session.sessionId;
+        return confirmAndStopSession(runningId, stopBtn, session);
       };
     }
 
@@ -1521,6 +1526,12 @@ function rebindSidebarEvents(projects) {
     if (deleteBtn) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (session.mergedMemberIds?.some(id =>
+          activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
+          || storedActivitySnapshot(id)?.liveness === 'alive')) {
+          surfaceStopFailure(deleteBtn, 'session is still running — close it first');
+          return;
+        }
         const ok = await showDeleteSessionDialog(session);
         if (!ok) return;
         // issue #271: delete is refused server-side for remote — see .ai/contexts/session-state.md.
@@ -1578,7 +1589,7 @@ function rebindSidebarEvents(projects) {
 
   // Auto-expand slug group if it contains the active session
   if (activeSessionId) {
-    const activeItem = sidebarContent.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const activeItem = sessionItemEl(activeSessionId, sidebarContent);
     const collapsedGroup = activeItem?.closest('.slug-group.collapsed');
     if (collapsedGroup) {
       collapsedGroup.classList.remove('collapsed');
@@ -1615,12 +1626,12 @@ function showSessionContextMenu(event, sessionId) {
   button.className = 'popover-option session-refresh-btn';
   button.setAttribute('role', 'menuitem');
   button.textContent = 'Refresh screen';
-  const entry = openSessions.get(sessionId);
-  button.disabled = !entry || entry.closed;
+  const openId = rowOpenId(sessionMap.get(sessionId) || { sessionId });
+  button.disabled = !openId;
   if (button.disabled) button.title = 'Open this session in a terminal to refresh its screen';
   button.onclick = () => {
     closeSessionContextMenu();
-    requestTerminalRefresh(sessionId);
+    requestTerminalRefresh(openId);
   };
   menu.appendChild(button);
   document.body.appendChild(menu);
@@ -1647,14 +1658,19 @@ function buildSessionItem(session) {
   item.id = 'si-' + session.sessionId;
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
-  if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
-  const remoteAttention = remoteAttentionSnapshot(session.sessionId);
-  setNeedsAttention(item, attentionSessions.has(session.sessionId) || !!remoteAttention);
-  setResponseReady(item, responseReadySessions.has(session.sessionId));
-  setCliBusy(item, !!sessionBusyState.get(session.sessionId));
-  setHasBusyAgents(item, parentHasActiveSubagent(session.sessionId));
+  if (rowSessionIds(session).some(id => activePtyIds.has(id))) item.classList.add('has-running-pty');
+  const ids = rowSessionIds(session);
+  if (session.mergedMemberIds?.length) item.dataset.mergedMemberIds = session.mergedMemberIds.join(' ');
+  const snapshot = ids.length > 1
+    ? mergedRowSnapshot(ids, session.sessionId, storedActivitySnapshot(session.sessionId) || snapshotForLocal(session.sessionId, session))
+    : null;
+  const remoteAttention = ids.map(remoteAttentionSnapshot).find(Boolean);
+  setNeedsAttention(item, (snapshot ? snapshot.attention : attentionSessions.has(session.sessionId)) || !!remoteAttention);
+  setResponseReady(item, snapshot ? snapshot.responseReady : responseReadySessions.has(session.sessionId));
+  setCliBusy(item, snapshot ? snapshot.busy : !!sessionBusyState.get(session.sessionId));
+  setHasBusyAgents(item, ids.some(id => parentHasActiveSubagent(id)));
   // initial-paint mirror of the remote-ssh adapter's liveness — see .ai/contexts/session-state.md
-  setIsAlive(item, !!session.remoteDescriptorSeen);
+  setIsAlive(item, (snapshot && snapshot.liveness === 'alive') || (session.remoteAlias && isRemoteSessionAlive(session)));
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
   if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;
@@ -1675,8 +1691,9 @@ function buildSessionItem(session) {
 
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
-  icon.className = 'session-icon' + (activePtyIds.has(session.sessionId) ? ' running' : '');
-  paintSessionIcon(icon, session.sessionId, session);
+  icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
+  if (snapshot) paintSessionIconFromSnapshot(icon, snapshot);
+  else paintSessionIcon(icon, session.sessionId, session);
   if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block

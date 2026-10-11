@@ -1,7 +1,38 @@
 // DOM projection for session activity, sole writer of the activity classes — see .ai/contexts/session-state.md
 
-function sessionItemEl(sessionId) {
-  return document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+function rowSessionIds(session) {
+  return [session.sessionId, ...(session.mergedMemberIds || [])];
+}
+
+function rowOpenId(session) {
+  return rowSessionIds(session).find(id => {
+    const entry = openSessions.get(id);
+    return entry && !entry.closed;
+  });
+}
+
+function sessionItemEl(sessionId, container = document) {
+  return container.querySelector(`.session-item[data-session-id="${sessionId}"]`)
+    || container.querySelector(`.session-item[data-merged-member-ids~="${sessionId}"]`);
+}
+
+function storedActivitySnapshot(sessionId) {
+  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return localPtyStates.get(sessionId)?.snapshot();
+  const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
+  if (remote && !remote.attached) return remote;
+  const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
+  return transcript || localPtyStates.get(sessionId)?.snapshot();
+}
+
+function mergedRowSnapshot(ids, sessionId, snapshot) {
+  if (ids.length === 1) return snapshot;
+  const snapshots = ids.map(id => id === sessionId ? snapshot : storedActivitySnapshot(id)).filter(Boolean);
+  const combined = { ...snapshot };
+  for (const field of ['attention', 'responseReady', 'busy', 'agentsBusy', 'waitingForInput']) {
+    combined[field] = snapshots.some(s => s[field]);
+  }
+  if (snapshots.some(s => s.liveness === 'alive')) combined.liveness = 'alive';
+  return combined;
 }
 
 function setNeedsAttention(el, on) {
@@ -35,6 +66,8 @@ function isSessionAlive(sessionId) {
 function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) return;
+  const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
+  snapshot = mergedRowSnapshot(ids, sessionId, snapshot);
   const icon = renderSessionIcon(snapshot);
   // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")
   const attention = !!(snapshot && snapshot.attention);
@@ -83,5 +116,8 @@ function paintSessionIconFromSnapshot(el, snapshot) {
 // Paints a local-pty row's icon slot — see .ai/contexts/session-state.md
 function paintSessionIcon(el, sessionId, session) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshotForLocal(sessionId, session)));
+  const snapshot = snapshotForLocal(sessionId, session);
+  const item = el.closest('.session-item');
+  const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
+  writeIconSlot(el, renderSessionIcon(mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot)));
 }

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const { makeDeleteSessionGuard } = require('../delete-session-guard');
 const bgAgents = require('../bg-agents');
@@ -28,6 +29,13 @@ function setup({ jobsDir, descriptorsDir }) {
 
 function refusal(id, activeSessions = new Map()) {
   return makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [] })(id);
+}
+
+function mergedRefusal(id, activeSessions = new Map()) {
+  return makeDeleteSessionGuard({
+    activeSessions, bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [],
+    getMergedMemberIds: () => [SID],
+  })(id);
 }
 
 function writeJob(jobsDir, id, state) {
@@ -53,6 +61,42 @@ test.afterEach(() => {
 test('nothing live and neither directory present: the delete may go ahead', async () => {
   setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
   assert.equal(await refusal(SID), null);
+});
+
+test('deleting a merged representative refuses its member live in an open terminal', async () => {
+  setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
+  assert.equal(await mergedRefusal('representative', new Map([[SID, { exited: false }]])), 'session is still running — close it first');
+  assert.equal(await mergedRefusal('representative', new Map([[SID, { exited: true }]])), null);
+});
+
+test('the main-process delete guard reads merged member ids from the current cache before refusing', async () => {
+  setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  const start = source.indexOf('const deleteSessionGuard = makeDeleteSessionGuard(');
+  const end = source.indexOf(');', start) + 2;
+  const rows = [{ sessionId: SID, mergedIntoSessionId: 'representative' }];
+  const context = vm.createContext({
+    makeDeleteSessionGuard, activeSessions: new Map([[SID, { exited: false }]]),
+    bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [], getAllCached: () => rows,
+  });
+  const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context);
+  assert.equal(await guard('REPRESENTATIVE'), 'session is still running — close it first');
+  rows[0].mergedIntoSessionId = 'another representative';
+  assert.equal(await guard('representative'), null);
+});
+
+test('deleting a merged representative refuses a member with a live background job', async () => {
+  const jobsDir = path.join(root, 'jobs');
+  writeJob(jobsDir, 'aaaaaaaa', 'working');
+  setup({ jobsDir, descriptorsDir: path.join(root, 'sessions') });
+  assert.match(await mergedRefusal('representative'), /background job aaaaaaaa is still running/);
+});
+
+test('deleting a merged representative refuses a member live outside this window', async () => {
+  const descriptorsDir = path.join(root, 'sessions');
+  writeDescriptor(descriptorsDir, 4242, SID);
+  setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir });
+  assert.match(await mergedRefusal('representative'), /session is still running outside this window/);
 });
 
 test('a job that is done does not hold the session', async () => {

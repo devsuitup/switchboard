@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8').replace(/\r\n/g, '\n');
 const APP_SRC = read('app.js');
@@ -91,6 +92,9 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
+  loadAppFunctions(ctx, {
+    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+  });
   vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
   for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow']) {
