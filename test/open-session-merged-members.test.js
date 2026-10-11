@@ -1,0 +1,62 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { setupSidebarDom } = require('./dom-setup');
+const { loadAppFunctions } = require('./app-source');
+
+const row = { sessionId: 'A', mergedMemberIds: ['B', 'C'], projectPath: '/project' };
+
+function setup(t) {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  ctx.evalPublic('resume-guard.js');
+  const shown = [], prompts = [], checked = [];
+  Object.assign(ctx.window, {
+    restoringWorkingSet: false, sessionOpenedOutsideRestore: false, continuationRetryCancelled: false,
+    showSession: id => shown.push(id),
+    confirm: message => { prompts.push(message); return false; },
+  });
+  ctx.window.api.getSessionContinuations = async id => {
+    checked.push(id);
+    return { candidates: [{ sessionId: 'B' }], unresolved: false };
+  };
+  const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession'] });
+  return { ctx, openSession, shown, prompts, checked };
+}
+
+test('opening a merged row focuses its open member without a continuation prompt', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('B', { closed: false });
+  await h.openSession(row);
+  assert.deepEqual(h.prompts, []);
+  assert.deepEqual(h.checked, []);
+  assert.deepEqual(h.shown, ['B']);
+});
+
+test('opening a merged row keeps its own open tab as the first choice', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('A', { closed: false });
+  h.ctx.window.openSessions.set('B', { closed: false });
+  await h.openSession(row);
+  assert.deepEqual(h.shown, ['A']);
+  assert.deepEqual(h.prompts, []);
+});
+
+test('opening a merged row skips a closed member for another open member', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('B', { closed: true });
+  h.ctx.window.openSessions.set('C', { closed: false });
+  await h.openSession(row);
+  assert.deepEqual(h.shown, ['C']);
+  assert.deepEqual(h.prompts, []);
+});
+
+test('opening a merged row with no live open member keeps the continuation prompt', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('B', { closed: true });
+  await h.openSession(row);
+  assert.deepEqual(h.checked, ['A']);
+  assert.match(h.prompts[0], /continued under another id/);
+  assert.deepEqual(h.shown, []);
+});

@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { loadAppFunctions } = require('./app-source');
 const { JSDOM } = require('jsdom');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -165,6 +166,9 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
+  loadAppFunctions(dom.getInternalVMContext(), {
+    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
+  });
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   // jsonl-viewer.js defines showSubagentTranscript — eval'd here so the real
   // implementation is available when tests exercise it directly. For routing
