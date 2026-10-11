@@ -89,9 +89,9 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
-  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'])
+  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession']) {
+  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow']) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {

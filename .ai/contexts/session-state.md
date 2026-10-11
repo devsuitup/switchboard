@@ -66,6 +66,34 @@ the terminal header's stop button, and the grid card's stop button all funnel
 through it) — it now asks `resolveSessionStop` which IPC to call instead of
 always calling `stopSession`.
 
+### Opening a session once
+
+`openSession` keeps the open of each session id in flight in `openingSessions`
+(id → `{ promise, byUser }`), set before its first `await` and removed when the
+open settles. A second call for the same id while the first is still running
+(a double click on a sidebar row, a repeated key, a restore reaching a session
+the user just clicked) gets the same promise back instead of starting a second
+`open-terminal`, so callers that read the result (`runRestore`) see the real
+outcome. Without it, both calls passed the `openSessions.has` check before the
+first `await`, and since `open-terminal` awaits the MCP server before it
+records the PTY, the second request could start a second `claude --resume` on
+the same transcript. The body is `openSessionNow`.
+
+Only an equivalent open is joined. A user open (`automatic: false`) that finds
+an automatic one in flight does not take its result: an automatic open of a
+session live elsewhere refuses without asking, and the click must still ask.
+It sets the click's flags (`continuationRetryCancelled`,
+`sessionOpenedOutsideRestore`) at once, waits for the automatic open to
+settle, then runs as usual, so it shows the terminal the automatic open made
+or asks when that open refused. An automatic open joins any open in flight.
+
+The key is the id the caller passed, which for a click is the id before
+continuation resolution, while the restore passes the resolved one. So once
+`resolveResumeSession` returns another id, the open waits for any open of
+that id in flight and registers itself under it too; a click resolving to a
+continuation the restore is opening then shows that terminal instead of
+starting a second one.
+
 ### Reopening a plain terminal
 
 A session's `type` is what tells `open-terminal` which of its two branches to

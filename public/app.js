@@ -1387,9 +1387,27 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
-async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
+const openingSessions = new Map();
+
+// see .ai/contexts/session-state.md ("Opening a session once")
+function openSession(session, customOptions, flags = {}) {
+  const inFlight = openingSessions.get(session.sessionId);
+  const open = { byUser: !flags.automatic, after: null };
+  if (inFlight) {
+    if (inFlight.byUser || !open.byUser) return inFlight.promise;
+    open.after = inFlight.promise.catch(() => {});
+  }
+  open.promise = openSessionNow(session, customOptions, flags, open).finally(() => {
+    for (const [id, o] of openingSessions) if (o === open) openingSessions.delete(id);
+  });
+  openingSessions.set(session.sessionId, open);
+  return open.promise;
+}
+
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}, open = null) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
+  if (open?.after) await open.after;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
@@ -1405,6 +1423,9 @@ async function openSession(session, customOptions, { automatic = false, live, co
         skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
       }
       skippedWorkingSetEntries.delete(originalId);
+      const other = openingSessions.get(session.sessionId);
+      if (open && other && other !== open) await other.promise.catch(() => {});
+      if (open) openingSessions.set(session.sessionId, open);
     }
   }
   const { sessionId, projectPath } = session;
