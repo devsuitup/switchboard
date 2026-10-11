@@ -172,6 +172,7 @@ function initFilePanel() {
       });
     }
     window.api.onUnsavedCheck(async (id, reason) => {
+      if (unsavedCheckReasons.has(id)) return;
       unsavedCheckReasons.set(id, reason);
       window.api.unsavedCheckAck(id);
       let proceed = true;

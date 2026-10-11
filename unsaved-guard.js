@@ -36,6 +36,12 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     if (current && current.wc === wc) current.arm();
   });
 
+  ipcMain.on('unsaved-ready', (event) => {
+    const entry = current;
+    if (!entry || entry.acked || !event || event.sender !== entry.wc) return;
+    try { entry.wc.send('unsaved-check', entry.id, entry.reason); } catch {}
+  });
+
   ipcMain.on('unsaved-check-ack', (_event, id) => {
     const entry = pending.get(id);
     if (!entry || entry.acked) return;

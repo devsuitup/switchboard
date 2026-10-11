@@ -264,10 +264,14 @@ Windows logoff or shutdown approves the quit before the question
 (`query-session-end`).
 
 A check for `'close'` has no time bound before the acknowledgement: a page that
-is busy when the close arrives (still starting, `onUnsavedCheck` is registered
-by `initFilePanel`, or stalled on a tab reveal) shows the question once it is
-free, rather than closing without it. A `'quit'` check keeps the 2.5 s bound,
-so a quit never waits for ever on the page.
+is busy when the close arrives (stalled on a tab reveal) shows the question once
+it is free, rather than closing without it. A page still starting has no
+listener yet (`onUnsavedCheck` is registered by `initFilePanel`), so the check
+it missed is sent again: registering the listener sends `unsaved-ready`, and
+main sends the pending check again, with the reason it holds now, if it is not
+acknowledged yet and that page is the one asked (the renderer ignores an id it
+already has). A `'quit'` check keeps the 2.5 s bound, so a quit never waits for
+ever on the page.
 
 A quit that arrives while the close question is pending (`SIGTERM`, a Linux or
 macOS logout, an update install) joins the same check, and the guard upgrades
@@ -315,7 +319,12 @@ so neither can be taken for the user insisting.
 A check the page never acknowledged for a quit ends at the 2.5 s bound; the
 window is then closed the usual way and destroyed only once Electron reports
 it unresponsive or it is closed again ([viewer-panel](viewer-panel.md),
-"Bounded"). `taskkill` without `/F` sends a close and gets the question like
+"Bounded"). Electron reports a page about 5 s after a close it has not
+completed and cannot tell a busy page from a hung one, so a page still busy
+about 7.5 s after the quit (the 2.5 s bound, then those 5 s) is destroyed, and
+its debounced working-set save is lost. The force waits for the quit to close
+the window: a quit still held by another `before-quit` handler (the
+ActivityWatch flush) is not cut short. `taskkill` without `/F` sends a close and gets the question like
 any close; `taskkill /F` (and an installer that escalates to it) ends the
 process without the quit cleanup, as it did before.
 

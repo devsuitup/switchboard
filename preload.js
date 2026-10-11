@@ -164,6 +164,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
     // see .ai/contexts/window-frame.md ("A window that stops answering")
     ipcRenderer.on('unsaved-ping', (_event, token) => ipcRenderer.send('unsaved-pong', token));
+    ipcRenderer.send('unsaved-ready');
   },
   onUnsavedCheckReason: (callback) => {
     ipcRenderer.on('unsaved-check-reason', (_event, id, reason) => callback(id, reason));
