@@ -9,6 +9,14 @@ const { loadAppFunctions } = require('./app-source');
 const PROJECT = '/project';
 const LIVE = { pid: 4242, cwd: PROJECT, startedAt: 1 };
 
+async function waitUntil(check, { tries = 500, intervalMs = 10 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    if (check()) return true;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return check();
+}
+
 function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live = false, fresh = false, indexed = true, remembered = false } = {}) {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
@@ -150,7 +158,7 @@ test('ask mode offers saved merged member B, keeps it pending and restores B on 
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(await h.persist(), h.saved, 'pending consent keeps member B saved');
   toast.querySelector('.restore-toast-restore').click();
-  await t.waitFor(() => assert.equal(h.read('restoringWorkingSet'), false));
+  assert.equal(await waitUntil(() => h.read('restoringWorkingSet') === false), true);
   assert.deepEqual(h.spawned, [{ sessionId: 'B', projectPath: PROJECT }]);
   assert.deepEqual(await h.persist(), h.saved);
   h.assertRunningRow();
