@@ -70,6 +70,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     var restorePlanner = null;
     var sessionOpenedOutsideRestore = false;
     var _persistChain = Promise.resolve();
+    var exitingApp = false;
     var RESTORE_STAGGER_MS = 0;
     var LIVE_ELSEWHERE_NOTICE_MS = 60000;
     function createTerminalEntry(session) {
