@@ -204,8 +204,12 @@ directory's `.claude`, as session state:
   repository keeps its config and hooks read-only and every `.claude` stays
   read-only, as in a bound directory (see [Git](#git)); a file linked from
   `~/.claude` into it, such as a `settings.json` kept in the same dotfiles
-  repository, stays read-only too. No `.claude` is created there. Other links
-  inside it are not followed.
+  repository, stays read-only too. A repository root there that has no
+  `.claude` gets an empty one before launch, read-only like the others, so the
+  session cannot give the repository settings that a `claude` started there
+  later would load. No `.claude` is created in a folder that is not a
+  repository: one the session creates there is loaded by a `claude` started in
+  that folder later. Other links inside it are not followed.
 - The launch is refused when the writable directory is also, or lies inside,
   something the sandbox keeps read-only: the target of another `~/.claude`
   entry (`hooks` and `skills` linked to the same directory, or `skills` linked
@@ -217,11 +221,24 @@ directory's `.claude`, as session state:
   the order in which the entries are bound does not matter, and it compares
   resolved paths: the directory is refused wherever the sandbox sees it
   read-only, also when the project, an Additional Directory or `$HOME` is
-  reached through a symbolic link.
+  reached through a symbolic link. It is also refused when a directory the
+  sandbox binds read-only (the node install, `$NVM_DIR`) lies inside the
+  writable directory under another spelling, where the writable mount would
+  cover it.
+- The launch is also refused when the target of a private entry
+  (`shell-snapshots`, `session-env`, `backups`, `state`) or of a
+  `~/.claude.json` that is a symbolic link is the writable directory, lies
+  inside it or contains it. The sandbox gives those entries a private copy, so
+  no mount of theirs is there to compare, while other sessions outside the
+  sandbox source the snapshots and session hooks and load the MCP servers of
+  `~/.claude.json`: written through the opted-in directory, they would run
+  unsandboxed.
 
 This gives up part of the protection: what the session writes there is loaded,
 and its scripts run, by every later session outside the sandbox, other
-projects' included for `~/.claude`.
+projects' included for `~/.claude`. A hook in a read-only `settings.json` that
+runs a script kept under `skills/` or `agents/` runs whatever the session wrote
+there.
 
 ### `~/.claude.json`
 
