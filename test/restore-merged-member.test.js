@@ -2,22 +2,23 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 
 const PROJECT = '/project';
 const LIVE = { pid: 4242, cwd: PROJECT, startedAt: 1 };
 
-function setup(t, { id = 'B', mode = 'auto', live = false, fresh = false, indexed = true, remembered = false } = {}) {
+function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live = false, fresh = false, indexed = true, remembered = false } = {}) {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
-  const saved = [{ sessionId: id, projectPath: PROJECT, active: true, ...(fresh ? { fresh: true } : {}) }];
+  const saved = ids.map(sessionId => ({ sessionId, projectPath: PROJECT, active: sessionId === ids.at(-1), ...(fresh ? { fresh: true } : {}) }));
   const settings = { global: { restoreOnStartup: mode, openWorkingSet: saved } };
   const spawned = [];
   const continuationQueries = [];
   const liveQueries = [];
   const row = {
-    sessionId: 'A', mergedMemberIds: ['B'], projectPath: PROJECT,
+    sessionId: 'A', mergedMemberIds: members, projectPath: PROJECT,
     name: 'Web conversation', created: new Date().toISOString(), modified: new Date().toISOString(),
     messageCount: 1,
   };
@@ -115,6 +116,21 @@ test('auto restore of saved primary A is unchanged', async t => {
   h.assertRunningRow();
 });
 
+for (const ids of [['B', 'A'], ['A', 'B'], ['B', 'C']]) {
+  test(`auto restore spawns every saved id in order [${ids.join(', ')}]`, async t => {
+    const h = setup(t, { ids, members: ['C', 'B'] });
+    await h.restoreWorkingSet();
+    assert.deepEqual(h.spawned.map(s => s.sessionId), ids, 'restore must spawn every saved id in saved order');
+    assert.deepEqual(await h.persist(), h.saved, 'every restored id keeps its saved order and active state');
+  });
+}
+
+test('auto restore persists both B and primary A when B was saved first', async t => {
+  const h = setup(t, { ids: ['B', 'A'] });
+  await h.restoreWorkingSet();
+  assert.deepEqual(await h.persist(), h.saved, 'the saved primary A must not disappear after member B opens');
+});
+
 test('saved merged member B live elsewhere is skipped, checked by B and kept', async t => {
   const h = setup(t, { live: true });
   await h.restoreWorkingSet();
@@ -170,4 +186,22 @@ test('a remembered active merged member B is reopened before working-set restore
   assert.deepEqual(h.spawned, [{ sessionId: 'B', projectPath: PROJECT }], 'the remembered open must resolve member B');
   assert.equal(h.document.getElementById('restore-toast'), null, 'the remembered open retains renderer-reload cancellation');
   assert.deepEqual(await h.persist(), h.saved);
+});
+
+test('a remembered active id absent from all rows only restores the working set', async () => {
+  const calls = [];
+  const ctx = vm.createContext({
+    window: {},
+    localStorage: { getItem: () => null },
+    activeSessionId: 'missing',
+    openSessions: new Map(),
+    sessionMap: new Map([['A', { sessionId: 'A', mergedMemberIds: ['B'] }]]),
+    openSession: async session => { calls.push(session.sessionId); },
+    restoreWorkingSet: async () => { calls.push('working set'); },
+    restoreAgentsViewAtStartup() {},
+  });
+  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions'] });
+  await assert.doesNotReject(restoreStartupSessions);
+  assert.deepEqual(calls, ['working set']);
+  assert.equal(ctx.window._startupResumeResolutions, null);
 });

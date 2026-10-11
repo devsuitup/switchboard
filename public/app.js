@@ -304,7 +304,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
