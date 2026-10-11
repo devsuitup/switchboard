@@ -145,7 +145,7 @@ function agentRowIcon(entry) {
     waitingForInput: live && (blocked || entry.status === 'waiting'),
     stale: !live,
   });
-  return { slotClass: icon.slotClasses[0], title: icon.title };
+  return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
 }
 
 function agentVerbAvailability(entry, daemonReachable) {
@@ -221,7 +221,7 @@ function renderAgentRow(entry, nested = false) {
   if (key === agentsSelectedKey) classes.push('selected');
   if (agentsPendingVerbs.has(key)) classes.push('pending');
   return `<div class="${classes.join(' ')}" data-key="${agentsEscapeAttr(key)}">
-    <span class="session-icon ${icon.slotClass}" title="${agentsEscapeAttr(icon.title)}"></span>
+    <span class="session-icon ${icon.slotClass}${icon.live ? ' running' : ''}" data-glyph="${agentsEscapeAttr(icon.glyph)}" title="${agentsEscapeAttr(icon.title)}"></span>
     <span class="agents-row-name">${escapeHtml(entry.name || entry.sessionId || entry.id || '')}</span>
     <span class="agents-row-agent">${escapeHtml(entry.agent || '—')}</span>
     <span class="agents-row-state"><span class="agents-state-emoji" aria-hidden="true">${stateEmoji}</span> ${escapeHtml(state + status)}</span>

@@ -383,7 +383,7 @@ result; **minor** = confusing but recoverable.
 | M2 | major | One stop control means kill, remote kill or detach; labels "Stop session", "Stop process", "Detach (the session keeps running)" differ by surface; after a detach the grid card footer says **Stopped** and the exit banner "session stopped" while the job runs; Agents **Stop** has no confirm; remote detach has no control | §1, §7, §10, §12 |
 | M3 | major | A session live elsewhere: the sidebar offers "Resume it anyway?", the Agents view forbids it | §11 |
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |
-| M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
+| M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical in the grid and header; waiting is distinguished only in the sidebar and Agents view; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
 | M6 | major | Hide Project silently drops settings and schedule registration and has no unhide; overlaps Archive folder | §6 |
 | m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote Delete refused after its dialog | §1, §6, §10 |
 | m2 | minor | Refusals name verbs that do not exist: "close it first", "stop it first" (External) | §1 R1.6, §11 |
@@ -399,8 +399,7 @@ Doc drift found by the audit (each misleads a reader of the docs):
 `docs/launching-sessions.md:122` (an exited terminal row is removed, not
 restarted); `docs/launching-sessions.md:3` (not every session is a PTY of the
 app); `docs/session-browser.md:212-217` (Stop omits detach);
-`docs/background-agents.md:21-22` ("orange while waiting, green when idle" —
-no such CSS); `docs/terminal.md:147` (panel shell does not stop with its
+`docs/terminal.md:147` (panel shell does not stop with its
 owner); `docs/settings.md:50` (eight shortcuts, not four);
 `.ai/contexts/session-cache.md:131` ("bulk and folder Archive retain their
 existing confirmations": folder Archive confirms, slug-group Archive does not,

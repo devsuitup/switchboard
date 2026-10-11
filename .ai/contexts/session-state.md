@@ -777,7 +777,40 @@ rules (`.session-status-dot`, `.session-icon`) exist side by side in
 old dot) is fixed regardless of rung, so the row never shifts as the glyph
 underneath it changes.
 
-`session-activity-dom.js` is the only file that writes the slot:
+Waiting uses `content: attr(data-glyph)` in an absolutely positioned `::before`
+inside the unchanged 6px slot. Its transparent background and absent box-shadow
+use `!important` to beat `.session-icon.running` and the terminal-row halo;
+`animation: none` keeps it static. Idle has an empty CSS rule so every slot
+class remains declared, with no overrides of the base dot or `.running`.
+Stale and archived only dim the base filled dot, without `!important`.
+Selectors depend only on `session-icon--<rung>`, with no layout measurement.
+
+| Rung | Slot class | Glyph / look | Produced on |
+|---|---|---|---|
+| attention | `session-icon--attention` | orange `--state-waiting` blinking LED and halo | sidebar |
+| responseReady | `session-icon--response-ready` | cyan glowing dot | sidebar |
+| busy | `session-icon--busy` | blue animated braille spinner, violet with busy subagents | sidebar and Agents |
+| agentsBusy | `session-icon--agents-busy` | violet static braille cell | sidebar |
+| waitingForInput | `session-icon--waiting` | orange `--state-waiting` hollow `○`, no halo or animation | sidebar and Agents |
+| idle | `session-icon--idle` | no glyph; base grey filled dot, green only with `.running` | sidebar and live idle Agents jobs |
+| stale | `session-icon--stale` | no glyph; base grey filled dot at 0.5 opacity | Agents only, for a job that is not live |
+| archived | `session-icon--archived` | same as stale | reserved, unused |
+
+`--state-waiting` lives in `:root` and reuses the existing attention orange;
+the attention slot and summary also reference it. The UI has one shared dark
+palette, no light-theme overrides; terminal themes change xterm only. Waiting's
+hollow ring differs from idle's filled dot without relying on colour or opacity.
+Green retains its existing live-process meaning through `.running`.
+
+Sidebar session and subagent rows receive `data-glyph` from `writeIconSlot`.
+The Agents view uses the same slot classes and now includes the domain glyph
+in its row markup (`agentRowIcon` / `renderAgentRow`, `public/agents-view.js`).
+`agentRowIcon` also adds `.running` when its existing `live` boolean is true.
+The sidebar never produces stale or archived; inactive rows fall back to idle.
+Grid cards use `.grid-card-dot` instead, so this change does not alter their
+Running/Stopped indicators.
+
+`session-activity-dom.js` is the only file that writes the sidebar slot:
 
 - `writeIconSlot(el, icon)` clears any previous `session-icon--*` class
   (robust to a rung's `slotClasses` shrinking or changing shape — a plain
@@ -842,14 +875,16 @@ needs to re-derive it: every rung's visual now keys on its own
 .session-icon--agents-busy { background: transparent !important; ... }
 .session-icon--agents-busy::before { content: "\283F"; color: #8088ff; ... }
 .session-icon--response-ready { background: #4fc3f7 !important; ... }
-.session-icon--attention { background: #f0a050 !important; ... }
+.session-icon--attention { background: var(--state-waiting) !important; ... }
 ```
 
 `background` (the only property `.session-icon.running`'s plain green also
-sets) carries `!important` on every rung — busy/attention/response-ready/
+sets) carries `!important` on the active rungs — busy/attention/response-ready/
 agentsBusy rows are very often also `.running` (a busy session almost always
 has a live PTY), and unlike the old code the rung is now a single class with
-no extra row-ancestor classes to lean on for specificity.
+no extra row-ancestor classes to lean on for specificity. Waiting similarly
+overrides the running fill and halo. Idle has no override; stale and reserved
+archived only apply opacity and do not need `!important`.
 
 **`has-busy-agents` is the one exception, and it stays row-level on purpose**
 (point 1 of the original brief: "`.has-busy-agents` stays a row-level class

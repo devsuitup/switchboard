@@ -7,6 +7,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Global Settings now lets you receive beta versions before they reach the stable channel. Turn on **Receive beta versions** and save; turning it off keeps your installed version until a newer stable release is available, except a beta already downloaded, which still installs at the next quit. (#549)
 
+### Fixed
+- A session waiting for your input now shows an orange ring instead of the same grey dot as an idle one. In the Agents view, live jobs show green and finished ones dim. (#563)
+
 ## v0.0.94 — 2026-10-11
 
 ### Fixed

@@ -38,14 +38,31 @@ transcripts (`mergedMemberIds`). Its state is the OR of the members' flags,
 and it is alive if any member is (`session-activity-dom.js:27-36`); the row
 is built from that merged snapshot (`sidebar.js:1661-1673, 1694-1697`).
 
+**Static rung mapping (issue #563, step 1).** Sidebar session/subagent slots
+and Agents rows show waiting as an orange hollow ring in a fixed 6px box, using
+`content: attr(data-glyph)`. Idle keeps the base filled dot: grey without
+`.running`, green with it. The ring and filled dot differ in shape without
+relying on colour or opacity. No animation is added.
+
+| State | Slot class | Sidebar | Agents view |
+|---|---|---|---|
+| Waiting for input | `session-icon--waiting` | orange hollow `○`, no halo | same |
+| Idle | `session-icon--idle` | base grey filled dot; green with `.running` | green filled dot for a live idle job |
+| Stale | `session-icon--stale` | not produced | base grey filled dot at 0.5 opacity for a job that is not live |
+| Archived | `session-icon--archived` | reserved, unused | reserved, unused; same rule as stale |
+
+`--state-waiting` is in `:root` and is shared with the attention orange.
+Terminal light/dark themes do not change these slots. Grid cards use
+`.grid-card-dot`, so their Running/Stopped projection remains separate.
+
 **Projections (several).**
 
 | Surface | Mark | Busy | Waiting for input | Attention | Response ready | Open here / alive | Ended | Text |
 |---|---|---|---|---|---|---|---|---|
-| Sidebar row | `.session-icon` slot (`sidebar.js:1693-1697`) | light-blue braille spinner, animated `content` (`style.css:1025-1054`) | **no CSS rule** for `session-icon--waiting` | orange blinking LED, 1 Hz, endless (`style.css:1318-1328`) | cyan glowing dot (`style.css:1297-1316`) | green `.running` dot when a PTY of the row is open here (`sidebar.js:1694`) | grey | raw CLI status word + reason + age, e.g. `waiting · <reason> · 3 min` (`sidebar.js:1721-1727`) |
+| Sidebar row | `.session-icon` slot (`sidebar.js:1693-1697`) | light-blue braille spinner, animated `content` (`style.css:1025-1054`) | orange hollow `○` | orange blinking LED, 1 Hz, endless (`style.css:1318-1328`) | cyan glowing dot (`style.css:1297-1316`) | green filled dot with `.running` when a PTY is open here (`sidebar.js:1694`); idle has no override | base grey idle dot; stale/archived not produced | raw CLI status word + reason + age, e.g. `waiting · <reason> · 3 min` (`sidebar.js:1721-1727`) |
 | Sidebar row with live subagents | same slot | violet static `⠿` (`style.css:1072-1090`); JS glyph is `◆` (`session-state.js:11`) | — | — | — | — | — | — |
 | Slug-group header | `.slug-group-dot` (`sidebar.js:545`) | — | — | — | — | **pulsing green** when any child has a PTY (`style.css:875-881`) | hidden | `N sessions` + time |
-| Agents view row | `.session-icon` slot **+** emoji **+** word (`agents-view.js:224-227`) | spinner | grey (unstyled rung); a `blocked` job is mapped to this rung (`agents-view.js:140-149`) | not mapped | not mapped | never green (no `.running` added) | grey (`stale`) | `⚙️ working · busy`, `🖥️ external · idle`, `?` |
+| Agents view row | `.session-icon` slot **+** emoji **+** word (`agents-view.js:224-227`) | spinner | orange hollow `○`; a `blocked` job is mapped to this rung (`agents-view.js:140-149`) | not mapped | not mapped | green filled dot for a live idle job (`.running`) | dim grey filled dot (`stale`) | `⚙️ working · busy`, `🖥️ external · idle`, `?` |
 | Agents group header | emoji + label (`agents-view.js:46-54, 266-271`) | `⚙️ Working` | `✋ Blocked` | — | — | — | `✅ Done`, `⏹️ Stopped`, `❌ Failed` | Title case + count |
 | Grid card | `.grid-card-dot` (`grid-view.js:178-180`) | **pulsing green**, from local `sessionBusyState` only (`app.js:1199-1201`, `style.css:1839-1843`) | not shown | not shown | not shown | static green with glow | grey `#6a6a80` (`style.css:1837`) | footer `Running` / `Stopped`, from `activePtyIds` only (`app.js:1203`) |
 | Terminal header | 8 px dot (`app.js:1215`) | not shown | not shown | not shown | not shown | green | grey | **no visible text**; `title`/`aria-label` only: `Running`, `Stopped`, `Killed (SIG…)`, `Exited (code N)` (`app.js:1214-1217`, `process-exit.js:18-28`) |
@@ -58,36 +75,30 @@ is built from that merged snapshot (`sidebar.js:1661-1673, 1694-1697`).
 1. *Busy* is a blue spinner (sidebar, Agents), a pulsing green dot (grid),
    nothing (header). *Pulsing green* means "busy" in the grid and "has an
    open PTY" on a slug-group header.
-2. *Waiting for input*, *Idle*, *Stale* and *Archived* have a slot class and
-   a title but no CSS (`grep session-icon--waiting style.css` → no match):
-   they render as the default dot. `docs/background-agents.md` promises
-   "orange while waiting, green when idle".
-3. A `blocked` Agents job (needs the user) and a finished one look the same
-   in the slot; only the emoji and word differ.
-4. Four text vocabularies for one concept: rung titles (`Working`), raw CLI
+2. Four text vocabularies for one concept: rung titles (`Working`), raw CLI
    status (`busy`), job state (`working`, `blocked`), PTY status (`Running`,
    `Stopped`). An Agents row prints two of them side by side
    (`⚙️ working · busy`, `agents-view.js:227`).
-5. The grid and the terminal header ignore attention, response-ready and
+3. The grid and the terminal header ignore attention, response-ready and
    waiting: a card or tab that needs the user looks like any running one.
-6. After a **Detach** of a background attach tab, the main process sets
+4. After a **Detach** of a background attach tab, the main process sets
    `stopRequested` (`main.js:1789-1791`), so the exit banner says `session
    stopped … to relaunch` (`process-exit.js:19`, `app.js:681`) and the grid
    card footer says `Stopped` (`app.js:1203`) while the job keeps running.
    The terminal header does not show it: a successful stop or detach of the
    session on screen hides the header (`app.js:1074-1077`), and the grid
    hides it too (`grid-view.js:403`).
-7. The word "Running" covers two populations: a local PTY (filter
+5. The word "Running" covers two populations: a local PTY (filter
    `Show running only`, `sidebar.js:684`; grid footer; status bar) and a live
    job (Agents header `N running`, `agents-view.js:360,365`). A third, a
    process alive anywhere, decides whether the Stop button shows
    (`has-running-pty` **or** `is-alive`, `style.css:1270-1273`; grid
    `app.js:1206`) without being called "Running".
-8. A merged row shows no mark that it stands for several transcripts
+6. A merged row shows no mark that it stands for several transcripts
    (no count, no badge; only `data-merged-member-ids`, `sidebar.js:1663`).
    Its icon is the OR of members while its status text and short id are the
    representative's (`sidebar.js:1715-1727`).
-9. Colour is the only cue for the header dot, the grid dot and the
+7. Colour is the only cue for the header dot, the grid dot and the
    slug-group dot (WCAG 1.4.1). Endless motion (LED, spinners, three
    `pulse-dot` cadences) has no `prefers-reduced-motion` path: `style.css`
    has **0** `@media` rules (WCAG 2.2.2).
@@ -96,8 +107,7 @@ is built from that merged snapshot (`sidebar.js:1661-1673, 1694-1697`).
 - One mark (B1, `renderSessionIcon`) on every surface that shows a session:
   sidebar row, Agents row, grid card header, terminal header. The grid and
   header dots become B1.
-- CSS for every rung that can be shown: waiting (static orange), stale
-  (hollow grey), idle (as today's grey), archived (dimmed).
+- Keep the static rung mapping above when extending B1 to other surfaces.
 - One label table (B2) for text, from the glossary's state names; the raw
   CLI word moves to a tooltip or detail line. The state ladder itself is a
   product-model decision (CONCEPT-MAP, M5); this section only requires that whatever
