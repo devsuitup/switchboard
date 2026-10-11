@@ -50,7 +50,7 @@ test('a merged representative rebuild uses its stored transcript activity for th
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   ctx.read("localTranscriptState('A').apply({ type: 'liveness', value: 'alive' }); localTranscriptState('A').apply({ type: 'busy', active: true })");
-  const item = ctx.sidebar.buildSessionItem(row);
+  const item = ctx.sidebar.buildSessionItem({ ...row, status: 'busy', statusUpdatedAt: Date.now() });
   assert.ok(item.classList.contains('cli-busy'));
   assert.equal(item.querySelector('.session-icon').title, 'Working');
 });

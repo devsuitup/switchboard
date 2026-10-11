@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { loadAppFunctions } = require('./app-source');
 const { JSDOM } = require('jsdom');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -63,21 +62,7 @@ function setupCombinedDom() {
     showTodayOnly: false,
     visibleSessionCount: 10,
     sessionMaxAgeDays: 3650,
-    attentionSessions: new Set(),
-    responseReadySessions: new Set(),
-    sessionBusyState: new Map(),
     cachedAllProjects: [],
-    // public/session-activity-dom.js is not loaded in this minimal harness
-    // (see .ai/contexts/session-state.md) — sidebar.js calls these directly.
-    setNeedsAttention: (el, on) => { if (el) el.classList.toggle('needs-attention', !!on); },
-    setResponseReady: (el, on) => { if (el) el.classList.toggle('response-ready', !!on); },
-    setCliBusy: (el, on) => { if (el) el.classList.toggle('cli-busy', !!on); },
-    setHasBusyAgents: (el, on) => { if (el) el.classList.toggle('has-busy-agents', !!on); },
-    setIsAlive: (el, on) => { if (el) el.classList.toggle('is-alive', !!on); },
-    isSessionAlive: () => false,
-    // issue #246 step 3b — sidebar.js calls this to paint the .session-icon
-    // slot; a no-op here is fine, this harness doesn't assert on it.
-    paintSessionIcon: () => {},
     // remote-activity-ui.js is not loaded in this harness — renderProjects
     // calls it unconditionally, and no fixture session here is remote.
     seedRemoteActivity: () => {},
@@ -99,9 +84,9 @@ function setupCombinedDom() {
 
   const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
   vm.runInContext(fs.readFileSync(MORPHDOM_PATH, 'utf8'), dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
-  loadAppFunctions(dom.getInternalVMContext(), {
-    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
-  });
+  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
+    evalInWindow(dom, path.join(PUBLIC_DIR, file));
+  }
   for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }

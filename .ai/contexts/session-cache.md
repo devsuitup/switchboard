@@ -450,8 +450,8 @@ still fed in parallel.
 
 Remote transcript-write activity feeds the adapter, which in turn still feeds the same
 `setActivity(sessionId, active, via)` dispatcher in `session-activity.js` that local PTY
-output uses (kept for two readers not yet migrated — sidebar's initial paint and the grid
-busy dot) — `remote-activity-ui.js` calls `setActivity(sessionId, true, 'remote-watch')` on
+output uses (kept for two readers not yet migrated — the subagent rows built by `buildSubagentItem` and the
+grid busy dot) — `remote-activity-ui.js` calls `setActivity(sessionId, true, 'remote-watch')` on
 each `remote-activity` IPC event and arms a 20 s decay timer (one per session, reset on each
 event) that calls `setActivity(sessionId, false, 'remote-decay', { armReady: false })` when
 it fires, and `seedRemoteActivity(session)` (called from `renderProjects`, before any row is

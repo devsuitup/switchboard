@@ -40,9 +40,16 @@ function clearLocalTranscriptAgentsTimer(sessionId) {
 }
 
 // descriptorStatus/liveness from session.status — see .ai/contexts/session-state.md
-function seedLocalTranscriptDescriptor(sessionId) {
-  const session = typeof sessionMap !== 'undefined' && sessionMap.get(sessionId);
-  if (!session || session.status === undefined) return;
+function seedLocalTranscriptDescriptor(sessionId, session) {
+  session = session || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+  if (!session || session.status === undefined) {
+    if (localTranscriptStates.get(sessionId)?.snapshot().liveness === 'alive') {
+      clearLocalTranscriptTimer(sessionId);
+      clearLocalTranscriptAgentsTimer(sessionId);
+      localTranscriptStates.delete(sessionId);
+    }
+    return;
+  }
   const state = localTranscriptState(sessionId);
   state.apply({ type: 'liveness', value: 'alive' });
   state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
@@ -50,7 +57,10 @@ function seedLocalTranscriptDescriptor(sessionId) {
 
 // silence means stopped writing, not response ready — see .ai/contexts/session-state.md
 function decayLocalTranscriptBusy(sessionId) {
-  const state = localTranscriptState(sessionId);
+  if (!localTranscriptStates.has(sessionId)) return;
+  seedLocalTranscriptDescriptor(sessionId);
+  const state = localTranscriptStates.get(sessionId);
+  if (!state) return;
   state.apply({ type: 'busy', active: false, armReady: false });
   projectLocalTranscriptState(sessionId);
 }
@@ -65,7 +75,10 @@ function armLocalTranscriptDecayTimer(sessionId) {
 
 // silence means the subagent stopped, not finished — see .ai/contexts/subagent-observability.md
 function decayLocalTranscriptAgentsBusy(sessionId) {
-  const state = localTranscriptState(sessionId);
+  if (!localTranscriptStates.has(sessionId)) return;
+  seedLocalTranscriptDescriptor(sessionId);
+  const state = localTranscriptStates.get(sessionId);
+  if (!state) return;
   state.apply({ type: 'subagentCompleted', stillActive: false });
   projectLocalTranscriptState(sessionId);
 }
@@ -78,7 +91,7 @@ function armLocalTranscriptAgentsDecayTimer(sessionId) {
   }, LOCAL_TRANSCRIPT_DECAY_MS));
 }
 
-// never claims waitingForInput/attention — see .ai/contexts/session-state.md
+// see .ai/contexts/session-state.md ("The local-transcript adapter (step 4)")
 function onLocalTranscriptActivity(payload) {
   if (payload && payload.kind === 'subagent') {
     onLocalTranscriptSubagentActivity(payload);
@@ -91,6 +104,7 @@ function onLocalTranscriptActivity(payload) {
   state.apply({ type: 'transcriptTouched', at: payload.at || Date.now(), source: 'local-transcript' });
   state.apply({ type: 'busy', active: true });
   seedLocalTranscriptDescriptor(sessionId);
+  if (!localTranscriptStates.has(sessionId)) return;
   projectLocalTranscriptState(sessionId);
   armLocalTranscriptDecayTimer(sessionId);
 }
@@ -103,6 +117,7 @@ function onLocalTranscriptSubagentActivity(payload) {
   const state = localTranscriptState(parentSessionId);
   state.apply({ type: 'subagentSpawned' });
   seedLocalTranscriptDescriptor(parentSessionId);
+  if (!localTranscriptStates.has(parentSessionId)) return;
   projectLocalTranscriptState(parentSessionId);
   armLocalTranscriptAgentsDecayTimer(parentSessionId);
   // per-(parent, agentId) running set for the child row's own dot — see .ai/contexts/subagent-observability.md

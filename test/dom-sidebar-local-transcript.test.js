@@ -32,6 +32,93 @@ function register(ctx, sessions) {
   for (const s of sessions) ctx.window.sessionMap.set(s.sessionId, s);
 }
 
+for (const state of ['descriptor', 'busy', 'waiting']) {
+  for (const disappearance of ['status', 'session']) {
+    test(`a ${state} row stops being alive or waiting after its ${disappearance} disappears and the sidebar re-renders`, { timeout: 10000 }, () => {
+      const ctx = setupSidebarDom();
+      try {
+        const session = { ...LOCAL_SESSION };
+        const projects = [makeSampleProject({ sessions: [session] })];
+        register(ctx, [session]);
+        ctx.sidebar.renderProjects(projects, true);
+        if (state !== 'descriptor') {
+          ctx.emitSessionTranscriptActivity({ sessionId: session.sessionId, at: Date.now() });
+          if (state === 'waiting') {
+            ctx.window.clearLocalTranscriptTimer(session.sessionId);
+            ctx.window.decayLocalTranscriptBusy(session.sessionId);
+          }
+        }
+        const before = ctx.document.getElementById('si-local-1');
+        assert.ok(before.classList.contains('is-alive'));
+        if (state === 'waiting') assert.equal(before.querySelector('.session-icon').title, 'Waiting for input');
+        if (disappearance === 'status') session.status = undefined;
+        else {
+          ctx.window.sessionMap.delete(session.sessionId);
+          projects[0].sessions = [{ ...session, status: undefined }];
+        }
+        ctx.sidebar.renderProjects(projects, true);
+        const item = ctx.document.getElementById('si-local-1');
+        assert.equal(item.classList.contains('is-alive'), false, 'the ended process is not alive');
+        assert.equal(item.classList.contains('cli-busy'), false, 'the ended process is not busy');
+        assert.equal(item.querySelector('.session-icon').title, 'Idle', 'the ended process is not waiting');
+        const local = ctx.read('localPtyStates.get("local-1").snapshot()');
+        assert.notEqual(local.liveness, 'alive');
+        assert.equal(local.busy, false);
+        assert.equal(local.waitingForInput, false);
+        assert.equal(ctx.read('localTranscriptStates.has("local-1")'), false);
+        assert.equal(ctx.read('localTranscriptDecayTimers.has("local-1")'), false);
+        ctx.window.decayLocalTranscriptBusy(session.sessionId);
+        assert.equal(item.querySelector('.session-icon').title, 'Idle', 'late decay cannot restore waiting');
+      } finally { ctx.destroy(); }
+    });
+  }
+}
+
+for (const withDescriptor of [false, true]) {
+  for (const state of ['busy', 'waiting']) {
+    test(`a transcript-driven ${state} row survives a full sidebar re-render ${withDescriptor ? 'with' : 'without'} a descriptor`, { timeout: 10000 }, () => {
+      const ctx = setupSidebarDom();
+      try {
+        const session = { ...LOCAL_SESSION };
+        if (!withDescriptor) {
+          delete session.status;
+          delete session.statusUpdatedAt;
+        }
+        const projects = [makeSampleProject({ sessions: [session] })];
+        register(ctx, [session]);
+        ctx.sidebar.renderProjects(projects, true);
+        ctx.emitSessionTranscriptActivity({ sessionId: session.sessionId, at: Date.now() });
+        if (state === 'waiting') {
+          ctx.window.clearLocalTranscriptTimer(session.sessionId);
+          ctx.window.decayLocalTranscriptBusy(session.sessionId);
+        }
+        const snapshot = ctx.read('localTranscriptStates.get("local-1").snapshot()');
+        const decayTimer = ctx.read('localTranscriptDecayTimers.get("local-1")');
+        const assertState = () => {
+          const item = ctx.document.getElementById('si-local-1');
+          const icon = item.querySelector('.session-icon');
+          assert.ok(icon.classList.contains(`session-icon--${state}`), `the ${state} icon survives the render`);
+          assert.equal(icon.title, state === 'busy' ? 'Working' : 'Waiting for input');
+          assert.equal(item.classList.contains('cli-busy'), state === 'busy');
+          assert.equal(item.classList.contains('response-ready'), false);
+          assert.equal(item.classList.contains('needs-attention'), false);
+          assert.equal(item.classList.contains('is-alive'), withDescriptor);
+          assert.deepEqual(ctx.read('localTranscriptStates.get("local-1").snapshot()'), snapshot);
+          assert.equal(ctx.read('localTranscriptDecayTimers.get("local-1")'), decayTimer);
+        };
+        assertState();
+        ctx.sidebar.renderProjects(projects, true);
+        assertState();
+        ctx.window.paintSessionIcon(ctx.document.querySelector('#si-local-1 .session-icon'), session.sessionId, session);
+        assertState();
+        ctx.document.getElementById('sidebar-content').replaceChildren();
+        ctx.sidebar.renderProjects(projects, true);
+        assertState();
+      } finally { ctx.destroy(); }
+    });
+  }
+}
+
 test('a local row without a PTY shows the busy slot after a transcript-activity event, and the age with no response-ready after decay', () => {
   const ctx = setupSidebarDom();
   try {
@@ -75,6 +162,7 @@ test('once the row gains a PTY, a later transcript-activity event no longer pain
     ctx.window.localTranscriptPtyTakeover('local-1');
     ctx.window.decayLocalTranscriptBusy('local-1'); // any timer that was still pending must be inert now
     ctx.window.activePtyIds.add('local-1');
+    ctx.setActivity('local-1', false, 'pty-idle', { armReady: false });
 
     ctx.emitSessionTranscriptActivity({ sessionId: 'local-1', at: Date.now() + 25000 });
     assert.ok(!item.classList.contains('cli-busy'),

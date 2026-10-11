@@ -217,6 +217,7 @@ const rendererCrossFileGlobals = {
   initLocalTranscriptAdapter: 'readonly',
   pruneLocalTranscriptTimers: 'readonly',
   localTranscriptStates: 'readonly',
+  seedLocalTranscriptDescriptor: 'readonly',
   // public/sidebar.js, consumed by session-activity-dom.js's snapshotForLocal
   // (see .ai/contexts/session-state.md, "The icon slot (step 3b)")
   parentHasActiveSubagent: 'readonly',

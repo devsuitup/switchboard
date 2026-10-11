@@ -85,7 +85,7 @@ function setup(sessionIds = ['s1'], { init = true, ptyState = true } = {}) {
   };
 }
 
-test('a session-transcript-activity event drives the adapter busy, then decay clears busy without arming waitingForInput/attention/response-ready as ready', () => {
+test('a session-transcript-activity event drives the adapter busy, then decay waits for input without attention or response-ready', () => {
   const t = setup(['s1']);
   let snap = t.snapshot('s1');
   assert.equal(snap.busy, false, 'precondition: idle');
