@@ -52,7 +52,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
   vm.runInContext(`
-    var openSessions = new Map(), sessionMap = new Map();
+    var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map();
     var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;
     var sessionOpenedOutsideRestore = false, _persistChain = Promise.resolve();
     var RESTORE_STAGGER_MS = 0;
@@ -72,8 +72,8 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   const app = loadAppFunctions(ctx, {
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'],
-    functions: ['runRestore', 'openSession', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],
+    declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
+    functions: ['runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],
   });
   return {
     spawned, prompts, rows, root, db, folder, ctx,
