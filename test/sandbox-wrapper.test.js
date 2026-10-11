@@ -1072,6 +1072,29 @@ test('sandbox wrapper: every .claude and repository below a bound directory is p
     }
   });
 
+test('sandbox wrapper: a repository and a .claude below an Additional Directory that is a link are protected',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const other = path.join(rig.root, 'other');
+      const sub = path.join(other, 'sub');
+      fs.mkdirSync(path.join(sub, '.claude'), { recursive: true });
+      git(sub, 'init', '-q');
+      const link = path.join(rig.root, 'link');
+      fs.symlinkSync(other, link);
+      const { status, stderr } = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: link });
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(link, 'sub', 'file')), '--bind');
+      for (const p of [path.join(link, 'sub', '.git', 'config'), path.join(link, 'sub', '.claude', 'settings.json')]) {
+        assert.equal(accessAt(ops, p), '--ro-bind', `${p} must stay read-only`);
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: refuses a repository git cannot read, rather than guessing which paths to protect',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
@@ -1252,8 +1275,21 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       fs.mkdirSync(path.join(C, 'shell-snapshots'));
       fs.writeFileSync(path.join(C, 'shell-snapshots', 'snapshot-bash-live.sh'), 'export A=1\n');
       fs.mkdirSync(path.join(C, 'session-env'));
+      const other = path.join(rig.root, 'other');
+      const sub = path.join(other, 'sub');
+      fs.mkdirSync(path.join(sub, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(sub, '.claude', 'settings.json'), '{}\n');
+      git(sub, 'init', '-q');
+      const linked = path.join(rig.root, 'linked');
+      fs.symlinkSync(other, linked);
+      const linkedAttempts = String.raw`
+L='${linked}/sub'
+attempt linked-dir-git-config 'git -C "$L" config core.fsmonitor evil'
+attempt linked-dir-settings 'echo evil > "$L/.claude/settings.json"'
+attempt linked-dir-file 'echo ok > "$L/file"'
+`;
 
-      const res = rig.run([PERSISTENCE_ATTEMPTS]);
+      const res = rig.run([PERSISTENCE_ATTEMPTS + linkedAttempts], { SWITCHBOARD_SANDBOX_BINDS: linked });
       assert.equal(res.status, 0, res.stderr);
       const said = res.stdout;
       const read = (p) => fs.readFileSync(p, 'utf8');
@@ -1301,6 +1337,11 @@ test('sandbox wrapper: from inside a real sandbox, every persistence write is re
       assert.equal(read(path.join(rig.proj, 'src.js')), 'export {}\n', `a source file must be written\n${said}`);
       assert.equal(git(rig.proj, 'log', '--format=%s', '-1'), 'src', `a commit must land\n${said}`);
       assert.match(said, /resolv-conf: written/, 'the resolver configuration must be readable');
+      assert.equal(spawnSync('git', ['config', '--get', 'core.fsmonitor'], { cwd: sub, env: cleanEnv() }).status, 1,
+        `a repository below a linked Additional Directory must keep its config\n${said}`);
+      assert.equal(read(path.join(sub, '.claude', 'settings.json')), '{}\n',
+        `a .claude below a linked Additional Directory must be read-only\n${said}`);
+      assert.equal(read(path.join(sub, 'file')), 'ok\n', `a file below a linked Additional Directory must be written\n${said}`);
     } finally {
       rig.cleanup();
     }

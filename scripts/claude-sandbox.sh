@@ -612,7 +612,7 @@ bind_project_dir() {
       .claude) protect_claude_dir "$n" ;;
       .git) protect_repo_root "$(dirname "$n")" ;;
     esac
-  done < <(find "$d" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
+  done < <(find "$d/" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \
              \( -name .claude -type l -print0 \) 2>/dev/null)
 }
