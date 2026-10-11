@@ -69,8 +69,8 @@ The dialog warns that uncommitted changes are lost and lists the worktree's
 uncommitted files, ten at most. **Delete anyway** runs
 `git worktree remove -f` from the repository, with a second `-f` when the
 worktree is locked, so those changes go with it. The branch is kept. The
-worktree's sessions leave the sidebar, and come back under the repository's
-header at the next refresh, since their transcripts are still on disk. Deleting a
+worktree's sessions move under the repository's header, at once or at the
+next refresh, since their transcripts are still on disk. Deleting a
 finished background session in the [Agents view](background-agents.md) also
 removes its worktree when that is safe.
 
