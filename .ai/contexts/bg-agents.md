@@ -56,7 +56,9 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 9. `delete-session` asks `deleteSessionRefusal` (`delete-session-guard.js`)
    first, and it fails closed. It refuses a session held by an open
    terminal (by id or `realSessionId`), by a live job (`liveJobCheck`: the
-   job files, read directly so it works before the view was ever opened; the
+   job files, read directly so it works before the view was ever opened, a
+   job's session id taken from `linkScanPath`, else from its `sessionId` or
+   `resumeSessionId` field, which a job with no transcript yet carries; the
    roster only supplies a session id a file lacks, or answers when `jobs/`
    does not exist or a listed job's `state.json` is missing), or by another
    process

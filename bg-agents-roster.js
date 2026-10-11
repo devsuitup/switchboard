@@ -7,6 +7,7 @@ const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
 const JOB_ID_RE = /^[0-9a-f]{8}$/;
 const JOB_ID_IN_TEXT_RE = /(?:^|[^0-9a-f])([0-9a-f]{8})(?![0-9a-f])/i;
 const TRANSCRIPT_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const str = (v) => (typeof v === 'string' && v ? v : null);
 const num = (v) => (Number.isFinite(v) ? v : null);
@@ -15,6 +16,10 @@ function sessionIdFromLinkScanPath(p) {
   if (typeof p !== 'string') return null;
   const m = TRANSCRIPT_ID_RE.exec(p);
   return m ? m[1].toLowerCase() : null;
+}
+
+function sessionIdField(v) {
+  return typeof v === 'string' && SESSION_ID_RE.test(v) ? v.toLowerCase() : null;
 }
 
 function flagValue(flags, name) {
@@ -49,7 +54,7 @@ function parseJobState(text) {
     agent: flagValue(raw.respawnFlags, '--agent'),
     model: flagValue(raw.respawnFlags, '--model'),
     name: flagValue(raw.respawnFlags, '--name'),
-    sessionId: sessionIdFromLinkScanPath(raw.linkScanPath),
+    sessionId: sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId) || sessionIdField(raw.resumeSessionId),
     transcriptPath: str(raw.linkScanPath),
     bridgeSessionId: str(raw.bridgeSessionId),
   };
