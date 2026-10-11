@@ -600,7 +600,10 @@ body { display: flex; flex-direction: column; }
 
 .project-header:hover .project-archive-btn,
 .project-header:hover .project-new-btn,
-.project-header:hover .project-settings-btn {
+.project-header:hover .project-settings-btn,
+.project-archive-btn:focus-visible,
+.project-new-btn:focus-visible,
+.project-settings-btn:focus-visible {
   opacity: 1;
 }
 
@@ -619,7 +622,8 @@ body { display: flex; flex-direction: column; }
   color: #808098;
 }
 
-.project-header:hover .project-new-btn:disabled {
+.project-header:hover .project-new-btn:disabled,
+.project-new-btn:focus-visible:disabled {
   opacity: 0.4;
 }
 
@@ -745,7 +749,10 @@ body { display: flex; flex-direction: column; }
 
 .worktree-header:hover .worktree-new-btn,
 .worktree-header:hover .worktree-hide-btn,
-.worktree-header:hover .worktree-delete-btn {
+.worktree-header:hover .worktree-delete-btn,
+.worktree-new-btn:focus-visible,
+.worktree-hide-btn:focus-visible,
+.worktree-delete-btn:focus-visible {
   opacity: 0.7;
 }
 
@@ -906,7 +913,8 @@ body { display: flex; flex-direction: column; }
   margin-top: 3px;
 }
 
-.slug-group-header:hover .slug-group-archive-btn {
+.slug-group-header:hover .slug-group-archive-btn,
+.slug-group-archive-btn:focus-visible {
   opacity: 1;
 }
 
@@ -1199,7 +1207,8 @@ body { display: flex; flex-direction: column; }
   z-index: 1;
 }
 
-.session-item:hover .session-actions {
+.session-item:hover .session-actions,
+.session-actions:has(:focus-visible) {
   opacity: 1;
 }
 
@@ -1253,7 +1262,6 @@ body { display: flex; flex-direction: column; }
 
 .session-launch-config-btn {
   color: #5a7a6a;
-  outline: none;
 }
 
 .session-fork-btn {
@@ -1904,7 +1912,8 @@ body { display: flex; flex-direction: column; }
   transition: all 0.15s;
 }
 
-.grid-card:hover .grid-card-stop-btn {
+.grid-card:hover .grid-card-stop-btn,
+.grid-card-stop-btn:focus-visible {
   opacity: 1;
 }
 
@@ -3393,7 +3402,8 @@ body { display: flex; flex-direction: column; }
   align-self: center;
 }
 
-.memory-item:hover .schedule-play-btn {
+.memory-item:hover .schedule-play-btn,
+.schedule-play-btn:focus-visible {
   opacity: 0.7;
 }
 
@@ -3793,7 +3803,8 @@ body { display: flex; flex-direction: column; }
   display: block;
 }
 
-.project-header:hover .project-schedule-btn {
+.project-header:hover .project-schedule-btn,
+.project-schedule-btn:focus-visible {
   opacity: 1;
 }
 
@@ -3825,7 +3836,8 @@ body { display: flex; flex-direction: column; }
   display: block;
 }
 
-.project-header:hover .project-settings-btn {
+.project-header:hover .project-settings-btn,
+.project-settings-btn:focus-visible {
   opacity: 1;
 }
 
@@ -4678,7 +4690,8 @@ body { display: flex; flex-direction: column; }
   display: block;
 }
 
-.project-header:hover .remote-host-refresh-btn {
+.project-header:hover .remote-host-refresh-btn,
+.remote-host-refresh-btn:focus-visible {
   opacity: 0.7;
 }
 
@@ -4969,7 +4982,8 @@ body { display: flex; flex-direction: column; }
 }
 
 #file-panel-body:hover ~ #file-panel-actions,
-#file-panel-actions:hover {
+#file-panel-actions:hover,
+#file-panel-actions:has(:focus-visible) {
   opacity: 1;
   pointer-events: auto;
 }
