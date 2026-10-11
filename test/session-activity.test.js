@@ -458,7 +458,8 @@ test('public/app.js: the poll reconciles busy state and re-keys it on fork/detec
   assert.match(poll, /reconcileBusyState\(entries,\s*seq\)/, 'the poll must reconcile the busy state');
   assert.match(poll, /entries\.map\(e => e\.sessionId\)/, 'activePtyIds must be rebuilt from the new payload shape');
 
-  const forked = src.slice(src.indexOf('window.api.onSessionForked'), src.indexOf('window.api.onProcessExited'));
+  assert.match(src, /window\.api\.onSessionForked\(applySessionForked\)/);
+  const forked = src.slice(src.indexOf('function applySessionForked'), src.indexOf('window.api.onSessionForked'));
   assert.match(forked, /rekeyActivityState\(oldId, newId\)/, 'a fork must carry the activity state to the new id');
 
   const detected = src.slice(src.indexOf('window.api.onSessionDetected'), src.indexOf('window.api.onSessionForked'));

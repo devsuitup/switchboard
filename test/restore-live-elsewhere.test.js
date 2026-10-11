@@ -65,12 +65,14 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   vm.runInContext(read('resume-guard.js'), ctx);
   vm.runInContext(`
     var openSessions = new Map();
+    var pendingSessions = new Map();
     var sessionMap = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;
     var restorePlanner = null;
     var sessionOpenedOutsideRestore = false;
     var _persistChain = Promise.resolve();
+    var exitingApp = false;
     var RESTORE_STAGGER_MS = 0;
     var LIVE_ELSEWHERE_NOTICE_MS = 60000;
     function createTerminalEntry(session) {
@@ -93,9 +95,9 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
   });
-  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'])
+  vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession']) {
+  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow']) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {

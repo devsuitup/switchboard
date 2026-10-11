@@ -1922,16 +1922,18 @@ function start(ctx) {
   const retained = new Set();
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
-  const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
+  const sessionLocks = new Map(); // PTY (or sessionId) -> tail Promise of the queue
   function acquireSessionLock(sessionId) {
-    const previous = sessionLocks.get(sessionId) || Promise.resolve();
+    const entry = ctx.getPtyForSession(sessionId);
+    const key = (entry && entry.ptyProcess) || sessionId;
+    const previous = sessionLocks.get(key) || Promise.resolve();
     let release;
     const held = new Promise((resolve) => { release = resolve; });
     const tail = previous.then(() => held);
-    sessionLocks.set(sessionId, tail);
+    sessionLocks.set(key, tail);
     return previous.then(() => () => {
       release();
-      if (sessionLocks.get(sessionId) === tail) sessionLocks.delete(sessionId);
+      if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
     });
   }
 

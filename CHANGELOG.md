@@ -8,6 +8,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A merged web conversation now shows its running continuation in the sidebar, and clicking it focuses the open tab without asking again which continuation to open. (#547)
 - Switching terminal tabs no longer freezes the window for about two seconds, a regression introduced in v0.0.91. (#541)
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
+- In a sandboxed session, a repository or a `.claude` folder below an Additional Directory that is a symbolic link now has its Git config, hooks and Claude settings read-only, like one below a plain directory. Before, they were writable from inside the sandbox. Such a directory holding a `.claude` that is itself a symbolic link, or a repository Git cannot read, now refuses to start the session (status 125), as a plain directory already did, instead of starting it unprotected. (#538)
+- A double click on a session in the sidebar opens it once, instead of sometimes starting two terminals that resume the same conversation. (#539)
 
 ## v0.0.92 — 2026-10-10
 
@@ -30,6 +32,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - An Agents view lists the sessions the Claude daemon runs in the background (`claude --bg`) and the interactive sessions running outside Switchboard, grouped by state or by project and worktree. Open it from the people icon in the sidebar or with Ctrl+Shift+A (Cmd+Shift+A on macOS); attach to a live one by double click, stop, respawn or delete one, and start a new one with New agent. A background session that is running shows a `bg` badge in the sidebar and is attached instead of resumed. (#374)
+- With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
 - **Archive folder** on a project header opens a dialog that archives the folder's sessions and disables its enabled schedules, each optional, and hides the folder with its worktrees. The folder comes back, with its settings, when you add it again or a new session starts in it, and then offers to turn back on the schedules the archive disabled. (#473)
 ### Changed
 - New scheduled task runs appear under a header named after their schedule, even with only one visible run. Schedules that use the same prompt stay separate; older runs keep their existing grouping. An old expansion choice is inherited only when it identifies one schedule across projects and hosts. (#489)
@@ -44,6 +47,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - When the Claude CLI reports a session's id in a different letter case, the subagents that session started or finished during a turn now show up when the turn ends. (#487)
 - A session that moves into a worktree while it runs stays in the sidebar, under its project, instead of disappearing while its terminal keeps running. A running session also stays listed when its transcript leaves its folder for any other reason. (#485)
 - Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. The worktrees of a repository hidden with Hide Project stay hidden. (#473)
+- Quitting or closing the window saves the open sessions right away, so the next start restores the sessions that were open, not an empty or out-of-date list. (#479)
+- `/clear` in a session keeps the open terminal on its sidebar row, which now follows the new conversation, instead of listing that conversation as a separate session. The cleared conversation stays in the list as a past session, and a session quit after `/clear` before its first prompt comes back on restore as a new session in the same project. (#477)
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 
 ## v0.0.89 — 2026-10-04
