@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
+
 ### Fixed
 - Switching terminal tabs no longer freezes the window for about two seconds, a regression introduced in v0.0.91. (#541)
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
@@ -33,7 +36,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - An Agents view lists the sessions the Claude daemon runs in the background (`claude --bg`) and the interactive sessions running outside Switchboard, grouped by state or by project and worktree. Open it from the people icon in the sidebar or with Ctrl+Shift+A (Cmd+Shift+A on macOS); attach to a live one by double click, stop, respawn or delete one, and start a new one with New agent. A background session that is running shows a `bg` badge in the sidebar and is attached instead of resumed. (#374)
-- With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
 - **Archive folder** on a project header opens a dialog that archives the folder's sessions and disables its enabled schedules, each optional, and hides the folder with its worktrees. The folder comes back, with its settings, when you add it again or a new session starts in it, and then offers to turn back on the schedules the archive disabled. (#473)
 ### Changed
 - New scheduled task runs appear under a header named after their schedule, even with only one visible run. Schedules that use the same prompt stay separate; older runs keep their existing grouping. An old expansion choice is inherited only when it identifies one schedule across projects and hosts. (#489)
