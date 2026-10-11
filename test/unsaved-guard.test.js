@@ -365,8 +365,10 @@ test('a quit the page never acknowledges goes ahead, and the window is destroyed
   await tick();
   assert.equal(quits, 1);
   assert.equal(t.win.destroys, 0);
+  t.win.emit('close', t.closeEvent());
+  assert.equal(t.win.destroys, 0, 'app.quit() closes the window the usual way');
   t.win.emit('unresponsive');
-  assert.equal(t.win.destroys, 1, 'app.quit() closes the window, which a hung page holds');
+  assert.equal(t.win.destroys, 1, 'a hung page holds that close');
 });
 
 test('an answered check never destroys the window, even while the user takes time to answer', async () => {
@@ -402,6 +404,36 @@ test('an updater install the page never acknowledges is approved, and the window
   assert.equal(await confirmed, true);
   assert.equal(t.win.destroys, 0, 'quitAndInstall still closes the window the usual way');
   t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 0, 'not before the quit reaches the window');
+  t.win.emit('close', t.closeEvent());
   assert.equal(t.win.destroys, 1);
   assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), false, 'the quit that follows is approved');
+});
+
+test('a quit held by another before-quit handler does not destroy the window before it closes it', async () => {
+  let quits = 0;
+  const t = setup({ timeoutMs: 2500, quit: () => { quits += 1; } });
+  t.win.emit('unresponsive');
+  assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), true);
+  t.timers.find((x) => x.ms === 2500).fn();
+  await tick();
+  assert.equal(quits, 1);
+  assert.equal(t.win.destroys, 0, 'the quit may still be held, by the ActivityWatch flush');
+  t.win.emit('unresponsive');
+  assert.equal(t.win.destroys, 0);
+  const e = t.closeEvent();
+  t.win.emit('close', e);
+  assert.equal(e.prevented, true);
+  assert.equal(t.win.destroys, 1, 'the quit closing a window already reported unresponsive destroys it');
+
+  const recovered = setup({ timeoutMs: 2500, quit: () => {} });
+  recovered.win.emit('unresponsive');
+  recovered.guard.beforeQuit(recovered.closeEvent(), recovered.win);
+  recovered.timers.find((x) => x.ms === 2500).fn();
+  await tick();
+  recovered.win.emit('responsive');
+  recovered.win.emit('close', recovered.closeEvent());
+  assert.equal(recovered.win.destroys, 0, 'a page that answers again is given its close');
+  recovered.win.emit('unresponsive');
+  assert.equal(recovered.win.destroys, 1);
 });
