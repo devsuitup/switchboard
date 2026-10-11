@@ -38,6 +38,7 @@ function createTriggerContext(deps) {
   const resolve = deps.resolveSessionId || ((id) => id);
   const ctx = {
     log,
+    resolveSessionId: resolve,
     getPtyForSession(sessionId) {
       const session = activeSessions.get(resolve(sessionId));
       if (!session || session.exited) return null;
@@ -88,6 +89,8 @@ function createTriggerContext(deps) {
       if (!session || session.exited || session.host != null || !session.projectFolder) return null;
       const id = session.realSessionId || resolve(sessionId);
       const filePath = path.join(projectsDir, session.projectFolder, id + '.jsonl');
+      const previous = readPaths.get(sessionId);
+      if (previous !== undefined && previous !== filePath) reader.forget(previous);
       readPaths.set(sessionId, filePath);
       return reader.read(filePath, compactionCursor);
     };

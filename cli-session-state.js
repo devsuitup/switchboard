@@ -577,11 +577,11 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
 function clearOwner(sessionId, ptyPid) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
-  startProcessTableRefresh();
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
   const key = sessionId.toLowerCase();
   let pid = null;
+  let found = null;
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
@@ -590,11 +590,23 @@ function clearOwner(sessionId, ptyPid) {
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
     pid = raw.pid;
+    found = raw;
     break;
   }
   if (pid == null) return 'pending';
-  if (chainReaches(pid, (current) => current === ptyPid, false)) return 'mine';
-  return readParentPid(pid) == null ? 'unknown' : 'other';
+  if (processTableEnabled) {
+    startProcessTableRefresh();
+    if (!tableEntry(pid)) return 'pending';
+    return conversationOwns(found, new Set([ptyPid])) ? 'mine' : 'other';
+  }
+  let current = pid;
+  for (let depth = 0; depth < 64 && current && current > 1; depth++) {
+    if (current === ptyPid) return 'mine';
+    const parent = readParentPid(current);
+    if (parent == null) return depth === 0 ? 'unknown' : 'other';
+    current = parent;
+  }
+  return 'other';
 }
 
 function ownPidTest(ptyPids) {

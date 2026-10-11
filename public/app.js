@@ -195,7 +195,7 @@ function persistWorkingSet({ final = false } = {}) {
       if (entry.closed) continue;
       // see docs/session-restore.md ("A session with no transcript yet")
       const fresh = pendingSessions.has(sessionId);
-      if (fresh && entry.session.remoteAlias) continue;
+      if (fresh && (entry.session.remoteAlias || pendingSessions.get(sessionId).restorable === false)) continue;
       set.push({
         sessionId,
         projectPath: entry.session.projectPath,
@@ -264,14 +264,15 @@ window.flushStateForExit = flushStateForExit;
 if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
 
 async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
-  const pending = list.filter(item => (item.fresh || sessionMap.has(item.sessionId)) && !openSessions.has(item.sessionId));
+  const startsFresh = item => item.fresh && !sessionMap.has(item.sessionId);
+  const pending = list.filter(item => (startsFresh(item) || sessionMap.has(item.sessionId)) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
   const startedAs = new Map();
   try {
-    const liveById = await liveElsewhereMany(pending.filter(item => !item.fresh).map(item => item.sessionId), { api: window.api });
+    const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
     for (const [position, item] of list.entries()) {
-      if (item.fresh) {
+      if (startsFresh(item)) {
         if (!restoreInFlight.has(item.sessionId)) continue;
         try {
           const project = { projectPath: item.projectPath };
@@ -598,7 +599,7 @@ window.api.onSessionDetected((tempId, realId) => {
   pollActiveSessions();
 });
 
-function applySessionForked(oldId, newId) {
+window.api.onSessionForked((oldId, newId, kind) => {
   if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
   const entry = openSessions.get(oldId);
   if (!entry) return;
@@ -620,11 +621,12 @@ function applySessionForked(oldId, newId) {
   if (pendingEntry) {
     pendingEntry.sessionId = newId;
     pendingSessions.set(newId, pendingEntry);
-  } else if (entry.session.projectPath) {
+  } else if (kind === 'clear' && entry.session.projectPath) {
     // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
     const projectPath = entry.session.projectPath;
-    const session = { ...entry.session, sessionId: newId, summary: 'New session', firstPrompt: '', name: null, messageCount: 0 };
-    pendingSessions.set(newId, { session, projectPath, folder: encodeProjectPath(projectPath), cleared: true });
+    const now = new Date().toISOString();
+    entry.session = { sessionId: newId, summary: 'New session', firstPrompt: '', projectPath, name: null, starred: 0, archived: 0, messageCount: 0, modified: now, created: now };
+    pendingSessions.set(newId, { session: entry.session, projectPath, folder: encodeProjectPath(projectPath), cleared: true });
   }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
@@ -642,9 +644,7 @@ function applySessionForked(oldId, newId) {
   });
   schedulePersistWorkingSet();
   pollActiveSessions();
-}
-
-window.api.onSessionForked(applySessionForked);
+});
 
 function applyProcessExit(sessionId, exitCode, signal, stopped) {
   if (window.ATRACE) window.atrace('recv.process-exited', sessionId, { exitCode, signal, stopped });
@@ -1346,7 +1346,8 @@ async function launchNewSession(project, sessionOptions) {
 
   // Track as pending (no .jsonl yet)
   const folder = encodeProjectPath(projectPath);
-  pendingSessions.set(sessionId, { session, projectPath, folder });
+  const restorable = !(sessionOptions && (sessionOptions.forkFrom || sessionOptions.worktree));
+  pendingSessions.set(sessionId, { session, projectPath, folder, ...(restorable ? {} : { restorable: false }) });
 
   // Inject into cached project data so it appears in sidebar immediately
   sessionMap.set(sessionId, session);

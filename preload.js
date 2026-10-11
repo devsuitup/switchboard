@@ -136,7 +136,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('cli-busy-state', (_event, sessionId, busy) => callback(sessionId, busy));
   },
   onSessionForked: (callback) => {
-    ipcRenderer.on('session-forked', (_event, oldId, newId) => callback(oldId, newId));
+    ipcRenderer.on('session-forked', (_event, oldId, newId, kind) => callback(oldId, newId, kind));
   },
   onSubagentSpawned: (cb) => ipcRenderer.on('subagent-spawned', (_e, payload) => cb(payload)),
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),

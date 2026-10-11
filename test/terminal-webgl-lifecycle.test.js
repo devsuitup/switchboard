@@ -73,10 +73,9 @@ function loadShippedListener(f, listener) {
   f.w.terminalHeaderId = f.w.document.createElement('span');
   f.w.terminalHeaderName = f.w.document.createElement('span');
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const REG = 'window.api.onSessionForked(applySessionForked);';
-  const start = src.indexOf(listener === 'onSessionForked' ? 'function applySessionForked' : `window.api.${listener}(`);
+  const start = src.indexOf(`window.api.${listener}(`);
   assert.ok(start >= 0, `${listener} found in app.js`);
-  const end = listener === 'onSessionForked' ? src.indexOf(REG) + REG.length : src.indexOf('\n});', start) + '\n});'.length;
+  const end = src.indexOf('\n});', start) + '\n});'.length;
   f.inCtx(src.slice(start, end));
   return receive;
 }

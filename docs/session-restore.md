@@ -26,12 +26,16 @@ session's id and project, and which one was active — in its global settings
 A session started with **+**, or one just cleared with `/clear`, has no
 conversation until its first prompt: the CLI has nothing to resume, and the
 index does not list it. It is saved as a *fresh* entry (`fresh: true`, with
-its project). On the next start a fresh entry needs no index: restore starts
-a new session in that project, with the project's current defaults for a new
-session, except that it never creates a worktree, since the saved project
-path already is the folder to start in. Once its first prompt makes it a real
-session, the set is saved again with it as an ordinary entry. A session
-without a transcript on a remote host is still left out.
+its project). Restore waits for indexing to finish before it treats a fresh
+entry as having no transcript: one whose first prompt landed before the quit
+is indexed by then and is resumed like any other session. A fresh entry that
+is still not in the index then is started anew: a new session in that project,
+with the project's current defaults for a new session, except that it never
+creates a worktree, since the saved project path already is the folder to
+start in. Once its first prompt makes it a real session, the set is saved
+again with it as an ordinary entry. A session without a transcript is still
+left out when it runs on a remote host, or was started as a fork or in a new
+worktree: starting it anew would not give back the same thing.
 
 ## Closing the app
 

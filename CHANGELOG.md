@@ -14,6 +14,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A double click on a session in the sidebar opens it once, instead of sometimes starting two terminals that resume the same conversation. (#539)
 - Closing the window or quitting no longer leaves Switchboard running when its window has stopped responding: the window closes as before, and once the system reports it not responding, about 5 seconds after the close, or once you close it again, it is closed anyway. A window still busy at that point is closed too, and its last unsaved changes to the list of open sessions are lost; one that recovers sooner closes normally. (#540)
 - Archiving or deleting a session no longer fails with "cannot tell whether a background job is running this session" while a background job that has not received its first prompt yet is live. (#553)
+- On Linux and Windows, `/clear` (or `/reset`, `/new`) in a session keeps the open terminal on its sidebar row, which now follows the new conversation, instead of listing that conversation as a separate session. The cleared conversation stays in the list as a past session, and a session quit after `/clear` before its first prompt comes back on restore as a new session in the same project. On macOS the new conversation is still listed apart. (#477)
 
 ## v0.0.92 — 2026-10-10
 
@@ -51,7 +52,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A session that moves into a worktree while it runs stays in the sidebar, under its project, instead of disappearing while its terminal keeps running. A running session also stays listed when its transcript leaves its folder for any other reason. (#485)
 - Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. The worktrees of a repository hidden with Hide Project stay hidden. (#473)
 - Quitting or closing the window saves the open sessions right away, so the next start restores the sessions that were open, not an empty or out-of-date list. (#479)
-- `/clear` in a session keeps the open terminal on its sidebar row, which now follows the new conversation, instead of listing that conversation as a separate session. The cleared conversation stays in the list as a past session, and a session quit after `/clear` before its first prompt comes back on restore as a new session in the same project. (#477)
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 
 ## v0.0.89 — 2026-10-04
