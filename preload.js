@@ -168,6 +168,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
   unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
+  unsavedCheckReasonDone: (id) => ipcRenderer.send('unsaved-check-reason-done', id),
   onExitFlush: (callback) => {
     ipcRenderer.on('exit-flush', () => callback());
   },

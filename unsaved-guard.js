@@ -31,11 +31,40 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     entry.finish(proceed === true);
   });
 
+  const reasonWaits = new Map();
+  ipcMain.on('unsaved-check-reason-done', (_event, id) => {
+    const done = reasonWaits.get(id);
+    if (done) done();
+  });
+
+  function waitReasonDone(id) {
+    let release = null;
+    const done = new Promise((resolve) => {
+      const timer = setTimeoutFn(() => release(), timeoutMs);
+      release = () => {
+        reasonWaits.delete(id);
+        clearTimeoutFn(timer);
+        resolve();
+      };
+      reasonWaits.set(id, release);
+    });
+    return { done, release };
+  }
+
   function askFull(win, reason) {
     if (inflight) {
       if (inflight.reason === 'reload') {
         inflight.reason = reason;
-        try { win.webContents.send('unsaved-check-reason', inflight.id, reason); } catch {}
+        const { id } = inflight;
+        const wait = waitReasonDone(id);
+        try { win.webContents.send('unsaved-check-reason', id, reason); } catch { wait.release(); }
+        inflight.asked = inflight.asked.then((result) => {
+          if (!result.proceed || result.unanswered) {
+            wait.release();
+            return result;
+          }
+          return wait.done.then(() => result);
+        });
       }
       return inflight.asked;
     }

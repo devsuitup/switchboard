@@ -154,10 +154,13 @@ function initFilePanel() {
     const answeredReloads = new Set();
     if (window.api.onUnsavedCheckReason) {
       window.api.onUnsavedCheckReason((id, reason) => {
+        const done = () => { if (window.api.unsavedCheckReasonDone) window.api.unsavedCheckReasonDone(id); };
         if (unsavedCheckReasons.has(id)) unsavedCheckReasons.set(id, reason);
         else if (answeredReloads.delete(id) && typeof window.flushStateForExit === 'function') {
-          window.flushStateForExit().catch((err) => console.error('[exit-flush]', err));
+          window.flushStateForExit().catch((err) => console.error('[exit-flush]', err)).finally(done);
+          return;
         }
+        done();
       });
     }
     window.api.onUnsavedCheck(async (id, reason) => {
