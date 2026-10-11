@@ -531,6 +531,45 @@ test('lazy: a dormant session whose conversation continues under another id is o
   } finally { failed.destroy(); }
 });
 
+test('lazy: a dormant session whose continuation is already open shows it, and is neither dormant nor saved after it closes', async () => {
+  const h = setup();
+  try {
+    h.index(['a', 'x', 'b']);
+    await h.fns.tickRestorePlanner();
+    h.window.sessionMap.set('a2', { sessionId: 'a2', projectPath: PROJECT });
+    await h.open('a2');
+    h.window.resolveResumeSession = async (session) => (session.sessionId === 'a' ? { ...session, sessionId: 'a2' } : session);
+    await h.open('a');
+    assert.deepEqual(h.openTerminalCalls, ['a2'], 'no second terminal for the open continuation');
+    assert.deepEqual(h.dormantIds(), ['b', 'x']);
+    assert.equal(h.row('a').classList.contains('dormant'), false);
+    h.window.openSessions.delete('a2');
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['x', 'b'], 'the closed continuation does not come back at the next start');
+  } finally { h.destroy(); }
+});
+
+test('lazy: a session the user opens under its continuation while the marking awaits a reattach is not marked dormant', async () => {
+  const releases = {};
+  const h = setup({ livePtys: ['a'], openResult: (id) => new Promise((resolve) => { releases[id] = () => resolve({ ok: true, reattached: id === 'a' }); }) });
+  try {
+    h.index(['a', 'x', 'b']);
+    const ticking = h.fns.tickRestorePlanner();
+    for (let j = 0; j < 5; j++) await settle();
+    h.window.resolveResumeSession = async (session) => (session.sessionId === 'b' ? { ...session, sessionId: 'b2' } : session);
+    const opening = h.open('b');
+    for (let j = 0; j < 5; j++) await settle();
+    releases.b2();
+    await opening;
+    releases.a();
+    await ticking;
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.row('b').classList.contains('dormant'), false);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds().sort(), ['a', 'b2', 'x']);
+  } finally { h.destroy(); }
+});
+
 test('lazy: a session the user opens while the marking awaits a reattach is not marked dormant', async () => {
   for (const stage of ['opened', 'opening', 'checking']) {
     const releases = {};
