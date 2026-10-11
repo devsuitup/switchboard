@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
 - In a sandboxed session, a repository or a `.claude` folder below an Additional Directory that is a symbolic link now has its Git config, hooks and Claude settings read-only, like one below a plain directory. Before, they were writable from inside the sandbox. Such a directory holding a `.claude` that is itself a symbolic link, or a repository Git cannot read, now refuses to start the session (status 125), as a plain directory already did, instead of starting it unprotected. (#538)
 - A double click on a session in the sidebar opens it once, instead of sometimes starting two terminals that resume the same conversation. (#539)
+- Closing the window or quitting no longer leaves Switchboard running when its window has stopped responding: the window closes as before, and once the system reports it not responding, about 5 seconds after the close, or once you close it again, it is closed anyway. A window still busy at that point is closed too, and its last unsaved changes to the list of open sessions are lost; one that recovers sooner closes normally. (#540)
 
 ## v0.0.92 — 2026-10-10
 
