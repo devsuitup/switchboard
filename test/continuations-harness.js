@@ -71,6 +71,9 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   ctx.rows = [...rows.values()];
   vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
+  loadAppFunctions(ctx, {
+    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+  });
   const app = loadAppFunctions(ctx, {
     declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'],
     functions: ['runRestore', 'openSession', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],

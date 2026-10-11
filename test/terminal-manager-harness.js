@@ -227,7 +227,7 @@ function setupTerminalDom(opts = {}) {
 
   const ctx = dom.getInternalVMContext();
   loadAppFunctions(dom.getInternalVMContext(), {
-    functions: ['sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
+    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
   const files = ['utils.js', 'subagent-timing.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-manager.js'];
   if (!opts.dom) {

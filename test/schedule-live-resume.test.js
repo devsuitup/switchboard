@@ -100,6 +100,9 @@ function setup(t, { sandbox = false } = {}) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
   `, ctx);
+  loadAppFunctions(ctx, {
+    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
+  });
   const app = loadAppFunctions(ctx, {
     functions: ['openSession', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice'],
     declarations: ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled'],
