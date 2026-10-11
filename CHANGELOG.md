@@ -47,6 +47,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A session that moves into a worktree while it runs stays in the sidebar, under its project, instead of disappearing while its terminal keeps running. A running session also stays listed when its transcript leaves its folder for any other reason. (#485)
 - Worktree folders from another host, or whose repository is not listed, show in the sidebar instead of being nested under the wrong folder or not shown at all. The worktrees of a repository hidden with Hide Project stay hidden. (#473)
 - Quitting or closing the window saves the open sessions right away, so the next start restores the sessions that were open, not an empty or out-of-date list. (#479)
+- `/clear` in a session keeps the open terminal on its sidebar row, which now follows the new conversation, instead of listing that conversation as a separate session. The cleared conversation stays in the list as a past session, and a session quit after `/clear` before its first prompt comes back on restore as a new session in the same project. (#477)
 - Remote triggers refuse commands containing invisible format characters, default-ignorable characters or braille blanks, including joined emoji, emoji with variation selectors (such as hearts), soft hyphens and right-to-left marks. Fullwidth slash, exclamation and number-sign prefixes are refused too. (#440)
 
 ## v0.0.89 — 2026-10-04

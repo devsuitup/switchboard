@@ -18,6 +18,7 @@ function setup() {
     console,
     Promise,
     openSessions: new Map(),
+    pendingSessions: new Map(),
     activeSessionId: null,
     document: { getElementById: () => null },
     skippedWorkingSetEntries: new Map(),

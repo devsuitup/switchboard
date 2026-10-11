@@ -31,6 +31,7 @@ function setup() {
   vm.runInContext(`
     var openSessions = new Map([['opened', { session: { projectPath: '/p' }, closed: false }]]);
     var sessionMap = new Map();
+    var pendingSessions = new Map();
     var activeSessionId = 'opened';
     var _persistChain = Promise.resolve();
     var RESTORE_STAGGER_MS = 0;

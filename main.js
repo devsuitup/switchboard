@@ -3122,6 +3122,7 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
+  clearOwner: (sessionId, ptyPid) => cliSessionState.clearOwner(sessionId, ptyPid),
 });
 const { detectSessionTransitions } = sessionTransitions;
 
@@ -3444,6 +3445,7 @@ if (!gotSingleInstanceLock) {
       require('./trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
+        resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {
           const settings = getSetting('global') || {};
           if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
