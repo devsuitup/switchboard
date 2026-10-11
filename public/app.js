@@ -203,14 +203,15 @@ function persistWorkingSet({ final = false } = {}) {
         ...(fresh ? { fresh: true } : {}),
       });
     }
-    const pending = pendingRestoreEntries();
-    const heldActive = pending.find(({ item }) => item.active && !openSessions.has(item.sessionId));
+    const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
+    const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
-    const held = [...skippedWorkingSetEntries.values(), ...pending]
+    const held = [...skippedWorkingSetEntries.values(), ...notStarted]
       .filter(({ item, keepAttached }) => !openSessions.has(item.sessionId) || (keepAttached && openSessions.get(item.sessionId).attach))
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active: heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId, ...(item.fresh ? { fresh: true } : {}) });
+      const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}) });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);

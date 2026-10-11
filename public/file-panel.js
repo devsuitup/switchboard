@@ -151,9 +151,13 @@ function initFilePanel() {
   });
   if (window.api.onUnsavedCheck) {
     const unsavedCheckReasons = new Map();
+    const answeredReloads = new Set();
     if (window.api.onUnsavedCheckReason) {
       window.api.onUnsavedCheckReason((id, reason) => {
         if (unsavedCheckReasons.has(id)) unsavedCheckReasons.set(id, reason);
+        else if (answeredReloads.delete(id) && typeof window.flushStateForExit === 'function') {
+          window.flushStateForExit().catch((err) => console.error('[exit-flush]', err));
+        }
       });
     }
     window.api.onUnsavedCheck(async (id, reason) => {
@@ -168,6 +172,7 @@ function initFilePanel() {
         const bound = new Promise((resolve) => setTimeout(resolve, EXIT_FLUSH_BOUND_MS));
         try { await Promise.race([window.flushStateForExit(), bound]); } catch (err) { console.error('[exit-flush]', err); }
       }
+      if (proceed && finalReason === 'reload') answeredReloads.add(id);
       window.api.unsavedCheckResult(id, proceed);
     });
   }
