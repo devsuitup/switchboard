@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- A merged web conversation now shows its running continuation in the sidebar, and clicking it focuses the open tab without asking again which continuation to open. (#547)
 - Switching terminal tabs no longer freezes the window for about two seconds, a regression introduced in v0.0.91. (#541)
 - Switching to a hidden terminal tab no longer disposes and recreates its graphics context every time, which blocked the window for several seconds. The three most recently shown terminals keep theirs, and a context that has to be recreated is made once the tab is shown. (#526)
 

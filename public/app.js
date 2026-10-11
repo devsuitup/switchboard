@@ -972,9 +972,9 @@ async function triggerRebuildAndSearch() {
 // --- Stop session helper ---
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 // btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
-async function confirmAndStopSession(sessionId, btn) {
+async function confirmAndStopSession(sessionId, btn, rowSession) {
   const openEntry = openSessions.get(sessionId);
-  const plan = resolveSessionStop(sessionMap.get(sessionId), { attach: !!(openEntry && openEntry.attach) });
+  const plan = resolveSessionStop(sessionMap.get(sessionId) || openEntry?.session || rowSession, { attach: !!(openEntry && openEntry.attach) });
   if (!confirm(plan.confirmText)) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
@@ -1076,7 +1076,9 @@ function updateRunningIndicators() {
       // Subagents have no PTY — see .ai/contexts/subagent-observability.md
       if (item.dataset.subagent) return;
       const id = item.dataset.sessionId;
-      const running = activePtyIds.has(id);
+      const session = sessionMap.get(id) || { sessionId: id };
+      const ids = rowSessionIds(session);
+      const running = ids.some(sid => activePtyIds.has(sid));
       item.classList.toggle('has-running-pty', running);
       // remote rows are owned by the remote adapter — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
       if (!running && !item.dataset.remoteAlias) {
@@ -1085,10 +1087,18 @@ function updateRunningIndicators() {
         // the process; detectSubagentTransitions skips exited sessions), so
         // drop the live-subagent state now instead of waiting for the TTL.
         dropLocalPtySession(id, 'pty-gone');
+        for (const sid of ids.slice(1)) dropLocalPtySession(sid, 'pty-gone');
       }
-      if (item.dataset.remoteAlias) setRemoteAttached(id, running);
+      if (item.dataset.remoteAlias) {
+        for (const sid of ids) setRemoteAttached(sid, activePtyIds.has(sid));
+      }
       // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md
-      if (running && !item.dataset.remoteAlias) localTranscriptPtyTakeover(id);
+      if (running && !item.dataset.remoteAlias) {
+        for (const sid of ids) {
+          if (activePtyIds.has(sid)) localTranscriptPtyTakeover(sid);
+          else dropLocalPtySession(sid, 'pty-gone');
+        }
+      }
       const icon = item.querySelector('.session-icon');
       if (icon) {
         icon.classList.toggle('running', running);
@@ -1390,6 +1400,12 @@ async function showTerminalHeader(session) {
 async function openSession(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
+  const openId = [session.sessionId, ...(session.mergedMemberIds || [])]
+    .find(id => openSessions.has(id) && !openSessions.get(id).closed);
+  if (openId) {
+    showSession(openId);
+    return;
+  }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
