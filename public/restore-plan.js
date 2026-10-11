@@ -37,7 +37,11 @@ function createRestorePlanner({ savedSet, maxTicks = 50, askOnce = false } = {})
       return { action: 'nothing', candidates: [], remaining: 0, unavailable: [] };
     }
 
-    const indexedIds = [...remaining].filter(id => (sessionMap && sessionMap.has(id)) || (indexingDone && items.get(id).fresh));
+    const indexedMembers = new Set();
+    for (const session of sessionMap?.values() || []) {
+      for (const id of session.mergedMemberIds || []) indexedMembers.add(id);
+    }
+    const indexedIds = [...remaining].filter(id => sessionMap?.has(id) || indexedMembers.has(id) || (indexingDone && items.get(id).fresh));
     const allIndexed = indexedIds.length === remaining.size;
 
     if (askOnce) {
