@@ -47,8 +47,12 @@ for one launch — see [Launching sessions](launching-sessions.md).
 
 ### Keyboard Shortcuts
 
-Four rebindable shortcuts, stored as `shortcuts` — see
-[Keyboard shortcuts](keyboard-shortcuts.md#rebinding).
+Eight rebindable shortcuts, stored as `shortcuts`: Toggle Changes, Show
+pending Diff, Toggle Touched, Toggle Shell, Navigate sessions / grid, Previous /
+next session, Toggle grid view and Toggle agents view. Each defaults to
+Primary+Shift (Ctrl, or Cmd on macOS) with its key — see
+[Keyboard shortcuts](keyboard-shortcuts.md) for the keys and
+[Rebinding](keyboard-shortcuts.md#rebinding).
 
 ### Updates
 

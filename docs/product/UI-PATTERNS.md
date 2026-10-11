@@ -189,9 +189,7 @@ The Changes badge is the one place that already meets "never colour alone".
 **Divergences.**
 1. Archive is reversible but the stop it performs is not; the row and
    slug-group Archive stop without asking while the folder Archive asks and
-   the Stop button asks (H5). `.ai/contexts/session-cache.md:131` states
-   "bulk and folder Archive retain their existing confirmations": the bulk
-   (slug-group) Archive has none.
+   the Stop button asks (H5).
 2. Three delete confirmations: custom modal with preview (session, worktree),
    OS `confirm` (Agents, files). The confirm button says `Delete permanently`,
    `Delete anyway`, or `OK`.

@@ -1,8 +1,16 @@
 # Launching Sessions
 
-Every Claude session Switchboard runs is a `claude` process in a terminal
-(a PTY) owned by the app. This page covers how one is started, resumed or
-forked, and with which options.
+A Claude session started, resumed or forked from this machine's sidebar is a
+`claude` process in a terminal (a PTY) owned by the app. This page covers how
+one is started, resumed or forked, and with which options.
+
+Not every session Switchboard lists is one of these. A
+[scheduled task](automation.md#schedules) runs headless, with no terminal. A
+[background agent](background-agents.md) runs under the Claude CLI's daemon;
+opening it runs `claude attach` in a terminal, and detaching leaves the session
+running. A session on a [remote host](remote-hosts.md)
+runs on that host. A `claude` started in an outside terminal belongs to that
+terminal ([Sessions live in another process](#sessions-live-in-another-process)).
 
 ## The "+" menu
 
@@ -119,8 +127,8 @@ shell's history:
 The generated files live in `shell-init/` in the data directory, next to
 `switchboard.db`; nothing under `$HOME` is written.
 
-Clicking a terminal row whose shell has exited starts a new shell in that same
-row.
+When a terminal's shell exits, its view closes and its row leaves the sidebar;
+**+** → **Terminal** starts a new one.
 
 ## Sessions live in another process
 

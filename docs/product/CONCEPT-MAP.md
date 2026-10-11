@@ -242,8 +242,7 @@ removed on exit (R7.1).
 **Panel shell** — states: none shown. Actions: **Shell** toggle
 (`public/tool-bar.js:8`, Primary+Shift+S); toggling off kills it with no
 confirmation (V\*). Rule: runs in the owning session's working directory
-(`docs/worktrees.md:52-53`); does not stop when the owner stops (V\*, doc says
-it does: `docs/terminal.md:147`).
+(`docs/worktrees.md:52-53`); does not stop when the owner stops (V\*).
 
 ## 10. Background agent (job)
 
@@ -393,14 +392,3 @@ result; **minor** = confusing but recoverable.
 | m6 | minor | The grid counts open terminals and calls them sessions | §8 |
 | m7 | minor | A scheduled run can be neither stopped nor attached | §14 |
 | m8 | minor | "agent", "terminal", "tab", "profile" each carry 3–4 meanings; "session" carries three | GLOSSARY |
-
-Doc drift found by the audit (each misleads a reader of the docs):
-`docs/worktrees.md:62` (Switchboard does delete worktrees);
-`docs/launching-sessions.md:122` (an exited terminal row is removed, not
-restarted); `docs/launching-sessions.md:3` (not every session is a PTY of the
-app); `docs/session-browser.md:212-217` (Stop omits detach);
-`docs/terminal.md:147` (panel shell does not stop with its
-owner); `docs/settings.md:50` (eight shortcuts, not four);
-`.ai/contexts/session-cache.md:131` ("bulk and folder Archive retain their
-existing confirmations": folder Archive confirms, slug-group Archive does not,
-`public/sidebar.js:1190`, `1362-1380`).
