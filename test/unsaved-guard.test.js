@@ -283,6 +283,18 @@ test('a quit that joins an unanswered reload check tells the renderer it is now 
   assert.equal(quits.length, 1);
 });
 
+test('a reload check that a quit joined quits without reloading first', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(id, true);
+  await tick();
+  assert.equal(t.wc.reloads, 0);
+  assert.equal(quits.length, 1);
+});
+
 test('a reload joining a quit check leaves it a quit', () => {
   const t = setup();
   t.win.emit('close', t.closeEvent());

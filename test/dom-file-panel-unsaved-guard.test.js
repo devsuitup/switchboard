@@ -286,6 +286,33 @@ test('a reload check that a quit joins before it is answered flushes once', asyn
   } finally { ctx.destroy(); }
 });
 
+test('a quit that joins a reload check the page has already answered still writes the app state', async () => {
+  const ctx = setup();
+  try {
+    let flushed = 0;
+    ctx.window.flushStateForExit = () => { flushed++; return Promise.resolve(); };
+    ctx.calls.check(6, 'reload');
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }]);
+    ctx.calls.reason(6, 'quit');
+    await flush();
+    assert.equal(flushed, 1);
+    ctx.calls.reason(6, 'quit');
+    ctx.calls.reason(99, 'quit');
+    await flush();
+    assert.equal(flushed, 1, 'once, and only for a check this page answered yes');
+
+    await dirtyTab(ctx, 's1', A);
+    ctx.calls.check(7, 'reload');
+    await flush();
+    button(ctx, 'unsaved-cancel').click();
+    await flush();
+    ctx.calls.reason(7, 'quit');
+    await flush();
+    assert.equal(flushed, 1, 'a reload answered no is not written for');
+  } finally { ctx.destroy(); }
+});
+
 test('a cancelled close does not flush', async () => {
   const ctx = setup();
   try {

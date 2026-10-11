@@ -55,7 +55,10 @@ window open), and stops saving it for the next 10 s. Main stops sending
 (`appQuitting`), so the shutdown cannot record them as closed. A reload is
 not an exit and does neither. A quit or close that arrives while a reload's
 question is still open joins it, and main tells the renderer the question is
-now an exit (`unsaved-check-reason`), so the answer still waits for the write.
+now an exit (`unsaved-check-reason`), so the answer still waits for the write,
+and the page is not reloaded before the quit. If the page had already answered
+the reload when the upgrade reaches it, it writes the set then, best effort as
+for a logoff below.
 
 The write keeps the saved sessions that are not open yet: those the index has
 not reached, those offered by the Restore prompt and not answered, and those

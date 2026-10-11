@@ -195,3 +195,26 @@ test('a Windows session end flushes the app state', async () => {
   await t.run('_persistChain');
   assert.deepEqual(t.writes, [['a']]);
 });
+
+test('a not-started entry holding the saved active marker keeps it over a reattached session shown meanwhile', async () => {
+  const t = setup();
+  t.saved(['a', 'b', 'c'], 'c');
+  t.run('restoreInFlight.set("c", savedSet[2]); skippedWorkingSetEntries.set("b", { item: savedSet[1], index: 1, keepAttached: true })');
+  t.open('a');
+  t.open('b');
+  t.context.openSessions.get('b').attach = true;
+  t.context.activeSessionId = 'b';
+  await t.flushStateForExit();
+  assert.deepEqual(t.store.global.openWorkingSet.map((e) => [e.sessionId, e.active]), [['a', false], ['b', false], ['c', true]]);
+});
+
+test('main stops reporting session exits once the quit starts killing them', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
+  const onExit = main.slice(main.indexOf('ptyProcess.onExit('), main.indexOf('\n  });', main.indexOf('ptyProcess.onExit(')));
+  assert.match(onExit, /if \(mainWindow && !mainWindow\.isDestroyed\(\) && !appQuitting\) \{\n\s*mainWindow\.webContents\.send\('process-exited'/);
+  const quitStart = main.indexOf("app.on('before-quit'");
+  const quit = main.slice(quitStart, main.indexOf('\n});', quitStart));
+  const flag = quit.indexOf('appQuitting = true;');
+  assert.notEqual(flag, -1, 'before-quit raises the flag');
+  assert.ok(flag < quit.indexOf('killPty('), 'the flag is up before the first kill');
+});
