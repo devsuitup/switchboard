@@ -20,6 +20,7 @@ function init(ctx) {
   clearOwner = ctx.clearOwner || (() => 'pending');
   setTimeoutFn = ctx.setTimeout || setTimeout;
   rekeyed.clear();
+  signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
   recheckTimers.clear();
 }
@@ -27,9 +28,33 @@ function init(ctx) {
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
 const rekeyed = new Map();
 
+function isLive(sessionId) {
+  const session = activeSessions && activeSessions.get(sessionId);
+  return !!session && !session.exited;
+}
+
 /** The id a session is keyed under now, following the re-keys of forks and /clear. */
+const CLEAR_COMMANDS = new Set(['/clear', '/reset', '/new']);
+
+function logOwnerOnce(session, file, line) {
+  const logged = session._ownerLogged || (session._ownerLogged = new Map());
+  if (logged.get(file) === line) return;
+  logged.set(file, line);
+  log.info(line);
+}
+
 function currentSessionId(sessionId) {
-  return rekeyed.get(sessionId) || sessionId;
+  if (isLive(sessionId)) {
+    rekeyed.delete(sessionId);
+    return sessionId;
+  }
+  const target = rekeyed.get(sessionId);
+  if (target === undefined) return sessionId;
+  if (!isLive(target)) {
+    rekeyed.delete(sessionId);
+    return sessionId;
+  }
+  return target;
 }
 
 function recordRekey(oldId, newId) {
@@ -328,11 +353,27 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
 /** Read first few lines of a new .jsonl to extract signals.
  *  Skips file-history-snapshot lines which can be very large (tens of KB)
  *  and reads up to 512KB to find the first user/assistant entry. */
+const signalsCache = new Map();
+const SIGNALS_CACHE_MAX = 256;
+
 function readNewSessionSignals(filePath) {
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { stat = null; }
+  const cached = stat && signalsCache.get(filePath);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return cached.signals;
+  const signals = readSignalsFromDisk(filePath, stat ? Math.min(stat.size, 524288) : 524288);
+  if (stat) {
+    if (signalsCache.size >= SIGNALS_CACHE_MAX) signalsCache.clear();
+    signalsCache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, signals });
+  }
+  return signals;
+}
+
+function readSignalsFromDisk(filePath, length) {
   try {
     const fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(524288);
-    const bytesRead = fs.readSync(fd, buf, 0, 524288, 0);
+    const buf = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buf, 0, length, 0);
     fs.closeSync(fd);
     const head = buf.toString('utf8', 0, bytesRead);
     const lines = head.split('\n').filter(Boolean);
@@ -355,7 +396,7 @@ function readNewSessionSignals(filePath) {
         const kind = classifyUserText(text);
         // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
         if (kind.kind === 'skip') continue;
-        cleared = kind.kind === 'command' && kind.text === '/clear';
+        cleared = kind.kind === 'command' && CLEAR_COMMANDS.has(kind.text.split(' ')[0]);
       }
       // Stop after finding a user or assistant message
       if (entry.type === 'user' || entry.type === 'assistant') { hasTurn = true; break; }
@@ -454,7 +495,7 @@ function detectSessionTransitions(folder) {
         const owner = clearOwner(newId, session.pty && session.pty.pid);
         if (owner === 'mine') matched = true;
         else pendingOwner = owner === 'pending';
-        log.info(`[detect] session=${sessionId} snapshot-only fork file=${newId} owner=${owner} matched=${matched}`);
+        logOwnerOnce(session, newFile, `[detect] session=${sessionId} snapshot-only fork file=${newId} owner=${owner} matched=${matched}`);
       }
       if (!matched && signals.cleared && !awaitingFork && newId !== (session.realSessionId || sessionId)) {
         const owner = clearOwner(newId, session.pty && session.pty.pid);
@@ -464,7 +505,7 @@ function detectSessionTransitions(folder) {
           emptyFiles.add(newFile);
           recheck = true;
         }
-        log.info(`[detect] session=${sessionId} /clear file=${newId} owner=${owner} matched=${matched}`);
+        logOwnerOnce(session, newFile, `[detect] session=${sessionId} /clear file=${newId} owner=${owner} matched=${matched}`);
       }
 
       if (!matched && !signals.hasTurn && newId !== (session.realSessionId || sessionId) && ageMs(newFilePath) <= STALE_EMPTY_MS) {
@@ -472,7 +513,8 @@ function detectSessionTransitions(folder) {
         if (isFresh(newFilePath) && (pendingOwner || !awaitingFork)) recheck = true;
       }
 
-      if (session.forkFrom && !matched) {
+      if (session.forkFrom && !matched && !(session._noMatchLogged || (session._noMatchLogged = new Set())).has(newFile)) {
+        session._noMatchLogged.add(newFile);
         log.info(`[detect] session=${sessionId} NO MATCH for newFile=${newId} forkFrom=${session.forkFrom} parentSessionId=${signals.parentSessionId||'null'} forkedFrom=${signals.forkedFrom||'null'}`);
       }
 
@@ -494,7 +536,7 @@ function detectSessionTransitions(folder) {
         const mainWindow = getMainWindow();
         if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('session-forked', sessionId, newId);
+          mainWindow.webContents.send('session-forked', sessionId, newId, signals.cleared && !awaitingFork ? 'clear' : 'fork');
         }
         break; // Only one transition per session per flush
       }

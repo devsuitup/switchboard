@@ -235,10 +235,9 @@ test('R3 N1: forking with Changes open keeps panel visibility and pressed state 
     assert.equal(changes.getAttribute('aria-pressed'), 'true');
     const state = ctx.state();
     const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
-    const start = src.indexOf('function applySessionForked');
+    const start = src.indexOf('window.api.onSessionForked(');
     assert.ok(start >= 0);
-    const REG = 'window.api.onSessionForked(applySessionForked);';
-    const end = src.indexOf(REG) + REG.length;
+    const end = src.indexOf('\n});', start) + '\n});'.length;
     ctx.inCtx(src.slice(start, end));
     receive('s1', 'forked');
     await flush();
@@ -349,10 +348,9 @@ for (const listener of ['onSessionDetected', 'onSessionForked']) {
       window.terminalHeaderId = window.document.createElement('span');
       window.terminalHeaderName = window.document.createElement('span');
       const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
-      const REG = 'window.api.onSessionForked(applySessionForked);';
-      const start = src.indexOf(listener === 'onSessionForked' ? 'function applySessionForked' : `window.api.${listener}(`);
+      const start = src.indexOf(`window.api.${listener}(`);
       assert.ok(start >= 0);
-      const end = listener === 'onSessionForked' ? src.indexOf(REG) + REG.length : src.indexOf('\n});', start) + '\n});'.length;
+      const end = src.indexOf('\n});', start) + '\n});'.length;
       ctx.inCtx(src.slice(start, end));
       receive('s1', 'real');
       await flush();

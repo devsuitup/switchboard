@@ -67,7 +67,11 @@ the commands a chain may send. `createTriggerContext` takes `resolveSessionId`
 (`getPtyForSession`, `isSessionBusy`, `getComposerState`, `getTranscriptTurn`,
 `getCliStatus`) goes through it, so the old id keeps reaching the same terminal
 and the CLI status is read under the id the CLI now writes, as is
-`getLiveDescriptor`. Results still carry the id the trigger named.
+`getLiveDescriptor`. Results still carry the id the trigger named. An id a
+live session holds itself resolves to that session, so a trigger aimed at a
+cleared conversation that was reopened reaches its own terminal. When a lookup
+finds the transcript under a new id, the turn reader forgets the file it read
+under the old one.
 `test/trigger-clear-chain.test.js` runs `[/clear, reply]` through the shipped
 watcher, with the re-key done by `session-transitions.js` while step 0 is
 verified; without the resolution that chain ends with "session exited during
@@ -348,11 +352,11 @@ in-flight write. Two commands landing in one composer half-typed into each
 other is a worse failure than anything `submitted` reports: corrupted input,
 not just a wrong report field.
 
-`start()` keeps `sessionLocks`, a `Map` used as a FIFO mutex queue
-(`acquireSessionLock`), keyed by the PTY that `getPtyForSession` returns, or by
-the session id when there is none. A fork or `/clear` gives one terminal a new
-id; keyed by the PTY, triggers naming the old and the new id share one queue
-(see "Re-keyed sessions"). `processTriggerFile` awaits it right after
+`start()` keeps `sessionLocks`, a `Map<sessionId, Promise>` used as a FIFO
+mutex queue (`acquireSessionLock`). A fork or `/clear` gives one terminal a new
+id, so a trigger waits for every queued id that resolves (`ctx.resolveSessionId`,
+see "Re-keyed sessions") to the same session as its own: the old and the new id
+share one queue, and a PTY replaced under the same id keeps it. `processTriggerFile` awaits it right after
 `sessionId` is known to be a non-empty string — before any wait, any PTY
 lookup, any write — and releases it in the function's own `finally`, so every
 exit path (success, validation refusal, thrown exception) releases exactly
@@ -988,8 +992,7 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   the CLI reacted. `idle` alone covers a turn too fast for a poll to see
   `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
   level probe, or a status that began earlier, proves nothing. Otherwise the
-  existing recovery applies (one bare `
-`, only into a free composer, same
+  existing recovery applies (one bare ``, only into a free composer, same
   window), and the reaction is looked for again. Still nothing:
   `confirmed: false`.
 - **The recovery Enter is never written while the descriptor reads `waiting`

@@ -75,8 +75,7 @@ function setup() {
       window.api.onSessionForked = (cb) => { forkedListener = cb; };
       const src = readAppSource();
       const start = src.indexOf('window.api.onSessionForked(');
-      const named = src.indexOf('function applySessionForked(');
-      vm.runInContext(named >= 0 ? src.slice(named, src.indexOf(';\n', start) + 1) : src.slice(start, src.indexOf('\n});', start) + 4), ctx.context);
+      vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), ctx.context);
     }
     forkedListener(...args);
   };
