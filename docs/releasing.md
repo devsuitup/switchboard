@@ -66,20 +66,51 @@ request first, because `main` is protected.
    draft. The workflow token has `contents: read`; only the publish job has
    `contents: write`, and no checkout persists credentials.
 
-5. **Publish the draft**, after checking its assets:
+5. **Publish the draft to beta**, after checking its assets:
 
    ```bash
    gh release view v0.1.0 --repo devsuitup/switchboard --json assets --jq '.assets | length'
-   gh release edit v0.1.0 --repo devsuitup/switchboard --draft=false --latest
+   gh release edit v0.1.0 --repo devsuitup/switchboard --draft=false --prerelease
    ```
 
-   Installed copies with automatic updates on pick the release up from its
-   `latest*.yml` manifests; a draft is invisible to them. On their first start
+   Installed copies with **Receive beta versions** and automatic updates on
+   pick the release up from its `latest*.yml` manifests; a draft is invisible
+   to them, and stable installs skip pre-releases. On their first start
    after the update, the What's new dialog shows this section, and those of
    any version they skipped.
 
+6. **Promote to stable**, only on the maintainer's go. First require at least
+   24 hours of use on beta and no open issue labelled `regression` for this
+   version. Inspect the open regression issues and confirm which version each
+   affects before promoting:
+
+   ```bash
+   gh issue list --repo devsuitup/switchboard --state open --label regression --limit 1000
+   gh release edit v0.1.0 --repo devsuitup/switchboard --prerelease=false --latest
+   ```
+
+   One binary serves both channels: beta is the GitHub pre-release flag.
+   Promotion changes that flag and marks the release latest; keep the same
+   version tag and assets, with no beta tags or rebuild.
+
 `npm run release` builds for the local platform only and publishes through
 electron-builder; it needs `GH_TOKEN` (a token with `repo` scope).
+
+## Withdraw a stable release
+
+On the maintainer's go, set the affected release back to pre-release:
+
+```bash
+gh release edit v0.1.0 --repo devsuitup/switchboard --prerelease
+gh release edit v0.0.99 --repo devsuitup/switchboard --latest   # the previous stable
+```
+
+Stable installs stop being offered the withdrawn version; new installs get the
+previous stable release. A stable install that already downloaded the withdrawn
+version still installs it at its next quit. Installs already on the withdrawn version keep it: never
+downgrade, because the SQLite cache only migrates forward. Fix forward with a
+new version published to beta, then use the same promotion gate. Beta installs
+can still receive a withdrawn pre-release.
 
 ## Fork release-flow gotchas
 

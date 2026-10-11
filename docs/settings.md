@@ -55,6 +55,7 @@ Four rebindable shortcuts, stored as `shortcuts` — see
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Automatic Updates | `autoUpdate` | on | Download updates in the background and install them when Switchboard quits; read at launch |
+| Receive beta versions | `receiveBetaVersions` | off | Include GitHub pre-releases in automatic and manual update checks; applied at launch and on Save Settings |
 | Version | — | — | The installed version and the update status |
 | Check for Updates | — | — | Checks GitHub Releases now |
 
@@ -70,6 +71,15 @@ restart. This keeps a locally built or patched build in place; with it on, the
 next release of the same or a higher version replaces it at quit.
 
 Builds run from source never check.
+
+Stable is the default channel. Turn on **Receive beta versions** and click
+**Save Settings** to include beta releases in future update checks. The same
+binary serves both channels; the release's GitHub pre-release status decides
+whether it is beta. Turning the switch off never downgrades: an installed beta
+stays in place until a newer stable version is available. A beta that was
+already downloaded before you turned the switch off still installs at the next
+quit. The SQLite cache
+only migrates forward.
 
 ### Remote Hosts
 

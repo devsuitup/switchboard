@@ -88,6 +88,16 @@ An explicitly saved `null` (permission mode "Default", which omits
 `--permission-mode`) is a value, not an absence: the merge overrides on
 `!== undefined` only, so it is never promoted to the table's `'auto'`.
 
+`receiveBetaVersions` is global-only in the panel and defaults to false in
+the shared table. `set-setting('global', ...)` re-reads the saved row and
+applies its channel to `autoUpdater.allowPrerelease` immediately. Startup
+applies it before scheduling update checks and logs `stable` or `beta`.
+Automatic downloads remain controlled separately by `autoUpdate`; manual
+checks use the same channel. No downgrade is enabled because the SQLite cache
+only migrates forward. Release promotion changes GitHub's pre-release flag
+without changing the version or binary, so the installed version alone cannot
+reliably identify a beta for the optional About indicator.
+
 ### File panel (IDE mode)
 
 | IPC | Args |

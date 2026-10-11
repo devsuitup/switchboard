@@ -80,6 +80,7 @@
     const restoreStartupValue = fieldValue('restoreOnStartup');
     const mcpEmulationValue = fieldValue('mcpEmulation');
     const autoUpdateValue = fieldValue('autoUpdate');
+    const receiveBetaVersionsValue = fieldValue('receiveBetaVersions');
     const shellProfileValue = fieldValue('shellProfile');
 
     // Working copy of the global-only host list, written back on Save.
@@ -344,6 +345,15 @@
         </div>
         <div class="settings-field">
           <div class="settings-field-info">
+            <span class="settings-label">Receive beta versions</span>
+            <div class="settings-description">Include beta releases when checking for updates. Applies when you save; turning it off never downgrades your installed version, but a beta already downloaded still installs at quit.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-receive-beta-versions" ${receiveBetaVersionsValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="settings-field">
+          <div class="settings-field-info">
             <span class="settings-label">Version</span>
             <div class="settings-description"><span id="sv-current-version"></span> <span id="sv-update-status"></span></div>
           </div>
@@ -592,6 +602,7 @@
         settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
+        settings.receiveBetaVersions = settingsViewerBody.querySelector('#sv-receive-beta-versions').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
         settings.shortcuts = scShortcuts;
         // Same alias rule as remote-hosts.js; a failing row is reported.
