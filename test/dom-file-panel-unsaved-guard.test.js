@@ -43,7 +43,7 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { openFile: null, check: null, acks: [], answers: [], saves: [], confirms: [] };
+  const calls = { openFile: null, check: null, acks: [], answers: [], saves: [], confirms: [], reasonDone: [] };
   let editor = null;
 
   window.api = new Proxy({
@@ -52,6 +52,7 @@ function setup() {
     onUnsavedCheckReason: (cb) => { calls.reason = cb; },
     unsavedCheckAck: (id) => { calls.acks.push({ id, at: calls.answers.length, dialog: !!window.document.getElementById('unsaved-edits-dialog') }); },
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
+    unsavedCheckReasonDone: (id) => { calls.reasonDone.push(id); },
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
     readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, git: false, original: disk.get(p), current: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
@@ -310,6 +311,43 @@ test('a quit that joins a reload check the page has already answered still write
     ctx.calls.reason(7, 'quit');
     await flush();
     assert.equal(flushed, 1, 'a reload answered no is not written for');
+  } finally { ctx.destroy(); }
+});
+
+test('the page tells main when the save a late upgrade asked for is done, and at once when it has none to do', async () => {
+  const ctx = setup();
+  try {
+    let finish = null;
+    let fail = false;
+    ctx.window.flushStateForExit = () => new Promise((resolve, reject) => { finish = () => (fail ? reject(new Error('disk')) : resolve()); });
+    ctx.calls.check(6, 'reload');
+    await flush();
+    ctx.calls.reason(6, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDone, [], 'not before the save lands');
+    finish();
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDone, [6]);
+
+    ctx.calls.check(7, 'reload');
+    await flush();
+    fail = true;
+    ctx.calls.reason(7, 'quit');
+    await flush();
+    finish();
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDone, [6, 7], 'a failed save still lets the quit go');
+
+    ctx.calls.reason(99, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDone, [6, 7, 99], 'an unknown check has nothing to wait for');
+
+    await dirtyTab(ctx, 's1', A);
+    ctx.calls.check(8, 'reload');
+    await flush();
+    ctx.calls.reason(8, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDone, [6, 7, 99, 8], 'a check still asking saves before it answers, so main need not wait');
   } finally { ctx.destroy(); }
 });
 
