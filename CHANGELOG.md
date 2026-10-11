@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.93 — 2026-10-11
+
 ### New
 - With Sandbox on, `SWITCHBOARD_SANDBOX_RW_SKILLS=1` or `SWITCHBOARD_SANDBOX_RW_AGENTS=1` in the Pre-launch Command lets the session create and edit skills or agents, in `~/.claude` and the project's `.claude`. Both are off by default: what the session writes there is loaded, and run, by later sessions outside the sandbox. (#483)
 
