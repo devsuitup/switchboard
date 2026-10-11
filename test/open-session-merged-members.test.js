@@ -21,7 +21,7 @@ function setup(t) {
     checked.push(id);
     return { candidates: [{ sessionId: 'B' }], unresolved: false };
   };
-  const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession'] });
+  const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow'], declarations: ['openingSessions'] });
   return { ctx, openSession, shown, prompts, checked };
 }
 

@@ -201,7 +201,7 @@ for (const ownOpen of [false, true]) {
     open(ctx, 'B');
     open(ctx, 'C');
     if (ownOpen) open(ctx, 'A');
-    const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession'] });
+    const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow'], declarations: ['openingSessions'] });
     await openSession(session);
     assert.deepEqual(shown, [ownOpen ? 'A' : 'C']);
   });
