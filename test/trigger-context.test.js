@@ -187,3 +187,35 @@ test('a re-keyed id is resolved before every lookup, the live descriptor include
   assert.deepEqual(ctx.getLiveDescriptor('old-id'), { id: 'new-id' });
   assert.deepEqual(asked, ['new-id']);
 });
+
+test('a re-key mid-chain forgets the transcript read under the previous id', () => {
+  const turnModule = require('../transcript-turn');
+  const original = turnModule.createTranscriptTurnReader;
+  const forgotten = [];
+  turnModule.createTranscriptTurnReader = (...args) => {
+    const reader = original(...args);
+    return { ...reader, forget: (p) => { forgotten.push(p); reader.forget(p); } };
+  };
+  const contextPath = require.resolve('../trigger-context');
+  const cached = require.cache[contextPath];
+  delete require.cache[contextPath];
+  try {
+    const { createTriggerContext: create } = require('../trigger-context');
+    const session = { pty: { pid: 1 }, host: null, projectFolder: 'proj', exited: false };
+    const activeSessions = new Map([['old-id', session]]);
+    let alias = null;
+    const ctx = create({ activeSessions, log: silentLog, projectsDir: '/projects', resolveSessionId: (id) => alias && id === 'old-id' ? alias : id });
+    ctx.getTranscriptTurn('old-id');
+    activeSessions.delete('old-id');
+    activeSessions.set('new-id', session);
+    session.realSessionId = 'new-id';
+    alias = 'new-id';
+    ctx.getTranscriptTurn('old-id');
+    assert.deepEqual(forgotten, [require('node:path').join('/projects', 'proj', 'old-id.jsonl')]);
+    ctx.forgetTranscriptTurn('old-id');
+    assert.deepEqual(forgotten.at(-1), require('node:path').join('/projects', 'proj', 'new-id.jsonl'));
+  } finally {
+    turnModule.createTranscriptTurnReader = original;
+    require.cache[contextPath] = cached;
+  }
+});
