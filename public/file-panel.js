@@ -185,7 +185,6 @@ function initFilePanel() {
         }
       } catch (err) { console.error('[unsaved-check]', err); }
       const finalReason = unsavedCheckReasons.get(id);
-      unsavedCheckReasons.delete(id);
       reasonChanged.delete(id);
       // see docs/session-restore.md ("Closing the app")
       if (proceed && finalReason !== 'reload' && typeof window.flushStateForExit === 'function') {
@@ -194,6 +193,7 @@ function initFilePanel() {
       }
       if (proceed && finalReason === 'reload') answeredReloads.add(id);
       window.api.unsavedCheckResult(id, proceed);
+      unsavedCheckReasons.delete(id);
     });
   }
 
