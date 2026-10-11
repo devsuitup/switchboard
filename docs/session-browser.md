@@ -216,10 +216,11 @@ session's process after a confirmation. For a session on a remote host the
 dialog names the host, and the process on that host is ended — see
 [Remote hosts](remote-hosts.md#stop-archive-delete).
 
-On a terminal attached to a [background agent](background-agents.md#attaching) the
-same button detaches instead: its tooltip reads **Detach (the session keeps
-running)**, the confirmation asks to detach, and the session goes on running
-under the Claude CLI's daemon. Stop it from the Agents view.
+For a session attached to a [background agent](background-agents.md#attaching)
+the button detaches: the confirmation asks to detach, and the session goes on
+running under the Claude CLI's daemon; stop it from the Agents view. Only the
+terminal header's button says so (**Detach (the session keeps running)**); the
+row and grid card buttons still read **Stop session**.
 
 ## Delete
 

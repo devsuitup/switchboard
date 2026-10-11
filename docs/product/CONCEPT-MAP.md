@@ -128,7 +128,7 @@ No row-level concept unifies these; each follows its own rule (M4).
 | `/clear` (Linux, Windows) | the open terminal's row follows the new transcript; the old one becomes a past row | `CHANGELOG.md:25` |
 | `/clear` (macOS) | new transcript listed as a separate row | `CHANGELOG.md:25` |
 | Continuation | separate rows; chosen by confirm dialogs at open time: "This conversation continued under another id: … Open <id>?" | `public/resume-guard.js:46-75` |
-| **Fork session** | new row, new id, original unchanged | `docs/launching-sessions.md:90-97` |
+| **Fork session** | new row, new id, original unchanged | `docs/launching-sessions.md:98-105` |
 
 ## 4. Slug group
 
@@ -156,7 +156,7 @@ Nothing else (`docs/subagents.md:32`). Grid: coloured pills, at most five
 
 **Rules**: R5.1 follows the parent's archive state; parent not found →
 **Orphan subagents** group (`docs/subagents.md:23-31`). R5.2 deleting a session
-deletes its subagent transcripts (`docs/session-browser.md:221-223`).
+deletes its subagent transcripts (`docs/session-browser.md:227-229`).
 
 ## 6. Project and worktree
 
@@ -169,7 +169,7 @@ amber (`docs/remote-hosts.md:149-157`).
 
 | Action | Project header | Worktree header | Elsewhere |
 |---|---|---|---|
-| New session | `+` → **Claude** / **Claude (Configure...)** / **Terminal** (`public/sidebar.js:942`; `docs/launching-sessions.md:9-15`) | **New session in worktree** (`:1001`) | Remote: "New session on <alias>" (`:934`) |
+| New session | `+` → **Claude** / **Claude (Configure...)** / **Terminal** (`public/sidebar.js:942`; `docs/launching-sessions.md:17-23`) | **New session in worktree** (`:1001`) | Remote: "New session on <alias>" (`:934`) |
 | Create scheduled task | clock, **Create scheduled task** (`:903`) | — | — |
 | Project settings | **Project settings** (`:909`) | — | — |
 | Archive folder | **Archive folder** (`:915`) → dialog "Archive <path>?", boxes "Archive the N sessions", "Disable the N enabled schedules…", button **Archive folder** (`:1180-1196`) | — | **Turn back on** / **Dismiss** notice (`:1130-1134`) |
@@ -236,13 +236,14 @@ sessions" counts cards (`public/grid-view.js:422`) (m6).
 
 **Plain terminal** — states: as an open session, row icon only. Actions:
 `+` → **Terminal**; row **Stop session**. Rule: inside it, `claude` prints
-"To start a Claude session, use the + button in the sidebar." (`docs/launching-sessions.md:101-104`);
+"To start a Claude session, use the + button in the sidebar." (`docs/launching-sessions.md:109-112`);
 removed on exit (R7.1).
 
 **Panel shell** — states: none shown. Actions: **Shell** toggle
 (`public/tool-bar.js:8`, Primary+Shift+S); toggling off kills it with no
 confirmation (V\*). Rule: runs in the owning session's working directory
-(`docs/worktrees.md:52-53`); does not stop when the owner stops (V\*).
+(`docs/worktrees.md:52-53`); does not stop when an owning Claude session stops (V\*); stops when an owning
+plain terminal's shell exits (`public/app.js:689-690`).
 
 ## 10. Background agent (job)
 

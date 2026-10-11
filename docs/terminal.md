@@ -144,10 +144,11 @@ the directory the Changes panel reads and a `claude --resume` runs in.
 
 There is one shell per session. Switching to another session leaves it running,
 and it is back, with what it printed meanwhile, when you return. **Shell** again
-closes and stops it. It keeps running when the session's process ends or is
-stopped; it stops when the session is relaunched, when Switchboard drops the
-ended session's terminal to free memory, when the session is deleted, and when
-Switchboard quits. If the shell exits on its own, its output stays in the
+closes and stops it. For a Claude session it keeps running when the session's
+process ends or is stopped; it stops when the session is relaunched, when
+Switchboard drops the ended session's terminal to free memory, when the session
+is deleted, and when Switchboard quits. For a plain terminal it stops when the
+terminal's shell exits or is stopped. If the shell exits on its own, its output stays in the
 panel with a note; toggle **Shell** off and on for a new one.
 
 A panel shell is not a session: it is never listed in the sidebar, never counted

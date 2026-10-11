@@ -62,12 +62,15 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
 When the work is merged or abandoned, remove the worktree from Switchboard or
 with git.
 
-**From Switchboard.** A worktree the sidebar shows as its own group, under its
-repository, has a delete button in its header (**Delete worktree from disk**).
+**From Switchboard.** A worktree the sidebar shows as a nested header, under
+its repository, has a delete button in that header (**Delete worktree from
+disk**).
 The dialog warns that uncommitted changes are lost and lists the worktree's
 uncommitted files, ten at most. **Delete anyway** runs
 `git worktree remove -f` from the repository, with a second `-f` when the
-worktree is locked, so those changes go with it. The branch is kept. Deleting a
+worktree is locked, so those changes go with it. The branch is kept. The
+worktree's sessions leave the sidebar, and come back under the repository's
+header at the next refresh, since their transcripts are still on disk. Deleting a
 finished background session in the [Agents view](background-agents.md) also
 removes its worktree when that is safe.
 
