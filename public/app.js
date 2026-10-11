@@ -1491,8 +1491,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
-  const openId = [session.sessionId, ...(session.mergedMemberIds || [])]
-    .find(id => openSessions.has(id) && !openSessions.get(id).closed);
+  const openId = rowOpenId(session);
   if (openId) {
     showSession(openId);
     return;

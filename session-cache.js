@@ -631,7 +631,9 @@ function buildProjectsFromCache(showArchived) {
       archived: meta?.archived || 0,
       remoteAlias: alias,
       bridgeSessionId: row.bridgeSessionId || null,
-      mergedMemberIds: children.map(child => child.sessionId),
+      mergedMemberIds: [...children].sort((a, b) =>
+        (b.modified || '').localeCompare(a.modified || '') || a.sessionId.localeCompare(b.sessionId)
+      ).map(child => child.sessionId),
     };
     if (!showArchived && s.archived) continue;
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")

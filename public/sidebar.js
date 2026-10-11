@@ -1526,6 +1526,12 @@ function rebindSidebarEvents(projects) {
     if (deleteBtn) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (session.mergedMemberIds?.length && rowSessionIds(session).some(id =>
+          activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
+          || storedActivitySnapshot(id)?.liveness === 'alive')) {
+          surfaceStopFailure(deleteBtn, 'session is still running — close it first');
+          return;
+        }
         const ok = await showDeleteSessionDialog(session);
         if (!ok) return;
         // issue #271: delete is refused server-side for remote — see .ai/contexts/session-state.md.
@@ -1620,12 +1626,12 @@ function showSessionContextMenu(event, sessionId) {
   button.className = 'popover-option session-refresh-btn';
   button.setAttribute('role', 'menuitem');
   button.textContent = 'Refresh screen';
-  const entry = openSessions.get(sessionId);
-  button.disabled = !entry || entry.closed;
+  const openId = rowOpenId(sessionMap.get(sessionId) || { sessionId });
+  button.disabled = !openId;
   if (button.disabled) button.title = 'Open this session in a terminal to refresh its screen';
   button.onclick = () => {
     closeSessionContextMenu();
-    requestTerminalRefresh(sessionId);
+    requestTerminalRefresh(openId);
   };
   menu.appendChild(button);
   document.body.appendChild(menu);
@@ -1664,7 +1670,7 @@ function buildSessionItem(session) {
   setCliBusy(item, snapshot ? snapshot.busy : !!sessionBusyState.get(session.sessionId));
   setHasBusyAgents(item, ids.some(id => parentHasActiveSubagent(id)));
   // initial-paint mirror of the remote-ssh adapter's liveness — see .ai/contexts/session-state.md
-  setIsAlive(item, snapshot ? snapshot.liveness === 'alive' : !!session.remoteDescriptorSeen);
+  setIsAlive(item, (snapshot && snapshot.liveness === 'alive') || (session.remoteAlias && isRemoteSessionAlive(session)));
   if (window.ATRACE && item.className !== 'session-item js-stateful') window.atrace('class.render', session.sessionId, { el: item.id, cls: item.className, fn: 'buildSessionItem' });
   item.dataset.sessionId = session.sessionId;
   if (session.remoteAlias) item.dataset.remoteAlias = session.remoteAlias;
@@ -1687,7 +1693,6 @@ function buildSessionItem(session) {
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
   paintSessionIcon(icon, session.sessionId, session);
-  if (snapshot) paintSessionIconFromSnapshot(icon, snapshot);
   if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block

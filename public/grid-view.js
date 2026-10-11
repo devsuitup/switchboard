@@ -312,7 +312,7 @@ function focusGridCard(sessionId) {
   lruTouch(sessionId);
   // Update sidebar active highlight
   document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
-  const sidebarItem = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+  const sidebarItem = sessionItemEl(sessionId);
   if (sidebarItem) sidebarItem.classList.add('active');
   // Update visual focus
   document.querySelectorAll('.grid-card').forEach(c => c.classList.remove('focused'));
@@ -335,9 +335,10 @@ function layoutGridCards(openSet) {
   const sidebarItems = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   let currentProjectPath = null;
   for (const item of sidebarItems) {
-    const sid = item.dataset.sessionId;
-    if (!openSet.has(sid)) continue;
-    const session = sessionMap.get(sid);
+    const ids = rowSessionIds({ sessionId: item.dataset.sessionId, mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') });
+    const openIds = ids.filter(id => openSet.has(id));
+    if (!openIds.length) continue;
+    const session = sessionMap.get(item.dataset.sessionId);
     const projectPath = session ? session.projectPath : null;
     if (gridGroupByProject && projectPath && projectPath !== currentProjectPath) {
       currentProjectPath = projectPath;
@@ -347,8 +348,10 @@ function layoutGridCards(openSet) {
       heading.textContent = shortProjectPath(projectPath);
       terminalsEl.appendChild(heading);
     }
-    wrapInGridCard(sid);
-    sessionIds.push(sid);
+    for (const sid of openIds) {
+      wrapInGridCard(sid);
+      sessionIds.push(sid);
+    }
   }
   return sessionIds;
 }
@@ -546,9 +549,10 @@ function getOrderedOpenSessionIds() {
   const items = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   const ids = [];
   for (const item of items) {
-    const sid = item.dataset.sessionId;
-    const entry = openSessions.get(sid);
-    if (entry && !entry.closed) ids.push(sid);
+    for (const sid of rowSessionIds({ sessionId: item.dataset.sessionId, mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') })) {
+      const entry = openSessions.get(sid);
+      if (entry && !entry.closed) ids.push(sid);
+    }
   }
   return ids;
 }

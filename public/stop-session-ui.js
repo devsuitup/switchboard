@@ -38,24 +38,35 @@ async function liveBackgroundJobRefusal(sessionId) {
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
 async function stopBeforeArchive(session) {
   if (!session) return { ok: true };
+  const ids = rowSessionIds(session);
   const alias = session.remoteAlias;
   if (alias) {
-    if (!isRemoteSessionAlive(session)) return { ok: true };
-    const result = await window.api.remoteStopSession(alias, session.sessionId);
-    if (!result || result.ok === false) {
-      return { ok: false, error: (result && result.error) || 'unknown error' };
+    for (const id of ids) {
+      const member = id === session.sessionId ? session : { sessionId: id, remoteAlias: alias };
+      const open = typeof openSessions !== 'undefined' && openSessions.get(id);
+      if (!isRemoteSessionAlive(member) && !(open && !open.closed)
+          && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
+      const result = await window.api.remoteStopSession(alias, id);
+      if (!result || result.ok === false) {
+        return { ok: false, error: (result && result.error) || 'unknown error' };
+      }
+      if (typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
     }
-    if (typeof applyRemoteStopped === 'function') applyRemoteStopped(session.sessionId);
     return { ok: true };
   }
-  const refusal = await liveBackgroundJobRefusal(session.sessionId);
-  if (refusal) return { ok: false, error: refusal };
-  if (typeof activePtyIds === 'undefined' || !activePtyIds.has(session.sessionId)) return { ok: true };
-  const result = await window.api.stopSession(session.sessionId);
-  if (result && result.ok === false) {
-    return { ok: false, error: result.error || 'unknown error' };
+  for (const id of ids) {
+    const refusal = await liveBackgroundJobRefusal(id);
+    if (refusal) return { ok: false, error: refusal };
   }
-  activePtyIds.delete(session.sessionId);
+  for (const id of ids) {
+    const open = typeof openSessions !== 'undefined' && openSessions.get(id);
+    if (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(id)) && !(open && !open.closed)) continue;
+    const result = await window.api.stopSession(id);
+    if (result && result.ok === false) {
+      return { ok: false, error: result.error || 'unknown error' };
+    }
+    if (typeof activePtyIds !== 'undefined') activePtyIds.delete(id);
+  }
   return { ok: true };
 }
 

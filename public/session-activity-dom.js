@@ -4,6 +4,13 @@ function rowSessionIds(session) {
   return [session.sessionId, ...(session.mergedMemberIds || [])];
 }
 
+function rowOpenId(session) {
+  return rowSessionIds(session).find(id => {
+    const entry = openSessions.get(id);
+    return entry && !entry.closed;
+  });
+}
+
 function sessionItemEl(sessionId, container = document) {
   return container.querySelector(`.session-item[data-session-id="${sessionId}"]`)
     || container.querySelector(`.session-item[data-merged-member-ids~="${sessionId}"]`);
