@@ -881,12 +881,12 @@ function showPanel(state) {
   filePanelEl.classList.add('open');
   filePanelEl.style.width = (state.panelWidth || DEFAULT_PANEL_WIDTH) + 'px';
   filePanelResizeHandle.style.display = 'block';
+  if (typeof syncToolBar === 'function') syncToolBar();
   refitActiveTerminal();
 }
 
 function hidePanel() {
   if (!filePanelEl) return;
-  if (typeof syncToolBar === 'function') syncToolBar();
   // The shell region keeps the panel open with no tab — see .ai/contexts/panel-terminal.md
   if (typeof panelTerminalIsOpen === 'function' && panelTerminalIsOpen(currentPanelSessionId)) {
     renderTabContent(currentPanelSessionId, null);
@@ -898,6 +898,7 @@ function hidePanel() {
   filePanelEl.classList.remove('open');
   filePanelEl.style.width = '0';
   filePanelResizeHandle.style.display = 'none';
+  if (typeof syncToolBar === 'function') syncToolBar();
   refitActiveTerminal();
 }
 
