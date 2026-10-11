@@ -35,6 +35,16 @@ test('parseJobState keeps the fields the view shows and derives agent/model/name
   assert.equal(job.sessionId, 'bc3fd129-60bb-4bd2-8f38-63fecd1256e5');
 });
 
+test('parseJobState takes the session id from sessionId when the job has no transcript yet', () => {
+  const job = parseJobState(JSON.stringify({
+    state: 'working', needs: 'send a prompt to start', linkScanOffset: 0,
+    sessionId: 'FC9016D8-5781-452C-BB22-687C121E6C43', resumeSessionId: 'fc9016d8-5781-452c-bb22-687c121e6c43',
+  }));
+  assert.equal(job.sessionId, 'fc9016d8-5781-452c-bb22-687c121e6c43');
+  assert.equal(parseJobState(JSON.stringify({ state: 'working', resumeSessionId: 'fc9016d8-5781-452c-bb22-687c121e6c43' })).sessionId, 'fc9016d8-5781-452c-bb22-687c121e6c43');
+  assert.equal(parseJobState(JSON.stringify({ state: 'working', sessionId: 'not a session id' })).sessionId, null);
+});
+
 test('parseJobState: unknown state, missing output and garbage are tolerated', () => {
   assert.equal(parseJobState(''), null);
   assert.equal(parseJobState('[]'), null);

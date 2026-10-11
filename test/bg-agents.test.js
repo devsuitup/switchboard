@@ -366,6 +366,18 @@ test('liveJobCheck reads the job files, takes the session id from the roster whe
   } finally { rmTmp(dir); }
 });
 
+test('liveJobCheck: a live job with no transcript yet names its session through sessionId, so other sessions are not refused', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working', needs: 'send a prompt to start', sessionId: 'aaaaaaaa-5781-452c-bb22-687c121e6c43' });
+    boot(dir, { cli: fakeCli({ list: [] }) });
+    bgAgents.start();
+    await bgAgents.reconcile();
+    assert.deepEqual(bgAgents.liveJobCheck('11111111-2222-4333-8444-555555555555'), { known: true, job: null });
+    assert.deepEqual(bgAgents.liveJobCheck('aaaaaaaa-5781-452c-bb22-687c121e6c43'), { known: true, job: { id: 'aaaaaaaa', state: 'working' } });
+  } finally { rmTmp(dir); }
+});
+
 test('roster entries carry projectRoot and worktreeRoot: the pattern or the cwd at once, the resolved roots after a change event', async () => {
   const dir = mkTmp();
   try {
