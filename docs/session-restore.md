@@ -36,7 +36,9 @@ creates a worktree, since the saved project path already is the folder to
 start in. Once its first prompt makes it a real session, the set is saved
 again with it as an ordinary entry. A session without a transcript is still
 left out when it runs on a remote host, or was started as a fork or in a new
-worktree: starting it anew would not give back the same thing.
+worktree: starting it anew would not give back the same thing. In **Restore on
+click** mode a fresh entry not in the index is dropped instead, since that
+mode starts nothing by itself and the entry has no row to click.
 
 ## Closing the app
 

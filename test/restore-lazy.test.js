@@ -94,7 +94,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
   const fns = loadAppFunctions(context, {
     declarations: ['restoringWorkingSet', 'restorePlanner', 'restoreMode', 'restoreIndexingDone',
       'sessionOpenedOutsideRestore', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight',
-      'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled'],
+      'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['dismissDormantSession', 'persistWorkingSet', 'pendingRestoreEntries', 'tickRestorePlanner', 'openSession', 'openSessionNow',
       'reopenActiveSessionAfterReload'],
   });
@@ -604,5 +604,20 @@ test('lazy: a running session is reattached under its own id, not a continuation
     h.run('activeSessionId = "x"');
     await h.fns.reopenActiveSessionAfterReload();
     assert.deepEqual(h.openTerminalCalls, ['a', 'x', 'x'], 'and so after a reload');
+  } finally { h.destroy(); }
+});
+
+test('lazy: a saved session with no transcript yet is neither started nor kept dormant', async () => {
+  const savedSet = [...SAVED, { sessionId: 'f', projectPath: PROJECT, active: false, fresh: true }];
+  const h = setup({ savedSet });
+  try {
+    h.index(['a', 'x', 'b']);
+    h.window.sessionMap.delete('f');
+    h.run('restoreIndexingDone = true');
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.openTerminalCalls, []);
+    assert.deepEqual(h.dormantIds(), ['a', 'b', 'x']);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a', 'x', 'b']);
   } finally { h.destroy(); }
 });

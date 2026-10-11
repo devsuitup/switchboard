@@ -452,6 +452,7 @@ async function tickRestorePlanner() {
     try {
       const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
       for (const [position, item] of candidates.entries()) {
+        if (item.fresh && !sessionMap.has(item.sessionId)) continue;
         const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
           && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
         const open = openSessions.get(item.sessionId);
