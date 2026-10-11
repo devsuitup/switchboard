@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { loadAppFunctions } = require('./app-source');
 
 const GUARD_PATH = path.join(__dirname, '..', 'public', 'resume-guard.js');
 const { guardResume } = require(GUARD_PATH);
@@ -126,9 +127,27 @@ test('openSession runs the guard before it asks main for a PTY', () => {
   assert.match(body, /guardResume\(session, \{ automatic,/);
 });
 
-test('the reload path resumes the remembered session as an automatic resume', () => {
-  assert.match(APP_SRC,
-    /if \(activeSessionId && !openSessions\.has\(activeSessionId\)\) \{\s*const session = sessionMap\.get\(activeSessionId\);\s*if \(session\) await openSession\(session, undefined, \{ automatic: true \}\);/);
+test('the reload path resumes the remembered session as an automatic resume', async () => {
+  const calls = [];
+  const ctx = vm.createContext({
+    window: {},
+    localStorage: { getItem: () => null },
+    activeSessionId: SESSION.sessionId,
+    openSessions: new Map(),
+    sessionMap: new Map([[SESSION.sessionId, SESSION]]),
+    openSession: async (session, options, flags) => {
+      calls.push({ session, options, automatic: flags.automatic });
+    },
+    restoreWorkingSet: async () => { calls.push('working set'); },
+    restoreAgentsViewAtStartup() {},
+  });
+  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions'] });
+  await restoreStartupSessions();
+  assert.deepEqual(calls, [
+    { session: SESSION, options: undefined, automatic: true },
+    'working set',
+  ]);
+  assert.equal(ctx.window._startupResumeResolutions, null);
 });
 
 
