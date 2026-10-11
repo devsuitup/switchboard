@@ -452,6 +452,7 @@ async function tickRestorePlanner() {
     try {
       const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
       for (const [position, item] of candidates.entries()) {
+        if (!restoreInFlight.has(item.sessionId)) continue;
         if (item.fresh && !sessionMap.has(item.sessionId)) continue;
         const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
           && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
@@ -1769,6 +1770,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
         skippedWorkingSetEntries.set(session.sessionId, { ...held, item: { ...held.item, sessionId: session.sessionId } });
       }
       skippedWorkingSetEntries.delete(originalId);
+      restoreInFlight.delete(originalId);
       const dormant = dormantWorkingSet.get(originalId);
       if (dormant) {
         dormantWorkingSet.delete(originalId);
@@ -1788,6 +1790,10 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     if (entry.closed) {
       destroySession(sessionId);
     } else {
+      if (dormantWorkingSet.delete(sessionId)) {
+        document.getElementById('si-' + sessionId)?.classList.remove('dormant');
+        schedulePersistWorkingSet();
+      }
       showSession(sessionId);
       return;
     }

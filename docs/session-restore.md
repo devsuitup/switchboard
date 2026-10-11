@@ -158,7 +158,8 @@ is selected, the last active one included.
   until it is open: if it is live in another process and you decline to resume
   it, or its terminal fails to start, it is still marked and still saved. One
   whose conversation continued under another id is resumed there, and the new
-  id takes its place in the saved set.
+  id takes its place in the saved set; if that continuation is already open,
+  it is shown and the marked session is simply dropped from the saved set.
 - **Don't restore**, in a marked session's right-click menu, removes it from
   the saved set without starting it. So does deleting the session.
 - A marked session never clicked stays in the saved set, so the next start
