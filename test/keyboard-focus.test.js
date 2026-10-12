@@ -77,7 +77,8 @@ test('Shift+F6 from the sidebar returns focus to the active terminal', () => {
 });
 
 function loadPublic(ctx, name) {
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public', name), 'utf8'), ctx.context);
+  const file = path.join(__dirname, '../public', name);
+  vm.runInContext(fs.readFileSync(file, 'utf8'), ctx.context, { filename: file });
 }
 
 for (const dialog of ['choice', 'New Session']) {

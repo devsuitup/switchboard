@@ -9,7 +9,8 @@ const { setupSidebarDom } = require('./dom-setup');
 
 function setup() {
   const ctx = setupSidebarDom();
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/dialogs.js'), 'utf8'), ctx.context);
+  const dialogsFile = path.join(__dirname, '../public/dialogs.js');
+  vm.runInContext(fs.readFileSync(dialogsFile, 'utf8'), ctx.context, { filename: dialogsFile });
   const project = { projectPath: '/fixture', folder: '-fixture', sessions: [] };
   ctx.sidebar.renderProjects([project]);
   const anchor = ctx.document.querySelector('.project-new-btn');
