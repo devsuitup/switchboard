@@ -2,9 +2,19 @@
 
 const { test, expect, makeRepo, openPlainTerminal } = require('./fixtures');
 
-test('keyboard Configure focuses the first New Session field and Escape returns to +', async ({ home, env, launch }) => {
+test('keyboard Configure focuses the selected mode, Escape returns to + and one Enter starts New Session', async ({ home, env, launch }) => {
   makeRepo(home, env, { 'focus.txt': 'keyboard fixture\n' });
-  const { page } = await launch();
+  const { app, page } = await launch();
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('get-effective-settings');
+    ipcMain.handle('get-effective-settings', () => ({ permissionMode: 'acceptEdits' }));
+    globalThis.newSessionLaunches = [];
+    ipcMain.removeHandler('open-terminal');
+    ipcMain.handle('open-terminal', (_event, id, projectPath, isNew, options) => {
+      globalThis.newSessionLaunches.push({ id, projectPath, isNew, options });
+      return { ok: true };
+    });
+  });
   const opener = page.locator('.project-header .project-new-btn').first();
   await opener.focus();
   await page.keyboard.press('Space');
@@ -13,11 +23,22 @@ test('keyboard Configure focuses the first New Session field and Escape returns 
   await expect(configure).toBeFocused();
   await page.keyboard.press('Enter');
   const dialog = page.locator('.new-session-dialog');
-  await expect(dialog.locator('#nsd-mode-grid button').first()).toBeFocused();
+  await expect(dialog.locator('[data-mode="acceptEdits"]')).toBeFocused();
   await expect(page.locator('.new-session-popover')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(opener).toBeFocused();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(dialog.locator('[data-mode="acceptEdits"]')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('#terminals .terminal-container.visible .xterm-helper-textarea')).toBeFocused();
+  const launches = await app.evaluate(() => globalThis.newSessionLaunches);
+  expect(launches).toHaveLength(1);
+  expect(launches[0].isNew).toBe(true);
+  expect(launches[0].options.permissionMode).toBe('acceptEdits');
 });
 
 test('F6 leaves a plain terminal and Shift+F6 returns to it', async ({ home, env, launch }) => {

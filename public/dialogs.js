@@ -311,6 +311,10 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
 
   // Bind mode grid clicks
   const modeGrid = dialog.querySelector('#nsd-mode-grid');
+  function focusSelectedMode() {
+    (modeGrid.querySelector('.permission-option.selected') || modeGrid.querySelector('button')).focus();
+  }
+
   modeGrid.addEventListener('click', (e) => {
     const btn = e.target.closest('.permission-option');
     if (!btn) return;
@@ -323,15 +327,17 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
       selectedMode = mode === 'null' ? null : mode;
     }
     modeGrid.innerHTML = renderModeGrid();
+    focusSelectedMode();
   });
 
-  function close() {
+  function close(returnFocus = true) {
     overlay.remove();
     document.removeEventListener('keydown', onKey);
+    if (!returnFocus) return;
     const targets = [
       opener,
       document.getElementById(openerHeaderId)?.querySelector('.project-new-btn'),
-      document.querySelector('.terminal-container.visible .xterm-helper-textarea'),
+      document.querySelector('.terminal-container.visible:not(.panel-terminal) .xterm-helper-textarea'),
       document.getElementById('add-project-btn'),
     ];
     for (const target of targets) {
@@ -363,21 +369,25 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
     if (preLaunch) options.preLaunchCmd = preLaunch;
     options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
-    close();
+    close(false);
     launchNewSession(project, options);
   }
 
-  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  dialog.querySelector('.new-session-cancel-btn').onclick = () => close();
   dialog.querySelector('.new-session-start-btn').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   // Keyboard support
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input, button')) start();
+    if (e.key === 'Enter' && !e.target.matches('input:not([type="checkbox"])')) {
+      e.preventDefault();
+      if (e.target.closest('.new-session-cancel-btn')) close();
+      else start();
+    }
   }
   document.addEventListener('keydown', onKey);
-  modeGrid.querySelector('button').focus();
+  focusSelectedMode();
 }
 
 const REMOTE_LAUNCH_PATH_RE = /^\/[A-Za-z0-9._+@:,=/ -]*$/;
