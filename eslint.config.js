@@ -420,7 +420,7 @@ module.exports = [
       'no-undef': 'error',
       'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
       'no-restricted-globals': ['error', ...['confirm', 'alert', 'prompt'].map(name => ({ name, message: 'Use public/app-dialogs.js (appConfirm/appAlert).' }))],
-      'no-restricted-properties': ['error', ...['confirm', 'alert', 'prompt'].map(property => ({ object: 'window', property, message: 'Use public/app-dialogs.js (appConfirm/appAlert).' }))],
+      'no-restricted-properties': ['error', ...['window', 'globalThis', 'self'].flatMap(object => ['confirm', 'alert', 'prompt'].map(property => ({ object, property, message: 'Use public/app-dialogs.js (appConfirm/appAlert).' })))],
       'no-implicit-globals': 'off', // renderer relies on script-scope globals by design
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-unreachable': 'warn',

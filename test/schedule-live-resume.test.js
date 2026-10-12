@@ -62,6 +62,7 @@ function setup(t, { sandbox = false } = {}) {
   const ctx = dom.getInternalVMContext();
   const openTerminalCalls = [];
   const messages = [];
+  const confirmations = [];
   const settings = { global: {} };
   const session = { sessionId: SID, projectPath: dir, name: 'Scheduled task' };
   dom.window.api = {
@@ -72,9 +73,10 @@ function setup(t, { sandbox = false } = {}) {
     getSetting: async (key) => settings[key],
     setSetting: async (key, value) => { settings[key] = value; },
   };
-  dom.window.appConfirm = async ({ message: message }) => { messages.push(message); return true; };
+  dom.window.appConfirm = async ({ message }) => { confirmations.push(message); return true; };
+  dom.window.appAlert = async ({ message }) => { messages.push(message); };
   vm.runInContext(read('public/utils.js'), ctx);
-  vm.runInContext(read('public/resume-guard.js'), ctx);
+  vm.runInContext(read('public/resume-guard.js'), ctx, { filename: path.join(ROOT, 'public/resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map();
     var sessionMap = new Map();
@@ -117,7 +119,7 @@ function setup(t, { sandbox = false } = {}) {
   });
   return {
     get child() { return children[0]; },
-    spawns, done, messages, openTerminalCalls, session, ctx, settings,
+    spawns, done, messages, confirmations, openTerminalCalls, session, ctx, settings, dom,
     start: () => {
       const { claudeArgs } = buildScheduleCommand(SID, { name: 'Scheduled task', cli: {} });
       main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true));
@@ -142,6 +144,7 @@ test('a click during a scheduled run refuses a second process even when the dial
   await h.open();
   assert.equal(h.openTerminalCalls.length, 0, 'a live scheduled run must not spawn a second claude --resume');
   assert.equal(h.messages.length, 1);
+  assert.deepEqual(h.confirmations, [], 'a scheduled run offers an OK-only notice, never an Open session confirmation');
   assert.match(h.messages[0], /scheduled.*running/i);
   h.child.emit('exit', 0);
   await h.open();
@@ -223,7 +226,8 @@ test('the schedule verdict never offers a resume override or a daemon attach', a
   const messages = [];
   const result = await guardResume({ sessionId: SID }, {
     live: { kind: 'schedule', pid: 4242, cwd: '/scheduled' },
-    confirm: (message) => { messages.push(message); return true; },
+    confirm: () => assert.fail('a scheduled run must never offer a resume override'),
+    alert: async (message) => { messages.push(message); },
   });
   assert.equal(result, false);
   assert.equal(messages.length, 1);

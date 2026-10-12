@@ -17,7 +17,7 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, live, allowBgAttach = false } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, alert, live, allowBgAttach = false } = {}) {
   if (!session || session.type === 'terminal') return true;
   if (live === undefined) {
     try {
@@ -30,7 +30,7 @@ async function guardResume(session, { automatic = false, api, confirm, live, all
   if (automatic && !(allowBgAttach && live.kind === 'bg')) return false;
   if (live.kind === 'schedule') {
     const where = live.cwd ? ` in ${live.cwd}` : '';
-    await confirm(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
+    await alert(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
       + 'Wait for the scheduled run to finish before opening it here.');
     return false;
   }

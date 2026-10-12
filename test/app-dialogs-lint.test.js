@@ -4,7 +4,7 @@ const path = require('node:path');
 const { ESLint } = require('eslint');
 
 for (const name of ['confirm', 'alert', 'prompt']) {
-  for (const prefix of ['', 'window.']) {
+  for (const prefix of ['', 'window.', 'globalThis.', 'self.']) {
     test('renderer lint rejects ' + prefix + name, async () => {
       const lint = new ESLint({ cwd: path.join(__dirname, '..') });
       const [result] = await lint.lintText(prefix + name + '("native");', { filePath: 'public/dialog-ban-fixture.js' });

@@ -149,7 +149,8 @@ function openChoiceDialog({
     }
 
     function onKey(event) {
-      if (!overlay.contains(event.target)) return;
+      const overlays = document.querySelectorAll('.choice-dialog-overlay');
+      if (overlays[overlays.length - 1] !== overlay) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -165,7 +166,7 @@ function openChoiceDialog({
         if (!overlay.contains(event.target)) return;
         event.preventDefault();
         if (buttons.includes(event.target)) event.target.click();
-        else if (!(event.target.matches && event.target.matches('input[type="checkbox"]'))) accept();
+        else if (!danger && !(event.target.matches && event.target.matches('input[type="checkbox"]'))) accept();
       }
     }
 

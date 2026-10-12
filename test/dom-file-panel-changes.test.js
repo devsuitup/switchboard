@@ -302,6 +302,54 @@ async function openFile(ctx, sessionId, filePath) {
   await flush();
 }
 
+test('Escape in a Changes diff with no return action reaches other listeners', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    const diff = ctx.document.getElementById('changes-diff-view');
+    let reached = 0;
+    ctx.document.addEventListener('keydown', event => { if (event.key === 'Escape') reached++; });
+    const event = new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    diff.dispatchEvent(event);
+    await flush();
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(reached, 1);
+    assert.equal(ctx.stateOf('s1').currentTab.selectedFile, null);
+  } finally { ctx.destroy(); }
+});
+
+test('Escape that returns a clean Changes diff to its list is swallowed immediately', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    let reached = 0;
+    ctx.document.addEventListener('keydown', () => { reached++; });
+    const event = new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    ctx.document.getElementById('changes-diff-view').dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(reached, 0);
+    assert.equal(ctx.stateOf('s1').currentTab.selectedFile, null);
+  } finally { ctx.destroy(); }
+});
+
+test('Escape leaves a dirty Changes diff open and propagates when discard is cancelled', async () => {
+  const ctx = setupFilePanelDom({ confirmImpl: () => false });
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'unsaved edits';
+    let reached = 0;
+    ctx.document.addEventListener('keydown', () => { reached++; });
+    const event = new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    ctx.document.getElementById('changes-diff-view').dispatchEvent(event);
+    await flush();
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(reached, 1);
+    assert.ok(ctx.stateOf('s1').currentTab.selectedFile);
+    assert.equal(ctx.editors[0].box.text, 'unsaved edits');
+  } finally { ctx.destroy(); }
+});
+
 // --- Rendering ---------------------------------------------------------
 
 test('openChangesTab loads status and renders the summary, branch info, and one row per file', async () => {

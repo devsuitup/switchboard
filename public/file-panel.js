@@ -138,9 +138,10 @@ function initFilePanel() {
     if (event.defaultPrevented || event.isComposing) return;
     if (event.target.closest('.cm-panels, .cm-search, .cm-tooltip')) return;
     if (event.target.closest('input, textarea') && !event.target.closest('.cm-content')) return;
-    event.preventDefault();
-    event.stopPropagation();
-    returnToPanelList();
+    if (returnToPanelList() === true) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   });
 
   window.addEventListener('beforeunload', (event) => {
@@ -366,22 +367,25 @@ async function handleClose() {
   endCurrentTab(sessionId, state, { pending });
 }
 
-async function returnToPanelList() {
+function returnToPanelList() {
   const sessionId = currentPanelSessionId;
   if (!sessionId) return false;
   const state = getSessionState(sessionId);
   const tab = state.currentTab;
   if (tab?.type === 'changes' && tab.selectedFile && !tab.returnList) {
-    await closeChangesDiff(sessionId);
-    return !tab.selectedFile;
+    const closing = closeChangesDiff(sessionId);
+    return !tab.selectedFile || closing.then(() => !tab.selectedFile);
   }
   if (!tab?.returnList) return false;
-  if ((hasUnsavedChangesEdits(tab) && !await confirmDiscardChangesEdits(tab))) return false;
-  const previous = tab.returnList;
-  destroyCurrentTab(state, { stash: false });
-  state.currentTab = previous;
-  if (currentPanelSessionId === sessionId) renderPanel(sessionId);
-  return true;
+  const restore = () => {
+    const previous = tab.returnList;
+    destroyCurrentTab(state, { stash: false });
+    state.currentTab = previous;
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return true;
+  };
+  if (hasUnsavedChangesEdits(tab)) return confirmDiscardChangesEdits(tab).then(confirmed => confirmed && restore());
+  return restore();
 }
 
 function snapshotPanelList(list, tab) {
@@ -705,7 +709,7 @@ function showUnsavedEditsDialog(tabs) {
     dialog.appendChild(actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
-    cancelBtn.focus();
+    saveBtn.focus();
 
     function finish(proceed) {
       overlay.remove();

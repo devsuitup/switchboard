@@ -60,9 +60,10 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     openTerminal: async (sessionId) => { openTerminalCalls.push(sessionId); return { ok: true }; },
   };
   dom.window.appConfirm = async () => { throw new Error('an automatic resume must never prompt'); };
+  dom.window.appAlert = async () => { throw new Error('an automatic resume must never alert'); };
 
   vm.runInContext(read('utils.js'), ctx);
-  vm.runInContext(read('resume-guard.js'), ctx);
+  vm.runInContext(read('resume-guard.js'), ctx, { filename: path.join(__dirname, '..', 'public', 'resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map();
     var pendingSessions = new Map();

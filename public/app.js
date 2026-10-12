@@ -1520,7 +1520,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), resolutions: window._startupResumeResolutions });
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions });
     if (!session) return false;
     if (session.sessionId !== originalId) {
       live = undefined;
@@ -1552,7 +1552,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), alert: message => appAlert({ title: 'Scheduled task already running', message }) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
@@ -1760,6 +1760,7 @@ initAgentsView();
 
 function handleGlobalShortcut(e) {
   if (e._handled || e.type !== 'keydown') return;
+  if (document.querySelector('.choice-dialog-overlay')) return;
   if (typeof handleFocusShortcut === 'function' && handleFocusShortcut(e)) return;
   if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
     e.preventDefault();

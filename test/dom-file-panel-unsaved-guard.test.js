@@ -166,6 +166,22 @@ function beforeUnload(ctx) {
   return event;
 }
 
+test('quit focuses Save so Enter saves the edits before approving quit', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(60, 'quit');
+    await flush();
+    const save = button(ctx, 'unsaved-save');
+    assert.equal(ctx.window.document.activeElement, save);
+    dialogKey(ctx, 'Enter');
+    save.click();
+    await checking;
+    assert.equal(ctx.disk.get(A), 'x0\nmine');
+    assert.deepEqual(ctx.calls.answers, [{ id: 60, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
+
 test('with nothing unsaved the check is answered at once and no dialog shows', async () => {
   const ctx = setup();
   try {
@@ -687,11 +703,11 @@ test('reload ACK is immediate while confirmations queue; quit upgrade waits for 
     await flush();
     assert.ok(dialog(ctx));
     assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
-    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
-    dialogKey(ctx, 'Tab', { shiftKey: true });
     assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+    dialogKey(ctx, 'Tab', { shiftKey: true });
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-discard'));
     dialogKey(ctx, 'Tab');
-    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
     button(ctx, 'unsaved-discard').click();
     await checking;
     assert.deepEqual(ctx.calls.answers, [{ id: 44, proceed: true }]);

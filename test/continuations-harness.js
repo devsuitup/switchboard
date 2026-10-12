@@ -41,6 +41,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
   const spawned = [], prompts = [];
   dom.window.appConfirm = async ({ message: message }) => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
+  dom.window.appAlert = async ({ message }) => { prompts.push(message); };
   dom.window.api = {
     getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
     setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),
@@ -50,7 +51,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
     getSessionsLiveElsewhere: async ids => Object.fromEntries(ids.filter(id => live[id]).map(id => [id, live[id]])),
     openTerminal: async (id, project, isNew, options) => { spawned.push({ id, project, options }); return { ok: true }; },
   };
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx, { filename: path.join(__dirname, '../public/resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map();
     var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;
