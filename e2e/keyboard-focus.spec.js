@@ -2,6 +2,24 @@
 
 const { test, expect, makeRepo, openPlainTerminal } = require('./fixtures');
 
+test('keyboard Configure focuses the first New Session field and Escape returns to +', async ({ home, env, launch }) => {
+  makeRepo(home, env, { 'focus.txt': 'keyboard fixture\n' });
+  const { page } = await launch();
+  const opener = page.locator('.project-header .project-new-btn').first();
+  await opener.focus();
+  await page.keyboard.press('Space');
+  const configure = page.locator('.new-session-popover').getByRole('menuitem').nth(1);
+  await page.keyboard.press('ArrowDown');
+  await expect(configure).toBeFocused();
+  await page.keyboard.press('Enter');
+  const dialog = page.locator('.new-session-dialog');
+  await expect(dialog.locator('#nsd-mode-grid button').first()).toBeFocused();
+  await expect(page.locator('.new-session-popover')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});
+
 test('F6 leaves a plain terminal and Shift+F6 returns to it', async ({ home, env, launch }) => {
   makeRepo(home, env, { 'readme.txt': 'fixture\n' });
   const { page } = await launch();

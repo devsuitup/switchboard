@@ -9,6 +9,7 @@ const { setupSidebarDom } = require('./dom-setup');
 
 function setup() {
   const ctx = setupSidebarDom();
+  ctx.evalPublic('setting-defaults.js');
   const dialogsFile = path.join(__dirname, '../public/dialogs.js');
   vm.runInContext(fs.readFileSync(dialogsFile, 'utf8'), ctx.context, { filename: dialogsFile });
   const project = { projectPath: '/fixture', folder: '-fixture', sessions: [] };
@@ -25,6 +26,102 @@ function setup() {
   };
   return { ...ctx, project, anchor, press, open };
 }
+
+async function openConfigure(ctx) {
+  const showDialog = ctx.window.showNewSessionDialog;
+  let opened;
+  ctx.window.showNewSessionDialog = (...args) => {
+    opened = showDialog(...args);
+    return opened;
+  };
+  ctx.anchor.focus();
+  ctx.open();
+  ctx.press('ArrowDown');
+  ctx.press('Enter');
+  await opened;
+  return ctx.document.querySelector('.new-session-dialog');
+}
+
+test('keyboard Configure focuses the first New Session field', async () => {
+  const ctx = setup();
+  try {
+    const dialog = await openConfigure(ctx);
+    assert.ok(dialog);
+    assert.equal(ctx.document.querySelector('.new-session-popover'), null);
+    assert.equal(ctx.document.activeElement, dialog.querySelector('#nsd-mode-grid button'));
+  } finally { ctx.destroy(); }
+});
+
+for (const action of ['Escape', 'Cancel', 'Start', 'outside click']) {
+  test(`${action} closes New Session and restores focus to +`, async () => {
+    const ctx = setup();
+    try {
+      let launches = 0;
+      ctx.window.launchNewSession = () => { launches++; };
+      const dialog = await openConfigure(ctx);
+      dialog.querySelector('#nsd-worktree-name').focus();
+      if (action === 'Escape') ctx.press('Escape');
+      else if (action === 'outside click') ctx.document.querySelector('.new-session-overlay').click();
+      else dialog.querySelector(action === 'Cancel' ? '.new-session-cancel-btn' : '.new-session-start-btn').click();
+      assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+      assert.equal(ctx.document.activeElement, ctx.anchor);
+      assert.equal(launches, action === 'Start' ? 1 : 0);
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('New Session remembers its direct opener before the settings lookup resolves', async () => {
+  const ctx = setup();
+  try {
+    let resolveSettings;
+    ctx.window.api.getEffectiveSettings = () => new Promise(resolve => { resolveSettings = resolve; });
+    ctx.anchor.focus();
+    const opened = ctx.window.showNewSessionDialog(ctx.project);
+    ctx.anchor.blur();
+    resolveSettings({});
+    await opened;
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.anchor);
+  } finally { ctx.destroy(); }
+});
+
+test('New Session returns focus to the replacement project + when its opener is removed', async () => {
+  const ctx = setup();
+  try {
+    await openConfigure(ctx);
+    const replacement = ctx.anchor.cloneNode(true);
+    ctx.anchor.replaceWith(replacement);
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, replacement);
+  } finally { ctx.destroy(); }
+});
+
+test('New Session falls back to the visible terminal when the project opener disappears', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible"><textarea class="xterm-helper-textarea"></textarea></div>';
+    await openConfigure(ctx);
+    ctx.anchor.closest('.project-group').remove();
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.document.querySelector('.xterm-helper-textarea'));
+  } finally { ctx.destroy(); }
+});
+
+test('Enter on a New Session permission field does not start a session', async () => {
+  const ctx = setup();
+  try {
+    let launches = 0;
+    ctx.window.launchNewSession = () => { launches++; };
+    const dialog = await openConfigure(ctx);
+    dialog.querySelector('#nsd-mode-grid button').focus();
+    ctx.press('Enter');
+    assert.equal(launches, 0);
+    assert.ok(dialog.isConnected);
+  } finally { ctx.destroy(); }
+});
 
 test('mousedown on New session menu padding keeps the menu open', () => {
   const ctx = setup();

@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Opening New Session from the keyboard now focuses its first field. Closing it returns focus to the opening control, or a nearby control if it has disappeared. (#583)
 - Tab and Shift+Tab now close the New session (+) menu and move on from its + button, instead of leaving the menu open with no way to close it from the keyboard. (#582)
 
 ## v0.0.95 — 2026-10-12
