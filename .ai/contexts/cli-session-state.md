@@ -132,9 +132,14 @@ tick covers the session either way.
 
 ## Cost at idle
 
-Zero polling. One `fs.watch` on a directory that holds a handful of tiny files,
-with a 150 ms debounce; events only occur when a CLI changes state. No timer is
-armed while the module is idle. This is the constraint from
+One `fs.watch` on a directory that holds a handful of tiny files, with a
+150 ms debounce. While the watcher holds live status entries, one shared
+5s timer probes their cached PIDs. It rereads only descriptors retained after
+a failed read, so a valid descriptor can clear the miss budget. A killed CLI
+can leave its descriptor untouched, so a file watcher alone cannot report that exit.
+The timer drops dead or expired entries. Only actual status-map changes push
+a renderer rebuild; unchanged alive probes do not. It stops rearming when the map
+is empty, and `stop()` cancels it. There is no polling with no cached status. This is the constraint from
 [ADR 0002](../../docs/decisions/0002-discrete-steps-sidebar-animations.md) —
 steady-state cost is the thing the repo has repeatedly paid to remove.
 
@@ -146,9 +151,9 @@ covers the machine where the directory only appears with the first CLI run.
 ## Failure is silence
 
 Missing directory, unreadable file, truncated JSON caught mid-write, missing
-fields, unknown status: every one of these results in doing nothing, never in a
-throw. The CLI does not write this file atomically. Degrading to "the tick
-handles it" is always an acceptable outcome, which is what makes depending on an
+fields, unknown status: none of these throws. A failed read or invalid descriptor
+retains a previous status only within the two-probe budget described below.
+The CLI does not write this file atomically. Degrading to "the tick handles it" is always an acceptable outcome, which is what makes depending on an
 undocumented file defensible at all.
 
 ## Surfacing status on the session object (issue #245)
@@ -183,7 +188,32 @@ restarted (F2, audit-fable-2026-09-11).** `getStatus(sessionId)` now keeps the
 tests use a fake clock instead of real delays) — a dead pid deletes the entry
 and the call returns `undefined`, same as a file event would have done. This
 still never touches disk and never arms `onIdle` — "the one invariant" above
-is unchanged, it is a read-path liveness check, not a new trigger.
+is unchanged. The shared 5s cached-PID probe also detects an exit without a
+`getStatus` caller. A lazy `getStatus` read that removes a dead entry also
+notifies, so it cannot consume the disappearance before the shared probe
+and leave the renderer uninformed.
+
+`main.js` subscribes `notifyRendererProjectsChanged` to
+`onStatusesChanged`. Only session appearance/disappearance, PID changes or
+status changes notify this subscriber; timestamp-only descriptor flushes
+and process-table refreshes do not. `onDescriptorsChanged` remains the
+separate directory/ownership feed for background agents. Detected PID deaths
+and watcher `stop()` clearing a populated status map enter the same leading/trailing
+1.5s notification throttle as other project changes; the renderer retains
+its 900ms debounce. No separate full-sidebar refresh loop is added. A stop
+means the status source is unavailable, not proof that all processes died:
+local renderer snapshots become unknown, with `is-alive` off and transcript
+activity bounded as described in session-state.md. Merged members get their
+own freshly queried `mergedMemberStatuses` on every project load.
+
+A deleted descriptor (`ENOENT`) is an exit signal: a dead known PID is forgotten
+at the flush or next probe. Other read errors and partial writes preserve the
+previous status until a probe can decide. Every retained miss expires after at
+most two shared 5s probes (up to 10s), even if the PID remains alive or repeated
+file events report the same miss. The probes reread only missed descriptors; a
+valid read resets the budget, while an absent or still unreadable descriptor
+does not. This bounds PID reuse without an extra process-start query. Both the
+150ms flush timer and the liveness probe call `unref()`.
 
 ## Live elsewhere (issue #331)
 

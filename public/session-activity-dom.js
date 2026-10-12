@@ -16,6 +16,39 @@ function sessionItemEl(sessionId, container = document) {
     || container.querySelector(`.session-item[data-merged-member-ids~="${sessionId}"]`);
 }
 
+const localMergedMemberRows = new Map();
+
+function indexLocalMergedMemberRows(projects) {
+  localMergedMemberRows.clear();
+  for (const project of projects) {
+    for (const row of project.sessions) {
+      if (row.remoteAlias) continue;
+      for (const id of row.mergedMemberIds || []) localMergedMemberRows.set(id, row);
+    }
+  }
+}
+
+function localSessionForStatus(sessionId, session) {
+  if (session) return session;
+  if (typeof sessionMap === 'undefined') return undefined;
+  const current = localMergedMemberRows.get(sessionId);
+  if (current) return { sessionId, ...current.mergedMemberStatuses?.[sessionId] };
+  const item = sessionItemEl(sessionId);
+  const rendered = item && sessionMap.get(item.dataset.sessionId);
+  if (rendered?.mergedMemberIds?.includes(sessionId)) {
+    return { sessionId, ...rendered.mergedMemberStatuses?.[sessionId] };
+  }
+  const stored = sessionMap.get(sessionId);
+  if (stored) return stored;
+  let latest;
+  for (const row of sessionMap.values()) {
+    if (row.mergedMemberIds?.includes(sessionId)) {
+      latest = row;
+    }
+  }
+  if (latest) return { sessionId, ...latest.mergedMemberStatuses?.[sessionId] };
+}
+
 function storedActivitySnapshot(sessionId, session) {
   const local = snapshotForLocal(sessionId, session);
   if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return localPtyStates.get(sessionId)?.snapshot();
@@ -100,7 +133,7 @@ function writeIconSlot(el, icon) {
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session) {
   let state = localPtyState(sessionId);
-  const sess = session || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+  const sess = localSessionForStatus(sessionId, session);
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
@@ -109,7 +142,7 @@ function snapshotForLocal(sessionId, session) {
     && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
     localPtyStates.delete(sessionId);
     state = localPtyState(sessionId);
-    state.apply({ type: 'liveness', value: 'dead' });
+    state.apply({ type: 'liveness', value: 'unknown' });
   }
   return state.snapshot();
 }

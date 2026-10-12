@@ -9,6 +9,7 @@ const localTranscriptAgentsDecayTimers = new Map();
 
 // one persistent state per session id, same shape as remoteSessionStates — see .ai/contexts/session-state.md
 const localTranscriptStates = new Map();
+const localTranscriptDescriptorLosses = new Set();
 
 function localTranscriptState(sessionId) {
   let state = localTranscriptStates.get(sessionId);
@@ -41,9 +42,11 @@ function clearLocalTranscriptAgentsTimer(sessionId) {
 
 // descriptorStatus/liveness from session.status — see .ai/contexts/session-state.md
 function seedLocalTranscriptDescriptor(sessionId, session) {
-  session = session || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+  session = localSessionForStatus(sessionId, session);
   if (!session || session.status === undefined) {
-    if (localTranscriptStates.get(sessionId)?.snapshot().liveness === 'alive') {
+    const state = localTranscriptStates.get(sessionId);
+    if (state?.snapshot().liveness === 'alive') {
+      localTranscriptDescriptorLosses.add(sessionId);
       clearLocalTranscriptTimer(sessionId);
       clearLocalTranscriptAgentsTimer(sessionId);
       localTranscriptStates.delete(sessionId);
@@ -52,15 +55,23 @@ function seedLocalTranscriptDescriptor(sessionId, session) {
   }
   const state = localTranscriptState(sessionId);
   state.apply({ type: 'liveness', value: 'alive' });
+  localTranscriptDescriptorLosses.delete(sessionId);
   state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
 }
 
 // silence means stopped writing, not response ready — see .ai/contexts/session-state.md
 function decayLocalTranscriptBusy(sessionId) {
   if (!localTranscriptStates.has(sessionId)) return;
+  clearLocalTranscriptTimer(sessionId);
   seedLocalTranscriptDescriptor(sessionId);
   const state = localTranscriptStates.get(sessionId);
   if (!state) return;
+  if (localTranscriptDescriptorLosses.has(sessionId) && state.snapshot().liveness === 'unknown' && !localTranscriptAgentsDecayTimers.has(sessionId)) {
+    clearLocalTranscriptTimer(sessionId);
+    localTranscriptStates.delete(sessionId);
+    applyStateClasses(sessionId, snapshotForLocal(sessionId));
+    return;
+  }
   state.apply({ type: 'busy', active: false, armReady: false });
   projectLocalTranscriptState(sessionId);
 }
@@ -76,9 +87,15 @@ function armLocalTranscriptDecayTimer(sessionId) {
 // silence means the subagent stopped, not finished — see .ai/contexts/subagent-observability.md
 function decayLocalTranscriptAgentsBusy(sessionId) {
   if (!localTranscriptStates.has(sessionId)) return;
+  clearLocalTranscriptAgentsTimer(sessionId);
   seedLocalTranscriptDescriptor(sessionId);
   const state = localTranscriptStates.get(sessionId);
   if (!state) return;
+  if (localTranscriptDescriptorLosses.has(sessionId) && state.snapshot().liveness === 'unknown' && !localTranscriptDecayTimers.has(sessionId)) {
+    localTranscriptStates.delete(sessionId);
+    applyStateClasses(sessionId, snapshotForLocal(sessionId));
+    return;
+  }
   state.apply({ type: 'subagentCompleted', stillActive: false });
   projectLocalTranscriptState(sessionId);
 }
@@ -129,6 +146,7 @@ function onLocalTranscriptSubagentActivity(payload) {
 
 // called once a row gains a PTY; the local-pty path takes over from here — see .ai/contexts/session-state.md
 function localTranscriptPtyTakeover(sessionId) {
+  localTranscriptDescriptorLosses.delete(sessionId);
   if (!localTranscriptStates.has(sessionId)) return;
   clearLocalTranscriptTimer(sessionId);
   clearLocalTranscriptAgentsTimer(sessionId);
@@ -136,6 +154,9 @@ function localTranscriptPtyTakeover(sessionId) {
 }
 
 function pruneLocalTranscriptTimers() {
+  for (const sessionId of localTranscriptDescriptorLosses) {
+    if (!sessionItemEl(sessionId)) localTranscriptDescriptorLosses.delete(sessionId);
+  }
   for (const sessionId of localTranscriptDecayTimers.keys()) {
     if (!sessionItemEl(sessionId)) clearLocalTranscriptTimer(sessionId);
   }

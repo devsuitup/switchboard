@@ -105,13 +105,15 @@ test('a descriptor whose id differs only in case still rescans the app session, 
   }
 });
 
-test('an uppercase descriptor is found under the lowercase id, and forgotten when its file goes', async () => {
+test('an uppercase descriptor is found under the lowercase id, and forgotten when its file goes and PID exits', async () => {
   const dir = mkTmp();
+  let alive = true;
   try {
     writeState(dir, 4242, { status: 'busy', sessionId: 'SESS-1' });
-    boot(dir, oneSession());
+    boot(dir, oneSession(), { isProcessAlive: () => alive });
     writeState(dir, 4242, { status: 'idle', sessionId: 'SESS-1' });
     await waitFor(() => cliSessionState.getStatus('sess-1')?.status === 'idle');
+    alive = false;
     fs.rmSync(path.join(dir, '4242.json'));
     await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
   } finally {
@@ -387,13 +389,15 @@ test('getStatus clears once a previously-live descriptor is next observed with a
   }
 });
 
-test('getStatus returns undefined once the descriptor file is removed', async () => {
+test('getStatus returns undefined once the descriptor file is removed and its PID exits', async () => {
   const dir = mkTmp();
+  let alive = true;
   try {
     writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 1000 });
-    boot(dir, oneSession());
+    boot(dir, oneSession(), { isProcessAlive: () => alive });
     await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
 
+    alive = false;
     fs.unlinkSync(path.join(dir, '4242.json'));
     await waitFor(() => cliSessionState.getStatus('sess-1') === undefined);
   } finally {

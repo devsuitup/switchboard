@@ -1261,8 +1261,18 @@ function dedup(projects) {
       } else {
         sessionMap.set(s.sessionId, s);
       }
+      if (!s.remoteAlias) {
+        for (const id of s.mergedMemberIds || []) {
+          const member = sessionMap.get(id);
+          if (!member) continue;
+          const status = s.mergedMemberStatuses?.[id];
+          member.status = status?.status;
+          member.statusUpdatedAt = status?.statusUpdatedAt;
+        }
+      }
     }
   }
+  indexLocalMergedMemberRows(projects);
 }
 
 async function loadProjects({ resort = false } = {}) {

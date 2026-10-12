@@ -42,6 +42,7 @@ let platform = process.platform;
 
 let watcher = null;
 let flushTimer = null;
+let livenessTimer = null;
 const pending = new Set();
 const known = new Map();
 const lastRescanAt = new Map();
@@ -52,6 +53,7 @@ const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
+const statusListeners = new Set();
 const scheduledRuns = new Map();
 
 function trackScheduleRun(sessionId, child, cwd) {
@@ -346,6 +348,17 @@ function notifyDescriptorsChanged() {
   }
 }
 
+function onStatusesChanged(listener) {
+  statusListeners.add(listener);
+  return () => { statusListeners.delete(listener); };
+}
+
+function notifyStatusesChanged() {
+  for (const listener of statusListeners) {
+    try { listener(); } catch (err) { log.warn('[cli-state] status listener failed: ' + err.message); }
+  }
+}
+
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
@@ -356,23 +369,35 @@ function findSession(sessionId) {
   return null;
 }
 
+function retainAfterMiss(name, deleted) {
+  const stale = known.get(name);
+  if (!stale) return;
+  if (deleted && !isProcessAlive(stale.pid)) {
+    forgetSession(stale.sessionId);
+    known.delete(name);
+    return;
+  }
+  stale.missedProbes ??= 0;
+}
+
 function handleFile(name) {
   let text;
   try {
     text = fs.readFileSync(path.join(dir, name), 'utf8');
-  } catch {
-    const stale = known.get(name);
-    if (stale && stale.sessionId) forgetSession(stale.sessionId);
-    known.delete(name);
+  } catch (err) {
+    retainAfterMiss(name, err.code === 'ENOENT');
     return;
   }
 
   const state = parseState(text);
-  if (!state) return;
+  if (!state) {
+    retainAfterMiss(name, false);
+    return;
+  }
 
   const prev = known.get(name);
   if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
-  known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+  known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
     statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
@@ -407,8 +432,45 @@ function flush() {
   flushTimer = null;
   const batch = [...pending];
   pending.clear();
+  const previous = new Map(statusBySession);
   for (const name of batch) handleFile(name);
+  armLivenessProbe();
+  if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
+    const prev = previous.get(id);
+    return !prev || prev.status !== entry.status || prev.pid !== entry.pid;
+  })) notifyStatusesChanged();
   if (batch.length > 0) notifyDescriptorsChanged();
+}
+
+function armLivenessProbe() {
+  if (livenessTimer || !watcher || statusBySession.size === 0) return;
+  livenessTimer = setTimeout(() => {
+    livenessTimer = null;
+    const previous = new Map(statusBySession);
+    for (const [name, stale] of known) {
+      if (stale.missedProbes == null || !statusBySession.has(statusKey(stale.sessionId))) continue;
+      handleFile(name);
+      const retained = known.get(name);
+      if (retained && retained.missedProbes != null && ++retained.missedProbes >= 2) {
+        forgetSession(retained.sessionId);
+        known.delete(name);
+      }
+    }
+    for (const [id, entry] of statusBySession) {
+      if (!isProcessAlive(entry.pid)) {
+        forgetSession(id);
+      }
+    }
+    if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
+      const prev = previous.get(id);
+      return !prev || prev.status !== entry.status || prev.pid !== entry.pid;
+    })) {
+      notifyDescriptorsChanged();
+      notifyStatusesChanged();
+    }
+    armLivenessProbe();
+  }, GET_STATUS_PROBE_THROTTLE_MS);
+  if (typeof livenessTimer.unref === 'function') livenessTimer.unref();
 }
 
 function seed() {
@@ -421,7 +483,7 @@ function seed() {
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const state = parseState(text);
     if (state) {
-      known.set(name, { procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+      known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
         statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       }
@@ -460,11 +522,13 @@ function ensureWatching() {
     log.warn(`[cli-state] cannot watch ${dir}: ${err.message}`);
     return false;
   }
+  armLivenessProbe();
   log.info(`[cli-state] watching ${dir}`);
   return true;
 }
 
 function stop() {
+  const hadStatus = statusBySession.size > 0;
   if (watcher) {
     try { watcher.close(); } catch {}
     watcher = null;
@@ -473,11 +537,19 @@ function stop() {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+  if (livenessTimer) {
+    clearTimeout(livenessTimer);
+    livenessTimer = null;
+  }
   pending.clear();
   known.clear();
   statusBySession.clear();
   lastRescanAt.clear();
   lastProbeAt.clear();
+  if (hadStatus) {
+    notifyDescriptorsChanged();
+    notifyStatusesChanged();
+  }
 }
 
 // Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
@@ -492,6 +564,8 @@ function getStatus(sessionId) {
     lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
       forgetSession(sessionId);
+      notifyDescriptorsChanged();
+      notifyStatusesChanged();
       return undefined;
     }
   }
@@ -689,6 +763,7 @@ module.exports = {
   stop,
   parseState,
   onDescriptorsChanged,
+  onStatusesChanged,
   readAllDescriptors,
   parseDescriptor,
   ownProcessFilter,
