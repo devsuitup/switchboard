@@ -59,7 +59,7 @@ function setup() {
   window.sessionMap.set('s2', { sessionId: 's2', projectPath: PROJECT });
   loadAppFunctions(ctx.context, {
     declarations: ['restoreMode', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet', 'restoreInFlight'],
-    functions: ['openSession', 'openSessionNow'],
+    functions: ['openSession', 'openSessionNow', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
   });
   window.renderProjects(window.cachedProjects, true);
   const row = () => window.document.getElementById('si-s1');

@@ -100,6 +100,7 @@ const rendererCrossFileGlobals = {
   dormantWorkingSet: 'readonly',
   dismissDormantSession: 'readonly',
   isDormantSession: 'readonly',
+  indexedSessionById: 'readonly',
   revealDormantSessions: 'readonly',
   sessionMap: 'writable',
   lastActivityTime: 'readonly',

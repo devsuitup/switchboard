@@ -78,7 +78,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   dom.window.SETTING_DEFAULTS = require('../public/setting-defaults').SETTING_DEFAULTS;
   const app = loadAppFunctions(ctx, {
     declarations: ['restoreMode', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
-    functions: ['runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice'],
+    functions: ['runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
   });
   return {
     spawned, prompts, rows, root, db, folder, ctx,

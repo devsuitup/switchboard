@@ -176,6 +176,12 @@ is selected, the last active one included.
   the open sessions only, so they never resume a row of marked sessions one
   after another. The grid has no card for a marked session, so in the grid
   they skip it.
+- A saved session that is a member of a merged web-session row marks that
+  row. Clicking the row resumes the marked member, or shows the member already
+  open; either way the row is open, so every member of it is dropped from the
+  marked and saved sessions. **Don't restore** and deleting the row drop every
+  marked member of it, and the session keys resume a marked member under its
+  own id.
 - Reloading the window starts nothing. A saved session whose process is still
   running is reattached, the selected one included; the others are marked. A
   process that ends during the reload is not started again.

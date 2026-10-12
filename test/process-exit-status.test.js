@@ -109,6 +109,7 @@ function setup() {
   run(extractDeclaration(APP_SRC, 'openingSessions'), 'app.js#openingSessions');
   run(sliceBlock('function openSession(session'), 'app.js#openSession');
   run(sliceBlock('async function openSessionNow(session'), 'app.js#openSessionNow');
+  run(sliceBlock('function clearDormantRow('), 'app.js#clearDormantRow');
   run(sliceBlock('function applyProcessExit('), 'app.js#applyProcessExit');
   run(sliceBlock('function handleProcessExited('), 'app.js#handleProcessExited');
   run(sliceBlock('function beginPtyOpen('), 'app.js#beginPtyOpen');

@@ -98,7 +98,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   });
   vm.runInContext(topLevelDeclarations(APP_SRC, ['restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow']) {
+  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow']) {
     vm.runInContext(functionSource(APP_SRC, name), ctx);
   }
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {

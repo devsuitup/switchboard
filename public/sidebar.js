@@ -762,7 +762,7 @@ function renderProjects(projects, resort) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
       const hasPinned = sessions.some(s => s.starred);
-      const hasDormant = sessions.some(s => isDormantSession(s.sessionId));
+      const hasDormant = sessions.some(s => rowSessionIds(s).some(isDormantSession));
       const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project, legacyScheduleScopes);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, dormant: hasDormant, element });
     }
@@ -1658,7 +1658,7 @@ function rebindSidebarEvents(projects) {
         // The sidebar re-injects transcript-less sessions from pendingSessions on
         // every load, so forget it here or a deleted placeholder card comes back.
         if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
-        if (typeof dismissDormantSession === 'function') dismissDormantSession(session.sessionId);
+        if (typeof dismissDormantSession === 'function') rowSessionIds(session).forEach(dismissDormantSession);
         if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
         // Close the tab too — otherwise it stays open pointing at a transcript
         // that no longer exists for the rest of this run.
@@ -1759,7 +1759,8 @@ function showSessionContextMenu(event, sessionId) {
     sendSessionToBackground(openId);
   };
   menu.appendChild(bgButton);
-  if (isDormantSession(sessionId)) {
+  const dormantIds = rowSessionIds(sessionMap.get(sessionId) || { sessionId }).filter(isDormantSession);
+  if (dormantIds.length) {
     const dismiss = document.createElement('button');
     dismiss.className = 'popover-option session-dismiss-dormant-btn';
     dismiss.setAttribute('role', 'menuitem');
@@ -1767,7 +1768,7 @@ function showSessionContextMenu(event, sessionId) {
     dismiss.title = 'Remove this session from the sessions to restore, without starting it';
     dismiss.onclick = () => {
       closeSessionContextMenu();
-      dismissDormantSession(sessionId);
+      dormantIds.forEach(dismissDormantSession);
     };
     menu.appendChild(dismiss);
   }

@@ -177,6 +177,28 @@ function dismissDormantSession(sessionId) {
   refreshSidebar();
 }
 
+function indexedSessionById(sessionId) {
+  const row = sessionMap.get(sessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(sessionId));
+  return row && (row.sessionId === sessionId ? row : { ...row, sessionId, mergedMemberIds: [] });
+}
+
+function dormantRowIds(row) {
+  return row ? [row.dataset.sessionId, ...(row.dataset.mergedMemberIds?.split(' ') || [])] : [];
+}
+
+function syncDormantRow(sessionId) {
+  const row = sessionItemEl(sessionId);
+  if (row) row.classList.toggle('dormant', dormantRowIds(row).some(id => dormantWorkingSet.has(id)));
+}
+
+function clearDormantRow(sessionId) {
+  if (!dormantWorkingSet.size) return false;
+  let cleared = false;
+  for (const id of new Set([sessionId, ...dormantRowIds(sessionItemEl(sessionId))])) cleared = dormantWorkingSet.delete(id) || cleared;
+  syncDormantRow(sessionId);
+  return cleared;
+}
+
 // Serialise concurrent read-modify-write calls so two async persist paths
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
@@ -384,8 +406,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 // see .ai/contexts/session-cache.md ("Restore on click")
 async function reopenActiveSessionAfterReload() {
   if (!activeSessionId || openSessions.has(activeSessionId)) return;
-  const row = sessionMap.get(activeSessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(activeSessionId));
-  const session = row && (row.sessionId === activeSessionId ? row : { ...row, sessionId: activeSessionId, mergedMemberIds: [] });
+  const session = indexedSessionById(activeSessionId);
   if (!session) return;
   const g = await window.api.getSetting('global');
   if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
@@ -453,9 +474,10 @@ async function tickRestorePlanner() {
       const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
       for (const [position, item] of candidates.entries()) {
         if (!restoreInFlight.has(item.sessionId)) continue;
-        if (item.fresh && !sessionMap.has(item.sessionId)) continue;
-        const reattached = live.has(item.sessionId) && sessionMap.has(item.sessionId)
-          && await openSession(sessionMap.get(item.sessionId), undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
+        const indexed = indexedSessionById(item.sessionId);
+        if (item.fresh && !indexed) continue;
+        const reattached = live.has(item.sessionId) && indexed
+          && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
         const open = openSessions.get(item.sessionId);
         if (!reattached && (!open || open.closed)) {
           const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
@@ -1732,6 +1754,10 @@ const openingSessions = new Map();
 
 // see .ai/contexts/session-state.md ("Opening a session once")
 function openSession(session, customOptions, flags = {}) {
+  if (!flags.automatic && session.mergedMemberIds?.length && !rowOpenId(session)) {
+    const dormantId = rowSessionIds(session).find(id => dormantWorkingSet.has(id));
+    if (dormantId && dormantId !== session.sessionId) session = { ...session, sessionId: dormantId, mergedMemberIds: [] };
+  }
   const inFlight = openingSessions.get(session.sessionId);
   const open = { byUser: !flags.automatic, after: null };
   if (inFlight) {
@@ -1752,7 +1778,7 @@ function settleContinuedInFlight(item) {
   const entry = openSessions.get(item.sessionId);
   if (entry && !entry.closed) return;
   dormantWorkingSet.set(item.sessionId, { item, index: restoreSavedIndex.get(item.sessionId) ?? Number.MAX_SAFE_INTEGER });
-  document.getElementById('si-' + item.sessionId)?.classList.add('dormant');
+  syncDormantRow(item.sessionId);
   schedulePersistWorkingSet();
 }
 
@@ -1764,6 +1790,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     ? (openSessions.has(session.sessionId) && !openSessions.get(session.sessionId).closed ? session.sessionId : null)
     : rowOpenId(session);
   if (openId) {
+    if (clearDormantRow(openId)) schedulePersistWorkingSet();
     showSession(openId);
     return;
   }
@@ -1792,7 +1819,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       if (dormant) {
         dormantWorkingSet.delete(originalId);
         dormantWorkingSet.set(session.sessionId, { ...dormant, item: { ...dormant.item, sessionId: session.sessionId } });
-        document.getElementById('si-' + originalId)?.classList.remove('dormant');
+        syncDormantRow(originalId);
       }
       const other = openingSessions.get(session.sessionId);
       if (open && other && other !== open) await other.promise.catch(() => {});
@@ -1807,10 +1834,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     if (entry.closed) {
       destroySession(sessionId);
     } else {
-      if (dormantWorkingSet.delete(sessionId)) {
-        document.getElementById('si-' + sessionId)?.classList.remove('dormant');
-        schedulePersistWorkingSet();
-      }
+      if (clearDormantRow(sessionId)) schedulePersistWorkingSet();
       showSession(sessionId);
       return;
     }
@@ -1861,9 +1885,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       keepAttached: true,
     });
   }
-  if (dormantWorkingSet.delete(sessionId)) {
-    document.getElementById('si-' + sessionId)?.classList.remove('dormant');
-  }
+  clearDormantRow(sessionId);
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
