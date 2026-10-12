@@ -3137,7 +3137,7 @@ sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
-  getDescriptorIdentity: () => cliSessionState.getDescriptorIdentity(),
+  getDescriptorIdentity: snapshot => cliSessionState.getDescriptorIdentity(snapshot),
 });
 const { detectSessionTransitions } = sessionTransitions;
 

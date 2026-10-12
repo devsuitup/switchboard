@@ -442,7 +442,7 @@ function rekeySession(sessionId, newId, session, currentFiles, kind) {
 }
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
-function detectContinuation(sessionId, session, folderPath, currentFiles, descriptorIdentity) {
+function detectContinuation(sessionId, session, folderPath, currentFiles, descriptorIdentity, descriptorSnapshot) {
   const sourceId = session.realSessionId || sessionId;
   const sourceFile = path.join(folderPath, sourceId + '.jsonl');
   let cached = session._continuation;
@@ -465,12 +465,12 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
     const previous = cached.other.get(newId);
     if (identity != null && previous && previous.mtimeMs === mtimeMs && previous.identity === identity) continue;
     let owner;
-    try { owner = clearOwner(newId, session.pty && session.pty.pid, { closestWriter: true }); } catch { continue; }
+    try { owner = clearOwner(newId, session.pty && session.pty.pid, { closestWriter: true, descriptorSnapshot }); } catch { continue; }
     if (owner === 'mine') {
       rekeySession(sessionId, newId, session, currentFiles, 'continuation');
       return true;
     }
-    if (owner === 'other') cached.other.set(newId, { mtimeMs, identity });
+    if (owner === 'other' || owner === 'absent' || owner === 'unsupported') cached.other.set(newId, { mtimeMs, identity });
     else cached.other.delete(newId);
     if (owner === 'pending' && isFresh(file)) scheduleRecheck(session.projectFolder);
   }
@@ -485,7 +485,8 @@ function detectSessionTransitions(folder) {
     currentFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
   } catch { return; }
   let descriptorIdentity;
-  const readIdentity = () => (descriptorIdentity ??= getDescriptorIdentity());
+  const descriptorSnapshot = {};
+  const readIdentity = () => (descriptorIdentity ??= getDescriptorIdentity(descriptorSnapshot));
 
   for (const [sessionId, session] of [...activeSessions]) {
     // Run subagent detection for all non-exited, non-terminal sessions in this folder
@@ -501,7 +502,7 @@ function detectSessionTransitions(folder) {
       continue;
     }
 
-    if (detectContinuation(sessionId, session, folderPath, currentFiles, readIdentity)) continue;
+    if (detectContinuation(sessionId, session, folderPath, currentFiles, readIdentity, descriptorSnapshot)) continue;
 
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
 

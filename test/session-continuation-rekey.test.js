@@ -31,32 +31,35 @@ function fixture(t, { owner, platform = 'linux' } = {}) {
   const activeSessions = new Map([['A', session]]);
   const clock = { now: Date.now() };
   const parents = new Map([[10, 1], [20, 10], [30, 20], [40, 1]]);
+  const starts = new Map([...parents.keys()].map(pid => [pid, ft(pid)]));
+  const dead = new Set();
   let tableReads = 0;
   cli.init({ dir: descriptors, activeSessions, log, onIdle() {}, platform,
-    now: () => clock.now, isProcessAlive: () => true, readProcStart: () => null,
+    now: () => clock.now, isProcessAlive: pid => !dead.has(pid), readProcStart: pid => starts.get(pid) ?? null,
     ...(platform === 'linux' ? { readParentPid: pid => parents.get(pid) ?? null } : {}),
     readProcessTable: async () => {
       tableReads++;
-      return new Map([...parents].map(([pid, ppid]) => [pid, { ppid, created: ft(pid) }]));
+      return new Map([...parents].map(([pid, ppid]) => [pid, { ppid, created: starts.get(pid) }]));
     } });
   let calls = 0;
   transitions.init({ PROJECTS_DIR: tmp, activeSessions, log,
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
     rekeyMcpServer: (...args) => rekeys.push(args), rekeyActivity: (...args) => activity.push(args),
     clearOwner: (...args) => { calls++; return owner ? owner(...args) : cli.clearOwner(...args); },
-    getDescriptorIdentity: () => cli.getDescriptorIdentity?.(),
+    getDescriptorIdentity: (...args) => cli.getDescriptorIdentity(...args),
     setTimeout: fn => { timers.push(fn); return { unref() {} }; } });
   t.after(() => {
     transitions.init({ PROJECTS_DIR: tmp, activeSessions: new Map(), log, getMainWindow: () => null, rekeyMcpServer() {} });
     cli.stop();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
-  return { tmp, folder, session, activeSessions, written, events, timers, rekeys, activity, clock, parents,
+  return { tmp, folder, descriptors, session, activeSessions, written, events, timers, rekeys, activity, clock, parents, starts, dead,
     get calls() { return calls; }, get tableReads() { return tableReads; },
     write, prompt,
-    descriptor(id, pid, status = 'idle') {
+    descriptor(id, pid, status = 'idle', fields = {}) {
       fs.writeFileSync(path.join(descriptors, pid + '.json'), JSON.stringify({ sessionId: id, pid, status,
-        pidDomain: 'win32:anchor', procStart: ft(pid) }));
+        ...(platform === 'win32' ? { pidDomain: 'win32:anchor' } : {}), procStart: ft(pid), ...fields }));
+      clock.now = Math.max(clock.now, Math.ceil(fs.statSync(path.join(descriptors, pid + '.json')).mtimeMs));
     },
     continueTo(...ids) {
       fs.appendFileSync(path.join(folder, 'A.jsonl'), ids.map(id => JSON.stringify({ type: 'continued-in', sessionId: 'A', continuedInSessionId: id })).join('\n') + '\n');
@@ -257,4 +260,138 @@ test('continued-in: an old malformed EOF does not start an endless indexing time
   f.detect();
   assert.equal(f.timers.length, 0);
   assert.equal(f.activeSessions.get('A'), f.session);
+});
+
+for (const pid of [10, 20]) {
+  test(`continued-in: a stale Linux descriptor on reused ancestor pid ${pid} cannot steal the tab`, t => {
+    const f = fixture(t);
+    f.parents.set(11, pid);
+    f.starts.set(11, ft(11));
+    f.continueTo('B');
+    f.write('B', [f.prompt('B')]);
+    f.session.knownJsonlFiles.add('B.jsonl');
+    f.descriptor('A', 11);
+    f.descriptor('B', pid);
+    f.starts.set(pid, 'reused');
+    f.detect();
+    assert.equal(f.activeSessions.get('A'), f.session);
+    assert.equal(f.activeSessions.has('B'), false);
+    assert.equal(f.events.length, 0);
+    assert.equal(cli.clearOwner('B', 10, { closestWriter: true }), 'pending');
+  });
+}
+
+for (const value of [null, 'stale']) {
+  test(`continued-in: ${value} procStart on an intermediate descriptor leaves ownership pending`, t => {
+    const f = fixture(t);
+    f.continueTo('B');
+    f.write('B', [f.prompt('B')]);
+    f.session.knownJsonlFiles.add('B.jsonl');
+    f.descriptor('B', 30);
+    f.descriptor('A', 20, 'idle', { procStart: value });
+    assert.equal(cli.clearOwner('B', 10, { closestWriter: true }), 'pending');
+    f.detect();
+    assert.equal(f.activeSessions.get('A'), f.session);
+  });
+}
+
+test('continued-in: an unreadable live Linux process start never proves ownership', t => {
+  const f = fixture(t);
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.session.knownJsonlFiles.add('B.jsonl');
+  f.descriptor('B', 20);
+  f.starts.delete(20);
+  assert.equal(cli.clearOwner('B', 10, { closestWriter: true }), 'pending');
+  f.detect();
+  assert.equal(f.activeSessions.get('A'), f.session);
+});
+
+for (const platform of ['win32', 'darwin']) {
+  test(`continued-in: ten unchanged dead-writer passes on ${platform} cost one owner call and one listing per pass`, async t => {
+    const f = fixture(t, { platform });
+    f.continueTo('B');
+    f.write('B', [f.prompt('B')]);
+    f.session.knownJsonlFiles.add('B.jsonl');
+    f.descriptor('B', 40);
+    f.dead.add(40);
+    let reads = 0;
+    const readdir = fs.readdirSync;
+    t.mock.method(fs, 'readdirSync', (...args) => {
+      if (args[0] === f.descriptors) reads++;
+      return readdir(...args);
+    });
+    for (let i = 0; i < 10; i++) {
+      f.clock.now += 4000;
+      f.detect();
+      await Promise.resolve();
+    }
+    assert.equal(f.calls, 1);
+    assert.equal(f.tableReads, 0);
+    assert.equal(reads, 10, 'one shared descriptor listing per detection pass');
+    assert.equal(f.timers.length, 0);
+    assert.equal(f.activeSessions.get('A'), f.session);
+    f.dead.delete(40);
+    f.descriptor('B', 20);
+    f.detect();
+    await Promise.resolve();
+    f.detect();
+    if (platform === 'win32') assert.equal(f.activeSessions.get('B'), f.session);
+  });
+}
+
+test('continued-in: macOS native descriptors give up without a process-table recheck loop', async t => {
+  const f = fixture(t, { platform: 'darwin' });
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.session.knownJsonlFiles.add('B.jsonl');
+  f.descriptor('B', 20);
+  for (let i = 0; i < 10; i++) {
+    f.clock.now += 4000;
+    f.detect();
+    await Promise.resolve();
+  }
+  assert.equal(f.calls, 1);
+  assert.equal(f.tableReads, 0);
+  assert.equal(f.timers.length, 0);
+  assert.equal(f.activeSessions.get('A'), f.session);
+});
+
+test('continued-in: a table older than a descriptor cannot permanently cache other', async t => {
+  const f = fixture(t, { platform: 'win32' });
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.session.knownJsonlFiles.add('B.jsonl');
+  await cli.refreshProcessTable();
+  f.starts.set(20, ft(50));
+  f.descriptor('B', 20, 'idle', { procStart: ft(50) });
+  const changed = new Date(f.clock.now + 1000);
+  fs.utimesSync(path.join(f.descriptors, '20.json'), changed, changed);
+  f.detect();
+  assert.equal(f.activeSessions.get('A'), f.session);
+  assert.equal(f.timers.length, 1);
+  f.clock.now += 4000;
+  await cli.refreshProcessTable();
+  f.detect();
+  assert.equal(f.activeSessions.get('B'), f.session);
+});
+
+test('continued-in: descriptors beyond 1000 invalidate the same identity used for ownership', t => {
+  const f = fixture(t);
+  for (let pid = 1000; pid < 2001; pid++) f.descriptor('unrelated', pid);
+  f.descriptor('B', 99999);
+  f.parents.set(99999, 1);
+  f.starts.set(99999, ft(99999));
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.session.knownJsonlFiles.add('B.jsonl');
+  f.detect();
+  assert.equal(f.activeSessions.get('A'), f.session);
+  const before = cli.getDescriptorIdentity();
+  f.descriptor('C', 99999);
+  f.descriptor('B', 20);
+  const after = cli.getDescriptorIdentity();
+  assert.notEqual(after, before);
+  f.detect();
+  assert.equal(f.activeSessions.get('B'), f.session);
 });
