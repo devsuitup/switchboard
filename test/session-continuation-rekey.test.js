@@ -182,6 +182,33 @@ test('continued-in: a nested CLI cannot become the tab writer; legacy clearOwner
 });
 
 for (const platform of ['linux', 'win32']) {
+  test(`continued-in: a nested CLI cannot steal a tab whose PTY is the CLI on ${platform}`, async t => {
+    const f = fixture(t, { platform });
+    f.continueTo('B');
+    f.write('B', [f.prompt('B')]);
+    f.session.knownJsonlFiles.add('B.jsonl');
+    f.descriptor('A', 10);
+    f.descriptor('B', 30);
+    await cli.refreshProcessTable();
+    f.detect();
+    assert.equal(f.activeSessions.get('A'), f.session, 'nested B must leave the tab on A');
+    assert.equal(f.activeSessions.has('B'), false);
+    assert.deepEqual(f.events, []);
+  });
+
+  test(`continued-in: the CLI at the PTY pid can continue as B on ${platform}`, async t => {
+    const f = fixture(t, { platform });
+    f.continueTo('B');
+    f.write('B', [f.prompt('B')]);
+    f.session.knownJsonlFiles.add('B.jsonl');
+    f.descriptor('B', 10);
+    await cli.refreshProcessTable();
+    f.detect();
+    assert.equal(f.activeSessions.get('B'), f.session);
+    assert.equal(f.activeSessions.has('A'), false);
+    assert.deepEqual(f.events, [['session-forked', 'A', 'B', 'continuation']]);
+  });
+
   test(`continued-in: a nested descriptor does not change the closest writer verdict on ${platform}`, async t => {
     const f = fixture(t, { platform });
     f.continueTo('B', 'C');
@@ -207,6 +234,42 @@ test('continued-in: a stale pending target does not keep the recheck timer alive
   f.detect();
   assert.equal(f.calls, 1);
   assert.equal(f.timers.length, 0);
+  assert.equal(f.activeSessions.get('A'), f.session);
+});
+
+test('continued-in: a fresh B written before its descriptor switches re-keys without another transcript write', t => {
+  const f = fixture(t);
+  f.descriptor('A', 20);
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.detect();
+  assert.equal(f.activeSessions.get('A'), f.session);
+  assert.equal(f.timers.length, 1, 'a fresh absent target must schedule a recheck');
+  const before = fs.statSync(path.join(f.folder, 'B.jsonl'));
+  f.descriptor('B', 20);
+  f.timers.shift()();
+  assert.equal(f.activeSessions.get('B'), f.session);
+  assert.deepEqual(f.events, [['session-forked', 'A', 'B', 'continuation']]);
+  assert.equal(fs.statSync(path.join(f.folder, 'B.jsonl')).mtimeMs, before.mtimeMs);
+});
+
+test('continued-in: absent ownership retries only while the target is fresh, then caches it', t => {
+  const f = fixture(t);
+  f.continueTo('B');
+  f.write('B', [f.prompt('B')]);
+  f.session.knownJsonlFiles.add('B.jsonl');
+  f.detect();
+  assert.equal(f.timers.length, 1);
+  f.timers.shift()();
+  assert.equal(f.calls, 2, 'fresh absent ownership must not be cached');
+  assert.equal(f.timers.length, 1);
+  const old = new Date(Date.now() - 61000);
+  fs.utimesSync(path.join(f.folder, 'B.jsonl'), old, old);
+  f.timers.shift()();
+  assert.equal(f.calls, 3);
+  assert.equal(f.timers.length, 0, 'the freshness window bounds retries');
+  f.detect();
+  assert.equal(f.calls, 3, 'stale absent ownership is cached');
   assert.equal(f.activeSessions.get('A'), f.session);
 });
 
@@ -308,11 +371,13 @@ test('continued-in: an unreadable live Linux process start never proves ownershi
 });
 
 for (const platform of ['win32', 'darwin']) {
-  test(`continued-in: ten unchanged dead-writer passes on ${platform} cost one owner call and one listing per pass`, async t => {
+  test(`continued-in: ten unchanged stale dead-writer passes on ${platform} cost one owner call and one listing per pass`, async t => {
     const f = fixture(t, { platform });
     f.continueTo('B');
     f.write('B', [f.prompt('B')]);
     f.session.knownJsonlFiles.add('B.jsonl');
+    const old = new Date(Date.now() - 61000);
+    fs.utimesSync(path.join(f.folder, 'B.jsonl'), old, old);
     f.descriptor('B', 40);
     f.dead.add(40);
     let reads = 0;

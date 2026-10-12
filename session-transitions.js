@@ -470,9 +470,10 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
       rekeySession(sessionId, newId, session, currentFiles, 'continuation');
       return true;
     }
-    if (owner === 'other' || owner === 'absent' || owner === 'unsupported') cached.other.set(newId, { mtimeMs, identity });
+    const waiting = (owner === 'pending' || owner === 'absent') && isFresh(file);
+    if (owner === 'other' || (owner === 'absent' && !waiting) || owner === 'unsupported') cached.other.set(newId, { mtimeMs, identity });
     else cached.other.delete(newId);
-    if (owner === 'pending' && isFresh(file)) scheduleRecheck(session.projectFolder);
+    if (waiting) scheduleRecheck(session.projectFolder);
   }
   return false;
 }

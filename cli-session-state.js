@@ -751,11 +751,11 @@ function descriptorWriterOwner(raw, ptyPid, descriptors, unreadable) {
       if (!canCompareProcStart(descriptor) || actual == null
         || String(actual) !== String(descriptor.procStart)) return 'pending';
     }
-    if (current === ptyPid) return 'mine';
     if (current !== raw.pid && descriptor) {
       if (processTableEnabled && !leafIsTheDescriptorWriter(descriptor)) return 'pending';
       return 'other';
     }
+    if (current === ptyPid) return 'mine';
     if (visited.has(current)) return 'pending';
     visited.add(current);
     const parent = readParentPid(current);

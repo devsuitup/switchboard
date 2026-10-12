@@ -1073,16 +1073,20 @@ is the element whose position depends on how much room is left.
 `knownJsonlFiles` when the tab opened. A record alone cannot move a tab:
 `clearOwner(target, pty.pid, { closestWriter: true })` must return `mine`.
 This opt-in check accepts only the descriptor writer closest to the PTY;
-nested CLI jobs below that writer cannot take its tab. On Linux, every
+nested CLI jobs below that writer cannot take its tab, including when the
+PTY pid is itself the CLI writer. On Linux, every
 descriptor encountered, including one on the PTY pid, must have a `procStart`
 matching field 22 of the live process's `/proc/<pid>/stat`. A missing,
-unreadable or mismatched start leaves ownership `pending`. Windows retains
+unreadable or mismatched start leaves ownership `pending`. An older Linux CLI
+that writes no `procStart` never re-keys (fail-safe). Windows retains
 the `win32:anchor` creation-time check. Other `clearOwner`
 callers retain their existing policy. A target already held by a live tab is
 left alone. The check relies on published descriptors; it cannot identify a
 descriptorless CLI among shell ancestors.
 
-Re-keying is supported on Windows and Linux outside the Linux sandbox.
+Re-keying is supported for native Windows tabs and Linux outside the Linux
+sandbox. WSL tabs on Windows are excluded: their descriptors are not in the
+Windows descriptor directory.
 Sandbox descriptors contain pids from their own namespace, which this host
 process cannot reliably match to its PTY. On macOS the CLI publishes no
 `win32:anchor` evidence; the opt-in check returns a cached `unsupported`
@@ -1090,7 +1094,7 @@ verdict without running `ps -A` or keeping a recheck timer alive. Neither
 case re-keys the tab, so a trigger addressed to the new id can still fail
 with `session not found`.
 
-`pending` uses the existing one-second /clear recheck timer while the target
+`pending` and `absent` use the existing one-second /clear recheck timer while the target
 transcript is less than 60 seconds old. `unknown`, `other`, and errors do not
 re-key. Incomplete source indexing uses the same timer until the source is
 fully scanned, including old transcripts. Each scan consumes at most 1 MiB
@@ -1098,7 +1102,7 @@ and resumes from its cached offset. A malformed EOF is retried only while
 the source is fresh; missing process ancestry is `pending`, never cached
 as a definite `other`.
 
-An `other`, `absent` (no live descriptor names the target), or `unsupported`
+An `other`, stale `absent` (no live descriptor names the target), or `unsupported`
 verdict is cached per tab and target transcript until that file's
 mtime or the set of descriptor `(sessionId, pid)` pairs changes. The identity
 is read once per detection pass from live descriptors; status changes and
