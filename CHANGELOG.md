@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Markdown previews now show a file's frontmatter as a readable header above its content, including its name, description and metadata. (#593)
+
 ### Fixed
 - On Windows and Linux, automation triggers follow a running conversation when its id changes, except in WSL or the Linux sandbox. (#579)
 - The New Session dialog now opens with focus on the selected permission mode, and Enter starts the session with that mode. Cancelling returns focus to the + button that opened the dialog; starting moves it to the new terminal. (#583)

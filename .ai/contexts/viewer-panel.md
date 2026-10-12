@@ -56,7 +56,37 @@ The toolbar factory builds all configured buttons up front; `open()` toggles vis
 - **File watch lifecycle**: each `open()` unwatches the previous path, then watches the new one. `destroy()` unwatches but is rarely called. **If you spawn a new ViewerPanel without destroying the old one, both will keep watchers alive.**
 - **`format` is a renderer-only transform** — it modifies the editor's document, doesn't write to disk. Use `save` separately if you want to persist.
 - **Clipboard uses `window.api.writeClipboard`** as of PR #18 (Wayland fix). Don't fall back to `navigator.clipboard.writeText` for new copy actions.
-- **Every markdown→`innerHTML` sink in this app must be `DOMPurify.sanitize(marked.parse(...))`, never `marked.parse(...)` alone.** `marked` doesn't filter URL schemes, so markdown syntax (`[x](javascript:...)`, `![x](javascript:...)`) survives into the DOM even when literal HTML is escaped first. Four sinks share this rule: `ViewerPanel._replaceContent` in `viewer-panel.js`, `toggleMarkdownPreview` and `renderMarkdownPreview` in `viewer-toolbar.js` (the second renders the Touched editor's formatted view, `.ai/contexts/touched-files.md`), and `jsonl-viewer.js`'s `renderJsonlText()` (transcript rendering, `public/jsonl-viewer.js`). `grep -n "marked.parse" public/*.js | grep -v "DOMPurify.sanitize(window.marked.parse"` prints only `jsonl-viewer.js`'s `marked.parse(escaped)`, sanitised two lines below. `renderJsonlText()` additionally guards for `window.DOMPurify` being absent (falls back to the plain-text `escapeHtml()` path rather than handing marked's raw HTML to `innerHTML`).
+- **Every markdown→`innerHTML` sink must sanitize marked's output with DOMPurify.** `marked` doesn't filter URL schemes, so Markdown links and images can carry `javascript:` URLs. `renderMarkdownPreview` in `viewer-toolbar.js` owns file preview rendering: the viewer toggle, `ViewerPanel._replaceContent` and the Changes diff preview all call it. It sanitizes the escaped metadata header together with the parsed Markdown body. Transcript rendering in `jsonl-viewer.js` sanitizes independently; when DOMPurify is absent, it falls back to escaped plain text.
+
+## Markdown frontmatter
+
+`renderMarkdownPreview` recognizes frontmatter only when an exact `---` line
+starts the file (optionally after a BOM), with an exact `---` or `...` closing
+line. LF and CRLF are accepted. Incomplete blocks and delimiters elsewhere
+retain ordinary Markdown rendering. The source document is never changed.
+
+The dependency-free parser accepts plain keys, plain and quoted strings,
+scalar inline/block lists, simple nested maps (up to 20 levels), comments,
+and literal/folded block strings with default or strip chomping (folded blocks
+with more-indented text fall back to raw YAML). Values stay
+display text; no type construction, tags, anchors or aliases are evaluated.
+Unsupported syntax, invalid indentation, duplicate keys and malformed quotes
+fall back to the entire raw block in an escaped `<pre>` above the body.
+A block that holds only comments and blank lines shows the same way, so text
+between two `---` lines never disappears. Brackets and braces are refused only
+inside inline lists; a plain value may contain them, and a block list may sit
+at its key's own indent.
+
+Name and title are emphasized, description is a lead, other fields form a
+two-column definition list. Scalar lists are comma separated; validated nested
+maps retain indented YAML. All header keys and values pass through `escapeHtml`
+before the complete preview is sanitized. Frontmatter styles use the existing
+surface, border, accent and muted text variables in both themes.
+
+`test/viewer-frontmatter.test.js` evaluates the shipped renderer scripts with
+filenames in `test/dom-setup.js`'s jsdom context and uses real marked/DOMPurify.
+It checks rendering, detection boundaries, fallback, escaping and viewer
+toggle/refresh paths while verifying the editor retains the complete source.
 
 ## Saving over a file that moved
 

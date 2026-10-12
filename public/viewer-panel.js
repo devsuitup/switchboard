@@ -640,7 +640,7 @@ class ViewerPanel {
   _replaceContent(newContent) {
     if (newContent !== this.getContent()) this._setDocument(newContent);
     if (this.previewMode) {
-      this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
+      renderMarkdownPreview(this.previewEl, newContent);
     }
   }
 
