@@ -112,6 +112,7 @@ function parsePreviewFrontmatter(raw) {
   }
   function scalar(text, flow = false) {
     text = text.trim();
+    if (text.startsWith('#')) return '';
     if (/^["']/.test(text)) {
       const quoted = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/.exec(text);
       if (!quoted) invalid();
@@ -153,6 +154,18 @@ function parsePreviewFrontmatter(raw) {
     const value = marker[0] === '>' ? content.replace(/([^\n])\n(?=[^\n ])/g, '$1 ').replace(/\n\n/g, '\n') : content;
     return value + (marker.endsWith('-') || !content ? '' : '\n');
   }
+  function isItem(at) {
+    return cursor < lines.length && indent(lines[cursor]) === at && /^-(?:\s|$)/.test(lines[cursor].slice(at));
+  }
+  function list(at) {
+    const items = [];
+    while (isItem(at)) {
+      items.push(scalar(lines[cursor].slice(at + 1)));
+      cursor++;
+      skip();
+    }
+    return items.join(', ');
+  }
   function map(depth, level = 0) {
     if (level > 20) invalid();
     const entries = [];
@@ -177,24 +190,12 @@ function parsePreviewFrontmatter(raw) {
         value = inline(text);
       } else {
         skip();
-        if (cursor < lines.length && indent(lines[cursor]) === depth && /^-\s/.test(lines[cursor].slice(depth))) {
-          const items = [];
-          while (cursor < lines.length && indent(lines[cursor]) === depth && /^-\s/.test(lines[cursor].slice(depth))) {
-            items.push(scalar(lines[cursor].slice(depth + 2)));
-            cursor++;
-            skip();
-          }
-          value = items.join(', ');
+        if (isItem(depth)) {
+          value = list(depth);
         } else if (cursor < lines.length && indent(lines[cursor]) > depth) {
           const childDepth = indent(lines[cursor]);
-          if (/^-\s/.test(lines[cursor].slice(childDepth))) {
-            const items = [];
-            while (cursor < lines.length && indent(lines[cursor]) === childDepth && /^-\s/.test(lines[cursor].slice(childDepth))) {
-              items.push(scalar(lines[cursor].slice(childDepth + 2)));
-              cursor++;
-              skip();
-            }
-            value = items.join(', ');
+          if (isItem(childDepth)) {
+            value = list(childDepth);
           } else {
             const start = cursor;
             map(childDepth, level + 1);

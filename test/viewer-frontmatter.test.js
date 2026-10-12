@@ -185,3 +185,9 @@ test('preview keeps a comment-only block visible and accepts brackets in plain v
   render('---\ntags: [a, {b}]\n---\nBody');
   assert.ok(el.querySelector('.markdown-frontmatter > pre'));
 });
+
+test('preview reads a commented or empty list item as empty, at any list indent', t => {
+  const { el, render } = setup(t);
+  render('---\ntags:\n- # c\n- b\nmeta:\n  tags:\n  -\n  - d\n---\nBody');
+  assert.deepEqual(values(el), [['tags', ', b'], ['meta', 'tags:\n-\n- d']]);
+});
