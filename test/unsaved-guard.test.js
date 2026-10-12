@@ -342,6 +342,45 @@ test('a quit that joins a reload check waits for the page to finish the save tha
   assert.equal(hung.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0);
 });
 
+test('a close or quit arriving while a joined quit waits for the late save joins it instead of asking again', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(id, true);
+  await tick();
+  const close = t.closeEvent();
+  t.win.emit('close', close);
+  const install = t.guard.confirmQuit(t.win);
+  await tick();
+  assert.equal(close.prevented, true);
+  assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check', 'unsaved-check-reason'], 'no second question while the save is pending');
+  assert.equal(quits.length, 0);
+  t.reasonDone(id);
+  await tick();
+  assert.equal(quits.length, 1);
+  assert.equal(await install, true);
+  assert.equal(t.win.closes, 1, 'the held close goes through once the save is done');
+});
+
+test('a page that dies while a joined quit waits for its late save releases the quit at once', async () => {
+  for (const event of ['render-process-gone', 'destroyed']) {
+    const quits = [];
+    const t = setup({ quit: () => quits.push(1) });
+    t.wc.emit('will-prevent-unload', t.closeEvent());
+    const id = t.sent[0].args[0];
+    t.guard.beforeQuit(t.closeEvent(), t.win);
+    t.answer(id, true);
+    await tick();
+    assert.equal(quits.length, 0);
+    t.wc.emit(event);
+    await tick();
+    assert.equal(quits.length, 1, `released on ${event}`);
+    assert.equal(t.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'no bounded wait left running');
+  }
+});
+
 test('a reload joining a quit check leaves it a quit', () => {
   const t = setup();
   t.win.emit('close', t.closeEvent());
