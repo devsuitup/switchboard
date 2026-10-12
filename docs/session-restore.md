@@ -57,8 +57,11 @@ not an exit and does neither. A quit or close that arrives while a reload's
 question is still open joins it, and main tells the renderer the question is
 now an exit (`unsaved-check-reason`), so the answer still waits for the write,
 and the page is not reloaded before the quit. If the page had already answered
-the reload when the upgrade reaches it, it writes the set then, best effort as
-for a logoff below.
+the reload when the upgrade reaches it, it writes the set then, and main waits
+for it to report the write done (`unsaved-check-reason-done`, bounded to
+2.5 s, and not at all once the page has crashed) before quitting; the page
+sends that report at once when it has nothing to write then. A close or quit
+that arrives during that wait joins it rather than asking again.
 
 The write keeps the saved sessions that are not open yet: those the index has
 not reached, those offered by the Restore prompt and not answered, and those

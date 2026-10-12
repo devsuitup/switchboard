@@ -39,7 +39,8 @@ function setup({ timeoutMs = 1000, quit, closeFinishes = false } = {}) {
   const closeEvent = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
   const answer = (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed);
   const ack = (id) => ipcMain.emit('unsaved-check-ack', {}, id);
-  return { win, wc, sent, timers, closeEvent, answer, ack, ipcMain, guard };
+  const reasonDone = (id) => ipcMain.emit('unsaved-check-reason-done', {}, id);
+  return { win, wc, sent, timers, closeEvent, answer, ack, reasonDone, ipcMain, guard };
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -279,6 +280,7 @@ test('a quit that joins an unanswered reload check tells the renderer it is now 
   assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check', 'unsaved-check-reason'], 'one upgrade, no second question');
   assert.deepEqual(t.sent[1].args, [id, 'quit']);
   t.answer(id, true);
+  t.reasonDone(id);
   await tick();
   assert.equal(quits.length, 1);
 });
@@ -290,9 +292,122 @@ test('a reload check that a quit joined quits without reloading first', async ()
   const id = t.sent[0].args[0];
   t.guard.beforeQuit(t.closeEvent(), t.win);
   t.answer(id, true);
+  t.reasonDone(id);
   await tick();
   assert.equal(t.wc.reloads, 0);
   assert.equal(quits.length, 1);
+});
+
+test('a quit that joins a reload check waits for the page to finish the save that upgrade asks for, but not for ever', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(id, true);
+  await tick();
+  assert.equal(quits.length, 0, 'the page may have answered before it saw the upgrade, and is still saving');
+  t.reasonDone(id);
+  await tick();
+  assert.equal(quits.length, 1);
+
+  const silent = setup({ quit: () => quits.push(2) });
+  silent.wc.emit('will-prevent-unload', silent.closeEvent());
+  const sid = silent.sent[0].args[0];
+  silent.guard.beforeQuit(silent.closeEvent(), silent.win);
+  silent.answer(sid, true);
+  await tick();
+  assert.deepEqual(quits, [1]);
+  const bound = silent.timers.filter((x) => !x.cleared && x.ms === 1000);
+  assert.equal(bound.length, 1, 'one bounded wait');
+  bound[0].fn();
+  await tick();
+  assert.deepEqual(quits, [1, 2], 'a page that never says it is done does not hold the quit');
+
+  const declined = setup({ quit: () => quits.push(3) });
+  declined.wc.emit('will-prevent-unload', declined.closeEvent());
+  const did = declined.sent[0].args[0];
+  declined.guard.beforeQuit(declined.closeEvent(), declined.win);
+  declined.answer(did, false);
+  await tick();
+  assert.equal(declined.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'a declined check leaves no wait behind');
+
+  const hung = setup({ quit: () => quits.push(4) });
+  hung.wc.emit('will-prevent-unload', hung.closeEvent());
+  hung.guard.beforeQuit(hung.closeEvent(), hung.win);
+  const checkBound = hung.timers.filter((x) => !x.cleared && x.ms === 1000)[0];
+  checkBound.fn();
+  await tick();
+  assert.deepEqual(quits, [1, 2, 4], 'a page that never answered the check is not waited for a second time');
+  assert.equal(hung.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0);
+});
+
+test('a page that reports the upgrade done before it answers lets the joined quit go on the answer', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.reasonDone(id);
+  await tick();
+  assert.equal(quits.length, 0, 'the question is still open');
+  t.answer(id, true);
+  await tick();
+  assert.equal(quits.length, 1, 'no wait for a report already received');
+  assert.equal(t.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'no bounded wait left running');
+});
+
+test('a close or quit arriving while a joined quit waits for the late save joins it instead of asking again', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(id, true);
+  await tick();
+  const close = t.closeEvent();
+  t.win.emit('close', close);
+  const install = t.guard.confirmQuit(t.win);
+  await tick();
+  assert.equal(close.prevented, true);
+  assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check', 'unsaved-check-reason'], 'no second question while the save is pending');
+  assert.equal(quits.length, 0);
+  t.reasonDone(id);
+  await tick();
+  assert.equal(quits.length, 1);
+  assert.equal(await install, true);
+  assert.equal(t.win.closes, 1, 'the held close goes through once the save is done');
+});
+
+test('a joined quit the page declined leaves nothing for a later close to join', async () => {
+  const t = setup();
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(t.sent[0].args[0], false);
+  await tick();
+  t.win.emit('close', t.closeEvent());
+  const checks = t.sent.filter((m) => m.channel === 'unsaved-check');
+  assert.equal(checks.length, 2, 'the later close is asked about');
+  t.answer(checks[1].args[0], true);
+  await tick();
+  assert.equal(t.win.closes, 1);
+});
+
+test('a page that dies while a joined quit waits for its late save releases the quit at once', async () => {
+  for (const event of ['render-process-gone', 'destroyed']) {
+    const quits = [];
+    const t = setup({ quit: () => quits.push(1) });
+    t.wc.emit('will-prevent-unload', t.closeEvent());
+    const id = t.sent[0].args[0];
+    t.guard.beforeQuit(t.closeEvent(), t.win);
+    t.answer(id, true);
+    await tick();
+    assert.equal(quits.length, 0);
+    t.wc.emit(event);
+    await tick();
+    assert.equal(quits.length, 1, `released on ${event}`);
+    assert.equal(t.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'no bounded wait left running');
+  }
 });
 
 test('a reload joining a quit check leaves it a quit', () => {
