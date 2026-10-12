@@ -62,6 +62,31 @@ test('the project New session menu launches Terminal with the keyboard and Escap
   await cancel.click();
 });
 
+test('Tab and Shift+Tab leave the New session menu through the opener native tab order', async ({ home, env, launch }) => {
+  makeRepo(home, env, { 'readme.txt': 'fixture\n' });
+  const { page } = await launch();
+  const opener = page.locator('.project-header .project-new-btn').first();
+  const menu = page.locator('.new-session-popover');
+  for (const key of ['Tab', 'Shift+Tab']) {
+    await opener.focus();
+    await page.keyboard.press(key);
+    const destination = await page.evaluateHandle(() => document.activeElement);
+    expect(await destination.evaluate(element => element !== document.body && element !== document.documentElement)).toBe(true);
+    for (const index of [0, 2]) {
+      await opener.focus();
+      await page.keyboard.press('Enter');
+      await expect(menu.getByRole('menuitem').first()).toBeFocused();
+      await expect(opener).toHaveAttribute('aria-expanded', 'true');
+      await menu.getByRole('menuitem').nth(index).focus();
+      await page.keyboard.press(key);
+      await expect(menu).toHaveCount(0);
+      await expect(opener).toHaveAttribute('aria-expanded', 'false');
+      await expect.poll(() => destination.evaluate(element => element === document.activeElement)).toBe(true);
+    }
+    await destination.dispose();
+  }
+});
+
 test('Tab reveals a session-row Archive button and its focus outline', async ({ home, env, launch }) => {
   makeRepo(home, env, { 'readme.txt': 'fixture\n' });
   const { page } = await launch();

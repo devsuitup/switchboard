@@ -142,6 +142,10 @@ function showNewSessionPopover(project, anchorEl) {
   }
 
   popover.addEventListener('keydown', e => {
+    if (e.key === 'Tab') {
+      close(true);
+      return;
+    }
     const index = items.indexOf(document.activeElement);
     let next;
     if (e.key === 'ArrowDown') next = (index + 1) % items.length;
@@ -159,7 +163,13 @@ function showNewSessionPopover(project, anchorEl) {
     for (const item of items) item.tabIndex = item === e.target ? 0 : -1;
   });
   popover.addEventListener('focusout', e => {
-    if (e.relatedTarget && !popover.contains(e.relatedTarget)) close();
+    if (e.relatedTarget) {
+      if (!popover.contains(e.relatedTarget)) close();
+    } else {
+      queueMicrotask(() => {
+        if (popover.isConnected && !popover.contains(document.activeElement)) close();
+      });
+    }
   });
   closeNewSessionPopover = close;
   document.addEventListener('mousedown', onClickOutside);

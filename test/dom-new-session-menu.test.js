@@ -14,7 +14,11 @@ function setup() {
   const project = { projectPath: '/fixture', folder: '-fixture', sessions: [] };
   ctx.sidebar.renderProjects([project]);
   const anchor = ctx.document.querySelector('.project-new-btn');
-  const press = key => ctx.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  const press = (key, options = {}) => {
+    const event = new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options });
+    ctx.document.activeElement.dispatchEvent(event);
+    return event;
+  };
   const open = () => {
     anchor.click();
     return [...ctx.document.querySelectorAll('.new-session-popover button')];
@@ -38,16 +42,74 @@ test('mousedown on New session menu padding keeps the menu open', () => {
   } finally { ctx.destroy(); }
 });
 
-test('window blur with a null focusout target keeps the New session menu open', () => {
+test('a null focusout target keeps the New session menu open when focus settles inside it', async () => {
   const ctx = setup();
   try {
     const items = ctx.open();
     ctx.window.dispatchEvent(new ctx.window.Event('blur'));
     items[0].dispatchEvent(new ctx.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    items[1].focus();
+    await Promise.resolve();
+    assert.ok(ctx.document.querySelector('.new-session-popover'));
+    assert.equal(ctx.document.activeElement, items[1]);
+    assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'true');
+  } finally { ctx.destroy(); }
+});
+
+test('a null focusout target closes the New session menu when focus leaves the document', async () => {
+  const ctx = setup();
+  try {
+    const items = ctx.open();
+    let relatedTarget = 'not observed';
+    items[0].addEventListener('focusout', event => { relatedTarget = event.relatedTarget; });
+    items[0].blur();
+    await Promise.resolve();
+    assert.equal(relatedTarget, null);
+    assert.equal(ctx.document.activeElement, ctx.document.body);
+    assert.equal(ctx.document.querySelector('.new-session-popover'), null);
+    assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'false');
+  } finally { ctx.destroy(); }
+});
+
+test('a null focusout target waits for focus to settle before closing the New session menu', async () => {
+  const ctx = setup();
+  try {
+    const items = ctx.open();
+    items[0].blur();
+    items[1].focus();
+    await Promise.resolve();
     assert.ok(ctx.document.querySelector('.new-session-popover'));
     assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'true');
   } finally { ctx.destroy(); }
 });
+
+test('a null focusout from a replaced New session menu leaves the reopened menu open', async () => {
+  const ctx = setup();
+  try {
+    const items = ctx.open();
+    items[0].blur();
+    const reopened = ctx.open();
+    await Promise.resolve();
+    assert.ok(reopened[0].isConnected);
+    assert.equal(ctx.document.querySelectorAll('.new-session-popover').length, 1);
+    assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'true');
+  } finally { ctx.destroy(); }
+});
+
+for (const shiftKey of [false, true]) {
+  test(`${shiftKey ? 'Shift+Tab' : 'Tab'} closes the New session menu and lets native navigation continue from +`, () => {
+    const ctx = setup();
+    try {
+      const items = ctx.open();
+      items[2].focus();
+      const event = ctx.press('Tab', { shiftKey });
+      assert.equal(ctx.document.querySelector('.new-session-popover'), null);
+      assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'false');
+      assert.equal(ctx.document.activeElement, ctx.anchor);
+      assert.equal(event.defaultPrevented, false);
+    } finally { ctx.destroy(); }
+  });
+}
 
 test('sidebar refresh skips New session button probes on non-stateful nodes', () => {
   const ctx = setup();
