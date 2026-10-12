@@ -342,6 +342,21 @@ test('a quit that joins a reload check waits for the page to finish the save tha
   assert.equal(hung.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0);
 });
 
+test('a page that reports the upgrade done before it answers lets the joined quit go on the answer', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.reasonDone(id);
+  await tick();
+  assert.equal(quits.length, 0, 'the question is still open');
+  t.answer(id, true);
+  await tick();
+  assert.equal(quits.length, 1, 'no wait for a report already received');
+  assert.equal(t.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'no bounded wait left running');
+});
+
 test('a close or quit arriving while a joined quit waits for the late save joins it instead of asking again', async () => {
   const quits = [];
   const t = setup({ quit: () => quits.push(1) });
