@@ -229,8 +229,10 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     throw new Error(`Failed to build CodeMirror bundle in ${worktree}: ${error.message}`);
   }
   let tempHome;
+  let launchCwd;
   try {
-    if (isolated) tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
+    launchCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
+    if (isolated) tempHome = launchCwd;
     const config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223 });
     if (isolated) {
       fixtures(tempHome, config.env, { allowClaude });
@@ -243,9 +245,9 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     log(`Launching PR #${pr} from ${worktree} (${isolated ? 'fixture HOME + DB + triggers' : 'isolated DB + triggers'})...`);
     warn("Do not pipe this command's output into a reader that exits early - see docs/testing-a-pr.md.");
     const executable = require(path.join(worktree, 'node_modules', 'electron'));
-    return await launch(executable, config.args, { cwd: worktree, env: config.env });
+    return await launch(executable, [path.resolve(worktree), ...config.args.slice(1)], { cwd: launchCwd, env: config.env });
   } finally {
-    if (tempHome) fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    if (launchCwd) fs.rmSync(launchCwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 

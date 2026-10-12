@@ -287,6 +287,26 @@ function workflow(t, script = bundleScript) {
     log: message => messages.push(message), warn: message => messages.push(message) };
 }
 
+for (const isolated of ['0', '1']) {
+  test(`mode ISOLATED=${isolated} confines relative native writes outside the checkout and cleans them on exit`, async (t) => {
+    const setup = workflow(t);
+    const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
+    let launchCwd;
+    assert.equal(await tooling().main({ ...setup, env: { ...setup.env, ISOLATED: isolated },
+      launch: async (file, args, options) => {
+        launchCwd = options.cwd;
+        assert.equal(path.isAbsolute(launchCwd), true);
+        assert.equal(path.relative(setup.checkout, launchCwd).startsWith(`..${path.sep}`), true);
+        assert.equal(args[0], worktree);
+        assert.equal(fs.existsSync(launchCwd), true);
+        fs.mkdirSync(path.join(launchCwd, '\u8a66\u9a13', 'Microsoft', 'Spelling', 'neutral'), { recursive: true });
+        return 0;
+      } }), 0);
+    assert.equal(fs.existsSync(path.join(worktree, '\u8a66\u9a13')), false);
+    assert.equal(fs.existsSync(launchCwd), false);
+  });
+}
+
 test('the complete isolated workflow prints the debug endpoint and removes its home after exit', async (t) => {
   const setup = workflow(t);
   let launchedHome;
@@ -311,7 +331,7 @@ test('the complete default workflow retains the original HOME and adds no debug 
   const setup = workflow(t);
   const status = await tooling().main({ ...setup, launch: async (file, args, options) => {
     assert.equal(options.env.HOME, setup.home);
-    assert.deepEqual(args, ['.', '--no-sandbox']);
+    assert.deepEqual(args, [path.join(setup.checkout, '.worktrees', 'pr-122-test'), '--no-sandbox']);
     return 0;
   }, fixtures: () => assert.fail('default mode must not create fixtures') });
   assert.equal(status, 0);

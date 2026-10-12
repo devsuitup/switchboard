@@ -64,6 +64,16 @@ mid-test and discard the DOM a journey is interacting with. Playwright also
 writes test outputs to `switchboard-e2e-results/` under `RUNNER_TEMP` in CI or
 the OS temporary directory locally, outside the app directory.
 
+Electron receives the absolute app directory as its entry point and the
+disposable `HOME` as its working directory. On Windows, native spelling
+initialization under the Codex sandbox can create malformed relative
+directories containing `Microsoft/Spelling/neutral`, even with an absolute
+`userData` path. Keeping the working directory in the fixture home contains
+those writes and removes them during teardown (#591). The native defect is
+tracked in [openai/codex#41889](https://github.com/openai/codex/issues/41889).
+`launch-isolation.spec.js` checks the actual Electron cwd, a relative write,
+and the absence of new Unicode directories in the checkout after teardown.
+
 - **Few and coarse.** Each journey costs an Electron launch. Add one only for
   something jsdom cannot see.
 - **Isolated.** The `launch` fixture in `e2e/fixtures.js` gives each test its
