@@ -85,6 +85,21 @@ function createTriggerContext(deps) {
       const id = resolve(sessionId);
       return activeSessions.get(id) || id;
     },
+    verifySessionOwner(sessionId, lockKey, entry) {
+      const id = currentId(sessionId);
+      const session = activeSessions.get(resolve(sessionId));
+      if (session !== lockKey || session.exited || session.pty !== entry.ptyProcess) return false;
+      const direct = activeSessions.get(id) === session && (!session.realSessionId || session.realSessionId === id);
+      if (session.host != null) return direct && session.handle === entry.handle;
+      if (!deps.clearOwner) return direct;
+      let owner;
+      try { owner = deps.clearOwner(id, session.pty.pid, { rejectOtherConversation: true, directKey: direct }); } catch { return false; }
+      if (owner === 'other') {
+        liveAliases.delete(id);
+        return false;
+      }
+      return owner === 'mine' || (direct && owner === 'pending');
+    },
     getPtyForSession(sessionId) {
       const session = activeSessions.get(resolve(sessionId));
       if (!session || session.exited) return null;

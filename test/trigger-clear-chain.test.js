@@ -286,8 +286,9 @@ test('continued-in a gated alias scan waits for the direct tab lock acquired dur
   const results = await run;
   assert.deepEqual(mid, [], 'nothing may write while the direct trigger holds the tab lock');
   assert.equal(results.first.ok, true, JSON.stringify(results.first));
-  assert.equal(results.direct.ok, true, JSON.stringify(results.direct));
-  assert.deepEqual(s.written.filter(data => data !== '\r'), ['direct', 'first']);
+  assert.equal(results.direct.ok, false, 'the old id no longer belongs to this writer');
+  assert.match(results.direct.error, /ownership/);
+  assert.deepEqual(s.written.filter(data => data !== '\r'), ['first']);
 });
 
 test('continued-in a failed alias resolution releases both queues for the next trigger', async t => {
@@ -366,13 +367,18 @@ test('continued-in before detection: a live descriptor routes B to its unique ow
   assert.equal(path.basename(s.ctx.getTranscriptTurn('new-id').compactionCursor.filePath), 'new-id.jsonl');
 });
 
-test('continued-in before detection: old and new ids share the same trigger queue', async t => {
+test('continued-in old and new ids share the same trigger queue across a verified transition', async t => {
   const s = continuingSession(t, { detect: false, statusForOld: true });
   const tmp = mkTmp('sw-continuation-queue-');
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'old-id' }));
   const write = s.session.pty.write;
   s.session.pty.write = data => {
     write(data);
-    if (data === 'first') fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
+    if (data !== 'first') return;
+    fs.writeFileSync(s.descriptorPath, JSON.stringify(descriptor));
+    sessionTransitions.detectSessionTransitions('proj');
+    fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
       sessionId: 'new-id', command: 'other', wait: 'none', timeout_ms: 4000,
     }));
   };
@@ -387,10 +393,14 @@ test('continued-in before detection: old and new ids share the same trigger queu
 test('continued-in old and new ids still share a tab lock when its PTY object changes', async t => {
   const s = continuingSession(t, { detect: false, statusForOld: true });
   const tmp = mkTmp('sw-continuation-replaced-pty-');
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'old-id' }));
   const write = s.session.pty.write;
   s.session.pty.write = data => {
     write(data);
     if (data !== 'first') return;
+    fs.writeFileSync(s.descriptorPath, JSON.stringify(descriptor));
+    sessionTransitions.detectSessionTransitions('proj');
     s.session.pty = { pid: 4242, write };
     fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
       sessionId: 'new-id', command: 'other', wait: 'none', timeout_ms: 4000,
@@ -463,4 +473,208 @@ test('a trigger waits for a chain whose session got a new PTY under the same id'
   } finally {
     s.cleanup();
   }
+});
+
+test('late alias resolution waits for the resolved tab lock before any write', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-probe-p3-');
+  const find = s.ctx.findPtyForSession;
+  let calls = 0;
+  s.ctx.findPtyForSession = async (...args) => (++calls === 1 ? null : find(...args));
+  s.session._cliBusy = true;
+  let idleSeen;
+  const idle = new Promise(r => { idleSeen = r; });
+  const busy = s.ctx.isSessionBusy;
+  s.ctx.isSessionBusy = id => { if (id === 'old-id') idleSeen(); return busy(id); };
+  const keepAlive = setTimeout(() => { s.session._cliBusy = false; }, 5000);
+  t.after(() => clearTimeout(keepAlive));
+  const run = runTriggers(s.ctx, [['direct', { sessionId: 'old-id', command: 'direct', wait: 'idle', timeout_ms: 6000 }]], 6000, tmp, ['direct', 'late']);
+  await idle;
+  fs.writeFileSync(path.join(tmp, 'late.json'), JSON.stringify({ sessionId: 'new-id', command: 'late', wait: 'none', timeout_ms: 6000 }));
+  await new Promise(r => setTimeout(r, 600));
+  const mid = [...s.written];
+  s.session._cliBusy = false;
+  const results = await run;
+  assert.deepEqual(mid, [], 'late trigger wrote while the direct trigger held the tab lock');
+  assert.equal(results.late.ok, true, JSON.stringify(results.late));
+  assert.equal(results.direct.ok, false, 'the direct id is obsolete');
+});
+
+test('queued compact rechecks ownership after taking the tab lock', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-probe-p1-');
+  s.session._cliBusy = true;
+  let idleSeen;
+  const idle = new Promise(r => { idleSeen = r; });
+  const busy = s.ctx.isSessionBusy;
+  s.ctx.isSessionBusy = id => { if (id === 'old-id') idleSeen(); return busy(id); };
+  const keepAlive = setTimeout(() => { s.session._cliBusy = false; }, 5000);
+  t.after(() => clearTimeout(keepAlive));
+  const find = s.ctx.findPtyForSession;
+  let found;
+  const foundP = new Promise(r => { found = r; });
+  s.ctx.findPtyForSession = async (...args) => { const r = await find(...args); found(); return r; };
+  const run = runTriggers(s.ctx, [['direct', { sessionId: 'old-id', command: 'direct', wait: 'idle', timeout_ms: 6000 }]], 6000, tmp, ['direct', 'compact']);
+  await idle;
+  fs.writeFileSync(path.join(tmp, 'compact.json'), JSON.stringify({ sessionId: 'new-id', command: '/compact', wait: 'none', timeout_ms: 6000 }));
+  await foundP;
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+  s.session._cliBusy = false;
+  const results = await run;
+  assert.ok(!s.written.includes('/compact'), '/compact for new-id reached the tab now writing third-id');
+  assert.equal(results.compact.ok, false);
+  assert.match(results.compact.error, /ownership/);
+});
+
+test('a torn writer descriptor with a nested CLI preserves the live alias', async t => {
+  const s = continuingSession(t, { detect: false });
+  cliSessionState.init({
+    dir: path.dirname(s.descriptorPath), activeSessions: s.activeSessions, log, platform: 'linux', onIdle: noop,
+    isProcessAlive: () => true, readProcStart: () => '111',
+    readParentPid: pid => pid === 4243 ? 4242 : pid === 4244 ? 4243 : 1,
+  });
+  fs.writeFileSync(path.join(path.dirname(s.descriptorPath), '4244.json'), JSON.stringify({ pid: 4244, sessionId: 'nested-id', kind: 'interactive', procStart: '111' }));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  assert.equal((await s.ctx.findPtyForSession('new-id')).ptyProcess, s.session.pty);
+  const descriptor = fs.readFileSync(s.descriptorPath, 'utf8');
+  fs.writeFileSync(s.descriptorPath, '');
+  now += 4000;
+  const torn = s.ctx.getPtyForSession('new-id');
+  fs.writeFileSync(s.descriptorPath, descriptor);
+  now += 4000;
+  const after = s.ctx.getPtyForSession('new-id');
+  assert.ok(torn && after, 'alias lost during a torn read because a nested claude runs under the PTY');
+});
+
+for (const stage of ['text', 'enter', 'recovery', 'chain']) {
+  test(`ownership is checked without the polling throttle before ${stage}`, async t => {
+    const s = continuingSession(t, { detect: false });
+    const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+    await s.ctx.findPtyForSession('new-id');
+    const move = () => fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+    if (stage !== 'chain') s.ctx.getCliStatus = () => ({ status: 'idle', statusUpdatedAt: 1 });
+    const write = s.session.pty.write;
+    s.session.pty.write = data => {
+      write(data);
+      if (stage === 'enter' && data === 'reply') move();
+      if (stage === 'recovery' && data === '\r') move();
+    };
+    if (stage === 'text') move();
+    if (stage === 'chain') {
+      let reads = 0;
+      const composer = s.ctx.getComposerState;
+      s.ctx.getComposerState = id => {
+        if (s.written.includes('\r') && ++reads === 2) move();
+        return composer(id);
+      };
+    }
+    const trigger = stage === 'chain'
+      ? { sessionId: 'new-id', chain: [{ command: 'reply' }, { command: '/compact' }] }
+      : { sessionId: 'new-id', command: 'reply' };
+    const { guarded } = await runTriggers(s.ctx, [['guarded', trigger]], 2000);
+    assert.equal(guarded.ok, false, JSON.stringify(guarded));
+    assert.deepEqual(s.written, stage === 'text' ? [] : stage === 'enter' ? ['reply'] : ['reply', '\r']);
+    assert.equal(guarded.submitted, stage === 'recovery' ? 'assumed' : 'no');
+    if (stage !== 'text') assert.equal(guarded.written, true);
+    if (stage === 'chain') {
+      assert.equal(guarded.steps_written, 1);
+      assert.equal(guarded.steps[1].written, false);
+      assert.equal(guarded.steps[1].submitted, 'no');
+    }
+  });
+}
+
+test('a direct key refuses a readable writer that moved to another conversation', async t => {
+  const s = continuingSession(t);
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+  const { direct } = await runTriggers(s.ctx, [['direct', { sessionId: 'new-id', command: '/compact' }]], 2000);
+  assert.equal(direct.ok, false);
+  assert.match(direct.error, /ownership/);
+  assert.deepEqual(s.written, []);
+});
+
+test('a macOS direct key writes to its matching CLI and refuses a different conversation', async t => {
+  const s = continuingSession(t);
+  cliSessionState.init({
+    dir: path.dirname(s.descriptorPath), activeSessions: s.activeSessions, log, platform: 'darwin', onIdle: noop,
+    isProcessAlive: () => true, readProcStart: () => null,
+    readProcessTable: async () => new Map([
+      [4242, { ppid: 1, created: 100 }], [4243, { ppid: 4242, created: 200 }],
+    ]),
+  });
+  await cliSessionState.refreshProcessTable();
+  const { matching } = await runTriggers(s.ctx, [['matching', { sessionId: 'new-id', command: 'reply' }]], 2000);
+  assert.equal(matching.ok, true, JSON.stringify(matching));
+  assert.deepEqual(s.written, ['reply', '\r']);
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+  const { changed } = await runTriggers(s.ctx, [['changed', { sessionId: 'new-id', command: '/compact' }]], 2000);
+  assert.equal(changed.ok, false);
+  assert.match(changed.error, /ownership/);
+  assert.deepEqual(s.written, ['reply', '\r']);
+});
+
+test('a retained alias cannot write while its descriptor is torn', async t => {
+  const s = continuingSession(t, { detect: false });
+  await s.ctx.findPtyForSession('new-id');
+  fs.writeFileSync(s.descriptorPath, '');
+  const { pending } = await runTriggers(s.ctx, [['pending', { sessionId: 'new-id', command: '/compact' }]], 2000);
+  assert.equal(pending.ok, false);
+  assert.match(pending.error, /ownership/);
+  assert.deepEqual(s.written, []);
+});
+
+test('a Windows direct key with a cold process table withholds writes until ownership can be checked', async t => {
+  const s = continuingSession(t);
+  const ft = n => String(134360000000000000n + BigInt(n) * 1000n);
+  cliSessionState.init({
+    dir: path.dirname(s.descriptorPath), activeSessions: s.activeSessions, log, platform: 'win32', onIdle: noop,
+    isProcessAlive: () => true,
+    readProcessTable: async () => new Map([
+      [4242, { ppid: 1, created: ft(100) }], [4243, { ppid: 4242, created: ft(200) }],
+    ]),
+  });
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ pid: 4243, sessionId: 'third-id',
+    kind: 'interactive', pidDomain: 'win32:anchor', procStart: ft(200) }));
+  const { cold } = await runTriggers(s.ctx, [['cold', { sessionId: 'new-id', command: '/compact' }]], 2000);
+  assert.deepEqual(s.written, [], 'cold ancestry must not make a changed writer safe for a direct key');
+  assert.equal(cold.ok, false);
+  assert.match(cold.error, /ownership/);
+  await cliSessionState.refreshProcessTable();
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'new-id' }));
+  const { retry } = await runTriggers(s.ctx, [['retry', { sessionId: 'new-id', command: 'reply' }]], 2000);
+  assert.equal(retry.ok, true, JSON.stringify(retry));
+  assert.deepEqual(s.written, ['reply', '\r']);
+});
+
+test('changing the resolved tab during a lock wait fails without writing and releases its locks', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-changed-tab-');
+  let waited, resolved;
+  const waiting = new Promise(r => { waited = r; });
+  const found = new Promise(r => { resolved = r; });
+  const busy = s.ctx.isSessionBusy;
+  s.session._cliBusy = true;
+  s.ctx.isSessionBusy = id => { if (id === 'old-id') waited(); return busy(id); };
+  const key = s.ctx.getSessionLockKey;
+  s.ctx.getSessionLockKey = id => { const result = key(id); if (id === 'new-id') resolved(); return result; };
+  const keepAlive = setTimeout(() => { s.session._cliBusy = false; }, 5000);
+  t.after(() => clearTimeout(keepAlive));
+  const run = runTriggers(s.ctx, [['holder', { sessionId: 'old-id', command: 'holder', wait: 'idle' }]], 6000, tmp, ['holder', 'queued', 'next']);
+  await waiting;
+  fs.writeFileSync(path.join(tmp, 'queued.json'), JSON.stringify({ sessionId: 'new-id', command: '/compact', timeout_ms: 2000 }));
+  await found;
+  const replacement = { ...s.session, pty: { ...s.session.pty, write: data => s.written.push(data) } };
+  s.activeSessions.set('new-id', replacement);
+  s.session._cliBusy = false;
+  fs.writeFileSync(path.join(tmp, 'next.json'), JSON.stringify({ sessionId: 'new-id', command: 'next', timeout_ms: 2000 }));
+  const results = await run;
+  assert.equal(results.queued.ok, false);
+  assert.match(results.queued.error, /tab lock/);
+  assert.equal(results.next.ok, true, JSON.stringify(results.next));
+  assert.deepEqual(s.written.filter(data => data !== '\r'), ['next']);
 });

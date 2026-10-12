@@ -404,6 +404,19 @@ test('alias revalidation on Windows rejects a readable descendant writing anothe
   assert.equal(cliSessionState.clearOwner('new-id', 5001, { rejectOtherConversation: true }), 'pending');
 }));
 
+test('Windows ownership ignores a nested CLI below a torn nearest writer', () => withDir(async dir => {
+  writeState(dir, 5003, { sessionId: 'outer', procStart: ft(40) });
+  writeState(dir, 5004, { sessionId: 'nested', procStart: ft(50) });
+  boot(dir);
+  await cliSessionState.refreshProcessTable();
+  assert.equal(cliSessionState.clearOwner('outer', 5001), 'mine');
+  assert.equal(cliSessionState.clearOwner('nested', 5001), 'other');
+  fs.writeFileSync(path.join(dir, '5003.json'), '');
+  assert.equal(cliSessionState.clearOwner('outer', 5001, { rejectOtherConversation: true }), 'pending');
+  writeState(dir, 5003, { sessionId: 'third', procStart: ft(40) });
+  assert.equal(cliSessionState.clearOwner('outer', 5001, { rejectOtherConversation: true }), 'other');
+}));
+
 test('clearOwner on macOS never claims a /clear: the descriptor carries no anchor to check the pid against', () => withDir(async (dir) => {
   writeState(dir, 5004, { sessionId: 'cleared', pidDomain: undefined, procStart: undefined });
   boot(dir, { platform: 'darwin' });

@@ -12,6 +12,14 @@
 | `terminal-input.js` | ~20 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `main.js` (wiring) | 3 | `require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
+## Delivery invariant
+
+Every trigger step writes only while holding the resolved tab's stable-session
+lock and after an unthrottled check of the requested conversation's ownership,
+immediately before that write. The guarded handle enforces this for text,
+initial Enter and recovery Enter. Resolution or identity changes fail closed.
+See "Session serialization", "Live descriptor fallback" and "Descriptor revision".
+
 ## Public surface
 
 ### `start(ctx)` → `{ close() }`
@@ -81,36 +89,44 @@ wait" at step 0.
 
 ### Live descriptor fallback
 
-Before transition detection catches up, `findPtyForSession` checks the live
-descriptor through `cliSessionState.findLiveProcess`, then uses `clearOwner`
-to select exactly one local, non-exited, non-terminal `activeSessions` entry.
-This is the same process ancestry check used by `/clear`, including the
-platform-specific process table. Unknown ancestry or several matching entries
-refuse delivery. No merged row or `bridgeSessionId` supplies an alias.
-The watcher registers the requested-id queue tail synchronously before awaiting
-the descriptor scan, resolves the alias inside the held section, then appends
-synchronously to a second mutex keyed by the resolved session object. Every
-trigger for that tab awaits that mutex's previous tail, including triggers
-that arrived while another trigger was scanning. The session object stays the
-same across re-keys and PTY replacement. Both locks release on every exit path.
-It retries the lookup
-after the live-descriptor lookup on a miss. Two triggers dispatched for the
-same conversation retain their order even when a descriptor scan is slow.
-The context retains the session and PTY objects. Each poll checks their
-identity and PTY liveness; ownership is checked at most once every three
-seconds against that PTY. `pending` also means that no live descriptor names
-the requested id. Revalidation uses `clearOwner` with
-`rejectOtherConversation: true`: a readable live descriptor under that PTY
-naming a different conversation gives definite `other` and drops the alias.
-Only unresolved ancestry, unreadable reads or transiently missing descriptors
-keep it, so a non-atomic descriptor rewrite cannot permanently lose the tab.
-A new alias evicts the previous alias for that PTY immediately. A definite
-`other` owner, a replaced or removed session or PTY, an exited/dead PTY, or
-opening the id directly drops the alias. The PTY's `onExit` hook prunes its
-aliases without waiting for another lookup. Closing a still-live terminal view
-only detaches its renderer; the session and its running PTY remain registered.
-Composer and busy probes use that PTY; descriptor and transcript probes use
-the conversation id named by the trigger (or the actual re-key target).
+Before transition detection catches up, `findPtyForSession` reads the live
+descriptor and uses `clearOwner` to select exactly one local, non-exited,
+non-terminal tab. Its alias retains the session and PTY objects. Every poll
+checks those identities and liveness; polling ownership checks are throttled
+to once every three seconds. This throttle never applies to a write.
+
+An alias survives a torn, missing or unreadable descriptor during polling.
+A readable writer closest to the PTY naming another conversation gives
+`other` and evicts it. A nested Claude below that writer (for example,
+`claude -p` or a background launch) cannot decide the tab's conversation.
+The numeric descriptor filenames identify intervening CLI writers even when
+their JSON is torn. Windows additionally checks process ancestry and creation
+times against its process table. A replaced or removed session or PTY, an
+exited/dead PTY, or opening the requested id directly also drops the alias.
+A new alias evicts the previous alias for that PTY; its `onExit` hook prunes
+aliases without another lookup.
+
+Alias retention only supports polling and resolution. Before every write,
+`verifySessionOwner` performs an unthrottled ownership check under the tab
+lock. An alias needs `mine`; `pending`, `unknown` and read failures withhold
+the write. A direct registered key (including an acknowledged re-key) is
+identity evidence when its real id agrees and no descriptor contradicts it;
+a definite `other` still refuses delivery. Composer and busy probes use the
+tab; descriptor and transcript probes use the trigger's requested id or its
+acknowledged re-key target. Results retain the original requested id.
+A readable descriptor with no usable process-table entry leaves direct-key
+ownership `unknown`; delivery is withheld while the asynchronous refresh runs.
+
+### Descriptor revision
+
+`cliSessionState.getDescriptorRevision` compares the set of live descriptor
+`(sessionId, pid)` pairs. Only a change to that set advances the revision:
+process-table refreshes, descriptor status flips and timestamps do not.
+Descriptor listeners still receive refresh notifications independently.
+`session-transitions` caches a continued-in target's `other` verdict per tab
+until the transcript mtime, PTY or descriptor identity set changes. The
+Windows regression uses the real `clearOwner`, ten refreshes four seconds
+apart, status changes, and a new owning descriptor to prove invalidation.
 
 ### Session handle (2026-09-08, issue #220)
 
@@ -379,49 +395,48 @@ queued ones take their place).
 
 ### Session serialization
 
-`MAX_INFLIGHT` bounds how many trigger *files* run concurrently; it is silent
-on which `sessionId` they target — nothing before this fix stopped two
-trigger files naming the same session from running their `waitForComposerFree`
-/ `submitWithVerify` sequences interleaved, each unaware of the other's
-in-flight write. Two commands landing in one composer half-typed into each
-other is a worse failure than anything `submitted` reports: corrupted input,
-not just a wrong report field.
+Every local trigger write requires both the lock of its resolved tab and
+unthrottled verification that the requested id belongs to that tab, performed
+immediately before the write. `start()` creates a requested-id FIFO and a
+resolved-tab FIFO. The requested tail is registered synchronously before any
+asynchronous resolution, preserving dispatch order for the same id.
 
-`start()` keeps a requested-id FIFO (`sessionLocks`) and a resolved-tab FIFO
-(`tabLocks`), both through `acquireSessionLock`. The first tail is registered
-synchronously, preserving dispatch order for the same requested id. After
-resolution, the second tail is appended synchronously using
-`ctx.getSessionLockKey`, which returns the tab's session object. A fork or
-`/clear` changes its id, and PTY replacement changes its process object, but
-the tab keeps its session object: both ids share the same queue.
-`processTriggerFile` awaits it right after
-`sessionId` is known to be a non-empty string — before any busy/composer wait
-or write — and releases it in the function's own `finally`, so every
-exit path (success, validation refusal, thrown exception) releases exactly
-once. A second trigger for the same session blocks on `await
-acquireSessionLock(...)` until the first's entire `processTriggerFile` run —
-including its own idle-wait, politeness wait, and submit-verify — has
-produced a result. Two triggers naming *different* sessions each get their own
-map entry and never wait on each other, still bounded only by `MAX_INFLIGHT`.
+The tab lock uses the stable session object returned by
+`ctx.getSessionLockKey`. Re-keying or replacing its PTY keeps that key.
+An unresolved id never substitutes for a tab lock. If initial resolution
+fails and the later descriptor lookup succeeds, `prepare()` acquires the
+resolved tab's lock before readiness or delivery. After a lock wait,
+resolution is checked again. A different tab releases the locks and fails
+with a clear error; this implementation chooses failure over re-resolution.
 
-This does not create a new way to hang: whichever trigger holds the lock is
-still bounded by its own `timeout_ms` / idle-wait deadline exactly as before,
-so the queued trigger's worst case is "the first trigger's own bound, then
-mine" — not unbounded. See `test/trigger-watcher.test.js`, the "session
-serialization" tests, for same-session ordering and cross-session
-independence, both proved by write-order assertions rather than by inspecting
-the lock directly.
+Single commands and every chain step submit through the same guarded handle.
+Its `write` re-resolves the target, requires the matching held tab lock,
+checks liveness, verifies ownership without the polling throttle, then writes
+synchronously without an intervening await. This applies to command text,
+the delayed initial Enter and any recovery Enter. Identity failure releases
+the locks and withholds the write. Each successful write uses the tab's
+current PTY, so a replaced PTY cannot receive a write through a stale handle.
+For injected contexts without `verifySessionOwner`, the direct-key
+comparison checks that their lookup still names the same locked entry.
 
-**Interaction with the target guard.** The lock is acquired before the target
-guard ever runs (both sit inside the same outer `try`), so a guard refusal —
-single command or a chain refused at step 0 — is itself a lock holder for the
-brief moment it takes to write its result and `return`. That `return` runs the
-same `finally` as every other exit path, so the lock is released exactly like
-a success would release it; the only visible cost is a rejected trigger
-briefly occupying the front of the queue. Proved by two tests under "Target
-guard" that queue a legitimate trigger for the same session right behind a
-refused one and require it to still produce a result — and by mutating the
-release call itself to confirm those tests go red when it stops firing.
+Both queues release idempotently on every exit, including resolution errors,
+validation refusals and failed writes. The tab lock spans readiness,
+submission verification and the entire chain; triggers for different tabs
+remain independent, bounded by `MAX_INFLIGHT`. A queued trigger's own
+execution timeout begins after its predecessor's processing.
+
+The watcher/context/descriptor integration tests cover late alias resolution,
+a gated scan overtaken by a direct trigger, a conversation changing during a
+lock wait, tab replacement, pre-write checks for text and both Enters, and
+ownership changes between chain steps. They assert actual PTY writes and
+result files. The existing serialization and target-guard tests also prove
+queue release on failures.
+
+A refusal after text or Enter has been written preserves that evidence:
+`written` stays true. If no Enter reached the PTY, `submitted` is `no`; if an
+Enter reached it before a later write was refused, submission is only
+`assumed`. Failed chain steps record their own write evidence and participate
+in the existing weakest-submission fold. No new submission value is added.
 
 **Liveness is probed after the waits, never before them.** `isPtyAlive` runs
 once as a pre-flight, then again *after* `waitForComposerFree` on the

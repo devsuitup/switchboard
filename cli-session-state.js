@@ -54,6 +54,7 @@ const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
 let descriptorRevision = 0;
+let descriptorIdentity = '';
 const statusListeners = new Set();
 const scheduledRuns = new Map();
 
@@ -344,10 +345,21 @@ function onDescriptorsChanged(listener) {
 }
 
 function notifyDescriptorsChanged() {
-  descriptorRevision++;
+  updateDescriptorRevision();
   for (const listener of descriptorListeners) {
     try { listener(); } catch (err) { log.warn(`[cli-state] descriptor listener failed: ${err.message}`); }
   }
+}
+
+// see .ai/contexts/trigger-watcher.md, "Descriptor revision"
+function updateDescriptorRevision() {
+  const identity = JSON.stringify([...new Set(readAllDescriptors()
+    .map(d => JSON.stringify([d.sessionId, d.pid])))].sort());
+  if (identity !== descriptorIdentity) {
+    descriptorIdentity = identity;
+    descriptorRevision++;
+  }
+  return descriptorRevision;
 }
 
 function onStatusesChanged(listener) {
@@ -651,11 +663,27 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
 }
 
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
-function clearOwner(sessionId, ptyPid, { rejectOtherConversation = false } = {}) {
+function clearOwner(sessionId, ptyPid, { rejectOtherConversation = false, directKey = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
   const key = sessionId.toLowerCase();
+  const descriptorPids = new Set(names.filter(name => STATE_FILE_RE.test(name))
+    .map(name => Number(path.basename(name, '.json'))).filter(isProcessAlive));
+  const own = new Set([ptyPid]);
+  function closestWriter(raw) {
+    const owns = directKey && platform === 'darwin'
+      ? chainReaches(raw.pid, current => own.has(current), false)
+      : conversationOwns(raw, own);
+    if (!owns) return false;
+    let current = raw.pid;
+    for (let depth = 0; depth < 64 && current && current > 1; depth++) {
+      if (current === ptyPid) return true;
+      current = readParentPid(current);
+      if (current !== ptyPid && descriptorPids.has(current)) return false;
+    }
+    return false;
+  }
   let pid = null;
   let found = null;
   const otherConversations = [];
@@ -679,19 +707,21 @@ function clearOwner(sessionId, ptyPid, { rejectOtherConversation = false } = {})
   if (pid == null) {
     if (rejectOtherConversation) {
       startProcessTableRefresh();
-      const own = new Set([ptyPid]);
-      if (otherConversations.some(raw => conversationOwns(raw, own))) return 'other';
+      if (directKey && processTableEnabled && !processTable?.map) return 'unknown';
+      if (otherConversations.some(closestWriter)) return 'other';
+      if (directKey && processTableEnabled && otherConversations.some(raw => !tableEntry(raw.pid))) return 'unknown';
     }
     return 'pending';
   }
   if (processTableEnabled) {
     startProcessTableRefresh();
-    if (!tableEntry(pid)) return 'pending';
-    return conversationOwns(found, new Set([ptyPid])) ? 'mine' : 'other';
+    if (!tableEntry(pid)) return directKey ? 'unknown' : 'pending';
+    return closestWriter(found) ? 'mine' : 'other';
   }
   let current = pid;
   for (let depth = 0; depth < 64 && current && current > 1; depth++) {
     if (current === ptyPid) return 'mine';
+    if (current !== pid && descriptorPids.has(current)) return 'other';
     const parent = readParentPid(current);
     if (parent == null) return depth === 0 ? 'unknown' : 'other';
     current = parent;
@@ -779,7 +809,7 @@ module.exports = {
   stop,
   parseState,
   onDescriptorsChanged,
-  getDescriptorRevision: () => descriptorRevision,
+  getDescriptorRevision: updateDescriptorRevision,
   onStatusesChanged,
   readAllDescriptors,
   parseDescriptor,

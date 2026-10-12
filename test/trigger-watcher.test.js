@@ -5398,11 +5398,11 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
     const startedSessions = new Set(); // sessions whose isSessionBusy has been polled at least once
     const written  = [];
     const composer = { pending: 0, lastInputAt: 0 };
-    const ptyProcess = { pid: process.pid, write(data) { written.push(data); } };
+    const ptys = new Map(sessionIds.map(sid => [sid, { pid: process.pid, write(data) { written.push(data); } }]));
 
     const ctx = {
       log: silentLog,
-      getPtyForSession() { return { ptyProcess }; },
+      getPtyForSession(sessionId) { return { ptyProcess: ptys.get(sessionId) }; },
       isSessionBusy(sessionId) {
         startedSessions.add(sessionId);
         return busy.get(sessionId) === true;

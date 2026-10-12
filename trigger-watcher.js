@@ -1317,7 +1317,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
   }
 
-  const handle = resolveHandle(sessionEntry);
+  await releaseSessionLock.prepare();
+  const handle = releaseSessionLock.handle;
 
   // W7 — pre-flight liveness check.  main.js may keep a stale entry in its
   // activeSessions map after a Claude process exited "cleanly" (Ctrl+D, /exit)
@@ -1502,7 +1503,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       if (v.writeError) throw v.writeError;
     } catch (err) {
       ctx.log.error('[trigger-watcher] PTY write failed:', err.message);
-      await writeResult({ ok: false, error: 'pty write failed: ' + err.message, sessionId });
+      await writeResult({ ok: false, submitted: handle.enters > 0 ? SUBMITTED_ASSUMED : SUBMITTED_NO,
+        written: handle.writes > 0, error: 'pty write failed: ' + err.message, sessionId });
       return;
     }
 
@@ -1605,7 +1607,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       await writeResult({ ok: false, submitted: (i > 0) ? chainSubmitted : SUBMITTED_NO, error: 'session exited during wait', partial: i > 0, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
-    const entryHandle = resolveHandle(entry);
+    const entryHandle = handle;
 
     // Inject the step command
     const stepSentAt = new Date().toISOString();
@@ -1721,16 +1723,20 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // step spent, not just the submit-verify portion.
     let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
+    const previousWrites = handle.writes;
+    const previousEnters = handle.enters;
     try {
       verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true });
+      if (verify.writeError) throw verify.writeError;
     } catch (err) {
       ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, err.message);
-      await writeResult({ ok: false, error: 'pty write failed: ' + err.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
-      return;
-    }
-    if (verify.writeError) {
-      ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, verify.writeError.message);
-      await writeResult({ ok: false, error: 'pty write failed: ' + verify.writeError.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
+      const written = handle.writes > previousWrites;
+      const submitted = handle.enters > previousEnters ? SUBMITTED_ASSUMED : SUBMITTED_NO;
+      steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs,
+        written, submitted, submit_retries: verify?.submit_retries || 0, turn_observed: false });
+      await writeResult({ ok: false, submitted: weakestSubmitted(chainSubmitted, submitted),
+        written: handle.writes > 0, error: 'pty write failed: ' + err.message,
+        partial: i > 0 || written, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
     if (isCompactCommand(step.command)) {
@@ -1927,7 +1933,6 @@ function start(ctx) {
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
   const sessionLocks = new Map();
   const tabLocks = new Map();
-  const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
   function appendLock(locks, key) {
     const previous = locks.get(key) || Promise.resolve();
     let release;
@@ -1943,16 +1948,67 @@ function start(ctx) {
   async function acquireSessionLock(sessionId) {
     const requested = appendLock(sessionLocks, sessionId);
     let tab;
+    let lockedKey;
+    let released = false;
+    const lockKey = (entry) => ctx.getSessionLockKey
+      ? ctx.getSessionLockKey(sessionId) : entry.ptyProcess || entry.handle;
     const unlock = () => {
+      if (released) return;
+      released = true;
       if (tab) tab.unlock();
       requested.unlock();
+    };
+    unlock.prepare = async () => {
+      const entry = ctx.getPtyForSession(sessionId);
+      if (!entry) throw new Error('trigger target no longer resolves to a tab');
+      const key = lockKey(entry);
+      if (tab && lockedKey !== key) {
+        unlock();
+        throw new Error('trigger target changed after taking its tab lock');
+      }
+      if (!tab) {
+        lockedKey = key;
+        tab = appendLock(tabLocks, key);
+        await tab.previous;
+      }
+      const current = ctx.getPtyForSession(sessionId);
+      if (!current || lockKey(current) !== lockedKey) {
+        unlock();
+        throw new Error('trigger target changed while waiting for its tab lock');
+      }
+    };
+    unlock.handle = {
+      writes: 0,
+      enters: 0,
+      isAlive() {
+        const entry = ctx.getPtyForSession(sessionId);
+        return !!entry && isEntryAlive(ctx, entry, resolveHandle(entry));
+      },
+      write(data) {
+        const entry = ctx.getPtyForSession(sessionId);
+        if (released || !tab || !entry || lockKey(entry) !== lockedKey) {
+          unlock();
+          throw new Error('trigger target changed: matching tab lock is required before writing');
+        }
+        const target = resolveHandle(entry);
+        if (!isEntryAlive(ctx, entry, target)) throw new Error('target process not running');
+        const owned = ctx.verifySessionOwner
+          ? ctx.verifySessionOwner(sessionId, lockedKey, entry)
+          : ctx.getPtyForSession(sessionId)?.ptyProcess === entry.ptyProcess
+            && lockKey(entry) === lockedKey;
+        if (!owned) {
+          unlock();
+          throw new Error('trigger target ownership could not be verified before writing');
+        }
+        target.write(data);
+        this.writes++;
+        if (data === '\r') this.enters++;
+      },
     };
     try {
       await requested.previous;
       if (!ctx.getPtyForSession(sessionId) && ctx.findPtyForSession) await ctx.findPtyForSession(sessionId);
-      const key = ctx.getSessionLockKey ? ctx.getSessionLockKey(sessionId) : resolveId(sessionId);
-      tab = appendLock(tabLocks, key);
-      await tab.previous;
+      if (ctx.getPtyForSession(sessionId)) await unlock.prepare();
       return unlock;
     } catch (err) {
       unlock();
