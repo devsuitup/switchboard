@@ -2883,6 +2883,37 @@ body { display: flex; flex-direction: column; }
 
 .markdown-preview img { max-width: 100%; border-radius: 6px; }
 
+.markdown-preview .markdown-frontmatter {
+  margin-bottom: 1.2em;
+  padding: 12px 16px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-surface);
+  overflow-wrap: anywhere;
+  font-size: 0.95em;
+}
+.markdown-preview .markdown-frontmatter > strong {
+  display: block;
+  color: var(--accent);
+  font-size: 1.1em;
+}
+.markdown-preview .markdown-frontmatter > p { white-space: pre-wrap; }
+.markdown-preview .markdown-frontmatter dl > div {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(0, 3fr);
+  gap: 12px;
+  padding: 3px 0;
+}
+.markdown-preview .markdown-frontmatter dt { color: var(--text-muted); }
+.markdown-preview .markdown-frontmatter dd { margin: 0; white-space: pre-wrap; }
+.markdown-preview .markdown-frontmatter pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--surface-sunken);
+  color: inherit;
+  white-space: pre-wrap;
+}
+
 .markdown-preview input[type="checkbox"] { margin-right: 6px; }
 
 /* ========== JSONL VIEWER ========== */

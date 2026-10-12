@@ -44,7 +44,7 @@ function flashButtonText(btn, text, duration = 1200) {
 function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isPreview, storageKey }) {
   if (!isPreview) {
     const content = editorView ? editorView.state.doc.toString() : '';
-    previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(content));
+    renderMarkdownPreview(previewEl, content);
     editorEl.style.display = 'none';
     previewEl.style.display = 'block';
     toggleBtn.classList.add('active');
@@ -69,7 +69,139 @@ function isMarkdownPath(filePath) {
 
 // see .ai/contexts/viewer-panel.md ("Invariants")
 function renderMarkdownPreview(el, text) {
-  el.innerHTML = DOMPurify.sanitize(window.marked.parse(text));
+  const match = /^\uFEFF?---\r?\n([\s\S]*?)(?:^---|^\.\.\.)(?:\r?\n|$)/m.exec(text);
+  if (!match || match.index !== 0) {
+    el.innerHTML = DOMPurify.sanitize(window.marked.parse(text));
+    return;
+  }
+  const raw = match[1].replace(/\r?\n$/, '');
+  let header;
+  try {
+    const entries = parsePreviewFrontmatter(raw);
+    const rows = [];
+    const lead = [];
+    for (const { key, value, nested } of entries) {
+      const safe = escapeHtml(value);
+      if (!nested && (key === 'name' || key === 'title')) {
+        lead.push(`<strong>${safe}</strong>`);
+      } else if (!nested && key === 'description') {
+        lead.push(`<p>${safe}</p>`);
+      } else {
+        rows.push(`<div><dt>${escapeHtml(key)}</dt><dd>${nested ? `<pre>${safe}</pre>` : safe}</dd></div>`);
+      }
+    }
+    header = entries.length ? `<header class="markdown-frontmatter">${lead.join('')}${rows.length ? `<dl>${rows.join('')}</dl>` : ''}</header>` : '';
+  } catch {
+    header = `<header class="markdown-frontmatter"><pre>${escapeHtml(raw)}</pre></header>`;
+  }
+  el.innerHTML = DOMPurify.sanitize(header + window.marked.parse(text.slice(match[0].length)));
+}
+
+// see .ai/contexts/viewer-panel.md ("Markdown frontmatter")
+function parsePreviewFrontmatter(raw) {
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  let cursor = 0;
+  function invalid() { throw new Error('Unsupported frontmatter'); }
+  function skip() {
+    while (cursor < lines.length && /^\s*(?:#.*)?$/.test(lines[cursor])) cursor++;
+  }
+  function indent(line) {
+    if (/^ *\t/.test(line)) invalid();
+    return line.match(/^ */)[0].length;
+  }
+  function scalar(text) {
+    text = text.trim();
+    if (/^["']/.test(text)) {
+      const quoted = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/.exec(text);
+      if (!quoted) invalid();
+      return text[0] === '"' ? JSON.parse(quoted[1]) : quoted[1].slice(1, -1).replace(/''/g, "'");
+    }
+    text = text.replace(/\s+#.*$/, '');
+    if (/^[!&*\[\]{}|>@`%]|^(?:[-?:])(?:\s|$)|:\s|:$|[\[\]{}]/.test(text)) invalid();
+    return text;
+  }
+  function inline(text) {
+    if (!text.startsWith('[')) return scalar(text);
+    const match = /^\[(.*)\](?:\s+#.*)?$/.exec(text);
+    if (!match) invalid();
+    if (!match[1].trim()) return '';
+    const items = [];
+    let remaining = match[1];
+    while (remaining.trim()) {
+      const item = /^\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,"'][^,]*)(?:,|$)/.exec(remaining);
+      if (!item) invalid();
+      items.push(scalar(item[1]));
+      remaining = remaining.slice(item[0].length);
+    }
+    return items.join(', ');
+  }
+  function block(marker, parentIndent) {
+    const start = cursor;
+    let width = null;
+    while (cursor < lines.length) {
+      const line = lines[cursor];
+      if (line.trim()) {
+        const depth = indent(line);
+        if (depth <= parentIndent) break;
+        if (width === null) width = depth;
+        if (depth < width || (marker[0] === '>' && depth > width)) invalid();
+      }
+      cursor++;
+    }
+    const content = lines.slice(start, cursor).map(line => line.slice(width || 0)).join('\n').replace(/\n+$/, '');
+    const value = marker[0] === '>' ? content.replace(/([^\n])\n(?=[^\n ])/g, '$1 ').replace(/\n\n/g, '\n') : content;
+    return value + (marker.endsWith('-') || !content ? '' : '\n');
+  }
+  function map(depth, level = 0) {
+    if (level > 20) invalid();
+    const entries = [];
+    const keys = new Set();
+    skip();
+    while (cursor < lines.length) {
+      const lineDepth = indent(lines[cursor]);
+      if (lineDepth < depth) break;
+      if (lineDepth !== depth) invalid();
+      const pair = /^([A-Za-z0-9_][\w .-]*):(?:\s+(.*)|$)$/.exec(lines[cursor].slice(depth));
+      if (!pair || keys.has(pair[1])) invalid();
+      const key = pair[1];
+      keys.add(key);
+      const text = (pair[2] || '').trim().replace(/^#.*$/, '');
+      cursor++;
+      let value = '';
+      let nested = false;
+      if (/^[|>][-+]?(?:\s+#.*)?$/.test(text)) {
+        if (text.includes('+')) invalid();
+        value = block(text.replace(/\s+#.*$/, ''), depth);
+      } else if (text) {
+        value = inline(text);
+      } else {
+        skip();
+        if (cursor < lines.length && indent(lines[cursor]) > depth) {
+          const childDepth = indent(lines[cursor]);
+          if (/^-\s/.test(lines[cursor].slice(childDepth))) {
+            const items = [];
+            while (cursor < lines.length && indent(lines[cursor]) === childDepth && /^-\s/.test(lines[cursor].slice(childDepth))) {
+              items.push(scalar(lines[cursor].slice(childDepth + 2)));
+              cursor++;
+              skip();
+            }
+            value = items.join(', ');
+          } else {
+            const start = cursor;
+            map(childDepth, level + 1);
+            value = lines.slice(start, cursor).map(line => line.slice(childDepth)).join('\n').trimEnd();
+            nested = true;
+          }
+        }
+      }
+      entries.push({ key, value, nested });
+      skip();
+    }
+    return entries;
+  }
+  const entries = map(0);
+  if (cursor !== lines.length) invalid();
+  return entries;
 }
 
 function setViewerPath(el, text) {
