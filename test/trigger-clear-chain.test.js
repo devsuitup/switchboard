@@ -145,15 +145,16 @@ function continuingSession(t, { detect = true, duplicate = false, owner = true, 
   const activeSessions = new Map([['old-id', session]]);
   if (duplicate) activeSessions.set('other-id', { ...session });
   cliSessionState.init({
-    dir: descriptors, activeSessions, log, platform: 'linux',
+    dir: descriptors, activeSessions, log, platform: 'linux', onIdle: noop,
     isProcessAlive: () => true, readProcStart: () => '111',
     readParentPid: pid => pid === 4243 ? (owner ? 4242 : 9999) : 1,
   });
-  const clearOwner = (id, pid) => cliSessionState.clearOwner(id, pid);
+  const clearOwner = (...args) => cliSessionState.clearOwner(...args);
   const events = [];
   sessionTransitions.init({
     PROJECTS_DIR: projectsDir, activeSessions, log, rekeyMcpServer: noop,
     clearOwner,
+    getDescriptorRevision: () => cliSessionState.getDescriptorRevision(),
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
   });
   const ctx = createTriggerContext({
@@ -204,6 +205,106 @@ test('continued-in alias ownership checks are throttled during polling', async t
   now += 4000;
   assert.equal(s.ctx.getPtyForSession('new-id').ptyProcess, s.session.pty);
   assert.equal(probe.mock.callCount(), initial + 1);
+});
+
+test('continued-in foreign ownership cache is invalidated by the real descriptor watcher', async t => {
+  const s = continuingSession(t, { detect: false, owner: false });
+  assert.equal(cliSessionState.ensureWatching(), true);
+  const probe = t.mock.method(cliSessionState, 'clearOwner');
+  for (let pass = 0; pass < 10; pass++) sessionTransitions.detectSessionTransitions('proj');
+  assert.equal(probe.mock.callCount(), 1);
+  assert.equal(s.activeSessions.get('old-id'), s.session);
+  const changed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { unsubscribe(); reject(new Error('descriptor change not observed')); }, 3000);
+    const unsubscribe = cliSessionState.onDescriptorsChanged(() => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, pid: 4242 }));
+  await changed;
+  sessionTransitions.detectSessionTransitions('proj');
+  assert.equal(probe.mock.callCount(), 2);
+  assert.equal(s.activeSessions.get('new-id'), s.session);
+});
+
+test('continued-in alias is dropped when its live descriptor moves to a third conversation', async t => {
+  const s = continuingSession(t, { detect: false });
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  assert.equal((await s.ctx.findPtyForSession('new-id')).ptyProcess, s.session.pty);
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+  now += 60000;
+  assert.equal(s.ctx.getPtyForSession('new-id'), null);
+});
+
+test('continued-in a new alias evicts the previous alias on the same PTY immediately', async t => {
+  const s = continuingSession(t, { detect: false });
+  assert.equal((await s.ctx.findPtyForSession('new-id')).ptyProcess, s.session.pty);
+  const descriptor = JSON.parse(fs.readFileSync(s.descriptorPath, 'utf8'));
+  fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
+  assert.equal((await s.ctx.findPtyForSession('third-id')).ptyProcess, s.session.pty);
+  assert.equal(s.ctx.getPtyForSession('new-id'), null);
+});
+
+test('continued-in a gated alias scan waits for the direct tab lock acquired during the scan', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-continuation-two-phase-');
+  const find = s.ctx.findPtyForSession;
+  let scanStarted, releaseScan, idleStarted, resolvedScan;
+  const started = new Promise(resolve => { scanStarted = resolve; });
+  const gate = new Promise(resolve => { releaseScan = resolve; });
+  const idle = new Promise(resolve => { idleStarted = resolve; });
+  const resolved = new Promise(resolve => { resolvedScan = resolve; });
+  s.ctx.findPtyForSession = async (...args) => {
+    scanStarted();
+    await gate;
+    const result = await find(...args);
+    resolvedScan();
+    return result;
+  };
+  s.session._cliBusy = true;
+  const busy = s.ctx.isSessionBusy;
+  s.ctx.isSessionBusy = id => {
+    if (id === 'old-id') idleStarted();
+    return busy(id);
+  };
+  const keepAlive = setTimeout(() => { releaseScan(); s.session._cliBusy = false; }, 5000);
+  t.after(() => clearTimeout(keepAlive));
+  const run = runTriggers(s.ctx, [['first', { sessionId: 'new-id', command: 'first' }]], 6000, tmp, ['first', 'direct']);
+  await started;
+  fs.writeFileSync(path.join(tmp, 'direct.json'), JSON.stringify({ sessionId: 'old-id', command: 'direct', wait: 'idle', timeout_ms: 6000 }));
+  await idle;
+  releaseScan();
+  await resolved;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const mid = [...s.written];
+  s.session._cliBusy = false;
+  const results = await run;
+  assert.deepEqual(mid, [], 'nothing may write while the direct trigger holds the tab lock');
+  assert.equal(results.first.ok, true, JSON.stringify(results.first));
+  assert.equal(results.direct.ok, true, JSON.stringify(results.direct));
+  assert.deepEqual(s.written.filter(data => data !== '\r'), ['direct', 'first']);
+});
+
+test('continued-in a failed alias resolution releases both queues for the next trigger', async t => {
+  const s = continuingSession(t, { detect: false });
+  const find = s.ctx.findPtyForSession;
+  let calls = 0;
+  s.ctx.findPtyForSession = (...args) => {
+    if (++calls === 1) throw new Error('descriptor scan failed');
+    return find(...args);
+  };
+  const results = await runTriggers(s.ctx, [
+    ['failed', { sessionId: 'new-id', command: 'failed' }],
+    ['next', { sessionId: 'new-id', command: 'next' }],
+  ], 2000);
+  assert.equal(results.failed.ok, false);
+  assert.equal(results.next.ok, true, JSON.stringify(results.next));
+  assert.deepEqual(s.written, ['next', '\r']);
 });
 
 test('continued-in with two records and pre-existing B: its trigger reaches the owning tab', async t => {
@@ -272,6 +373,26 @@ test('continued-in before detection: old and new ids share the same trigger queu
   s.session.pty.write = data => {
     write(data);
     if (data === 'first') fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
+      sessionId: 'new-id', command: 'other', wait: 'none', timeout_ms: 4000,
+    }));
+  };
+  const results = await runTriggers(s.ctx, [
+    ['chain', { sessionId: 'old-id', chain: [{ command: 'first' }, { command: 'second' }] }],
+  ], 4000, tmp, ['chain', 'single']);
+  assert.equal(results.chain.ok, true, JSON.stringify(results.chain));
+  assert.equal(results.single.ok, true, JSON.stringify(results.single));
+  assert.deepEqual(s.written.filter(data => data !== '\r'), ['first', 'second', 'other']);
+});
+
+test('continued-in old and new ids still share a tab lock when its PTY object changes', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-continuation-replaced-pty-');
+  const write = s.session.pty.write;
+  s.session.pty.write = data => {
+    write(data);
+    if (data !== 'first') return;
+    s.session.pty = { pid: 4242, write };
+    fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
       sessionId: 'new-id', command: 'other', wait: 'none', timeout_ms: 4000,
     }));
   };

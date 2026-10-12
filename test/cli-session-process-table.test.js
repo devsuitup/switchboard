@@ -391,6 +391,19 @@ test('clearOwner on Windows reads ownership from the process table, and waits fo
   assert.equal(cliSessionState.clearOwner('cleared', 7003), 'other');
 }));
 
+test('alias revalidation on Windows rejects a readable descendant writing another conversation', () => withDir(async (dir) => {
+  writeState(dir, 5004, { sessionId: 'third-id' });
+  boot(dir);
+  await cliSessionState.refreshProcessTable();
+  assert.equal(cliSessionState.clearOwner('new-id', 5001), 'pending');
+  assert.equal(cliSessionState.clearOwner('new-id', 5001, { rejectOtherConversation: true }), 'other');
+  assert.equal(cliSessionState.clearOwner('new-id', 7003, { rejectOtherConversation: true }), 'pending');
+  fs.writeFileSync(path.join(dir, '5004.json'), '');
+  assert.equal(cliSessionState.clearOwner('new-id', 5001, { rejectOtherConversation: true }), 'pending');
+  fs.unlinkSync(path.join(dir, '5004.json'));
+  assert.equal(cliSessionState.clearOwner('new-id', 5001, { rejectOtherConversation: true }), 'pending');
+}));
+
 test('clearOwner on macOS never claims a /clear: the descriptor carries no anchor to check the pid against', () => withDir(async (dir) => {
   writeState(dir, 5004, { sessionId: 'cleared', pidDomain: undefined, procStart: undefined });
   boot(dir, { platform: 'darwin' });

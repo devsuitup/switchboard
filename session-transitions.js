@@ -9,7 +9,7 @@ const { scanContinuationIndex } = require('./session-continuations');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, setTimeoutFn;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, setTimeoutFn, getDescriptorRevision;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -20,6 +20,7 @@ function init(ctx) {
   rekeyActivity = ctx.rekeyActivity || (() => {});
   clearOwner = ctx.clearOwner || (() => 'pending');
   setTimeoutFn = ctx.setTimeout || setTimeout;
+  getDescriptorRevision = ctx.getDescriptorRevision || (() => 0);
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -461,6 +462,9 @@ function detectSessionTransitions(folder) {
     }
 
     const targets = continuations.get(session);
+    const foreign = session._foreignContinuations || (session._foreignContinuations = new Map());
+    for (const file of foreign.keys()) if (!targets.has(path.basename(file, '.jsonl')) || !currentFiles.includes(file)) foreign.delete(file);
+    const descriptorRevision = getDescriptorRevision();
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f)
       || (targets.has(path.basename(f, '.jsonl')) && f !== (session.realSessionId || sessionId) + '.jsonl'));
 
@@ -475,6 +479,13 @@ function detectSessionTransitions(folder) {
       const newFilePath = path.join(folderPath, newFile);
       const newId = path.basename(newFile, '.jsonl');
       if (newId === (session.realSessionId || sessionId) || isLive(newId)) continue;
+      let mtimeMs;
+      if (targets.has(newId)) {
+        try { mtimeMs = fs.statSync(newFilePath).mtimeMs; } catch { continue; }
+        const previous = foreign.get(newFile);
+        if (previous && previous.mtimeMs === mtimeMs && previous.descriptorRevision === descriptorRevision && previous.pty === session.pty) continue;
+      }
+      foreign.delete(newFile);
       const signals = readNewSessionSignals(newFilePath);
       const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
       let continued = false;
@@ -482,6 +493,7 @@ function detectSessionTransitions(folder) {
       if (!awaitingFork && !signals.cleared && targets.has(newId)) {
         owner = clearOwner(newId, session.pty && session.pty.pid);
         continued = owner === 'mine';
+        if (owner === 'other') foreign.set(newFile, { mtimeMs, descriptorRevision, pty: session.pty });
       }
 
       // File exists but has no parseable content yet — skip and retry next cycle

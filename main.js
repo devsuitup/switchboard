@@ -3137,6 +3137,7 @@ sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
   clearOwner: (sessionId, ptyPid) => cliSessionState.clearOwner(sessionId, ptyPid),
+  getDescriptorRevision: () => cliSessionState.getDescriptorRevision(),
 });
 const { detectSessionTransitions } = sessionTransitions;
 
@@ -3465,7 +3466,7 @@ if (!gotSingleInstanceLock) {
       require('./trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
-        clearOwner: (id, pid) => cliSessionState.clearOwner(id, pid),
+        clearOwner: (id, pid, options) => cliSessionState.clearOwner(id, pid, options),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {
           const settings = getSetting('global') || {};

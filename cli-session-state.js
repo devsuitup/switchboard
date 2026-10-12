@@ -53,6 +53,7 @@ const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
+let descriptorRevision = 0;
 const statusListeners = new Set();
 const scheduledRuns = new Map();
 
@@ -343,6 +344,7 @@ function onDescriptorsChanged(listener) {
 }
 
 function notifyDescriptorsChanged() {
+  descriptorRevision++;
   for (const listener of descriptorListeners) {
     try { listener(); } catch (err) { log.warn(`[cli-state] descriptor listener failed: ${err.message}`); }
   }
@@ -649,25 +651,39 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
 }
 
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
-function clearOwner(sessionId, ptyPid) {
+function clearOwner(sessionId, ptyPid, { rejectOtherConversation = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
   const key = sessionId.toLowerCase();
   let pid = null;
   let found = null;
+  const otherConversations = [];
   for (const name of names) {
     if (!STATE_FILE_RE.test(name)) continue;
     let raw;
     try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-    if (!raw || typeof raw.sessionId !== 'string' || raw.sessionId.toLowerCase() !== key) continue;
+    if (!raw || typeof raw.sessionId !== 'string' || !raw.sessionId) continue;
+    const matches = raw.sessionId.toLowerCase() === key;
+    if (!matches && !rejectOtherConversation) continue;
     if (!Number.isInteger(raw.pid) || raw.pid <= 0) continue;
     if (!isProcessAlive(raw.pid)) continue;
+    if (!matches) {
+      otherConversations.push(raw);
+      continue;
+    }
     pid = raw.pid;
     found = raw;
     break;
   }
-  if (pid == null) return 'pending';
+  if (pid == null) {
+    if (rejectOtherConversation) {
+      startProcessTableRefresh();
+      const own = new Set([ptyPid]);
+      if (otherConversations.some(raw => conversationOwns(raw, own))) return 'other';
+    }
+    return 'pending';
+  }
   if (processTableEnabled) {
     startProcessTableRefresh();
     if (!tableEntry(pid)) return 'pending';
@@ -763,6 +779,7 @@ module.exports = {
   stop,
   parseState,
   onDescriptorsChanged,
+  getDescriptorRevision: () => descriptorRevision,
   onStatusesChanged,
   readAllDescriptors,
   parseDescriptor,

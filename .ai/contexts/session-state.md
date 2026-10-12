@@ -64,6 +64,13 @@ covers the interval before detection runs. A descriptor-owned conversation
 without a continuation record remains reachable through that fallback while
 the tab keeps its key.
 
+A target confirmed as `other` is cached per tab and filename. Detection skips
+its signal read and ownership probe until its mtime, the descriptor revision,
+or the tab's PTY object changes. The CLI descriptor watcher and process-table
+notifications advance that revision, so ownership can be reconsidered without
+waiting for another transcript write. Pending and unknown verdicts are never
+cached as foreign. Removed files and obsolete continuation targets are pruned.
+
 The shared transition path updates `activeSessions`, `realSessionId`,
 `recordRekey`, MCP and ActivityWatch, drops the previous subagent scan state,
 and emits `session-forked` with kind `continuation`. The existing renderer

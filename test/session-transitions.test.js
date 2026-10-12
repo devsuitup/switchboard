@@ -796,6 +796,37 @@ test('continuation: a target owned by another process cannot re-key this PTY', t
   assert.deepEqual(f.rekeys, []);
 });
 
+test('continuation: ten unchanged passes check a foreign target only once', t => {
+  let calls = 0;
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => { calls++; return 'other'; } });
+  for (let pass = 0; pass < 10; pass++) sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(calls, 1);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+});
+
+for (const change of ['mtime', 'descriptors', 'pty']) {
+  test(`continuation: a foreign target is reconsidered after ${change} changes`, t => {
+    let owner = 'other';
+    let revision = 0;
+    const f = continuationFixture(t, ['new-id'], {
+      clearOwner: () => owner,
+      getDescriptorRevision: () => revision,
+    });
+    sessionTransitions.detectSessionTransitions(f.folder);
+    assert.equal(f.activeSessions.get('old-id'), f.session);
+    owner = 'mine';
+    if (change === 'mtime') {
+      const file = path.join(f.tmp, f.folder, 'new-id.jsonl');
+      const time = new Date(fs.statSync(file).mtimeMs + 2000);
+      fs.utimesSync(file, time, time);
+    }
+    if (change === 'descriptors') revision++;
+    if (change === 'pty') f.session.pty = { pid: 4343 };
+    sessionTransitions.detectSessionTransitions(f.folder);
+    assert.equal(f.activeSessions.get('new-id'), f.session);
+  });
+}
+
 test('continuation: an already open target is never overwritten', t => {
   const f = continuationFixture(t, ['new-id']);
   const other = makePtySession(f.folder, { knownJsonlFiles: new Set(['old-id.jsonl', 'new-id.jsonl']) });

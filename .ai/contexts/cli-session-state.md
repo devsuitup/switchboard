@@ -461,7 +461,16 @@ The state file is what links the two: the CLI rewrites
 2026-10-05 on CLI 2.1.28x: live state files whose `sessionId` names a
 transcript that starts with the `/clear` record). `clearOwner(newId, ptyPid)`
 finds the live pid whose state file names `newId` and walks its parent chain
-(`/proc/<pid>/stat`) up to the PTY's pid. Verdicts:
+(`/proc/<pid>/stat`) up to the PTY's pid.
+
+Trigger alias revalidation passes `{ rejectOtherConversation: true }` as a
+third argument. When no live descriptor names the requested id, a readable
+live descriptor owned by that PTY naming another conversation returns `other`;
+missing or unreadable descriptors still return `pending`. Ordinary transition
+detection keeps the two-argument behavior. `getDescriptorRevision()` advances
+on descriptor/ownership notifications and invalidates foreign-target caches.
+
+Verdicts:
 
 - `mine` — the CLI runs under this PTY: re-key, exactly like a fork
   (`session-forked` to the renderer).

@@ -87,17 +87,28 @@ to select exactly one local, non-exited, non-terminal `activeSessions` entry.
 This is the same process ancestry check used by `/clear`, including the
 platform-specific process table. Unknown ancestry or several matching entries
 refuse delivery. No merged row or `bridgeSessionId` supplies an alias.
-The watcher registers the session queue tail synchronously before awaiting
-the descriptor scan, resolves the alias inside the held section, and waits
-for earlier tails that now resolve to the same tab. It retries the lookup
+The watcher registers the requested-id queue tail synchronously before awaiting
+the descriptor scan, resolves the alias inside the held section, then appends
+synchronously to a second mutex keyed by the resolved session object. Every
+trigger for that tab awaits that mutex's previous tail, including triggers
+that arrived while another trigger was scanning. The session object stays the
+same across re-keys and PTY replacement. Both locks release on every exit path.
+It retries the lookup
 after the live-descriptor lookup on a miss. Two triggers dispatched for the
 same conversation retain their order even when a descriptor scan is slow.
 The context retains the session and PTY objects. Each poll checks their
 identity and PTY liveness; ownership is checked at most once every three
-seconds against that PTY. Pending, unknown and unreadable descriptor reads
-keep the alias, so a non-atomic descriptor rewrite cannot permanently lose
-the tab. A definite `other` owner, a replaced or removed session or PTY,
-an exited/dead PTY, or opening the id directly drops the alias.
+seconds against that PTY. `pending` also means that no live descriptor names
+the requested id. Revalidation uses `clearOwner` with
+`rejectOtherConversation: true`: a readable live descriptor under that PTY
+naming a different conversation gives definite `other` and drops the alias.
+Only unresolved ancestry, unreadable reads or transiently missing descriptors
+keep it, so a non-atomic descriptor rewrite cannot permanently lose the tab.
+A new alias evicts the previous alias for that PTY immediately. A definite
+`other` owner, a replaced or removed session or PTY, an exited/dead PTY, or
+opening the id directly drops the alias. The PTY's `onExit` hook prunes its
+aliases without waiting for another lookup. Closing a still-live terminal view
+only detaches its renderer; the session and its running PTY remain registered.
 Composer and busy probes use that PTY; descriptor and transcript probes use
 the conversation id named by the trigger (or the actual re-key target).
 
@@ -376,13 +387,16 @@ in-flight write. Two commands landing in one composer half-typed into each
 other is a worse failure than anything `submitted` reports: corrupted input,
 not just a wrong report field.
 
-`start()` keeps `sessionLocks`, a `Map<sessionId, Promise>` used as a FIFO
-mutex queue (`acquireSessionLock`). A fork or `/clear` gives one terminal a new
-id, so a trigger waits for every queued id that resolves (`ctx.resolveSessionId`,
-see "Re-keyed sessions") to the same session as its own: the old and the new id
-share one queue, and a PTY replaced under the same id keeps it. `processTriggerFile` awaits it right after
-`sessionId` is known to be a non-empty string — before any wait, any PTY
-lookup, any write — and releases it in the function's own `finally`, so every
+`start()` keeps a requested-id FIFO (`sessionLocks`) and a resolved-tab FIFO
+(`tabLocks`), both through `acquireSessionLock`. The first tail is registered
+synchronously, preserving dispatch order for the same requested id. After
+resolution, the second tail is appended synchronously using
+`ctx.getSessionLockKey`, which returns the tab's session object. A fork or
+`/clear` changes its id, and PTY replacement changes its process object, but
+the tab keeps its session object: both ids share the same queue.
+`processTriggerFile` awaits it right after
+`sessionId` is known to be a non-empty string — before any busy/composer wait
+or write — and releases it in the function's own `finally`, so every
 exit path (success, validation refusal, thrown exception) releases exactly
 once. A second trigger for the same session blocks on `await
 acquireSessionLock(...)` until the first's entire `processTriggerFile` run —

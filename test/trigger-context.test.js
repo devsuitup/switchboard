@@ -243,6 +243,19 @@ test('a live alias tolerates pending, unknown and unreadable ownership, then dro
   assert.equal(ctx.getPtyForSession('b'), null);
 });
 
+test('a PTY exit prunes its live alias without needing a lookup', async () => {
+  const session = makeSession();
+  const listeners = [];
+  session.pty.onExit = fn => { listeners.push(fn); return { dispose() {} }; };
+  const ctx = createTriggerContext({
+    activeSessions: new Map([['a', session]]), log: silentLog,
+    getLiveDescriptor: () => ({ pid: process.pid }), clearOwner: () => 'mine',
+  });
+  await ctx.findPtyForSession('b');
+  for (const listener of listeners) listener({ exitCode: 0 });
+  assert.equal(ctx.getPtyForSession('b'), null);
+});
+
 for (const change of ['pty', 'session', 'exited', 'dead', 'direct']) {
   test(`a live alias is invalidated immediately on ${change}`, async () => {
     const session = makeSession();

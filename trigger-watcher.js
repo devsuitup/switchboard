@@ -1925,25 +1925,34 @@ function start(ctx) {
   const retained = new Set();
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
-  const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
+  const sessionLocks = new Map();
+  const tabLocks = new Map();
   const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
-  async function acquireSessionLock(sessionId) {
-    const earlier = [...sessionLocks];
-    const target = resolveId(sessionId);
-    const previous = Promise.all(earlier.filter(([id]) => resolveId(id) === target).map(([, t]) => t));
+  function appendLock(locks, key) {
+    const previous = locks.get(key) || Promise.resolve();
     let release;
     const held = new Promise((resolve) => { release = resolve; });
     const tail = previous.then(() => held);
-    sessionLocks.set(sessionId, tail);
+    locks.set(key, tail);
     const unlock = () => {
       release();
-      if (sessionLocks.get(sessionId) === tail) sessionLocks.delete(sessionId);
+      if (locks.get(key) === tail) locks.delete(key);
+    };
+    return { previous, unlock };
+  }
+  async function acquireSessionLock(sessionId) {
+    const requested = appendLock(sessionLocks, sessionId);
+    let tab;
+    const unlock = () => {
+      if (tab) tab.unlock();
+      requested.unlock();
     };
     try {
-      await previous;
+      await requested.previous;
       if (!ctx.getPtyForSession(sessionId) && ctx.findPtyForSession) await ctx.findPtyForSession(sessionId);
-      const resolved = resolveId(sessionId);
-      await Promise.all(earlier.filter(([id]) => resolveId(id) === resolved).map(([, t]) => t));
+      const key = ctx.getSessionLockKey ? ctx.getSessionLockKey(sessionId) : resolveId(sessionId);
+      tab = appendLock(tabLocks, key);
+      await tab.previous;
       return unlock;
     } catch (err) {
       unlock();
