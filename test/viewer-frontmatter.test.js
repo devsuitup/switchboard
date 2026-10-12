@@ -137,6 +137,7 @@ test('preview supports empty frontmatter, comments, quoted strings and empty val
   const { el, render } = setup(t);
   render('---\n# metadata\n---\n# Body');
   assert.equal(el.querySelector('hr'), null);
+  assert.equal(el.querySelector('.markdown-frontmatter > pre')?.textContent, '# metadata');
   assert.equal(el.querySelector('h1').textContent, 'Body');
   render('---\n# metadata\nname: "Quoted name" # comment\nowner:\ntags: []\nmode: safe # comment\n---\nBody');
   assert.equal(el.querySelector('strong')?.textContent, 'Quoted name');
@@ -171,4 +172,16 @@ test('viewer refresh uses the same frontmatter rendering while updating its sour
   panel._replaceContent(next);
   assert.equal(el.querySelector('strong')?.textContent, 'Reloaded');
   assert.equal(panel.getContent(), next);
+});
+
+test('preview keeps a comment-only block visible and accepts brackets in plain values and same-indent lists', t => {
+  const { el, render } = setup(t);
+  render('---\n# Title\n---\nbody');
+  assert.equal(el.querySelector('.markdown-frontmatter > pre')?.textContent, '# Title');
+  render('---\ntitle: Fix [bug] in { filename } now\ntags:\n- a\n- b\n---\nBody');
+  assert.equal(el.querySelector('.markdown-frontmatter > pre'), null);
+  assert.equal(el.querySelector('strong')?.textContent, 'Fix [bug] in { filename } now');
+  assert.deepEqual(values(el), [['tags', 'a, b']]);
+  render('---\ntags: [a, {b}]\n---\nBody');
+  assert.ok(el.querySelector('.markdown-frontmatter > pre'));
 });

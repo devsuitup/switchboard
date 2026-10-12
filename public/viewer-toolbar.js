@@ -90,7 +90,8 @@ function renderMarkdownPreview(el, text) {
         rows.push(`<div><dt>${escapeHtml(key)}</dt><dd>${nested ? `<pre>${safe}</pre>` : safe}</dd></div>`);
       }
     }
-    header = entries.length ? `<header class="markdown-frontmatter">${lead.join('')}${rows.length ? `<dl>${rows.join('')}</dl>` : ''}</header>` : '';
+    header = entries.length ? `<header class="markdown-frontmatter">${lead.join('')}${rows.length ? `<dl>${rows.join('')}</dl>` : ''}</header>`
+      : raw.trim() ? `<header class="markdown-frontmatter"><pre>${escapeHtml(raw)}</pre></header>` : '';
   } catch {
     header = `<header class="markdown-frontmatter"><pre>${escapeHtml(raw)}</pre></header>`;
   }
@@ -109,7 +110,7 @@ function parsePreviewFrontmatter(raw) {
     if (/^ *\t/.test(line)) invalid();
     return line.match(/^ */)[0].length;
   }
-  function scalar(text) {
+  function scalar(text, flow = false) {
     text = text.trim();
     if (/^["']/.test(text)) {
       const quoted = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/.exec(text);
@@ -117,7 +118,7 @@ function parsePreviewFrontmatter(raw) {
       return text[0] === '"' ? JSON.parse(quoted[1]) : quoted[1].slice(1, -1).replace(/''/g, "'");
     }
     text = text.replace(/\s+#.*$/, '');
-    if (/^[!&*\[\]{}|>@`%]|^(?:[-?:])(?:\s|$)|:\s|:$|[\[\]{}]/.test(text)) invalid();
+    if (/^[!&*\[\]{}|>@`%]|^(?:[-?:])(?:\s|$)|:\s|:$/.test(text) || (flow && /[\[\]{}]/.test(text))) invalid();
     return text;
   }
   function inline(text) {
@@ -130,7 +131,7 @@ function parsePreviewFrontmatter(raw) {
     while (remaining.trim()) {
       const item = /^\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,"'][^,]*)(?:,|$)/.exec(remaining);
       if (!item) invalid();
-      items.push(scalar(item[1]));
+      items.push(scalar(item[1], true));
       remaining = remaining.slice(item[0].length);
     }
     return items.join(', ');
@@ -176,7 +177,15 @@ function parsePreviewFrontmatter(raw) {
         value = inline(text);
       } else {
         skip();
-        if (cursor < lines.length && indent(lines[cursor]) > depth) {
+        if (cursor < lines.length && indent(lines[cursor]) === depth && /^-\s/.test(lines[cursor].slice(depth))) {
+          const items = [];
+          while (cursor < lines.length && indent(lines[cursor]) === depth && /^-\s/.test(lines[cursor].slice(depth))) {
+            items.push(scalar(lines[cursor].slice(depth + 2)));
+            cursor++;
+            skip();
+          }
+          value = items.join(', ');
+        } else if (cursor < lines.length && indent(lines[cursor]) > depth) {
           const childDepth = indent(lines[cursor]);
           if (/^-\s/.test(lines[cursor].slice(childDepth))) {
             const items = [];

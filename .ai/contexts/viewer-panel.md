@@ -72,6 +72,10 @@ with more-indented text fall back to raw YAML). Values stay
 display text; no type construction, tags, anchors or aliases are evaluated.
 Unsupported syntax, invalid indentation, duplicate keys and malformed quotes
 fall back to the entire raw block in an escaped `<pre>` above the body.
+A block that holds only comments and blank lines shows the same way, so text
+between two `---` lines never disappears. Brackets and braces are refused only
+inside inline lists; a plain value may contain them, and a block list may sit
+at its key's own indent.
 
 Name and title are emphasized, description is a lead, other fields form a
 two-column definition list. Scalar lists are comma separated; validated nested
