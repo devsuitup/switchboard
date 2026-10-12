@@ -112,7 +112,10 @@ function parsePreviewFrontmatter(raw) {
   }
   function scalar(text, flow = false) {
     text = text.trim();
-    if (text.startsWith('#')) return '';
+    if (text.startsWith('#')) {
+      if (flow) invalid();
+      return '';
+    }
     if (/^["']/.test(text)) {
       const quoted = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/.exec(text);
       if (!quoted) invalid();

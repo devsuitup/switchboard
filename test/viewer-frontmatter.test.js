@@ -191,3 +191,9 @@ test('preview reads a commented or empty list item as empty, at any list indent'
   render('---\ntags:\n- # c\n- b\nmeta:\n  tags:\n  -\n  - d\n---\nBody');
   assert.deepEqual(values(el), [['tags', ', b'], ['meta', 'tags:\n-\n- d']]);
 });
+
+test('preview falls back to raw YAML for a flow list item that starts with a hash', t => {
+  const { el, render } = setup(t);
+  render('---\ntags: [#a, b]\n---\nBody');
+  assert.equal(el.querySelector('.markdown-frontmatter > pre')?.textContent, 'tags: [#a, b]');
+});
