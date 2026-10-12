@@ -81,7 +81,9 @@ carry Electron's default keys for their roles. There is no reload shortcut: `Cmd
 The project and worktree **New session (+)** menus focus the first item when
 opened. Up/Down wrap between items, Home/End select the edges, and Enter or
 Space activates the focused item. Escape closes the menu and returns focus to
-its + button. Moving focus outside the menu or clicking outside also closes it.
+its + button. Tab and Shift+Tab close the menu, return focus to its + button,
+then continue through the window's normal tab order from there. Moving focus
+outside the menu or clicking outside also closes it.
 
 In the New Session, Resume and Add Project dialogs, Enter confirms and Esc
 cancels (Enter inside a text field does not start a session).
