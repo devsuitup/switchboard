@@ -344,13 +344,14 @@ for (const kind of ["What's new", 'Send prompt', 'Add Project']) {
   });
 }
 
-for (const openerState of ['removed', 'body']) {
+for (const openerState of ['removed', 'body', 'unfocusable']) {
   test(`closing the last modal with a ${openerState} opener focuses the active terminal once`, () => {
     const ctx = setup();
     try {
       const opener = ctx.doc.createElement('button');
       ctx.doc.body.append(opener);
-      if (openerState === 'removed') opener.focus();
+      if (openerState !== 'body') opener.focus();
+      if (openerState === 'unfocusable') opener.focus = () => {};
       let restored = 0;
       ctx.window.activeSessionId = 's1';
       ctx.window.openSessions.set('s1', { terminal: { focus() { restored++; ctx.textarea.focus(); } } });
@@ -358,7 +359,7 @@ for (const openerState of ['removed', 'body']) {
       overlay.innerHTML = '<div role="dialog">Dialog</div>';
       ctx.doc.body.append(overlay);
       const unregister = ctx.window.registerModal({ overlay, cancel() {} });
-      opener.remove();
+      if (openerState !== 'unfocusable') opener.remove();
       overlay.remove();
       unregister();
       unregister();

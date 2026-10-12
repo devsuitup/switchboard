@@ -35,9 +35,12 @@ function registerModal({ overlay, cancel, enter, bodyEnter = false, restoreFocus
     if (remaining && restoreFocus) {
       if (!remaining.overlay.contains(document.activeElement)) focusModal(remaining);
     } else if (!remaining && restoreFocus) {
+      let restored = false;
       if (opener?.isConnected && opener !== document.body && opener !== document.documentElement && !opener.matches(':disabled')) {
         opener.focus();
-      } else if (typeof activeSessionId !== 'undefined' && typeof openSessions !== 'undefined') {
+        restored = document.activeElement === opener;
+      }
+      if (!restored && typeof activeSessionId !== 'undefined' && typeof openSessions !== 'undefined') {
         const entry = activeSessionId && openSessions.get(activeSessionId);
         if (entry && !entry.closed) entry.terminal.focus();
       }
