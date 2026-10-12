@@ -92,6 +92,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       if (REASON_RANK[reason] > REASON_RANK[inflight.entry.reason]) {
         const joined = inflight;
         joined.held = true;
+        joined.upgrades = (joined.upgrades || 0) + 1;
         const token = nextId++;
         const sent = joined.entry.upgrade(reason, token);
         const wait = waitReasonDone(token, win.webContents);
@@ -103,7 +104,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
           }
           return wait.done.then(() => result);
         }).then((result) => {
-          if (inflight === joined) inflight = null;
+          joined.upgrades -= 1;
+          if (joined.upgrades === 0 && inflight === joined) inflight = null;
           return result;
         });
       }
