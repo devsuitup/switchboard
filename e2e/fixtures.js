@@ -131,7 +131,7 @@ const test = base.extend({
       app = await electron.launch({
         executablePath: require('electron'),
         args: [APP_DIR, '--no-sandbox'],
-        cwd: APP_DIR,
+        cwd: env.HOME,
         env: { ...env, ELECTRON_IS_DEV: '0' },
       });
       proc = app.process();

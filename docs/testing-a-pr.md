@@ -12,8 +12,14 @@ the default. Other values produce a usage error before any git command.
 
 ## From source, not a build
 
-`npx electron . --no-sandbox` runs the checked-out source directly. In both
-modes, `task test-pr` first rebuilds `public/codemirror-bundle.js` in the
+Electron receives the absolute worktree path and `--no-sandbox` to run the
+checked-out source directly. Its working directory is a disposable OS-temporary
+directory, removed on exit in both modes. In isolated mode, this is also the
+fixture HOME. This contains malformed relative writes from native Windows
+spelling initialization under the Codex sandbox (#591); see [the e2e launch
+notes](e2e.md#writing-one).
+
+In both modes, `task test-pr` first rebuilds `public/codemirror-bundle.js` in the
 worktree using esbuild's JavaScript API, resolved from that worktree's
 `node_modules`. Build options come from the worktree's `package.json`
 `bundle:codemirror` script: entry points, `--bundle`, `--minify`, and

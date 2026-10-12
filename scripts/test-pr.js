@@ -36,7 +36,7 @@ function hasProxyCredentials(value) {
 }
 
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
-  isolated = false, allowClaude = false, tempHome, port = 9223, platform = process.platform }) {
+  isolated = false, allowClaude = false, tempHome, port = 9223, platform = process.platform, entry = '.' }) {
   validatePr(pr);
   const pathKeys = Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort();
   if (platform === 'win32' && pathKeys.length) {
@@ -46,7 +46,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   const data = path.join(home, `.switchboard-dev-pr${pr}`);
   if (!isolated) {
     return { env: { ...env, SWITCHBOARD_DATA_DIR: data, SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers') },
-      args: ['.', '--no-sandbox'] };
+      args: [entry, '--no-sandbox'] };
   }
   if (!Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('Debug port must be an integer from 1 to 65535');
   if (!tempHome) throw new Error('Isolated mode requires a temporary home');
@@ -74,7 +74,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: path.join(tempHome, '.gitconfig'),
     },
-    args: ['.', '--no-sandbox', `--remote-debugging-port=${Number(port)}`],
+    args: [entry, '--no-sandbox', `--remote-debugging-port=${Number(port)}`],
   };
 }
 
@@ -191,7 +191,8 @@ function runElectron(executable, args, options) {
 
 async function main({ checkout = path.resolve(__dirname, '..'), env = process.env,
   clean = false, run = runCommand, launch = runElectron, fixtures = prepareFixtures,
-  log = console.log, warn = console.error } = {}) {
+  log = console.log, warn = console.error,
+  removeDir = dir => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } = {}) {
   const pr = env.PR;
   validatePr(pr);
   const isolated = validateIsolated(env.ISOLATED);
@@ -229,9 +230,12 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     throw new Error(`Failed to build CodeMirror bundle in ${worktree}: ${error.message}`);
   }
   let tempHome;
+  let launchCwd;
   try {
-    if (isolated) tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
-    const config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223 });
+    launchCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
+    if (isolated) tempHome = launchCwd;
+    const config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223,
+      entry: path.resolve(worktree) });
     if (isolated) {
       fixtures(tempHome, config.env, { allowClaude });
       log(`Temporary HOME: ${tempHome}`);
@@ -243,9 +247,15 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     log(`Launching PR #${pr} from ${worktree} (${isolated ? 'fixture HOME + DB + triggers' : 'isolated DB + triggers'})...`);
     warn("Do not pipe this command's output into a reader that exits early - see docs/testing-a-pr.md.");
     const executable = require(path.join(worktree, 'node_modules', 'electron'));
-    return await launch(executable, config.args, { cwd: worktree, env: config.env });
+    return await launch(executable, config.args, { cwd: launchCwd, env: config.env });
   } finally {
-    if (tempHome) fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    if (launchCwd) {
+      try {
+        removeDir(launchCwd);
+      } catch (error) {
+        warn(`Could not remove ${launchCwd}: ${error.message}. Delete it by hand${allowClaude ? ': it holds the claude login' : ''}.`);
+      }
+    }
   }
 }
 
