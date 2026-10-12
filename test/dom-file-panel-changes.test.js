@@ -169,7 +169,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
 
   // jsdom's own window.confirm throws "not implemented"; the panel asks before
   // discarding unsaved edits, so the suite answers for the user.
-  window.confirm = (message) => {
+  window.appConfirm = async ({ message: message }) => {
     calls.confirm.push(message);
     return confirmImpl ? confirmImpl(message) : true;
   };
@@ -2507,5 +2507,21 @@ test('a diff failure on a subagent row is shown, not thrown', async () => {
     subagentRows(ctx)[0].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
     await flush();
     assert.match(ctx.document.getElementById('changes-diff-view').textContent, /no longer exists/);
+  } finally { ctx.destroy(); }
+});
+
+test('delayed discard consent cannot close a replacement MCP tab', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    await openFile(ctx, 's1', 'src/a.js');
+    ctx.editors[0].box.text = 'unsaved';
+    let answer;
+    ctx.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+    const closing = ctx.window.handleClose();
+    ctx.window.openDiffTab('s1', 'replacement', { oldFilePath: '/repo/other.js', oldContent: 'a', newContent: 'b' });
+    await flush();
+    answer(true);
+    await closing;
+    assert.equal(ctx.stateOf('s1').currentTab?.diffId, 'replacement');
   } finally { ctx.destroy(); }
 });

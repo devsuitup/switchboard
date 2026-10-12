@@ -72,6 +72,7 @@ function setup() {
     },
   });
   window.confirm = (msg) => { calls.confirms.push(msg); return calls.onConfirm ? calls.onConfirm(msg) : false; };
+  window.appConfirm = async ({ message: msg }) => { calls.confirms.push(msg); return false; };
   window.createEditableViewer = (parent, content) => {
     editor = fakeEditor(content);
     editor.dom = window.document.createElement('div');
@@ -98,7 +99,7 @@ function setup() {
   window.appShortcuts = {};
   window.initFilePanel();
   registerPanelTerminals(dom, ['s1', 's3']);
-  return { window, disk, calls, editor: () => editor, destroy: () => window.close() };
+  return { window, context: dom.getInternalVMContext(), disk, calls, editor: () => editor, destroy: () => window.close() };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 5));
@@ -651,5 +652,69 @@ test('a check delivered twice, before and after the page said it is ready, is an
     await flush();
     assert.deepEqual(ctx.calls.acks.map((a) => a.id), [9]);
     assert.deepEqual(ctx.calls.answers, [{ id: 9, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
+function loadAppDialogs(ctx) {
+  for (const f of ['choice-dialog.js', 'app-dialogs.js']) {
+    const filename = path.join(PUBLIC_DIR, f);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+  }
+}
+function dialogKey(ctx, key, init = {}) {
+  ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+}
+test('reload ACK is immediate while confirmations queue; quit upgrade waits for one focused unsaved guard', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const opener = ctx.window.document.createElement('button');
+    ctx.window.document.body.append(opener);
+    opener.focus();
+    let flushed = 0;
+    ctx.window.flushStateForExit = async () => { flushed++; };
+    const confirming = ctx.window.appConfirm({ title: 'Delete?', danger: true });
+    const alerting = ctx.window.appAlert({ message: 'Queued message' });
+    const checking = ctx.calls.check(44, 'reload');
+    ctx.calls.reason(44, 'quit');
+    assert.deepEqual(ctx.calls.acks.map(x => x.id), [44]);
+    await flush();
+    assert.equal(dialog(ctx), null, 'the unsaved guard must wait for the dialog queue');
+    dialogKey(ctx, 'Escape');
+    assert.equal(await confirming, false);
+    dialogKey(ctx, 'Enter');
+    await alerting;
+    await flush();
+    assert.ok(dialog(ctx));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
+    dialogKey(ctx, 'Tab', { shiftKey: true });
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+    dialogKey(ctx, 'Tab');
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
+    button(ctx, 'unsaved-discard').click();
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 44, proceed: true }]);
+    assert.equal(flushed, 1);
+    assert.equal(ctx.window.document.activeElement, opener);
+  } finally { ctx.destroy(); }
+});
+test('a foreground alert cannot cancel or steal focus into an underlying unsaved guard', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(45, 'reload');
+    await flush();
+    const alerting = ctx.window.appAlert({ message: 'Foreground' });
+    dialogKey(ctx, 'Tab');
+    assert.ok(ctx.window.document.activeElement.closest('.choice-dialog-overlay'));
+    dialogKey(ctx, 'Escape');
+    await alerting;
+    assert.ok(dialog(ctx));
+    assert.deepEqual(ctx.calls.answers, []);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 45, proceed: false }]);
   } finally { ctx.destroy(); }
 });

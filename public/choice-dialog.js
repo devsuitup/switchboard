@@ -8,15 +8,49 @@ function writeRememberedChoice(rememberKey, checked) {
   try { localStorage.setItem(rememberKey, checked ? '1' : '0'); } catch {}
 }
 
+// see .ai/contexts/app-dialogs.md
+const choiceDialogQueue = [];
+const choiceDialogIdleWaiters = [];
+let choiceDialogActive = false;
+let choiceDialogReturnFocus = null;
 let closeOpenChoiceDialog = null;
 
-/**
- * A modal with optional checkboxes. Resolves to `{ [choice.id]: boolean }` on
- * confirm, null on cancel, and null at once while another one is open, unless
- * `replace` cancels the open one and shows this one. `closeWith`, a promise,
- * closes the dialog with the value it resolves to.
- */
-function showChoiceDialog({
+function showChoiceDialog(options = {}) {
+  const active = document.activeElement;
+  const returnFocus = options.returnFocus || (active?.closest('.choice-dialog-overlay') ? choiceDialogReturnFocus : active);
+  return new Promise((resolve) => {
+    const entry = { options: { ...options, returnFocus }, resolve };
+    if (options.replace && closeOpenChoiceDialog) {
+      choiceDialogQueue.unshift(entry);
+      closeOpenChoiceDialog(null);
+    } else choiceDialogQueue.push(entry);
+    drainChoiceDialogs();
+  });
+}
+
+function whenChoiceDialogsIdle() {
+  if (!choiceDialogActive && !choiceDialogQueue.length) return Promise.resolve();
+  return new Promise(resolve => choiceDialogIdleWaiters.push(resolve));
+}
+
+function drainChoiceDialogs() {
+  if (choiceDialogActive) return;
+  if (!choiceDialogQueue.length) {
+    for (const resolve of choiceDialogIdleWaiters.splice(0)) resolve();
+    return;
+  }
+  choiceDialogActive = true;
+  const { options, resolve } = choiceDialogQueue.shift();
+  if (options.replace && options.returnFocus && options.returnFocus.isConnected === false) options.returnFocus = document.activeElement;
+  choiceDialogReturnFocus = options.returnFocus;
+  openChoiceDialog(options).then((value) => {
+    choiceDialogActive = false;
+    resolve(value);
+    drainChoiceDialogs();
+  });
+}
+
+function openChoiceDialog({
   title,
   message,
   choices = [],
@@ -28,11 +62,7 @@ function showChoiceDialog({
   replace = false,
   closeWith = null,
 } = {}) {
-  if (document.querySelector('.choice-dialog-overlay')) {
-    if (!replace || !closeOpenChoiceDialog) return Promise.resolve(null);
-    closeOpenChoiceDialog(null);
-    if (returnFocus && returnFocus.isConnected === false) returnFocus = document.activeElement;
-  }
+
 
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -86,6 +116,7 @@ function showChoiceDialog({
     cancelBtn.type = 'button';
     cancelBtn.className = 'new-session-cancel-btn choice-dialog-cancel';
     cancelBtn.textContent = cancelLabel;
+    cancelBtn.hidden = cancelLabel === null;
     const confirmBtn = document.createElement('button');
     confirmBtn.type = 'button';
     confirmBtn.className = (danger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-confirm';
@@ -101,9 +132,10 @@ function showChoiceDialog({
     function close(value) {
       if (closed) return;
       closed = true;
+      if (closeOpenChoiceDialog === close) closeOpenChoiceDialog = null;
       overlay.remove();
       document.removeEventListener('keydown', onKey, true);
-      if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
+      if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus();
       resolve(value);
     }
 
@@ -117,13 +149,14 @@ function showChoiceDialog({
     }
 
     function onKey(event) {
+      if (!overlay.contains(event.target)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopImmediatePropagation();
         close(null);
       } else if (event.key === 'Tab') {
         event.preventDefault();
-        const controls = [...dialog.querySelectorAll('button, input')];
+        const controls = [...dialog.querySelectorAll('button, input')].filter(control => !control.hidden);
         const at = controls.indexOf(document.activeElement);
         const step = event.shiftKey ? -1 : 1;
         const next = at === -1 ? (event.shiftKey ? controls.length - 1 : 0) : (at + step + controls.length) % controls.length;
@@ -142,9 +175,9 @@ function showChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey, true);
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});
-    document.addEventListener('keydown', onKey, true);
     (initialFocus === 'cancel' ? cancelBtn : confirmBtn).focus();
   });
 }

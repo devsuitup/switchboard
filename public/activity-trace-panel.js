@@ -67,7 +67,7 @@ async function openActivityTraceFile(file) {
     result = { ok: false, error: (err && err.message) || String(err) };
   }
   if (!result || !result.ok) {
-    window.alert(`Could not read ${file.name}: ${(result && result.error) || 'unknown error'}`);
+    await appAlert({ title: 'Switchboard', message: `Could not read ${file.name}: ${(result && result.error) || 'unknown error'}` });
     return;
   }
   if (typeof hideAllViewers === 'function') hideAllViewers();
@@ -117,7 +117,7 @@ function buildActivityTraceRow(file, listEl) {
   deleteBtn.className = 'settings-check-updates-btn activity-trace-delete-btn';
   deleteBtn.textContent = 'Delete';
   deleteBtn.addEventListener('click', async () => {
-    if (!window.confirm(`Delete "${file.name}"?\n\nThis cannot be undone.`)) return;
+    if (!await appConfirm({ title: 'Delete?', message: `Delete "${file.name}"?\n\nThis cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
     deleteBtn.disabled = true;
     let result;
     try {
@@ -130,7 +130,7 @@ function buildActivityTraceRow(file, listEl) {
     if (result && result.ok) {
       renderActivityTraceFiles(listEl);
     } else {
-      window.alert(`Delete failed: ${(result && result.error) || 'unknown error'}`);
+      await appAlert({ title: 'Switchboard', message: `Delete failed: ${(result && result.error) || 'unknown error'}` });
     }
   });
 

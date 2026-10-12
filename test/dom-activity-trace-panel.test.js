@@ -79,8 +79,8 @@ function setup({ traceState, files = [], readResult, deleteResult = { ok: true }
 
   const confirms = [];
   const alerts = [];
-  window.confirm = (msg) => { confirms.push(msg); return window.__confirmAnswer !== false; };
-  window.alert = (msg) => { alerts.push(String(msg)); };
+  window.appConfirm = async ({ message: msg }) => { confirms.push(msg); return window.__confirmAnswer !== false; };
+  window.appAlert = async ({ message: msg }) => { alerts.push(String(msg)); };
 
   evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
@@ -299,5 +299,15 @@ test('an IPC rejection is reported instead of leaving a dead button', async () =
     assert.equal(btn.disabled, false, 'the button is usable again');
     assert.equal(ctx.alerts.length, 1, 'the failure was surfaced');
     assert.match(ctx.alerts[0], /handler exploded/);
+  } finally { ctx.destroy(); }
+});
+
+test('a failed trace read reports its message through appAlert and opens no content', async () => {
+  const ctx = setup({ files: SAMPLE_FILES, readResult: { ok: false, error: 'gone' } });
+  try {
+    await ctx.window.openActivityTraceFile(SAMPLE_FILES[0]);
+    assert.equal(ctx.opened.length, 0);
+    assert.equal(ctx.alerts.length, 1);
+    assert.match(ctx.alerts[0], /Could not read.*gone/);
   } finally { ctx.destroy(); }
 });

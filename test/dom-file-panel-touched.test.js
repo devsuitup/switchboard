@@ -307,7 +307,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     calls.save.push({ filePath, content, expected, options });
     return Promise.resolve(saveImpl ? saveImpl(calls.save.length - 1) : { ok: true, version: 'v2' });
   };
-  window.confirm = (...args) => { calls.confirm++; return (confirmImpl || (() => true))(...args); };
+  window.appConfirm = async ({ message }) => { calls.confirm++; return (confirmImpl || (() => true))(message); };
   window.cmRevealLine = (_view, line) => calls.revealed.push(line);
   if (ownerOf) window.panelTerminalOwnerOf = ownerOf;
   const editors = [];
@@ -732,6 +732,8 @@ test('close and Escape restore the same Touched rows, scroll and selection witho
     const back = ctx.document.getElementById('changes-diff-close-btn');
     assert.ok(back, 'a shared panel back button');
     back.click();
+    await flush();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.equal(rows(ctx)[0], first);
     assert.equal(list.scrollTop, 123);
@@ -942,9 +944,12 @@ test('Close keeps a dirty file on refusal and discards it without stashing it af
     ctx.editors.at(-1).setText('unsaved edit');
     const back = ctx.document.getElementById('changes-diff-close-btn');
     back.click();
+    await flush();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'changes');
     agree = true;
     back.click();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.equal(ctx.stateOf('s1').touchedStashes?.size ?? 0, 0);
   } finally { ctx.destroy(); }
@@ -1214,6 +1219,7 @@ test('round 3: a symlink Touched pair uses the shared chrome read-only and canno
     await ctx.window.handleChangesSave('s1');
     assert.equal(ctx.calls.save.length, 0);
     ctx.document.getElementById('changes-diff-close-btn').click();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab, list);
     assert.equal(rows(ctx)[0], row);
     assert.equal(ctx.calls.touched.length, 1);
@@ -1370,6 +1376,7 @@ for (const [dirty, git] of [[true, true], [false, true], [true, false], [false, 
       assert.equal(ctx.editors.at(-1).current, dirty ? 'typing' : 'external');
       assert.equal(ctx.stateOf('s1').currentTab.externalChange, dirty);
       ctx.document.getElementById('changes-diff-close-btn').click();
+      await flush();
       assert.deepEqual(ctx.watchCalls.at(-1), ['unwatch', '/work/a.txt']);
       assert.equal(ctx.calls.touched.length, 1);
     } finally { ctx.destroy(); }

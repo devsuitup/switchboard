@@ -1166,7 +1166,7 @@ async function archiveProjectFolder(project, button) {
 
   const plan = await window.api.getProjectArchivePlan(groupsArg);
   if (!plan || plan.indexing) {
-    alert(ARCHIVE_INDEXING_MESSAGE);
+    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
     return;
   }
   const schedules = plan.schedules || [];
@@ -1233,13 +1233,13 @@ async function archiveProjectFolder(project, button) {
     disableSchedules: result.disableSchedules ? disableable.map(s => s.filePath) : [],
   });
   if (res && res.error === 'indexing') {
-    alert(ARCHIVE_INDEXING_MESSAGE);
+    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
   } else if (res && res.error) {
-    alert('The folder could not be archived: ' + res.error
-      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : ''));
+    await appAlert({ title: 'Switchboard', message: 'The folder could not be archived: ' + res.error
+      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : '') });
   } else if (res && Array.isArray(res.failed) && res.failed.length > 0) {
-    alert('The folder is archived, but these schedules could not be disabled:\n'
-      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n'));
+    await appAlert({ title: 'Switchboard', message: 'The folder is archived, but these schedules could not be disabled:\n'
+      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n') });
   }
   pollActiveSessions();
   loadProjects();
@@ -1310,10 +1310,10 @@ function rebindSidebarEvents(projects) {
         const newPath = await window.api.browseFolder();
         if (!newPath) return;
         const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-        if (!confirm(`Remap ${projectShortName} to:\n${newPath}?`)) return;
+        if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
         const result = await window.api.remapProject(project.projectPath, newPath);
         if (result.error) {
-          alert('Failed to remap: ' + result.error);
+          await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
         } else {
           loadProjects();
         }
@@ -1370,7 +1370,7 @@ function rebindSidebarEvents(projects) {
           loadProjects();
         } else {
           const msg = (result && result.error) ? result.error : 'Unknown error';
-          alert(`Failed to delete worktree: ${msg}`);
+          await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
         }
       };
     }

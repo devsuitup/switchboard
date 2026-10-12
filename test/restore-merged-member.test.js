@@ -49,7 +49,7 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live =
       return { ok: true };
     },
   });
-  h.window.confirm = () => { throw new Error('automatic restore must not prompt'); };
+  h.window.appConfirm = async () => { throw new Error('automatic restore must not prompt'); };
   h.evalPublic('restore-plan.js');
   h.evalPublic('resume-guard.js');
   const functions = loadAppFunctions(h.context, {

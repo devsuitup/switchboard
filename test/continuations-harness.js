@@ -40,7 +40,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   const saved = savedEntries || [{ sessionId: 'old', projectPath: root, active: true }];
   fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
   const spawned = [], prompts = [];
-  dom.window.confirm = message => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
+  dom.window.appConfirm = async ({ message: message }) => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
   dom.window.api = {
     getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
     setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),

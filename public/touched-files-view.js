@@ -181,10 +181,10 @@ function renderTouchedTab(sessionId, tab) {
   }
 }
 
-function toggleTouchedTab(sessionId) {
+async function toggleTouchedTab(sessionId) {
   const state = getSessionState(sessionId);
   if (state.currentTab && (state.currentTab.type === 'touched' || state.currentTab.returnList?.type === 'touched')) {
-    if (!confirmDiscardChangesEdits(state.currentTab)) return;
+    if ((hasUnsavedChangesEdits(state.currentTab) && !await confirmDiscardChangesEdits(state.currentTab))) return;
     destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
     endCurrentTab(sessionId, state);
@@ -320,14 +320,14 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
       if (currentPanelSessionId === sessionId) renderPanel(sessionId);
       return;
     }
-    if (!confirmDiscardChangesEdits(current)) return;
+    if ((hasUnsavedChangesEdits(current) && !await confirmDiscardChangesEdits(current))) return;
     tab.selection = filePath;
     if (currentPanelSessionId === sessionId) window.snapshotPanelList(touchedListEl, tab);
     destroyCurrentTab(state, { stash: false });
     restoreTouchedStash(sessionId, state, { key: stashKey, returnList: tab, line });
     return;
   }
-  if (asks && !confirmDiscardChangesEdits(current)) return;
+  if (asks && (hasUnsavedChangesEdits(current) && !await confirmDiscardChangesEdits(current))) return;
   const agreedContent = readChangesEditorContent(current);
   tab.opening = true;
   let result;
@@ -346,7 +346,7 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   }
   if (origin !== 'row') addTouchedOpened(state, filePath);
   const keep = asks
-    ? readChangesEditorContent(current) !== agreedContent && !confirmDiscardChangesEdits(current)
+    ? readChangesEditorContent(current) !== agreedContent && (hasUnsavedChangesEdits(current) && !await confirmDiscardChangesEdits(current))
     : hasUnsavedChangesEdits(current);
   if (keep) {
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);

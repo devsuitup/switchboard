@@ -238,7 +238,7 @@ test('archive folder: while indexing, an alert and nothing else', async () => {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     const calls = installApi(ctx, { getProjectArchivePlan: () => Promise.resolve({ indexing: true }) });
     let alerted = null;
-    ctx.window.alert = (m) => { alerted = m; };
+    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
     render(ctx, [project]);
     await clickArchive(ctx, '/p');
 
@@ -317,7 +317,7 @@ test('archive folder: an archive that failed after disabling schedules names the
   try {
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY', disabled: ['nightly'] }) });
     let alerted = null;
-    ctx.window.alert = (m) => { alerted = m; };
+    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
     render(ctx, [{ projectPath: '/p', folder: '-p', sessions: [session('s1')] }]);
     await clickArchive(ctx, '/p', { confirm: true });
 
@@ -383,7 +383,7 @@ test('archive folder: a schedule that could not be disabled is reported', async 
       archiveProject: () => Promise.resolve({ ok: true, disabled: [], failed: [{ name: 'a', error: 'EACCES' }] }),
     });
     let alerted = null;
-    ctx.window.alert = (m) => { alerted = m; };
+    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 
@@ -397,7 +397,7 @@ test('archive folder: an archive refused for indexing is reported', async () => 
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'indexing' }) });
     let alerted = null;
-    ctx.window.alert = (m) => { alerted = m; };
+    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 
@@ -411,7 +411,7 @@ test('archive folder: an archive that failed in the main process is reported', a
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY' }) });
     let alerted = null;
-    ctx.window.alert = (m) => { alerted = m; };
+    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 

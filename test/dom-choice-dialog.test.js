@@ -187,11 +187,11 @@ test('choice dialog: one paragraph per message line', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('choice dialog: a second call while one is open resolves null and leaves the first', async () => {
+test('choice dialog: a second call waits until the first closes', async () => {
   const ctx = setupSidebarDom();
   try {
     const first = open(ctx);
-    assert.equal(await open(ctx), null);
+    const second = open(ctx);
     assert.equal(ctx.document.querySelectorAll('.modal-overlay').length, 1);
     confirmBtn(ctx).click();
     assert.deepEqual({ ...(await first) }, { a: true, b: true });

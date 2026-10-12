@@ -87,6 +87,7 @@ for (const dialog of ['choice', 'New Session']) {
       const ctx = setup();
       try {
         loadPublic(ctx, 'choice-dialog.js');
+        loadPublic(ctx, 'app-dialogs.js');
         loadPublic(ctx, 'setting-defaults.js');
         loadPublic(ctx, 'dialogs.js');
         const doc = ctx.window.document;

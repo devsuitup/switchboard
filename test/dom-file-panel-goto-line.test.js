@@ -38,7 +38,7 @@ function setup({ pair } = {}) {
     unwatchFile: () => Promise.resolve({ ok: true }),
     saveFileForPanel: () => Promise.resolve({ ok: true }),
   };
-  window.confirm = () => true;
+  window.appConfirm = async () => true;
   window.loadCodeMirrorBundle = () => Promise.resolve();
   window.cmRevealLine = (view, line) => calls.revealed.push({ view, line });
 

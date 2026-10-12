@@ -41,8 +41,8 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
       return () => Promise.resolve({ ok: true });
     },
   });
-  window.confirm = (msg) => { calls.confirms.push(msg); return confirmAnswer; };
-  window.alert = (msg) => { calls.alerts.push(msg); };
+  window.appConfirm = async ({ message: msg }) => { calls.confirms.push(msg); return confirmAnswer; };
+  window.appAlert = async ({ message: msg }) => { calls.alerts.push(msg); };
   window.loadCodeMirrorBundle = () => Promise.resolve();
   window.localStorage.setItem('filePanelDiffMode', 'side-by-side');
 
@@ -261,7 +261,7 @@ test('the diff tab asks again when the disk moves during its confirm, and never 
   const disk = fakeDisk('session\n');
   const ctx = setup({ saveImpl: disk.save });
   let asked = 0;
-  ctx.window.confirm = (msg) => {
+  ctx.window.appConfirm = async ({ message: msg }) => {
     ctx.calls.confirms.push(msg);
     asked += 1;
     if (asked === 1) { disk.text = 'second session write\n'; return true; }

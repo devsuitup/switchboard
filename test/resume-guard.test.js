@@ -37,7 +37,7 @@ function makeApi(answer) {
 
 function makeConfirm(result) {
   const messages = [];
-  const confirm = (msg) => { messages.push(msg); return result; };
+  const confirm = async (msg) => { messages.push(msg); return result; };
   return { confirm, messages };
 }
 
@@ -99,7 +99,7 @@ test('a failed check is silence: the resume proceeds as it did before the guard'
 
 test('loaded as a classic script, the guard is a global the renderer can call', async () => {
   const ctx = vm.createContext({});
-  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx, { filename: GUARD_PATH });
   assert.equal(typeof ctx.guardResume, 'function');
   const api = makeApi(LIVE);
   assert.equal(await ctx.guardResume(SESSION, { automatic: true, api, confirm: () => true }), false);

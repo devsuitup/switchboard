@@ -60,7 +60,7 @@ function setup({ disk }) {
       ? { ok: false, error: 'ENOENT: no such file or directory', code: 'ENOENT' }
       : { ok: true, content: state.disk }),
   };
-  window.confirm = (msg) => { state.confirms.push(msg); return state.confirmAnswer; };
+  window.appConfirm = async ({ message: msg }) => { state.confirms.push(msg); return state.confirmAnswer; };
 
   const realCreate = window.document.createElement.bind(window.document);
   window.document.createElement = function (tag, ...args) {
@@ -637,7 +637,7 @@ test('Overwrite while the disk moves during its confirm asks again and never wri
   try {
     await unagreed(t);
     let asked = 0;
-    t.window.confirm = (msg) => {
+    t.window.appConfirm = async ({ message: msg }) => {
       t.state.confirms.push(msg);
       asked += 1;
       if (asked === 1) { t.state.disk = 'second session write\n'; return true; }
@@ -802,7 +802,7 @@ test('a stale refusal nothing had announced shows its notice and says the file c
     await t.open('first read\n');
     t.editor().type('mine');
     let noticeAtConfirm = null;
-    t.window.confirm = (msg) => {
+    t.window.appConfirm = async ({ message: msg }) => {
       t.state.confirms.push(msg);
       noticeAtConfirm = visible(t.notice()) ? noticeText(t) : null;
       return false;
@@ -820,7 +820,7 @@ test('switching file during the confirm sends no retry, for either file', async 
     await t.open('one\n');
     t.editor().type('mine');
     const other = '/home/u/.claude/projects/p/memory/other.md';
-    t.window.confirm = (msg) => {
+    t.window.appConfirm = async ({ message: msg }) => {
       t.state.confirms.push(msg);
       t.panel.open('other', other, 'other\n');
       return true;
@@ -851,3 +851,89 @@ test('a stale refusal that comes back after the file was switched asks nothing a
     assert.equal(visible(t.notice()), false);
   } finally { t.destroy(); }
 });
+
+test('reload consent for a previous file never reloads the new dirty file', async () => {
+  const t = setup({ disk: 'one' });
+  try {
+    await t.open('one');
+    t.editor().type('mine');
+    let answer;
+    t.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+    const reload = t.panel._reloadDiscardingEdits();
+    await t.open('other', '/other.md');
+    t.editor().type('keep');
+    answer(true);
+    await reload;
+    assert.equal(t.panel.getContent(), 'otherkeep');
+  } finally { t.destroy(); }
+});
+test('overwrite consent retries against the disk value shown before a watcher update', async () => {
+  const t = setup({ disk: 'session' });
+  try {
+    await t.open('one');
+    t.editor().type('mine');
+    let answer;
+    let asked = 0;
+    t.window.appConfirm = () => ++asked === 1 ? new Promise(resolve => { answer = resolve; }) : false;
+    const saving = t.panel._save();
+    await tick();
+    await t.externalWrite('new session');
+    answer(true);
+    await saving;
+    assert.equal(t.state.disk, 'new session');
+    assert.equal(t.state.saves[1].expected, 'session');
+    assert.equal(asked, 2);
+  } finally { t.destroy(); }
+});
+
+test('Delete consent for an old viewer file never deletes its replacement', async () => {
+  const t = setup({ disk: 'one' });
+  try {
+    await t.open('one');
+    const deleted = [];
+    t.panel.opts.onDelete = async file => { deleted.push(file); return { ok: true }; };
+    let answer;
+    t.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+    const deleting = t.panel._delete();
+    await t.open('other', '/other.md');
+    answer(true);
+    await deleting;
+    assert.deepEqual(deleted, []);
+    assert.equal(t.panel.getContent(), 'other');
+  } finally { t.destroy(); }
+});
+for (const agree of [false, true]) {
+  test('viewer Delete waits and ' + (agree ? 'proceeds' : 'cancels'), async () => {
+    const t = setup({ disk: 'one' });
+    try {
+      await t.open('one');
+      const deleted = [];
+      let closed = 0;
+      t.panel.opts.onDelete = async file => { deleted.push(file); return { ok: true }; };
+      t.panel.opts.onClose = () => { closed++; };
+      let answer;
+      t.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+      const deleting = t.panel._delete();
+      assert.deepEqual(deleted, []);
+      answer(agree);
+      await deleting;
+      assert.deepEqual(deleted, agree ? [FILE] : []);
+      assert.equal(closed, agree ? 1 : 0);
+    } finally { t.destroy(); }
+  });
+}
+
+for (const throws of [false, true]) {
+  test('viewer Delete reports ' + (throws ? 'rejected IPC' : 'refusal') + ' through appAlert', async () => {
+    const t = setup({ disk: 'one' });
+    try {
+      await t.open('one');
+      const alerts = [];
+      t.window.appConfirm = async () => true;
+      t.window.appAlert = async ({ message }) => { alerts.push(message); };
+      t.panel.opts.onDelete = async () => { if (throws) throw new Error('busy'); return { ok: false, error: 'busy' }; };
+      await t.panel._delete();
+      assert.deepEqual(alerts, ['Delete failed: busy']);
+    } finally { t.destroy(); }
+  });
+}

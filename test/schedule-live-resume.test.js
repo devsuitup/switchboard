@@ -72,7 +72,7 @@ function setup(t, { sandbox = false } = {}) {
     getSetting: async (key) => settings[key],
     setSetting: async (key, value) => { settings[key] = value; },
   };
-  dom.window.confirm = (message) => { messages.push(message); return true; };
+  dom.window.appConfirm = async ({ message: message }) => { messages.push(message); return true; };
   vm.runInContext(read('public/utils.js'), ctx);
   vm.runInContext(read('public/resume-guard.js'), ctx);
   vm.runInContext(`
