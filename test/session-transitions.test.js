@@ -751,6 +751,92 @@ function makePtySession(folder, overrides = {}) {
   };
 }
 
+function continuationFixture(t, targets, extra = {}) {
+  const tmp = mkTmp();
+  const folder = 'proj';
+  fs.mkdirSync(path.join(tmp, folder));
+  fs.writeFileSync(path.join(tmp, folder, 'old-id.jsonl'), targets.map(id => JSON.stringify({
+    type: 'continued-in', sessionId: 'old-id', continuedInSessionId: id,
+  })).join('\n') + '\n');
+  const rekeys = [];
+  const fixture = setupForkDetection(tmp, { rekeyMcpServer: (...args) => rekeys.push(args), ...extra });
+  const session = makePtySession(folder, { pty: { pid: 4242 }, knownJsonlFiles: new Set(['old-id.jsonl']) });
+  fixture.activeSessions.set('old-id', session);
+  for (const id of targets) fs.writeFileSync(path.join(tmp, folder, id + '.jsonl'), JSON.stringify({ sessionId: id, type: 'user', message: { content: 'continued' } }) + '\n');
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  return { ...fixture, tmp, folder, session, rekeys };
+}
+
+test('continuation: a single continued-in target re-keys without a descriptor', t => {
+  const f = continuationFixture(t, ['new-id']);
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('new-id'), f.session);
+  assert.deepEqual(f.rekeys, [['old-id', 'new-id']]);
+  assert.deepEqual(f.events, [{ channel: 'session-forked', payload: 'old-id', args: ['old-id', 'new-id', 'continuation'] }]);
+});
+
+test('continuation: several transcript targets require process ownership', t => {
+  const f = continuationFixture(t, ['first-id', 'second-id']);
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  assert.deepEqual(f.rekeys, []);
+});
+
+test('continuation: process ownership chooses the actual target among several records', t => {
+  const f = continuationFixture(t, ['first-id', 'second-id'], { clearOwner: id => id === 'second-id' ? 'mine' : 'other' });
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('second-id'), f.session);
+  assert.equal(f.activeSessions.has('first-id'), false);
+});
+
+test('continuation: a target owned by another process cannot re-key this PTY', t => {
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'other' });
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  assert.deepEqual(f.rekeys, []);
+});
+
+test('continuation: an already open target is never overwritten', t => {
+  const f = continuationFixture(t, ['new-id']);
+  const other = makePtySession(f.folder, { knownJsonlFiles: new Set(['old-id.jsonl', 'new-id.jsonl']) });
+  f.activeSessions.set('new-id', other);
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('new-id'), other);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+});
+
+test('continuation: a late continued-in record can identify an already seen transcript', t => {
+  const f = continuationFixture(t, ['new-id']);
+  f.session.knownJsonlFiles.add('new-id.jsonl');
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('new-id'), f.session);
+});
+
+test('continuation: an ordinary new transcript can be identified by its owning pid', t => {
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'mine' });
+  fs.writeFileSync(path.join(f.tmp, f.folder, 'old-id.jsonl'), JSON.stringify({ sessionId: 'old-id', type: 'user' }) + '\n');
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('new-id'), f.session);
+});
+
+test('continuation: two open sources pointing at the same target cannot choose a PTY', t => {
+  const f = continuationFixture(t, ['new-id']);
+  fs.writeFileSync(path.join(f.tmp, f.folder, 'other-id.jsonl'), JSON.stringify({
+    type: 'continued-in', sessionId: 'other-id', continuedInSessionId: 'new-id',
+  }) + '\n');
+  f.activeSessions.set('other-id', makePtySession(f.folder, { pty: { pid: 9999 }, knownJsonlFiles: new Set(['old-id.jsonl', 'other-id.jsonl', 'new-id.jsonl']) }));
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  assert.equal(f.activeSessions.has('new-id'), false);
+});
+
+test('continuation: a header-only target is identified by its single continued-in record', t => {
+  const f = continuationFixture(t, ['new-id']);
+  fs.writeFileSync(path.join(f.tmp, f.folder, 'new-id.jsonl'), JSON.stringify({ sessionId: 'new-id', type: 'mode', mode: 'normal' }) + '\n');
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('new-id'), f.session);
+});
+
 test('fork detection: new jsonl with matching forkedFrom re-keys the session and notifies the renderer', () => {
   const tmp = mkTmp();
   try {
@@ -1168,13 +1254,13 @@ test('/clear: a transcript whose first real turn is a prompt is not a /clear', (
     const folderPath = path.join(tmp, folder);
     fs.mkdirSync(folderPath, { recursive: true });
     let asked = false;
-    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'mine'; } });
+    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'other'; } });
     activeSessions.set('old-id', makePtySession(folder, { pty: { pid: 1 } }));
 
     fs.writeFileSync(path.join(folderPath, 'new-id.jsonl'),
       JSON.stringify({ sessionId: 'new-id', type: 'user', message: { role: 'user', content: 'hello /clear' } }) + '\n', 'utf8');
     sessionTransitions.detectSessionTransitions(folder);
-    assert.equal(asked, false);
+    assert.equal(asked, true);
     assert.ok(activeSessions.has('old-id'));
   } finally {
     cleanup(tmp);

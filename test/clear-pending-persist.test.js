@@ -58,7 +58,7 @@ function setup() {
   };
   window.cachedProjects = [];
   window.cachedAllProjects = [];
-  vm.runInContext(PLAN_SRC, ctx.context);
+  vm.runInContext(PLAN_SRC, ctx.context, { filename: 'public/restore-plan.js' });
   const fns = loadAppFunctions(ctx.context, {
     functions: ['dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore'],
     declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled'],
@@ -75,7 +75,7 @@ function setup() {
       window.api.onSessionForked = (cb) => { forkedListener = cb; };
       const src = readAppSource();
       const start = src.indexOf('window.api.onSessionForked(');
-      vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), ctx.context);
+      vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), ctx.context, { filename: 'public/app.js' });
     }
     forkedListener(...args);
   };
@@ -99,6 +99,28 @@ test('after /clear, the new id has no transcript yet: it is saved as a fresh ses
     assert.ok(h.window.pendingSessions.has('new-id'), 'the cleared session is a pending row');
     await h.persistWorkingSet();
     assert.deepEqual(h.saved(), [{ sessionId: 'new-id', projectPath: '/srv/app', active: true, fresh: true }]);
+  } finally { h.destroy(); }
+});
+
+test('a continuation re-keys the sidebar maps and saves the new id without clearing metadata', async () => {
+  const h = setup();
+  try {
+    h.open('old-id');
+    const conversation = h.window.sessionMap.get('old-id');
+    Object.assign(conversation, { name: 'Payments', starred: 1, messageCount: 42 });
+    h.setProjects([{ ...PROJECT, sessions: [{ ...conversation, sessionId: 'new-id' }] }]);
+    h.window.activeSessionId = 'old-id';
+    h.sessionForked('old-id', 'new-id', 'continuation');
+    assert.equal(h.window.openSessions.has('old-id'), false);
+    assert.equal(h.window.sessionMap.has('old-id'), false);
+    assert.equal(h.window.sessionMap.get('new-id'), conversation);
+    assert.equal(h.window.openSessions.get('new-id').session.name, 'Payments');
+    assert.equal(h.window.openSessions.get('new-id').session.messageCount, 42);
+    assert.equal(h.window.pendingSessions.has('new-id'), false);
+    assert.equal(h.window.activeSessionId, 'new-id');
+    assert.ok(h.persists() > 0);
+    await h.persistWorkingSet();
+    assert.deepEqual(h.saved(), [{ sessionId: 'new-id', projectPath: '/srv/app', active: true }]);
   } finally { h.destroy(); }
 });
 

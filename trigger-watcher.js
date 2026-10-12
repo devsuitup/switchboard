@@ -1289,7 +1289,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // ── 4. Look up session ────────────────────────────────────────────────────
-  const sessionEntry = ctx.getPtyForSession(sessionId);
+  let sessionEntry = ctx.getPtyForSession(sessionId);
   if (!sessionEntry) {
     const remote = ctx.remote;
     if (remote) {
@@ -1302,16 +1302,19 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
     const descriptor = typeof ctx.getLiveDescriptor === 'function'
       ? await ctx.getLiveDescriptor(sessionId) : null;
-    if (descriptor?.kind === 'bg') {
+    if (descriptor && ctx.findPtyForSession) sessionEntry = await ctx.findPtyForSession(sessionId, descriptor);
+    if (!sessionEntry && descriptor?.kind === 'bg') {
       await writeResult({
         ok: false, submitted: SUBMITTED_NO, error: 'background session, not attached here',
         jobId: descriptor.jobId, sessionId,
       });
       return;
     }
-    ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
-    await writeResult({ ok: false, error: 'session not found', sessionId });
-    return;
+    if (!sessionEntry) {
+      ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
+      await writeResult({ ok: false, error: 'session not found', sessionId });
+      return;
+    }
   }
 
   const handle = resolveHandle(sessionEntry);
@@ -1924,7 +1927,8 @@ function start(ctx) {
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
   const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
   const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
-  function acquireSessionLock(sessionId) {
+  async function acquireSessionLock(sessionId) {
+    if (!ctx.getPtyForSession(sessionId) && ctx.findPtyForSession) await ctx.findPtyForSession(sessionId);
     const target = resolveId(sessionId);
     const previous = Promise.all([...sessionLocks].filter(([id]) => resolveId(id) === target).map(([, t]) => t));
     let release;

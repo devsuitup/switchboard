@@ -3,6 +3,7 @@ const fs = require('fs');
 const { readSubagentMeta, classifyUserText } = require('./read-session-file');
 const { enabled: TRACE, trace } = require('./activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
+const { scanContinuationIndex } = require('./session-continuations');
 
 /**
  * Fork detection for active PTY sessions.
@@ -418,6 +419,19 @@ function isFresh(filePath) {
   return ageMs(filePath) < CLEAR_OWNER_WAIT_MS;
 }
 
+// see .ai/contexts/session-state.md ("Live conversation continuations")
+function readContinuation(sessionId, session, folderPath) {
+  const id = session.realSessionId || sessionId;
+  try {
+    const previous = session._continuationSource === id ? session._continuationIndex : undefined;
+    session._continuationIndex = scanContinuationIndex(path.join(folderPath, id + '.jsonl'), id, previous);
+    session._continuationSource = id;
+    const index = JSON.parse(session._continuationIndex);
+    if (!index.complete) scheduleRecheck(session.projectFolder);
+    return index.complete && !index.unresolved && index.ids.length === 1 ? index.ids[0] : null;
+  } catch { return null; }
+}
+
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
@@ -425,6 +439,15 @@ function detectSessionTransitions(folder) {
   try {
     currentFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
   } catch { return; }
+
+  const continuations = new Map(), targetCounts = new Map();
+  for (const [id, session] of activeSessions) {
+    if (session.exited || session.isPlainTerminal || !session.knownJsonlFiles || session.projectFolder !== folder) continue;
+    const target = readContinuation(id, session, folderPath);
+    if (!target) continue;
+    continuations.set(session, target);
+    targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
+  }
 
   for (const [sessionId, session] of [...activeSessions]) {
     // Run subagent detection for all non-exited, non-terminal sessions in this folder
@@ -440,7 +463,10 @@ function detectSessionTransitions(folder) {
       continue;
     }
 
-    const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
+    const target = continuations.get(session);
+    const continuation = targetCounts.get(target) === 1 ? target : null;
+    const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f)
+      || (f === continuation + '.jsonl' && continuation !== (session.realSessionId || sessionId)));
 
     if (newFiles.length > 0) log.debug(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
 
@@ -452,11 +478,19 @@ function detectSessionTransitions(folder) {
     for (const newFile of newFiles) {
       const newFilePath = path.join(folderPath, newFile);
       const newId = path.basename(newFile, '.jsonl');
+      if (newId === (session.realSessionId || sessionId) || isLive(newId)) continue;
       const signals = readNewSessionSignals(newFilePath);
+      const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
+      let continued = false;
+      let owner = null;
+      if (!awaitingFork && !signals.cleared && (signals.hasTurn || continuation === newId)) {
+        owner = clearOwner(newId, session.pty && session.pty.pid);
+        continued = owner === 'mine' || (continuation === newId && owner !== 'other');
+      }
 
       // File exists but has no parseable content yet — skip and retry next cycle
       // But if the file's mtime is older than 1 hour, treat it as stale and archive it
-      if (!signals.forkedFrom && !signals.parentSessionId && !signals.slug) {
+      if (!continued && !signals.forkedFrom && !signals.parentSessionId && !signals.slug) {
         if (signals.hasSnapshots && session.forkFrom && !session.realSessionId) {
           log.info(`[detect] session=${sessionId} snapshot-only file=${newId} while awaiting a fork`);
         } else {
@@ -477,7 +511,7 @@ function detectSessionTransitions(folder) {
         log.debug(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=none`);
       }
 
-      let matched = false;
+      let matched = continued;
 
       // Fork: forkedFrom.sessionId matches this active PTY or the session it was forked from
       if (signals.forkedFrom === sessionId || (session.forkFrom && signals.forkedFrom === session.forkFrom)) {
@@ -488,8 +522,11 @@ function detectSessionTransitions(folder) {
       if (!matched && session.forkFrom && signals.parentSessionId === session.forkFrom && newId !== session.forkFrom) {
         matched = true;
       }
-      const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
       let pendingOwner = false;
+      if (!matched && owner === 'pending' && isFresh(newFilePath)) {
+        emptyFiles.add(newFile);
+        recheck = true;
+      }
       // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
       if (!matched && awaitingFork && signals.hasSnapshots && !signals.hasTurn) {
         const owner = clearOwner(newId, session.pty && session.pty.pid);
@@ -519,7 +556,8 @@ function detectSessionTransitions(folder) {
       }
 
       if (matched) {
-        log.info(`[session-transition] ${sessionId} → ${newId} (${signals.cleared && !awaitingFork ? 'clear' : 'fork'})`);
+        const kind = continued ? 'continuation' : signals.cleared && !awaitingFork ? 'clear' : 'fork';
+        log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
         session.knownJsonlFiles = new Set(currentFiles);
         session.realSessionId = newId;
         // Subagent scanning follows realSessionId into a different directory —
@@ -536,7 +574,7 @@ function detectSessionTransitions(folder) {
         const mainWindow = getMainWindow();
         if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('session-forked', sessionId, newId, signals.cleared && !awaitingFork ? 'clear' : 'fork');
+          mainWindow.webContents.send('session-forked', sessionId, newId, kind);
         }
         break; // Only one transition per session per flush
       }

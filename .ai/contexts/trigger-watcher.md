@@ -59,7 +59,7 @@ free**.
 
 ### Re-keyed sessions
 
-A fork or a `/clear` re-keys the open session in `activeSessions` under its new
+A fork, a `/clear`, or a live conversation continuation re-keys the open session in `activeSessions` under its new
 id (`session-transitions.js`; see cli-session-state.md, "Owner of a /clear
 transcript"), while a chain keeps the id it was given, and `/clear` is one of
 the commands a chain may send. `createTriggerContext` takes `resolveSessionId`
@@ -67,7 +67,9 @@ the commands a chain may send. `createTriggerContext` takes `resolveSessionId`
 (`getPtyForSession`, `isSessionBusy`, `getComposerState`, `getTranscriptTurn`,
 `getCliStatus`) goes through it, so the old id keeps reaching the same terminal
 and the CLI status is read under the id the CLI now writes, as is
-`getLiveDescriptor`. Results still carry the id the trigger named. An id a
+`getLiveDescriptor`. A continuation uses the same re-key and IPC path, with
+kind `continuation`; see session-state.md, "Live conversation continuations".
+Results still carry the id the trigger named. An id a
 live session holds itself resolves to that session, so a trigger aimed at a
 cleared conversation that was reopened reaches its own terminal. When a lookup
 finds the transcript under a new id, the turn reader forgets the file it read
@@ -76,6 +78,22 @@ under the old one.
 watcher, with the re-key done by `session-transitions.js` while step 0 is
 verified; without the resolution that chain ends with "session exited during
 wait" at step 0.
+
+### Live descriptor fallback
+
+Before transition detection catches up, `findPtyForSession` checks the live
+descriptor through `cliSessionState.findLiveProcess`, then uses `clearOwner`
+to select exactly one local, non-exited, non-terminal `activeSessions` entry.
+This is the same process ancestry check used by `/clear`, including the
+platform-specific process table. Unknown ancestry or several matching entries
+refuse delivery. No merged row or `bridgeSessionId` supplies an alias.
+The watcher performs this lookup before acquiring the session queue, and
+retries it after the live-descriptor lookup on a miss. Old and new ids thus
+share the queue even before a re-key. The context retains the session and PTY
+objects, revalidates unique ownership on each lookup, and drops the alias if
+the PTY changes, exits, loses ownership, or the id is opened directly.
+Composer and busy probes use that PTY; descriptor and transcript probes use
+the conversation id named by the trigger (or the actual re-key target).
 
 ### Session handle (2026-09-08, issue #220)
 

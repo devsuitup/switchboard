@@ -17,6 +17,7 @@ const path   = require('path');
 const { start } = require('../trigger-watcher');
 const { createTriggerContext } = require('../trigger-context');
 const sessionTransitions = require('../session-transitions');
+const cliSessionState = require('../cli-session-state');
 
 function mkTmp(prefix) {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -97,7 +98,7 @@ function clearingSession(onText = noop) {
   return { ctx, written, activeSessions, cleanup: () => fs.rmSync(projectsDir, { recursive: true, force: true }) };
 }
 
-async function runTriggers(ctx, triggers, timeoutMs, tmp = mkTmp('sw-clear-chain-triggers-')) {
+async function runTriggers(ctx, triggers, timeoutMs, tmp = mkTmp('sw-clear-chain-triggers-'), expectedIds = triggers.map(([id]) => id)) {
   process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
   const watcher = start(ctx);
   try {
@@ -106,7 +107,7 @@ async function runTriggers(ctx, triggers, timeoutMs, tmp = mkTmp('sw-clear-chain
     }
     const results = {};
     const deadline = Date.now() + timeoutMs + 5000;
-    for (const [uuid] of triggers) {
+    for (const uuid of expectedIds) {
       const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
       while (!fs.existsSync(resultPath)) {
         if (Date.now() > deadline) throw new Error('no result file for ' + uuid);
@@ -121,6 +122,103 @@ async function runTriggers(ctx, triggers, timeoutMs, tmp = mkTmp('sw-clear-chain
     delete process.env.SWITCHBOARD_TRIGGERS_DIR;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function continuingSession(t, { detect = true, duplicate = false, owner = true, statusForOld = false } = {}) {
+  const projectsDir = mkTmp('sw-continuation-projects-');
+  const folderPath = path.join(projectsDir, 'proj');
+  const descriptors = path.join(projectsDir, 'descriptors');
+  fs.mkdirSync(folderPath);
+  fs.mkdirSync(descriptors);
+  const oldFile = path.join(folderPath, 'old-id.jsonl');
+  fs.writeFileSync(oldFile, jsonl([prompt('old-id', Date.now() - 60000, 'earlier')]));
+  const written = [];
+  const idleStatus = { status: 'idle', statusUpdatedAt: Date.now() - 10000 };
+  const session = {
+    pty: { pid: 4242, write: data => {
+      written.push(data);
+      if (data === '\r') idleStatus.statusUpdatedAt = Date.now();
+    } }, cwd: projectsDir,
+    projectFolder: 'proj', knownJsonlFiles: new Set(['old-id.jsonl']),
+    composerState: { pending: 0, lastInputAt: 0 }, _cliBusy: false,
+  };
+  const activeSessions = new Map([['old-id', session]]);
+  if (duplicate) activeSessions.set('other-id', { ...session });
+  cliSessionState.init({
+    dir: descriptors, activeSessions, log, platform: 'linux',
+    isProcessAlive: () => true, readProcStart: () => '111',
+    readParentPid: pid => pid === 4243 ? (owner ? 4242 : 9999) : 1,
+  });
+  const clearOwner = (id, pid) => cliSessionState.clearOwner(id, pid);
+  const events = [];
+  sessionTransitions.init({
+    PROJECTS_DIR: projectsDir, activeSessions, log, rekeyMcpServer: noop,
+    clearOwner,
+    getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
+  });
+  const ctx = createTriggerContext({
+    activeSessions, log, projectsDir, isPtyAlive: () => true, clearOwner,
+    getLiveDescriptor: id => cliSessionState.findLiveProcess(id),
+    getCliStatus: id => id === 'new-id' || (statusForOld && id === 'old-id') ? idleStatus : undefined,
+    resolveSessionId: id => sessionTransitions.currentSessionId(id),
+  });
+  fs.appendFileSync(oldFile, jsonl([{ type: 'continued-in', sessionId: 'old-id', continuedInSessionId: 'new-id' }]));
+  fs.writeFileSync(path.join(folderPath, 'new-id.jsonl'), jsonl([prompt('new-id', Date.now(), 'continued')]));
+  fs.writeFileSync(path.join(descriptors, '4243.json'), JSON.stringify({ pid: 4243, sessionId: 'new-id', kind: 'interactive', procStart: '111' }));
+  if (detect) sessionTransitions.detectSessionTransitions('proj');
+  t.after(() => {
+    cliSessionState.stop();
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  });
+  return { ctx, written, activeSessions, session, events };
+}
+
+test('continued-in A to B: a trigger for B reaches the PTY opened under A', async t => {
+  const s = continuingSession(t);
+  const { continuation } = await runTriggers(s.ctx, [['continuation', { sessionId: 'new-id', command: 'reply' }]], 2000);
+  assert.equal(continuation.ok, true, JSON.stringify(continuation));
+  assert.deepEqual(s.written, ['reply', '\r']);
+  assert.equal(s.activeSessions.get('new-id'), s.session);
+  assert.equal(s.activeSessions.has('old-id'), false);
+  assert.equal(sessionTransitions.currentSessionId('old-id'), 'new-id');
+  assert.deepEqual(s.events, [['session-forked', 'old-id', 'new-id', 'continuation']]);
+});
+
+test('continued-in before detection: a live descriptor routes B to its unique owning PTY', async t => {
+  const s = continuingSession(t, { detect: false });
+  const { continuation } = await runTriggers(s.ctx, [['continuation', { sessionId: 'new-id', chain: [{ command: 'reply' }] }]], 2000);
+  assert.equal(continuation.ok, true, JSON.stringify(continuation));
+  assert.deepEqual(s.written, ['reply', '\r']);
+  assert.equal(s.ctx.resolveSessionId('new-id'), 'old-id');
+  assert.deepEqual(s.ctx.getCliStatus('new-id').status, 'idle');
+  assert.equal(path.basename(s.ctx.getTranscriptTurn('new-id').compactionCursor.filePath), 'new-id.jsonl');
+});
+
+test('continued-in before detection: old and new ids share the same trigger queue', async t => {
+  const s = continuingSession(t, { detect: false, statusForOld: true });
+  const tmp = mkTmp('sw-continuation-queue-');
+  const write = s.session.pty.write;
+  s.session.pty.write = data => {
+    write(data);
+    if (data === 'first') fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({
+      sessionId: 'new-id', command: 'other', wait: 'none', timeout_ms: 4000,
+    }));
+  };
+  const results = await runTriggers(s.ctx, [
+    ['chain', { sessionId: 'old-id', chain: [{ command: 'first' }, { command: 'second' }] }],
+  ], 4000, tmp, ['chain', 'single']);
+  assert.equal(results.chain.ok, true, JSON.stringify(results.chain));
+  assert.equal(results.single.ok, true, JSON.stringify(results.single));
+  assert.deepEqual(s.written.filter(data => data !== '\r'), ['first', 'second', 'other']);
+});
+
+for (const [name, options] of [['ambiguous PTYs', { duplicate: true }], ['another process', { owner: false }]]) {
+  test(`continued-in fallback refuses ${name}`, async t => {
+    const s = continuingSession(t, { detect: false, ...options });
+    const { continuation } = await runTriggers(s.ctx, [['continuation', { sessionId: 'new-id', command: 'reply' }]], 2000);
+    assert.equal(continuation.error, 'session not found');
+    assert.deepEqual(s.written, []);
+  });
 }
 
 test('a [/clear, reply] chain follows the session to its new id and writes the reply', async () => {
