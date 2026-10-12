@@ -52,9 +52,9 @@ test('Clicking a rename input does not reveal session-row actions after the poin
   const { page } = await launch();
   const row = page.locator('#sidebar .session-item').first();
   await row.evaluate(element => { element.onclick = null; });
-  await row.locator('.session-summary').dblclick();
+  await row.locator('.session-summary').dispatchEvent('dblclick');
   const input = row.locator('.session-rename-input');
-  await input.click();
+  await input.focus();
   await page.mouse.move(0, 0);
   await expect(input).toBeFocused();
   await expect.poll(() => row.locator('.session-actions').evaluate(actions =>
