@@ -66,8 +66,47 @@ function decodeOsc52Payload(payload) {
   return new TextDecoder().decode(bytes);
 }
 
+function isFocusTargetVisible(element) {
+  if (!element || !element.isConnected || element.closest('[hidden], [inert]')) return false;
+  for (let current = element; current; current = current.parentElement) {
+    const style = getComputedStyle(current);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+  }
+  return true;
+}
+
+function handleFocusShortcut(e) {
+  const toSidebar = matchShortcut('focusSidebar', e, isMac, appShortcuts);
+  if (!toSidebar && !matchShortcut('focusTerminal', e, isMac, appShortcuts)) return false;
+  if (e.type !== 'keydown' || e._handled) return true;
+  const overlays = document.querySelectorAll('.modal-overlay, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, [aria-modal="true"]');
+  if ([...overlays].some(isFocusTargetVisible)) return false;
+  const focused = document.activeElement;
+  if (toSidebar ? !focused?.closest('.terminal-container') : focused !== document.body && !focused?.closest('#sidebar')) return false;
+  e.preventDefault();
+  e._handled = true;
+  if (toSidebar) {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return true;
+    const row = activeSessionId && sessionItemEl(activeSessionId, sidebar);
+    if (isFocusTargetVisible(row)) {
+      row.tabIndex = -1;
+      row.focus();
+    } else {
+      const controls = sidebar.querySelectorAll('button, input:not([type="hidden"]), select, textarea, a[href], [tabindex]');
+      const control = [...controls].find(el => el.tabIndex >= 0 && !el.matches(':disabled') && isFocusTargetVisible(el));
+      if (control) control.focus();
+    }
+  } else {
+    const entry = openSessions.get(activeSessionId);
+    if (entry && isFocusTargetVisible(entry.element)) entry.terminal.focus();
+  }
+  return true;
+}
+
 function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } = {}) {
   terminal.attachCustomKeyEventHandler((e) => {
+    if (handleFocusShortcut(e)) return false;
     // Cmd/Ctrl+F → open terminal search bar
     if (e.key === 'f' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
       if (e.type === 'keydown' && onFind) onFind();

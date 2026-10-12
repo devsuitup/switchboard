@@ -18,6 +18,22 @@ const {
   captureBinding,
 } = require('../public/shortcuts');
 
+test('F6 focus shortcuts are fixed and ignore stored rebindings on every platform', () => {
+  const stored = { focusSidebar: { primary: true, shift: true, key: 'z' }, focusTerminal: { key: 'z' } };
+  for (const isMac of [false, true]) {
+    assert.equal(matchShortcut('focusSidebar', ev('F6'), isMac, stored), true);
+    assert.equal(matchShortcut('focusSidebar', ev('F6', 'shift'), isMac, stored), false);
+    assert.equal(matchShortcut('focusTerminal', ev('F6', 'shift'), isMac, stored), true);
+    for (const modifier of ['ctrl', 'meta', 'alt']) {
+      assert.equal(matchShortcut('focusSidebar', ev('F6', modifier), isMac, stored), false);
+      assert.equal(matchShortcut('focusTerminal', ev('F6', 'shift+' + modifier), isMac, stored), false);
+    }
+    assert.equal(formatBinding('focusSidebar', isMac, stored), 'F6');
+    assert.equal(formatBinding('focusTerminal', isMac, stored), 'Shift+F6');
+  }
+  assert.ok(!SHORTCUT_DEFS.some(def => def.id === 'focusSidebar' || def.id === 'focusTerminal'));
+});
+
 // Build a fake KeyboardEvent. `mods` is a string like 'ctrl+alt'.
 function ev(key, mods = '', code) {
   const set = new Set(mods.split('+').filter(Boolean));

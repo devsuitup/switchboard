@@ -28,6 +28,11 @@ const DEFAULT_SHORTCUTS = {
   agentsToggle: { primary: true, alt: false, shift: true, key: 'a' },
 };
 
+const FIXED_SHORTCUTS = {
+  focusSidebar: { primary: false, alt: false, shift: false, key: 'F6' },
+  focusTerminal: { primary: false, alt: false, shift: true, key: 'F6' },
+};
+
 // Metadata for rendering the settings UI and resolving each action's key family.
 const SHORTCUT_DEFS = [
   { id: 'changesToggle', label: 'Toggle Changes', description: 'Show working tree changes', family: 'key' },
@@ -106,6 +111,8 @@ function modifiersMatch(binding, e, isMac) {
 
 // Does this event trigger the given action under the current bindings?
 function matchShortcut(id, e, isMac, shortcuts) {
+  const fixed = FIXED_SHORTCUTS[id];
+  if (fixed) return modifiersMatch(fixed, e, isMac) && e.key === fixed.key;
   const def = getDef(id);
   if (!def) return false;
   const sc = (shortcuts && shortcuts[id]) || DEFAULT_SHORTCUTS[id];
@@ -130,6 +137,8 @@ function isSessionNavShortcut(e, isMac, shortcuts) {
 
 // Human-readable label, e.g. "Ctrl+Alt+←/→" or "Cmd+Shift+[ / ]".
 function formatBinding(id, isMac, shortcuts) {
+  const fixed = FIXED_SHORTCUTS[id];
+  if (fixed) return (fixed.shift ? 'Shift+' : '') + fixed.key;
   const def = getDef(id);
   if (!def) return '';
   const sc = (shortcuts && shortcuts[id]) || DEFAULT_SHORTCUTS[id];
@@ -167,6 +176,7 @@ function captureBinding(e, def, isMac) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     DEFAULT_SHORTCUTS,
+    FIXED_SHORTCUTS,
     SHORTCUT_DEFS,
     normalizeShortcuts,
     keyFamily,

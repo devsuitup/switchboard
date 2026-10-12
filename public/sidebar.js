@@ -925,7 +925,7 @@ function renderProjects(projects, resort) {
     }
 
     const newBtn = document.createElement('button');
-    newBtn.className = 'project-new-btn';
+    newBtn.className = 'project-new-btn js-stateful';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
     if (project.remoteAlias) {
       const launch = project.remoteHostProfile && Array.isArray(project.remoteHostProfile.tiers)
@@ -940,6 +940,8 @@ function renderProjects(projects, resort) {
       }
     } else {
       newBtn.title = 'New session';
+      newBtn.setAttribute('aria-haspopup', 'menu');
+      newBtn.setAttribute('aria-expanded', 'false');
     }
     header.appendChild(newBtn);
 
@@ -996,9 +998,11 @@ function renderProjects(projects, resort) {
       wtHeader.appendChild(wtDeleteBtn);
 
       const wtNewBtn = document.createElement('button');
-      wtNewBtn.className = 'project-new-btn worktree-new-btn';
+      wtNewBtn.className = 'project-new-btn worktree-new-btn js-stateful';
       wtNewBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
       wtNewBtn.title = 'New session in worktree';
+      wtNewBtn.setAttribute('aria-haspopup', 'menu');
+      wtNewBtn.setAttribute('aria-expanded', 'false');
       wtHeader.appendChild(wtNewBtn);
 
       const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath, wtResult.topLevelIds);
@@ -1037,6 +1041,13 @@ function renderProjects(projects, resort) {
       // none of these classes, so we bail immediately — this alone removes
       // ~589 ms of per-node classList probe overhead on the full 22k-node tree.
       if (!fromEl.classList.contains('js-stateful')) return true;
+
+      if (fromEl.classList.contains('project-new-btn') && fromEl.getAttribute('aria-expanded') === 'true') {
+        toEl.setAttribute('aria-expanded', 'true');
+      }
+      if (fromEl.classList.contains('session-item') && fromEl === document.activeElement) {
+        toEl.setAttribute('tabindex', '-1');
+      }
 
       // Skip updating session items that have an active rename input
       if (fromEl.classList.contains('session-item') && fromEl.querySelector('.session-rename-input')) {

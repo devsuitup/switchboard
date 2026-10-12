@@ -303,7 +303,8 @@ share one flash helper that colours by class, not by outcome.
 | `.add-project-overlay` | `dialogs.js:624`; `file-panel.js:642` | same |
 | `showChoiceDialog` | **1 use**: folder Archive (`sidebar.js:1190`) | `role="dialog"`, `aria-modal`, `aria-labelledby`, focus trap, Escape, Enter, return focus, `danger` variant, verb-labelled confirm, remembered checkboxes (`choice-dialog.js:15-135`) |
 | `.modal-overlay` | Touched info (`touched-files-view.js:133-134`), What's new (`whats-new.js:60`) | `role="dialog"`, `aria-modal` |
-| Popover menu | session context menu (`sidebar.js:1620-1644`), terminal context menu, new-session popover | `role="menu"` / `menuitem`, Escape, outside click |
+| Popover menu | session context menu (`sidebar.js:1620-1644`), terminal context menu | `role="menu"` / `menuitem`, Escape, outside click |
+| New session popover | project and worktree + buttons (`dialogs.js`, `showNewSessionPopover`) | `role="menu"` / `menuitem`; opener has `aria-haspopup="menu"` and `aria-expanded`; first item focused on open; Up/Down wrap, Home/End select edges, Enter/Space activate; Escape closes and refocuses +; focusout to outside and outside click close |
 
 **Prompt rules as they are.**
 - Continuations: one `confirm` per candidate, each repeating the whole
@@ -395,6 +396,13 @@ row-action buttons (`.session-*-btn`, `1181-1290`), `.restore-toast-btn`
 `outline: none` on 7 selectors, none of them a button. Action buttons retain
 the shared ring on keyboard focus (`:focus-visible`), including
 `.session-launch-config-btn`.
+
+Fixed `F6` moves focus from any terminal (single view, grid or panel shell) to
+the active sidebar row, or the first visible enabled sidebar control. The row
+is made programmatically focusable without adding a Tab stop. `Shift+F6`
+returns from the sidebar or body to the visible active terminal. Neither acts
+while a dialog is open. Both are intercepted in the renderer
+before xterm writes to the PTY; see `docs/keyboard-shortcuts.md`.
 
 **Motion.** Braille spinner animating `content` (`style.css:1032-1054`),
 LED blink (`1321`), `pulse-dot` at 2 s (`880`), 1.5 s (`1842`) and 1 s

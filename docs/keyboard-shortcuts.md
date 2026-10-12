@@ -36,6 +36,12 @@ They are global only, stored as `shortcuts`.
 
 ## Terminal
 
+From a terminal, `F6` moves focus to the active session row in the sidebar, or its first visible,
+enabled control when that row is unavailable. `Shift+F6` returns focus to the
+active terminal from the sidebar or body. Neither acts while a dialog is open.
+These fixed shortcuts work in single view, grid terminals and
+the panel shell; they are not sent to the running program and cannot be rebound.
+
 | Keys | Effect |
 |---|---|
 | Primary+`F` | Find in the scrollback; Enter / Shift+Enter for next / previous, Esc to close |
@@ -71,6 +77,11 @@ carry Electron's default keys for their roles. There is no reload shortcut: `Cmd
 [Window](window.md).
 
 ## Dialogs
+
+The project and worktree **New session (+)** menus focus the first item when
+opened. Up/Down wrap between items, Home/End select the edges, and Enter or
+Space activates the focused item. Escape closes the menu and returns focus to
+its + button. Moving focus outside the menu or clicking outside also closes it.
 
 In the New Session, Resume and Add Project dialogs, Enter confirms and Esc
 cancels (Enter inside a text field does not start a session).
