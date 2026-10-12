@@ -665,13 +665,34 @@ watch-channel descriptor list to poll; its only inputs are:
   `is-alive`, including on the first render before any transcript activity:
   the descriptor's PID is checked by `cli-session-state.js`, so it is a real
   live-process signal, independent of whether the CLI is writing.
-  If a previously alive session loses its status or session entry, the
-  transcript state and both decay timers are dropped. Late decay callbacks
-  cannot recreate the state. `snapshotForLocal` also replaces the local-pty
-  cache with a blank, dead state when that signal disappears and no PTY is
-  active. Busy, waiting, response-ready and subagent-busy then clear on render.
+  If a previously alive session loses its status or session entry, both local
+  adapters reset liveness to unknown, so `is-alive` clears without asserting
+  a death. The local-pty fallback is blank; the transcript adapter retains
+  no prior activity inference after a loss: its state and both timers clear
+  immediately, preserving the #573 base contract. This sacrifices Waiting
+  across an actual loss of the source, since unknown cannot prove the
+  previous inference still holds. A transient read error while the known
+  PID is alive instead retains the descriptor main-side. Decay deletes
+  re-created transcript state only when this session previously lost an
+  observed live descriptor, projecting the local fallback rather than Waiting.
+  The descriptor-loss marker survives decay so late parent/subagent writes
+  remain bounded, and clears on a returning descriptor, PTY takeover or prune.
   A session that never had a descriptor stays unknown; its transcript-driven
-  Working/Waiting state still survives refreshes. An active PTY keeps ownership.
+  Working/Waiting state still survives refreshes.
+  Child-row attribution retains its separate, existing 60s TTL. An active PTY
+  keeps ownership.
+  `main.js` includes `mergedMemberStatuses` for every local merged member;
+  `dedup` refreshes or clears existing members' `sessionMap` statuses on every
+  load, including members that once had a standalone row. A never-standalone
+  member stays outside that map so restoration can still resolve its project
+  path from the representative. `localSessionForStatus` reads its own fresh
+  status from the owning row for both paints and transcript events. An index
+  rebuilt by each dedup pass maps member IDs to the latest emitted rows in
+  O(1), ahead of stale cached rows. If dedup has not run, a rendered owner
+  takes precedence; the last matching map row is the fallback. The normal
+  merged stop/delete paths use the index rather than scanning sessionMap.
+  The representative's status is never borrowed by a hidden member.
+
 - **Nothing else.** No attention or verified completion signal. Waiting for
   input is the silence inference described above, not proof that a response
   completed — see the ports-table note below the table.

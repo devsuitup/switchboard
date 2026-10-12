@@ -631,6 +631,8 @@ function annotateRemoteAttachable(projects) {
         const local = cliSessionState.getStatus(session.sessionId);
         session.status = local ? local.status : undefined;
         session.statusUpdatedAt = local ? local.statusUpdatedAt : undefined;
+        session.mergedMemberStatuses = Object.fromEntries((session.mergedMemberIds || [])
+          .map(id => [id, cliSessionState.getStatus(id) || null]));
       }
     }
   }
@@ -3149,6 +3151,7 @@ cliSessionState.init({
     );
   },
 });
+cliSessionState.onStatusesChanged(notifyRendererProjectsChanged);
 
 // a session with a live PTY is owned by the OSC path — see .ai/contexts/session-state.md
 const ptyPids = cliSessionState.makePtyPids(activeSessions);
