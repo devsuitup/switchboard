@@ -713,3 +713,176 @@ test('lazy: a saved session with no transcript yet is neither started nor kept d
     assert.deepEqual(h.savedIds(), ['a', 'x', 'b']);
   } finally { h.destroy(); }
 });
+
+function setupMerged({ saved = ['B', 'x'], members = ['B'], slug = false, ...opts } = {}) {
+  const savedSet = saved.map((sessionId) => ({ sessionId, projectPath: PROJECT, active: sessionId === 'x' }));
+  const h = setup({ savedSet, ...opts });
+  const project = h.window.cachedProjects[0];
+  const rowIds = new Set(['A', ...members]);
+  project.sessions = project.sessions.filter((s) => !rowIds.has(s.sessionId));
+  project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: members, ...(slug ? { slug: 'sl' } : {}) });
+  if (slug) project.sessions.push({ sessionId: 'z', name: 'z', slug: 'sl', modified: OLD, messageCount: 1 });
+  h.indexMerged = () => {
+    h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: members });
+    h.window.sessionMap.set('x', { sessionId: 'x', projectPath: PROJECT });
+  };
+  h.window.renderProjects(h.window.cachedProjects, true);
+  return h;
+}
+
+test('lazy merged row: a saved member that is not the row\'s primary is marked and kept saved', async () => {
+  const h = setupMerged();
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.dormantIds(), ['B', 'x']);
+    assert.ok(h.row('A').classList.contains('dormant'), 'the shared row is marked');
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['B', 'x']);
+    assert.deepEqual(h.openTerminalCalls, []);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: a running member is reattached under its own id', async () => {
+  const h = setupMerged({ livePtys: ['B'] });
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.openTerminalCalls, ['B']);
+    assert.equal(h.openTerminalOptions[0].reattachOnly, true);
+    assert.deepEqual(h.dormantIds(), ['x']);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: a click on the row resumes its dormant member, and the row is no longer marked', async () => {
+  const h = setupMerged();
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    h.row('A').click();
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, ['B']);
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.row('A').classList.contains('dormant'), false);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['B', 'x']);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: "Don\'t restore" and Delete drop the row\'s dormant member', async () => {
+  const h = setupMerged();
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    h.row('A').dispatchEvent(new h.window.MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+    const dismiss = h.window.document.querySelector('.session-dismiss-dormant-btn');
+    assert.ok(dismiss, 'the menu of a row with a dormant member offers "Don\'t restore"');
+    dismiss.click();
+    await h.window.eval('_persistChain');
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.deepEqual(h.savedIds(), ['x']);
+    assert.deepEqual(h.openTerminalCalls, []);
+  } finally { h.destroy(); }
+
+  const d = setupMerged();
+  try {
+    d.indexMerged();
+    await d.fns.tickRestorePlanner();
+    d.row('A').querySelector('.session-delete-btn').click();
+    await settle();
+    await d.window.eval('_persistChain');
+    assert.deepEqual(d.dormantIds(), ['x']);
+    assert.deepEqual(d.savedIds(), ['x']);
+  } finally { d.destroy(); }
+});
+
+test('lazy merged row: a slug group whose row has a dormant member is not folded under "older"', async () => {
+  const h = setupMerged({ slug: true });
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    const group = h.row('A').closest('.slug-group');
+    assert.ok(group, 'the row is in a slug group');
+    assert.equal(group.closest('.sessions-older'), null);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: the session keys open a dormant member under its own id', async () => {
+  const h = setupMerged();
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    await h.open('x');
+    h.run('navigateSession(1)');
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, ['x', 'B']);
+    assert.deepEqual(h.dormantIds(), []);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: opening the row clears every dormant member of it, also when another member is already open', async () => {
+  const h = setupMerged({ saved: ['A', 'B', 'x'] });
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.dormantIds(), ['A', 'B', 'x']);
+    h.row('A').click();
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, ['A']);
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.row('A').classList.contains('dormant'), false);
+  } finally { h.destroy(); }
+
+  const o = setupMerged({ saved: ['A', 'x'] });
+  try {
+    o.indexMerged();
+    await o.fns.tickRestorePlanner();
+    o.window.openSessions.set('B', { session: { sessionId: 'B', projectPath: PROJECT }, closed: false, terminal: {} });
+    let persists = 0;
+    o.window.schedulePersistWorkingSet = () => { persists++; };
+    o.row('A').click();
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(o.openTerminalCalls, [], 'the open member is shown, nothing is started');
+    assert.equal(o.run('activeSessionId'), 'B');
+    assert.deepEqual(o.dormantIds(), ['x']);
+    assert.equal(o.row('A').classList.contains('dormant'), false);
+    assert.equal(persists, 1);
+  } finally { o.destroy(); }
+});
+
+test('lazy merged row: a member continued under another id keeps the row marked while another member is still dormant', async () => {
+  const h = setupMerged({ saved: ['B', 'C', 'x'], members: ['B', 'C'] });
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    h.window.resolveResumeSession = async (s) => (s.sessionId === 'B' ? { ...s, sessionId: 'B2' } : s);
+    await h.fns.openSession({ sessionId: 'B', projectPath: PROJECT, mergedMemberIds: [] });
+    assert.deepEqual(h.openTerminalCalls, ['B2']);
+    assert.deepEqual(h.dormantIds(), ['C', 'x']);
+    assert.ok(h.row('A').classList.contains('dormant'), 'C is still dormant');
+  } finally { h.destroy(); }
+});
+
+test('a save leaves out a session the restore started and the user stopped', async () => {
+  const h = setup();
+  try {
+    h.run('restoreInFlight.set("b", savedSet[2])');
+    h.window.openSessions.set('b', { session: { sessionId: 'b', projectPath: PROJECT }, closed: true, terminal: {} });
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['a', 'x']);
+  } finally { h.destroy(); }
+});
+
+test('lazy: settling a continuation that did not open marks its row and schedules a save', async () => {
+  const h = setup();
+  try {
+    h.index(['a', 'x', 'b']);
+    h.window.refreshSidebar();
+    let persists = 0;
+    h.window.schedulePersistWorkingSet = () => { persists++; };
+    h.fns.settleContinuedInFlight({ sessionId: 'b', projectPath: PROJECT });
+    assert.ok(h.row('b').classList.contains('dormant'));
+    assert.equal(persists, 1);
+    assert.deepEqual(h.dormantIds(), ['b']);
+  } finally { h.destroy(); }
+});
