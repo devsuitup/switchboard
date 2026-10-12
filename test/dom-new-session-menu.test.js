@@ -71,6 +71,31 @@ test('a null focusout target closes the New session menu when focus leaves the d
   } finally { ctx.destroy(); }
 });
 
+test('a null focusout target waits for focus to settle before closing the New session menu', async () => {
+  const ctx = setup();
+  try {
+    const items = ctx.open();
+    items[0].blur();
+    items[1].focus();
+    await Promise.resolve();
+    assert.ok(ctx.document.querySelector('.new-session-popover'));
+    assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'true');
+  } finally { ctx.destroy(); }
+});
+
+test('a null focusout from a replaced New session menu leaves the reopened menu open', async () => {
+  const ctx = setup();
+  try {
+    const items = ctx.open();
+    items[0].blur();
+    const reopened = ctx.open();
+    await Promise.resolve();
+    assert.ok(reopened[0].isConnected);
+    assert.equal(ctx.document.querySelectorAll('.new-session-popover').length, 1);
+    assert.equal(ctx.anchor.getAttribute('aria-expanded'), 'true');
+  } finally { ctx.destroy(); }
+});
+
 for (const shiftKey of [false, true]) {
   test(`${shiftKey ? 'Shift+Tab' : 'Tab'} closes the New session menu and lets native navigation continue from +`, () => {
     const ctx = setup();
