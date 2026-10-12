@@ -384,6 +384,44 @@ test('a page that reports the upgrade done before it answers lets the joined qui
   assert.equal(t.timers.filter((x) => !x.cleared && x.ms === 1000).length, 0, 'no bounded wait left running');
 });
 
+test('each upgrade of a check is waited for by its own report, not by the first one to arrive', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.win.emit('close', t.closeEvent());
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  const [toClose, toQuit] = t.reasons().map((m) => m.args[2]);
+  assert.deepEqual(t.reasons().map((m) => m.args.slice(0, 2)), [[id, 'close'], [id, 'quit']]);
+  t.answer(id, true);
+  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toQuit);
+  await tick();
+  assert.equal(quits.length, 0, 'the save the close upgrade asked for has not reported yet');
+  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toClose);
+  await tick();
+  assert.equal(quits.length, 1);
+});
+
+test('the preload passes an upgrade token through, and back with the report', () => {
+  const listeners = new Map();
+  const sends = [];
+  let api;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), {
+    process: { platform: 'fixture', argv: [] },
+    require: () => ({
+      contextBridge: { exposeInMainWorld(_name, value) { api = value; } },
+      ipcRenderer: { on(channel, cb) { listeners.set(channel, cb); }, send(channel, ...args) { sends.push({ channel, args }); } },
+      webUtils: {},
+    }),
+  });
+  const changed = [];
+  api.onUnsavedCheckReason((...args) => changed.push(args));
+  listeners.get('unsaved-check-reason')({}, 3, 'quit', 9);
+  assert.deepEqual(changed, [[3, 'quit', 9]]);
+  api.unsavedCheckReasonDone(3, 9);
+  assert.deepEqual(sends.at(-1), { channel: 'unsaved-check-reason-done', args: [3, 9] });
+});
+
 test('a close or quit arriving while a joined quit waits for the late save joins it instead of asking again', async () => {
   const quits = [];
   const t = setup({ quit: () => quits.push(1) });

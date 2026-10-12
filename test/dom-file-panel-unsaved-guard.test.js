@@ -45,7 +45,7 @@ function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   const disk = new Map();
-  const calls = { openFile: null, check: null, reason: null, acks: [], answers: [], saves: [], confirms: [], reasonDone: [] };
+  const calls = { openFile: null, check: null, reason: null, acks: [], answers: [], saves: [], confirms: [], reasonDone: [], reasonDoneTokens: [] };
   let editor = null;
 
   window.api = new Proxy({
@@ -54,7 +54,7 @@ function setup() {
     onUnsavedCheckReason: (cb) => { calls.reason = cb; },
     unsavedCheckAck: (id) => { calls.acks.push({ id, at: calls.answers.length, dialog: !!window.document.getElementById('unsaved-edits-dialog') }); },
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
-    unsavedCheckReasonDone: (id) => { calls.reasonDone.push(id); },
+    unsavedCheckReasonDone: (id, token) => { calls.reasonDone.push(id); calls.reasonDoneTokens.push(token); },
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
     readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, git: false, original: disk.get(p), current: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
@@ -355,6 +355,24 @@ test('a quit that joins a reload check the page has already answered still write
     ctx.calls.reason(7, 'quit');
     await flush();
     assert.equal(flushed, 1, 'a reload answered no is not written for');
+  } finally { ctx.destroy(); }
+});
+
+test('the page reports each upgrade with the token it came with', async () => {
+  const ctx = setup();
+  try {
+    let finish = null;
+    ctx.window.flushStateForExit = () => new Promise((resolve) => { finish = resolve; });
+    ctx.calls.check(6, 'reload');
+    await flush();
+    ctx.calls.reason(6, 'close', 41);
+    await flush();
+    ctx.calls.reason(6, 'quit', 42);
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [42], 'the second upgrade has no save of its own to wait for');
+    finish();
+    await flush();
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [42, 41], 'the first is reported once its save lands');
   } finally { ctx.destroy(); }
 });
 
