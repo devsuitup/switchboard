@@ -725,6 +725,7 @@ function setupMerged({ saved = ['B', 'x'], members = ['B'], slug = false, ...opt
   h.indexMerged = () => {
     h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: members });
     h.window.sessionMap.set('x', { sessionId: 'x', projectPath: PROJECT });
+    h.window.indexLocalMergedMemberRows([{ sessions: [h.window.sessionMap.get('A')] }]);
   };
   h.window.renderProjects(h.window.cachedProjects, true);
   return h;
@@ -860,6 +861,45 @@ test('lazy merged row: a member continued under another id keeps the row marked 
     assert.deepEqual(h.openTerminalCalls, ['B2']);
     assert.deepEqual(h.dormantIds(), ['C', 'x']);
     assert.ok(h.row('A').classList.contains('dormant'), 'C is still dormant');
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: a member whose row has a reattached member is not marked, whatever the saved order', async () => {
+  for (const [saved, live] of [[['A', 'B', 'x'], 'A'], [['B', 'A', 'x'], 'A'], [['B', 'A', 'x'], 'B'], [['A', 'B', 'x'], 'B']]) {
+    const label = `saved ${saved.join(',')} with ${live} running`;
+    const h = setupMerged({ saved, livePtys: [live] });
+    try {
+      h.indexMerged();
+      await h.fns.tickRestorePlanner();
+      assert.deepEqual(h.openTerminalCalls, [live], label);
+      assert.deepEqual(h.dormantIds(), ['x'], label);
+      assert.equal(h.row('A').classList.contains('dormant'), false, label);
+      await h.fns.persistWorkingSet();
+      assert.deepEqual(h.savedIds(), [live, 'x'], label);
+      h.run(`activeSessionId = ${JSON.stringify(live)}`);
+      for (let i = 0; i < 3; i++) {
+        h.run('navigateSession(1)');
+        for (let j = 0; j < 5; j++) await settle();
+      }
+      assert.deepEqual(h.openTerminalCalls, [live, 'x'], `${label}: the session keys start nothing for the row`);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy merged row: the session keys on a dormant member of a row with an open member show that member and start nothing', async () => {
+  const h = setupMerged();
+  try {
+    h.indexMerged();
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.dormantIds(), ['B', 'x']);
+    h.window.openSessions.set('A', { session: { sessionId: 'A', projectPath: PROJECT }, closed: false, terminal: {} });
+    h.run('activeSessionId = "A"');
+    h.run('navigateSession(1)');
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, []);
+    assert.equal(h.run('activeSessionId'), 'A');
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.row('A').classList.contains('dormant'), false);
   } finally { h.destroy(); }
 });
 
