@@ -330,12 +330,12 @@ test('the complete isolated workflow prints the debug endpoint and removes its h
 test('a temporary cwd that cannot be removed is reported and keeps the launch status', async (t) => {
   const setup = workflow(t);
   let launchCwd;
+  t.after(() => { if (launchCwd) fs.rmSync(launchCwd, { recursive: true, force: true }); });
   const status = await tooling().main({ ...setup, env: { ...setup.env, ISOLATED: '1', ALLOW_CLAUDE: '1' }, fixtures: () => {},
     launch: async (file, args, options) => { launchCwd = options.cwd; return 3; },
     removeDir: () => { throw new Error('EBUSY'); } });
   assert.equal(status, 3);
   assert.ok(setup.messages.some(message => message.includes(`Could not remove ${launchCwd}: EBUSY`) && message.includes('claude login')));
-  fs.rmSync(launchCwd, { recursive: true, force: true });
 });
 
 test('the complete default workflow retains the original HOME and adds no debug port', async (t) => {
