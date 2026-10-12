@@ -1065,6 +1065,41 @@ constant; the CSS dropped `space-between` for a plain `gap`, with
 `margin-left: auto` on `.session-status` alone so it — not the short id —
 is the element whose position depends on how much room is left.
 
+## Proven continuation re-key
+
+`session-transitions.js` scans the active transcript with
+`scanContinuationIndex` from `session-continuations.js`. Every valid
+`continued-in` target is considered, including transcripts already in
+`knownJsonlFiles` when the tab opened. A record alone cannot move a tab:
+`clearOwner(target, pty.pid, { closestWriter: true })` must return `mine`.
+This opt-in check accepts only the descriptor writer closest to the PTY;
+nested CLI jobs below that writer cannot take its tab. Other `clearOwner`
+callers retain their existing policy. A target already held by a live tab is
+left alone. The check relies on published descriptors; it cannot identify a
+descriptorless CLI among shell ancestors.
+
+`pending` uses the existing one-second /clear recheck timer while the target
+transcript is less than 60 seconds old. `unknown`, `other`, and errors do not
+re-key. Incomplete source indexing uses the same timer until the source is
+fully scanned, including old transcripts. Each scan consumes at most 1 MiB
+and resumes from its cached offset. A malformed EOF is retried only while
+the source is fresh; missing process ancestry is `pending`, never cached
+as a definite `other`.
+
+An `other` verdict is cached per tab and target transcript until that file's
+mtime or the set of descriptor `(sessionId, pid)` pairs changes. The identity
+is read once per detection pass from live descriptors; status changes and
+process-table refresh notifications do not invalidate it. No such cache is
+used when descriptor identity is unavailable.
+
+A proven continuation uses the same `rekeySession` operation as fork and
+/clear: it moves `activeSessions`, records `currentSessionId` resolution,
+re-keys MCP and activity, and resets subagent scanning. The existing
+`session-forked` renderer handler receives kind `continuation`, moves the
+open entry and sidebar mapping to the new id, and schedules working-set
+persistence with that id. It keeps the conversation metadata; only /clear
+creates a fresh-session placeholder.
+
 ## Known limits
 
 - **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s

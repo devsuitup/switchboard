@@ -337,6 +337,11 @@ function readAllDescriptors() {
   return out;
 }
 
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function getDescriptorIdentity() {
+  return JSON.stringify([...new Set(readAllDescriptors().map(d => JSON.stringify([d.sessionId, d.pid])))].sort());
+}
+
 function onDescriptorsChanged(listener) {
   descriptorListeners.add(listener);
   return () => { descriptorListeners.delete(listener); };
@@ -649,10 +654,11 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
 }
 
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
-function clearOwner(sessionId, ptyPid) {
+function clearOwner(sessionId, ptyPid, { closestWriter = false } = {}) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
+  if (closestWriter) return closestWriterOwner(sessionId, ptyPid, names);
   const key = sessionId.toLowerCase();
   let pid = null;
   let found = null;
@@ -681,6 +687,57 @@ function clearOwner(sessionId, ptyPid) {
     current = parent;
   }
   return 'other';
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function closestWriterOwner(sessionId, ptyPid, names) {
+  const descriptors = new Map(), unreadable = new Set();
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      if (!parseDescriptor(JSON.stringify(raw))) { unreadable.add(Number(path.basename(name, '.json'))); continue; }
+      if (isProcessAlive(raw.pid)) descriptors.set(raw.pid, raw);
+    } catch { unreadable.add(Number(path.basename(name, '.json'))); }
+  }
+  if (processTableEnabled) startProcessTableRefresh();
+  let verdict = 'pending', uncertain = false;
+  for (const raw of descriptors.values()) {
+    if (raw.sessionId.toLowerCase() !== sessionId.toLowerCase()) continue;
+    const owner = descriptorWriterOwner(raw, ptyPid, descriptors, unreadable);
+    if (owner === 'mine') return 'mine';
+    if (owner === 'pending') uncertain = true;
+    else verdict = owner;
+  }
+  return uncertain ? 'pending' : verdict;
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function descriptorWriterOwner(raw, ptyPid, descriptors, unreadable) {
+  if (processTableEnabled) {
+    const leaf = tableEntry(raw.pid);
+    if (!leaf || leaf.created == null || raw.pidDomain !== 'win32:anchor'
+      || typeof raw.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(raw.procStart)) return 'pending';
+    if (!leafIsTheDescriptorWriter(raw)) return 'other';
+  }
+  let current = raw.pid;
+  const visited = new Set();
+  for (let depth = 0; depth < 64 && current > 1; depth++) {
+    if (current === ptyPid) return 'mine';
+    if (visited.has(current)) return 'pending';
+    visited.add(current);
+    const parent = readParentPid(current);
+    if (parent == null || unreadable.has(parent)) return 'pending';
+    if (parent <= 1) return 'other';
+    if (processTableEnabled) {
+      const child = tableEntry(current), above = tableEntry(parent);
+      if (!child || !above || child.created == null || above.created == null) return 'pending';
+      if (child.created < above.created) return 'other';
+    }
+    if (parent !== ptyPid && descriptors.has(parent)) return 'other';
+    current = parent;
+  }
+  return current <= 1 ? 'other' : 'pending';
 }
 
 function ownPidTest(ptyPids) {
@@ -765,6 +822,7 @@ module.exports = {
   onDescriptorsChanged,
   onStatusesChanged,
   readAllDescriptors,
+  getDescriptorIdentity,
   parseDescriptor,
   ownProcessFilter,
   makePtyPids,

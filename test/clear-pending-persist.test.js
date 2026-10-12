@@ -75,7 +75,7 @@ function setup() {
       window.api.onSessionForked = (cb) => { forkedListener = cb; };
       const src = readAppSource();
       const start = src.indexOf('window.api.onSessionForked(');
-      vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), ctx.context);
+      vm.runInContext(src.slice(start, src.indexOf('\n});', start) + 4), ctx.context, { filename: path.join(__dirname, '..', 'public', 'app.js') });
     }
     forkedListener(...args);
   };
@@ -89,6 +89,24 @@ function setup() {
     destroy: () => ctx.destroy(),
   };
 }
+
+test('a continuation re-key persists B and retains the open conversation metadata', async () => {
+  const h = setup();
+  try {
+    h.open('A');
+    h.window.activeSessionId = 'A';
+    const entry = h.window.openSessions.get('A');
+    h.sessionForked('A', 'B', 'continuation');
+    assert.equal(h.window.openSessions.get('B'), entry);
+    assert.equal(h.window.openSessions.has('A'), false);
+    assert.equal(h.window.sessionMap.has('A'), false);
+    assert.equal(h.window.sessionMap.get('B').summary, 'Earlier work');
+    assert.equal(h.window.pendingSessions.has('B'), false);
+    assert.equal(h.persists(), 1);
+    await h.persistWorkingSet();
+    assert.deepEqual(h.saved(), [{ sessionId: 'B', projectPath: '/srv/app', active: true }]);
+  } finally { h.destroy(); }
+});
 
 test('after /clear, the new id has no transcript yet: it is saved as a fresh session, not dropped', async () => {
   const h = setup();
