@@ -9,23 +9,38 @@ function hasOpenModal() {
   return modalStack.length > 0;
 }
 
-function registerModal({ overlay, cancel, enter, bodyEnter = false }) {
+function focusModal(modal) {
+  const focused = modal.lastFocused;
+  const target = focused?.isConnected && modal.overlay.contains(focused) && !focused.matches(':disabled')
+    ? focused : modal.overlay.querySelector('[role="dialog"], .modal-dialog, .new-session-dialog') || modal.overlay;
+  if (target !== focused) target.tabIndex = -1;
+  target.focus();
+}
+
+function registerModal({ overlay, cancel, enter, bodyEnter = false, restoreFocus = true }) {
+  const opener = document.activeElement;
   const previousZIndex = overlay.style.zIndex;
   const top = modalStack[modalStack.length - 1];
   overlay.style.zIndex = String(Math.max(Number(getComputedStyle(overlay).zIndex) || 0,
     Number(top?.overlay.style.zIndex) || 0) + 1);
-  const modal = { overlay, cancel, enter, bodyEnter };
+  const modal = { overlay, cancel, enter, bodyEnter, lastFocused: overlay.contains(opener) ? opener : null };
   modalStack.push(modal);
-  if (!overlay.contains(document.activeElement)) {
-    const dialog = overlay.querySelector('[role="dialog"], .modal-dialog, .new-session-dialog') || overlay;
-    dialog.tabIndex = -1;
-    dialog.focus();
-  }
+  if (!overlay.contains(opener)) focusModal(modal);
   return () => {
     const index = modalStack.indexOf(modal);
-    if (index !== -1) {
-      modalStack.splice(index, 1);
-      overlay.style.zIndex = previousZIndex;
+    if (index === -1) return;
+    modalStack.splice(index, 1);
+    overlay.style.zIndex = previousZIndex;
+    const remaining = modalStack[modalStack.length - 1];
+    if (remaining && restoreFocus) {
+      if (!remaining.overlay.contains(document.activeElement)) focusModal(remaining);
+    } else if (!remaining && restoreFocus) {
+      if (opener?.isConnected && opener !== document.body && opener !== document.documentElement && !opener.matches(':disabled')) {
+        opener.focus();
+      } else if (typeof activeSessionId !== 'undefined' && typeof openSessions !== 'undefined') {
+        const entry = activeSessionId && openSessions.get(activeSessionId);
+        if (entry && !entry.closed) entry.terminal.focus();
+      }
     }
     drainModalQuestions();
   };
@@ -71,13 +86,28 @@ function routeModalKey(event) {
     }
   } else if (!inside) {
     if (typeof matchShortcut === 'function' && typeof SHORTCUT_DEFS !== 'undefined' &&
-        [...SHORTCUT_DEFS.map(def => def.id), ...Object.keys(FIXED_SHORTCUTS)]
-          .some(id => matchShortcut(id, event, isMac, appShortcuts))) event.preventDefault();
+        [...SHORTCUT_DEFS.map(def => def.id), ...Object.keys(typeof FIXED_SHORTCUTS === 'undefined' ? {} : FIXED_SHORTCUTS)]
+          .some(id => matchShortcut(id, event, typeof isMac === 'undefined' ? false : isMac,
+            typeof appShortcuts === 'undefined' ? {} : appShortcuts))) event.preventDefault();
     event.stopImmediatePropagation();
   }
 }
 
 document.addEventListener('keydown', routeModalKey, true);
+document.addEventListener('focusin', event => {
+  const modal = modalStack[modalStack.length - 1];
+  if (!modal) return;
+  if (modal.overlay.contains(event.target)) modal.lastFocused = event.target;
+  else focusModal(modal);
+}, true);
+
+for (const type of ['paste', 'beforeinput', 'input']) {
+  document.addEventListener(type, event => {
+    if (!hasOpenModal() || !event.target.matches?.('.xterm-helper-textarea')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
 
 function enqueueModalQuestion(open, { whenIdle = false } = {}) {
   return new Promise((resolve, reject) => {

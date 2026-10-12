@@ -377,7 +377,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
   dialog.querySelector('.new-session-start-btn').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  const unregister = registerModal({ overlay, cancel: () => close(), bodyEnter: true, enter: e => {
+  const unregister = registerModal({ overlay, cancel: () => close(), bodyEnter: true, restoreFocus: false, enter: e => {
     if (!e.target.matches('input:not([type="checkbox"])')) {
       if (e.target.closest('.new-session-cancel-btn')) close();
       else start();
@@ -653,7 +653,6 @@ function showSendPromptDialog(session) {
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   overlay.tabIndex = -1;
-  textarea.focus();
   dialog.addEventListener('click', (e) => { if (e.target !== textarea) textarea.focus(); });
 
   function close() {
@@ -690,6 +689,7 @@ function showSendPromptDialog(session) {
     send();
     return true;
   } });
+  textarea.focus();
 }
 
 // Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)
@@ -721,7 +721,6 @@ function showAddProjectDialog() {
 
   const pathInput = dialog.querySelector('#add-project-path');
   const errorEl = dialog.querySelector('#add-project-error');
-  pathInput.focus();
 
   function close() {
     overlay.remove();
@@ -761,6 +760,7 @@ function showAddProjectDialog() {
     addProject();
     return true;
   } });
+  pathInput.focus();
 }
 
 // see .ai/contexts/bg-agents.md

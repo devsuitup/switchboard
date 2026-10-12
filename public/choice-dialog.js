@@ -130,7 +130,7 @@ function openChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
-    const unregister = registerModal({ overlay, cancel: () => close(null), enter });
+    const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});
     (initialFocus === 'cancel' ? cancelBtn : confirmBtn).focus();

@@ -218,8 +218,9 @@ for (const handled of [false, true]) {
       ctx.document.body.appendChild(outside);
       const target = handled ? dialog.querySelector('.new-session-start-btn') : outside;
       target.focus();
+      assert.ok(dialog.contains(ctx.document.activeElement), 'outside focus is returned to the dialog');
       if (handled) ctx.window.addEventListener('keydown', e => e.preventDefault(), { once: true, capture: true });
-      ctx.press('Enter');
+      target.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       assert.equal(launches.length, 0);
       assert.ok(ctx.document.querySelector('.new-session-overlay'));
     } finally { ctx.destroy(); }

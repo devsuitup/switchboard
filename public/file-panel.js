@@ -709,7 +709,6 @@ function showUnsavedEditsDialog(tabs) {
     dialog.appendChild(actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
-    saveBtn.focus();
 
     function finish(proceed) {
       overlay.remove();
@@ -717,9 +716,10 @@ function showUnsavedEditsDialog(tabs) {
       if (returnFocus?.isConnected) returnFocus.focus();
       resolve(proceed);
     }
-    const unregister = registerModal({ overlay, cancel: () => {
+    const unregister = registerModal({ overlay, restoreFocus: false, cancel: () => {
       if (!cancelBtn.disabled) finish(false);
     } });
+    saveBtn.focus();
 
     cancelBtn.onclick = () => finish(false);
     discardBtn.onclick = () => finish(true);

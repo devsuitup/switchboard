@@ -68,6 +68,25 @@ test('a fullscreen transcript screenshot traps Tab and closes with Escape from o
   } finally { dom.window.close(); }
 });
 
+test('closing a fullscreen screenshot restores its explicit opener once', () => {
+  const dom = setupDom();
+  try {
+    const { window } = dom;
+    const opener = window.document.createElement('button');
+    window.document.body.append(opener);
+    opener.focus();
+    let restored = 0;
+    const focus = opener.focus.bind(opener);
+    opener.focus = () => { restored++; focus(); };
+    window.showJsonlScreenshot('data:image/png;base64,AA==');
+    window.document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true,
+    }));
+    assert.equal(window.document.activeElement, opener);
+    assert.equal(restored, 1);
+  } finally { dom.window.close(); }
+});
+
 test('renderJsonlText: javascript: URL in markdown link produces no href', () => {
   const dom = setupDom();
   try {

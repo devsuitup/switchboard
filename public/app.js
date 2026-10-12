@@ -1953,7 +1953,7 @@ document.getElementById('indexing-banner-dismiss').addEventListener('click', dis
 window.api.onFullScreenChanged(() => {
   requestAnimationFrame(() => {
     const entry = activeSessionId && openSessions.get(activeSessionId);
-    if (entry && !entry.closed) entry.terminal.focus();
+    if (entry && !entry.closed && !hasOpenModal()) entry.terminal.focus();
   });
 });
 

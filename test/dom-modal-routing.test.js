@@ -8,6 +8,8 @@ const vm = require('node:vm');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
+const { JSDOM } = require('jsdom');
+const { createCanvas } = require('@napi-rs/canvas');
 
 function setup(api = {}) {
   const writes = [];
@@ -189,6 +191,245 @@ test('registering a modal removes focus from the terminal textarea', () => {
     assert.equal(ctx.doc.activeElement.tabIndex, -1);
     unregister();
     overlay.remove();
+  } finally { ctx.destroy(); }
+});
+
+function realTerminal(ctx) {
+  const canvases = new WeakMap();
+  ctx.window.HTMLCanvasElement.prototype.getContext = function (type) {
+    if (!canvases.has(this)) canvases.set(this, createCanvas(this.width, this.height));
+    return canvases.get(this).getContext(type);
+  };
+  ctx.window.matchMedia = () => Object.assign(new ctx.window.EventTarget(), {
+    matches: false, addListener() {}, removeListener() {},
+  });
+  vm.runInContext(fs.readFileSync(require.resolve('@xterm/xterm'), 'utf8'), ctx.context);
+  const Xterm = ctx.window.Terminal;
+  ctx.window.Terminal = class extends Xterm {
+    loadAddon() {}
+    get unicode() { return { activeVersion: '' }; }
+  };
+  return ctx.window.createTerminalEntry({ sessionId: 's1' });
+}
+
+function typeAndPaste(ctx, textarea) {
+  ctx.press(textarea, 'a');
+  textarea.dispatchEvent(new ctx.window.KeyboardEvent('keypress', {
+    key: 'a', charCode: 97, keyCode: 97, bubbles: true, cancelable: true,
+  }));
+  textarea.dispatchEvent(new ctx.window.InputEvent('beforeinput', {
+    inputType: 'insertText', data: 'a', bubbles: true, cancelable: true,
+  }));
+  textarea.value = 'a';
+  textarea.dispatchEvent(new ctx.window.InputEvent('input', {
+    inputType: 'insertText', data: 'a', bubbles: true,
+  }));
+  const paste = new ctx.window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { getData: () => 'PASTED' } });
+  textarea.dispatchEvent(paste);
+}
+
+for (const pathToFocus of ['showSession', 'fullscreen', 'direct focus']) {
+  test(`What's new keeps focus and blocks real xterm input after ${pathToFocus}`, async () => {
+    let fullscreen;
+    const ctx = setup({ onFullScreenChanged: cb => { fullscreen = cb; } });
+    let entry;
+    try {
+      entry = realTerminal(ctx);
+      const textarea = entry.element.querySelector('.xterm-helper-textarea');
+      entry.terminal.focus();
+      const overlay = require('../public/whats-new').showWhatsNew(ctx.doc, { whatsNewDismissed() {} },
+        ctx.window.escapeHtml, { sections: [] });
+      const focused = ctx.doc.activeElement;
+      let focusCalls = 0;
+      const focus = entry.terminal.focus.bind(entry.terminal);
+      entry.terminal.focus = () => { focusCalls++; focus(); };
+      if (pathToFocus === 'showSession') ctx.window.showSession('s1');
+      else if (pathToFocus === 'fullscreen') {
+        ctx.window.activeSessionId = 's1';
+        const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+        const start = source.indexOf('window.api.onFullScreenChanged(() => {');
+        assert.notEqual(start, -1);
+        vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 5), ctx.context);
+        fullscreen();
+        await new Promise(resolve => ctx.window.requestAnimationFrame(resolve));
+      } else entry.terminal.focus();
+      typeAndPaste(ctx, textarea);
+      assert.deepEqual(ctx.writes, [], 'typing and paste must not reach the PTY');
+      assert.equal(ctx.doc.activeElement, focused, 'focus must stay on the last focused modal control');
+      if (pathToFocus !== 'direct focus') assert.equal(focusCalls, 0, 'background paths must skip terminal.focus');
+      ctx.press(focused, 'Escape');
+      assert.equal(overlay.isConnected, false);
+      entry.terminal.focus();
+      typeAndPaste(ctx, textarea);
+      assert.ok(ctx.writes.some(([id, data]) => id === 's1' && data === 'a'));
+      assert.ok(ctx.writes.some(([id, data]) => id === 's1' && data === 'PASTED'));
+    } finally {
+      entry?.terminal.dispose();
+      ctx.destroy();
+    }
+  });
+}
+
+for (const type of ['paste', 'beforeinput', 'input']) {
+  test(`the modal stack cancels terminal ${type} before its target handler but allows modal editing`, () => {
+    const ctx = setup();
+    try {
+      ctx.window.showSendPromptDialog({ sessionId: 's1', remoteAlias: 'box' });
+      const field = ctx.doc.querySelector('.new-session-dialog textarea');
+      let delivered = 0;
+      ctx.textarea.addEventListener(type, () => { delivered++; });
+      field.addEventListener(type, () => { delivered++; });
+      const blocked = new ctx.window.Event(type, { bubbles: true, cancelable: true });
+      ctx.textarea.dispatchEvent(blocked);
+      assert.equal(blocked.defaultPrevented, true);
+      assert.equal(delivered, 0);
+      const allowed = new ctx.window.Event(type, { bubbles: true, cancelable: true });
+      field.dispatchEvent(allowed);
+      assert.equal(allowed.defaultPrevented, false);
+      assert.equal(delivered, 1);
+      ctx.press(field, 'Escape');
+      ctx.textarea.dispatchEvent(new ctx.window.Event(type, { bubbles: true, cancelable: true }));
+      assert.equal(delivered, 2);
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('the focus trap keeps the top modal control and falls back when that control is removed', () => {
+  const ctx = setup();
+  try {
+    const lower = ctx.doc.createElement('div');
+    lower.innerHTML = '<div role="dialog"><button>Lower</button></div>';
+    ctx.doc.body.append(lower);
+    const unregisterLower = ctx.window.registerModal({ overlay: lower, cancel() {} });
+    const lowerButton = lower.querySelector('button');
+    lowerButton.focus();
+    const upper = ctx.doc.createElement('div');
+    upper.innerHTML = '<div role="dialog"><button>Upper</button></div>';
+    ctx.doc.body.append(upper);
+    const unregisterUpper = ctx.window.registerModal({ overlay: upper, cancel() {} });
+    const upperButton = upper.querySelector('button');
+    upperButton.focus();
+    lowerButton.focus();
+    assert.equal(ctx.doc.activeElement, upperButton);
+    upperButton.remove();
+    ctx.textarea.focus();
+    assert.equal(ctx.doc.activeElement, upper.firstElementChild);
+    upper.remove();
+    unregisterUpper();
+    assert.equal(ctx.doc.activeElement, lowerButton, 'closing the top modal restores its underlying modal');
+    lower.remove();
+    unregisterLower();
+  } finally { ctx.destroy(); }
+});
+
+for (const kind of ["What's new", 'Send prompt', 'Add Project']) {
+  test(`${kind} restores its connected opener once on Escape`, () => {
+    const ctx = setup();
+    try {
+      const opener = ctx.doc.createElement('button');
+      ctx.doc.body.append(opener);
+      opener.focus();
+      let restored = 0;
+      const focus = opener.focus.bind(opener);
+      opener.focus = () => { restored++; focus(); };
+      if (kind === "What's new") require('../public/whats-new').showWhatsNew(ctx.doc,
+        { whatsNewDismissed() {} }, ctx.window.escapeHtml, { sections: [] });
+      else if (kind === 'Send prompt') ctx.window.showSendPromptDialog({ sessionId: 's1', remoteAlias: 'box' });
+      else ctx.window.showAddProjectDialog();
+      ctx.press(ctx.doc.activeElement, 'Escape');
+      assert.equal(ctx.doc.activeElement, opener);
+      assert.equal(restored, 1);
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const openerState of ['removed', 'body']) {
+  test(`closing the last modal with a ${openerState} opener focuses the active terminal once`, () => {
+    const ctx = setup();
+    try {
+      const opener = ctx.doc.createElement('button');
+      ctx.doc.body.append(opener);
+      if (openerState === 'removed') opener.focus();
+      let restored = 0;
+      ctx.window.activeSessionId = 's1';
+      ctx.window.openSessions.set('s1', { terminal: { focus() { restored++; ctx.textarea.focus(); } } });
+      const overlay = ctx.doc.createElement('div');
+      overlay.innerHTML = '<div role="dialog">Dialog</div>';
+      ctx.doc.body.append(overlay);
+      const unregister = ctx.window.registerModal({ overlay, cancel() {} });
+      opener.remove();
+      overlay.remove();
+      unregister();
+      unregister();
+      assert.equal(ctx.doc.activeElement, ctx.textarea);
+      assert.equal(restored, 1);
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const kind of ['appConfirm', 'New Session', 'Touched info']) {
+  test(`${kind} keeps its explicit opener restore without a second focus call`, async () => {
+    const ctx = setup();
+    try {
+      const opener = ctx.doc.createElement('button');
+      ctx.doc.body.append(opener);
+      opener.focus();
+      let restored = 0;
+      const focus = opener.focus.bind(opener);
+      opener.focus = () => { restored++; focus(); };
+      let pending;
+      if (kind === 'appConfirm') pending = ctx.window.appConfirm({ title: 'Question' });
+      else if (kind === 'Touched info') {
+        const filename = path.join(__dirname, '../public/touched-files-view.js');
+        vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+        ctx.window.showTouchedInfo(opener);
+      }
+      else await ctx.window.showNewSessionDialog({ projectPath: '/fixture' }, opener);
+      ctx.press(ctx.doc.activeElement, 'Escape');
+      if (pending) await pending;
+      assert.equal(ctx.doc.activeElement, opener);
+      assert.equal(restored, 1);
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const missing of ['FIXED_SHORTCUTS', 'isMac', 'appShortcuts']) {
+  test(`outside modal keys remain consumed when ${missing} is not loaded`, () => {
+    const dom = new JSDOM('<body><div id="overlay"><div role="dialog"></div></div></body>', { runScripts: 'outside-only' });
+    try {
+      const context = dom.getInternalVMContext();
+      for (const [name, value] of Object.entries({
+        SHORTCUT_DEFS: [{ id: 'fixture' }], FIXED_SHORTCUTS: {}, isMac: false, appShortcuts: {},
+      })) if (name !== missing) dom.window[name] = value;
+      dom.window.matchShortcut = () => false;
+      const filename = path.join(__dirname, '../public/modal-stack.js');
+      vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+      dom.window.registerModal({ overlay: dom.window.document.getElementById('overlay'), cancel() {} });
+      const event = new dom.window.KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true });
+      assert.doesNotThrow(() => dom.window.routeModalKey(event));
+      let delivered = 0;
+      dom.window.document.addEventListener('keydown', () => { delivered++; });
+      dom.window.document.body.dispatchEvent(event);
+      assert.equal(delivered, 0);
+    } finally { dom.window.close(); }
+  });
+}
+
+test('appConfirm above another modal restores that modal opener only once', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.showSendPromptDialog({ sessionId: 's1', remoteAlias: 'box' });
+    const opener = ctx.doc.activeElement;
+    const pending = ctx.window.appConfirm({ title: 'Question' });
+    let restored = 0;
+    const focus = opener.focus.bind(opener);
+    opener.focus = () => { restored++; focus(); };
+    ctx.press(ctx.doc.activeElement, 'Escape');
+    assert.equal(await pending, false);
+    assert.equal(ctx.doc.activeElement, opener);
+    assert.equal(restored, 1);
+    ctx.press(opener, 'Escape');
   } finally { ctx.destroy(); }
 });
 

@@ -145,7 +145,7 @@ function showTouchedInfo(button) {
   closeButton.addEventListener('click', close);
   overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
   document.body.appendChild(overlay);
-  const unregister = registerModal({ overlay, cancel: close });
+  const unregister = registerModal({ overlay, cancel: close, restoreFocus: false });
   closeButton.focus();
 }
 

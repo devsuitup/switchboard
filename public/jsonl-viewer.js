@@ -538,7 +538,7 @@ function showJsonlScreenshot(src) {
   }
   overlay.onclick = close;
   document.body.appendChild(overlay);
-  const unregister = registerModal({ overlay, cancel: close });
+  const unregister = registerModal({ overlay, cancel: close, restoreFocus: false });
   overlay.focus();
 }
 

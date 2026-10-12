@@ -1474,7 +1474,7 @@ function showSession(sessionId) {
       if (tr) revealLap(tr, 'restoreMs');
       entry.element.classList.add('visible');
       if (tr) revealLap(tr, 'visibleMs');
-      entry.terminal.focus();
+      if (!hasOpenModal()) entry.terminal.focus();
       fitAndScroll(entry, tr, entry.webglWanted);
       if (tr) revealLap(tr, 'focusMs');
     }

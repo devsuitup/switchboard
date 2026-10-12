@@ -150,6 +150,25 @@ const A = '/repo/a.md';
 const B = '/repo/b.md';
 const C = '/repo/c.md';
 
+test('the unsaved guard keeps its explicit opener restoration to one focus call', async () => {
+  const ctx = setup();
+  try {
+    const opener = ctx.window.document.createElement('button');
+    ctx.window.document.body.append(opener);
+    opener.focus();
+    let restored = 0;
+    const focus = opener.focus.bind(opener);
+    opener.focus = () => { restored++; focus(); };
+    const pending = ctx.window.showUnsavedEditsDialog([]);
+    ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true,
+    }));
+    assert.equal(await pending, false);
+    assert.equal(ctx.window.document.activeElement, opener);
+    assert.equal(restored, 1);
+  } finally { ctx.destroy(); }
+});
+
 async function dirtyTab(ctx, sessionId, file, text = 'mine') {
   ctx.disk.set(file, 'x0\n');
   ctx.window.switchPanel(sessionId);
