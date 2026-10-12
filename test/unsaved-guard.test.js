@@ -698,8 +698,9 @@ test('the shipped preload answers a ping once the check handler is registered', 
   });
   assert.equal(listeners.has('unsaved-ping'), false);
   api.onUnsavedCheck(() => {});
+  assert.deepEqual(sends, [{ channel: 'unsaved-ready', args: [] }], 'the page says it can answer a check');
   listeners.get('unsaved-ping')({}, 7);
-  assert.deepEqual(sends, [{ channel: 'unsaved-pong', args: [7] }]);
+  assert.deepEqual(sends[1], { channel: 'unsaved-pong', args: [7] });
   const changed = [];
   api.onUnsavedCheckReason((id, reason) => changed.push([id, reason]));
   listeners.get('unsaved-check-reason')({}, 3, 'quit');
@@ -856,4 +857,27 @@ test('a quit held by another before-quit handler does not destroy the window bef
   assert.equal(recovered.win.destroys, 0, 'a page that answers again is given its close');
   recovered.win.emit('unresponsive');
   assert.equal(recovered.win.destroys, 1);
+});
+
+test('a check sent before the page listened is sent again once the page is ready, and only to that page', () => {
+  const t = setup();
+  t.win.emit('close', t.closeEvent());
+  const [id, reason] = t.checks()[0].args;
+  t.ipcMain.emit('unsaved-ready', { sender: {} });
+  assert.equal(t.checks().length, 1, 'another page being ready changes nothing');
+  t.ipcMain.emit('unsaved-ready', { sender: t.wc });
+  assert.deepEqual(t.checks().map((m) => m.args), [[id, reason], [id, reason]]);
+  t.ack(id);
+  t.ipcMain.emit('unsaved-ready', { sender: t.wc });
+  assert.equal(t.checks().length, 2, 'an acknowledged check is not sent again');
+
+  const upgraded = setup();
+  upgraded.win.emit('close', upgraded.closeEvent());
+  upgraded.guard.beforeQuit(upgraded.closeEvent(), upgraded.win);
+  upgraded.ipcMain.emit('unsaved-ready', { sender: upgraded.wc });
+  assert.equal(upgraded.checks()[1].args[1], 'quit', 'sent again with the reason it holds now');
+
+  const idle = setup();
+  idle.ipcMain.emit('unsaved-ready', { sender: idle.wc });
+  assert.equal(idle.sent.length, 0);
 });

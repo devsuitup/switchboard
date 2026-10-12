@@ -605,3 +605,14 @@ test('the close question on macOS says the app stays in the Dock', async () => {
     assert.match(ctx.window.document.querySelector('.choice-dialog').textContent, /stays in the Dock/);
   } finally { ctx.destroy(); }
 });
+
+test('a check delivered twice, before and after the page said it is ready, is answered once', async () => {
+  const ctx = setup();
+  try {
+    ctx.calls.check(9, 'quit');
+    ctx.calls.check(9, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.acks.map((a) => a.id), [9]);
+    assert.deepEqual(ctx.calls.answers, [{ id: 9, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
