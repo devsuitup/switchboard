@@ -1,6 +1,66 @@
 'use strict';
 
-const { test, expect, makeRepo } = require('./fixtures');
+const { test, expect, makeRepo, openPlainTerminal } = require('./fixtures');
+
+test('F6 leaves a plain terminal and Shift+F6 returns to it', async ({ home, env, launch }) => {
+  makeRepo(home, env, { 'readme.txt': 'fixture\n' });
+  const { page } = await launch();
+  await openPlainTerminal(page);
+  await page.locator('#terminals .xterm-screen').first().click();
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.xterm'))).toBe(true);
+  await page.keyboard.press('F6');
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.xterm'))).toBe(false);
+  expect(await page.evaluate(() => !!document.activeElement?.closest('#sidebar'))).toBe(true);
+  await page.keyboard.press('Shift+F6');
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.xterm'))).toBe(true);
+  await page.evaluate(() => { window.showChoiceDialog({ title: 'Focus guard' }); });
+  const confirm = page.locator('.choice-dialog-confirm');
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press('F6');
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press('Shift+F6');
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press('Escape');
+});
+
+test('the project New session menu launches Terminal with the keyboard and Escape returns to +', async ({ home, env, launch }) => {
+  makeRepo(home, env, { 'readme.txt': 'fixture\n' });
+  const { page } = await launch();
+  const opener = page.locator('.project-header .project-new-btn').first();
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  const menu = page.locator('.new-session-popover');
+  const items = menu.getByRole('menuitem');
+  await expect(items.first()).toBeFocused();
+  await expect(opener).toHaveAttribute('aria-expanded', 'true');
+  await menu.click({ position: { x: 2, y: 2 } });
+  await expect(menu).toBeVisible();
+  await items.first().focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(2)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator('#terminals .xterm-screen').first()).toBeVisible();
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await expect(opener).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  const cancel = page.locator('.new-session-overlay .new-session-cancel-btn');
+  await cancel.focus();
+  await page.keyboard.press('F6');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Shift+F6');
+  await expect(cancel).toBeFocused();
+  await cancel.click();
+});
 
 test('Tab reveals a session-row Archive button and its focus outline', async ({ home, env, launch }) => {
   makeRepo(home, env, { 'readme.txt': 'fixture\n' });

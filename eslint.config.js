@@ -34,6 +34,7 @@ const rendererCrossFileGlobals = {
   syncToolBar: 'readonly',
   toolBarOwner: 'readonly',
   handleToolShortcut: 'readonly',
+  handleFocusShortcut: 'readonly',
   leaveToolTab: 'readonly',
   showPendingDiff: 'readonly',
   // DOM element handles (defined in app.js)

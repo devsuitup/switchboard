@@ -1756,6 +1756,7 @@ initAgentsView();
 
 function handleGlobalShortcut(e) {
   if (e._handled || e.type !== 'keydown') return;
+  if (typeof handleFocusShortcut === 'function' && handleFocusShortcut(e)) return;
   if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
     e.preventDefault();
     toggleAgentsView();
