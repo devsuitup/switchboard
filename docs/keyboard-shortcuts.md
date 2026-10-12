@@ -85,8 +85,19 @@ its + button. Tab and Shift+Tab close the menu, return focus to its + button,
 then continue through the window's normal tab order from there. Moving focus
 outside the menu or clicking outside also closes it.
 
-In the New Session, Resume and Add Project dialogs, Enter confirms and Esc
-cancels (Enter inside a text field does not start a session).
+The **New Session** dialog focuses the selected permission-mode control whenever
+opened, including from the + menu. Choosing another mode keeps focus on that
+mode. Escape, Cancel and clicking outside return focus to the control that opened
+it (the + button for the menu). If that control has disappeared, focus goes to
+its replacement project or worktree +,
+the visible session terminal, or Add Project. Start and Enter start the session
+with the selected mode and focus its terminal. Enter in a text input does not
+start; Enter on Cancel cancels and returns focus to the opener.
+
+Resume leaves focus on the previously focused control when opened. Add Project
+focuses its folder field. These two dialogs do not yet restore focus to their
+opener when closed. Esc cancels both. Enter outside a text field confirms
+Resume, and Enter confirms Add Project.
 
 Tool shortcuts act on the shown terminal or focused grid card and are inactive
 in other views. If a tool chord conflicts with an existing session, grid or

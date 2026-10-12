@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- The New Session dialog now opens with focus on the selected permission mode, and Enter starts the session with that mode. Cancelling returns focus to the + button that opened the dialog; starting moves it to the new terminal. (#583)
 - Tab and Shift+Tab now close the New session (+) menu and move on from its + button, instead of leaving the menu open with no way to close it from the keyboard. (#582)
 
 ## v0.0.95 — 2026-10-12

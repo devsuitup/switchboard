@@ -9,6 +9,7 @@ const { setupSidebarDom } = require('./dom-setup');
 
 function setup() {
   const ctx = setupSidebarDom();
+  ctx.evalPublic('setting-defaults.js');
   const dialogsFile = path.join(__dirname, '../public/dialogs.js');
   vm.runInContext(fs.readFileSync(dialogsFile, 'utf8'), ctx.context, { filename: dialogsFile });
   const project = { projectPath: '/fixture', folder: '-fixture', sessions: [] };
@@ -24,6 +25,263 @@ function setup() {
     return [...ctx.document.querySelectorAll('.new-session-popover button')];
   };
   return { ...ctx, project, anchor, press, open };
+}
+
+async function openConfigure(ctx) {
+  const showDialog = ctx.window.showNewSessionDialog;
+  let opened;
+  ctx.window.showNewSessionDialog = (...args) => {
+    opened = showDialog(...args);
+    return opened;
+  };
+  ctx.anchor.focus();
+  ctx.open();
+  ctx.press('ArrowDown');
+  ctx.press('Enter');
+  await opened;
+  return ctx.document.querySelector('.new-session-dialog');
+}
+
+test('keyboard Configure focuses the first New Session field', async () => {
+  const ctx = setup();
+  try {
+    const dialog = await openConfigure(ctx);
+    assert.ok(dialog);
+    assert.equal(ctx.document.querySelector('.new-session-popover'), null);
+    assert.equal(ctx.document.activeElement, dialog.querySelector('#nsd-mode-grid button'));
+  } finally { ctx.destroy(); }
+});
+
+test('New Session focuses the configured acceptEdits mode on open', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.getEffectiveSettings = async () => ({ permissionMode: 'acceptEdits' });
+    const dialog = await openConfigure(ctx);
+    assert.equal(ctx.document.activeElement, dialog.querySelector('[data-mode="acceptEdits"]'));
+  } finally { ctx.destroy(); }
+});
+
+test('New Session focuses Dangerous Skip when configured on open', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.getEffectiveSettings = async () => ({ dangerouslySkipPermissions: true });
+    const dialog = await openConfigure(ctx);
+    assert.equal(ctx.document.activeElement, dialog.querySelector('[data-mode="dangerous-skip"]'));
+  } finally { ctx.destroy(); }
+});
+
+for (const action of ['Escape', 'Cancel', 'outside click']) {
+  test(`${action} closes New Session and restores focus to +`, async () => {
+    const ctx = setup();
+    try {
+      let launches = 0;
+      ctx.window.launchNewSession = () => { launches++; };
+      const dialog = await openConfigure(ctx);
+      dialog.querySelector('#nsd-worktree-name').focus();
+      if (action === 'Escape') ctx.press('Escape');
+      else if (action === 'outside click') ctx.document.querySelector('.new-session-overlay').click();
+      else dialog.querySelector('.new-session-cancel-btn').click();
+      assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+      assert.equal(ctx.document.activeElement, ctx.anchor);
+      assert.equal(launches, 0);
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('Start closes New Session without returning focus to the opener and preserves launch focus', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible"><textarea class="xterm-helper-textarea"></textarea></div>';
+    const terminal = ctx.document.querySelector('.xterm-helper-textarea');
+    let launches = 0;
+    ctx.window.launchNewSession = () => { launches++; terminal.focus(); };
+    const dialog = await openConfigure(ctx);
+    let openerFocuses = 0;
+    ctx.anchor.addEventListener('focus', () => { openerFocuses++; });
+    dialog.querySelector('.new-session-start-btn').click();
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+    assert.equal(openerFocuses, 0);
+    assert.equal(ctx.document.activeElement, terminal);
+    assert.equal(launches, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('New Session remembers its direct opener before the settings lookup resolves', async () => {
+  const ctx = setup();
+  try {
+    let resolveSettings;
+    ctx.window.api.getEffectiveSettings = () => new Promise(resolve => { resolveSettings = resolve; });
+    ctx.anchor.focus();
+    const opened = ctx.window.showNewSessionDialog(ctx.project);
+    ctx.anchor.blur();
+    resolveSettings({});
+    await opened;
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.anchor);
+  } finally { ctx.destroy(); }
+});
+
+test('New Session returns focus to the replacement project + when its opener is removed', async () => {
+  const ctx = setup();
+  try {
+    await openConfigure(ctx);
+    const replacement = ctx.anchor.cloneNode(true);
+    ctx.anchor.replaceWith(replacement);
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, replacement);
+  } finally { ctx.destroy(); }
+});
+
+test('New Session falls back to the visible terminal when the project opener disappears', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible"><textarea class="xterm-helper-textarea"></textarea></div>';
+    await openConfigure(ctx);
+    ctx.anchor.closest('.project-group').remove();
+    ctx.document.querySelector('#nsd-worktree-name').focus();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.document.querySelector('.xterm-helper-textarea'));
+  } finally { ctx.destroy(); }
+});
+
+test('New Session falls back to the session terminal ahead of the visible panel shell', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible panel-terminal"><textarea class="xterm-helper-textarea"></textarea></div><div class="terminal-container visible"><textarea id="session-terminal" class="xterm-helper-textarea"></textarea></div>';
+    await openConfigure(ctx);
+    ctx.anchor.closest('.project-group').remove();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.document.getElementById('session-terminal'));
+  } finally { ctx.destroy(); }
+});
+
+test('New Session skips a disabled opener when restoring focus', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible"><textarea class="xterm-helper-textarea"></textarea></div>';
+    await openConfigure(ctx);
+    ctx.anchor.disabled = true;
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.document.querySelector('.xterm-helper-textarea'));
+  } finally { ctx.destroy(); }
+});
+
+test('New Session falls back to Add Project when only the panel shell remains', async () => {
+  const ctx = setup();
+  try {
+    ctx.document.body.insertAdjacentHTML('beforeend', '<button id="add-project-btn">Add Project</button>');
+    ctx.document.getElementById('terminals').innerHTML = '<div class="terminal-container visible panel-terminal"><textarea class="xterm-helper-textarea"></textarea></div>';
+    await openConfigure(ctx);
+    ctx.anchor.closest('.project-group').remove();
+    ctx.press('Escape');
+    assert.equal(ctx.document.activeElement, ctx.document.getElementById('add-project-btn'));
+  } finally { ctx.destroy(); }
+});
+
+for (const target of ['selected mode', 'checkbox', 'Start', 'body']) {
+  test(`Enter on ${target} starts New Session once with acceptEdits`, async () => {
+    const ctx = setup();
+    try {
+      const launches = [];
+      ctx.window.api.getEffectiveSettings = async () => ({ permissionMode: 'acceptEdits' });
+      ctx.window.launchNewSession = (project, options) => { launches.push({ project, options }); };
+      const dialog = await openConfigure(ctx);
+      const selectors = {
+        'selected mode': '[data-mode="acceptEdits"]',
+        checkbox: '#nsd-worktree',
+        Start: '.new-session-start-btn',
+      };
+      const control = target === 'body' ? ctx.document.body : dialog.querySelector(selectors[target]);
+      if (target === 'body') ctx.document.activeElement.blur();
+      else control.focus();
+      const event = ctx.press('Enter');
+      if (!event.defaultPrevented && control.tagName === 'BUTTON') control.click();
+      assert.equal(event.defaultPrevented, true);
+      assert.equal(launches.length, 1);
+      assert.equal(launches[0].project, ctx.project);
+      assert.equal(launches[0].options.permissionMode, 'acceptEdits');
+      assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const handled of [false, true]) {
+  test(`Enter ${handled ? 'already handled' : 'from a control outside the dialog'} does not start New Session`, async () => {
+    const ctx = setup();
+    try {
+      const launches = [];
+      ctx.window.launchNewSession = (project, options) => { launches.push({ project, options }); };
+      const dialog = await openConfigure(ctx);
+      const outside = ctx.document.createElement('textarea');
+      ctx.document.body.appendChild(outside);
+      const target = handled ? dialog.querySelector('.new-session-start-btn') : outside;
+      target.focus();
+      if (handled) target.addEventListener('keydown', e => e.preventDefault(), { once: true });
+      ctx.press('Enter');
+      assert.equal(launches.length, 0);
+      assert.ok(ctx.document.querySelector('.new-session-overlay'));
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('a mode click keeps focus on the rebuilt selected mode', async () => {
+  const ctx = setup();
+  try {
+    const dialog = await openConfigure(ctx);
+    const mode = dialog.querySelector('[data-mode="acceptEdits"]');
+    mode.focus();
+    mode.querySelector('.perm-name').click();
+    const rebuilt = dialog.querySelector('[data-mode="acceptEdits"]');
+    assert.notEqual(rebuilt, mode);
+    assert.ok(rebuilt.classList.contains('selected'));
+    assert.equal(ctx.document.activeElement, rebuilt);
+    assert.ok(dialog.contains(ctx.document.activeElement));
+  } finally { ctx.destroy(); }
+});
+
+test('toggling Dangerous Skip off focuses the selected Default mode', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.api.getEffectiveSettings = async () => ({ dangerouslySkipPermissions: true });
+    const dialog = await openConfigure(ctx);
+    dialog.querySelector('[data-mode="dangerous-skip"]').click();
+    assert.equal(ctx.document.activeElement, dialog.querySelector('[data-mode="null"]'));
+    assert.ok(ctx.document.activeElement.classList.contains('selected'));
+  } finally { ctx.destroy(); }
+});
+
+test('Enter on Cancel closes New Session without launching and restores focus to +', async () => {
+  const ctx = setup();
+  try {
+    let launches = 0;
+    ctx.window.launchNewSession = () => { launches++; };
+    const dialog = await openConfigure(ctx);
+    dialog.querySelector('.new-session-cancel-btn').focus();
+    ctx.press('Enter');
+    assert.equal(launches, 0);
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+    assert.equal(ctx.document.activeElement, ctx.anchor);
+  } finally { ctx.destroy(); }
+});
+
+for (const selector of ['#nsd-worktree-name', '#nsd-pre-launch', '#nsd-add-dirs']) {
+  test(`Enter in ${selector} does not start New Session`, async () => {
+    const ctx = setup();
+    try {
+      let launches = 0;
+      ctx.window.launchNewSession = () => { launches++; };
+      const dialog = await openConfigure(ctx);
+      const input = dialog.querySelector(selector);
+      input.focus();
+      const event = ctx.press('Enter');
+      assert.equal(launches, 0);
+      assert.ok(dialog.isConnected);
+      assert.equal(ctx.document.activeElement, input);
+      assert.equal(event.defaultPrevented, false);
+    } finally { ctx.destroy(); }
+  });
 }
 
 test('mousedown on New session menu padding keeps the menu open', () => {
