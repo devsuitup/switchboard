@@ -87,11 +87,17 @@ to select exactly one local, non-exited, non-terminal `activeSessions` entry.
 This is the same process ancestry check used by `/clear`, including the
 platform-specific process table. Unknown ancestry or several matching entries
 refuse delivery. No merged row or `bridgeSessionId` supplies an alias.
-The watcher performs this lookup before acquiring the session queue, and
-retries it after the live-descriptor lookup on a miss. Old and new ids thus
-share the queue even before a re-key. The context retains the session and PTY
-objects, revalidates unique ownership on each lookup, and drops the alias if
-the PTY changes, exits, loses ownership, or the id is opened directly.
+The watcher registers the session queue tail synchronously before awaiting
+the descriptor scan, resolves the alias inside the held section, and waits
+for earlier tails that now resolve to the same tab. It retries the lookup
+after the live-descriptor lookup on a miss. Two triggers dispatched for the
+same conversation retain their order even when a descriptor scan is slow.
+The context retains the session and PTY objects. Each poll checks their
+identity and PTY liveness; ownership is checked at most once every three
+seconds against that PTY. Pending, unknown and unreadable descriptor reads
+keep the alias, so a non-atomic descriptor rewrite cannot permanently lose
+the tab. A definite `other` owner, a replaced or removed session or PTY,
+an exited/dead PTY, or opening the id directly drops the alias.
 Composer and busy probes use that PTY; descriptor and transcript probes use
 the conversation id named by the trigger (or the actual re-key target).
 

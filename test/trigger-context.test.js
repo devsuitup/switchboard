@@ -219,3 +219,46 @@ test('a re-key mid-chain forgets the transcript read under the previous id', () 
     require.cache[contextPath] = cached;
   }
 });
+
+test('a live alias tolerates pending, unknown and unreadable ownership, then drops definite other', async t => {
+  let owner = 'mine';
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const session = makeSession();
+  const ctx = createTriggerContext({
+    activeSessions: new Map([['a', session]]), log: silentLog,
+    getLiveDescriptor: () => ({ pid: process.pid }),
+    clearOwner: () => { if (owner === 'unreadable') throw new Error('torn read'); return owner; },
+  });
+  assert.equal((await ctx.findPtyForSession('b')).ptyProcess, session.pty);
+  for (owner of ['pending', 'unknown', 'unreadable', 'mine']) {
+    now += 4000;
+    assert.equal(ctx.getPtyForSession('b')?.ptyProcess, session.pty);
+  }
+  owner = 'other';
+  now += 4000;
+  assert.equal(ctx.getPtyForSession('b'), null);
+  owner = 'mine';
+  now += 4000;
+  assert.equal(ctx.getPtyForSession('b'), null);
+});
+
+for (const change of ['pty', 'session', 'exited', 'dead', 'direct']) {
+  test(`a live alias is invalidated immediately on ${change}`, async () => {
+    const session = makeSession();
+    const activeSessions = new Map([['a', session]]);
+    let alive = true;
+    const ctx = createTriggerContext({
+      activeSessions, log: silentLog, isPtyAlive: () => alive,
+      getLiveDescriptor: () => ({ pid: process.pid }), clearOwner: () => 'mine',
+    });
+    assert.equal((await ctx.findPtyForSession('b')).ptyProcess, session.pty);
+    if (change === 'pty') session.pty = { pid: process.pid, write() {} };
+    if (change === 'session') activeSessions.set('a', makeSession());
+    if (change === 'exited') session.exited = true;
+    if (change === 'dead') alive = false;
+    if (change === 'direct') activeSessions.set('b', makeSession());
+    const result = ctx.getPtyForSession('b');
+    assert.equal(result?.ptyProcess ?? null, change === 'direct' ? activeSessions.get('b').pty : null);
+  });
+}

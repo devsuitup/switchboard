@@ -6,30 +6,6 @@ what actually shipped, not the whole plan.
 
 ## Migration status
 
-### Live conversation continuations
-
-`session-transitions.js` follows a conversation that continues under a new
-CLI id inside an existing PTY, as well as forks and `/clear`. It reads the old
-transcript with `scanContinuationIndex` from `session-continuations.js`, using
-the bounded, incremental index and its validation rules. A complete,
-resolved index with one target, claimed by only one open source transcript,
-identifies the continuation unless process ownership says it belongs
-elsewhere. Several targets require `clearOwner(newId, pty.pid) === 'mine'`;
-that ownership proof can also identify an ordinary new transcript without
-a continuation record. An already open target is never overwritten. A late
-record can identify a target already included in `knownJsonlFiles`.
-
-The shared transition path updates `activeSessions`, `realSessionId`,
-`recordRekey`, MCP and ActivityWatch, drops the previous subagent scan state,
-and emits `session-forked` with kind `continuation`. The existing renderer
-handler re-keys `openSessions`, pending sessions, `sessionMap`, file-panel
-state and activity, updates the active header/sidebar and calls
-`schedulePersistWorkingSet`. It preserves conversation metadata, unlike
-kind `clear`, which creates a blank pending conversation. Restore therefore
-receives the new id through the ordinary saved working set and keeps its
-existing continuation-resolution rules. Merged display rows and
-`bridgeSessionId` are never evidence of PTY ownership.
-
 **Complete.** All three kinds (`local-pty`, `remote-ssh`, `local-transcript`)
 are persistent-state adapters of the same shape: one `createSessionState(kind)`
 per session id, events applied to it, `session-activity-dom.js`'s
@@ -68,6 +44,36 @@ Issue #246 is closed.
   below.
 - **The local-pty adapter: done** (this pass, closing #246). See "The
   local-pty adapter" below.
+
+### Live conversation continuations
+
+`session-transitions.js` follows a conversation that continues under a new
+CLI id inside an existing PTY, as well as forks and `/clear`. It reads the old
+transcript with `scanContinuationIndex` from `session-continuations.js`, using
+the bounded, incremental index and its validation rules. Every target in a
+complete, resolved index requires
+`clearOwner(newId, pty.pid) === 'mine'` before the tab can re-key. A record
+alone cannot identify its writer. Fresh targets with pending ownership use
+the same one-second, folder-deduplicated recheck as `/clear`. An ordinary
+prompt without a continuation record never re-keys by ownership alone.
+An already open target is never overwritten. Targets already included in
+`knownJsonlFiles` are reconsidered too: with A → B and A → C, the descriptor
+for B can confirm its ownership after the tab opens and re-key A → B, even
+when B.jsonl pre-dates that tab. The live descriptor trigger fallback also
+covers the interval before detection runs. A descriptor-owned conversation
+without a continuation record remains reachable through that fallback while
+the tab keeps its key.
+
+The shared transition path updates `activeSessions`, `realSessionId`,
+`recordRekey`, MCP and ActivityWatch, drops the previous subagent scan state,
+and emits `session-forked` with kind `continuation`. The existing renderer
+handler re-keys `openSessions`, pending sessions, `sessionMap`, file-panel
+state and activity, updates the active header/sidebar and calls
+`schedulePersistWorkingSet`. It preserves conversation metadata, unlike
+kind `clear`, which creates a blank pending conversation. Restore therefore
+receives the new id through the ordinary saved working set and keeps its
+existing continuation-resolution rules. Merged display rows and
+`bridgeSessionId` are never evidence of PTY ownership.
 
 ## The two lifecycle verbs: detach and stop
 

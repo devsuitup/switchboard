@@ -1928,17 +1928,27 @@ function start(ctx) {
   const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
   const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
   async function acquireSessionLock(sessionId) {
-    if (!ctx.getPtyForSession(sessionId) && ctx.findPtyForSession) await ctx.findPtyForSession(sessionId);
+    const earlier = [...sessionLocks];
     const target = resolveId(sessionId);
-    const previous = Promise.all([...sessionLocks].filter(([id]) => resolveId(id) === target).map(([, t]) => t));
+    const previous = Promise.all(earlier.filter(([id]) => resolveId(id) === target).map(([, t]) => t));
     let release;
     const held = new Promise((resolve) => { release = resolve; });
     const tail = previous.then(() => held);
     sessionLocks.set(sessionId, tail);
-    return previous.then(() => () => {
+    const unlock = () => {
       release();
       if (sessionLocks.get(sessionId) === tail) sessionLocks.delete(sessionId);
-    });
+    };
+    try {
+      await previous;
+      if (!ctx.getPtyForSession(sessionId) && ctx.findPtyForSession) await ctx.findPtyForSession(sessionId);
+      const resolved = resolveId(sessionId);
+      await Promise.all(earlier.filter(([id]) => resolveId(id) === resolved).map(([, t]) => t));
+      return unlock;
+    } catch (err) {
+      unlock();
+      throw err;
+    }
   }
 
   function scheduleNext() {

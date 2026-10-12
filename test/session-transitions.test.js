@@ -767,8 +767,8 @@ function continuationFixture(t, targets, extra = {}) {
   return { ...fixture, tmp, folder, session, rekeys };
 }
 
-test('continuation: a single continued-in target re-keys without a descriptor', t => {
-  const f = continuationFixture(t, ['new-id']);
+test('continuation: a single continued-in target re-keys with confirmed ownership', t => {
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'mine' });
   sessionTransitions.detectSessionTransitions(f.folder);
   assert.equal(f.activeSessions.get('new-id'), f.session);
   assert.deepEqual(f.rekeys, [['old-id', 'new-id']]);
@@ -806,17 +806,18 @@ test('continuation: an already open target is never overwritten', t => {
 });
 
 test('continuation: a late continued-in record can identify an already seen transcript', t => {
-  const f = continuationFixture(t, ['new-id']);
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'mine' });
   f.session.knownJsonlFiles.add('new-id.jsonl');
   sessionTransitions.detectSessionTransitions(f.folder);
   assert.equal(f.activeSessions.get('new-id'), f.session);
 });
 
-test('continuation: an ordinary new transcript can be identified by its owning pid', t => {
+test('continuation: an ordinary prompt does not re-key even when its pid is owned', t => {
   const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'mine' });
   fs.writeFileSync(path.join(f.tmp, f.folder, 'old-id.jsonl'), JSON.stringify({ sessionId: 'old-id', type: 'user' }) + '\n');
   sessionTransitions.detectSessionTransitions(f.folder);
-  assert.equal(f.activeSessions.get('new-id'), f.session);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  assert.deepEqual(f.rekeys, []);
 });
 
 test('continuation: two open sources pointing at the same target cannot choose a PTY', t => {
@@ -831,10 +832,62 @@ test('continuation: two open sources pointing at the same target cannot choose a
 });
 
 test('continuation: a header-only target is identified by its single continued-in record', t => {
-  const f = continuationFixture(t, ['new-id']);
+  const f = continuationFixture(t, ['new-id'], { clearOwner: () => 'mine' });
   fs.writeFileSync(path.join(f.tmp, f.folder, 'new-id.jsonl'), JSON.stringify({ sessionId: 'new-id', type: 'mode', mode: 'normal' }) + '\n');
   sessionTransitions.detectSessionTransitions(f.folder);
   assert.equal(f.activeSessions.get('new-id'), f.session);
+});
+
+for (const initialOwner of ['pending', 'unknown']) {
+  test(`continuation: ${initialOwner} ownership never re-keys a foreign target`, t => {
+    let owner = initialOwner;
+    const timers = [];
+    const f = continuationFixture(t, ['new-id'], {
+      clearOwner: () => owner,
+      setTimeout: fn => { timers.push(fn); return { unref() {} }; },
+    });
+    sessionTransitions.detectSessionTransitions(f.folder);
+    assert.equal(f.activeSessions.get('old-id'), f.session);
+    assert.deepEqual(f.rekeys, []);
+    if (initialOwner === 'pending') {
+      assert.equal(timers.length, 1);
+      owner = 'other';
+      timers.shift()();
+      assert.equal(f.activeSessions.get('old-id'), f.session);
+      assert.deepEqual(f.rekeys, []);
+    }
+  });
+}
+
+test('continuation: pending ownership is rechecked and re-keys only after mine', t => {
+  let owner = 'pending';
+  const timers = [];
+  const f = continuationFixture(t, ['new-id'], {
+    clearOwner: () => owner,
+    setTimeout: fn => { timers.push(fn); return { unref() {} }; },
+  });
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  assert.equal(timers.length, 1);
+  owner = 'mine';
+  timers.shift()();
+  assert.equal(f.activeSessions.get('new-id'), f.session);
+  assert.deepEqual(f.rekeys, [['old-id', 'new-id']]);
+});
+
+test('continuation: ownership selects a pre-existing target among two records', t => {
+  let owner = 'pending';
+  const f = continuationFixture(t, ['first-id', 'second-id'], {
+    clearOwner: id => id === 'first-id' ? owner : 'other',
+  });
+  f.session.knownJsonlFiles = new Set(['old-id.jsonl', 'first-id.jsonl', 'second-id.jsonl']);
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('old-id'), f.session);
+  owner = 'mine';
+  fs.appendFileSync(path.join(f.tmp, f.folder, 'first-id.jsonl'), JSON.stringify({ type: 'assistant', sessionId: 'first-id' }) + '\n');
+  sessionTransitions.detectSessionTransitions(f.folder);
+  assert.equal(f.activeSessions.get('first-id'), f.session);
+  assert.deepEqual(f.rekeys, [['old-id', 'first-id']]);
 });
 
 test('fork detection: new jsonl with matching forkedFrom re-keys the session and notifies the renderer', () => {
@@ -1254,13 +1307,13 @@ test('/clear: a transcript whose first real turn is a prompt is not a /clear', (
     const folderPath = path.join(tmp, folder);
     fs.mkdirSync(folderPath, { recursive: true });
     let asked = false;
-    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'other'; } });
+    const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => { asked = true; return 'mine'; } });
     activeSessions.set('old-id', makePtySession(folder, { pty: { pid: 1 } }));
 
     fs.writeFileSync(path.join(folderPath, 'new-id.jsonl'),
       JSON.stringify({ sessionId: 'new-id', type: 'user', message: { role: 'user', content: 'hello /clear' } }) + '\n', 'utf8');
     sessionTransitions.detectSessionTransitions(folder);
-    assert.equal(asked, true);
+    assert.equal(asked, false);
     assert.ok(activeSessions.has('old-id'));
   } finally {
     cleanup(tmp);

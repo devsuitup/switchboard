@@ -37,6 +37,7 @@ function createTriggerContext(deps) {
   // see .ai/contexts/trigger-watcher.md, "Re-keyed sessions"
   const currentId = deps.resolveSessionId || ((id) => id);
   const liveAliases = new Map();
+  const ALIAS_RECHECK_MS = 3000;
   function owningSession(id) {
     let match = null;
     for (const [key, session] of activeSessions) {
@@ -55,12 +56,23 @@ function createTriggerContext(deps) {
     }
     const alias = liveAliases.get(id);
     if (!alias) return id;
-    const match = owningSession(id);
-    if (!match || match.session !== alias.session || match.session.pty !== alias.pty) {
+    const session = activeSessions.get(alias.key);
+    if (session !== alias.session || session.pty !== alias.pty || session.exited
+      || !(isPtyAlive ? isPtyAlive(alias.pty) : createLocalSessionHandle(alias.pty).isAlive())) {
       liveAliases.delete(id);
       return id;
     }
-    return match.key;
+    const now = Date.now();
+    if (now - alias.checkedAt >= ALIAS_RECHECK_MS) {
+      alias.checkedAt = now;
+      let owner;
+      try { owner = deps.clearOwner(id, alias.pty.pid); } catch {}
+      if (owner === 'other') {
+        liveAliases.delete(id);
+        return id;
+      }
+    }
+    return alias.key;
   }
   const ctx = {
     log,
@@ -95,7 +107,7 @@ function createTriggerContext(deps) {
       if (!Number.isInteger(live?.pid) || live.pid <= 0) return null;
       const match = owningSession(id);
       if (!match) return null;
-      liveAliases.set(id, { session: match.session, pty: match.session.pty });
+      liveAliases.set(id, { key: match.key, session: match.session, pty: match.session.pty, checkedAt: Date.now() });
       return ctx.getPtyForSession(sessionId);
     };
   }

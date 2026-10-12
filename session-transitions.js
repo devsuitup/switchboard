@@ -428,8 +428,8 @@ function readContinuation(sessionId, session, folderPath) {
     session._continuationSource = id;
     const index = JSON.parse(session._continuationIndex);
     if (!index.complete) scheduleRecheck(session.projectFolder);
-    return index.complete && !index.unresolved && index.ids.length === 1 ? index.ids[0] : null;
-  } catch { return null; }
+    return index.complete && !index.unresolved ? index.ids : [];
+  } catch { return []; }
 }
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
@@ -440,13 +440,10 @@ function detectSessionTransitions(folder) {
     currentFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
   } catch { return; }
 
-  const continuations = new Map(), targetCounts = new Map();
+  const continuations = new Map();
   for (const [id, session] of activeSessions) {
     if (session.exited || session.isPlainTerminal || !session.knownJsonlFiles || session.projectFolder !== folder) continue;
-    const target = readContinuation(id, session, folderPath);
-    if (!target) continue;
-    continuations.set(session, target);
-    targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
+    continuations.set(session, new Set(readContinuation(id, session, folderPath)));
   }
 
   for (const [sessionId, session] of [...activeSessions]) {
@@ -463,10 +460,9 @@ function detectSessionTransitions(folder) {
       continue;
     }
 
-    const target = continuations.get(session);
-    const continuation = targetCounts.get(target) === 1 ? target : null;
+    const targets = continuations.get(session);
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f)
-      || (f === continuation + '.jsonl' && continuation !== (session.realSessionId || sessionId)));
+      || (targets.has(path.basename(f, '.jsonl')) && f !== (session.realSessionId || sessionId) + '.jsonl'));
 
     if (newFiles.length > 0) log.debug(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
 
@@ -483,9 +479,9 @@ function detectSessionTransitions(folder) {
       const awaitingFork = Boolean(session.forkFrom && !session.realSessionId);
       let continued = false;
       let owner = null;
-      if (!awaitingFork && !signals.cleared && (signals.hasTurn || continuation === newId)) {
+      if (!awaitingFork && !signals.cleared && targets.has(newId)) {
         owner = clearOwner(newId, session.pty && session.pty.pid);
-        continued = owner === 'mine' || (continuation === newId && owner !== 'other');
+        continued = owner === 'mine';
       }
 
       // File exists but has no parseable content yet — skip and retry next cycle
