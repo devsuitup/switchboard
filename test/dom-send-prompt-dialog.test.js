@@ -24,7 +24,7 @@ function setup(sendResult) {
   for (const [k, v] of Object.entries(stubs)) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
-  for (const f of ['setting-defaults.js', 'utils.js', 'dialogs.js']) {
+  for (const f of ['modal-stack.js', 'setting-defaults.js', 'utils.js', 'dialogs.js']) {
     const file = path.join(PUBLIC_DIR, f);
     vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }
@@ -117,7 +117,8 @@ test('Cancel and Escape close the dialog without sending', () => {
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
     ctx.window.showSendPromptDialog(SESSION);
     ctx.document.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    assert.notEqual(ctx.document.querySelector('.new-session-overlay'), null, 'an Escape aimed elsewhere does not close it');
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null, 'Escape outside cancels the topmost modal');
+    ctx.window.showSendPromptDialog(SESSION);
     ctx.document.querySelector('textarea').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
     assert.equal(ctx.calls.length, 0);

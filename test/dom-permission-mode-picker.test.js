@@ -64,6 +64,7 @@ function setupDialogsDom() {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'dialogs.js'));

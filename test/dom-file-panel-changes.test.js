@@ -201,6 +201,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
 
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'splitter.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));

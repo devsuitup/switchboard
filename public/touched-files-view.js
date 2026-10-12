@@ -139,23 +139,13 @@ function showTouchedInfo(button) {
   const closeButton = overlay.querySelector('button');
   const close = () => {
     overlay.remove();
-    document.removeEventListener('keydown', onKey, true);
+    unregister();
     button.focus();
   };
-  function onKey(event) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      close();
-    } else if (event.key === 'Tab') {
-      event.preventDefault();
-      closeButton.focus();
-    }
-  }
   closeButton.addEventListener('click', close);
   overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
   document.body.appendChild(overlay);
-  document.addEventListener('keydown', onKey, true);
+  const unregister = registerModal({ overlay, cancel: close });
   closeButton.focus();
 }
 

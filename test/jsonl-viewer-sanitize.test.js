@@ -40,12 +40,33 @@ function setupDom({ installMarked = true, installDOMPurify = true } = {}) {
   });
 
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   if (installMarked) evalInWindow(dom, MARKED_PATH);
   if (installDOMPurify) evalInWindow(dom, DOMPURIFY_PATH);
   evalInWindow(dom, path.join(PUBLIC_DIR, 'jsonl-viewer.js'));
 
   return dom;
 }
+
+test('a fullscreen transcript screenshot traps Tab and closes with Escape from outside', () => {
+  const dom = setupDom();
+  try {
+    const { window } = dom;
+    const doc = window.document;
+    const result = doc.createElement('div');
+    doc.body.append(result);
+    window.renderToolResult([{ type: 'image', source: { data: 'AA==', media_type: 'image/png' } }], result);
+    result.querySelector('img').click();
+    const overlay = doc.querySelector('.jsonl-screenshot-fullscreen');
+    assert.ok(overlay);
+    doc.activeElement.blur();
+    doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    assert.equal(doc.activeElement, overlay);
+    doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(overlay.isConnected, false);
+    assert.equal(window.hasOpenModal(), false);
+  } finally { dom.window.close(); }
+});
 
 test('renderJsonlText: javascript: URL in markdown link produces no href', () => {
   const dom = setupDom();

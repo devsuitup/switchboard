@@ -218,7 +218,7 @@ for (const handled of [false, true]) {
       ctx.document.body.appendChild(outside);
       const target = handled ? dialog.querySelector('.new-session-start-btn') : outside;
       target.focus();
-      if (handled) target.addEventListener('keydown', e => e.preventDefault(), { once: true });
+      if (handled) ctx.window.addEventListener('keydown', e => e.preventDefault(), { once: true, capture: true });
       ctx.press('Enter');
       assert.equal(launches.length, 0);
       assert.ok(ctx.document.querySelector('.new-session-overlay'));

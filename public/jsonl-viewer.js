@@ -522,7 +522,26 @@ function mergeLocalCommandBlocks(blocks) {
   return result;
 }
 
-// Render a tool result into a container, handling images, text, and mixed content
+// see .ai/contexts/app-dialogs.md
+function showJsonlScreenshot(src) {
+  const returnFocus = document.activeElement;
+  const overlay = document.createElement('div');
+  overlay.className = 'jsonl-screenshot-fullscreen';
+  overlay.tabIndex = -1;
+  const image = document.createElement('img');
+  image.src = src;
+  overlay.appendChild(image);
+  function close() {
+    overlay.remove();
+    unregister();
+    if (returnFocus?.isConnected) returnFocus.focus();
+  }
+  overlay.onclick = close;
+  document.body.appendChild(overlay);
+  const unregister = registerModal({ overlay, cancel: close });
+  overlay.focus();
+}
+
 function renderToolResult(resultData, container) {
   // Try to extract image data from the result
   const images = extractImages(resultData);
@@ -537,13 +556,7 @@ function renderToolResult(resultData, container) {
     imgEl.src = img.src;
     if (img.alt) imgEl.alt = img.alt;
     imgEl.onclick = () => {
-      const overlay = document.createElement('div');
-      overlay.className = 'jsonl-screenshot-fullscreen';
-      const fullImg = document.createElement('img');
-      fullImg.src = img.src;
-      overlay.appendChild(fullImg);
-      overlay.onclick = () => overlay.remove();
-      document.body.appendChild(overlay);
+      showJsonlScreenshot(img.src);
     };
     container.appendChild(imgEl);
   }
@@ -792,13 +805,7 @@ async function showJsonlViewer(session) {
   // Click-to-fullscreen for inline images
   jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
     img.onclick = () => {
-      const overlay = document.createElement('div');
-      overlay.className = 'jsonl-screenshot-fullscreen';
-      const fullImg = document.createElement('img');
-      fullImg.src = img.src;
-      overlay.appendChild(fullImg);
-      overlay.onclick = () => overlay.remove();
-      document.body.appendChild(overlay);
+      showJsonlScreenshot(img.src);
     };
   });
 
@@ -883,13 +890,7 @@ async function showSubagentTranscript(session) {
   // Click-to-fullscreen for inline images
   jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
     img.onclick = () => {
-      const overlay = document.createElement('div');
-      overlay.className = 'jsonl-screenshot-fullscreen';
-      const fullImg = document.createElement('img');
-      fullImg.src = img.src;
-      overlay.appendChild(fullImg);
-      overlay.onclick = () => overlay.remove();
-      document.body.appendChild(overlay);
+      showJsonlScreenshot(img.src);
     };
   });
 

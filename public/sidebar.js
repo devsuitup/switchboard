@@ -1905,7 +1905,7 @@ async function showDeleteSessionDialog(session) {
     ? window.api.deleteSessionPreview(session.sessionId)
     : Promise.resolve(null);
 
-  return new Promise((resolve) => {
+  return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'new-session-overlay';
 
@@ -1953,7 +1953,7 @@ async function showDeleteSessionDialog(session) {
 
     function close(confirmed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
+      unregister();
       resolve(confirmed);
     }
 
@@ -1961,9 +1961,9 @@ async function showDeleteSessionDialog(session) {
     dialog.querySelector('#dss-confirm').onclick = () => close(true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
-    function onKey(e) { if (e.key === 'Escape') close(false); }
-    document.addEventListener('keydown', onKey);
-  });
+    const unregister = registerModal({ overlay, cancel: () => close(false) });
+    dialog.querySelector('#dss-cancel').focus();
+  }));
 }
 
 // --- Delete worktree confirmation dialog ---
@@ -1972,7 +1972,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
   // Fetch worktree status (dirty files) while the dialog is shown
   const statusPromise = window.api.worktreeStatus(worktreePath);
 
-  return new Promise((resolve) => {
+  return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'new-session-overlay';
 
@@ -2023,7 +2023,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
 
     function close(confirmed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
+      unregister();
       resolve(confirmed);
     }
 
@@ -2031,9 +2031,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
     dialog.querySelector('#dwt-confirm').onclick = () => close(true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
-    function onKey(e) {
-      if (e.key === 'Escape') close(false);
-    }
-    document.addEventListener('keydown', onKey);
-  });
+    const unregister = registerModal({ overlay, cancel: () => close(false) });
+    dialog.querySelector('#dwt-cancel').focus();
+  }));
 }

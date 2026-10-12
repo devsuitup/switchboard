@@ -306,7 +306,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -1760,7 +1760,7 @@ initAgentsView();
 
 function handleGlobalShortcut(e) {
   if (e._handled || e.type !== 'keydown') return;
-  if (document.querySelector('.choice-dialog-overlay')) return;
+  if (hasOpenModal()) return;
   if (typeof handleFocusShortcut === 'function' && handleFocusShortcut(e)) return;
   if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
     e.preventDefault();

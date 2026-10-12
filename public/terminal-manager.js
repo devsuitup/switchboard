@@ -79,8 +79,7 @@ function handleFocusShortcut(e) {
   const toSidebar = matchShortcut('focusSidebar', e, isMac, appShortcuts);
   if (!toSidebar && !matchShortcut('focusTerminal', e, isMac, appShortcuts)) return false;
   if (e.type !== 'keydown' || e._handled) return true;
-  const overlays = document.querySelectorAll('.modal-overlay, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, [aria-modal="true"]');
-  if ([...overlays].some(isFocusTargetVisible)) return false;
+  if (hasOpenModal()) return false;
   const focused = document.activeElement;
   if (toSidebar ? !focused?.closest('.terminal-container') : focused !== document.body && !focused?.closest('#sidebar')) return false;
   e.preventDefault();
@@ -106,6 +105,7 @@ function handleFocusShortcut(e) {
 
 function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } = {}) {
   terminal.attachCustomKeyEventHandler((e) => {
+    if (hasOpenModal()) return false;
     if (handleFocusShortcut(e)) return false;
     // Cmd/Ctrl+F → open terminal search bar
     if (e.key === 'f' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
@@ -1185,6 +1185,7 @@ function createTerminalEntry(session, opts = {}) {
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
   terminal.onData(data => {
+    if (hasOpenModal()) return;
     if (data === '\x1b[I' || data === '\x1b[O') return;
     window.api.sendInput(entry.session.sessionId, data);
   });

@@ -64,7 +64,10 @@ function event(window, key, extra = {}) {
 test('an open choice dialog suppresses the global Changes shortcut and resumes it after closing', async () => {
   const ctx = setup();
   try {
-    for (const file of ['choice-dialog.js', 'app-dialogs.js']) ctx.inCtx(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'));
+    for (const file of ['choice-dialog.js', 'app-dialogs.js']) {
+      const filename = path.join(__dirname, '../public', file);
+      require('node:vm').runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    }
     const { handleGlobalShortcut } = loadAppFunctions(ctx.context, { functions: ['handleGlobalShortcut'] });
     const calls = [];
     ctx.window.toggleChangesTab = id => calls.push(id);

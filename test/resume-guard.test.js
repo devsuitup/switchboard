@@ -23,6 +23,19 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const LIVE = { pid: 4242, cwd: '/work/proj', startedAt: 1790685077444 };
 const SESSION = { sessionId: 'sess-1', projectPath: '/work/proj' };
 
+test('a schedule notice without injection uses the renderer appAlert fallback', async () => {
+  const messages = [];
+  const ctx = vm.createContext({ appAlert: async options => messages.push(options) });
+  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx, { filename: GUARD_PATH });
+  assert.equal(await ctx.guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), false);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].message, /scheduled task/);
+});
+
+test('a schedule notice without any alert adapter fails with an explicit contract error', async () => {
+  await assert.rejects(guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), /guardResume requires an alert adapter/);
+});
+
 function makeApi(answer) {
   const asked = [];
   return {

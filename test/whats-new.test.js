@@ -18,6 +18,8 @@ function makeDom() {
   const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { runScripts: 'outside-only' });
   const utils = path.join(ROOT, 'public', 'utils.js');
   vm.runInContext(fs.readFileSync(utils, 'utf8'), dom.getInternalVMContext(), { filename: utils });
+  const modal = path.join(ROOT, 'public', 'modal-stack.js');
+  vm.runInContext(fs.readFileSync(modal, 'utf8'), dom.getInternalVMContext(), { filename: modal });
   return { doc: dom.window.document, window: dom.window, escape: dom.window.escapeHtml };
 }
 

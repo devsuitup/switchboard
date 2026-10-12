@@ -17,7 +17,7 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, alert, live, allowBgAttach = false } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false } = {}) {
   if (!session || session.type === 'terminal') return true;
   if (live === undefined) {
     try {
@@ -29,6 +29,7 @@ async function guardResume(session, { automatic = false, api, confirm, alert, li
   if (!live) return true;
   if (automatic && !(allowBgAttach && live.kind === 'bg')) return false;
   if (live.kind === 'schedule') {
+    if (typeof alert !== 'function') throw new TypeError('guardResume requires an alert adapter for a scheduled task notice');
     const where = live.cwd ? ` in ${live.cwd}` : '';
     await alert(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
       + 'Wait for the scheduled run to finish before opening it here.');

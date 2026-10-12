@@ -332,7 +332,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   const bundledMarked = window.marked;
   delete window.marked;
   window.loadCodeMirrorBundle = () => { window.marked = bundledMarked; return Promise.resolve(); };
-  for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
   window.openSessions = new Map();
@@ -367,6 +367,14 @@ function flush() {
   let p = Promise.resolve();
   for (let i = 0; i < 12; i++) p = p.then(() => Promise.resolve());
   return p;
+}
+
+async function waitForUnsavedDialog(ctx) {
+  for (let i = 0; i < 100; i++) {
+    if (ctx.document.getElementById('unsaved-edits-dialog')) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.fail('the queued unsaved dialog did not open');
 }
 
 async function openTab(ctx, sessionId = 's1') {
@@ -1348,6 +1356,7 @@ test('Touched edits participate in the existing unsaved-file close prompt', asyn
     await flush();
     ctx.editors.at(-1).setText('unsaved');
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     const dialog = ctx.document.getElementById('unsaved-save');
     assert.ok(dialog, 'the unsaved-file prompt includes the Touched editor');
     dialog.click();
@@ -2159,6 +2168,7 @@ test('the quit check lists a stashed Touched file and Save writes it with its ve
     await dirtyTouched(ctx, '/work/a.txt', 'unsaved');
     ctx.window.openDiffTab('s1', 'd1', DIFF);
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     const items = [...ctx.document.querySelectorAll('#unsaved-edits-dialog li')];
     assert.deepEqual(items.map(li => [li.textContent, li.title]), [['a.txt', '/work/a.txt']]);
     ctx.document.getElementById('unsaved-save').click();
@@ -2290,6 +2300,7 @@ test('the quit check keeps a stash whose save is refused, and forgets only the s
     await dirtyTouched(ctx, '/work/a.txt', 'two');
     ctx.window.openDiffTab('s2', 'd2', DIFF);
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     ctx.document.getElementById('unsaved-save').click();
     await flush();
     assert.equal(ctx.calls.save.length, 2);

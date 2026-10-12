@@ -27,7 +27,7 @@ function setup({ dispatchResult = { ok: true, id: 'cccccccc' }, projects, effect
     openSessions: new Map(), activePtyIds: new Set(), refreshSidebar: () => {}, pollActiveSessions: () => {},
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
-  for (const f of ['setting-defaults.js', 'utils.js', 'icons.js', 'dialogs.js']) {
+  for (const f of ['modal-stack.js', 'setting-defaults.js', 'utils.js', 'icons.js', 'dialogs.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, f) });
   }
   return { window, document: window.document, calls, destroy: () => window.close() };
@@ -80,15 +80,20 @@ test('Enter inside the prompt does not start; Escape closes', async (t) => {
   assert.equal(d.querySelector('.new-session-overlay'), null);
 });
 
-test('Enter on a focused button is left to the button: Enter on Cancel never starts; Enter elsewhere does', async (t) => {
+test('Enter on Cancel closes without dispatching; Enter on the dialog starts', async (t) => {
   const ctx = setup(); t.after(ctx.destroy);
   await ctx.window.showDispatchAgentDialog(null);
   const d = ctx.document;
   d.querySelector('#dad-prompt').value = 'go';
-  d.querySelector('.new-session-cancel-btn').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  const cancel = d.querySelector('.new-session-cancel-btn');
+  cancel.focus();
+  cancel.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   await tick(); await tick();
   assert.equal(ctx.calls.dispatched.length, 0);
-  d.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.equal(d.querySelector('.new-session-overlay'), null);
+  await ctx.window.showDispatchAgentDialog(null);
+  d.querySelector('#dad-prompt').value = 'go';
+  d.querySelector('.new-session-dialog').dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   await tick(); await tick();
   assert.equal(ctx.calls.dispatched.length, 1);
 });

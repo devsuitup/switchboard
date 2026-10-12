@@ -232,9 +232,10 @@ test('choice dialog: only the topmost overlay handles keys from the body', async
     const foreground = ctx.document.createElement('div');
     foreground.className = 'choice-dialog-overlay';
     ctx.document.body.append(foreground);
+    const unregister = ctx.window.registerModal({ overlay: foreground, cancel: () => { foreground.remove(); unregister(); } });
     key(ctx, ctx.document.body, 'Escape');
-    assert.equal(ctx.document.querySelectorAll('.choice-dialog-overlay').length, 2);
-    foreground.remove();
+    assert.equal(ctx.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+    assert.ok(overlay(ctx), 'only the registered topmost modal closes');
     key(ctx, ctx.document.body, 'Escape');
     assert.equal(ctx.document.querySelector('.choice-dialog-overlay'), null);
     assert.equal(await pending, null);
@@ -306,7 +307,7 @@ test('choice dialog: Enter outside the dialog does nothing', async () => {
     const pending = open(ctx);
     const event = key(ctx, outside, 'Enter');
     assert.ok(overlay(ctx), 'the dialog must stay open');
-    assert.equal(event.defaultPrevented, false);
+    assert.equal(event.defaultPrevented, true);
     cancelBtn(ctx).click();
     assert.equal(await pending, null);
   } finally { ctx.destroy(); }

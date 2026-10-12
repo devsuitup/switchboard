@@ -713,26 +713,13 @@ function showUnsavedEditsDialog(tabs) {
 
     function finish(proceed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
+      unregister();
       if (returnFocus?.isConnected) returnFocus.focus();
       resolve(proceed);
     }
-    function onKey(e) {
-      if (!overlay.contains(e.target)) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        finish(false);
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        const controls = [cancelBtn, discardBtn, saveBtn].filter(button => !button.disabled);
-        if (!controls.length) return;
-        const at = controls.indexOf(document.activeElement);
-        const step = e.shiftKey ? -1 : 1;
-        controls[(at + step + controls.length) % controls.length].focus();
-      }
-    }
-    document.addEventListener('keydown', onKey);
+    const unregister = registerModal({ overlay, cancel: () => {
+      if (!cancelBtn.disabled) finish(false);
+    } });
 
     cancelBtn.onclick = () => finish(false);
     discardBtn.onclick = () => finish(true);
@@ -792,11 +779,10 @@ function askAboutUnsavedEdits() {
   if (unsavedPrompt) return unsavedPrompt;
   const tabs = collectUnsavedFileTabs();
   if (!tabs.length) return Promise.resolve(true);
-  unsavedPrompt = (async () => {
-    if (typeof appDialogsIdle === 'function') await appDialogsIdle();
+  unsavedPrompt = enqueueModalQuestion(() => {
     const currentTabs = collectUnsavedFileTabs();
     return currentTabs.length ? showUnsavedEditsDialog(currentTabs) : true;
-  })().then((proceed) => {
+  }, { whenIdle: true }).then((proceed) => {
     unsavedPrompt = null;
     if (proceed) {
       unloadApproved = true;

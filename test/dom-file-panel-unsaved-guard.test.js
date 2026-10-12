@@ -12,6 +12,7 @@ const { JSDOM } = require('jsdom');
 const { registerPanelTerminals } = require('./terminal-manager-harness');
 const { EventEmitter } = require('node:events');
 const { createUnsavedGuard } = require('../unsaved-guard');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -89,7 +90,7 @@ function setup() {
     return el;
   };
 
-  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const f of ['modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
   window.openSessions = new Map();
@@ -175,7 +176,8 @@ test('quit focuses Save so Enter saves the edits before approving quit', async (
     const save = button(ctx, 'unsaved-save');
     assert.equal(ctx.window.document.activeElement, save);
     dialogKey(ctx, 'Enter');
-    save.click();
+    await flush();
+    assert.equal(ctx.disk.get(A), 'x0\nmine', 'Enter itself must save');
     await checking;
     assert.equal(ctx.disk.get(A), 'x0\nmine');
     assert.deepEqual(ctx.calls.answers, [{ id: 60, proceed: true }]);
@@ -671,7 +673,7 @@ test('a check delivered twice, before and after the page said it is ready, is an
   } finally { ctx.destroy(); }
 });
 function loadAppDialogs(ctx) {
-  for (const f of ['choice-dialog.js', 'app-dialogs.js']) {
+  for (const f of ['app-dialogs.js']) {
     const filename = path.join(PUBLIC_DIR, f);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
   }
@@ -679,6 +681,74 @@ function loadAppDialogs(ctx) {
 function dialogKey(ctx, key, init = {}) {
   ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
 }
+test('a session deletion question waits for the unsaved guard to close', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    ctx.window.cleanDisplayName = value => value;
+    ctx.window.escapeHtml = value => value;
+    const { showDeleteSessionDialog } = loadAppFunctions(ctx.context, {
+      sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'), functions: ['showDeleteSessionDialog'],
+    });
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(72, 'quit');
+    await flush();
+    const deleting = showDeleteSessionDialog({ sessionId: 's1' });
+    assert.equal(ctx.window.document.querySelector('.new-session-overlay'), null);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.equal(dialog(ctx), null);
+    assert.ok(ctx.window.document.querySelector('#dss-cancel'));
+    dialogKey(ctx, 'Escape');
+    assert.equal(await deleting, false);
+  } finally { ctx.destroy(); }
+});
+test('N2: unsaved guard traps Tab and cancels Escape from the body', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(71, 'quit');
+    await flush();
+    ctx.window.document.activeElement.blur();
+    dialogKey(ctx, 'Tab');
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
+    ctx.window.document.activeElement.blur();
+    dialogKey(ctx, 'Escape');
+    await flush();
+    assert.equal(dialog(ctx), null);
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 71, proceed: false }]);
+  } finally { ctx.destroy(); }
+});
+test('N4: unsaved guard waits for every continuation question, including the final fallback', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    const filename = path.join(PUBLIC_DIR, 'resume-guard.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    await dirtyTab(ctx, 's1', A);
+    const chain = ctx.window.resolveResumeSession({ sessionId: 'original' }, {
+      api: { getSessionContinuations: async () => ({ candidates: [{ sessionId: 'first' }, { sessionId: 'second' }] }) },
+      confirm: message => ctx.window.appConfirm({ message }),
+    });
+    await flush();
+    const checking = ctx.calls.check(70, 'quit');
+    for (let i = 0; i < 3; i++) {
+      await flush();
+      assert.equal(dialog(ctx), null, `guard must wait for question ${i + 1}`);
+      assert.equal(ctx.window.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+      dialogKey(ctx, 'Escape');
+    }
+    assert.equal(await chain, null);
+    await flush();
+    assert.ok(dialog(ctx));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 70, proceed: false }]);
+  } finally { ctx.destroy(); }
+});
 test('reload ACK is immediate while confirmations queue; quit upgrade waits for one focused unsaved guard', async () => {
   const ctx = setup();
   try {
@@ -715,7 +785,7 @@ test('reload ACK is immediate while confirmations queue; quit upgrade waits for 
     assert.equal(ctx.window.document.activeElement, opener);
   } finally { ctx.destroy(); }
 });
-test('a foreground alert cannot cancel or steal focus into an underlying unsaved guard', async () => {
+test('an alert waits for the unsaved guard, then owns focus and Escape', async () => {
   const ctx = setup();
   try {
     loadAppDialogs(ctx);
@@ -724,13 +794,15 @@ test('a foreground alert cannot cancel or steal focus into an underlying unsaved
     await flush();
     const alerting = ctx.window.appAlert({ message: 'Foreground' });
     dialogKey(ctx, 'Tab');
-    assert.ok(ctx.window.document.activeElement.closest('.choice-dialog-overlay'));
-    dialogKey(ctx, 'Escape');
-    await alerting;
-    assert.ok(dialog(ctx));
+    assert.ok(dialog(ctx).contains(ctx.window.document.activeElement));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
     assert.deepEqual(ctx.calls.answers, []);
     dialogKey(ctx, 'Escape');
     await checking;
     assert.deepEqual(ctx.calls.answers, [{ id: 45, proceed: false }]);
+    assert.equal(dialog(ctx), null);
+    assert.ok(ctx.window.document.activeElement.closest('.choice-dialog-overlay'));
+    dialogKey(ctx, 'Escape');
+    await alerting;
   } finally { ctx.destroy(); }
 });

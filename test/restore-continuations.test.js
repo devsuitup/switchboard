@@ -65,7 +65,7 @@ test('B6 a plain attach tab is excluded from the saved set', { timeout: 9000 }, 
 
 test('a continuation opens with Enter; only the live-elsewhere warning focuses Cancel', async t => {
   const h = setup(t, { old: ['new'], new: [] }, { live: { new: { pid: 4242, cwd: '/elsewhere' } } });
-  for (const file of ['choice-dialog.js', 'app-dialogs.js']) {
+  for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
     const filename = path.join(__dirname, '../public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.ctx, { filename });
   }
