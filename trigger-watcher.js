@@ -359,6 +359,10 @@ function pollLoop(check) {
   });
 }
 
+function triggerRefusal(message) {
+  return Object.assign(new Error(message), { triggerRefusal: true });
+}
+
 /**
  * Poll until the target composer is free — empty AND quiet — bounded by the
  * absolute `deadlineMs`.
@@ -733,7 +737,29 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   const compactSnapshot = compact ? readTranscriptTurn(ctx, sessionId) : null;
   if (compactSnapshot) compactSnapshot.compactBoundaries = [...(compactSnapshot.compactBoundaries || [])];
 
+  const clearId = transcriptReaction && command.trim().split(/\s/)[0] === '/clear' && ctx.resolveSessionId
+    ? ctx.resolveSessionId(sessionId) : null;
+  const clearEntry = clearId === null ? null : ctx.getPtyForSession(sessionId);
+  const clearKey = clearId === null ? null : ctx.getSessionLockKey?.(sessionId);
   const { midBusy, enterAt } = await submitToPty(handle, command, sessionId, ctx);
+
+  let clearWaitedMs = 0;
+  if (clearId !== null) {
+    const started = Date.now();
+    const rekeyed = await pollLoop((resolve, scheduleNext) => {
+      const entry = ctx.getPtyForSession(sessionId);
+      if (!entry || entry.ptyProcess !== clearEntry.ptyProcess
+        || (ctx.getSessionLockKey && ctx.getSessionLockKey(sessionId) !== clearKey)) {
+        throw triggerRefusal('trigger target changed while waiting for its /clear re-key');
+      }
+      if (ctx.resolveSessionId(sessionId) !== clearId) return resolve(true);
+      if (Date.now() >= deadlineMs) return resolve(false);
+      scheduleNext();
+    });
+    clearWaitedMs = Date.now() - started;
+    if (!rekeyed) return { enterAt, submit_retries: 0, sawBusy: false, confirmed: false,
+      composerConfirmed: false, sessionExited: false, timedOut: true, waited_ms: clearWaitedMs };
+  }
 
   if (compact) return waitForCompaction(sessionId, ctx, enterAt, deadlineMs ?? Date.now() + getIdleTimeout(), compactSnapshot);
 
@@ -768,7 +794,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
         : first.sawBusy && preBusy === false && midBusy === false && composerEmptyAfterWrite,
       sessionExited: first.sessionExited,
       timedOut: first.timedOut,
-      waited_ms: first.waited_ms,
+      waited_ms: clearWaitedMs + first.waited_ms,
       confirmSource: first.sawBusy ? confirmSource : null,
     };
   }
@@ -787,7 +813,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
       timedOut: false,
       recoverySkipped: true,
       recoveryReason: 'the CLI reports a dialog open or a turn running, a bare Enter could answer it',
-      waited_ms: first.waited_ms,
+      waited_ms: clearWaitedMs + first.waited_ms,
     };
   }
   const polite = await waitForComposerFree(sessionId, ctx, recoveryDeadline);
@@ -802,7 +828,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
       timedOut: false,
       recoverySkipped: true,
       recoveryReason: polite.reason,
-      waited_ms: first.waited_ms + polite.waited_ms,
+      waited_ms: clearWaitedMs + first.waited_ms + polite.waited_ms,
     };
   }
 
@@ -819,7 +845,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
       sessionExited: false,
       timedOut: false,
       writeError: err,
-      waited_ms: first.waited_ms,
+      waited_ms: clearWaitedMs + first.waited_ms,
     };
   }
 
@@ -832,7 +858,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
     composerConfirmed: edgeMode && second.sawBusy,
     sessionExited: second.sessionExited,
     timedOut: second.timedOut,
-    waited_ms: first.waited_ms + second.waited_ms,
+    waited_ms: clearWaitedMs + first.waited_ms + second.waited_ms,
     confirmSource: second.sawBusy ? confirmSource : null,
   };
 }
@@ -1162,9 +1188,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
-  if (acquireSessionLock) {
-    releaseSessionLock = await acquireSessionLock(sessionId);
-  }
+  releaseSessionLock = await acquireSessionLock(sessionId);
 
   // An unknown `wait` is refused before anything is written: falling back to
   // 'none' would submit immediately into a session that asked to be waited for.
@@ -1504,7 +1528,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     } catch (err) {
       ctx.log.error('[trigger-watcher] PTY write failed:', err.message);
       await writeResult({ ok: false, submitted: handle.enters > 0 ? SUBMITTED_ASSUMED : SUBMITTED_NO,
-        written: handle.writes > 0, error: 'pty write failed: ' + err.message, sessionId });
+        written: handle.writes > 0, error: err.triggerRefusal ? err.message : 'pty write failed: ' + err.message, sessionId });
       return;
     }
 
@@ -1735,7 +1759,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs,
         written, submitted, submit_retries: verify?.submit_retries || 0, turn_observed: false });
       await writeResult({ ok: false, submitted: weakestSubmitted(chainSubmitted, submitted),
-        written: handle.writes > 0, error: 'pty write failed: ' + err.message,
+        written: handle.writes > 0, error: err.triggerRefusal ? err.message : 'pty write failed: ' + err.message,
         partial: i > 0 || written, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
@@ -1874,6 +1898,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   });
 
   } catch (err) {
+    if (err?.triggerRefusal) {
+      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: err.message });
+      return;
+    }
     // see .ai/contexts/trigger-watcher.md, "Removing the entry"
     safeLogError(ctx, '[trigger-watcher] Trigger processing threw, writing a generic failure result:',
       name, err && err.message);
@@ -1960,11 +1988,11 @@ function start(ctx) {
     };
     unlock.prepare = async () => {
       const entry = ctx.getPtyForSession(sessionId);
-      if (!entry) throw new Error('trigger target no longer resolves to a tab');
+      if (!entry) throw triggerRefusal('trigger target no longer resolves to a tab');
       const key = lockKey(entry);
       if (tab && lockedKey !== key) {
         unlock();
-        throw new Error('trigger target changed after taking its tab lock');
+        throw triggerRefusal('trigger target changed after taking its tab lock');
       }
       if (!tab) {
         lockedKey = key;
@@ -1974,7 +2002,14 @@ function start(ctx) {
       const current = ctx.getPtyForSession(sessionId);
       if (!current || lockKey(current) !== lockedKey) {
         unlock();
-        throw new Error('trigger target changed while waiting for its tab lock');
+        throw triggerRefusal('trigger target changed while waiting for its tab lock');
+      }
+      if (ctx.refreshProcessTable && !unlock.ownershipPrepared) {
+        unlock.ownershipPrepared = true;
+        let timer;
+        try {
+          await Promise.race([ctx.refreshProcessTable(), new Promise(resolve => { timer = setTimeout(resolve, 1000); })]);
+        } finally { clearTimeout(timer); }
       }
     };
     unlock.handle = {
@@ -1988,7 +2023,7 @@ function start(ctx) {
         const entry = ctx.getPtyForSession(sessionId);
         if (released || !tab || !entry || lockKey(entry) !== lockedKey) {
           unlock();
-          throw new Error('trigger target changed: matching tab lock is required before writing');
+          throw triggerRefusal('trigger target changed: matching tab lock is required before writing');
         }
         const target = resolveHandle(entry);
         if (!isEntryAlive(ctx, entry, target)) throw new Error('target process not running');
@@ -1998,7 +2033,7 @@ function start(ctx) {
             && lockKey(entry) === lockedKey;
         if (!owned) {
           unlock();
-          throw new Error('trigger target ownership could not be verified before writing');
+          throw triggerRefusal('trigger target ownership could not be verified before writing');
         }
         target.write(data);
         this.writes++;

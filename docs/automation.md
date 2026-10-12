@@ -687,6 +687,21 @@ nothing went out; read them as `(result.steps || []).length === 0`.
 
 ### Failures in the watcher itself
 
+A changed target tab or a refused ownership check is a normal refusal, without
+`internal: true`. Before any write, tab resolution or locking failures report
+`trigger target no longer resolves to a tab`,
+`trigger target changed after taking its tab lock`, or
+`trigger target changed while waiting for its tab lock`. A write without the
+matching lock reports
+`trigger target changed: matching tab lock is required before writing`.
+Ownership refusal reports
+`trigger target ownership could not be verified before writing`; a tab or PTY
+replacement during a chain's `/clear` wait reports
+`trigger target changed while waiting for its /clear re-key`.
+These failures retain `written`, `submitted` and partial-chain evidence for any
+input already written. A direct registered key refuses definite ownership by
+another conversation; an alias requires positively verified ownership.
+
 **An exception while deciding a trigger's fate** — a body that is valid JSON but
 not a usable shape, such as `null` or a non-object chain step — still ends in a
 result and a deletion: `{ "ok": false, "error": "internal error: <message>",

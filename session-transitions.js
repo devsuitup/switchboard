@@ -442,6 +442,7 @@ function detectSessionTransitions(folder) {
   } catch { return; }
 
   const continuations = new Map();
+  let descriptorRevision;
   for (const [id, session] of activeSessions) {
     if (session.exited || session.isPlainTerminal || !session.knownJsonlFiles || session.projectFolder !== folder) continue;
     continuations.set(session, new Set(readContinuation(id, session, folderPath)));
@@ -464,7 +465,7 @@ function detectSessionTransitions(folder) {
     const targets = continuations.get(session);
     const foreign = session._foreignContinuations || (session._foreignContinuations = new Map());
     for (const file of foreign.keys()) if (!targets.has(path.basename(file, '.jsonl')) || !currentFiles.includes(file)) foreign.delete(file);
-    const descriptorRevision = getDescriptorRevision();
+    descriptorRevision ??= getDescriptorRevision();
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f)
       || (targets.has(path.basename(f, '.jsonl')) && f !== (session.realSessionId || sessionId) + '.jsonl'));
 

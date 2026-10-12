@@ -256,6 +256,34 @@ test('a PTY exit prunes its live alias without needing a lookup', async () => {
   assert.equal(ctx.getPtyForSession('b'), null);
 });
 
+test('write ownership permits uncertain direct keys while aliases require mine', async () => {
+  let owner = 'mine';
+  const session = makeSession();
+  const ctx = createTriggerContext({
+    activeSessions: new Map([['direct', session]]), log: silentLog,
+    getLiveDescriptor: () => ({ pid: process.pid }),
+    clearOwner: () => { if (owner === 'unreadable') throw new Error('torn read'); return owner; },
+  });
+  await ctx.findPtyForSession('alias');
+  for (owner of ['mine', 'pending', 'unknown', 'unreadable', 'other']) {
+    assert.equal(ctx.verifySessionOwner('direct', session, ctx.getPtyForSession('direct')), owner !== 'other', owner);
+    assert.equal(ctx.verifySessionOwner('alias', session, ctx.getPtyForSession('alias')), owner === 'mine', owner);
+  }
+});
+
+test('a requested id resolved through an acknowledged re-key still requires mine', () => {
+  let owner;
+  const session = makeSession();
+  const ctx = createTriggerContext({
+    activeSessions: new Map([['new-id', session]]), log: silentLog,
+    resolveSessionId: id => id === 'old-id' ? 'new-id' : id,
+    clearOwner: () => { if (owner === 'unreadable') throw new Error('torn read'); return owner; },
+  });
+  for (owner of ['mine', 'pending', 'unknown', 'unreadable', 'other']) {
+    assert.equal(ctx.verifySessionOwner('old-id', session, ctx.getPtyForSession('old-id')), owner === 'mine', owner);
+  }
+});
+
 for (const change of ['pty', 'session', 'exited', 'dead', 'direct']) {
   test(`a live alias is invalidated immediately on ${change}`, async () => {
     const session = makeSession();

@@ -17,7 +17,8 @@
 Every trigger step writes only while holding the resolved tab's stable-session
 lock and after an unthrottled check of the requested conversation's ownership,
 immediately before that write. The guarded handle enforces this for text,
-initial Enter and recovery Enter. Resolution or identity changes fail closed.
+initial Enter and recovery Enter. A changed tab is refused; ownership policy
+depends on whether the requested key is direct or an alias, as described below.
 See "Session serialization", "Live descriptor fallback" and "Descriptor revision".
 
 ## Public surface
@@ -109,20 +110,34 @@ aliases without another lookup.
 Alias retention only supports polling and resolution. Before every write,
 `verifySessionOwner` performs an unthrottled ownership check under the tab
 lock. An alias needs `mine`; `pending`, `unknown` and read failures withhold
-the write. A direct registered key (including an acknowledged re-key) is
-identity evidence when its real id agrees and no descriptor contradicts it;
-a definite `other` still refuses delivery. Composer and busy probes use the
+the write. A direct key (the tab is registered under the requested id) delivers
+unless ownership is definite `other`: the CLI writer closest to the PTY has a
+readable descriptor naming a different id. `unknown`, `pending` and unreadable
+ownership do not contradict that registered key and allow delivery. Every
+matching descriptor is examined, so another process running the same id cannot
+decide ownership by appearing first in the directory. A Linux descriptor whose
+recorded process start differs from the live process is stale and cannot name
+an intervening writer. Torn numeric descriptor files still identify intervening
+writers. Composer and busy probes use the
 tab; descriptor and transcript probes use the trigger's requested id or its
 acknowledged re-key target. Results retain the original requested id.
-A readable descriptor with no usable process-table entry leaves direct-key
-ownership `unknown`; delivery is withheld while the asynchronous refresh runs.
+Before delivery, preparation awaits at most one process-table refresh, bounded
+to one second. A missing or unusable table still permits a direct key and never
+permits an alias without `mine`. Each write checks ownership again without a
+throttle. A chain that submitted `/clear` waits for the acknowledged re-key,
+bounded by that step's deadline, before checking submission or sending a
+recovery Enter or the next step. Its tab object and PTY must remain the same
+during this wait; no ownership check is bypassed. Results retain the requested id.
+An old requested id that resolves through an acknowledged continuation or
+`/clear` re-key is still an alias and requires `mine` before each write.
 
 ### Descriptor revision
 
 `cliSessionState.getDescriptorRevision` compares the set of live descriptor
 `(sessionId, pid)` pairs. Only a change to that set advances the revision:
 process-table refreshes, descriptor status flips and timestamps do not.
-Descriptor listeners still receive refresh notifications independently.
+Descriptor listeners still receive refresh notifications independently. A
+transition-detection pass reads the revision once and shares it across its tabs.
 `session-transitions` caches a continued-in target's `other` verdict per tab
 until the transcript mtime, PTY or descriptor identity set changes. The
 Windows regression uses the real `clearOwner`, ten refreshes four seconds

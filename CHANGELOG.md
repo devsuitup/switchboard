@@ -6,7 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - The New Session dialog now opens with focus on the selected permission mode, and Enter starts the session with that mode. Cancelling returns focus to the + button that opened the dialog; starting moves it to the new terminal. (#583)
-- Automation triggers can reach a running conversation under its continued id and run one at a time per tab. Delivery checks the conversation before each write and stops if its identity cannot be verified; nested CLI jobs no longer interrupt a valid continuation during a partial descriptor read. (#579)
+- Automation triggers reach a session after its conversation continues under a new id. A trigger is refused when its tab is definitely writing another conversation, so it cannot be delivered to that conversation. (#579)
 - Tab and Shift+Tab now close the New session (+) menu and move on from its + button, instead of leaving the menu open with no way to close it from the keyboard. (#582)
 - A quit that arrives just as a reload of the window is confirmed now waits for the open sessions to be saved before Switchboard closes, so the next start restores them. (#479)
 

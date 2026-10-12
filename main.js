@@ -3467,6 +3467,7 @@ if (!gotSingleInstanceLock) {
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         clearOwner: (id, pid, options) => cliSessionState.clearOwner(id, pid, options),
+        refreshProcessTable: () => cliSessionState.refreshProcessTable(),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {
           const settings = getSetting('global') || {};

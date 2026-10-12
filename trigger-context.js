@@ -89,16 +89,17 @@ function createTriggerContext(deps) {
       const id = currentId(sessionId);
       const session = activeSessions.get(resolve(sessionId));
       if (session !== lockKey || session.exited || session.pty !== entry.ptyProcess) return false;
-      const direct = activeSessions.get(id) === session && (!session.realSessionId || session.realSessionId === id);
+      const direct = id === sessionId && activeSessions.get(id) === session
+        && (!session.realSessionId || session.realSessionId === id);
       if (session.host != null) return direct && session.handle === entry.handle;
       if (!deps.clearOwner) return direct;
       let owner;
-      try { owner = deps.clearOwner(id, session.pty.pid, { rejectOtherConversation: true, directKey: direct }); } catch { return false; }
+      try { owner = deps.clearOwner(id, session.pty.pid, { rejectOtherConversation: true, directKey: direct }); } catch { return direct; }
       if (owner === 'other') {
         liveAliases.delete(id);
         return false;
       }
-      return owner === 'mine' || (direct && owner === 'pending');
+      return direct || owner === 'mine';
     },
     getPtyForSession(sessionId) {
       const session = activeSessions.get(resolve(sessionId));
@@ -121,6 +122,7 @@ function createTriggerContext(deps) {
     },
   };
   if (isPtyAlive) ctx.isPtyAlive = isPtyAlive;
+  if (deps.refreshProcessTable) ctx.refreshProcessTable = () => deps.refreshProcessTable();
   if (getLiveDescriptor && deps.clearOwner) {
     ctx.findPtyForSession = async (sessionId, descriptor) => {
       const direct = ctx.getPtyForSession(sessionId);

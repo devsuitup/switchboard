@@ -827,6 +827,22 @@ for (const change of ['mtime', 'descriptors', 'pty']) {
   });
 }
 
+test('transition detection reads one descriptor revision for all tabs in a pass', () => {
+  const root = mkTmp();
+  const sessions = new Map(['first', 'second'].map(id => [id, {
+    pty: { pid: 4242 }, projectFolder: 'proj', knownJsonlFiles: new Set(),
+  }]));
+  fs.mkdirSync(path.join(root, 'proj'));
+  let reads = 0;
+  init({ PROJECTS_DIR: root, activeSessions: sessions, getMainWindow: () => null,
+    log: { info() {}, debug() {}, warn() {}, error() {} }, rekeyMcpServer() {},
+    getDescriptorRevision: () => { reads++; return 1; } });
+  try {
+    sessionTransitions.detectSessionTransitions('proj');
+    assert.equal(reads, 1);
+  } finally { cleanup(root); }
+});
+
 test('continuation: an already open target is never overwritten', t => {
   const f = continuationFixture(t, ['new-id']);
   const other = makePtySession(f.folder, { knownJsonlFiles: new Set(['old-id.jsonl', 'new-id.jsonl']) });

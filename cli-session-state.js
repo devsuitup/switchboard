@@ -30,6 +30,7 @@ let onIdle = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
 let readProcStartMany = defaultReadProcStartMany;
+let readProcStart = defaultReadProcStart;
 let readParentPid = defaultReadParentPid;
 let readProcessTable = defaultReadProcessTable;
 let processTableEnabled = false;
@@ -273,6 +274,7 @@ function init(ctx) {
     || (ctx.readProcStart
       ? async (pids) => new Map(pids.map((pid) => [pid, ctx.readProcStart(pid)]))
       : defaultReadProcStartMany);
+  readProcStart = ctx.readProcStart || defaultReadProcStart;
   now = ctx.now || Date.now;
   platform = ctx.platform || process.platform;
   readParentPid = ctx.readParentPid || defaultReadParentPid;
@@ -683,6 +685,30 @@ function clearOwner(sessionId, ptyPid, { rejectOtherConversation = false, direct
       if (current !== ptyPid && descriptorPids.has(current)) return false;
     }
     return false;
+  }
+  if (directKey && rejectOtherConversation) {
+    startProcessTableRefresh();
+    const descriptors = [];
+    for (const name of names) {
+      if (!STATE_FILE_RE.test(name)) continue;
+      let raw;
+      try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+      if (!raw || typeof raw.sessionId !== 'string' || !raw.sessionId
+        || !Number.isInteger(raw.pid) || raw.pid <= 0 || !isProcessAlive(raw.pid)) continue;
+      if (platform === 'linux' && raw.procStart != null) {
+        let actual;
+        try { actual = readProcStart(raw.pid); } catch {}
+        if (actual != null && String(actual) !== String(raw.procStart)) {
+          descriptorPids.delete(raw.pid);
+          continue;
+        }
+      }
+      descriptors.push(raw);
+    }
+    const matching = descriptors.filter(raw => raw.sessionId.toLowerCase() === key);
+    if (descriptors.some(raw => raw.sessionId.toLowerCase() !== key && closestWriter(raw))) return 'other';
+    if (matching.some(raw => closestWriter(raw))) return 'mine';
+    return matching.length ? 'unknown' : 'pending';
   }
   let pid = null;
   let found = null;

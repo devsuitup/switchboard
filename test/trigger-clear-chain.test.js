@@ -85,13 +85,14 @@ function clearingSession(onText = noop) {
     _cliBusy: false, composerState: { pending: 0, lastInputAt: 0 },
   };
   const activeSessions = new Map([['old-id', session]]);
+  const clearOwner = (id, pid) => (pid === 4242 ? 'mine' : 'other');
   sessionTransitions.init({
     PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log,
-    rekeyMcpServer: noop, clearOwner: (id, pid) => (pid === 4242 ? 'mine' : 'other'),
+    rekeyMcpServer: noop, clearOwner,
   });
   const ctx = createTriggerContext({
     activeSessions, log, projectsDir,
-    isPtyAlive: () => true,
+    isPtyAlive: () => true, clearOwner,
     getCliStatus: (id) => status[id] && { ...status[id] },
     resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
   });
@@ -159,6 +160,7 @@ function continuingSession(t, { detect = true, duplicate = false, owner = true, 
   });
   const ctx = createTriggerContext({
     activeSessions, log, projectsDir, isPtyAlive: () => true, clearOwner,
+    refreshProcessTable: () => cliSessionState.refreshProcessTable(),
     getLiveDescriptor: id => cliSessionState.findLiveProcess(id),
     getCliStatus: id => id === 'new-id' || (statusForOld && id === 'old-id') ? idleStatus : undefined,
     resolveSessionId: id => sessionTransitions.currentSessionId(id),
@@ -525,6 +527,7 @@ test('queued compact rechecks ownership after taking the tab lock', async t => {
   assert.ok(!s.written.includes('/compact'), '/compact for new-id reached the tab now writing third-id');
   assert.equal(results.compact.ok, false);
   assert.match(results.compact.error, /ownership/);
+  assert.notEqual(results.compact.internal, true);
 });
 
 test('a torn writer descriptor with a nested CLI preserves the live alias', async t => {
@@ -592,7 +595,8 @@ test('a direct key refuses a readable writer that moved to another conversation'
   fs.writeFileSync(s.descriptorPath, JSON.stringify({ ...descriptor, sessionId: 'third-id' }));
   const { direct } = await runTriggers(s.ctx, [['direct', { sessionId: 'new-id', command: '/compact' }]], 2000);
   assert.equal(direct.ok, false);
-  assert.match(direct.error, /ownership/);
+  assert.equal(direct.error, 'trigger target ownership could not be verified before writing');
+  assert.notEqual(direct.internal, true);
   assert.deepEqual(s.written, []);
 });
 
@@ -675,6 +679,182 @@ test('changing the resolved tab during a lock wait fails without writing and rel
   const results = await run;
   assert.equal(results.queued.ok, false);
   assert.match(results.queued.error, /tab lock/);
+  assert.notEqual(results.queued.internal, true);
   assert.equal(results.next.ok, true, JSON.stringify(results.next));
   assert.deepEqual(s.written.filter(data => data !== '\r'), ['next']);
 });
+
+const ft = n => String(134360000000000000n + BigInt(n) * 1000n);
+
+function directTab(t, cliInit, descriptors) {
+  const root = mkTmp('sw-r4-');
+  const proj = path.join(root, 'projects'); const dir = path.join(root, 'desc');
+  fs.mkdirSync(path.join(proj, 'proj'), { recursive: true }); fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(proj, 'proj', 'sess.jsonl'), JSON.stringify({ sessionId: 'sess', type: 'user', message: { content: 'x' } }) + '\n');
+  for (const [pid, d] of Object.entries(descriptors)) fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid: Number(pid), kind: 'interactive', ...d }));
+  const written = [];
+  const session = { pty: { pid: 4242, write: d => { written.push(d); if (d === '\r') session._cliBusy = true; } }, cwd: root, projectFolder: 'proj', knownJsonlFiles: new Set(['sess.jsonl']), composerState: { pending: 0, lastInputAt: 0 }, _cliBusy: false };
+  const activeSessions = new Map([['sess', session]]);
+  cliSessionState.init({ dir, activeSessions, log, onIdle: noop, ...cliInit });
+  const clearOwner = (...a) => cliSessionState.clearOwner(...a);
+  sessionTransitions.init({ PROJECTS_DIR: proj, activeSessions, log, rekeyMcpServer: noop, clearOwner, getMainWindow: () => null });
+  const ctx = createTriggerContext({ activeSessions, log, projectsDir: proj, isPtyAlive: () => true, clearOwner,
+    refreshProcessTable: () => cliSessionState.refreshProcessTable(),
+    getLiveDescriptor: id => cliSessionState.findLiveProcess(id), resolveSessionId: id => sessionTransitions.currentSessionId(id) });
+  t.after(() => { cliSessionState.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  return { ctx, written, dir };
+}
+
+test('PA1 Windows direct key, matching CLI, table snapshot older than the CLI process', async t => {
+  let rows = new Map([[4242, { ppid: 1, created: ft(100) }]]);
+  const s = directTab(t, { platform: 'win32', isProcessAlive: () => true, readProcessTable: async () => rows },
+    { 4243: { sessionId: 'sess', pidDomain: 'win32:anchor', procStart: ft(200) } });
+  await cliSessionState.refreshProcessTable();
+  rows = new Map([[4242, { ppid: 1, created: ft(100) }], [4243, { ppid: 4242, created: ft(200) }]]);
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('PA2 Windows direct key, matching CLI, table never read yet', async t => {
+  const s = directTab(t, { platform: 'win32', isProcessAlive: () => true,
+    readProcessTable: async () => new Map([[4242, { ppid: 1, created: ft(100) }], [4243, { ppid: 4242, created: ft(200) }]]) },
+    { 4243: { sessionId: 'sess', pidDomain: 'win32:anchor', procStart: ft(200) } });
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('PB Linux sandboxed tab: CLI descriptor records its namespace pid (2)', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true, readProcStart: () => '1',
+    readParentPid: pid => (pid === 2 ? null : 1) },
+    { 2: { sessionId: 'sess', procStart: '1' } });
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('PB2 Linux sandboxed tab: namespace pid 7 is a host kernel thread under kthreadd', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true, readProcStart: () => '1',
+    readParentPid: pid => (pid === 7 ? 2 : pid === 2 ? null : 1) },
+    { 7: { sessionId: 'sess', procStart: '1' } });
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('PC Linux PID reuse: a stale descriptor names the pid of the shell between PTY and CLI', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true, readProcStart: () => '1',
+    readParentPid: pid => (pid === 4243 ? 4300 : pid === 4300 ? 4242 : 1) },
+    { 4243: { sessionId: 'sess', procStart: '1' }, 4300: { sessionId: 'crashed-long-ago', procStart: '0' } });
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('PD same id resumed elsewhere: first descriptor in readdir is a foreign process', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true, readProcStart: () => '1',
+    readParentPid: pid => (pid === 4243 ? 4242 : pid === 1000 ? 999 : 1) },
+    { 1000: { sessionId: 'sess', procStart: '1' }, 4243: { sessionId: 'sess', procStart: '1' } });
+  const { r } = await runTriggers(s.ctx, [['r', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('a direct key refuses the closest different writer even when a nested CLI names the requested id', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true, readProcStart: () => '1',
+    readParentPid: pid => pid === 4244 ? 4243 : pid === 4243 ? 4242 : 1 },
+  { 4243: { sessionId: 'other', procStart: '1' }, 4244: { sessionId: 'sess', procStart: '1' } });
+  const { refused } = await runTriggers(s.ctx, [['refused', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /ownership/);
+  assert.deepEqual(s.written, []);
+});
+
+test('a direct key delivers after one bounded refresh when the process table never answers', async t => {
+  const s = directTab(t, { platform: 'win32', isProcessAlive: () => true,
+    readProcessTable: () => new Promise(() => {}) },
+  { 4243: { sessionId: 'sess', pidDomain: 'win32:anchor', procStart: ft(200) } });
+  let refreshes = 0;
+  const refresh = s.ctx.refreshProcessTable;
+  s.ctx.refreshProcessTable = () => { refreshes++; return refresh(); };
+  const { bounded } = await runTriggers(s.ctx, [['bounded', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(bounded.ok, true, JSON.stringify(bounded));
+  assert.equal(refreshes, 1);
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+test('a direct key delivers when its ownership descriptor cannot be read', async t => {
+  const s = directTab(t, { platform: 'linux', isProcessAlive: () => true }, {});
+  t.mock.method(cliSessionState, 'clearOwner', () => { throw new Error('unreadable'); });
+  const { unreadable } = await runTriggers(s.ctx, [['unreadable', { sessionId: 'sess', command: 'hello' }]], 2000);
+  assert.equal(unreadable.ok, true, JSON.stringify(unreadable));
+  assert.deepEqual(s.written, ['hello', '\r']);
+});
+
+
+function realClearingSession(t, detectDelayMs) {
+  const projectsDir = mkTmp('sw-r4c-');
+  const folderPath = path.join(projectsDir, 'proj'); fs.mkdirSync(folderPath);
+  const descDir = path.join(projectsDir, 'desc'); fs.mkdirSync(descDir);
+  const descPath = path.join(descDir, '4243.json');
+  const writeDesc = id => fs.writeFileSync(descPath, JSON.stringify({ pid: 4243, sessionId: id, kind: 'interactive', procStart: '1' }));
+  writeDesc('old-id');
+  const old = Date.now() - 60000;
+  const oldFile = path.join(folderPath, 'old-id.jsonl');
+  fs.writeFileSync(oldFile, jsonl([prompt('old-id', old - 1000, 'earlier'), endTurn('old-id', old), system('old-id', old + 100, 'turn_duration')]));
+  fs.utimesSync(oldFile, new Date(old + 200), new Date(old + 200));
+  let current = 'old-id';
+  const status = { 'old-id': { status: 'idle', statusUpdatedAt: old + 300 } };
+  const written = []; let lastText = null;
+  const pty = { pid: 4242, write(data) {
+    written.push(data);
+    if (data !== '\r') { lastText = data; return; }
+    if (!fs.existsSync(folderPath)) return;
+    const at = Date.now();
+    if (lastText === '/clear') {
+      current = 'new-id';
+      writeDesc('new-id');
+      status['new-id'] = { status: 'idle', statusUpdatedAt: Date.now() };
+      fs.writeFileSync(path.join(folderPath, 'new-id.jsonl'), jsonl([
+        { sessionId: 'new-id', type: 'mode', mode: 'normal' },
+        { sessionId: 'new-id', type: 'user', isMeta: true, timestamp: iso(at), message: { role: 'user', content: '<local-command-caveat>Caveat: synthetic.</local-command-caveat>' } },
+        prompt('new-id', at, CLEAR_TEXT)]));
+      setTimeout(() => { if (fs.existsSync(folderPath)) sessionTransitions.detectSessionTransitions('proj'); }, detectDelayMs);
+    } else {
+      const id = current;
+      status[id] = { status: 'busy', statusUpdatedAt: Date.now() };
+      fs.appendFileSync(path.join(folderPath, id + '.jsonl'), jsonl([prompt(id, at, lastText)]));
+      setTimeout(() => {
+        if (!fs.existsSync(folderPath)) return;
+        fs.appendFileSync(path.join(folderPath, id + '.jsonl'), jsonl([endTurn(id, Date.now()), system(id, Date.now(), 'turn_duration')]));
+        status[id] = { status: 'idle', statusUpdatedAt: Date.now() };
+      }, 100);
+    }
+  } };
+  const session = { pty, cwd: '/w', projectFolder: 'proj', exited: false, isPlainTerminal: false, knownJsonlFiles: new Set(['old-id.jsonl']), forkFrom: null, realSessionId: null, _cliBusy: false, composerState: { pending: 0, lastInputAt: 0 } };
+  const activeSessions = new Map([['old-id', session]]);
+  cliSessionState.init({ dir: descDir, activeSessions, log, platform: 'linux', onIdle: noop, isProcessAlive: () => true, readProcStart: () => '1', readParentPid: pid => (pid === 4243 ? 4242 : 1) });
+  const clearOwner = (...a) => cliSessionState.clearOwner(...a);
+  sessionTransitions.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log, rekeyMcpServer: noop, clearOwner, getDescriptorRevision: () => cliSessionState.getDescriptorRevision() });
+  const ctx = createTriggerContext({ activeSessions, log, projectsDir, isPtyAlive: () => true, clearOwner,
+    refreshProcessTable: () => cliSessionState.refreshProcessTable(),
+    getLiveDescriptor: id => cliSessionState.findLiveProcess(id),
+    getCliStatus: id => status[id] && { ...status[id] }, resolveSessionId: id => sessionTransitions.currentSessionId(id) });
+  t.after(() => { cliSessionState.stop(); fs.rmSync(projectsDir, { recursive: true, force: true }); });
+  return { ctx, written, activeSessions };
+}
+
+for (const delay of [600, 2600]) {
+  test(`[/clear, reply] with production ownership and re-key detection delayed ${delay} ms`, async t => {
+    const verifyMs = process.env.SWITCHBOARD_SUBMIT_VERIFY_MS;
+    process.env.SWITCHBOARD_SUBMIT_VERIFY_MS = '2000';
+    t.after(() => { process.env.SWITCHBOARD_SUBMIT_VERIFY_MS = verifyMs; });
+    const s = realClearingSession(t, delay);
+    const { clear } = await runTriggers(s.ctx, [['clear', { sessionId: 'old-id', chain: [{ command: '/clear' }, { command: 'reply' }] }]], 6000);
+    assert.equal(clear.ok, true, JSON.stringify(clear));
+    assert.deepEqual(s.written.filter(d => d !== '\r'), ['/clear', 'reply']);
+    assert.equal(clear.sessionId, 'old-id');
+    assert.equal(clear.steps_completed, 2);
+  });
+}
