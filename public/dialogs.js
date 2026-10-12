@@ -379,6 +379,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
 
   // Keyboard support
   function onKey(e) {
+    if (e.defaultPrevented || (!overlay.contains(e.target) && e.target !== document.body)) return;
     if (e.key === 'Escape') close();
     if (e.key === 'Enter' && !e.target.matches('input:not([type="checkbox"])')) {
       e.preventDefault();

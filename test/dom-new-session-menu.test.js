@@ -207,6 +207,25 @@ for (const target of ['selected mode', 'checkbox', 'Start', 'body']) {
   });
 }
 
+for (const handled of [false, true]) {
+  test(`Enter ${handled ? 'already handled' : 'from a control outside the dialog'} does not start New Session`, async () => {
+    const ctx = setup();
+    try {
+      const launches = [];
+      ctx.window.launchNewSession = (project, options) => { launches.push({ project, options }); };
+      const dialog = await openConfigure(ctx);
+      const outside = ctx.document.createElement('textarea');
+      ctx.document.body.appendChild(outside);
+      const target = handled ? dialog.querySelector('.new-session-start-btn') : outside;
+      target.focus();
+      if (handled) target.addEventListener('keydown', e => e.preventDefault(), { once: true });
+      ctx.press('Enter');
+      assert.equal(launches.length, 0);
+      assert.ok(ctx.document.querySelector('.new-session-overlay'));
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('a mode click keeps focus on the rebuilt selected mode', async () => {
   const ctx = setup();
   try {
