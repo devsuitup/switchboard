@@ -257,7 +257,7 @@ refused on click.
 
 **Proposed convergence.** Rule: in a fixed action set (detail panel, header,
 tool bar, dialog), **disable with a reason** (`title` = why + what to do), as
-Refresh does. In a hover action bar, **hide**. A control that will refuse is
+Refresh does. In an action bar revealed by hover or keyboard focus (`:focus-visible`), **hide**. A control that will refuse is
 disabled up front, never enabled-then-refused. Refusal texts name an existing
 control.
 
@@ -267,7 +267,7 @@ control.
 
 | Mechanism | Where | Notes |
 |---|---|---|
-| Button text flash `Failed` + reason in `title` for 3 s | `surfaceStopFailure` (`sidebar.js:21-28`): Archive, slug Archive, folder Archive, Delete pre-check, Delete stop; `confirmAndStopSession` (`app.js:1062-1067`) | the bar is `opacity:0` unless hovered (`style.css:1162-1179`): if the pointer left, nothing is seen |
+| Button text flash `Failed` + reason in `title` for 3 s | `surfaceStopFailure` (`sidebar.js:21-28`): Archive, slug Archive, folder Archive, Delete pre-check, Delete stop; `confirmAndStopSession` (`app.js:1062-1067`) | the bar is `opacity:0` unless hovered or a button has keyboard focus (`:focus-visible`) (`style.css`, `.session-actions:has(:focus-visible)`): after both pointer and keyboard focus leave, nothing is seen |
 | Button text flash `Failed`, reason **only in console** | Row Delete failure (`sidebar.js:1547-1554`) | the user never learns why |
 | Button flash success | `flashButtonText` (`viewer-toolbar.js:28-39`): `Saved!` (`file-panel.js:446, 2089`, `viewer-toolbar.js:266`), `✓` / `Copied!` (`viewer-toolbar.js:271, 276`) | on `.icon-btn` it always flashes **green**, whatever the text; today no `Failed` caller is an `.icon-btn` (verified from the caller list) |
 | `window.alert` | 12 sites: `sidebar.js:1158, 1225, 1227, 1230, 1305, 1349`; `viewer-panel.js:290, 293`; `file-panel.js:448, 451`; `activity-trace-panel.js:70, 133` | blocking, OS-styled |
@@ -342,7 +342,7 @@ a two-button question.
 
 | List | Row anatomy, in order | Selection / open | Keyboard | Grouping, folding | Empty state |
 |---|---|---|---|---|---|
-| Sidebar sessions (`buildSessionItem`, `sidebar.js:1655-1827`) | pin · state slot · [badges `terminal` / `bg` / remote alias] name · meta (`time · N msgs`, short id, status) · hover action bar (up to 8 icon buttons, `1808-1818`) | click opens/resumes/attaches/reads (`1431-1439`); active row highlighted; dblclick on name renames (`1460-1463`); right-click menu (`1444-1448`) | **none on rows**; action buttons tabbable but invisible (`opacity:0`, no `:focus-within`, `style.css:1162-1179`); a shortcut cycles open sessions (`grid-view.js:560-575`) | project → worktree → slug group (`buildSlugGroup`, `sidebar.js:492`) → subagents; slug-group header click toggles, not focusable (`1382-1386`); rows with a PTY promoted to the top of a group (`563-570`) | `Select a session from the sidebar to begin.` (`index.html:54`, main area) |
+| Sidebar sessions (`buildSessionItem`, `sidebar.js:1655-1827`) | pin · state slot · [badges `terminal` / `bg` / remote alias] name · meta (`time · N msgs`, short id, status) · action bar revealed by hover or keyboard focus (`:focus-visible`) (up to 8 icon buttons, `1808-1818`) | click opens/resumes/attaches/reads (`1431-1439`); active row highlighted; dblclick on name renames (`1460-1463`); right-click menu (`1444-1448`) | **none on rows**; action buttons tabbable, visible while a button has keyboard focus (`:focus-visible`), with a focus ring on that button (`style.css`, `.session-actions:has(:focus-visible)`, `:where(button:focus-visible)`); a shortcut cycles open sessions (`grid-view.js:560-575`) | project → worktree → slug group (`buildSlugGroup`, `sidebar.js:492`) → subagents; slug-group header click toggles, not focusable (`1382-1386`); rows with a PTY promoted to the top of a group (`563-570`) | `Select a session from the sidebar to begin.` (`index.html:54`, main area) |
 | Agents (`renderAgentRow`, `agents-view.js:213-231`) | state slot · name · agent · emoji + state word · cwd · age | click selects; dblclick attaches (`563-569`) | group headers focusable, Enter/Space (`270, 570-576`); **rows not focusable**; verbs need a selected row | none / state / project, worktree sub-groups, persisted collapse | `No background agents. claude --bg starts one, or New agent.` even when rows are only hidden by the Finished filter (`374-376`) while the header counts them (`365`) |
 | Grid cards (`grid-view.js:170-215`) | dot · name · project · Stop · terminal · footer (`Running`/`Stopped`, date) | mousedown focuses; dblclick header → single view | arrows via shortcut | grouped by project or flat (`index.html:120`, `aria-pressed`); a merged row with two open members gives **two** cards (`grid-view.js:338-355`) | — |
 | Changes, Touched | file rows with state badge | click opens diff | see `.ai/contexts/changes-view.md` | | `No changes` / `No changes in the session directory` (`file-panel.js:1505`); `No files touched by the file tools` (`touched-files-view.js:387`) |
@@ -364,8 +364,7 @@ a two-button question.
 **Proposed convergence.**
 - One row brick (B3) with variants; Agents rows and grid card headers use its
   name/state/project part.
-- Rows focusable (roving `tabindex`), Enter opens/selects, the action bar
-  visible on `:focus-within`.
+- Rows focusable (roving `tabindex`), Enter opens/selects.
 - Every folding header is B10 (Agents' model).
 - Every list has three states: empty (why + next action, filter-aware),
   loading, error (distinct style).
@@ -393,9 +392,9 @@ row-action buttons (`.session-*-btn`, `1181-1290`), `.restore-toast-btn`
 81`).
 
 **Focus.** Base ring `:where(button:focus-visible)` (`style.css:50-53`);
-`outline: none` on 8 selectors, one of them a button,
-`.session-launch-config-btn` (`style.css:1229-1232`), which beats the
-zero-specificity ring (WCAG 2.4.7).
+`outline: none` on 7 selectors, none of them a button. Action buttons retain
+the shared ring on keyboard focus (`:focus-visible`), including
+`.session-launch-config-btn`.
 
 **Motion.** Braille spinner animating `content` (`style.css:1032-1054`),
 LED blink (`1321`), `pulse-dot` at 2 s (`880`), 1.5 s (`1842`) and 1 s
@@ -408,9 +407,9 @@ the issues'): #543 whole-sidebar rebuild on every `projects-changed`
 (0.6–0.7 s at 900 sessions; each row builds its SVG buttons by `innerHTML`,
 `sidebar.js:1764-1806`); #544 the braille spinner animates `content`, forcing
 style and layout; #545 every grid card refits on undebounced `resize`/`focus`.
-`transition: all` ×40 (supposed small cost). One `:has()` left,
-`#agents-worktrees-toggle:has(input:disabled)` (`style.css:1742`), not on a
-hot path (supposed cheap).
+`transition: all` ×40 (supposed small cost). `:has()` handles the disabled
+Agents worktree toggle and reveals the session and file-panel action bars
+on keyboard focus (`:focus-visible`).
 
 **Proposed convergence.**
 - State and text-tier colours as tokens (`--state-busy`, `--state-attention`,
@@ -419,7 +418,6 @@ hot path (supposed cheap).
   text raised to 4.5:1 and icon buttons to 3:1 against `--surface-chrome`
   (contrast computed from CSS only, not rendered).
 - One button brick (B4) with variants (icon, text, primary, danger, toggle).
-- Drop `outline: none` on buttons.
 - One spinner (B12) animating `transform` only, paused under reduced motion;
   attention becomes a static high-contrast mark.
 - B3 rows built from a cloned `<template>` (the brick-level part of #543).

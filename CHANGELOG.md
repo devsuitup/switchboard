@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Global Settings now lets you receive beta versions before they reach the stable channel. Turn on **Receive beta versions** and save; turning it off keeps your installed version until a newer stable release is available, except a beta already downloaded, which still installs at the next quit. (#549)
 
 ### Fixed
+- Buttons that appear only on hover now also appear with a focus ring when you reach them with the keyboard, in the sidebar, the grid and the file panel. (#574)
 - Sessions running outside Switchboard, including remote sessions, keep their activity indicators when the sidebar refreshes or you toggle Show archived sessions. After a local session's process ends, it stops showing as alive or waiting at the next sidebar refresh. (#573)
 - A session waiting for your input now shows an orange ring instead of the same grey dot as an idle one. In the Agents view, live jobs show green and finished ones dim. (#563)
 

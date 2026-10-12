@@ -96,8 +96,9 @@ word read from it; raw CLI words move to tooltips/detail.
 - **States.** active (open tab), `has-running-pty`, `is-alive`,
   `needs-attention`, `response-ready`, `cli-busy`, `has-busy-agents`.
 - **Behaviour.** Click (`1431-1439`), dblclick name to rename (`1460-1463`),
-  right-click menu (`1444-1448`, B14). **No keyboard**: not focusable; action
-  bar `opacity:0` except on `:hover` (`style.css:1162-1179`).
+  right-click menu (`1444-1448`, B14). The row is not focusable; its action
+  buttons are tabbable. The action bar appears on hover or when a button has
+  keyboard focus (`:focus-visible`) (`style.css`, `.session-actions:has(:focus-visible)`).
 - **Tokens.** `--surface-chrome` for the action-bar fade (`style.css:1171`);
   the rest literal.
 - **Duplicates.** Agents row (`renderAgentRow`, `agents-view.js:213-231`)
@@ -107,9 +108,9 @@ word read from it; raw CLI words move to tooltips/detail.
   buttons via `innerHTML` per row (`sidebar.js:1764-1806`).
 
 **Proposed convergence.** One row built from a cloned `<template>`;
-focusable with roving `tabindex`, Enter opens; action bar visible on
-`:focus-within`; a merged-row mark (member count) in the meta line; Agents
-rows and grid headers reuse its name/state/project part.
+focusable with roving `tabindex`, Enter opens; a merged-row mark (member
+count) in the meta line; Agents rows and grid headers reuse its
+name/state/project part.
 
 ## B4. Action button
 
@@ -198,8 +199,9 @@ focus) with a form body.
 - **Divergences.** Same CSS twice (`style.css:78-96` and `137-154`), same
   position (overlap supposed); message `white-space: nowrap`
   (`style.css:96, 154`); no `role="status"`/`aria-live`.
-- **Duplicates that should become it.** 12 `alert()` calls; the hover-only
-  `Failed` flashes; the info-only `confirm` (`resume-guard.js:33`).
+- **Duplicates that should become it.** 12 `alert()` calls; the `Failed`
+  flashes visible on hover or keyboard focus (`:focus-visible`); the
+  info-only `confirm` (`resume-guard.js:33`).
 
 **Proposed convergence.** One notice brick, stacked, wrapping, `role`
 `status` (info) or `alert` (error), an optional action, an optional
