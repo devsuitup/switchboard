@@ -404,6 +404,28 @@ test('each upgrade of a check is waited for by its own report, not by the first 
   assert.equal(quits.length, 1);
 });
 
+test('a check joined by two upgrades stays in flight until the last upgrade reports', async () => {
+  const quits = [];
+  const t = setup({ quit: () => quits.push(1) });
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  const id = t.sent[0].args[0];
+  t.win.emit('close', t.closeEvent());
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  const [toClose, toQuit] = t.reasons().map((m) => m.args[2]);
+  t.answer(id, true);
+  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toClose);
+  await tick();
+  const install = t.guard.confirmQuit(t.win);
+  await tick();
+  assert.equal(t.checks().length, 1, 'an install arriving before the quit upgrade reports joins the question');
+  assert.equal(quits.length, 0);
+  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toQuit);
+  await tick();
+  assert.equal(quits.length, 1);
+  assert.equal(await install, true);
+  assert.equal(t.checks().length, 1, 'still one question');
+});
+
 test('the preload passes an upgrade token through, and back with the report', () => {
   const listeners = new Map();
   const sends = [];
