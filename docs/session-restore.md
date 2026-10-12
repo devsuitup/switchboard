@@ -181,7 +181,9 @@ is selected, the last active one included.
   open; either way the row is open, so every member of it is dropped from the
   marked and saved sessions. **Don't restore** and deleting the row drop every
   marked member of it, and the session keys resume a marked member under its
-  own id.
+  own id, or show the member already open. After a reload, a member whose row
+  already has a running member is not marked, whatever its place in the saved
+  set: the row is open.
 - Reloading the window starts nothing. A saved session whose process is still
   running is reattached, the selected one included; the others are marked. A
   process that ends during the reload is not started again.

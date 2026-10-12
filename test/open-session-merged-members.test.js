@@ -21,7 +21,7 @@ function setup(t) {
     checked.push(id);
     return { candidates: [{ sessionId: 'D' }], unresolved: false };
   };
-  const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'], declarations: ['openingSessions', 'dormantWorkingSet'] });
+  const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'], declarations: ['openingSessions', 'dormantWorkingSet'] });
   return { ctx, openSession, shown, prompts, checked };
 }
 

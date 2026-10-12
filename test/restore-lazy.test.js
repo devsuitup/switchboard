@@ -96,7 +96,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
       'sessionOpenedOutsideRestore', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight',
       'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['dismissDormantSession', 'persistWorkingSet', 'pendingRestoreEntries', 'tickRestorePlanner', 'openSession', 'openSessionNow',
-      'reopenActiveSessionAfterReload', 'settleContinuedInFlight', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+      'reopenActiveSessionAfterReload', 'settleContinuedInFlight', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
   });
   const gridSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'grid-view.js'), 'utf8');
   vm.runInContext(['var gridViewActive = false;', 'var gridFocusedSessionId = null;',

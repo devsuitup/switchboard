@@ -539,8 +539,9 @@ function navigateSession(direction, { repeat = false } = {}) {
   if (ids.length === 0 || !next) return;
   if (gridViewActive) {
     focusGridCard(next);
-  } else if (isDormantSession(next) && indexedSessionById(next)) {
-    openSession(indexedSessionById(next)).catch(err => console.error('[navigateSession]', err));
+  } else if (isDormantSession(next) && indexedRowOf(next)) {
+    const row = indexedRowOf(next);
+    openSession(rowOpenId(row) ? row : indexedSessionById(next)).catch(err => console.error('[navigateSession]', err));
   } else {
     showSession(next);
   }

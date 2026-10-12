@@ -177,8 +177,13 @@ function dismissDormantSession(sessionId) {
   refreshSidebar();
 }
 
+function indexedRowOf(sessionId) {
+  return localMergedMemberRows.get(sessionId) || sessionMap.get(sessionId)
+    || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(sessionId));
+}
+
 function indexedSessionById(sessionId) {
-  const row = sessionMap.get(sessionId) || [...sessionMap.values()].find(s => s.mergedMemberIds?.includes(sessionId));
+  const row = sessionMap.get(sessionId) || indexedRowOf(sessionId);
   return row && (row.sessionId === sessionId ? row : { ...row, sessionId, mergedMemberIds: [] });
 }
 
@@ -479,7 +484,11 @@ async function tickRestorePlanner() {
         const reattached = live.has(item.sessionId) && indexed
           && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
         const open = openSessions.get(item.sessionId);
-        if (!reattached && (!open || open.closed)) {
+        const row = indexedRowOf(item.sessionId);
+        if (!reattached && row && rowOpenId(row)) {
+          clearDormantRow(item.sessionId);
+          restoreInFlight.delete(item.sessionId);
+        } else if (!reattached && (!open || open.closed)) {
           const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
           dormantWorkingSet.set(item.sessionId, { item, index });
           restoreInFlight.delete(item.sessionId);

@@ -166,7 +166,7 @@ test('the reload path resumes the remembered session as an automatic resume', as
     restoreWorkingSet: async () => { calls.push('working set'); },
     restoreAgentsViewAtStartup() {},
   });
-  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
+  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
   await restoreStartupSessions();
   assert.deepEqual(calls, [
     { session: SESSION, options: undefined, automatic: true },

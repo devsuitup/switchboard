@@ -63,7 +63,7 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode =
       'dedup', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone',
       'runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries',
       'showRestoreNotice', 'showNotRestoredNotice', 'showLiveElsewhereNotice', 'showColdCacheNotice',
-      'restoreStartupSessions', 'reopenActiveSessionAfterReload',, 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'
+      'restoreStartupSessions', 'reopenActiveSessionAfterReload',, 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'
     ],
   });
   Object.assign(h.window, {
@@ -213,11 +213,12 @@ test('a remembered active id absent from all rows only restores the working set'
     activeSessionId: 'missing',
     openSessions: new Map(),
     sessionMap: new Map([['A', { sessionId: 'A', mergedMemberIds: ['B'] }]]),
+    localMergedMemberRows: new Map(),
     openSession: async session => { calls.push(session.sessionId); },
     restoreWorkingSet: async () => { calls.push('working set'); },
     restoreAgentsViewAtStartup() {},
   });
-  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
+  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
   await assert.doesNotReject(restoreStartupSessions);
   assert.deepEqual(calls, ['working set']);
   assert.equal(ctx.window._startupResumeResolutions, null);

@@ -52,7 +52,7 @@ async function withHarness(setup, fn) {
     setup(window, calls);
     const { openSession } = loadAppFunctions(ctx.context, {
       declarations: ['ptyGenerations', 'pendingOpens', 'continuationRetryCancelled', 'openingSessions'],
-      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession', 'openSessionNow', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
     });
     await fn({ openSession, window, calls });
   } finally {
