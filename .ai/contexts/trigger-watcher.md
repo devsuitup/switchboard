@@ -59,6 +59,8 @@ free**.
 
 ### Re-keyed sessions
 
+A proven `continued-in` conversation is reached through the tab's re-key to its new id, with no continuation lookup fallback.
+
 A fork or a `/clear` re-keys the open session in `activeSessions` under its new
 id (`session-transitions.js`; see cli-session-state.md, "Owner of a /clear
 transcript"), while a chain keeps the id it was given, and `/clear` is one of

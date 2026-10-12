@@ -29,6 +29,7 @@ let activeSessions = null;
 let onIdle = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
+let readProcStart = defaultReadProcStart;
 let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
 let readProcessTable = defaultReadProcessTable;
@@ -153,6 +154,7 @@ function refreshProcessTable() {
   if (processTableFresh()) return Promise.resolve(processTable.map);
   if (processTableInFlight) return processTableInFlight;
   const epoch = processTableEpoch;
+  const observedAt = now();
   const inFlight = (async () => {
     let map = null;
     try {
@@ -161,7 +163,7 @@ function refreshProcessTable() {
       log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
     }
     if (epoch === processTableEpoch) {
-      processTable = { at: now(), map };
+      processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
       if (map) notifyDescriptorsChanged();
     }
@@ -267,6 +269,7 @@ function init(ctx) {
   onIdle = ctx.onIdle;
   log = ctx.log || { info() {}, debug() {}, warn() {}, error() {} };
   isProcessAlive = ctx.isProcessAlive || defaultIsProcessAlive;
+  readProcStart = ctx.readProcStart || defaultReadProcStart;
   readProcStartMany = ctx.readProcStartMany
     || (ctx.readProcStart
       ? async (pids) => new Map(pids.map((pid) => [pid, ctx.readProcStart(pid)]))
@@ -335,6 +338,13 @@ function readAllDescriptors() {
     if (d && isProcessAlive(d.pid)) out.push(d);
   }
   return out;
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function getDescriptorIdentity(snapshot = {}) {
+  Object.assign(snapshot, readWriterDescriptors());
+  if (!snapshot.descriptors) return null;
+  return JSON.stringify([...new Set([...snapshot.descriptors.values()].map(d => JSON.stringify([d.sessionId, d.pid])))].sort());
 }
 
 function onDescriptorsChanged(listener) {
@@ -649,8 +659,10 @@ async function findLiveProcess(sessionId, { exclude = () => false } = {}) {
 }
 
 // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
-function clearOwner(sessionId, ptyPid) {
+function clearOwner(sessionId, ptyPid, { closestWriter = false, descriptorSnapshot } = {}) {
   if (typeof sessionId !== 'string' || !sessionId || !Number.isInteger(ptyPid)) return 'pending';
+  if (closestWriter) return closestWriterOwner(sessionId, ptyPid,
+    descriptorSnapshot && descriptorSnapshot.descriptors ? descriptorSnapshot : readWriterDescriptors());
   let names;
   try { names = fs.readdirSync(dir); } catch { return 'pending'; }
   const key = sessionId.toLowerCase();
@@ -681,6 +693,82 @@ function clearOwner(sessionId, ptyPid) {
     current = parent;
   }
   return 'other';
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function readWriterDescriptors() {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return {}; }
+  const descriptors = new Map(), unreadable = new Set();
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      if (!parseDescriptor(JSON.stringify(raw))) { unreadable.add(Number(path.basename(name, '.json'))); continue; }
+      if (isProcessAlive(raw.pid)) {
+        raw.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs;
+        descriptors.set(raw.pid, raw);
+      }
+    } catch { unreadable.add(Number(path.basename(name, '.json'))); }
+  }
+  return { descriptors, unreadable };
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function closestWriterOwner(sessionId, ptyPid, { descriptors, unreadable }) {
+  if (!descriptors) return 'pending';
+  const matches = [...descriptors.values()].filter(raw => raw.sessionId.toLowerCase() === sessionId.toLowerCase());
+  if (matches.length === 0) return 'absent';
+  if (platform === 'darwin') return 'unsupported';
+  if (processTableEnabled) startProcessTableRefresh();
+  let verdict = 'pending', uncertain = false;
+  for (const raw of matches) {
+    let owner = descriptorWriterOwner(raw, ptyPid, descriptors, unreadable);
+    if (owner === 'other' && processTableEnabled
+      && processTable.observedAt < raw.descriptorMtimeMs) owner = 'pending';
+    if (owner === 'mine') return 'mine';
+    if (owner === 'pending') uncertain = true;
+    else verdict = owner;
+  }
+  return uncertain ? 'pending' : verdict;
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function descriptorWriterOwner(raw, ptyPid, descriptors, unreadable) {
+  if (processTableEnabled) {
+    const leaf = tableEntry(raw.pid);
+    if (!leaf || leaf.created == null || raw.pidDomain !== 'win32:anchor'
+      || typeof raw.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(raw.procStart)) return 'pending';
+    if (!leafIsTheDescriptorWriter(raw)) return 'other';
+  }
+  let current = raw.pid;
+  const visited = new Set();
+  for (let depth = 0; depth < 64 && current > 1; depth++) {
+    const descriptor = descriptors.get(current);
+    if (descriptor && !processTableEnabled) {
+      let actual;
+      try { actual = readProcStart(current); } catch { return 'pending'; }
+      if (!canCompareProcStart(descriptor) || actual == null
+        || String(actual) !== String(descriptor.procStart)) return 'pending';
+    }
+    if (current !== raw.pid && descriptor) {
+      if (processTableEnabled && !leafIsTheDescriptorWriter(descriptor)) return 'pending';
+      return 'other';
+    }
+    if (current === ptyPid) return 'mine';
+    if (visited.has(current)) return 'pending';
+    visited.add(current);
+    const parent = readParentPid(current);
+    if (parent == null || unreadable.has(parent)) return 'pending';
+    if (parent <= 1) return 'other';
+    if (processTableEnabled) {
+      const child = tableEntry(current), above = tableEntry(parent);
+      if (!child || !above || child.created == null || above.created == null) return 'pending';
+      if (child.created < above.created) return 'other';
+    }
+    current = parent;
+  }
+  return current <= 1 ? 'other' : 'pending';
 }
 
 function ownPidTest(ptyPids) {
@@ -765,6 +853,7 @@ module.exports = {
   onDescriptorsChanged,
   onStatusesChanged,
   readAllDescriptors,
+  getDescriptorIdentity,
   parseDescriptor,
   ownProcessFilter,
   makePtyPids,

@@ -1065,6 +1065,63 @@ constant; the CSS dropped `space-between` for a plain `gap`, with
 `margin-left: auto` on `.session-status` alone so it — not the short id —
 is the element whose position depends on how much room is left.
 
+## Proven continuation re-key
+
+`session-transitions.js` scans the active transcript with
+`scanContinuationIndex` from `session-continuations.js`. Every valid
+`continued-in` target is considered, including transcripts already in
+`knownJsonlFiles` when the tab opened. A record alone cannot move a tab:
+`clearOwner(target, pty.pid, { closestWriter: true })` must return `mine`.
+This opt-in check accepts only the descriptor writer closest to the PTY;
+nested CLI jobs below that writer cannot take its tab, including when the
+PTY pid is itself the CLI writer. On Linux, every
+descriptor encountered, including one on the PTY pid, must have a `procStart`
+matching field 22 of the live process's `/proc/<pid>/stat`. A missing,
+unreadable or mismatched start leaves ownership `pending`. An older Linux CLI
+that writes no `procStart` never re-keys (fail-safe). Windows retains
+the `win32:anchor` creation-time check. Other `clearOwner`
+callers retain their existing policy. A target already held by a live tab is
+left alone. The check relies on published descriptors; it cannot identify a
+descriptorless CLI among shell ancestors.
+
+Re-keying is supported for native Windows tabs and Linux outside the Linux
+sandbox. WSL tabs on Windows are excluded: their descriptors are not in the
+Windows descriptor directory.
+Sandbox descriptors contain pids from their own namespace, which this host
+process cannot reliably match to its PTY. On macOS the CLI publishes no
+`win32:anchor` evidence; the opt-in check returns a cached `unsupported`
+verdict without running `ps -A` or keeping a recheck timer alive. Neither
+case re-keys the tab, so a trigger addressed to the new id can still fail
+with `session not found`.
+
+`pending` and `absent` use the existing one-second /clear recheck timer while the target
+transcript is less than 60 seconds old. `unknown`, `other`, and errors do not
+re-key. Incomplete source indexing uses the same timer until the source is
+fully scanned, including old transcripts. Each scan consumes at most 1 MiB
+and resumes from its cached offset. A malformed EOF is retried only while
+the source is fresh; missing process ancestry is `pending`, never cached
+as a definite `other`.
+
+An `other`, stale `absent` (no live descriptor names the target), or `unsupported`
+verdict is cached per tab and target transcript until that file's
+mtime or the set of descriptor `(sessionId, pid)` pairs changes. The identity
+is read once per detection pass from live descriptors; status changes and
+process-table refresh notifications do not invalidate it. Identity and
+ownership share one full directory snapshot per detection pass, including
+descriptors beyond the agents view's 1000-file cap. Only a matching live
+descriptor starts a Windows process-table refresh. An `other` result from a
+table whose read began before the target descriptor's mtime is `pending`
+instead, allowing a later table to prove ownership. No such cache is used
+when descriptor identity is unavailable.
+
+A proven continuation uses the same `rekeySession` operation as fork and
+/clear: it moves `activeSessions`, records `currentSessionId` resolution,
+re-keys MCP and activity, and resets subagent scanning. The existing
+`session-forked` renderer handler receives kind `continuation`, moves the
+open entry and sidebar mapping to the new id, and schedules working-set
+persistence with that id. It keeps the conversation metadata; only /clear
+creates a fresh-session placeholder.
+
 ## Known limits
 
 - **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s

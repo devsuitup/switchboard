@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { readSubagentMeta, classifyUserText } = require('./read-session-file');
+const { scanContinuationIndex } = require('./session-continuations');
 const { enabled: TRACE, trace } = require('./activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
 
@@ -8,7 +9,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, setTimeoutFn;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -18,6 +19,7 @@ function init(ctx) {
   rekeyMcpServer = ctx.rekeyMcpServer;
   rekeyActivity = ctx.rekeyActivity || (() => {});
   clearOwner = ctx.clearOwner || (() => 'pending');
+  getDescriptorIdentity = ctx.getDescriptorIdentity || (() => null);
   setTimeoutFn = ctx.setTimeout || setTimeout;
   rekeyed.clear();
   signalsCache.clear();
@@ -418,6 +420,64 @@ function isFresh(filePath) {
   return ageMs(filePath) < CLEAR_OWNER_WAIT_MS;
 }
 
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function rekeySession(sessionId, newId, session, currentFiles, kind) {
+  log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
+  session.knownJsonlFiles = new Set(currentFiles);
+  session.realSessionId = newId;
+  session.knownSubagents = null;
+  session._prevDirMtime = undefined;
+  session._subFileList = null;
+  session._continuation = null;
+  activeSessions.delete(sessionId);
+  activeSessions.set(newId, session);
+  recordRekey(sessionId, newId);
+  rekeyMcpServer(sessionId, newId);
+  rekeyActivity(sessionId, newId);
+  const mainWindow = getMainWindow();
+  if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('session-forked', sessionId, newId, kind);
+  }
+}
+
+// see .ai/contexts/session-state.md ("Proven continuation re-key")
+function detectContinuation(sessionId, session, folderPath, currentFiles, descriptorIdentity, descriptorSnapshot) {
+  const sourceId = session.realSessionId || sessionId;
+  const sourceFile = path.join(folderPath, sourceId + '.jsonl');
+  let cached = session._continuation;
+  if (!cached || cached.sourceId !== sourceId) cached = session._continuation = { sourceId, index: null, other: new Map() };
+  let index;
+  try {
+    cached.index = scanContinuationIndex(sourceFile, sourceId, cached.index);
+    index = JSON.parse(cached.index);
+  } catch { return false; }
+  if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder);
+  const targets = new Set(index.ids);
+  for (const target of cached.other.keys()) if (!targets.has(target)) cached.other.delete(target);
+  let identity;
+  for (const newId of targets) {
+    if (newId === sourceId || !currentFiles.includes(newId + '.jsonl') || isLive(newId)) continue;
+    const file = path.join(folderPath, newId + '.jsonl');
+    let mtimeMs;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { continue; }
+    try { identity ??= descriptorIdentity(); } catch { continue; }
+    const previous = cached.other.get(newId);
+    if (identity != null && previous && previous.mtimeMs === mtimeMs && previous.identity === identity) continue;
+    let owner;
+    try { owner = clearOwner(newId, session.pty && session.pty.pid, { closestWriter: true, descriptorSnapshot }); } catch { continue; }
+    if (owner === 'mine') {
+      rekeySession(sessionId, newId, session, currentFiles, 'continuation');
+      return true;
+    }
+    const waiting = (owner === 'pending' || owner === 'absent') && isFresh(file);
+    if (owner === 'other' || (owner === 'absent' && !waiting) || owner === 'unsupported') cached.other.set(newId, { mtimeMs, identity });
+    else cached.other.delete(newId);
+    if (waiting) scheduleRecheck(session.projectFolder);
+  }
+  return false;
+}
+
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
@@ -425,6 +485,9 @@ function detectSessionTransitions(folder) {
   try {
     currentFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
   } catch { return; }
+  let descriptorIdentity;
+  const descriptorSnapshot = {};
+  const readIdentity = () => (descriptorIdentity ??= getDescriptorIdentity(descriptorSnapshot));
 
   for (const [sessionId, session] of [...activeSessions]) {
     // Run subagent detection for all non-exited, non-terminal sessions in this folder
@@ -439,6 +502,8 @@ function detectSessionTransitions(folder) {
       }
       continue;
     }
+
+    if (detectContinuation(sessionId, session, folderPath, currentFiles, readIdentity, descriptorSnapshot)) continue;
 
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
 
@@ -519,25 +584,7 @@ function detectSessionTransitions(folder) {
       }
 
       if (matched) {
-        log.info(`[session-transition] ${sessionId} → ${newId} (${signals.cleared && !awaitingFork ? 'clear' : 'fork'})`);
-        session.knownJsonlFiles = new Set(currentFiles);
-        session.realSessionId = newId;
-        // Subagent scanning follows realSessionId into a different directory —
-        // drop the state keyed to the old one so the new one bootstraps.
-        session.knownSubagents = null;
-        session._prevDirMtime = undefined;
-        session._subFileList = null;
-        activeSessions.delete(sessionId);
-        activeSessions.set(newId, session);
-        recordRekey(sessionId, newId);
-        // Re-key MCP server to match new session ID
-        rekeyMcpServer(sessionId, newId);
-        rekeyActivity(sessionId, newId);
-        const mainWindow = getMainWindow();
-        if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('session-forked', sessionId, newId, signals.cleared && !awaitingFork ? 'clear' : 'fork');
-        }
+        rekeySession(sessionId, newId, session, currentFiles, signals.cleared && !awaitingFork ? 'clear' : 'fork');
         break; // Only one transition per session per flush
       }
     }
