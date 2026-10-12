@@ -191,7 +191,8 @@ function runElectron(executable, args, options) {
 
 async function main({ checkout = path.resolve(__dirname, '..'), env = process.env,
   clean = false, run = runCommand, launch = runElectron, fixtures = prepareFixtures,
-  log = console.log, warn = console.error } = {}) {
+  log = console.log, warn = console.error,
+  removeDir = dir => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } = {}) {
   const pr = env.PR;
   validatePr(pr);
   const isolated = validateIsolated(env.ISOLATED);
@@ -250,9 +251,9 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   } finally {
     if (launchCwd) {
       try {
-        fs.rmSync(launchCwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        removeDir(launchCwd);
       } catch (error) {
-        warn(`Could not remove ${launchCwd}: ${error.message}`);
+        warn(`Could not remove ${launchCwd}: ${error.message}. Delete it by hand${allowClaude ? ': it holds the claude login' : ''}.`);
       }
     }
   }
