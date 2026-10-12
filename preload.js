@@ -167,12 +167,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('unsaved-ready');
   },
   onUnsavedCheckReason: (callback) => {
-    ipcRenderer.on('unsaved-check-reason', (_event, id, reason) => callback(id, reason));
+    ipcRenderer.on('unsaved-check-reason', (_event, id, reason, token) => callback(id, reason, token));
   },
   unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
   unsavedDialog: (open) => ipcRenderer.send('unsaved-dialog', open === true),
   unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
-  unsavedCheckReasonDone: (id) => ipcRenderer.send('unsaved-check-reason-done', id),
+  unsavedCheckReasonDone: (id, token) => ipcRenderer.send('unsaved-check-reason-done', id, token),
   onExitFlush: (callback) => {
     ipcRenderer.on('exit-flush', () => callback());
   },

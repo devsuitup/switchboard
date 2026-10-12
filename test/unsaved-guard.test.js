@@ -42,7 +42,9 @@ function setup({ timeoutMs = 1000, probeMs = 1500, dialogCeilingMs, quit, closeF
   const closeEvent = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
   const answer = (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed);
   const ack = (id) => ipcMain.emit('unsaved-check-ack', {}, id);
-  const reasonDone = (id) => ipcMain.emit('unsaved-check-reason-done', {}, id);
+  const reasonDone = (id) => {
+    for (const m of sent) if (m.channel === 'unsaved-check-reason' && m.args[0] === id) ipcMain.emit('unsaved-check-reason-done', {}, id, m.args[2]);
+  };
   const pong = (token) => ipcMain.emit('unsaved-pong', { sender: wc }, token);
   const pings = () => sent.filter((m) => m.channel === 'unsaved-ping');
   const checks = () => sent.filter((m) => m.channel === 'unsaved-check');
@@ -305,7 +307,7 @@ test('a quit that joins an unanswered reload check tells the renderer it is now 
   assert.equal(t.guard.beforeQuit(t.closeEvent(), t.win), true);
   t.win.emit('close', t.closeEvent());
   assert.deepEqual(t.sent.map((m) => m.channel), ['unsaved-check', 'unsaved-check-reason'], 'one upgrade, no second question');
-  assert.deepEqual(t.sent[1].args, [id, 'quit']);
+  assert.deepEqual(t.sent[1].args.slice(0, 2), [id, 'quit']);
   t.answer(id, true);
   t.reasonDone(id);
   await tick();
@@ -688,7 +690,7 @@ test('a quit that joins a close question tells the page, and a page that has not
   const [mark] = t.armed(2500);
   t.guard.beforeQuit(t.closeEvent(), t.win);
   assert.equal(mark.cleared, true);
-  assert.deepEqual(t.reasons().map((m) => m.args), [[t.sent[0].args[0], 'quit']]);
+  assert.deepEqual(t.reasons().map((m) => m.args.slice(0, 2)), [[t.sent[0].args[0], 'quit']]);
   const [bound] = t.armed(2500);
   assert.ok(bound, 'SIGTERM or a logout cannot wait for ever on a busy page');
   bound.fn();

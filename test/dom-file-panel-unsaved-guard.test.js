@@ -135,7 +135,7 @@ function wireGuard(ctx) {
   Object.assign(ctx.window.api, {
     unsavedCheckAck: (id) => ipcMain.emit('unsaved-check-ack', {}, id),
     unsavedCheckResult: (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed),
-    unsavedCheckReasonDone: (id) => ipcMain.emit('unsaved-check-reason-done', {}, id),
+    unsavedCheckReasonDone: (id, token) => ipcMain.emit('unsaved-check-reason-done', {}, id, token),
     unsavedDialog: (open) => ipcMain.emit('unsaved-dialog', { sender: wc }, open),
   });
   const close = () => win.emit('close', { preventDefault() {} });

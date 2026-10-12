@@ -155,8 +155,8 @@ function initFilePanel() {
     const reasonChanged = new Map();
     const answeredReloads = new Set();
     if (window.api.onUnsavedCheckReason) {
-      window.api.onUnsavedCheckReason((id, reason) => {
-        const done = () => { if (window.api.unsavedCheckReasonDone) window.api.unsavedCheckReasonDone(id); };
+      window.api.onUnsavedCheckReason((id, reason, token) => {
+        const done = () => { if (window.api.unsavedCheckReasonDone) window.api.unsavedCheckReasonDone(id, token); };
         if (!unsavedCheckReasons.has(id)) {
           if (answeredReloads.delete(id) && typeof window.flushStateForExit === 'function') {
             window.flushStateForExit().catch((err) => console.error('[exit-flush]', err)).finally(done);

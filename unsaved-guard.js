@@ -57,29 +57,24 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   });
 
   const reasonWaits = new Map();
-  ipcMain.on('unsaved-check-reason-done', (_event, id) => {
-    const waits = reasonWaits.get(id);
-    if (waits) for (const release of [...waits]) release();
+  ipcMain.on('unsaved-check-reason-done', (_event, _id, token) => {
+    const release = reasonWaits.get(token);
+    if (release) release();
   });
 
-  function waitReasonDone(id, wc) {
+  function waitReasonDone(token, wc) {
     let release = null;
     const done = new Promise((resolve) => {
       const timer = setTimeoutFn(() => release(), timeoutMs);
       const onGone = () => release();
       release = () => {
-        const waits = reasonWaits.get(id);
-        if (waits) {
-          waits.delete(release);
-          if (!waits.size) reasonWaits.delete(id);
-        }
+        reasonWaits.delete(token);
         clearTimeoutFn(timer);
         wc.removeListener('render-process-gone', onGone);
         wc.removeListener('destroyed', onGone);
         resolve();
       };
-      if (!reasonWaits.has(id)) reasonWaits.set(id, new Set());
-      reasonWaits.get(id).add(release);
+      reasonWaits.set(token, release);
       wc.on('render-process-gone', onGone);
       wc.on('destroyed', onGone);
     });
@@ -97,8 +92,9 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       if (REASON_RANK[reason] > REASON_RANK[inflight.entry.reason]) {
         const joined = inflight;
         joined.held = true;
-        const sent = joined.entry.upgrade(reason);
-        const wait = waitReasonDone(joined.entry.id, win.webContents);
+        const token = nextId++;
+        const sent = joined.entry.upgrade(reason, token);
+        const wait = waitReasonDone(token, win.webContents);
         if (!sent) wait.release();
         joined.asked = joined.asked.then((result) => {
           if (!result.proceed || result.ended) {
@@ -131,10 +127,10 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
         if (entry.reason !== 'close') entry.timer = setTimeoutFn(() => entry.finish(true, 'unanswered'), dialogs.has(wc) ? dialogCeilingMs : timeoutMs);
         else if (!dialogs.has(wc)) entry.timer = setTimeoutFn(() => { entry.overdue = true; }, timeoutMs);
       };
-      entry.upgrade = (to) => {
+      entry.upgrade = (to, token) => {
         entry.reason = to;
         let sent = true;
-        try { wc.send('unsaved-check-reason', id, to); } catch { sent = false; }
+        try { wc.send('unsaved-check-reason', id, to, token); } catch { sent = false; }
         entry.arm();
         return sent;
       };
