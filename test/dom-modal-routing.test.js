@@ -9,9 +9,9 @@ const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
 
-function setup() {
+function setup(api = {}) {
   const writes = [];
-  const ctx = setupTerminalDom({ api: { sendInput: (...args) => writes.push(args), getEffectiveSettings: async () => ({}) } });
+  const ctx = setupTerminalDom({ api: { sendInput: (...args) => writes.push(args), getEffectiveSettings: async () => ({}), ...api } });
   const { window } = ctx;
   window.cachedAllProjects = [];
   for (const name of ['choice-dialog.js', 'app-dialogs.js', 'setting-defaults.js', 'dialogs.js']) {
@@ -146,17 +146,117 @@ test('N1: terminal and document shortcuts and PTY input stop under an open quest
   } finally { ctx.destroy(); }
 });
 
-test('N1: xterm data cannot bypass the modal key handler', async () => {
+test('N1: xterm protocol replies reach every PTY while a modal is open', async () => {
   const ctx = setup();
+  const entries = [];
   try {
-    const entry = ctx.window.createTerminalEntry({ sessionId: 's1' });
+    vm.runInContext(fs.readFileSync(require.resolve('@xterm/xterm'), 'utf8'), ctx.context);
+    const Xterm = ctx.window.Terminal;
+    ctx.window.Terminal = class extends Xterm {
+      loadAddon() {}
+      get unicode() { return { activeVersion: '' }; }
+      open() {}
+    };
+    for (const [sessionId, options] of [['s1', {}], ['background', {}], ['shell', { panel: true }]]) {
+      entries.push(ctx.window.createTerminalEntry({ sessionId }, options));
+    }
     const pending = ctx.window.appConfirm({ danger: true });
-    entry.terminal._onData('composed text');
-    assert.deepEqual(ctx.writes, []);
+    for (const entry of entries) {
+      await new Promise(resolve => entry.terminal.write('\x1b[6n\x1b[c\x1b[?1$p', resolve));
+    }
+    assert.deepEqual(ctx.writes, ['s1', 'background', 'shell'].flatMap(id => [
+      [id, '\x1b[1;1R'], [id, '\x1b[?1;2c'], [id, '\x1b[?1;2$y'],
+    ]));
     ctx.doc.querySelector('.choice-dialog-cancel').click();
     await pending;
-    entry.terminal._onData('allowed');
-    assert.deepEqual(ctx.writes, [['s1', 'allowed']]);
+    await new Promise(resolve => entries[0].terminal.write('\x1b[6n', resolve));
+    assert.deepEqual(ctx.writes.at(-1), ['s1', '\x1b[1;1R']);
+  } finally {
+    for (const entry of entries) entry.terminal.dispose();
+    ctx.destroy();
+  }
+});
+
+test('registering a modal removes focus from the terminal textarea', () => {
+  const ctx = setup();
+  try {
+    ctx.textarea.focus();
+    const overlay = ctx.doc.createElement('div');
+    overlay.innerHTML = '<div class="modal-dialog">Dialog</div>';
+    ctx.doc.body.append(overlay);
+    const unregister = ctx.window.registerModal({ overlay, cancel() {} });
+    assert.equal(ctx.doc.activeElement, overlay.firstElementChild);
+    assert.equal(ctx.doc.activeElement.tabIndex, -1);
+    unregister();
+    overlay.remove();
+  } finally { ctx.destroy(); }
+});
+
+for (const mode of [null, 'plan', 'dangerous-skip']) {
+  test(`Resume focuses its selected ${mode || 'default'} mode and Enter resumes from the opener`, async () => {
+    const ctx = setup({ getEffectiveSettings: async () => mode === 'dangerous-skip'
+      ? { dangerouslySkipPermissions: true } : { permissionMode: mode } });
+    try {
+      const actions = [];
+      ctx.window.openSession = (session, options) => actions.push({ session, options });
+      const session = { sessionId: 's1', projectPath: '/fixture' };
+      ctx.textarea.focus();
+      await ctx.window.showResumeSessionDialog(session);
+      assert.equal(ctx.doc.activeElement.dataset.mode, String(mode));
+      assert.equal(ctx.press(ctx.doc.activeElement, 'Enter').defaultPrevented, true);
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].session, session);
+      assert.equal(actions[0].options.permissionMode, mode === 'plan' ? 'plan' : undefined);
+      assert.equal(actions[0].options.dangerouslySkipPermissions, mode === 'dangerous-skip' ? true : undefined);
+      assert.equal(ctx.window.hasOpenModal(), false);
+      assert.deepEqual(ctx.writes, []);
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('remote launch focuses its path and Enter launches from the opener', () => {
+  const ctx = setup();
+  try {
+    const actions = [];
+    ctx.window.launchRemoteSession = (project, request) => actions.push({ project, request });
+    const project = { projectPath: '/fixture', remoteAlias: 'box' };
+    ctx.textarea.focus();
+    ctx.window.showRemoteLaunchDialog(project);
+    assert.equal(ctx.doc.activeElement, ctx.doc.getElementById('rld-path'));
+    assert.equal(ctx.press(ctx.doc.activeElement, 'Enter').defaultPrevented, true);
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].project, project);
+    assert.equal(actions[0].request.cwd, '/fixture');
+    assert.equal(ctx.window.hasOpenModal(), false);
+    assert.deepEqual(ctx.writes, []);
+  } finally { ctx.destroy(); }
+});
+
+test('outside keys keep native defaults while app shortcuts stay suppressed under a modal', async () => {
+  const ctx = setup();
+  try {
+    const pending = ctx.window.appConfirm({ danger: true });
+    const native = [['I', { ctrlKey: true, shiftKey: true }], ['z', { ctrlKey: true }],
+      ['a', { ctrlKey: true }], ['a', { metaKey: true }], ['F12', {}], ['F11', {}], ['y', {}]];
+    for (const [key, init] of native) {
+      assert.equal(ctx.press(ctx.textarea, key, init).defaultPrevented, false, key);
+    }
+    assert.equal(ctx.press(ctx.textarea, 'g', { ctrlKey: true, shiftKey: true }).defaultPrevented, true);
+    ctx.window.setAppShortcuts({ gridToggle: { primary: true, alt: false, shift: true, key: 'x' } });
+    assert.equal(ctx.press(ctx.textarea, 'x', { ctrlKey: true, shiftKey: true }).defaultPrevented, true);
+    assert.equal(ctx.press(ctx.textarea, 'F6').defaultPrevented, true);
+    assert.deepEqual(ctx.writes, []);
+    ctx.press(ctx.doc.body, 'Escape');
+    assert.equal(await pending, false);
+  } finally { ctx.destroy(); }
+});
+
+test('unused question-idle adapters are absent from the renderer API', () => {
+  const ctx = setup();
+  try {
+    for (const name of ['appDialogsIdle', 'whenChoiceDialogsIdle', 'whenModalQuestionsIdle']) {
+      assert.equal(typeof ctx.window[name], 'undefined', name);
+    }
   } finally { ctx.destroy(); }
 });
 

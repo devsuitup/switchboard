@@ -487,6 +487,7 @@ function showRemoteLaunchDialog(project) {
     start();
     return true;
   } });
+  dialog.querySelector('#rld-path').focus();
 }
 
 async function showResumeSessionDialog(session) {
@@ -614,10 +615,12 @@ async function showResumeSessionDialog(session) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const unregister = registerModal({ overlay, cancel: close, bodyEnter: true, enter: e => {
-    if (e.target.matches('input, button')) return false;
+    if (e.target.matches('input, button:not(.permission-option)')) return false;
     resume();
     return true;
   } });
+  (modeGrid.querySelector(dangerousSkip ? '[data-mode="dangerous-skip"]' : '.permission-option.selected') ||
+    modeGrid.querySelector('button')).focus();
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")

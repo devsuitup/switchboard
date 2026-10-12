@@ -23,10 +23,6 @@ function showChoiceDialog(options = {}) {
   });
 }
 
-function whenChoiceDialogsIdle() {
-  return whenModalQuestionsIdle();
-}
-
 function openChoiceDialog({
   title,
   message,

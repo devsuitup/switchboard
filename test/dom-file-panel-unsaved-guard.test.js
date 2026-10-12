@@ -681,6 +681,37 @@ function loadAppDialogs(ctx) {
 function dialogKey(ctx, key, init = {}) {
   ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
 }
+
+for (const reason of ['quit', 'close', 'reload']) {
+  test(`${reason} opens the unsaved guard on top of New Session without closing it first`, async () => {
+    const ctx = setup();
+    try {
+      loadAppDialogs(ctx);
+      for (const f of ['setting-defaults.js', 'dialogs.js']) {
+        const filename = path.join(PUBLIC_DIR, f);
+        vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+      }
+      await dirtyTab(ctx, 's1', A);
+      ctx.window.api.getEffectiveSettings = async () => ({});
+      await ctx.window.showNewSessionDialog({ projectPath: '/repo' });
+      const underneath = ctx.window.document.querySelector('.new-session-overlay');
+      const checking = ctx.calls.check(73, reason);
+      assert.deepEqual(ctx.calls.acks.map(x => x.id), [73]);
+      await flush();
+      assert.ok(dialog(ctx), 'a configuration modal must not delay the unsaved guard');
+      assert.equal(underneath.isConnected, true);
+      assert.ok(Number(dialog(ctx).parentElement.style.zIndex) > Number(underneath.style.zIndex));
+      assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+      dialogKey(ctx, 'Escape');
+      await checking;
+      assert.deepEqual(ctx.calls.answers, [{ id: 73, proceed: false }]);
+      assert.equal(underneath.isConnected, true);
+      dialogKey(ctx, 'Escape');
+      assert.equal(underneath.isConnected, false);
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('a session deletion question waits for the unsaved guard to close', async () => {
   const ctx = setup();
   try {

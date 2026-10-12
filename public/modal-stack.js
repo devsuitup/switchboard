@@ -2,7 +2,6 @@
 const modalStack = [];
 const modalQuestions = [];
 const modalIdleQuestions = [];
-const modalQuestionIdleWaiters = [];
 let modalQuestionActive = false;
 let modalIdleTimer = null;
 
@@ -17,6 +16,11 @@ function registerModal({ overlay, cancel, enter, bodyEnter = false }) {
     Number(top?.overlay.style.zIndex) || 0) + 1);
   const modal = { overlay, cancel, enter, bodyEnter };
   modalStack.push(modal);
+  if (!overlay.contains(document.activeElement)) {
+    const dialog = overlay.querySelector('[role="dialog"], .modal-dialog, .new-session-dialog') || overlay;
+    dialog.tabIndex = -1;
+    dialog.focus();
+  }
   return () => {
     const index = modalStack.indexOf(modal);
     if (index !== -1) {
@@ -66,7 +70,9 @@ function routeModalKey(event) {
       event.target.click();
     }
   } else if (!inside) {
-    event.preventDefault();
+    if (typeof matchShortcut === 'function' && typeof SHORTCUT_DEFS !== 'undefined' &&
+        [...SHORTCUT_DEFS.map(def => def.id), ...Object.keys(FIXED_SHORTCUTS)]
+          .some(id => matchShortcut(id, event, isMac, appShortcuts))) event.preventDefault();
     event.stopImmediatePropagation();
   }
 }
@@ -104,16 +110,7 @@ function drainModalQuestions() {
     modalIdleTimer = null;
     if (modalQuestionActive || modalQuestions.length) { drainModalQuestions(); return; }
     if (modalIdleQuestions.length) {
-      if (!hasOpenModal()) openModalQuestion(modalIdleQuestions.shift());
-      return;
+      openModalQuestion(modalIdleQuestions.shift());
     }
-    for (const resolve of modalQuestionIdleWaiters.splice(0)) resolve();
   }, 0);
-}
-
-function whenModalQuestionsIdle() {
-  return new Promise(resolve => {
-    modalQuestionIdleWaiters.push(resolve);
-    drainModalQuestions();
-  });
 }
