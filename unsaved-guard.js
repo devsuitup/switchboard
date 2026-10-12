@@ -37,16 +37,21 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
     if (done) done();
   });
 
-  function waitReasonDone(id) {
+  function waitReasonDone(id, wc) {
     let release = null;
     const done = new Promise((resolve) => {
       const timer = setTimeoutFn(() => release(), timeoutMs);
+      const onGone = () => release();
       release = () => {
         reasonWaits.delete(id);
         clearTimeoutFn(timer);
+        wc.removeListener('render-process-gone', onGone);
+        wc.removeListener('destroyed', onGone);
         resolve();
       };
       reasonWaits.set(id, release);
+      wc.on('render-process-gone', onGone);
+      wc.on('destroyed', onGone);
     });
     return { done, release };
   }
@@ -54,16 +59,21 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
   function askFull(win, reason) {
     if (inflight) {
       if (inflight.reason === 'reload') {
-        inflight.reason = reason;
-        const { id } = inflight;
-        const wait = waitReasonDone(id);
+        const joined = inflight;
+        joined.reason = reason;
+        joined.held = true;
+        const { id } = joined;
+        const wait = waitReasonDone(id, win.webContents);
         try { win.webContents.send('unsaved-check-reason', id, reason); } catch { wait.release(); }
-        inflight.asked = inflight.asked.then((result) => {
+        joined.asked = joined.asked.then((result) => {
           if (!result.proceed || result.unanswered) {
             wait.release();
             return result;
           }
           return wait.done.then(() => result);
+        }).then((result) => {
+          if (inflight === joined) inflight = null;
+          return result;
         });
       }
       return inflight.asked;
@@ -82,7 +92,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, logoffCan
         wc.removeListener('render-process-gone', onGone);
         wc.removeListener('destroyed', onGone);
         settled = true;
-        inflight = null;
+        if (inflight && inflight.id === id && !inflight.held) inflight = null;
         resolve({ proceed, unanswered });
       };
       entry.timer = setTimeoutFn(() => entry.finish(true, true), timeoutMs);

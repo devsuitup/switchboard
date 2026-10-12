@@ -364,6 +364,20 @@ test('a close or quit arriving while a joined quit waits for the late save joins
   assert.equal(t.win.closes, 1, 'the held close goes through once the save is done');
 });
 
+test('a joined quit the page declined leaves nothing for a later close to join', async () => {
+  const t = setup();
+  t.wc.emit('will-prevent-unload', t.closeEvent());
+  t.guard.beforeQuit(t.closeEvent(), t.win);
+  t.answer(t.sent[0].args[0], false);
+  await tick();
+  t.win.emit('close', t.closeEvent());
+  const checks = t.sent.filter((m) => m.channel === 'unsaved-check');
+  assert.equal(checks.length, 2, 'the later close is asked about');
+  t.answer(checks[1].args[0], true);
+  await tick();
+  assert.equal(t.win.closes, 1);
+});
+
 test('a page that dies while a joined quit waits for its late save releases the quit at once', async () => {
   for (const event of ['render-process-gone', 'destroyed']) {
     const quits = [];
