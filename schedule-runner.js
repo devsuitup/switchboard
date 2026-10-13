@@ -206,7 +206,8 @@ function initialScheduleProjects(listProjectSettingKeys) {
 function scheduleRegistry(getSetting, setSetting, seed = () => []) {
   const read = () => {
     const stored = getSetting('scheduleProjects');
-    const projects = Array.isArray(stored) ? stored : seed().map(p => path.resolve(p));
+    const projects = (Array.isArray(stored) ? stored : seed().map(p => path.resolve(p)))
+      .filter(p => typeof p === 'string' && p !== '');
     const seen = new Set();
     const unique = projects.filter(p => {
       const key = normalizeProjectPath(p);

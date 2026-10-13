@@ -85,3 +85,23 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.deepEqual(Array.from(h.reload().list()), []);
   });
 }
+
+test('a registry holding non-string entries drops them and keeps the valid paths', t => {
+  const h = setup(t, { platform: 'linux', stored: [null, 42, '', '/a'] });
+  assert.deepEqual(Array.from(h.registry.list()), ['/a']);
+  assert.deepEqual(h.get('scheduleProjects'), ['/a']);
+  assert.equal(h.writes(), 1);
+});
+
+test('Windows paths that resolve keep their on-disk spelling and stay distinct', t => {
+  const onDisk = { 'C:\\x\\Proj': 'C:\\x\\Proj', 'C:\\x\\proj': 'C:\\x\\proj' };
+  const h = setup(t, { stored: ['C:\\x\\Proj', 'C:\\x\\proj'], realpath: value => onDisk[value] });
+  assert.deepEqual(Array.from(h.registry.list()), ['C:\\x\\Proj', 'C:\\x\\proj']);
+  assert.equal(h.writes(), 0);
+});
+
+test('Windows paths that do not resolve match whatever their case', t => {
+  const h = setup(t, { stored: ['C:\\X\\P'] });
+  h.registry.add('c:\\x\\p');
+  assert.deepEqual(h.get('scheduleProjects'), ['C:\\X\\P']);
+});

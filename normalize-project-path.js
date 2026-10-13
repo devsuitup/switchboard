@@ -1,9 +1,11 @@
 const fs = require('fs');
 
 function normalizeProjectPath(value) {
-  try { value = fs.realpathSync.native(value); } catch {}
+  if (typeof value !== 'string') return value;
+  let resolved = true;
+  try { value = fs.realpathSync.native(value); } catch { resolved = false; }
   value = value.replace(/\\/g, '/');
-  return process.platform === 'win32' ? value.toLowerCase() : value;
+  return !resolved && process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 module.exports = { normalizeProjectPath };

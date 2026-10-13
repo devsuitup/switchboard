@@ -36,8 +36,11 @@ Only an absent or non-array setting invokes the seed; an empty array stays empty
 Path comparisons share `normalizeProjectPath` in `normalize-project-path.js`
 with `main.js`'s Archive checks and unarchive catch-up reset: use
 `fs.realpathSync.native` when available, replace backslashes with slashes,
-then lowercase only on Windows. A missing directory uses its spelled path;
-Linux and macOS retain case-sensitive comparisons.
+then lowercase only on Windows and only when the path did not resolve: a
+path that resolves keeps its on-disk spelling, so case-sensitive Windows
+directories stay distinct. A missing directory uses its spelled path;
+Linux and macOS retain case-sensitive comparisons. On every platform the
+registry collapses realpath-equivalent spellings (a symlink and its target).
 
 `add` retains the existing spelling of an equivalent project; `remove` removes
 every equivalent spelling. Reads also collapse persisted duplicates and seed

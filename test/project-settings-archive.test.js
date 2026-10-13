@@ -248,7 +248,10 @@ test('a nested worktree schedule is not caught up either when its project is una
 
 for (const target of ['root', 'worktree']) {
   test(`Windows unarchive with different path case resets the ${target} scheduler key`, t => {
-    const h = setup(t, { cron: '0 * * * *', platform: 'win32', realpath: value => value });
+    let h;
+    const onDisk = value => value.toLowerCase().startsWith(h.projectPath.toLowerCase())
+      ? h.projectPath + value.slice(h.projectPath.length) : value;
+    h = setup(t, { cron: '0 * * * *', platform: 'win32', realpath: onDisk });
     const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
     const commands = path.join(worktree, '.claude', 'commands');
     fs.mkdirSync(commands, { recursive: true });
