@@ -239,7 +239,12 @@ function defaultReadCliProcess(pid) {
   if (processTableEnabled) {
     const commandLine = processTableFresh() ? tableEntry(pid)?.commandLine : null;
     if (!commandLine) return null;
-    args = [...commandLine.matchAll(/"([^"]*)"|(\S+)/g)].map(match => match[1] ?? match[2]);
+    const executable = /^"([^"]*)"|^((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]*?\.exe)(?=\s|$)|^(\S+)/i.exec(commandLine.trim());
+    if (!executable) return null;
+    args = [executable[1] ?? executable[2] ?? executable[3]];
+    const rest = commandLine.trim().slice(executable[0].length);
+    const tokens = /"([^"]*)"|((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]*?\.(?:[cm]?js))(?=\s|$)|(\S+)/gi;
+    args.push(...[...rest.matchAll(tokens)].map(match => match[1] ?? match[2] ?? match[3]));
   } else {
     if (platform !== 'linux') return null;
     try { args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return null; }
@@ -247,8 +252,9 @@ function defaultReadCliProcess(pid) {
   if (!args.length) return null;
   const name = value => value.replaceAll('\\', '/').split('/').pop().toLowerCase();
   if (/^claude(?:\.exe)?$/.test(name(args[0]))) return true;
+  const script = args.slice(1).find(arg => !arg.startsWith('-'));
   return /^node(?:\.exe)?$/.test(name(args[0]))
-    && args.slice(1).some(arg => /(?:^|[\\/])(?:claude(?:\.js)?|@anthropic-ai[\\/]claude-code[\\/]cli\.js)$/i.test(arg));
+    && typeof script === 'string' && /(?:^|[\\/])@anthropic-ai[\\/]claude-code[\\/]cli\.js$/i.test(script);
 }
 
 // see .ai/contexts/cli-session-state.md

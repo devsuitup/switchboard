@@ -78,11 +78,18 @@ remains `mine` beside a missing branch; an unreachable writer stays `unknown`
 until the traversal is complete. Cycles, malformed records and index waits
 remain unresolved. Restore's terminal-candidate and `unresolved` policy is unchanged.
 
-Each delivery traversal scans every transcript node to completion in 1 MiB
-chunks, under a total 64 MiB read cap. A cap overflow or read failure leaves
-ownership unknown; chunk boundaries alone do not. Completed indexes are shared
-by all bindings of a watcher, keyed by path, size and mtime, with at most 128
-entries. Append, replacement or a changed mtime invalidates the cached index.
+Admission skips the background-job traversal when the observed tab writer already
+names the requested id. Other delivery traversals scan transcript nodes in 1 MiB
+chunks, under a total 512 MiB transcript-size cap and the existing 32-edge/128-node
+limits. A cap overflow or read failure leaves ownership unknown; chunk boundaries
+alone do not. The last serialized index, including an unfinished line, is shared
+by all bindings of a watcher per path, with at most 128 entries. Unchanged size,
+mtime and file identity reuse the index without reading. Append resumes from the
+indexed byte offset after checking file identity and matching the first and last
+64 indexed bytes; only appended data and these validation bytes are read. A
+truncate, replacement, different head/tail or same-size mtime change rescans from
+byte zero. These boundary checks cannot detect arbitrary edits in the middle
+of a file that also grows while retaining its indexed head and tail.
 
 Delivery pins the session object, `session.generation`, PTY object and available
 process-start identity. Busy/composer reads stay on that object; descriptor and

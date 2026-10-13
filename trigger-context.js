@@ -134,7 +134,7 @@ function createTriggerContext(deps) {
     }
     function graph(id) {
       if (!projectsDir || !session.projectFolder) return { unresolved: true, reachable: [], candidates: [] };
-      let remainingBytes = 64 * 1024 * 1024;
+      let remainingBytes = 512 * 1024 * 1024;
       return resolveContinuationsSync(id, nodeId => {
         const folder = path.join(projectsDir, session.projectFolder);
         const names = fs.readdirSync(folder).filter(name => name.endsWith('.jsonl') && normalizeSessionId(name.slice(0, -6)) === normalizeSessionId(nodeId));
@@ -143,26 +143,27 @@ function createTriggerContext(deps) {
         const file = path.join(folder, names[0]);
         try {
           const stat = fs.statSync(file);
+          if (stat.size > remainingBytes) return null;
+          remainingBytes -= stat.size;
           const cached = indexes.get(file);
-          let index = cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs ? cached.index : null;
+          const sameFile = cached?.dev === stat.dev && cached.ino === stat.ino;
+          let index = sameFile && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs ? cached.index : null;
           if (!index) {
-            if (stat.size > remainingBytes) return null;
-            let serialized;
+            const fd = fs.openSync(file, 'r');
+            const buffer = Buffer.alloc(Math.min(64, stat.size));
+            let head;
+            try { head = buffer.toString('hex', 0, fs.readSync(fd, buffer, 0, buffer.length, 0)); }
+            finally { fs.closeSync(fd); }
+            let serialized = sameFile && head.startsWith(cached.head) ? cached.serialized : undefined;
             do {
-              const chunkBytes = Math.min(1024 * 1024, remainingBytes);
-              if (chunkBytes < 1) return null;
-              const before = index?.bytes || 0;
-              serialized = scanContinuationIndex(file, names[0].slice(0, -6), serialized, chunkBytes);
+              serialized = scanContinuationIndex(file, names[0].slice(0, -6), serialized, 1024 * 1024);
               index = JSON.parse(serialized);
-              remainingBytes -= index.bytes - before;
             } while (!index.complete && index.bytes < index.size);
             const after = fs.statSync(file);
             if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return null;
-            if (index.complete) {
-              indexes.delete(file);
-              indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, index });
-              if (indexes.size > 128) indexes.delete(indexes.keys().next().value);
-            }
+            indexes.delete(file);
+            indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, head, index, serialized });
+            if (indexes.size > 128) indexes.delete(indexes.keys().next().value);
           }
           return { index: { ...index, ids: index.ids.map(normalizeSessionId), unresolved: index.unresolved || !index.complete } };
         } catch (err) { return err.code === 'ENOENT' ? { missing: true } : null; }
@@ -251,11 +252,15 @@ function createTriggerContext(deps) {
     };
     binding.admit = async deadline => {
       if (own) {
-        const continuation = graph(normalizeSessionId(requestedId));
-        for (const candidate of continuation.candidates || []) {
-          if (lookup(candidate.sessionId)) continue;
-          const background = source.findDeliveryTab(candidate.sessionId, []).background;
-          if (background) fail('background session, not attached here', background);
+        let writer;
+        try { writer = observe(pid)?.writer; } catch {}
+        if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)) {
+          const continuation = graph(normalizeSessionId(requestedId));
+          for (const candidate of continuation.candidates || []) {
+            if (lookup(candidate.sessionId)) continue;
+            const background = source.findDeliveryTab(candidate.sessionId, []).background;
+            if (background) fail('background session, not attached here', background);
+          }
         }
       }
       await binding.prepareText(deadline);

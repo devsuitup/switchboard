@@ -17,6 +17,16 @@ test('delivery process table preserves quoted commands alongside process start i
 for (const [label, commandLine, nested] of [
   ['native CLI', '"C:\\Program Files\\Claude\\claude.exe" -p task', true],
   ['Node CLI', '"C:\\Program Files\\nodejs\\node.exe" "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js" -p task', true],
+  ['Node launcher argument', 'node launcher.js claude', false],
+  ['Node launcher CLI path argument', 'node launcher.js C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js', false],
+  ['Node launcher native CLI argument', 'node launcher.js C:\\Program Files\\Claude\\claude.exe', false],
+  ['unrelated claude script', 'node C:\\tools\\claude.js', false],
+  ['unquoted Node CLI script', 'node C:\\Program Files\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\cli.js -p task', true],
+  ['unquoted Node executable and CLI script', 'C:\\Program Files\\nodejs\\node.exe C:\\Program Files\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\cli.js -p task', true],
+  ['quoted Node executable and unquoted CLI script', '"C:\\Program Files\\nodejs\\node.exe" C:\\Program Files\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\cli.js -p task', true],
+  ['Node option before CLI script', 'node --no-warnings "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js" -p task', true],
+  ['native executable name', 'claude.exe -p task', true],
+  ['unquoted native executable path', 'C:\\Program Files\\Claude\\claude.exe -p task', true],
   ['shell mentioning CLI', 'cmd.exe /c echo claude.exe', false],
   ['unreadable command', undefined, null],
 ]) {

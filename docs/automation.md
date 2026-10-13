@@ -231,6 +231,7 @@ keeps reaching its tab only along proven `continued-in` links. After a user
 refuses the trigger with zero bytes, even before the sidebar re-keys it. When
 ownership cannot be observed, a live direct key keeps the normal availability
 fallback; an old historical alias must prove ownership before typing.
+Beyond 512 MiB of transcripts in a continuation traversal, Switchboard cannot distinguish a cleared conversation from the live one and delivers to the tab when the requested id still directly names it.
 
 Triggers reaching the same tab are serialized through the whole command or
 chain, including verification and result production. The mandatory same-id

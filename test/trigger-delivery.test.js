@@ -186,7 +186,6 @@ for (const command of ['prompt', '/compact']) {
     const f = await provenFixture(t, 'linux');
     const pinned = f.ctx.pinDelivery('a', f.ctx.getPtyForSession('a'), command === 'prompt');
     pinned.binding.beginStep(command);
-    pinned.binding.boundEnter = true;
     pinned.binding.deadline = Date.now() + 1000;
     pinned.handle.write(command);
     pinned.binding.deadline = Date.now() - 1;
@@ -761,9 +760,18 @@ test('ADR scenario: no viable fallback fast-fails macOS, namespaces, external pr
 test('ADR scenario: an old id continued into an unattached bg job fails immediately', async t => {
   const f = fixture(t);
   f.continueTo('a', 'job'); f.descriptor('job', 400, 'bg', { jobId: '1234abcd' });
+  f.hide();
   const result = await f.run({});
   assert.equal(result.error, 'background session, not attached here'); assert.equal(result.jobId, '1234abcd');
   assert.deepEqual(f.written, []);
+});
+
+test('ADR scenario: a writer still naming R delivers without searching a continued background job', async t => {
+  const f = fixture(t);
+  f.continueTo('a', 'job'); f.descriptor('job', 400, 'bg', { jobId: '1234abcd' });
+  const result = await f.run({});
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(f.written, ['prompt', '\r']);
 });
 
 test('ADR scenario: a writer changes during turn-end wait and preserves the already written step', async t => {

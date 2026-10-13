@@ -25,6 +25,113 @@ function fixture(t, edges) {
   } };
 }
 
+function deliveryContext(f, writer) {
+  const session = { generation: 1, host: null, projectFolder: 'proj', pty: { pid: process.pid, write() {} } };
+  return createTriggerContext({ activeSessions: new Map([['a', session]]), projectsDir: f.projectsDir,
+    isPtyAlive: () => true,
+    cliSessionState: { deliveryPtyStart: () => 'start', findDeliveryTab: () => ({}) },
+    observeTabWriter: () => ({ writer: { sessionId: writer }, identity: '200:200' }),
+  });
+}
+
+async function admit(ctx) {
+  const pinned = ctx.pinDelivery('a', ctx.getPtyForSession('a'), false);
+  await pinned.binding.admit(Date.now() + 1000);
+}
+
+test('ADR growing 40 MiB transcript: the second trigger reads only appended data and validation bytes', async t => {
+  const f = fixture(t, { a: ['b'], b: [] });
+  const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { content: 'x'.repeat(4000) } }) + '\n';
+  fs.appendFileSync(file, line.repeat(Math.ceil(40 * 1024 * 1024 / line.length)));
+  const ctx = deliveryContext(f, 'b');
+  const read = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
+  await admit(ctx);
+  assert.ok(bytes >= 40 * 1024 * 1024);
+  bytes = 0;
+  await admit(ctx);
+  assert.equal(bytes, 0);
+  for (let i = 0; i < 2; i++) {
+    fs.appendFileSync(file, line);
+    bytes = 0;
+    await admit(ctx);
+    assert.ok(bytes >= Buffer.byteLength(line));
+    assert.ok(bytes <= Buffer.byteLength(line) + 256, `append read ${bytes} bytes`);
+  }
+});
+
+test('ADR admission: a writer already naming the requested id reads no continuation transcript', async t => {
+  const f = fixture(t, { a: [] });
+  const ctx = deliveryContext(f, 'a');
+  const read = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
+  await admit(ctx);
+  assert.equal(bytes, 0);
+});
+
+test('ADR continuation cache: an unfinished line resumes from the retained serialized index', async t => {
+  const f = fixture(t, { a: ['b'], b: [] });
+  const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { content: 'x'.repeat(4000) } }) + '\n';
+  fs.appendFileSync(file, line.repeat(1024) + '{"type":"continued-in",');
+  const ctx = deliveryContext(f, 'b');
+  await admit(ctx);
+  const append = '"sessionId":"a","continuedInSessionId":"b"}\n';
+  fs.appendFileSync(file, append);
+  const read = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
+  await admit(ctx);
+  assert.ok(bytes <= Buffer.byteLength(append) + 256, `unfinished line read ${bytes} bytes`);
+});
+
+for (const change of ['truncate', 'replace', 'different head']) {
+  test(`ADR continuation cache ${change}: changed evidence rescans from byte zero`, async t => {
+    const f = fixture(t, { a: ['b'], b: [], c: [] });
+    const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+    fs.appendFileSync(file, '{}\n'.repeat(1024));
+    const ctx = deliveryContext(f, 'b');
+    await admit(ctx);
+    const content = fs.readFileSync(file, 'utf8').replace('"b"', '"c"');
+    if (change === 'truncate') fs.writeFileSync(file, content.slice(0, content.indexOf('\n') + 1));
+    else if (change === 'replace') {
+      const replacement = file + '.replacement';
+      fs.writeFileSync(replacement, content + '{}\n');
+      fs.renameSync(replacement, file);
+    } else {
+      const fd = fs.openSync(file, 'r+');
+      try { fs.writeSync(fd, content); } finally { fs.closeSync(fd); }
+      fs.appendFileSync(file, '{}\n');
+    }
+    const read = fs.readSync;
+    const positions = [];
+    t.mock.method(fs, 'readSync', (...args) => { if (args[3] > 64) positions.push(args[4]); return read(...args); });
+    await assert.rejects(admit(ctx), /ownership writer/);
+    assert.equal(positions[0], 0);
+  });
+}
+
+test('ADR continuation size cap: a 65 MiB uncontinued conversation refuses a foreign writer', async t => {
+  const f = fixture(t, { a: [] });
+  const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { content: 'x'.repeat(4000) } }) + '\n';
+  fs.appendFileSync(file, line.repeat(Math.ceil(65 * 1024 * 1024 / line.length)));
+  await assert.rejects(admit(deliveryContext(f, 'foreign')), /ownership writer/);
+});
+
+test('ADR continuation size cap: over 512 MiB stays unknown without reading the transcript', async t => {
+  const f = fixture(t, { a: [] });
+  fs.truncateSync(path.join(f.projectsDir, 'proj', 'a.jsonl'), 512 * 1024 * 1024 + 1);
+  const read = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
+  await admit(deliveryContext(f, 'foreign'));
+  assert.equal(bytes, 0);
+});
+
 test('ADR continuation cache: new bindings reuse complete indexes and invalidate size and mtime changes', t => {
   const f = fixture(t, { a: [], b: [] });
   const bytes = [];
