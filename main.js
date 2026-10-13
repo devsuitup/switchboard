@@ -42,6 +42,7 @@ const { createWhatsNew } = require('./changelog');
 const { createUnsavedGuard } = require('./unsaved-guard');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
 const { cleanEnv } = require('./clean-env');
+const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./normalize-project-path');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -736,12 +737,6 @@ function skipMissedScheduleRuns(projects) {
   } catch (err) {
     log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
   }
-}
-
-function normalizeArchivedProjectPath(value) {
-  try { value = fs.realpathSync.native(value); } catch {}
-  value = value.replace(/\\/g, '/');
-  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 function isProjectSettingsArchived(projectPath) {

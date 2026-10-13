@@ -29,6 +29,31 @@ From `schedule-ipc.js`:
 - `init(log, runScheduleCommand)` — wire IPC handlers (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`).
 - `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` if missing.
 
+## Schedule project registry
+
+`scheduleRegistry` reads `scheduleProjects` on each `list`, `add` and `remove`.
+Only an absent or non-array setting invokes the seed; an empty array stays empty.
+Path comparisons share `normalizeProjectPath` in `normalize-project-path.js`
+with `main.js`'s Archive checks and unarchive catch-up reset: use
+`fs.realpathSync.native` when available, replace backslashes with slashes,
+then lowercase only on Windows. A missing directory uses its spelled path;
+Linux and macOS retain case-sensitive comparisons.
+
+`add` retains the existing spelling of an equivalent project; `remove` removes
+every equivalent spelling. Reads also collapse persisted duplicates and seed
+duplicates, keeping the first spelling (the seed still resolves its paths).
+The setting is rewritten only when seeded or when duplicates were found.
+This repairs registries created before #607 before the scheduler scans them;
+preventing new duplicates alone would still allow two runs per tick in those
+registries. The surviving spelling keeps its transcript folder and catch-up
+key, which both depend on how the scanner spells the path. Removed spellings'
+catch-up files are left unused; no catch-up record or transcript is migrated.
+
+`test/schedule-registry-paths.test.js` uses real disposable settings files with
+Windows/Linux/macOS platform seams, including missing paths and realpath
+aliases. `test/project-settings-archive.test.js` also restores a legacy Hide
+entry with different case on native Windows and verifies one scheduled run.
+
 ## Schedule file format
 
 ```markdown

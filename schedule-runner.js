@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
+const { normalizeProjectPath } = require('./normalize-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -201,18 +202,20 @@ function initialScheduleProjects(listProjectSettingKeys) {
   return [...found];
 }
 
-/**
- * The schedule registry, kept in the `scheduleProjects` setting: the projects
- * Switchboard opened a session in or the user added, seeded once by
- * `seed()` when the setting has never been written.
- */
+// see .ai/contexts/schedule-runner.md ("Schedule project registry")
 function scheduleRegistry(getSetting, setSetting, seed = () => []) {
   const read = () => {
     const stored = getSetting('scheduleProjects');
-    if (Array.isArray(stored)) return stored;
-    const seeded = [...new Set(seed().map(p => path.resolve(p)))];
-    setSetting('scheduleProjects', seeded);
-    return seeded;
+    const projects = Array.isArray(stored) ? stored : seed().map(p => path.resolve(p));
+    const seen = new Set();
+    const unique = projects.filter(p => {
+      const key = normalizeProjectPath(p);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!Array.isArray(stored) || unique.length !== stored.length) setSetting('scheduleProjects', unique);
+    return unique;
   };
   return {
     list: read,
@@ -220,12 +223,15 @@ function scheduleRegistry(getSetting, setSetting, seed = () => []) {
       if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return;
       const p = path.resolve(projectPath);
       const current = read();
-      if (!current.includes(p)) setSetting('scheduleProjects', [...current, p]);
+      const key = normalizeProjectPath(p);
+      if (!current.some(x => normalizeProjectPath(x) === key)) setSetting('scheduleProjects', [...current, p]);
     },
     remove(projectPath) {
       const p = path.resolve(projectPath);
       const current = read();
-      if (current.includes(p)) setSetting('scheduleProjects', current.filter(x => x !== p));
+      const key = normalizeProjectPath(p);
+      const remaining = current.filter(x => normalizeProjectPath(x) !== key);
+      if (remaining.length !== current.length) setSetting('scheduleProjects', remaining);
     },
   };
 }
