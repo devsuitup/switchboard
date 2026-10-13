@@ -60,6 +60,7 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
   });
   const source = read('main.js');
   vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
+  vm.runInContext(extractFunction(source, 'unarchivedScheduleProjects'), context, { filename: path.join(ROOT, 'main.js') });
   if (source.includes('function isProjectSettingsArchived(')) {
     vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: path.join(ROOT, 'main.js') });
   }
@@ -160,14 +161,13 @@ test('delete drops project settings, cache, search and schedules without changin
   assert.ok(fs.statSync(h.projectPath).isDirectory());
 });
 
-test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', t => {
-  const h = setup(t, { cron: '0 * * * *' });
+function schedulerHarness(t, h) {
   const localRequire = createRequire(path.join(ROOT, 'schedule-runner.js'));
   const timers = [];
-  let now = new Date(2026, 0, 5, 10, 50).getTime();
+  const clock = { now: new Date(2026, 0, 5, 10, 50).getTime() };
   class Clock extends Date {
-    constructor(...args) { super(...(args.length ? args : [now])); }
-    static now() { return now; }
+    constructor(...args) { super(...(args.length ? args : [clock.now])); }
+    static now() { return clock.now; }
   }
   const runnerContext = vm.createContext({
     require: name => name === 'os' ? { homedir: () => h.dir } : localRequire(name), module: { exports: {} },
@@ -177,7 +177,7 @@ test('archived schedules cannot run on ticks or catch-up and a run missed while 
   vm.runInContext(read('schedule-runner.js'), runnerContext, { filename: path.join(ROOT, 'schedule-runner.js') });
   const stateDir = path.join(h.dir, 'schedule-state');
   const log = { info() {}, warn() {}, error() {} };
-  h.context.skipMissedScheduleRuns = projectPath => runnerContext.module.exports.skipMissedRuns(log, [projectPath], stateDir);
+  h.context.skipMissedScheduleRuns = projects => runnerContext.module.exports.skipMissedRuns(log, projects, stateDir);
   const source = read('main.js');
   const projectsLine = source.split('\n').find(line => line.includes('projects: () => scheduleProjects().list()'));
   const projects = vm.runInContext('({' + projectsLine.trim() + '}).projects', h.context, { filename: path.join(ROOT, 'main.js') });
@@ -187,19 +187,46 @@ test('archived schedules cannot run on ticks or catch-up and a run missed while 
     (_args, cwd, _name, done) => { runs.push(cwd); done(); },
     { projects, resumeSource: resume, stateDir });
   t.after(stop);
-  assert.equal(runs.length, 0);
+  return { runs, resume, tick: () => timers[0].fn(), at: (...args) => { clock.now = new Date(2026, 0, 5, ...args).getTime(); } };
+}
+
+test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', t => {
+  const h = setup(t, { cron: '0 * * * *' });
+  const s = schedulerHarness(t, h);
+  assert.equal(s.runs.length, 0);
   h.archive();
-  now = new Date(2026, 0, 5, 11, 30).getTime();
-  timers[0].fn();
-  resume.emit('resume');
-  assert.equal(runs.length, 0, 'archive must suspend ticks and resume catch-up checks');
+  s.at(11, 30);
+  s.tick();
+  s.resume.emit('resume');
+  assert.equal(s.runs.length, 0, 'archive must suspend ticks and resume catch-up checks');
   h.invoke('unarchive-project', h.projectPath);
-  now = new Date(2026, 0, 5, 11, 31).getTime();
-  timers[0].fn();
-  assert.equal(runs.length, 0, 'the 11:00 run missed while archived is not caught up');
-  now = new Date(2026, 0, 5, 12, 0).getTime();
-  timers[0].fn();
-  assert.equal(runs.length, 1, 'the same registration runs again at its next due minute');
+  s.at(11, 31);
+  s.tick();
+  assert.equal(s.runs.length, 0, 'the 11:00 run missed while archived is not caught up');
+  s.at(12, 0);
+  s.tick();
+  assert.equal(s.runs.length, 1, 'the same registration runs again at its next due minute');
+});
+
+test('a nested worktree schedule is not caught up either when its project is unarchived', t => {
+  const h = setup(t, { cron: '0 * * * *' });
+  const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
+  const commands = path.join(worktree, '.claude', 'commands');
+  fs.mkdirSync(commands, { recursive: true });
+  fs.writeFileSync(path.join(commands, 'schedule-audit.md'), h.scheduleBytes);
+  h.setSetting('scheduleProjects', [h.projectPath, worktree]);
+  const s = schedulerHarness(t, h);
+  h.archive();
+  s.at(11, 30);
+  s.tick();
+  assert.equal(s.runs.length, 0);
+  h.invoke('unarchive-project', h.projectPath);
+  s.at(11, 31);
+  s.tick();
+  assert.equal(s.runs.length, 0, 'neither the project nor its worktree replays the 11:00 run');
+  s.at(12, 0);
+  s.tick();
+  assert.deepEqual([...s.runs].sort(), [h.projectPath, worktree].sort());
 });
 
 function runNowHarness(h) {

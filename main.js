@@ -718,9 +718,16 @@ function isDirectory(target) {
   try { return fs.statSync(target).isDirectory(); } catch { return false; }
 }
 
-function skipMissedScheduleRuns(projectPath) {
+function unarchivedScheduleProjects(projectPath) {
+  const { isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
+  const slashed = value => value.replace(/\\/g, '/');
+  const nested = scheduleProjects().list().filter(p => isHiddenRepositoryWorktree(slashed(p), null, [slashed(projectPath)]));
+  return [projectPath, ...nested];
+}
+
+function skipMissedScheduleRuns(projects) {
   try {
-    require('./schedule-runner').skipMissedRuns(log, [projectPath], path.join(path.dirname(DB_PATH), 'schedule-state'));
+    require('./schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
   } catch (err) {
     log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
   }
@@ -764,7 +771,7 @@ ipcMain.handle('unarchive-project', (_event, entry) => {
     refreshFolder(folder);
     const { [entry]: kind, ...kinds } = global.hiddenProjectKinds || {};
     if (alias === null && kind === undefined && isDirectory(projectPath)) scheduleProjects().add(projectPath);
-    if (alias === null) skipMissedScheduleRuns(projectPath);
+    if (alias === null) skipMissedScheduleRuns(unarchivedScheduleProjects(projectPath));
     clearArchivedEntry(getSetting, setSetting, alias, projectPath);
     global.hiddenProjects = global.hiddenProjects.filter(p => p !== entry);
     global.hiddenProjectKinds = kinds;

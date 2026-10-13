@@ -436,16 +436,6 @@ function buildScheduleCommand(sessionId, schedule) {
 }
 
 /**
- * Start the cron loop. Checks every 60 seconds; a schedule with `catch-up: true`
- * is also checked at start and on `resume`, and runs once for missed minutes.
- * @param {object} log - Logger
- * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
- * @param {object} [opts]
- * @param {EventEmitter} [opts.resumeSource] - Emits `resume` after a system suspend (Electron's powerMonitor)
- * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
- * @returns {function} stop - Call to stop the scheduler
- */
-/**
  * Pass over every minute up to now for the catch-up schedules of these projects,
  * so a run that fell due while a project was archived is not replayed.
  * see .ai/contexts/schedule-runner.md ("Archive")
@@ -463,6 +453,16 @@ function skipMissedRuns(log, projects, stateDir) {
   }
 }
 
+/**
+ * Start the cron loop. Checks every 60 seconds; a schedule with `catch-up: true`
+ * is also checked at start and on `resume`, and runs once for missed minutes.
+ * @param {object} log - Logger
+ * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
+ * @param {object} [opts]
+ * @param {EventEmitter} [opts.resumeSource] - Emits `resume` after a system suspend (Electron's powerMonitor)
+ * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
+ * @returns {function} stop - Call to stop the scheduler
+ */
 function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
   let running = true;
   const runningTasks = new Set();
