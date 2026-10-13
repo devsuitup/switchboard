@@ -424,10 +424,11 @@ consequences:
 
 ## Attach
 
-`guardResume(session, { automatic, api, confirm, live })`:
+`guardResume(session, { automatic, allowBgAttach, api, confirm, live })`:
 
-- `automatic` (restore, reload): a session live elsewhere returns `false`;
-  nothing attaches or resumes on its own.
+- `automatic` (restore, reload): a session live elsewhere returns `false`,
+  except a background job when `allowBgAttach` is true. Working-set restore
+  allows this for a resolved continuation or a saved entry with `bg: true`.
 - `live.kind === 'bg'` with a `jobId`: `{ attach: jobId, cwd }`. `app.js`
   turns that into `{ type: 'attach', jobId, cwd }` and marks the entry
   `attach`. Without a `jobId` it refuses (`false`) rather than offering to
@@ -440,8 +441,12 @@ In `open-terminal`, `type: 'attach'` validates `jobId` against `JOB_ID_RE`,
 takes `cwd` from the options, runs `claude attach <jobId>` and skips sandbox,
 pre-launch command and MCP emulation. The session is flagged `isAttach` with
 `attachJobId`, which `isAttachedHere` (passed to `bgAgents.init`) reads to set
-`attachedHere` on the roster entry. Attach tabs are excluded from the working
-set (`entry.attach`). After a renderer reload the tab is reopened through the
+`attachedHere` on the roster entry. Ordinary attach tabs are excluded from the
+working set (`entry.attach`). An attach tab kept by continuation restore
+is saved with `bg: true` while it is open and not closed; closing or
+destroying it drops the mark; the mark survives later saves,
+so restore reattaches the live job at every restart. After a renderer reload
+the tab is reopened through the
 reattach branch of `open-terminal`, which returns `attach: !!session.isAttach`;
 `openSession` sets `entry.attach` from it, so the flag survives the reload.
 

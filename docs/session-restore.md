@@ -141,7 +141,8 @@ are indexed in yielded chunks without a total byte limit.
 
 A live continuation remains a candidate even before its first transcript record
 exists. A live background continuation uses the existing attach path and its final id
-stays in the saved working set for a later restore.
+is saved with `bg: true`, so every later restore reattaches it while the job is
+live. A saved entry without that mark still skips a session live elsewhere.
 
 Within one run of the app, going back to a session whose process still runs is
 a reattach: the terminal replays its buffered output onto the same process.

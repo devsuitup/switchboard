@@ -9,6 +9,60 @@ const cache = require('../session-cache');
 
 const { setup } = require('./continuations-harness');
 
+test('B1 a saved background entry reattaches on the next restart and keeps its mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, {
+    live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } },
+    savedEntries: [{ sessionId: 'new', projectPath: 'X', active: true, bg: true }],
+  });
+  h.saved[0].projectPath = h.root;
+  await h.restore();
+  assert.deepEqual(h.spawned.map(call => [call.id, call.options?.type, call.options?.jobId]), [['new', 'attach', '1234abcd']]);
+  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true }]);
+});
+
+test('B2 a saved entry without the background mark is not attached automatically', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, {
+    live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } },
+    savedEntries: [{ sessionId: 'new', projectPath: 'X', active: true }],
+  });
+  h.saved[0].projectPath = h.root;
+  await h.restore();
+  assert.deepEqual(h.spawned, []);
+  assert.match(h.dom.window.notice, /Not reopened/);
+});
+
+test('B3 a continuation attached at restore is saved with the background mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, {
+    live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } },
+  });
+  await h.restore();
+  assert.equal(h.spawned[0].options.type, 'attach');
+  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true }]);
+});
+
+test('B4 a continuation attach tab the user closed is not saved with the background mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } } });
+  await h.restore();
+  vm.runInContext(`openSessions.get('new').closed = true;`, h.ctx, { filename: __filename });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet.filter(item => item.bg), []);
+});
+
+test('B5 a continuation attach tab that was destroyed is not saved with the background mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } } });
+  await h.restore();
+  vm.runInContext(`destroySession('new');`, h.ctx, { filename: __filename });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet.filter(item => item.bg), []);
+});
+
+test('B6 a plain attach tab is excluded from the saved set', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: [] }, { savedEntries: [] });
+  vm.runInContext(`openSessions.set('n2', { session: { sessionId: 'n2', projectPath: 'P' }, attach: true });`, h.ctx, { filename: __filename });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet, []);
+});
+
 for (const children of [['new', 'missing'], ['missing', 'new']]) {
   test(`R3 restore drops a disk-missing sibling (${children.join(', ')}) and persists the existing id`, { timeout: 9000 }, async t => {
     const h = setup(t, { old: children, new: [] });
