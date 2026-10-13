@@ -39,6 +39,7 @@ function setup(t, { sandbox = false } = {}) {
       return child;
     },
     getSetting: () => ({}),
+    isProjectSettingsArchived: () => false,
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false },
     resolveShell: () => ({ path: 'fake-shell' }),
     quoteArgvForShell: (_shell, args) => args.join(' '),

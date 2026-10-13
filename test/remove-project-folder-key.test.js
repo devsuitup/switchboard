@@ -51,10 +51,10 @@ test('remove-project: writes an alias-qualified hidden entry for a remote group'
     'the computed hiddenEntry must be what gets pushed, not the bare projectPath');
 });
 
-test('preload: removeProject forwards the folder key to the main process', () => {
+test('preload: deleteProject forwards the folder key to the main process', () => {
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
   assert.match(preload,
-    /removeProject: \(projectPath, folderKey\) => ipcRenderer\.invoke\('remove-project', projectPath, folderKey\)/,
+    /deleteProject: \(projectPath, folderKey\) => ipcRenderer\.invoke\('remove-project', projectPath, folderKey\)/,
     'the bridge must widen to two arguments end to end');
 });
 
@@ -66,6 +66,6 @@ test('renderer: the settings viewer threads the group folder key through to remo
   const panel = fs.readFileSync(path.join(ROOT, 'public', 'settings-panel.js'), 'utf8');
   assert.match(panel, /async function openSettingsViewer\(scope, projectPath, folderKey\)/,
     'the settings viewer must accept the folder key it is given');
-  assert.match(panel, /window\.api\.removeProject\(projectPath, folderKey\)/,
-    'Hide Project must pass the folder key through, not just the projectPath');
+  assert.match(panel, /window\.api\.deleteProject\(projectPath, folderKey\)/,
+    'Delete Project must pass the folder key through, not just the projectPath');
 });

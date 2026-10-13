@@ -987,7 +987,7 @@ function renderProjects(projects, resort) {
 
       const wtHideBtn = document.createElement('button');
       wtHideBtn.className = 'worktree-hide-btn';
-      wtHideBtn.title = 'Hide worktree';
+      wtHideBtn.title = 'Archive project';
       wtHideBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
       wtHeader.appendChild(wtHideBtn);
 
@@ -1340,9 +1340,22 @@ function rebindSidebarEvents(projects) {
       wtHideBtn.onclick = async (e) => {
         e.stopPropagation();
         const name = wtProject.projectPath.split('/').pop();
-        if (!confirm(`Hide worktree "${name}"?\n\nSession files are not deleted.`)) return;
-        await window.api.removeProject(wtProject.projectPath);
-        loadProjects();
+        const choice = await showChoiceDialog({
+          title: `Archive project "${name}"?`,
+          message: [
+            'Its settings and cached sessions are kept. Its schedules are suspended while archived and resume on unarchive.',
+            'This is reversible from Settings → Archived projects.',
+          ],
+          confirmLabel: 'Archive Project', returnFocus: wtHideBtn,
+        });
+        if (!choice) return;
+        try {
+          const result = await window.api.archiveProjectSettings(wtProject.projectPath, wtProject.folder);
+          if (result.error) throw new Error(result.error);
+          await loadProjects();
+        } catch (err) {
+          await showChoiceDialog({ title: 'Could not archive project', message: err.message, confirmLabel: 'OK', returnFocus: wtHideBtn });
+        }
       };
     }
     const wtDeleteBtn = wtHeader.querySelector('.worktree-delete-btn');

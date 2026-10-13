@@ -440,13 +440,49 @@
         </div>
       </div>` : ''}
 
+      ${!isProject ? `<div class="settings-section">
+        <div class="settings-section-title">Archived projects</div>
+        <div class="settings-description">Unarchive restores a project's sidebar row and schedules. Projects deleted from Switchboard can be added again with default settings.</div>
+        <div id="sv-archived-projects"></div>
+      </div>` : ''}
+
       <div class="settings-btn-row">
         <button class="settings-cancel-btn" id="sv-cancel-btn">Cancel</button>
         <button class="settings-save-btn" id="sv-save-btn">Save Settings</button>
-        ${isProject ? '<button class="settings-remove-btn" id="sv-remove-btn">Hide Project</button>' : ''}
+        ${isProject ? '<button class="settings-cancel-btn" id="sv-archive-btn">Archive Project</button><button class="settings-remove-btn" id="sv-delete-btn">Delete Project</button>' : ''}
       </div>
     </div>
   `;
+
+    if (!isProject) {
+      const list = settingsViewerBody.querySelector('#sv-archived-projects');
+      const deleted = current.hiddenProjectKinds || {};
+      let archived = (current.hiddenProjects || []).filter(entry => deleted[entry] !== 'delete');
+      function renderArchived() {
+        list.innerHTML = archived.length ? archived.map((entry, i) => `
+          <div class="settings-field">
+            <div class="settings-field-info">${escapeHtml(entry)}</div>
+            <div class="settings-field-control"><button class="settings-cancel-btn" data-archived-index="${i}">Unarchive</button></div>
+          </div>`).join('') : '<div class="settings-description">No archived projects.</div>';
+        list.querySelectorAll('button').forEach(button => {
+          button.addEventListener('click', async () => {
+            const entry = archived[Number(button.dataset.archivedIndex)];
+            button.disabled = true;
+            try {
+              const result = await window.api.unarchiveProject(entry);
+              if (result.error) throw new Error(result.error);
+              archived = archived.filter(p => p !== entry);
+              renderArchived();
+              if (typeof loadProjects === 'function') await loadProjects();
+            } catch (err) {
+              button.disabled = false;
+              await showChoiceDialog({ title: 'Could not unarchive project', message: err.message, confirmLabel: 'OK' });
+            }
+          });
+        });
+      }
+      renderArchived();
+    }
 
     // Remote hosts: a list the user grows and shrinks, rebuilt in place.
     if (!isProject) {
@@ -708,15 +744,37 @@
       });
     }
 
-    // Remove project button
-    const removeBtn = settingsViewerBody.querySelector('#sv-remove-btn');
-    if (removeBtn) {
-      removeBtn.addEventListener('click', async () => {
-        if (!confirm(`Hide project "${shortName}" from Switchboard?\n\nThis hides the project from the sidebar. Your session files are not deleted.`)) return;
-        await window.api.removeProject(projectPath, folderKey);
-        settingsViewer.style.display = 'none';
-        document.getElementById('placeholder').style.display = 'flex';
-        if (typeof loadProjects === 'function') loadProjects();
+    for (const action of ['archive', 'delete']) {
+      const button = settingsViewerBody.querySelector('#sv-' + action + '-btn');
+      if (!button) continue;
+      button.addEventListener('click', async () => {
+        const deleting = action === 'delete';
+        const result = await showChoiceDialog({
+          title: `${deleting ? 'Delete' : 'Archive'} project "${shortName}"?`,
+          message: deleting ? [
+            'This removes the project settings, cached sessions and search index, and schedule registration from Switchboard.',
+            'The project folder, session files and schedule files are not deleted. Adding the project again uses default settings.',
+          ] : [
+            'The project is removed from the sidebar. Its settings and cached sessions are kept; its schedules are suspended while archived and resume on unarchive.',
+            'This is reversible from Settings → Archived projects.',
+          ],
+          confirmLabel: deleting ? 'Delete Project' : 'Archive Project',
+          danger: deleting,
+          initialFocus: deleting ? 'cancel' : 'confirm',
+          returnFocus: button,
+        });
+        if (!result) return;
+        try {
+          const response = deleting
+            ? await window.api.deleteProject(projectPath, folderKey)
+            : await window.api.archiveProjectSettings(projectPath, folderKey);
+          if (response.error) throw new Error(response.error);
+          settingsViewer.style.display = 'none';
+          document.getElementById('placeholder').style.display = 'flex';
+          if (typeof loadProjects === 'function') await loadProjects();
+        } catch (err) {
+          await showChoiceDialog({ title: `Could not ${action} project`, message: err.message, confirmLabel: 'OK', returnFocus: button });
+        }
       });
     }
   }

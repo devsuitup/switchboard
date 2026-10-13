@@ -714,6 +714,75 @@ function scheduleProjects() {
   return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+
+function unarchivedScheduleProjects(projectPath) {
+  const { isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
+  const slashed = value => value.replace(/\\/g, '/');
+  const nested = scheduleProjects().list().filter(p => isHiddenRepositoryWorktree(slashed(p), null, [slashed(projectPath)]));
+  return [projectPath, ...nested];
+}
+
+function skipMissedScheduleRuns(projects) {
+  try {
+    require('./schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
+  } catch (err) {
+    log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
+  }
+}
+
+function isProjectSettingsArchived(projectPath) {
+  const hidden = (getSetting('global') || {}).hiddenProjects || [];
+  const normalize = value => {
+    try { value = fs.realpathSync.native(value); } catch {}
+    value = value.replace(/\\/g, '/');
+    return process.platform === 'win32' ? value.toLowerCase() : value;
+  };
+  const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalize);
+  const target = normalize(projectPath);
+  return local.includes(target)
+    || require('./public/worktree-nesting').isHiddenRepositoryWorktree(target, null, local);
+}
+
+// see .ai/contexts/session-cache.md ("Project Archive and Delete")
+ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
+  try {
+    const global = getSetting('global') || {};
+    const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
+    const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
+    global.hiddenProjects = [...new Set([...(global.hiddenProjects || []), entry])];
+    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [entry]: 'archive' };
+    setSetting('global', global);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('unarchive-project', (_event, entry) => {
+  try {
+    const global = getSetting('global') || {};
+    if (!(global.hiddenProjects || []).includes(entry)) return { error: 'Project is not archived' };
+    const { alias, folder: projectPath } = parseFolderKey(entry);
+    const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
+    refreshFolder(folder);
+    const { [entry]: kind, ...kinds } = global.hiddenProjectKinds || {};
+    if (alias === null && kind === undefined && isDirectory(projectPath)) scheduleProjects().add(projectPath);
+    if (alias === null) skipMissedScheduleRuns(unarchivedScheduleProjects(projectPath));
+    clearArchivedEntry(getSetting, setSetting, alias, projectPath);
+    global.hiddenProjects = global.hiddenProjects.filter(p => p !== entry);
+    global.hiddenProjectKinds = kinds;
+    setSetting('global', global);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 // --- IPC: add-project ---
 ipcMain.handle('add-project', (_event, projectPath) => {
   try {
@@ -721,10 +790,11 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     const stat = fs.statSync(projectPath);
     if (!stat.isDirectory()) return { error: 'Path is not a directory' };
 
-    // Unhide if previously hidden
+    // see .ai/contexts/session-cache.md ("Project Archive and Delete")
     const global = getSetting('global') || {};
     if (global.hiddenProjects && global.hiddenProjects.includes(projectPath)) {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
+      if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[projectPath];
       setSetting('global', global);
     }
     clearArchivedEntry(getSetting, setSetting, null, projectPath);
@@ -766,6 +836,7 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
     const hiddenEntry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
     if (!hidden.includes(hiddenEntry)) hidden.push(hiddenEntry);
     global.hiddenProjects = hidden;
+    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [hiddenEntry]: 'delete' };
     setSetting('global', global);
 
     // Clean up DB cache and search index for this folder
@@ -944,6 +1015,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
         const global = getSetting('global') || {};
         if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
           global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
+          if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[normalizedPath];
           setSetting('global', global);
         }
       } catch {}
@@ -3377,6 +3449,11 @@ if (!gotSingleInstanceLock) {
     const { spawn: cpSpawn } = require('child_process');
     function runScheduleCommand(claudeArgv, cwd, name, onDone) {
       const globalSettings = getSetting('global') || {};
+      if (isProjectSettingsArchived(cwd)) {
+        log.info(`[schedule] ${name} suspended: project is archived`);
+        if (onDone) onDone();
+        return;
+      }
       const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
       const profile = resolveShell(profileId);
       const shell = profile.path;
@@ -3449,13 +3526,13 @@ if (!gotSingleInstanceLock) {
       });
     }
 
-    scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath);
+    scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
     // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
     scheduleProjects().list();
     startScheduler(log, runScheduleCommand, {
       resumeSource: powerMonitor,
       stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
-      projects: () => scheduleProjects().list(),
+      projects: () => scheduleProjects().list().filter(p => !isProjectSettingsArchived(p)),
     });
 
     // File-trigger watcher — allows harness scripts to inject input into open

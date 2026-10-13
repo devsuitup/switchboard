@@ -14,11 +14,7 @@ function worktreeName(projectPath) {
   return match ? match[2] : null;
 }
 
-/**
- * Whether the group is a worktree of a repository hidden with Hide Project on
- * its host: a bare `hiddenProjects` entry hides on every host, an
- * `<alias>::<path>` entry on that host only, as isProjectHidden reads them.
- */
+// see .ai/contexts/session-cache.md ("Project Archive and Delete")
 function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects) {
   const parentPath = worktreeParentPath(projectPath);
   if (parentPath === null) return false;

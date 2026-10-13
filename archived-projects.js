@@ -109,10 +109,12 @@ function retireArchivedEntries(getSetting, setSetting, archived, entries) {
  * offer.
  */
 function applyAndPersistArchived(projects, showArchived, { getSetting, setSetting, scheduleName = readScheduleName }) {
+  const hidden = (getSetting('global') || {}).hiddenProjects || [];
+  projects = projects.filter(project => !hidden.includes(project.projectPath)
+    && !(project.remoteAlias && hidden.includes(joinFolderKey(project.remoteAlias, project.projectPath))));
   const archived = getSetting(SETTING_KEY) || {};
   const { projects: kept, cleared } = applyArchivedProjects(projects, archived, showArchived);
   if (cleared.length > 0) retireArchivedEntries(getSetting, setSetting, archived, cleared);
-  const hidden = (getSetting('global') || {}).hiddenProjects;
   for (const project of kept) {
     if (isHiddenRepositoryWorktree(project.projectPath, project.remoteAlias || null, hidden)) project.hiddenRepository = true;
   }

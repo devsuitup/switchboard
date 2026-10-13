@@ -176,7 +176,7 @@ concept. Each entry gives:
 - **Code**: `resolveWorktreePath()` (`derive-project-path.js`);
   `public/worktree-nesting.js`; worktree header buttons
   `public/sidebar.js:988-1001`.
-- **Today**: actions **Hide worktree**, **Delete worktree from disk**,
+- **Today**: actions **Archive project**, **Delete worktree from disk**,
   **New session in worktree**. The Agents view groups by worktree
   separately (`docs/background-agents.md:43-50`).
 
@@ -341,7 +341,7 @@ concept. Each entry gives:
 
 - **Definition**: hide a row from the normal list (stopping its process first)
   while keeping its transcript; **Unarchive** brings it back.
-- **Don't say**: "hide" (Hide is a different, project-level action), "delete".
+- **Don't say**: "hide" (Archive project is a different, project-level action), "delete".
 - **Code**: `archived` flag; `archive-session` (`main.js:2291`);
   `stopBeforeArchive` (`public/stop-session-ui.js:39`); row button
   `public/sidebar.js:1780`, handler `1570-1585`.
@@ -367,17 +367,21 @@ concept. Each entry gives:
   `public/agents-view.js:421`), and a worktree ("Delete worktree from disk",
   `public/sidebar.js:994`). Remote rows show the dialog then refuse (m1).
 
-### Hide
+### Archive project / Delete project
 
-- **Definition**: remove a project or a worktree from the sidebar without
-  deleting files.
-- **Don't say**: "archive", "remove".
-- **Code**: `remove-project` (`main.js:757-779`); **Hide Project**
-  (`public/settings-panel.js:436`, confirm `704`); **Hide worktree**
-  (`public/sidebar.js:988`, confirm `1332`).
-- **Today**: Hide Project also deletes the project's settings and schedule
-  registration, which its confirm does not say; there is no unhide list
-  (M6). The IPC is named "remove" while the UI says "Hide".
+- **Definition**: **Archive project** removes a project or a worktree from the
+  sidebar and suspends its schedules, keeping its settings, cached sessions and
+  schedule registration; **Unarchive** (Settings, Archived projects) restores
+  it. **Delete project** drops the project's settings, cache, search index and
+  schedule registration; files on disk are never deleted, and the project
+  returns only through Add project, with default settings.
+- **Don't say**: "hide", "remove".
+- **Code**: `archive-project-settings`, `unarchive-project` and
+  `remove-project` (`main.js`); **Archive Project** and **Delete Project**
+  (`public/settings-panel.js`); worktree **Archive project**
+  (`public/sidebar.js`).
+- **Today**: both actions confirm in an in-app dialog that states what is kept
+  or dropped. A deleted project is not listed under Archived projects.
 
 ### Respawn
 

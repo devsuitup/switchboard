@@ -1285,9 +1285,10 @@ async function loadProjects({ resort = false } = {}) {
     loadingStatus.className = 'active';
     loadingStatus.style.display = '';
   }
-  const [defaultProjects, allProjects] = await Promise.all([
+  const [defaultProjects, allProjects, globalSettings] = await Promise.all([
     window.api.getProjects(false),
     window.api.getProjects(true),
+    window.api.getSetting('global'),
   ]);
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
@@ -1300,13 +1301,16 @@ async function loadProjects({ resort = false } = {}) {
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
-  let hiddenProjects = null;
+  const hiddenProjects = globalSettings?.hiddenProjects || [];
   for (const [sid, pending] of [...pendingSessions]) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
       pendingSessions.delete(sid);
       if (openSessions.has(sid)) schedulePersistWorkingSet();
     } else {
+      const alias = pending.session.remoteAlias || null;
+      if (hiddenProjects.includes(pending.projectPath)
+        || (alias && hiddenProjects.includes(alias + '::' + pending.projectPath))) continue;
       hasReinjected = true;
       // Still pending — re-inject into cached data
       for (const projList of [cachedProjects, cachedAllProjects]) {
@@ -1318,9 +1322,6 @@ async function loadProjects({ resort = false } = {}) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
           if (pendingAlias) proj.remoteAlias = pendingAlias;
-          if (worktreeParentPath(pending.projectPath) !== null && hiddenProjects === null) {
-            hiddenProjects = ((await window.api.getSetting('global')) || {}).hiddenProjects || [];
-          }
           if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
           projList.unshift(proj);
         }

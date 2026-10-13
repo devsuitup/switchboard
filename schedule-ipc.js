@@ -124,7 +124,7 @@ function ensureScheduleCreatorCommand() {
   }
 }
 
-function init(log, runCommand, isPathAllowed) {
+function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   const { parseFrontmatter, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
 
   ipcMain.handle('get-schedule-creator-command', () => {
@@ -192,6 +192,7 @@ function init(log, runCommand, isPathAllowed) {
         return { ok: false, error: target.error };
       }
       const { realPath, projectPath } = target;
+      if (isProjectArchived(projectPath)) return { ok: false, error: 'Project is archived; unarchive it before running schedules' };
 
       const content = fs.readFileSync(realPath, 'utf8');
       const { meta, body } = parseFrontmatter(content);

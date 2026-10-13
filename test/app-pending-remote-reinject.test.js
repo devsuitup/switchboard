@@ -26,6 +26,7 @@ function run(projects, pendingSession, pendingFolder) {
     window.api = {
       getProjects: async () => JSON.parse(JSON.stringify(projects)),
       getActiveTerminals: async () => [],
+      getSetting: async () => ({}),
     };
     window.cachedProjects = [];
     window.cachedAllProjects = [];

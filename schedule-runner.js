@@ -436,6 +436,24 @@ function buildScheduleCommand(sessionId, schedule) {
 }
 
 /**
+ * Pass over every minute up to now for the catch-up schedules of these projects,
+ * so a run that fell due while a project was archived is not replayed.
+ * see .ai/contexts/schedule-runner.md ("Archive")
+ */
+function skipMissedRuns(log, projects, stateDir) {
+  const baseline = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS - MINUTE_MS;
+  const state = readScheduleState(stateDir);
+  for (const schedule of scanSchedules(log, projects)) {
+    if (!schedule.catchUp) continue;
+    const key = scheduleStateKey(schedule);
+    const entry = state.get(key);
+    if (entry && entry.handled >= baseline) continue;
+    claimScheduleMinute(stateDir, key, baseline, { file: schedule.filePath, name: schedule.name });
+    if (entry) pruneScheduleState(stateDir, entry);
+  }
+}
+
+/**
  * Start the cron loop. Checks every 60 seconds; a schedule with `catch-up: true`
  * is also checked at start and on `resume`, and runs once for missed minutes.
  * @param {object} log - Logger
@@ -618,4 +636,4 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
   }
 }
 
-module.exports = { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };

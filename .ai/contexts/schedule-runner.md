@@ -79,6 +79,25 @@ offered files that still read `enabled: false`.
 
 ## Invariants
 
+- **Project Archive suspends launches without editing schedule files (#568).**
+  `main.js` filters `scheduleProjects().list()` with `isProjectSettingsArchived`
+  on every scheduler check, including startup, cron ticks and wake catch-up.
+  The stored registry is preserved. The shared launch function checks again,
+  and `schedule-ipc.init` receives the same predicate so Run now refuses before
+  pre-seeding a transcript. Bare hidden entries suspend local projects and
+  their nested worktrees; host-qualified remote entries do not suspend local
+  schedules. The predicate resolves existing local roots on disk and normalizes
+  separators, so Run now's resolved cwd, directory junctions and native Windows
+  worktree paths follow the same suspension; on Windows the comparison uses
+  `fs.realpathSync.native` and is case-insensitive. Already running commands
+  continue. Unarchive clears the entry and passes over the catch-up record of the
+  project's schedules (`skipMissedRuns` in `schedule-runner.js` claims the
+  previous minute), so a run that fell due while archived is not replayed and the
+  next due minute runs normally. It registers the project only for a legacy Hide
+  entry (no `hiddenProjectKinds` mark) whose folder still exists; an Archive
+  leaves the registry untouched, and a Delete is never registered again. Archive folder remains
+  a separate operation that can write `enabled: false` and offer re-enabling.
+
 - **Schedules are scanned fresh every check** (`scanSchedules` on every minute boundary, at start and on `resume`). No in-memory cache — adding/editing a `.md` file takes effect within 60 seconds without any restart.
 - **One run at a time per schedule** — `runningTasks` Set guards against overlap. If a schedule is still running when the next minute matches, the next tick is skipped with an info log line (no queue, no retry). A catch-up hits the same guard, after its minute is recorded: the skipped minute is consumed, not retried.
 - **Trigger alignment**: `setTimeout` to next minute boundary, then `setInterval(tick, 60_000)`. The first call is aligned to the wall-clock minute; subsequent calls drift only by JS event-loop latency.
