@@ -15,13 +15,14 @@ const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 const { encodeProjectPath } = require('../encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('../remote-hosts');
 const { applyAndPersistArchived, clearArchivedEntry } = require('../archived-projects');
-const { scheduleRegistry } = require('../schedule-runner');
+const { loadScheduleRunner } = require('./schedule-runner-harness');
 
 const ROOT = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
+function setup(t, { hidden = [], cron = '* * * * *', registered = true,
+  platform = process.platform, realpath = fs.realpathSync.native } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-project-archive-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const projectPath = path.join(dir, 'project');
@@ -50,10 +51,11 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
   const refreshed = [];
   const handlers = new Map();
   let notices = 0;
+  const modules = loadScheduleRunner({ home: dir, platform, realpath });
   const context = vm.createContext({
-    fs, path, process, skipMissedScheduleRuns: () => {}, encodeProjectPath, parseFolderKey, joinFolderKey, getSetting, setSetting, deleteSetting,
+    fs: modules.filesystem, path, process: { platform }, skipMissedScheduleRuns: () => {}, encodeProjectPath, parseFolderKey, joinFolderKey, getSetting, setSetting, deleteSetting,
     clearArchivedEntry, require: createRequire(path.join(ROOT, 'main.js')),
-    scheduleProjects: () => scheduleRegistry(getSetting, setSetting),
+    scheduleProjects: () => modules.runner.scheduleRegistry(getSetting, setSetting),
     deleteCachedFolder: key => cache.delete(key), deleteSearchFolder: key => search.delete(key),
     refreshFolder: key => { refreshed.push(key); cache.add(key); },
     notifyRendererProjectsChanged: () => { notices++; },
@@ -61,7 +63,7 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
   });
   const source = read('main.js');
   vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
-  vm.runInContext(extractFunction(source, 'normalizeArchivedProjectPath'), context, { filename: path.join(ROOT, 'main.js') });
+  context.normalizeArchivedProjectPath = modules.load('normalize-project-path.js').normalizeProjectPath;
   vm.runInContext(extractFunction(source, 'unarchivedScheduleProjects'), context, { filename: path.join(ROOT, 'main.js') });
   if (source.includes('function isProjectSettingsArchived(')) {
     vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: path.join(ROOT, 'main.js') });
@@ -130,6 +132,19 @@ test('legacy hidden entries unarchive with default settings and rebuild the fold
   assert.ok(h.cache.has(h.folder));
   assert.deepEqual(h.getSetting('scheduleProjects'), [h.projectPath]);
 });
+
+test('Windows legacy Hide unarchive with different case keeps one registration and one scheduled run',
+  { skip: process.platform !== 'win32' }, t => {
+    const h = setup(t, { cron: '0 * * * *' });
+    const hidden = h.projectPath.toUpperCase();
+    h.setSetting('global', { hiddenProjects: [hidden] });
+    assert.equal(h.invoke('unarchive-project', hidden).ok, true);
+    assert.deepEqual(h.getSetting('scheduleProjects'), [h.projectPath]);
+    const s = schedulerHarness(t, h);
+    s.at(11, 0);
+    s.tick();
+    assert.deepEqual(s.runs, [h.projectPath]);
+  });
 
 test('remote archive and unarchive preserve host scope without registering a local schedule', t => {
   const h = setup(t);
@@ -233,9 +248,10 @@ test('a nested worktree schedule is not caught up either when its project is una
 
 for (const target of ['root', 'worktree']) {
   test(`Windows unarchive with different path case resets the ${target} scheduler key`, t => {
-    const h = setup(t, { cron: '0 * * * *' });
-    h.context.process = { platform: 'win32' };
-    h.context.fs = { ...fs, realpathSync: { native: value => value } };
+    let h;
+    const onDisk = value => value.toLowerCase().startsWith(h.projectPath.toLowerCase())
+      ? h.projectPath + value.slice(h.projectPath.length) : value;
+    h = setup(t, { cron: '0 * * * *', platform: 'win32', realpath: onDisk });
     const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
     const commands = path.join(worktree, '.claude', 'commands');
     fs.mkdirSync(commands, { recursive: true });
@@ -268,9 +284,7 @@ for (const target of ['root', 'worktree']) {
 
 for (const platform of ['linux', 'darwin']) {
   test(`${platform} unarchive keeps differently cased registry projects distinct`, t => {
-    const h = setup(t);
-    h.context.process = { platform };
-    h.context.fs = { ...fs, realpathSync: { native: value => value } };
+    const h = setup(t, { platform, realpath: value => value });
     const otherRoot = h.projectPath.toUpperCase();
     const otherWorktree = path.join(otherRoot, '.claude', 'worktrees', 'worker');
     h.setSetting('scheduleProjects', [h.projectPath, otherRoot, otherWorktree]);
