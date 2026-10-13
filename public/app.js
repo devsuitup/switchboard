@@ -204,10 +204,12 @@ function persistWorkingSet({ final = false } = {}) {
         ...(fresh ? { fresh: true } : {}),
       });
     }
-    const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
+    const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
+    const notStarted = pendingRestoreEntries()
+      .filter(({ item }) => !openSessions.has(item.sessionId) || liveAttach(item.sessionId))
+      .map(entry => ({ ...entry, keepAttached: liveAttach(entry.item.sessionId) }));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
-    const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
     const held = [...skippedWorkingSetEntries.values(), ...notStarted]
       .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) : !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
@@ -288,7 +290,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const options = await resolveDefaultSessionOptions(project);
           delete options.worktree;
           delete options.worktreeName;
-          const newId = await launchNewSession(project, options);
+          const newId = await launchNewSession(project, options, item.sessionId);
           if (newId) startedAs.set(item.sessionId, newId);
         } finally {
           restoreInFlight.delete(item.sessionId);
@@ -1359,7 +1361,7 @@ async function loadProjects({ resort = false } = {}) {
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
 
-async function launchNewSession(project, sessionOptions) {
+async function launchNewSession(project, sessionOptions, restoreSessionId) {
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
@@ -1393,6 +1395,7 @@ async function launchNewSession(project, sessionOptions) {
   refreshSidebar();
 
   const entry = createTerminalEntry(session);
+  if (restoreSessionId) restoreInFlight.delete(restoreSessionId);
 
   // Open terminal in main process with session options
   const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);

@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - On Windows, opening a project with different letter case no longer makes its scheduled tasks run twice. Existing duplicate registrations are cleaned up automatically. (#607)
+- Quitting while startup is restoring sessions no longer opens an extra new session on the next start or forgets a conversation being reattached in the background. (#550)
 - On Windows, a `/compact` sent by an automation trigger is no longer reported as done because of a transcript file that was replaced while it waited. (#601)
 - A session sent to the background is reattached at every restart, not only the first. (#546)
 - Archiving a merged remote conversation now stops its live members even when the visible session is no longer running. Archiving a remote session whose host has not synced yet in this run (attached, or listed from the saved copy after a restart) now asks the host first, with the button busy, for up to 20 seconds. If the host does not answer, the session is still archived and a notice says it was not stopped and may still be running; archiving a folder or a group works the same way. A row whose host is disabled or removed archives as before. (#556)
