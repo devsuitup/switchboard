@@ -93,7 +93,10 @@ offered files that still read `enabled: false`.
   continue. Unarchive clears the entry and passes over the catch-up record of the
   project's schedules (`skipMissedRuns` in `schedule-runner.js` claims the
   previous minute), so a run that fell due while archived is not replayed and the
-  next due minute runs normally. It registers the project only for a legacy Hide
+  next due minute runs normally. The reset passes the registry's own spellings
+  of the project and its nested worktrees, selected with the same real-path,
+  case-insensitive-on-Windows comparison as suspension, because the catch-up key
+  hashes the schedule file path as the scheduler scanned it. It registers the project only for a legacy Hide
   entry (no `hiddenProjectKinds` mark) whose folder still exists; an Archive
   leaves the registry untouched, and a Delete is never registered again. Archive folder remains
   a separate operation that can write `enabled: false` and offer re-enabling.

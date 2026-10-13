@@ -723,9 +723,11 @@ function isDirectory(target) {
 
 function unarchivedScheduleProjects(projectPath) {
   const { isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
-  const slashed = value => value.replace(/\\/g, '/');
-  const nested = scheduleProjects().list().filter(p => isHiddenRepositoryWorktree(slashed(p), null, [slashed(projectPath)]));
-  return [projectPath, ...nested];
+  const target = normalizeArchivedProjectPath(projectPath);
+  return scheduleProjects().list().filter(p => {
+    const candidate = normalizeArchivedProjectPath(p);
+    return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target]);
+  });
 }
 
 function skipMissedScheduleRuns(projects) {
@@ -736,15 +738,16 @@ function skipMissedScheduleRuns(projects) {
   }
 }
 
+function normalizeArchivedProjectPath(value) {
+  try { value = fs.realpathSync.native(value); } catch {}
+  value = value.replace(/\\/g, '/');
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
 function isProjectSettingsArchived(projectPath) {
   const hidden = (getSetting('global') || {}).hiddenProjects || [];
-  const normalize = value => {
-    try { value = fs.realpathSync.native(value); } catch {}
-    value = value.replace(/\\/g, '/');
-    return process.platform === 'win32' ? value.toLowerCase() : value;
-  };
-  const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalize);
-  const target = normalize(projectPath);
+  const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath);
+  const target = normalizeArchivedProjectPath(projectPath);
   return local.includes(target)
     || require('./public/worktree-nesting').isHiddenRepositoryWorktree(target, null, local);
 }
