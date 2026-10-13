@@ -112,10 +112,23 @@ for (const type of ['paste', 'beforeinput', 'input']) {
   }, true);
 }
 
-function enqueueModalQuestion(open, { whenIdle = false, front = false } = {}) {
+function hasActiveModalQuestion() {
+  return modalQuestionActive;
+}
+
+function enqueueModalQuestion(open, { whenIdle = false, front = false, settleWith = null } = {}) {
   return new Promise((resolve, reject) => {
     const queue = whenIdle ? modalIdleQuestions : modalQuestions;
-    queue[front ? 'unshift' : 'push']({ open, resolve, reject });
+    const question = { open, resolve, reject };
+    queue[front ? 'unshift' : 'push'](question);
+    if (settleWith) {
+      settleWith.then((value) => {
+        const index = queue.indexOf(question);
+        if (index === -1) return;
+        queue.splice(index, 1);
+        resolve(value);
+      }, () => {});
+    }
     drainModalQuestions();
   });
 }

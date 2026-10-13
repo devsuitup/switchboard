@@ -27,6 +27,7 @@ const rendererCrossFileGlobals = {
   registerModal: 'readonly',
   hasOpenModal: 'readonly',
   enqueueModalQuestion: 'readonly',
+hasActiveModalQuestion: 'readonly',
   TOOL_BAR: 'readonly',
   filePanelState: 'readonly',
   currentPanelSessionId: 'readonly',

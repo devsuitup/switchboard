@@ -866,3 +866,61 @@ test('an alert waits for the unsaved guard, then owns focus and Escape', async (
     await alerting;
   } finally { ctx.destroy(); }
 });
+
+function openOtherQuestion(ctx) {
+  const { document } = ctx.window;
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog';
+  const ok = document.createElement('button');
+  ok.textContent = 'Delete';
+  dialog.append(ok);
+  overlay.append(dialog);
+  return ctx.window.enqueueModalQuestion(() => new Promise((resolve) => {
+    document.body.append(overlay);
+    const unregister = ctx.window.registerModal({ overlay, cancel: () => { overlay.remove(); unregister(); resolve(false); }, restoreFocus: false });
+  }));
+}
+
+test('a quit that arrives while the close question waits behind another question answers yes without that question', async () => {
+  const ctx = setup();
+  const { document } = ctx.window;
+  try {
+    let answered = null;
+    openOtherQuestion(ctx).then((v) => { answered = v; });
+    await flush();
+    ctx.calls.check(1, 'close');
+    await flush();
+    ctx.calls.reason(1, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: true }]);
+    assert.equal(answered, null, 'the other question is still the user\'s to answer');
+    assert.ok(document.querySelector('.new-session-overlay'));
+  } finally { ctx.destroy(); }
+});
+
+test('the close question opens on top of another question and Escape returns to it', async () => {
+  const ctx = setup();
+  const { document } = ctx.window;
+  try {
+    let answered = null;
+    openOtherQuestion(ctx).then((v) => { answered = v; });
+    await flush();
+    const underneath = document.querySelector('.new-session-overlay');
+    ctx.calls.check(1, 'close');
+    await flush();
+    assert.equal(document.querySelectorAll('.choice-dialog').length, 1, 'the close question is shown, not held behind');
+    assert.ok(document.querySelector('.new-session-overlay'), 'the other question is not cancelled');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: false }]);
+    assert.equal(answered, null);
+    assert.equal(document.querySelector('.choice-dialog'), null);
+    assert.ok(underneath.isConnected);
+    assert.ok(underneath.contains(document.activeElement), 'focus returns to the other question');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    assert.equal(answered, false, 'Escape now reaches the other question');
+  } finally { ctx.destroy(); }
+});

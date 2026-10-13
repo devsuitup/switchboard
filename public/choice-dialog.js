@@ -16,11 +16,15 @@ function showChoiceDialog(options = {}) {
   const active = document.activeElement;
   const returnFocus = options.returnFocus || (active?.closest('.choice-dialog-overlay') ? choiceDialogReturnFocus : active);
   if (options.replace && closeOpenChoiceDialog) closeOpenChoiceDialog(null);
+  else if (options.replace && hasActiveModalQuestion()) {
+    choiceDialogReturnFocus = returnFocus;
+    return openChoiceDialog({ ...options, returnFocus });
+  }
   return enqueueModalQuestion(() => {
     const restore = options.replace && returnFocus && returnFocus.isConnected === false ? document.activeElement : returnFocus;
     choiceDialogReturnFocus = restore;
     return openChoiceDialog({ ...options, returnFocus: restore });
-  }, { front: !!options.replace });
+  }, { front: !!options.replace, settleWith: options.closeWith || null });
 }
 
 function openChoiceDialog({
