@@ -390,7 +390,7 @@ the exact remote command, and the mutation proofs are in
   and run the transport immediately regardless of `nextAttemptAt`. A
   skipped `refreshHostNow` carries a `reason` (`stopped`, `unknown-host`,
   `in-flight`, `backoff`), and `getRemoteHostState` carries `attempts` and
-  `lastErrorTransport` (true only for a failure of the ssh sync); Archive reads them (#556, `session-state.md`). The
+  `lastErrorTransport` (true only for a failure tagged by the ssh transport); Archive reads them (#556, `session-state.md`). The
   automatic callers — the periodic timer's `refreshNow()` and the watch
   channel's `onRemoteWatchEvent` → `refreshHostNow(alias)` in `main.js` — call
   both functions with no options, so `force` defaults to `false` and the

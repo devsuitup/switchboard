@@ -14,20 +14,25 @@ const mainSource = fs.readFileSync(mainPath, 'utf8');
 const start = mainSource.indexOf("ipcMain.handle('remote-stop-session'");
 const end = mainSource.indexOf("ipcMain.handle('remote-launch-session'", start);
 
-function setup(t, { present = true, pollError = null, stopError = null, polling = false, firstPollError = null, localFailure = false, configured = true, timeoutMs = 60000 } = {}) {
+function setup(t, { present = true, pollError = null, stopError = null, polling = false, firstPollError = null, localFailure = false, pollLocalError = null, busyElsewhere = false, configured = true, timeoutMs = 60000 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-556-'));
   let live = present;
   let polls = 0;
   let finishPoll;
-  const pollGate = polling ? new Promise(resolve => { finishPoll = resolve; }) : null;
+  const pollGate = (polling || busyElsewhere) ? new Promise(resolve => { finishPoll = resolve; }) : null;
+  const pollsBy = {};
+  const transportError = message => Object.assign(new Error(message), { remoteTransport: true });
   const indexer = createRemoteIndexer({
     scanFolders: async () => { if (localFailure) throw new Error('disk full'); },
-    getHosts: () => (configured ? [{ alias: 'host' }] : []), dataDir, transport: {},
-    sync: async () => {
+    getHosts: () => (configured ? [{ alias: 'host' }, ...(busyElsewhere ? [{ alias: 'other' }] : [])] : []), dataDir, transport: {},
+    sync: async ({ alias }) => {
       polls++;
-      if (firstPollError && polls === 1) throw new Error(firstPollError);
-      if (pollGate) await pollGate;
-      if (pollError) throw new Error(pollError);
+      pollsBy[alias] = (pollsBy[alias] || 0) + 1;
+      if (alias === 'other') { await pollGate; return { fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }; }
+      if (firstPollError && pollsBy[alias] === 1) throw transportError(firstPollError);
+      if (pollLocalError) throw new Error(pollLocalError);
+      if (polling && pollGate) await pollGate;
+      if (pollError) throw transportError(pollError);
       return { fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(localFailure ? ['f'] : []), sessions: live ? [{ sessionId: 'A', pid: 100 }] : [] };
     },
   });
@@ -221,5 +226,28 @@ test('Archive refuses, as before, when the first sync fails for a local reason r
   const button = await archive(ctx);
   assert.deepEqual(ctx.calls, []);
   assert.match(button.title, /disk full/);
+  assert.deepEqual(ctx.notices, []);
+});
+
+test('Archive refuses, as before, when the mirror write fails locally during the first sync', async t => {
+  const ctx = setup(t, { pollLocalError: 'EACCES: mirror write' });
+  const button = await archive(ctx);
+  assert.deepEqual(ctx.calls, []);
+  assert.match(button.title, /EACCES/);
+  assert.deepEqual(ctx.notices, []);
+});
+
+test('Archive asks a host in backoff even when a global poll is busy elsewhere', async t => {
+  const ctx = setup(t, { busyElsewhere: true, firstPollError: 'old failure' });
+  assert.equal((await ctx.indexer.refreshHostNow('host')).error, 'old failure');
+  const global = ctx.indexer.refreshNow();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const click = archive(ctx);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.deepEqual(ctx.calls, []);
+  ctx.finishPoll();
+  await global;
+  await click;
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
   assert.deepEqual(ctx.notices, []);
 });

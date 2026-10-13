@@ -397,6 +397,13 @@ test('a hung ssh is killed at the timeout and reported, not awaited forever', as
   assert.equal(t.liveCount(), 0, 'nothing is left registered');
 });
 
+test('a failed or timed-out ssh inventory is tagged as a transport failure', async () => {
+  const failing = createSshTransport({ spawn: spawnRecorder((child) => { child.stderr.push(null); child.emit('close', 255); }) });
+  await assert.rejects(() => failing.listFiles('vps'), err => err.remoteTransport === true);
+  const hung = createSshTransport({ spawn: spawnRecorder(null), listTimeoutMs: 30 });
+  await assert.rejects(() => hung.listFiles('vps'), err => err.remoteTransport === true);
+});
+
 test('dispose kills every child still in flight', async () => {
   const spawn = spawnRecorder(null);
   const t = createSshTransport({ spawn, listTimeoutMs: 5000 });

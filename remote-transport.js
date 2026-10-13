@@ -282,14 +282,18 @@ function createSshTransport(opts = {}) {
     });
   }
 
+  function transportError(message) {
+    return Object.assign(new Error(message), { remoteTransport: true });
+  }
+
   async function listFiles(alias) {
     const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias, LIST_COMMAND], {
       timeoutMs: listTimeoutMs,
       maxBytes: MAX_LIST_BYTES,
     });
-    if (res.timedOut) throw new Error(`ssh inventory timed out after ${listTimeoutMs} ms`);
-    if (res.truncated) throw new Error('ssh inventory output exceeded the size cap');
-    if (res.code !== 0) throw new Error(`ssh inventory failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
+    if (res.timedOut) throw transportError(`ssh inventory timed out after ${listTimeoutMs} ms`);
+    if (res.truncated) throw transportError('ssh inventory output exceeded the size cap');
+    if (res.code !== 0) throw transportError(`ssh inventory failed (exit ${res.code}): ${res.stderr.trim() || 'no stderr'}`);
     const { inventoryBlock, sessionsBlock } = splitListOutput(res.stdout);
     const files = parseInventory(inventoryBlock);
     const { sessions: rawSessions, warnings, dropped } = parseSessions(sessionsBlock);

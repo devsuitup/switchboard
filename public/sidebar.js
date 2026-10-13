@@ -1207,6 +1207,13 @@ async function archiveProjectFolder(project, button) {
   const groupsArg = groups.map(g => ({ projectPath: g.projectPath, folderKey: g.folder }));
   const sessions = groups.flatMap(g => g.sessions.filter(s => !s.parentSessionId && !s.archived));
 
+  const refuseWhileBusy = () => {
+    if (!sessions.some(s => archivingSessionIds.has(s.sessionId))) return false;
+    surfaceStopFailure(button, `An archive is still in progress for ${shortProjectPath(parent.projectPath)}; try again when it finishes`);
+    return true;
+  };
+  if (refuseWhileBusy()) return;
+
   const plan = await window.api.getProjectArchivePlan(groupsArg);
   if (!plan || plan.indexing) {
     alert(ARCHIVE_INDEXING_MESSAGE);
@@ -1250,6 +1257,7 @@ async function archiveProjectFolder(project, button) {
     returnFocus: button,
   });
   if (!result) return;
+  if (refuseWhileBusy()) return;
 
   if (result.archiveSessions) {
     let refused = false;

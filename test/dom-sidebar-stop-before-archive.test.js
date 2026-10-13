@@ -438,7 +438,7 @@ test('project archive-all: sessions on an unreachable host are archived with the
   } finally { ctx.destroy(); }
 });
 
-test('folder archive skips a row whose own Archive is still checking the host, and leaves its busy state alone', async () => {
+test('folder archive is refused up front while a row of the folder is still checking its host', async () => {
   const ctx = setupSidebarDom();
   try {
     const r1 = remoteSession('r1', 'vps', true);
@@ -446,23 +446,22 @@ test('folder archive skips a row whose own Archive is still checking the host, a
     ctx.window.sessionMap.set('r1', r1);
     let release;
     const gate = new Promise(resolve => { release = resolve; });
-    const calls = installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    const calls = installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: false, error: 'stop refused' })) });
     ctx.window.cachedAllProjects = [project];
     ctx.sidebar.renderProjects([project], true);
     const rowBtn = ctx.document.querySelector('#si-r1 .session-archive-btn');
     const own = rowBtn.onclick({ stopPropagation() {} });
     await new Promise(r => setTimeout(r, 0));
     const folderBtn = headerFor(ctx, project).querySelector('.project-archive-btn');
-    const done = folderBtn.onclick(new ctx.window.MouseEvent('click'));
-    await new Promise(r => setTimeout(r, 0));
-    await answerChoiceDialog(ctx, { confirm: true });
-    await done;
+    await folderBtn.onclick(new ctx.window.MouseEvent('click'));
+    assert.match(folderBtn.title, /An archive is still in progress for .*proj; try again when it finishes/);
+    assert.equal(calls.filter(c => c.method === 'archiveProject').length, 0);
     assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
     assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, true);
     release();
     await own;
+    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 0);
     assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, false);
-    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 1);
   } finally { ctx.destroy(); }
 });
 

@@ -135,7 +135,8 @@ function createRemoteIndexer(ctx) {
     return errorChanged;
   }
 
-  function onHostFailure(alias, err, intervalMs) {
+  function onHostFailure(alias, thrown, intervalMs) {
+    const err = thrown instanceof Error ? thrown : new Error(String(thrown));
     const state = backoffState(alias);
     const prevDelay = backoffDelayMs(state.failures, intervalMs);
     state.failures += 1;
@@ -230,19 +231,13 @@ function createRemoteIndexer(ctx) {
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
     fs.mkdirSync(projectsDir, { recursive: true });
 
-    let result;
-    try {
-      result = await sync({
-        alias: host.alias,
-        transport: ctx.transport,
-        projectsDir,
-        manifestPath,
-        log,
-      });
-    } catch (err) {
-      err.remoteTransport = true;
-      throw err;
-    }
+    const result = await sync({
+      alias: host.alias,
+      transport: ctx.transport,
+      projectsDir,
+      manifestPath,
+      log,
+    });
 
     remoteSessions.set(host.alias, Array.isArray(result.sessions)
       ? result.sessions.map(s => (s && 'waitingFor' in s ? { ...s, waitingFor: sanitizeWaitingFor(s.waitingFor) } : s))
@@ -326,7 +321,7 @@ function createRemoteIndexer(ctx) {
         } catch (err) {
           // A failed cycle keeps the last known descriptors — see
           // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
-          errors.push({ alias: host.alias, error: err.message });
+          errors.push({ alias: host.alias, error: err instanceof Error ? err.message : String(err) });
           if (onHostFailure(host.alias, err, intervalMs)) changed = true;
         }
       }
@@ -365,7 +360,7 @@ function createRemoteIndexer(ctx) {
       // A failed cycle keeps the last known descriptors — see
       // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
       if (onHostFailure(alias, err, intervalMs)) changed = true;
-      error = err.message;
+      error = err instanceof Error ? err.message : String(err);
     } finally {
       hostInFlight.delete(alias);
     }
