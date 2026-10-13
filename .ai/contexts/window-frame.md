@@ -246,10 +246,14 @@ session, so there the question reads "Close the window?" and says the app
 stays in the Dock. The question is the in-page choice dialog
 (`confirmWindowClose` in `file-panel.js`), not a native `confirm()`: Cancel
 has the focus, so `Enter` keeps the app, and the page keeps running while it
-is shown, which the probe below relies on. Only one choice dialog shows at a
-time, so the close question is asked with `replace: true`: another one that is
-open (the Archive folder dialog, say) is cancelled first, and a close is never
-answered with a silent Cancel because something else was on screen.
+is shown, which the probe below relies on. Choice dialogs wait in the modal
+stack's question queue ([app-dialogs](app-dialogs.md)), so the close question
+is asked with `replace: true`: the one that is open (the Archive folder dialog,
+say) is cancelled first and the question goes to the front of the queue, so a
+close is never answered with a silent Cancel or held behind a queued question.
+It registers with the modal stack like any choice dialog: `Escape` cancels,
+`Tab` stays inside it, and every close path (answer, `replace`, `closeWith`)
+unregisters it.
 
 It rides on the unsaved-edits guard (`unsaved-guard.js`, see
 [viewer-panel](viewer-panel.md), "Unsaved edits on quit, reload and close"):

@@ -20,7 +20,7 @@ function showChoiceDialog(options = {}) {
     const restore = options.replace && returnFocus && returnFocus.isConnected === false ? document.activeElement : returnFocus;
     choiceDialogReturnFocus = restore;
     return openChoiceDialog({ ...options, returnFocus: restore });
-  });
+  }, { front: !!options.replace });
 }
 
 function openChoiceDialog({

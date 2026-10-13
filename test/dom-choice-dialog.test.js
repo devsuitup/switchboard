@@ -337,3 +337,40 @@ test('choice dialog: closeWith closes it with its value, and does nothing once t
     assert.equal(ctx.document.activeElement, elsewhere, 'the focus is not taken back a second time');
   } finally { ctx.destroy(); }
 });
+
+test('choice dialog: replace cancels the open one and goes ahead of the queue; Escape on it gives the focus back', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const origin = ctx.document.createElement('button');
+    ctx.document.body.appendChild(origin);
+    origin.focus();
+    const first = open(ctx, { title: 'First' });
+    const queued = open(ctx, { title: 'Queued' });
+    const closing = open(ctx, { title: 'Close?', replace: true, initialFocus: 'cancel', returnFocus: origin });
+    assert.equal(await first, null, 'the open dialog is cancelled');
+    await new Promise((r) => setTimeout(r));
+    assert.equal(ctx.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+    assert.equal(shown(ctx).querySelector('#choice-dialog-title').textContent, 'Close?', 'it is not behind the queued one');
+    assert.equal(ctx.document.activeElement, cancelBtn(ctx));
+    key(ctx, ctx.document.activeElement, 'Escape');
+    assert.equal(await closing, null);
+    await new Promise((r) => setTimeout(r));
+    assert.equal(shown(ctx).querySelector('#choice-dialog-title').textContent, 'Queued', 'the queue resumes');
+    key(ctx, ctx.document.activeElement, 'Escape');
+    assert.equal(await queued, null);
+    assert.equal(ctx.window.hasOpenModal(), false, 'every path unregistered from the modal stack');
+    assert.equal(ctx.document.activeElement, origin);
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: closeWith closes a replaced-in dialog and leaves the modal stack empty', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    let settle;
+    const pending = open(ctx, { replace: true, closeWith: new Promise((r) => { settle = r; }) });
+    assert.equal(ctx.window.hasOpenModal(), true);
+    settle({});
+    assert.deepEqual(await pending, {});
+    assert.equal(ctx.window.hasOpenModal(), false);
+  } finally { ctx.destroy(); }
+});

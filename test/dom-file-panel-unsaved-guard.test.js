@@ -543,13 +543,23 @@ test('a window close while another choice dialog is open cancels that one and as
   } finally { ctx.destroy(); }
 });
 
-test('a choice dialog that does not ask to replace still yields to one already open', async () => {
+test('a choice dialog that does not ask to replace waits behind the open one, and shows once it closes', async () => {
   const ctx = setup();
   try {
-    ctx.window.showChoiceDialog({ title: 'first' });
-    const second = await ctx.window.showChoiceDialog({ title: 'second' });
+    const { document } = ctx.window;
+    const first = ctx.window.showChoiceDialog({ title: 'first' });
+    let second;
+    ctx.window.showChoiceDialog({ title: 'second' }).then((v) => { second = v; });
+    await flush();
+    assert.equal(second, undefined, 'the second question is not answered as a silent Cancel');
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'first');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(await first, null);
+    await flush();
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'second');
+    document.querySelector('.choice-dialog-cancel').click();
+    await flush();
     assert.equal(second, null);
-    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'first');
   } finally { ctx.destroy(); }
 });
 
@@ -593,7 +603,7 @@ test('a native dialog the page shows is reported around it, and the shipped guar
     };
     ctx.window.confirm('Delete "x"?');
     assert.deepEqual(during, { pings: 0, destroys: 0 }, 'a close that arrives behind a native dialog waits for the user to answer it');
-    await flush();
+    for (let i = 0; i < 40 && !dialog(ctx); i++) await flush();
     assert.ok(dialog(ctx), 'the page answers once the dialog is gone');
 
     ctx.calls.onConfirm = () => {

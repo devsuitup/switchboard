@@ -112,9 +112,10 @@ for (const type of ['paste', 'beforeinput', 'input']) {
   }, true);
 }
 
-function enqueueModalQuestion(open, { whenIdle = false } = {}) {
+function enqueueModalQuestion(open, { whenIdle = false, front = false } = {}) {
   return new Promise((resolve, reject) => {
-    (whenIdle ? modalIdleQuestions : modalQuestions).push({ open, resolve, reject });
+    const queue = whenIdle ? modalIdleQuestions : modalQuestions;
+    queue[front ? 'unshift' : 'push']({ open, resolve, reject });
     drainModalQuestions();
   });
 }
