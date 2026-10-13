@@ -125,8 +125,8 @@ function readRange(filePath, start, length, expectedStat) {
   const fd = fs.openSync(filePath, 'r');
   try {
     if (expectedStat) {
-      const actual = fs.fstatSync(fd);
-      if (actual.dev !== expectedStat.dev || actual.ino !== expectedStat.ino || actual.size < start + length) {
+      const actual = fs.fstatSync(fd, { bigint: true });
+      if (actual.dev !== expectedStat.dev || actual.ino !== expectedStat.ino || actual.size < BigInt(start + length)) {
         throw new Error('transcript changed during read');
       }
     }
@@ -174,7 +174,11 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
   return {
     read(filePath, compactionCursor) {
       let stat;
-      try { stat = fs.statSync(filePath); } catch (_) { return null; }
+      try {
+        const exact = fs.statSync(filePath, { bigint: true });
+        stat = { dev: exact.dev, ino: exact.ino, size: Number(exact.size),
+          mtimeMs: Number(exact.mtimeNs / 1_000_000_000n) * 1000 + Number(exact.mtimeNs % 1_000_000_000n) / 1e6 };
+      } catch (_) { return null; }
       const hit = cache.get(filePath);
       let cached = hit;
       if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev) {

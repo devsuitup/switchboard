@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const { setTimeout: realSetTimeout } = require('node:timers');
 
 const { start, waitForCliIdleAfter } = require('../trigger-watcher');
 
@@ -49,22 +50,37 @@ function set(desc, status) {
   desc.statusUpdatedAt = Date.now();
 }
 
-async function run(payload, s) {
+async function run(payload, s, t) {
   const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-trigger-single-ready-')));
   process.env.SWITCHBOARD_TRIGGERS_DIR = tmp;
+  let started;
+  const processing = new Promise(resolve => { started = resolve; });
+  const getComposerState = s.ctx.getComposerState;
+  if (t) s.ctx.getComposerState = (...args) => { started(); return getComposerState(...args); };
   const watcher = start(s.ctx);
   try {
     fs.writeFileSync(path.join(tmp, payload.sessionId + '.json'), JSON.stringify(payload), 'utf8');
     const resultPath = path.join(tmp, 'processed', payload.sessionId + '.result.json');
-    const limit = Date.now() + 15000;
-    while (!fs.existsSync(resultPath)) {
-      if (Date.now() > limit) throw new Error('no result file');
-      await new Promise((r) => setTimeout(r, 20));
+    const resultReady = (async () => {
+      const limit = performance.now() + 15000;
+      while (!fs.existsSync(resultPath)) {
+        if (performance.now() > limit) throw new Error('no result file');
+        await new Promise((r) => realSetTimeout(r, 20));
+      }
+      return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    })();
+    if (t) {
+      await Promise.race([processing, resultReady.then(() => { throw new Error('trigger ended before reading the composer'); })]);
+      await new Promise(resolve => setImmediate(resolve));
+      for (let elapsed = 0; elapsed < 2000 && !fs.existsSync(resultPath); elapsed += 5) {
+        t.mock.timers.tick(5);
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
-    await new Promise((r) => setTimeout(r, 20));
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    return await resultReady;
   } finally {
     watcher.close();
+    s.ctx.getComposerState = getComposerState;
     delete process.env.SWITCHBOARD_TRIGGERS_DIR;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -234,13 +250,17 @@ test('idle, timeout_ms below the settle on an idle session: written, never "neve
   });
 });
 
-test('idle, an idle too recent for the settle: the settle is capped at the deadline, so it is written', async () => {
+test('idle, an idle too recent for the settle: the settle is capped at the deadline, so it is written', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   await withSettle(2000, async () => {
     const id = 'sess-single-ready-cap-' + Date.now();
     const s = session(id);
     s.desc.statusUpdatedAt = Date.now() - 150;
-    const r = await run(trig(id, { wait: 'idle', timeout_ms: 400 }), s);
+    const started = Date.now();
+    const r = await run(trig(id, { wait: 'idle', timeout_ms: 400 }), s, t);
     assert.equal(s.written[0] && s.written[0].data, 'hello', JSON.stringify(r));
+    assert.ok(s.written[0].at - started >= 249, 'the recent idle must still settle');
+    assert.ok(s.written[0].at - started < 400, 'the write must precede the deadline');
     assert.equal(r.ok, true);
   });
 });

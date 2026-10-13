@@ -1,5 +1,14 @@
 # Context: trigger-watcher
 
+For transcript cursor identity, device and inode are read as BigInts from both
+`statSync` and `fstatSync`. NTFS identifiers can exceed the exact integer range
+of JavaScript Numbers: a real rename and replacement can have distinct inodes
+that round to the same Number. Keep the exact identities through cache and
+cursor comparisons; sizes stay numeric for buffer offsets, and timestamps
+stay in milliseconds for readiness checks. The rounded-inode regression tests
+in `test/trigger-transcript-fallback.test.js` cover replacement before stat and
+between stat and the opened-file check.
+
 **Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill.
 
 ## Key files
@@ -1976,8 +1985,16 @@ step-level assertion with `actual: 'confirmed'`.
 
 ## Timing tests and host load
 
+The i488 compaction fixture, the single-trigger recent-idle capped-settle
+case, and remote U7/U8 status-deadline cases use Node's mock Date and setTimeout.
+They await the real watcher reaching the composer or remote descriptor lookup
+before advancing time, yield between clock ticks for promise
+continuations, and keep result-file deadlines on performance.now() with real,
+ref'd timers. The watcher, transcript files, context and result path stay real;
+the 650 ms step budget and busy-fall settle assertions are not widened.
+
 `test/trigger-watcher.test.js` uses real timers and real `fs.watch` against
-fixed wall-clock budgets (no fake-timer injection yet). It measures the host,
+fixed wall-clock budgets outside that fixture. It measures the host,
 not only the code under test, so it is far more sensitive to CPU contention
 than the rest of the suite. `npm test` / `npm run coverage` (`scripts/run-tests.js`)
 run it alone, serially, after every other test file, specifically to remove

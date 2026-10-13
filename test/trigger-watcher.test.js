@@ -1,7 +1,4 @@
-// test/trigger-watcher.test.js — node:test suite for trigger-watcher.js
-//
-// Strategy: real fs in a mkdtemp sandbox, env vars override dirs + timeouts.
-// No mocks — ctx provides a concrete in-memory PTY stand-in.
+// see .ai/contexts/trigger-watcher.md
 'use strict';
 
 // Keep the discrete-Enter submit delay tiny so the suite stays fast and the
@@ -28,6 +25,7 @@ const assert = require('node:assert/strict');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const { setTimeout: realSetTimeout } = require('node:timers');
 
 // This file runs with real timers and real fs.watch against fixed wall-clock
 // budgets, so it measures the host, not just the code under test. Under host
@@ -136,11 +134,11 @@ function waitForFile(filePath, maxMs = 2000, pollMs = 20) {
   // (SWITCHBOARD_TEST_TIME_SCALE) rather than tighten it.
   maxMs = scaleUp(maxMs);
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + maxMs;
+    const deadline = performance.now() + maxMs;
     function poll() {
       if (fs.existsSync(filePath)) return resolve();
-      if (Date.now() >= deadline) return reject(new Error('Timeout waiting for file: ' + filePath));
-      setTimeout(poll, pollMs);
+      if (performance.now() >= deadline) return reject(new Error('Timeout waiting for file: ' + filePath));
+      realSetTimeout(poll, pollMs);
     }
     poll();
   });
@@ -151,7 +149,8 @@ function readResult(processedDir, uuid) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
-async function runCompactEvidenceCase({ chain = false, evidence = 'none', descriptor = false, busy = true, evidenceDelay = 80, deadline = 900, retainedRecords = 0, busyFallDelay = 230, settleMs } = {}) {
+async function runCompactEvidenceCase(t, { chain = false, evidence = 'none', descriptor = false, busy = true, evidenceDelay = 80, deadline = 900, retainedRecords = 0, busyFallDelay = 230, settleMs } = {}) {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const tmp = mkTmp();
   const keepAlive = setInterval(() => {}, 1000);
   const timers = [];
@@ -209,6 +208,10 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
       activeSessions: new Map([[sessionId, session]]), log: silentLog, projectsDir: tmp,
       ...(descriptor ? { getCliStatus: () => status } : {}),
     });
+    let started;
+    const processing = new Promise(resolve => { started = resolve; });
+    const getComposerState = ctx.getComposerState;
+    ctx.getComposerState = (...args) => { started(); return getComposerState(...args); };
     if (['missing', 'missing-then-future'].includes(evidence)) fs.unlinkSync(transcript);
     watcher = require('../trigger-watcher').start(ctx);
     writeTrigger(tmp, 'i488', {
@@ -218,20 +221,29 @@ async function runCompactEvidenceCase({ chain = false, evidence = 'none', descri
         ...(chain === 'only' ? [] : [{ command: 'resume after compaction' }])] }
         : { command: '/compact', timeout_ms: deadline }),
     });
-    await waitForFile(path.join(tmp, 'processed', 'i488.result.json'), deadline + 2000);
+    const resultPath = path.join(tmp, 'processed', 'i488.result.json');
+    const resultReady = waitForFile(resultPath, 15000);
+    await Promise.race([processing, resultReady.then(() => { throw new Error('trigger ended before reading the composer'); })]);
+    await new Promise(resolve => setImmediate(resolve));
+    for (let elapsed = 0; elapsed < deadline * 3 + 2000 && !fs.existsSync(resultPath); elapsed += 5) {
+      t.mock.timers.tick(5);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    await resultReady;
     return { result: readResult(path.join(tmp, 'processed'), 'i488'), written, writtenAt };
   } finally {
     watcher?.close();
     timers.forEach(clearTimeout);
     clearInterval(keepAlive);
-    process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = previousSettle;
+    if (previousSettle === undefined) delete process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS;
+    else process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = previousSettle;
     delete process.env.SWITCHBOARD_TRIGGERS_DIR;
     cleanup(tmp);
   }
 }
 
-test('i488-fix3: replaying a pre-write boundary with the same uuid and timestamp cannot confirm compaction', async () => {
-  const { result, written } = await runCompactEvidenceCase({ chain: true, evidence: 'replayed-future' });
+test('i488-fix3: replaying a pre-write boundary with the same uuid and timestamp cannot confirm compaction', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, { chain: true, evidence: 'replayed-future' });
   assert.equal(result.compaction_observed, false);
   assert.equal(result.steps[0].compaction_observed, false);
   assert.equal(result.steps[0].submit_confirmed, false);
@@ -240,8 +252,8 @@ test('i488-fix3: replaying a pre-write boundary with the same uuid and timestamp
   assert.deepEqual(written, ['/compact', '\r']);
 });
 
-test('i488: unrelated busy activity cannot confirm a compact or release the resume step', async () => {
-  const { result, written } = await runCompactEvidenceCase({ chain: true });
+test('i488: unrelated busy activity cannot confirm a compact or release the resume step', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, { chain: true });
   assert.equal(result.ok, false, 'a compact without its effect must stop the chain');
   assert.equal(result.submitted, 'activity');
   assert.equal(result.compaction_observed, false);
@@ -262,8 +274,8 @@ for (const options of [
   { evidence: 'preexisting-future' },
   { evidence: 'wrong-type' }, { evidence: 'wrong-subtype' }, { evidence: 'no-timestamp' },
 ]) {
-  test(`i488: single compact refuses unrelated evidence ${JSON.stringify(options)}`, async () => {
-    const { result } = await runCompactEvidenceCase(options);
+  test(`i488: single compact refuses unrelated evidence ${JSON.stringify(options)}`, async (t) => {
+    const { result } = await runCompactEvidenceCase(t, options);
     assert.equal(result.compaction_observed, false);
     assert.equal(result.submit_confirmed, false);
     assert.notEqual(result.submitted, 'confirmed');
@@ -279,8 +291,8 @@ for (const options of [
   { evidence: 'manual', busy: false },
   { chain: true, evidence: 'manual', descriptor: true, evidenceDelay: 750, deadline: 1400 },
 ]) {
-  test(`i488: fresh manual boundary confirms compaction ${JSON.stringify(options)}`, async () => {
-    const { result, written } = await runCompactEvidenceCase(options);
+  test(`i488: fresh manual boundary confirms compaction ${JSON.stringify(options)}`, async (t) => {
+    const { result, written } = await runCompactEvidenceCase(t, options);
     const step = options.chain ? result.steps[0] : result;
     assert.equal(result.ok, true);
     assert.equal(result.compaction_observed, true);
@@ -295,16 +307,16 @@ for (const options of [
   });
 }
 
-test('i488: a compact evidence deadline stops the chain before later compaction arrives', async () => {
-  const { result, written } = await runCompactEvidenceCase({ chain: true, evidence: 'manual', evidenceDelay: 1200, deadline: 600 });
+test('i488: a compact evidence deadline stops the chain before later compaction arrives', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, { chain: true, evidence: 'manual', evidenceDelay: 1200, deadline: 600 });
   assert.equal(result.ok, false);
   assert.equal(result.compaction_observed, false);
   assert.equal(result.steps_completed, 0);
   assert.deepEqual(written, ['/compact', '\r']);
 });
 
-test('i488: a final compact also requires compaction evidence', async () => {
-  const { result, written } = await runCompactEvidenceCase({ chain: 'only' });
+test('i488: a final compact also requires compaction evidence', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, { chain: 'only' });
   assert.equal(result.ok, false);
   assert.equal(result.compaction_observed, false);
   assert.equal(result.steps[0].submit_confirmed, false);
@@ -312,8 +324,8 @@ test('i488: a final compact also requires compaction evidence', async () => {
   assert.deepEqual(written, ['/compact', '\r']);
 });
 
-test('i488: each compact needs its own boundary and the result requires every compact', async () => {
-  const { result, written } = await runCompactEvidenceCase({ chain: 'repeat', evidence: 'manual-once' });
+test('i488: each compact needs its own boundary and the result requires every compact', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, { chain: 'repeat', evidence: 'manual-once' });
   assert.equal(result.ok, false);
   assert.equal(result.compaction_observed, false);
   assert.equal(result.steps[0].compaction_observed, true);
@@ -323,8 +335,8 @@ test('i488: each compact needs its own boundary and the result requires every co
   assert.deepEqual(written, ['/compact', '\r', '/compact', '\r']);
 });
 
-test('i488-fix2: retained records beyond the tail cannot hide a completed compaction', async () => {
-  const { result, written } = await runCompactEvidenceCase({
+test('i488-fix2: retained records beyond the tail cannot hide a completed compaction', async (t) => {
+  const { result, written } = await runCompactEvidenceCase(t, {
     chain: true, evidence: 'manual', retainedRecords: 80, descriptor: true,
   });
   assert.equal(result.ok, true, JSON.stringify(result));
@@ -332,32 +344,37 @@ test('i488-fix2: retained records beyond the tail cannot hide a completed compac
   assert.deepEqual(written, ['/compact', '\r', 'resume after compaction', '\r']);
 });
 
-test('i488-fix2: completion as busy falls releases resume within a 650 ms step deadline', async () => {
-  const { result, written } = await runCompactEvidenceCase({
+test('i488-fix2: completion as busy falls releases resume within a 650 ms step deadline', async (t) => {
+  const { result, written, writtenAt } = await runCompactEvidenceCase(t, {
     chain: true, evidence: 'manual', evidenceDelay: 350, busyFallDelay: 350, deadline: 650,
   });
   assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.steps_completed, 2);
+  assert.equal(result.steps[0].compaction_observed, true);
+  assert.equal(result.steps[0].submit_confirmed, true);
   assert.equal(result.steps[0].idle_source, 'busy_flag');
+  assert.ok(writtenAt[2] - writtenAt[1] >= 400);
+  assert.ok(writtenAt[2] - writtenAt[1] < 650);
   assert.deepEqual(written, ['/compact', '\r', 'resume after compaction', '\r']);
 });
 
-test('i488-fix2: observed compaction still waits for busy to fall and settle', async () => {
-  const { result, writtenAt } = await runCompactEvidenceCase({
+test('i488-fix2: observed compaction still waits for busy to fall and settle', async (t) => {
+  const { result, writtenAt } = await runCompactEvidenceCase(t, {
     chain: true, evidence: 'manual', busyFallDelay: 450, deadline: 1000, settleMs: 200,
   });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.ok(writtenAt[2] - writtenAt[1] >= 650, 'resume must follow busy fall plus the idle settle');
 });
 
-test('i488-fix2: a compaction boundary counts as an observed turn without sampled busy', async () => {
-  const { result } = await runCompactEvidenceCase({ chain: 'only', evidence: 'manual', busy: false });
+test('i488-fix2: a compaction boundary counts as an observed turn without sampled busy', async (t) => {
+  const { result } = await runCompactEvidenceCase(t, { chain: 'only', evidence: 'manual', busy: false });
   assert.equal(result.ok, true);
   assert.equal(result.steps[0].turn_observed, true);
   assert.equal(result.steps_with_turn_observed, 1);
 });
 
-test('i488-fix2: an unreadable pre-write snapshot cannot confirm a later future-stamped boundary', async () => {
-  const { result } = await runCompactEvidenceCase({ evidence: 'missing-then-future' });
+test('i488-fix2: an unreadable pre-write snapshot cannot confirm a later future-stamped boundary', async (t) => {
+  const { result } = await runCompactEvidenceCase(t, { evidence: 'missing-then-future' });
   assert.equal(result.ok, false);
   assert.equal(result.compaction_observed, false);
 });
