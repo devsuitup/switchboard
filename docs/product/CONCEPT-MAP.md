@@ -162,7 +162,7 @@ deletes its subagent transcripts (`docs/session-browser.md:227-229`).
 
 **States**: expanded / collapsed; missing ("Project path no longer exists — use
 "Change path" to fix", `public/sidebar.js:1419`); archived (folder);
-hidden (no list, M6). Remote: host dot green / grey / amber / red / pulsing
+archived (project, listed in Settings → Archived projects). Remote: host dot green / grey / amber / red / pulsing
 amber (`docs/remote-hosts.md:149-157`).
 
 **Actions**
@@ -174,8 +174,9 @@ amber (`docs/remote-hosts.md:149-157`).
 | Project settings | **Project settings** (`:909`) | — | — |
 | Archive folder | **Archive folder** (`:915`) → dialog "Archive <path>?", boxes "Archive the N sessions", "Disable the N enabled schedules…", button **Archive folder** (`:1180-1196`) | — | **Turn back on** / **Dismiss** notice (`:1130-1134`) |
 | Change project path | **Change project path** (`:922`), confirm "Remap <name> to: <path>?" (`:1302`) | — | — |
-| Hide | — | **Hide worktree** (`:988`), confirm "Hide worktree "<name>"? Session files are not deleted." (`:1332`) | Settings: **Hide Project** (`public/settings-panel.js:436`), confirm "…This hides the project from the sidebar. Your session files are not deleted." (`:704`) |
-| Delete | — | **Delete worktree from disk** (`:994`) → dialog "Delete worktree "<name>"?" (`:1949-1961`) | — |
+| Archive project | — | **Archive project**, reversible from Settings → Archived projects (`public/sidebar.js`) | Settings: **Archive Project** (`public/settings-panel.js`), in-app confirmation says settings/cache are kept and schedules suspended |
+| Unarchive project | — | — | Global Settings → **Archived projects** → **Unarchive**, including legacy hidden entries |
+| Delete | — | **Delete worktree from disk** (`:994`) → dialog "Delete worktree "<name>"?" (`:1949-1961`) | Settings: **Delete Project**, destructive in-app confirmation lists settings, cache/search and schedule registration; keeps all disk files |
 | Reconnect (remote) | "Reconnect <alias> now" (`:896`) | — | — |
 | Add | — | — | **Add project** (`public/index.html:31`) |
 
@@ -184,11 +185,12 @@ amber (`docs/remote-hosts.md:149-157`).
 - R6.1 A worktree is nested under its repository only when that repository is
   listed for the same host (`docs/session-browser.md:68-73`).
 - R6.2 Archive folder keeps settings and comes back on new activity or Add
-  Project; Hide Project drops settings, cache and schedule registration and
-  comes back only through Add Project (`docs/session-browser.md:62-66`,
-  `196-203`; V `main.js:757-779`).
-- R6.3 Hide worktree calls `remove-project` without the folder key
-  (V, `public/sidebar.js:1333`); effect on a remote worktree S.
+  Project. Archive Project keeps settings, cache and schedule registration,
+  suspends schedules and returns through explicit Unarchive or Add Project.
+  Delete Project drops settings, cache/search and schedule registration,
+  while keeping disk files (`docs/settings.md`, `main.js`).
+- R6.3 The worktree Archive project control passes its host-qualified folder
+  key to `archive-project-settings`; it uses the same reversible project action.
 
 ## 7. Open session (terminal view)
 
@@ -384,7 +386,7 @@ result; **minor** = confusing but recoverable.
 | M3 | major | A session live elsewhere: the sidebar offers "Resume it anyway?", the Agents view forbids it | §11 |
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |
 | M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical in the grid and header; waiting is distinguished only in the sidebar and Agents view; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
-| M6 | major | Hide Project silently drops settings and schedule registration and has no unhide; overlaps Archive folder | §6 |
+| M6 | resolved (#568) | Project Archive is reversible through Settings and preserves settings/cache while suspending schedules; destructive Delete is separate. Archive folder still returns on new activity. | §6 |
 | m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote Delete refused after its dialog | §1, §6, §10 |
 | m2 | minor | Refusals name verbs that do not exist: "close it first", "stop it first" (External) | §1 R1.6, §11 |
 | m3 | minor | Grid card reads **Stopped** next to a visible Stop button for an alive unattached session | §8 |

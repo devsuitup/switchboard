@@ -66,6 +66,6 @@ test('renderer: the settings viewer threads the group folder key through to remo
   const panel = fs.readFileSync(path.join(ROOT, 'public', 'settings-panel.js'), 'utf8');
   assert.match(panel, /async function openSettingsViewer\(scope, projectPath, folderKey\)/,
     'the settings viewer must accept the folder key it is given');
-  assert.match(panel, /window\.api\.removeProject\(projectPath, folderKey\)/,
-    'Hide Project must pass the folder key through, not just the projectPath');
+  assert.match(panel, /window\.api\.deleteProject\(projectPath, folderKey\)/,
+    'Delete Project must pass the folder key through, not just the projectPath');
 });

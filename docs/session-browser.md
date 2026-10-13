@@ -59,17 +59,19 @@ A project on a [remote host](remote-hosts.md) carries a host status dot and a
 one-line placeholder transcript whose `cwd` is the folder, so the project is
 listed before any session has run in it.
 
-**Hide Project**, in Project Settings, removes a project from the sidebar
-without deleting any file. Adding the same folder again with **Add Project**
-shows it again. Unlike **Archive folder**, it also drops the project's settings
-and its schedule registration, and a new session in the folder does not show
-it again.
+**Archive Project**, in Project Settings, removes a project from the sidebar
+while keeping its settings and cache. Schedules are suspended without changing
+their files. **Unarchive** in Settings → **Archived projects**, or **Add Project**
+on the same local folder, restores it and resumes scheduling. Unlike **Archive
+folder**, a new session does not restore it automatically. **Delete Project**
+separately removes settings, cache, search entries and schedule registration;
+its confirmation names these losses. It deletes no folder or transcript.
 
 Sessions run in a git worktree are listed in their repository's project — see
 [Worktree sessions](worktrees.md). A worktree folder is nested under its
 repository only when that repository is listed for the same host; a worktree of
 another host, or one whose repository is not listed, is shown as a project of
-its own. The worktrees of a repository hidden with **Hide Project** stay hidden
+its own. The worktrees of a repository archived with **Archive Project** stay hidden
 with it.
 
 ### Missing projects

@@ -79,6 +79,20 @@ offered files that still read `enabled: false`.
 
 ## Invariants
 
+- **Project Archive suspends launches without editing schedule files (#568).**
+  `main.js` filters `scheduleProjects().list()` with `isProjectSettingsArchived`
+  on every scheduler check, including startup, cron ticks and wake catch-up.
+  The stored registry is preserved. The shared launch function checks again,
+  and `schedule-ipc.init` receives the same predicate so Run now refuses before
+  pre-seeding a transcript. Bare hidden entries suspend local projects and
+  their nested worktrees; host-qualified remote entries do not suspend local
+  schedules. The predicate resolves existing local roots on disk and normalizes
+  separators, so Run now's resolved cwd, directory junctions and native Windows
+  worktree paths follow the same suspension. Already running commands continue. Unarchive clears the entry and
+  restores local registration (for legacy Hide), so subsequent checks resume;
+  opted-in catch-up keeps its usual missed-minute policy. Archive folder remains
+  a separate operation that can write `enabled: false` and offer re-enabling.
+
 - **Schedules are scanned fresh every check** (`scanSchedules` on every minute boundary, at start and on `resume`). No in-memory cache — adding/editing a `.md` file takes effect within 60 seconds without any restart.
 - **One run at a time per schedule** — `runningTasks` Set guards against overlap. If a schedule is still running when the next minute matches, the next tick is skipped with an info log line (no queue, no retry). A catch-up hits the same guard, after its minute is recorded: the skipped minute is consumed, not retried.
 - **Trigger alignment**: `setTimeout` to next minute boundary, then `setInterval(tick, 60_000)`. The first call is aligned to the wall-clock minute; subsequent calls drift only by JS event-loop latency.

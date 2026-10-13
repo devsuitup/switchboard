@@ -714,6 +714,51 @@ function scheduleProjects() {
   return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
+function isProjectSettingsArchived(projectPath) {
+  const hidden = (getSetting('global') || {}).hiddenProjects || [];
+  const normalize = value => {
+    try { value = fs.realpathSync(value); } catch {}
+    return value.replace(/\\/g, '/');
+  };
+  const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalize);
+  const target = normalize(projectPath);
+  return local.includes(target)
+    || require('./public/worktree-nesting').isHiddenRepositoryWorktree(target, null, local);
+}
+
+// see .ai/contexts/session-cache.md ("Project Archive and Delete")
+ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
+  try {
+    const global = getSetting('global') || {};
+    const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
+    const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
+    global.hiddenProjects = [...new Set([...(global.hiddenProjects || []), entry])];
+    setSetting('global', global);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('unarchive-project', (_event, entry) => {
+  try {
+    const global = getSetting('global') || {};
+    if (!(global.hiddenProjects || []).includes(entry)) return { error: 'Project is not archived' };
+    const { alias, folder: projectPath } = parseFolderKey(entry);
+    const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
+    refreshFolder(folder);
+    if (alias === null) scheduleProjects().add(projectPath);
+    clearArchivedEntry(getSetting, setSetting, alias, projectPath);
+    global.hiddenProjects = global.hiddenProjects.filter(p => p !== entry);
+    setSetting('global', global);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 // --- IPC: add-project ---
 ipcMain.handle('add-project', (_event, projectPath) => {
   try {
@@ -721,7 +766,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     const stat = fs.statSync(projectPath);
     if (!stat.isDirectory()) return { error: 'Path is not a directory' };
 
-    // Unhide if previously hidden
+    // see .ai/contexts/session-cache.md ("Project Archive and Delete")
     const global = getSetting('global') || {};
     if (global.hiddenProjects && global.hiddenProjects.includes(projectPath)) {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
@@ -3377,6 +3422,11 @@ if (!gotSingleInstanceLock) {
     const { spawn: cpSpawn } = require('child_process');
     function runScheduleCommand(claudeArgv, cwd, name, onDone) {
       const globalSettings = getSetting('global') || {};
+      if (isProjectSettingsArchived(cwd)) {
+        log.info(`[schedule] ${name} suspended: project is archived`);
+        if (onDone) onDone();
+        return;
+      }
       const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
       const profile = resolveShell(profileId);
       const shell = profile.path;
@@ -3449,13 +3499,13 @@ if (!gotSingleInstanceLock) {
       });
     }
 
-    scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath);
+    scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
     // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
     scheduleProjects().list();
     startScheduler(log, runScheduleCommand, {
       resumeSource: powerMonitor,
       stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
-      projects: () => scheduleProjects().list(),
+      projects: () => scheduleProjects().list().filter(p => !isProjectSettingsArchived(p)),
     });
 
     // File-trigger watcher — allows harness scripts to inject input into open

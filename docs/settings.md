@@ -107,7 +107,8 @@ only migrates forward.
 ### Stored without a field
 
 - `sidebarWidth` (default 340): the sidebar's width, set by dragging its edge.
-- `hiddenProjects`: projects hidden with **Hide Project**.
+- `hiddenProjects`: projects archived with **Archive Project**, including legacy
+  hidden entries and projects deleted from Switchboard. Listed in **Archived projects**.
 - `archivedProjects`, a setting of its own: folders hidden with
   [Archive folder](session-browser.md#archive-a-folder), each with the session
   ids it held and the schedule files it disabled.
@@ -127,8 +128,27 @@ and **Session Launch**: Permission Mode, Worktree, Worktree Name, Chrome, Sandbo
 **Use global default** box; while it is checked the field shows the global value
 and nothing is stored for the project.
 
-**Hide Project** removes the project from the sidebar after a confirmation. No
-file is deleted; **Add Project** on the same folder shows it again.
+**Archive Project** removes the project and its nested worktrees from the
+sidebar after an in-app confirmation. Settings, cached sessions and search
+entries are kept. Schedules stay on disk with their enabled state unchanged,
+but Switchboard suspends their launches until you unarchive the project.
+Already running sessions and schedules continue.
+
+In Global Settings → **Archived projects**, **Unarchive** restores the sidebar
+row and resumes scheduling; **Add Project** on the same local folder also
+restores it. Previously hidden projects appear here too, with default settings
+because the old Hide action already removed their settings. A remote entry
+includes its host alias; unarchiving it does not register a local schedule.
+
+**Delete Project** is a separate destructive action in Project Settings. Its
+in-app confirmation names the project settings, cached sessions and search
+index, and schedule registration that will be removed. It deletes no project
+folder, session file or schedule file. The project stays out of the sidebar;
+adding or unarchiving it again rebuilds the cache with default settings.
+
+Project Archive stays in effect until restored explicitly. It differs from
+[Archive folder](session-browser.md#archive-a-folder), which returns on new
+activity and can optionally archive sessions and disable schedule files.
 
 ## Environment variables
 
