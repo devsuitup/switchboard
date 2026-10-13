@@ -1282,7 +1282,8 @@ async function archiveProjectFolder(project, button) {
     } finally {
       for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
       setGroupArchiveBusy(groupKey, false);
-    }    announceNotStopped(notStopped);
+    }
+    announceNotStopped(notStopped);
     if (refused) {
       pollActiveSessions();
       loadProjects();
