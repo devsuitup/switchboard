@@ -2,9 +2,9 @@
 // Runs the node:test suite in two stages, cross-platform (no shell-specific
 // syntax, so this works the same under cmd.exe and under a POSIX shell).
 //
-// Stage 1: every test file except trigger-watcher.test.js, at
+// Stage 1: every test file except the ISOLATED_FILES, at
 // DEFAULT_CONCURRENCY workers (override with SWITCHBOARD_TEST_CONCURRENCY).
-// Stage 2: trigger-watcher.test.js alone, serially, with a generous timeout.
+// Stage 2: the ISOLATED_FILES alone, serially, with a generous timeout.
 // It uses real timers + real fs.watch against wall-clock budgets (no fake-timer
 // injection yet -- see .ai/contexts/trigger-watcher.md, "timing tests and host
 // load"), so it is far more sensitive to CPU contention from sibling test
@@ -18,7 +18,7 @@ const os   = require('os');
 const path = require('path');
 
 const TEST_DIR = path.join(__dirname, '..', 'test');
-const ISOLATED_FILE = 'trigger-watcher.test.js';
+const ISOLATED_FILES = ['trigger-watcher.test.js', 'trigger-delivery.test.js', 'trigger-continuation-delivery.test.js'];
 
 // Node defaults stage 1 to os.availableParallelism() workers, which on a large
 // workstation is a dozen-plus test processes at once. See
@@ -37,7 +37,7 @@ function stageOneConcurrency() {
 }
 
 const mainFiles = fs.readdirSync(TEST_DIR)
-  .filter((name) => name.endsWith('.js') && name !== ISOLATED_FILE)
+  .filter((name) => name.endsWith('.js') && !ISOLATED_FILES.includes(name))
   .map((name) => path.join('test', name));
 
 function run(args) {
@@ -54,7 +54,7 @@ if (require.main === module) {
   const isolatedStatus = run([
     '--test',
     '--test-concurrency=1',
-    path.join('test', ISOLATED_FILE),
+    ...ISOLATED_FILES.map((name) => path.join('test', name)),
   ]);
 
   process.exit(mainStatus !== 0 ? mainStatus : isolatedStatus);

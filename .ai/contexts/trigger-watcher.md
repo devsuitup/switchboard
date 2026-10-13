@@ -2050,7 +2050,10 @@ not only the code under test, so it is far more sensitive to CPU contention
 than the rest of the suite. `npm test` / `npm run coverage` (`scripts/run-tests.js`)
 run it alone, serially, after every other test file, specifically to remove
 the self-inflicted contention of ~150 sibling test-file processes running
-concurrently — that alone fixed most of what issue #260 measured. What's left
+concurrently — that alone fixed most of what issue #260 measured. The ADR 0003
+delivery tests (`test/trigger-delivery.test.js`,
+`test/trigger-continuation-delivery.test.js`) also run against real delivery
+budgets and are in the same serial stage. What's left
 after serializing is contention from outside the suite (other agents,
 antivirus, a second `node --test` run): under a synthetic load of that kind
 (measured 2026-09-11 with 8 CPU-saturating processes on an 8-core machine),
