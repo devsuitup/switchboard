@@ -42,7 +42,11 @@ async function stopBeforeArchive(session) {
   const alias = session.remoteAlias;
   if (alias) {
     for (const id of ids) {
-      const member = id === session.sessionId ? session : { ...session, sessionId: id };
+      const member = id === session.sessionId ? session : {
+        ...session,
+        sessionId: id,
+        remoteDescriptorSeen: session.remoteMemberDescriptorSeen?.[id] ?? session.remoteDescriptorSeen,
+      };
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
       if (!isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;

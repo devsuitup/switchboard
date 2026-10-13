@@ -625,6 +625,8 @@ function annotateRemoteAttachable(projects) {
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
+        session.remoteMemberDescriptorSeen = Object.fromEntries((session.mergedMemberIds || [])
+          .map(id => [id, info.byId.has(id)]));
       } else {
         // Same descriptor vocabulary, read from the local ~/.claude/sessions/<pid>.json
         // instead of a remote host's mirror -- see .ai/contexts/cli-session-state.md
@@ -1890,7 +1892,14 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   if (typeof alias !== 'string' || !alias || typeof sessionId !== 'string' || !sessionId) {
     return { ok: false, error: 'invalid request' };
   }
-  const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
+  let remote = remoteIndexer.getRemoteSessions(alias);
+  let descriptor = remote.sessions.find(s => s.sessionId === sessionId);
+  if (!descriptor && !remote.at) {
+    await remoteIndexer.refreshHostNow(alias, { force: true });
+    remote = remoteIndexer.getRemoteSessions(alias);
+    if (!remote.at) return { ok: false, error: remote.error || 'not yet synced with this host' };
+    descriptor = remote.sessions.find(s => s.sessionId === sessionId);
+  }
   if (!descriptor) return { ok: false, error: 'session not found on that host' };
 
   const result = await remoteStopAdapter.stop(alias, descriptor);
