@@ -3244,7 +3244,9 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
 });
 
 // --- IPC: terminal-resize (fire-and-forget) ---
-const handleTerminalResize = createTerminalResizeHandler(activeSessions);
+const handleTerminalResize = createTerminalResizeHandler(activeSessions, undefined, (sessionId, phase, cols, rows, ok) => {
+  if (TRACE.on) trace('pty.resize', sessionId, { phase, cols, rows, ok });
+});
 ipcMain.on('terminal-resize', (_event, sessionId, cols, rows, refresh) => {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {

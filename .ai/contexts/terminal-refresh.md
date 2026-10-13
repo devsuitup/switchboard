@@ -54,6 +54,14 @@ only; local and solo refresh fit with `safeFit`, repaint and send the fitted
 size even when it equals `lastPtySize`. Refresh never temporarily shrinks
 xterm or adds a WebGL context (#353).
 
+The fit corrects stale xterm columns before requesting the PTY nudge (#603).
+While Refresh is pending, xterm's resize callback leaves size synchronization
+to the refresh branch: a changed fit sends one refresh IPC instead of an
+ordinary resize followed by a refresh. `safeFit` returns the content-box-clamped
+proposal for tracing, or `null` if it used FitAddon's fallback. The trace takes
+`prevPty` before fitting, since ordinary xterm resize callbacks can otherwise
+overwrite it. Shared explicit Refresh still performs only a local repaint.
+
 Destruction cancels the timer. When the timer finds a closed, disconnected
 or hidden entry, it clears the refresh request before returning, so a later
 unrelated geometry fit cannot revive a stale refresh.
@@ -71,7 +79,13 @@ behave as ordinary resizes.
 
 A refresh sends the fitted size, nudges to one column less (one more at a
 single column), and restores the fitted size after `PTY_REFRESH_DELAY_MS`
-(50 ms). The pre-existing first-open nudge also stays within the upper bound.
+(300 ms). This is a conservative initial hold, six times the unsuccessful
+50 ms round trip, allowing several CLI/libuv size-check opportunities while
+keeping the temporary width change below half a second. It is not a measured
+minimum or proof of ConPTY delivery. The pre-existing first-open nudge uses
+its own `PTY_FIRST_RESIZE_DELAY_MS` (50 ms before the nudge and 50 ms before
+restoration); its startup timing is unchanged because #603 concerns explicit
+Refresh. The first-open nudge also stays within the upper bound.
 Both phases run in main; losing a second renderer message cannot leave the
 nudge in place. Restoration retries once on a thrown PTY operation. A newer
 fit cancels pending restoration and becomes the final size, retrying once
@@ -83,6 +97,12 @@ enforces solo sizing. Solo refresh errors reach the guarded operation for
 restoration retry; ordinary resize errors remain absorbed by the adapter.
 An exited or permanently failing PTY cannot be restored, and no continuing
 retry or idle timer is installed.
+
+The handler's optional third argument, `onResize(sessionId, phase, cols, rows,
+ok)`, observes every PTY operation attempt, including failed attempts and
+retries, with phases `fit`, `nudge` and `restore`. Main forwards it as
+`pty.resize` only under `if (TRACE.on)`. Renderer probes are similarly guarded
+by `window.ATRACE`; disabled probes construct no trace payload and send no IPC.
 
 ## WebGL contexts across tab switches
 
@@ -153,12 +173,53 @@ zero refresh IPC and zero raw resize calls. A dropped solo restoration is
 retried. `.work-files/r2-measure.log` records current timings and traces.
 The earlier shared-resize measurements describe the superseded behavior.
 
-A local ConPTY/plain-shell nudge produces two intended SIGWINCH size changes
-50 ms apart; duplicate prompts and TUI reflow have not been measured. The
+A local ConPTY/plain-shell Refresh requests two size changes 300 ms apart;
+duplicate prompts and TUI reflow have not been measured. The
 fake-port protocol trace does not establish signal delivery on Windows.
 Live painting, actual SIGWINCH delivery through ssh/tmux and peer effects
 remain unverified. `tmux refresh-client` was not benchmarked; its client TTY
 would need resolution beyond the descriptor's pane/window target.
+
+## Issue #603: live confirmation
+
+The maintainer's 14 October diagnosis recorded no write over 316 characters
+after Refresh, while real file-panel geometry changes caused 8.8–13 KB
+repaints and dragging the splitter repaired the screen. The 50 ms hold being
+missed by ConPTY/libuv remains plausible; the earlier trace did not record
+requests or resize operations and could not exclude missing IPC.
+
+With Debug mode armed in a build containing this change, press Refresh once
+on a garbled visible tab and note the session and time. Look for:
+
+1. `refresh.request` with `hidden:false`.
+2. `refresh.fit` with actual `cols`/`rows`, the pre-fit `prevPty`, the
+   `proposed` fit and `clientW`; mismatched old columns must be corrected.
+3. `pty.resize` phases `fit` at W, `nudge` at W−1 and `restore` at W, with
+   `ok:true` and about 300 ms between nudge and restore (at least the hold;
+   event-loop load may delay it). A one-column terminal nudges to two.
+4. `render.stats` showing a full repaint burst, comparable to the measured
+   8.8–13 KB (`maxBatchChars`/`writeChars`), and an actually repaired screen.
+
+No request points to the control path; a request without a fit points to the
+renderer fit/visibility path; a fit without PTY records points to IPC/main.
+Successful resize records without repaint mean the CLI still did not observe
+the nudge. `ok:true` records a guarded operation's success, not signal delivery.
+These observations require a live Windows app; the tests do not establish them.
+
+## Stale queries in hidden replay
+
+`removeCursorPositionQueries` removes DSR cursor position (`ESC[6n`), private
+DECXCPR (`ESC[?6n`) and primary device attributes (`ESC[c` / `ESC[0c`) in one
+pass. The CLI was observed polling DECXCPR and DA1; replaying them made xterm
+send `ESC[?73;3R` and `ESC[?1;2c` roughly 60 seconds late. Hidden accumulation
+also removes each query completed across chunk boundaries, including one-byte
+chunks, and the reveal filter covers pending live-buffer drains.
+
+Live output keeps queries so the current requester can receive a timely reply.
+Responses, cursor movement, status requests and other escape sequences remain
+unchanged; no additional polled query was established by this diagnosis.
+Removal is non-recursive: bytes that form a new query only after another query
+is removed are left alone in that pass, preserving the existing replay rule.
 
 ## Verification
 
@@ -170,8 +231,14 @@ would need resolution beyond the descriptor's pane/window target.
 - `test/header-controls.test.js`: header disabled, accessible and tooltip
   state through stopped/running/stopped transitions.
 - `test/terminal-refresh-pty.test.js`: restoration, retries, newer fits,
-  allocation bounds, strict refresh flag, exit/replacement and attach policy.
+  allocation bounds, strict refresh flag, exit/replacement and attach policy;
+  injected-clock 300 ms hold, unchanged first-open timing and resize hooks.
 - `test/terminal-refresh-ipc.test.js`: shipped main open/reattach/launch
   capability results and preload/main resize round trip.
+- `test/terminal-hidden-suspend.test.js`: shipped query filter, split DECXCPR
+  and DA1 queries, live-buffer drain and preservation of live queries.
+- `test/activity-trace-probe-guards.test.js`: permanent guarded `pty.resize`.
+- `test/main-wiring-source-check.test.js`: guarded handler registry wiring,
+  allowing the optional resize trace hook.
 - `e2e/terminal-refresh.spec.js`: existing isolated plain-shell button journey;
   written and syntax checked, not run because Electron is prohibited here.

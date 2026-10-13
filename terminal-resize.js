@@ -3,10 +3,12 @@
 const { resizePty } = require('./pty-ops');
 const { MAX_COLS, MAX_ROWS } = require('./pty-size');
 
-const PTY_REFRESH_DELAY_MS = 50;
+// see .ai/contexts/terminal-refresh.md
+const PTY_REFRESH_DELAY_MS = 300;
+const PTY_FIRST_RESIZE_DELAY_MS = 50;
 const PTY_REFRESH_RESTORE_ATTEMPTS = 2;
 
-function createTerminalResizeHandler(activeSessions, timers = { setTimeout, clearTimeout }) {
+function createTerminalResizeHandler(activeSessions, timers = { setTimeout, clearTimeout }, onResize) {
   const pending = new WeakMap();
   return (sessionId, cols, rows, refresh = false) => {
     const session = activeSessions.get(sessionId);
@@ -19,8 +21,13 @@ function createTerminalResizeHandler(activeSessions, timers = { setTimeout, clea
     }
     const forced = refresh === true || !!previous?.forced;
     const options = forced ? { refresh: true } : undefined;
+    const resize = (phase, nextCols, nextRows) => {
+      const ok = resizePty(session, nextCols, nextRows, sessionId, options);
+      if (onResize) onResize(sessionId, phase, nextCols, nextRows, ok);
+      return ok;
+    };
     const retryFit = refresh === true || !!previous;
-    if (!resizePty(session, cols, rows, sessionId, options) && !(retryFit && resizePty(session, cols, rows, sessionId, options))) return;
+    if (!resize('fit', cols, rows) && !(retryFit && resize('fit', cols, rows))) return;
     const firstNudge = session.firstResize && !session.isPlainTerminal;
     session.firstResize = false;
     if (!refresh && !firstNudge) return;
@@ -29,16 +36,16 @@ function createTerminalResizeHandler(activeSessions, timers = { setTimeout, clea
       pending.delete(session);
       if (!current()) return;
       for (let i = 0; i < PTY_REFRESH_RESTORE_ATTEMPTS; i++) {
-        if (resizePty(session, cols, rows, sessionId, options)) break;
+        if (resize('restore', cols, rows)) break;
       }
     };
     const nudge = () => {
       if (!current()) { pending.delete(session); return; }
-      resizePty(session, (refresh || cols === MAX_COLS) && cols > 1 ? cols - 1 : cols + 1, rows, sessionId, options);
-      pending.set(session, { forced, timer: timers.setTimeout(restore, PTY_REFRESH_DELAY_MS) });
+      resize('nudge', (refresh || cols === MAX_COLS) && cols > 1 ? cols - 1 : cols + 1, rows);
+      pending.set(session, { forced, timer: timers.setTimeout(restore, refresh ? PTY_REFRESH_DELAY_MS : PTY_FIRST_RESIZE_DELAY_MS) });
     };
     if (refresh) nudge();
-    else pending.set(session, { forced, timer: timers.setTimeout(nudge, PTY_REFRESH_DELAY_MS) });
+    else pending.set(session, { forced, timer: timers.setTimeout(nudge, PTY_FIRST_RESIZE_DELAY_MS) });
   };
 }
 

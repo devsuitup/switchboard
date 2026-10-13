@@ -15,6 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, a single close waits, and closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. A window closed while it is still starting asks once it has loaded. (#478)
 
 ### Fixed
+- Refresh screen refits the terminal and gives the running CLI more time to redraw a garbled screen. Returning to a hidden tab no longer sends late cursor-position or terminal-identification replies. (#603)
 - On Windows, opening a project with different letter case no longer makes its scheduled tasks run twice. Existing duplicate registrations are cleaned up automatically. (#607)
 - Quitting while startup is restoring sessions no longer opens an extra new session on the next start or forgets a conversation being reattached in the background. (#550)
 - On Windows, a `/compact` sent by an automation trigger is no longer reported as done because of a transcript file that was replaced while it waited. (#601)

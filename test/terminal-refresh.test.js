@@ -236,6 +236,45 @@ test('refresh bursts and the resize observer share one delayed geometry measurem
   } finally { ctx.destroy(); }
 });
 
+test('Refresh fits stale columns once and traces the previous PTY size before overwriting it', () => {
+  const ctx = setup({ proposeDimensions: () => ({ cols: 204, rows: 40 }) });
+  try {
+    const e = ctx.entry('local');
+    e.terminal.resize(218, 40);
+    ctx.resizes.length = 0;
+    Object.defineProperty(e.element, 'clientWidth', { value: 1632 });
+    const events = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, payload) => events.push({ cat, sid, payload: JSON.parse(JSON.stringify(payload)) });
+    ctx.window.requestTerminalRefresh('local');
+    ctx.advance(80);
+    assert.equal(e.terminal.cols, 204);
+    assert.deepEqual(ctx.resizes, [{ id: 'local', cols: 204, rows: 40 }]);
+    assert.deepEqual(ctx.refreshes, ctx.resizes);
+    assert.deepEqual(events, [
+      { cat: 'refresh.request', sid: 'local', payload: { hidden: false } },
+      { cat: 'refresh.fit', sid: 'local', payload: { cols: 204, rows: 40, prevPty: { cols: 218, rows: 40 }, proposed: { cols: 204, rows: 40 }, clientW: 1632 } },
+    ]);
+  } finally { ctx.destroy(); }
+});
+
+test('Refresh traces a hidden request before reveal and does not trace while disabled', () => {
+  const ctx = setup();
+  try {
+    const e = ctx.entry('local');
+    ctx.window.atrace = () => { throw new Error('disabled trace evaluated'); };
+    ctx.window.requestTerminalRefresh('local');
+    ctx.advance(80);
+    const events = [];
+    ctx.window.ATRACE = true;
+    ctx.window.atrace = (cat, sid, payload) => events.push({ cat, sid, payload });
+    Object.defineProperty(e.element, 'clientHeight', { value: 0, configurable: true });
+    ctx.window.requestTerminalRefresh('local');
+    assert.equal(events[0]?.cat, 'refresh.request');
+    assert.equal(events[0]?.payload.hidden, true);
+  } finally { ctx.destroy(); }
+});
+
 test('a grid card return refreshes a remote terminal once, even through showSession', async () => {
   const ctx = setup();
   try {

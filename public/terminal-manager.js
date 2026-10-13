@@ -290,8 +290,7 @@ function proposeFittedDimensions(entry) {
   return { cols: dims.cols, rows: clampRowsToContentBox(dims.rows, el.clientHeight, padV, cellH) };
 }
 
-// Fit terminal to container, clamping rows to the container's true content-box
-// height to avoid bottom-row clipping (see clampRowsToContentBox above).
+// see .ai/contexts/terminal-refresh.md
 function safeFit(entry) {
   const dims = proposeFittedDimensions(entry);
   if (dims) {
@@ -299,6 +298,7 @@ function safeFit(entry) {
   } else {
     entry.fitAddon.fit();
   }
+  return dims || null;
 }
 
 // Fit a terminal that just became visible (from display:none or reparent).
@@ -401,7 +401,8 @@ function scheduleTerminalFit(entry) {
       forceRepaint(entry);
       return;
     }
-    safeFit(entry);
+    const prevPty = window.ATRACE && entry.refreshRequested ? entry.lastPtySize || null : null;
+    const proposed = safeFit(entry);
     if (entry.resizeSyncRequested) {
       entry.resizeSyncRequested = false;
       if (!entry.refreshRequested) {
@@ -414,6 +415,7 @@ function scheduleTerminalFit(entry) {
     entry.refreshRequested = false;
     forceRepaint(entry);
     const { cols, rows } = entry.terminal;
+    if (window.ATRACE) window.atrace('refresh.fit', entry.session.sessionId, { cols, rows, prevPty, proposed, clientW: entry.element.clientWidth });
     entry.lastPtySize = { cols, rows };
     window.api.resizeTerminal(entry.session.sessionId, cols, rows, { refresh: true });
   }, CONTAINER_RESIZE_DEBOUNCE_MS);
@@ -430,6 +432,7 @@ function allowRemoteResize(sessionId) {
 function requestTerminalRefresh(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry || entry.closed) return;
+  if (window.ATRACE) window.atrace('refresh.request', sessionId, { hidden: entry.element.clientHeight === 0 });
   entry.refreshRequested = true;
   if (entry.element.clientHeight === 0) showSession(sessionId);
   scheduleTerminalFit(entry);
@@ -810,23 +813,23 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
   acc.raw = buf.chunks.join('') + acc.raw; // leftover is older — goes first
 }
 
-// Cursor-position query (DSR 6): never kept for a replay — see
-// .ai/contexts/ipc-bridge.md, "Cursor-position queries".
-const CURSOR_POSITION_QUERY = '\x1b[6n';
+// see .ai/contexts/terminal-refresh.md
+const REPLAY_QUERIES = ['\x1b[6n', '\x1b[?6n', '\x1b[c', '\x1b[0c'];
 
-// One pass: a query re-formed by the removal is left alone, see the doc above.
+// see .ai/contexts/terminal-refresh.md
 function removeCursorPositionQueries(str) {
-  return str.includes(CURSOR_POSITION_QUERY) ? str.split(CURSOR_POSITION_QUERY).join('') : str;
+  return str.replace(/\x1b\[(?:\??6n|0?c)/g, '');
 }
 
-// Length of the query prefix `prev` ends with that `next` completes, 0 if
-// none. Only a chunk starting with '[', '6' or 'n' can complete one.
-function splitQueryPrefixLength(prev, next) {
-  if (!'[6n'.includes(next[0])) return 0;
-  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
-    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
+// see .ai/contexts/terminal-refresh.md
+function splitReplayQuery(prev, next) {
+  if (!'[?60nc'.includes(next[0])) return null;
+  for (const query of REPLAY_QUERIES) {
+    for (let k = query.length - 1; k > 0; k--) {
+      if (prev.endsWith(query.slice(0, k)) && next.startsWith(query.slice(k))) return { prefix: k, remainder: query.length - k };
+    }
   }
-  return 0;
+  return null;
 }
 
 function appendToHiddenAccumulator(sessionId, data) {
@@ -835,9 +838,9 @@ function appendToHiddenAccumulator(sessionId, data) {
     acc = { raw: '', reset: false };
     hiddenAccumulators.set(sessionId, acc);
   }
-  const k = splitQueryPrefixLength(acc.raw, data);
-  const head = k ? acc.raw.slice(0, -k) : acc.raw;
-  acc.raw = head + removeCursorPositionQueries(k ? data.slice(CURSOR_POSITION_QUERY.length - k) : data);
+  const split = splitReplayQuery(acc.raw, data);
+  const head = split ? acc.raw.slice(0, -split.prefix) : acc.raw;
+  acc.raw = head + removeCursorPositionQueries(split ? data.slice(split.remainder) : data);
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
     const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
     acc.raw = trimmed.data;
@@ -1192,7 +1195,7 @@ function createTerminalEntry(session, opts = {}) {
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
-    if (entry.resizeSyncRequested) return;
+    if (entry.resizeSyncRequested || entry.refreshRequested) return;
     if (entry.session.remoteAlias && entry.remoteResizeAllowed !== true) return;
     // Only tell the PTY when the size really moved — see ptySizeChanged.
     if (!ptySizeChanged(entry, cols, rows)) return;
