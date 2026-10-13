@@ -485,7 +485,8 @@ async function tickRestorePlanner() {
           && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
         const open = openSessions.get(item.sessionId);
         const row = indexedRowOf(item.sessionId);
-        if (!reattached && row && rowOpenId(row)) {
+        const rowOpen = row && rowSessionIds(row).some(id => !openingSessions.has(id) && openSessions.has(id) && !openSessions.get(id).closed);
+        if (!reattached && rowOpen) {
           clearDormantRow(item.sessionId);
           restoreInFlight.delete(item.sessionId);
         } else if (!reattached && (!open || open.closed)) {
