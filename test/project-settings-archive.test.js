@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createHash } = require('node:crypto');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
@@ -60,6 +61,7 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
   });
   const source = read('main.js');
   vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
+  vm.runInContext(extractFunction(source, 'normalizeArchivedProjectPath'), context, { filename: path.join(ROOT, 'main.js') });
   vm.runInContext(extractFunction(source, 'unarchivedScheduleProjects'), context, { filename: path.join(ROOT, 'main.js') });
   if (source.includes('function isProjectSettingsArchived(')) {
     vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: path.join(ROOT, 'main.js') });
@@ -187,7 +189,7 @@ function schedulerHarness(t, h) {
     (_args, cwd, _name, done) => { runs.push(cwd); done(); },
     { projects, resumeSource: resume, stateDir });
   t.after(stop);
-  return { runs, resume, tick: () => timers[0].fn(), at: (...args) => { clock.now = new Date(2026, 0, 5, ...args).getTime(); } };
+  return { runs, resume, stateDir, tick: () => timers[0].fn(), at: (...args) => { clock.now = new Date(2026, 0, 5, ...args).getTime(); } };
 }
 
 test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', t => {
@@ -228,6 +230,53 @@ test('a nested worktree schedule is not caught up either when its project is una
   s.tick();
   assert.deepEqual([...s.runs].sort(), [h.projectPath, worktree].sort());
 });
+
+for (const target of ['root', 'worktree']) {
+  test(`Windows unarchive with different path case resets the ${target} scheduler key`, t => {
+    const h = setup(t, { cron: '0 * * * *' });
+    h.context.process = { platform: 'win32' };
+    h.context.fs = { ...fs, realpathSync: { native: value => value } };
+    const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
+    const commands = path.join(worktree, '.claude', 'commands');
+    fs.mkdirSync(commands, { recursive: true });
+    const worktreeFile = path.join(commands, 'schedule-audit.md');
+    fs.writeFileSync(worktreeFile, h.scheduleBytes);
+    h.setSetting('scheduleProjects', [h.projectPath, worktree]);
+    const s = schedulerHarness(t, h);
+    const archivedPath = h.projectPath.toUpperCase();
+    assert.notEqual(archivedPath, h.projectPath);
+    assert.equal(h.archive(archivedPath, encodeProjectPath(archivedPath)).ok, true);
+    s.at(11, 30);
+    s.tick();
+    s.resume.emit('resume');
+    assert.equal(s.runs.length, 0);
+    assert.equal(h.invoke('unarchive-project', archivedPath).ok, true);
+    const file = target === 'root' ? h.scheduleFile : worktreeFile;
+    const key = createHash('sha256').update(file).digest('hex').slice(0, 16);
+    const baseline = new Date(2026, 0, 5, 11, 29).getTime();
+    assert.ok(fs.existsSync(path.join(s.stateDir, `${key}-${baseline}.json`)),
+      'unarchive must reset the catch-up record under the registry schedule file key');
+    s.at(11, 31);
+    s.tick();
+    s.resume.emit('resume');
+    assert.equal(s.runs.length, 0, 'the missed 11:00 run must not replay');
+    s.at(12, 0);
+    s.tick();
+    assert.deepEqual([...s.runs].sort(), [h.projectPath, worktree].sort());
+  });
+}
+
+for (const platform of ['linux', 'darwin']) {
+  test(`${platform} unarchive keeps differently cased registry projects distinct`, t => {
+    const h = setup(t);
+    h.context.process = { platform };
+    h.context.fs = { ...fs, realpathSync: { native: value => value } };
+    const otherRoot = h.projectPath.toUpperCase();
+    const otherWorktree = path.join(otherRoot, '.claude', 'worktrees', 'worker');
+    h.setSetting('scheduleProjects', [h.projectPath, otherRoot, otherWorktree]);
+    assert.deepEqual(Array.from(h.context.unarchivedScheduleProjects(h.projectPath)), [h.projectPath]);
+  });
+}
 
 function runNowHarness(h) {
   const handlers = new Map();
