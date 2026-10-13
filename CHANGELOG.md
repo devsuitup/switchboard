@@ -17,6 +17,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Refresh screen holds the temporary resize longer so the running CLI redraws a garbled screen, and the replay of a hidden or reattached tab no longer answers stale terminal queries. (#603)
+- Opening a compacted conversation that is not open now resumes its latest part, not the transcript from before the compaction. (#564)
 - On Windows, opening a project with different letter case no longer makes its scheduled tasks run twice. Existing duplicate registrations are cleaned up automatically. (#607)
 - Quitting while startup is restoring sessions no longer opens an extra new session on the next start or forgets a conversation being reattached in the background. (#550)
 - On Windows, a `/compact` sent by an automation trigger is no longer reported as done because of a transcript file that was replaced while it waited. (#601)

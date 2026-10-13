@@ -100,7 +100,7 @@ function setup() {
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
   run(PRELUDE, 'prelude.js');
   loadAppFunctions(ctx, {
-    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
+    functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
   });
   run(extractDeclaration(APP_SRC, 'continuationRetryCancelled'), 'app.js#continuationRetryCancelled');
   run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');

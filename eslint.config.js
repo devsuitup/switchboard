@@ -182,6 +182,7 @@ const rendererCrossFileGlobals = {
   syncLocalPtyAgentsBusy: 'readonly',
   sessionItemEl: 'readonly',
   rowSessionIds: 'readonly',
+  rowHeadId: 'readonly',
   rowOpenId: 'readonly',
   mergedRowSnapshot: 'readonly',
   storedActivitySnapshot: 'readonly',

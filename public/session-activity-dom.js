@@ -4,8 +4,13 @@ function rowSessionIds(session) {
   return [session.sessionId, ...(session.mergedMemberIds || [])];
 }
 
+function rowHeadId(session) {
+  return session.headSessionId || session.sessionId;
+}
+
 function rowOpenId(session) {
-  return rowSessionIds(session).find(id => {
+  const head = rowHeadId(session);
+  return [head, ...(session.mergedMemberIds || []).filter(id => id !== head), session.sessionId].find(id => {
     const entry = openSessions.get(id);
     return entry && !entry.closed;
   });

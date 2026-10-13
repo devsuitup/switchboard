@@ -1535,7 +1535,12 @@ function rebindSidebarEvents(projects) {
       } else if (session.remoteAlias && !session.remoteAttachable) {
         showJsonlViewer(session);
       } else {
-        openSession(session);
+        const head = rowHeadId(session);
+        const mergedMemberIds = [
+          ...(session.mergedMemberIds || []).filter(id => id !== head),
+          ...(session.sessionId !== head ? [session.sessionId] : []),
+        ];
+        openSession({ ...session, sessionId: head, mergedMemberIds });
       }
     };
 

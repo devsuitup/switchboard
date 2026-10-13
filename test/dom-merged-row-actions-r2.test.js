@@ -17,6 +17,18 @@ function setup(t, session = row) {
   return ctx;
 }
 
+test('a click on a merged row with nothing open opens its head', t => {
+  const session = { ...row, headSessionId: 'B' };
+  const ctx = setup(t, session);
+  const opened = [];
+  ctx.window.openSession = target => opened.push(target);
+  ctx.document.getElementById('si-A').click();
+  assert.deepEqual(opened.map(target => target.sessionId), ['B']);
+  assert.deepEqual(Array.from(opened[0].mergedMemberIds), ['C', 'A']);
+  assert.equal(opened[0].summary, session.summary);
+  assert.equal(ctx.window.sessionMap.get('A').sessionId, 'A');
+});
+
 function open(ctx, id, closed = false) {
   const element = ctx.document.createElement('div');
   element.className = 'terminal-container visible';
@@ -161,8 +173,8 @@ test('Delete refuses an open merged member even before the running poll catches 
 });
 
 for (const ownOpen of [false, true]) {
-  test(`Refresh screen uses ${ownOpen ? 'the representative open tab first' : 'an open merged member'}`, t => {
-    const ctx = setup(t);
+  test(`Refresh screen uses an open merged member${ownOpen ? ' before the representative' : ''}`, t => {
+    const ctx = setup(t, { ...row, headSessionId: 'B' });
     open(ctx, 'B', true);
     open(ctx, 'C');
     if (ownOpen) open(ctx, 'A');
@@ -172,7 +184,7 @@ for (const ownOpen of [false, true]) {
     const button = ctx.document.querySelector('.session-refresh-btn');
     assert.equal(button.disabled, false);
     button.click();
-    assert.deepEqual(refreshed, [ownOpen ? 'A' : 'C']);
+    assert.deepEqual(refreshed, ['C']);
   });
 }
 
@@ -193,7 +205,7 @@ function cachedRow(ctx) {
 }
 
 for (const ownOpen of [false, true]) {
-  test(`cached member order makes openSession prefer ${ownOpen ? 'its own open tab' : 'the newest open member'}`, async t => {
+  test(`cached member order makes openSession prefer its head${ownOpen ? ' over its representative open tab' : ''}`, async t => {
     const ctx = setup(t);
     const session = cachedRow(ctx);
     const shown = [];
@@ -203,7 +215,7 @@ for (const ownOpen of [false, true]) {
     if (ownOpen) open(ctx, 'A');
     const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow'], declarations: ['openingSessions'] });
     await openSession(session);
-    assert.deepEqual(shown, [ownOpen ? 'A' : 'C']);
+    assert.deepEqual(shown, ['C']);
   });
 }
 
