@@ -50,7 +50,29 @@ test('quitting while a fresh restore opens saves only the replacement session', 
   try {
     await h.app.flushStateForExit();
     assert.deepEqual(h.settings().openWorkingSet, [
-      { sessionId: newId, projectPath: '/project', active: false, fresh: true },
+      { sessionId: newId, projectPath: '/project', active: true, fresh: true },
+    ]);
+  } finally {
+    gate.release();
+    await restoring;
+  }
+});
+
+test('quitting while the saved active fresh entry opens keeps the replacement active ahead of a later fresh entry', { timeout: 9000 }, async t => {
+  const h = setupExitRestore(t, {}, {
+    savedEntries: [
+      { sessionId: 'a', projectPath: '/project', active: true, fresh: true },
+      { sessionId: 'b', projectPath: '/project', active: false, fresh: true },
+    ],
+  });
+  const gate = holdTerminalOpen(h);
+  const restoring = h.app.runRestore(h.saved);
+  const newId = await gate.opened;
+  try {
+    await h.app.flushStateForExit();
+    assert.deepEqual(h.settings().openWorkingSet, [
+      { sessionId: newId, projectPath: '/project', active: true, fresh: true },
+      { sessionId: 'b', projectPath: '/project', active: false, fresh: true },
     ]);
   } finally {
     gate.release();

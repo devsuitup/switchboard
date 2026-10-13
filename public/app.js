@@ -204,6 +204,10 @@ function persistWorkingSet({ final = false } = {}) {
         ...(fresh ? { fresh: true } : {}),
       });
     }
+    if (!set.some(e => e.active)) {
+      const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
+      if (opening) opening.active = true;
+    }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
     const notStarted = pendingRestoreEntries()
       .filter(({ item }) => !openSessions.has(item.sessionId) || liveAttach(item.sessionId))
@@ -1395,10 +1399,14 @@ async function launchNewSession(project, sessionOptions, restoreSessionId) {
   refreshSidebar();
 
   const entry = createTerminalEntry(session);
-  if (restoreSessionId) restoreInFlight.delete(restoreSessionId);
+  if (restoreSessionId) {
+    if (restoreInFlight.get(restoreSessionId)?.active) pendingSessions.get(sessionId).openingActive = true;
+    restoreInFlight.delete(restoreSessionId);
+  }
 
   // Open terminal in main process with session options
   const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+  delete pendingSessions.get(sessionId)?.openingActive;
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
