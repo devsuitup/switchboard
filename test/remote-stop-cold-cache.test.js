@@ -54,10 +54,12 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
   ctx.window.openSessions.set('A', { closed: false });
   ctx.window.activePtyIds.add('A');
+  const notices = [];
+  ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
   ctx.window.api.remoteStopSession = (alias, sessionId) => handler(null, { alias, sessionId });
   ctx.window.api.archiveSession = async (id, value) => { calls.push(['archive', id, value]); return { ok: true }; };
   t.after(() => { finishPoll?.(); indexer.dispose(); ctx.destroy(); fs.rmSync(dataDir, { recursive: true, force: true }); });
-  return { ...ctx, indexer, calls, attached, session, polls: () => polls, isLive: () => live, finishPoll };
+  return { ...ctx, indexer, calls, notices, attached, session, polls: () => polls, isLive: () => live, finishPoll };
 }
 
 async function archive(ctx) {
@@ -77,30 +79,28 @@ test('Archive before the first remote poll stops the live process and closes its
   assert.equal(ctx.attached.exited, true);
 });
 
-test('Archive refuses a cold-cache host whose first poll fails', async t => {
+test('Archive hides a cold-cache row anyway when the host fails its first poll, and says it was not stopped', async t => {
   const ctx = setup(t, { pollError: 'host unreachable' });
-  const button = await archive(ctx);
-  assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /host unreachable/);
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
   assert.equal(ctx.isLive(), true);
   assert.equal(ctx.attached.exited, false);
+  assert.equal(ctx.notices.length, 1);
+  assert.match(ctx.notices[0], /not stopped/);
+  assert.match(ctx.notices[0], /host did not answer: host unreachable/);
 });
 
-test('Archive counts absence after a successful first poll as done', async t => {
-  const ctx = setup(t, { present: false });
-  await archive(ctx);
-  assert.ok(ctx.polls() > 0);
-  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
-});
-
-test('Archive refuses a cold cache while the first poll is still in flight', async t => {
+test('Archive waits for a first poll already in flight and stops the session once it answers', async t => {
   const ctx = setup(t, { polling: true });
   const pending = ctx.indexer.refreshHostNow('host');
-  const button = await archive(ctx);
+  const click = archive(ctx);
+  await new Promise(resolve => setTimeout(resolve, 30));
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /not yet synced/);
   ctx.finishPoll();
   await pending;
+  await click;
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
+  assert.deepEqual(ctx.notices, []);
 });
 
 test('Archive preserves its attach and row if stopping after the first poll fails', async t => {
@@ -135,12 +135,22 @@ test('Archive still archives a row when the remote indexer is stopped', async t 
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
 });
 
-test('Archive stops waiting for a host that does not answer the first sync', async t => {
+test('Archive stops waiting for a host that does not answer the first sync, then archives and says so', async t => {
   const ctx = setup(t, { polling: true, timeoutMs: 20 });
-  const button = await archive(ctx);
-  assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /did not answer/);
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
   assert.equal(ctx.isLive(), true);
+  assert.match(ctx.notices[0], /host did not answer: no answer within/);
+});
+
+test('Archive stops waiting for an in-flight poll that never answers, then archives and says so', async t => {
+  const ctx = setup(t, { polling: true, timeoutMs: 40 });
+  const pending = ctx.indexer.refreshHostNow('host');
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
+  assert.match(ctx.notices[0], /host did not answer/);
+  ctx.finishPoll();
+  await pending;
 });
 
 test('Archive is busy while it checks the host and ignores a second click', async t => {
@@ -160,7 +170,31 @@ test('Archive is busy while it checks the host and ignores a second click', asyn
 });
 
 test('Archive re-enables its button after a refusal', async t => {
-  const ctx = setup(t, { pollError: 'host unreachable' });
+  const ctx = setup(t, { stopError: 'stop refused' });
   const button = await archive(ctx);
+  assert.equal(button.disabled, false);
+});
+
+test('Archive busy state follows the live button when a re-render replaces it', async t => {
+  const ctx = setup(t, { polling: true });
+  const first = ctx.document.querySelector('#si-A .session-archive-btn').onclick({ stopPropagation() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  ctx.sidebar.renderProjects([makeSampleProject({ sessions: [ctx.session] })], true);
+  const live = ctx.document.querySelector('#si-A .session-archive-btn');
+  assert.equal(live.disabled, true);
+  assert.match(live.title, /Checking the host/);
+  ctx.finishPoll();
+  await first;
+  const after = ctx.document.querySelector('#si-A .session-archive-btn');
+  assert.equal(after.disabled, false);
+  assert.equal(after.title, 'Archive');
+});
+
+test('Archive reports a stop that throws instead of leaving the click unhandled', async t => {
+  const ctx = setup(t);
+  ctx.window.api.remoteStopSession = async () => { throw new Error('ipc broke'); };
+  const button = await archive(ctx);
+  assert.deepEqual(ctx.calls, []);
+  assert.match(button.title, /ipc broke/);
   assert.equal(button.disabled, false);
 });

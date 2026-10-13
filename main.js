@@ -1899,16 +1899,27 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   let descriptor = remote.sessions.find(s => s.sessionId === sessionId);
   if (!descriptor && !remote.at) {
     let timer;
+    let abandoned = false;
     const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), REMOTE_STOP_SYNC_TIMEOUT_MS); });
-    const refreshed = await Promise.race([remoteIndexer.refreshHostNow(alias, { force: true }), timedOut]).finally(() => clearTimeout(timer));
+    const sync = (async () => {
+      const refreshed = await remoteIndexer.refreshHostNow(alias, { force: true });
+      while (!abandoned && refreshed.skipped && refreshed.reason === 'in-flight') {
+        const current = remoteIndexer.getRemoteSessions(alias);
+        if (current.at || current.error) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return refreshed;
+    })();
+    const refreshed = await Promise.race([sync, timedOut]).finally(() => { abandoned = true; clearTimeout(timer); });
     if (refreshed && (refreshed.reason === 'stopped' || refreshed.reason === 'unknown-host')) {
       return { ok: false, error: 'session not found on that host' };
     }
     remote = remoteIndexer.getRemoteSessions(alias);
     if (!remote.at) {
-      if (refreshed && refreshed.timedOut) return { ok: false, error: `${alias} did not answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s; try again once it is reachable` };
-      if (remote.error) return { ok: false, error: `${alias} did not answer (${remote.error}); archive again once it is reachable, or remove the host in Settings` };
-      return { ok: false, error: 'not yet synced with this host; try again in a moment' };
+      const why = refreshed && refreshed.timedOut
+        ? `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s`
+        : (remote.error || 'not yet synced');
+      return { ok: false, hostUnreachable: true, error: why };
     }
     descriptor = remote.sessions.find(s => s.sessionId === sessionId);
   }

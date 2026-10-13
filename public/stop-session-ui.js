@@ -41,7 +41,9 @@ async function stopBeforeArchive(session) {
   const ids = rowSessionIds(session);
   const alias = session.remoteAlias;
   if (alias) {
+    const notStopped = [];
     for (const id of ids) {
+      if (notStopped.length) continue;
       const member = id === session.sessionId ? session : {
         ...session,
         sessionId: id,
@@ -53,12 +55,16 @@ async function stopBeforeArchive(session) {
       if (!hostUnsynced && !isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
       const result = await window.api.remoteStopSession(alias, id);
+      if (result && result.hostUnreachable) {
+        notStopped.push({ alias, error: result.error });
+        continue;
+      }
       if (!result || (result.ok === false && result.error !== 'session not found on that host')) {
         return { ok: false, error: (result && result.error) || 'unknown error' };
       }
       if (typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
     }
-    return { ok: true };
+    return notStopped.length ? { ok: true, notStopped } : { ok: true };
   }
   for (const id of ids) {
     const refusal = await liveBackgroundJobRefusal(id);

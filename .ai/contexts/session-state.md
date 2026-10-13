@@ -159,11 +159,17 @@ come from the on-disk mirror). `stopBeforeArchive` treats a null `remoteHostAt`
 as liveness unknown and calls `remoteStopSession` for that member unless the
 adapter has confirmed it dead; `remote-stop-session` then refreshes the host
 once (at most `REMOTE_STOP_SYNC_TIMEOUT_MS`, 20 s) and answers from the fresh
-list. A host that does not answer refuses the archive with the reason; a host
-that is stopped or no longer configured (`refreshHostNow` reports
-`reason: 'stopped'` or `'unknown-host'`) answers "session not found on that
-host", so the row archives as it did before. The Archive button is disabled
-and titled "Checking the host before archiving…" while this runs
+list. A host that does not answer (timeout, error, still not synced after an
+in-flight refresh was awaited within the same bound) makes `remote-stop-session`
+return `{ok:false, hostUnreachable:true, error}`; Archive is reversible, so
+`stopBeforeArchive` turns that into `{ok:true, notStopped:[{alias,error}]}`
+(asking the same host only once per row) and the caller archives anyway, then
+`announceNotStopped` shows a notice naming the host. A host that answers but
+refuses the stop still returns `{ok:false}` and blocks the archive. A host that
+is stopped or no longer configured (`refreshHostNow` reports `reason: 'stopped'`
+or `'unknown-host'`) answers "session not found on that host", so the row
+archives silently. The Archive button is disabled
+and titled "Checking the host before archiving…" while this runs (the folder and group Archive buttons too, plus each row they check)
 (`archivingSessionIds`, `public/sidebar.js`), and a second click is ignored.
 
 | kind | alive / has PTY | call |
