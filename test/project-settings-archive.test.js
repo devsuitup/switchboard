@@ -330,7 +330,7 @@ function settingsDom(t, h) {
   dom.window.alert = () => { throw new Error('native alert must not be used'); };
   let reloads = 0;
   dom.window.loadProjects = async () => { reloads++; };
-  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'choice-dialog.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'modal-stack.js', 'choice-dialog.js', 'settings-panel.js']) {
     vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public', file) });
   }
   return { window: dom.window, document: dom.window.document, calls, reloads: () => reloads };

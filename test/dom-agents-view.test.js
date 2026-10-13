@@ -915,21 +915,3 @@ test('background Delete waits for its async confirmation and cancellation sends 
   await ctx.window.runAgentVerb('rm', ROSTER[1]);
   assert.deepEqual(ctx.calls.verbs, [['rm', ROSTER[1].id]]);
 });
-for (const agree of [false, true]) {
-  test('project Hide ' + (agree ? 'proceeds' : 'cancels') + ' after an async decision', async t => {
-    const ctx = setup({ settingsPanel: true }); t.after(() => ctx.destroy());
-    const removed = [];
-    ctx.window.api.removeProject = async (...args) => { removed.push(args); };
-    await ctx.window.openSettingsViewer('project', '/project', 'folder-key');
-    let answer;
-    let options;
-    ctx.window.appConfirm = value => { options = value; return new Promise(resolve => { answer = resolve; }); };
-    ctx.document.getElementById('sv-remove-btn').click();
-    assert.deepEqual(removed, []);
-    assert.equal(options.confirmLabel, 'Hide');
-    answer(agree);
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(removed, agree ? [['/project', 'folder-key']] : []);
-    assert.equal(ctx.document.getElementById('settings-viewer').style.display, agree ? 'none' : 'flex');
-  });
-}

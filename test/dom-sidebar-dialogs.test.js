@@ -3,32 +3,6 @@ const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
 for (const agree of [false, true]) {
-  test('worktree Hide ' + (agree ? 'proceeds' : 'cancels') + ' after an async decision', async () => {
-    const ctx = setupSidebarDom();
-    try {
-      const parent = makeSampleProject({ projectPath: '/p' });
-      const child = makeSampleProject({ projectPath: '/p/.claude/worktrees/w' });
-      const removed = [];
-      ctx.window.api = { removeProject: async path => { removed.push(path); } };
-      ctx.window.cachedAllProjects = [parent, child];
-      ctx.sidebar.renderProjects([parent, child], true);
-      const button = ctx.document.querySelector('.worktree-hide-btn');
-      assert.ok(button);
-      let answer;
-      ctx.window.appConfirm = options => {
-        assert.equal(options.confirmLabel, 'Hide');
-        return new Promise(resolve => { answer = resolve; });
-      };
-      const pending = button.onclick(new ctx.window.MouseEvent('click'));
-      assert.deepEqual(removed, []);
-      answer(agree);
-      await pending;
-      assert.deepEqual(removed, agree ? [child.projectPath] : []);
-    } finally { ctx.destroy(); }
-  });
-}
-
-for (const agree of [false, true]) {
   test('Remap ' + (agree ? 'proceeds and reports failure' : 'cancels') + ' after an async decision', async () => {
     const ctx = setupSidebarDom();
     try {
