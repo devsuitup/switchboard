@@ -1900,12 +1900,12 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   if (!descriptor && !remote.at) {
     let timer;
     let abandoned = false;
+    const attemptsBefore = remoteIndexer.getRemoteHostState(alias).attempts;
     const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), REMOTE_STOP_SYNC_TIMEOUT_MS); });
     const sync = (async () => {
       const refreshed = await remoteIndexer.refreshHostNow(alias, { force: true });
       while (!abandoned && refreshed.skipped && refreshed.reason === 'in-flight') {
-        const current = remoteIndexer.getRemoteSessions(alias);
-        if (current.at || current.error) break;
+        if (remoteIndexer.getRemoteSessions(alias).at || remoteIndexer.getRemoteHostState(alias).attempts > attemptsBefore) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       return refreshed;
@@ -1916,10 +1916,14 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     }
     remote = remoteIndexer.getRemoteSessions(alias);
     if (!remote.at) {
-      const why = refreshed && refreshed.timedOut
-        ? `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s`
-        : (remote.error || 'not yet synced');
-      return { ok: false, hostUnreachable: true, error: why };
+      const state = remoteIndexer.getRemoteHostState(alias);
+      if (refreshed && refreshed.timedOut) {
+        return { ok: false, hostUnreachable: true, error: `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s` };
+      }
+      if (state.attempts > attemptsBefore && state.lastError && !state.lastErrorTransport) {
+        return { ok: false, error: state.lastError };
+      }
+      return { ok: false, hostUnreachable: true, error: state.attempts > attemptsBefore && state.lastError ? state.lastError : 'not yet synced' };
     }
     descriptor = remote.sessions.find(s => s.sessionId === sessionId);
   }

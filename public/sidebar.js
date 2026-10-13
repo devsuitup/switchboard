@@ -14,6 +14,7 @@ function slugId(slug) {
 }
 
 const archivingSessionIds = new Set();
+const archivingGroupIds = new Set();
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
 
 // see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
@@ -27,6 +28,13 @@ function setArchiveBusy(sessionId, busy) {
   btn.title = busy ? ARCHIVE_CHECKING_TITLE : (session && session.archived ? 'Unarchive' : 'Archive');
 }
 
+function setGroupArchiveBusy(domId, busy) {
+  if (busy) archivingGroupIds.add(domId); else archivingGroupIds.delete(domId);
+  const el = document.getElementById(domId);
+  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn');
+  if (btn) btn.disabled = busy;
+}
+
 async function stopForArchive(session) {
   try {
     return await stopBeforeArchive(session);
@@ -37,8 +45,10 @@ async function stopForArchive(session) {
 
 function announceNotStopped(entries) {
   if (!entries.length) return;
+  const byAlias = new Map();
+  for (const e of entries) if (!byAlias.has(e.alias)) byAlias.set(e.alias, e.error);
   const text = 'Archived, but not stopped: '
-    + [...new Set(entries.map(e => `${e.alias} did not answer: ${e.error}`))].join('; ')
+    + [...byAlias].map(([alias, error]) => `${alias} did not answer (${error})`).join('; ')
     + '. The session may still be running there; unarchive it to try again once the host is back.';
   console.error('[stop-before-archive]', text);
   if (typeof showRestoreNotice === 'function') showRestoreNotice('archive-not-stopped-toast', text);
@@ -579,6 +589,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
   archiveSlugBtn.className = 'slug-group-archive-btn';
   archiveSlugBtn.title = 'Archive all sessions in group';
   archiveSlugBtn.innerHTML = ICONS.archive(14);
+  if (archivingGroupIds.has(id)) archiveSlugBtn.disabled = true;
 
   info.appendChild(nameEl);
   info.appendChild(meta);
@@ -945,6 +956,7 @@ function renderProjects(projects, resort) {
     archiveGroupBtn.className = 'project-archive-btn';
     archiveGroupBtn.title = 'Archive folder';
     archiveGroupBtn.innerHTML = ICONS.archive(18);
+    if (archivingGroupIds.has(header.id)) archiveGroupBtn.disabled = true;
     header.appendChild(archiveGroupBtn);
 
     if (project.missing) {
@@ -1242,9 +1254,11 @@ async function archiveProjectFolder(project, button) {
   if (result.archiveSessions) {
     let refused = false;
     const notStopped = [];
-    if (button) button.disabled = true;
+    const groupKey = 'ph-' + folderId(project.projectPath);
+    const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
+    setGroupArchiveBusy(groupKey, true);
     try {
-      for (const s of sessions) {
+      for (const s of own) {
         setArchiveBusy(s.sessionId, true);
         let stopResult;
         try { stopResult = await stopForArchive(s); } finally { setArchiveBusy(s.sessionId, false); }
@@ -1257,7 +1271,7 @@ async function archiveProjectFolder(project, button) {
         }
       }
     } finally {
-      if (button) button.disabled = false;
+      setGroupArchiveBusy(groupKey, false);
     }
     announceNotStopped(notStopped);
     if (refused) {
@@ -1265,7 +1279,7 @@ async function archiveProjectFolder(project, button) {
       loadProjects();
       return;
     }
-    for (const s of sessions) {
+    for (const s of own) {
       await window.api.archiveSession(s.sessionId, 1);
       s.archived = 1;
     }
@@ -1428,8 +1442,8 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const group = header.parentElement;
-        if (archiveBtn.disabled) return;
-        archiveBtn.disabled = true;
+        if (archivingGroupIds.has(group.id)) return;
+        setGroupArchiveBusy(group.id, true);
         const sessionItems = group.querySelectorAll('.session-item:not([data-subagent])');
         const notStopped = [];
         try {
@@ -1449,7 +1463,7 @@ function rebindSidebarEvents(projects) {
             session.archived = 1;
           }
         } finally {
-          archiveBtn.disabled = false;
+          setGroupArchiveBusy(group.id, false);
         }
         announceNotStopped(notStopped);
         pollActiveSessions();
@@ -1649,6 +1663,7 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
+        let notStoppedToAnnounce = [];
         if (newVal) {
           if (archivingSessionIds.has(session.sessionId)) return;
           setArchiveBusy(session.sessionId, true);
@@ -1662,11 +1677,12 @@ function rebindSidebarEvents(projects) {
             surfaceStopFailure(sessionItemEl(session.sessionId, sidebarContent)?.querySelector('.session-archive-btn') || archiveBtn, stopResult.error);
             return;
           }
-          announceNotStopped(stopResult.notStopped || []);
+          notStoppedToAnnounce = stopResult.notStopped || [];
           pollActiveSessions();
         }
         await window.api.archiveSession(session.sessionId, newVal);
         session.archived = newVal;
+        announceNotStopped(notStoppedToAnnounce);
         loadProjects();
       };
     }

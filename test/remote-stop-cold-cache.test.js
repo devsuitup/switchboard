@@ -14,19 +14,21 @@ const mainSource = fs.readFileSync(mainPath, 'utf8');
 const start = mainSource.indexOf("ipcMain.handle('remote-stop-session'");
 const end = mainSource.indexOf("ipcMain.handle('remote-launch-session'", start);
 
-function setup(t, { present = true, pollError = null, stopError = null, polling = false, configured = true, timeoutMs = 60000 } = {}) {
+function setup(t, { present = true, pollError = null, stopError = null, polling = false, firstPollError = null, localFailure = false, configured = true, timeoutMs = 60000 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-556-'));
   let live = present;
   let polls = 0;
   let finishPoll;
   const pollGate = polling ? new Promise(resolve => { finishPoll = resolve; }) : null;
   const indexer = createRemoteIndexer({
+    scanFolders: async () => { if (localFailure) throw new Error('disk full'); },
     getHosts: () => (configured ? [{ alias: 'host' }] : []), dataDir, transport: {},
     sync: async () => {
       polls++;
+      if (firstPollError && polls === 1) throw new Error(firstPollError);
       if (pollGate) await pollGate;
       if (pollError) throw new Error(pollError);
-      return { fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: live ? [{ sessionId: 'A', pid: 100 }] : [] };
+      return { fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(localFailure ? ['f'] : []), sessions: live ? [{ sessionId: 'A', pid: 100 }] : [] };
     },
   });
   const calls = [];
@@ -87,7 +89,7 @@ test('Archive hides a cold-cache row anyway when the host fails its first poll, 
   assert.equal(ctx.attached.exited, false);
   assert.equal(ctx.notices.length, 1);
   assert.match(ctx.notices[0], /not stopped/);
-  assert.match(ctx.notices[0], /host did not answer: host unreachable/);
+  assert.match(ctx.notices[0], /host did not answer \(host unreachable\)/);
 });
 
 test('Archive waits for a first poll already in flight and stops the session once it answers', async t => {
@@ -140,7 +142,7 @@ test('Archive stops waiting for a host that does not answer the first sync, then
   await archive(ctx);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
   assert.equal(ctx.isLive(), true);
-  assert.match(ctx.notices[0], /host did not answer: no answer within/);
+  assert.match(ctx.notices[0], /host did not answer \(no answer within/);
 });
 
 test('Archive stops waiting for an in-flight poll that never answers, then archives and says so', async t => {
@@ -197,4 +199,27 @@ test('Archive reports a stop that throws instead of leaving the click unhandled'
   assert.deepEqual(ctx.calls, []);
   assert.match(button.title, /ipc broke/);
   assert.equal(button.disabled, false);
+});
+
+test('Archive does not take a stale error from an earlier attempt as the answer of the poll in flight', async t => {
+  const ctx = setup(t, { polling: true, firstPollError: 'old failure' });
+  const first = await ctx.indexer.refreshHostNow('host');
+  assert.equal(first.error, 'old failure');
+  const pending = ctx.indexer.refreshHostNow('host', { force: true });
+  const click = archive(ctx);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(ctx.calls, []);
+  ctx.finishPoll();
+  await pending;
+  await click;
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
+  assert.deepEqual(ctx.notices, []);
+});
+
+test('Archive refuses, as before, when the first sync fails for a local reason rather than the connection', async t => {
+  const ctx = setup(t, { localFailure: true });
+  const button = await archive(ctx);
+  assert.deepEqual(ctx.calls, []);
+  assert.match(button.title, /disk full/);
+  assert.deepEqual(ctx.notices, []);
 });

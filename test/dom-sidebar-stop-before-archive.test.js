@@ -437,3 +437,53 @@ test('project archive-all: sessions on an unreachable host are archived with the
     assert.equal(button.disabled, false);
   } finally { ctx.destroy(); }
 });
+
+test('folder archive skips a row whose own Archive is still checking the host, and leaves its busy state alone', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const r1 = remoteSession('r1', 'vps', true);
+    const project = { projectPath: '/home/dev/proj', sessions: [r1] };
+    ctx.window.sessionMap.set('r1', r1);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const calls = installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const rowBtn = ctx.document.querySelector('#si-r1 .session-archive-btn');
+    const own = rowBtn.onclick({ stopPropagation() {} });
+    await new Promise(r => setTimeout(r, 0));
+    const folderBtn = headerFor(ctx, project).querySelector('.project-archive-btn');
+    const done = folderBtn.onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
+    assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
+    assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, true);
+    release();
+    await own;
+    assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, false);
+    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('a re-render keeps the slug-group and folder Archive buttons disabled while they check', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
+    const r2 = remoteSession('r2', 'vps', true, { slug: 'grp' });
+    const project = { projectPath: '/home/dev/proj', sessions: [r1, r2] };
+    ctx.window.sessionMap.set('r1', r1);
+    ctx.window.sessionMap.set('r2', r2);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    ctx.sidebar.renderProjects([project], true);
+    const done = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    ctx.sidebar.renderProjects([project], true);
+    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, true);
+    release();
+    await done;
+    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});

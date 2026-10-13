@@ -115,7 +115,7 @@ function createRemoteIndexer(ctx) {
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
     if (!s) {
-      s = { failures: 0, lastError: null, nextAttemptAt: 0 };
+      s = { failures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
       hostBackoff.set(alias, s);
     }
     return s;
@@ -128,7 +128,9 @@ function createRemoteIndexer(ctx) {
     }
     const errorChanged = state.lastError !== null;
     state.failures = 0;
+    state.attempts += 1;
     state.lastError = null;
+    state.lastErrorTransport = false;
     state.nextAttemptAt = 0;
     return errorChanged;
   }
@@ -137,8 +139,10 @@ function createRemoteIndexer(ctx) {
     const state = backoffState(alias);
     const prevDelay = backoffDelayMs(state.failures, intervalMs);
     state.failures += 1;
+    state.attempts += 1;
     const errorChanged = state.lastError !== err.message;
     state.lastError = err.message;
+    state.lastErrorTransport = err.remoteTransport === true;
     const delay = backoffDelayMs(state.failures, intervalMs);
     state.nextAttemptAt = now() + delay;
     if (delay !== prevDelay) {
@@ -150,8 +154,8 @@ function createRemoteIndexer(ctx) {
 
   function getRemoteHostState(alias) {
     const s = hostBackoff.get(alias);
-    if (!s) return { consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 };
-    return { consecutiveFailures: s.failures, lastError: s.lastError, nextAttemptAt: s.nextAttemptAt };
+    if (!s) return { consecutiveFailures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
+    return { consecutiveFailures: s.failures, lastError: s.lastError, lastErrorTransport: s.lastErrorTransport, attempts: s.attempts, nextAttemptAt: s.nextAttemptAt };
   }
 
   function hosts() {
@@ -226,13 +230,19 @@ function createRemoteIndexer(ctx) {
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
     fs.mkdirSync(projectsDir, { recursive: true });
 
-    const result = await sync({
-      alias: host.alias,
-      transport: ctx.transport,
-      projectsDir,
-      manifestPath,
-      log,
-    });
+    let result;
+    try {
+      result = await sync({
+        alias: host.alias,
+        transport: ctx.transport,
+        projectsDir,
+        manifestPath,
+        log,
+      });
+    } catch (err) {
+      err.remoteTransport = true;
+      throw err;
+    }
 
     remoteSessions.set(host.alias, Array.isArray(result.sessions)
       ? result.sessions.map(s => (s && 'waitingFor' in s ? { ...s, waitingFor: sanitizeWaitingFor(s.waitingFor) } : s))
