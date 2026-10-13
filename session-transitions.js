@@ -38,6 +38,12 @@ function isLive(sessionId) {
 /** The id a session is keyed under now, following the re-keys of forks and /clear. */
 const CLEAR_COMMANDS = new Set(['/clear', '/reset', '/new']);
 
+const normalizeSessionId = id => typeof id === 'string' ? id.toLowerCase() : id;
+
+function isClearCommand(command) {
+  return typeof command === 'string' && CLEAR_COMMANDS.has(command.trim().split(/\s+/)[0]);
+}
+
 function logOwnerOnce(session, file, line) {
   const logged = session._ownerLogged || (session._ownerLogged = new Map());
   if (logged.get(file) === line) return;
@@ -46,20 +52,26 @@ function logOwnerOnce(session, file, line) {
 }
 
 function currentSessionId(sessionId) {
-  if (isLive(sessionId)) {
-    rekeyed.delete(sessionId);
-    return sessionId;
+  const key = normalizeSessionId(sessionId);
+  const liveKeys = [...(activeSessions || [])].filter(([id, session]) => normalizeSessionId(id) === key && session && !session.exited);
+  if (liveKeys.length) {
+    rekeyed.delete(key);
+    return liveKeys.length === 1 ? liveKeys[0][0] : key;
   }
-  const target = rekeyed.get(sessionId);
-  if (target === undefined) return sessionId;
-  if (!isLive(target)) {
-    rekeyed.delete(sessionId);
-    return sessionId;
+  const target = rekeyed.get(key);
+  if (target === undefined) return key;
+  const live = [...(activeSessions || [])].some(([id, session]) => normalizeSessionId(id) === target && session && !session.exited);
+  if (!live) {
+    rekeyed.delete(key);
+    return key;
   }
-  return target;
+  const targetKeys = [...activeSessions].filter(([id, session]) => normalizeSessionId(id) === target && session && !session.exited);
+  return targetKeys.length === 1 ? targetKeys[0][0] : target;
 }
 
 function recordRekey(oldId, newId) {
+  oldId = normalizeSessionId(oldId);
+  newId = normalizeSessionId(newId);
   for (const [from, to] of rekeyed) if (to === oldId) rekeyed.set(from, newId);
   rekeyed.set(oldId, newId);
 }
@@ -398,7 +410,7 @@ function readSignalsFromDisk(filePath, length) {
         const kind = classifyUserText(text);
         // see .ai/contexts/cli-session-state.md ("Owner of a /clear transcript")
         if (kind.kind === 'skip') continue;
-        cleared = kind.kind === 'command' && CLEAR_COMMANDS.has(kind.text.split(' ')[0]);
+        cleared = kind.kind === 'command' && isClearCommand(kind.text);
       }
       // Stop after finding a user or assistant message
       if (entry.type === 'user' || entry.type === 'assistant') { hasTurn = true; break; }
@@ -598,4 +610,4 @@ function detectSessionTransitions(folder) {
 }
 
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions, currentSessionId };
+module.exports = { init, detectSessionTransitions, detectSubagentTransitions, currentSessionId, isClearCommand, normalizeSessionId };

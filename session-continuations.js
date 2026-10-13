@@ -3,7 +3,8 @@ const fs = require('fs');
 const validId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id);
 
 function continuationId(entry, sessionId) {
-  return entry?.type === 'continued-in' && entry.sessionId === sessionId && validId(entry.continuedInSessionId)
+  return entry?.type === 'continued-in' && typeof entry.sessionId === 'string' && typeof sessionId === 'string'
+    && entry.sessionId.toLowerCase() === sessionId.toLowerCase() && validId(entry.continuedInSessionId)
     ? entry.continuedInSessionId : null;
 }
 
@@ -80,17 +81,18 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
   } finally { fs.closeSync(fd); }
 }
 
-async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNodes = 128 } = {}) {
+function* continuationTraversal(sessionId, { maxDepth = 32, maxNodes = 128, includeReachable = false } = {}) {
   const candidates = new Map(), visiting = new Set(), visited = new Set();
-  let unresolved = false, nodes = 0, continued = false, waitingForIndex = false;
-  async function visit(id, depth) {
+  const reachable = new Set();
+  let unresolved = false, incomplete = false, nodes = 0, continued = false, waitingForIndex = false;
+  function* visit(id, depth) {
     if (visiting.has(id) || depth > maxDepth || ++nodes > maxNodes) { unresolved = true; return; }
     if (visited.has(id)) return;
-    let node;
-    try { node = await getNode(id); } catch { unresolved = true; return; }
+    const node = yield id;
     if (!node) { unresolved = true; return; }
     if (node.waitingForIndex) { unresolved = true; waitingForIndex = true; return; }
-    if (node.missing) return false;
+    if (node.missing) { incomplete = true; return false; }
+    reachable.add(id);
     const index = node.index;
     if (index?.unresolved) unresolved = true;
     const children = index?.ids || [];
@@ -101,7 +103,7 @@ async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNode
       visiting.add(id);
       let allMissing = true;
       for (const child of children) {
-        if (await visit(child, depth + 1) !== false) allMissing = false;
+        if ((yield* visit(child, depth + 1)) !== false) allMissing = false;
         if (nodes > maxNodes) break;
       }
       if (allMissing) unresolved = true;
@@ -110,8 +112,32 @@ async function resolveContinuations(sessionId, getNode, { maxDepth = 32, maxNode
     visited.add(id);
   }
   if (!validId(sessionId)) return { candidates: [], unresolved: true, continued: false };
-  if (await visit(sessionId, 0) === false) unresolved = true;
-  return { candidates: [...candidates.values()], unresolved, continued, waitingForIndex };
+  if ((yield* visit(sessionId, 0)) === false) unresolved = true;
+  return { candidates: [...candidates.values()], unresolved, continued, waitingForIndex,
+    ...(includeReachable ? { reachable: [...reachable], incomplete: incomplete || unresolved } : {}) };
 }
 
-module.exports = { continuationId, scanContinuationIndex, resolveContinuations, validId };
+async function resolveContinuations(sessionId, getNode, options) {
+  const traversal = continuationTraversal(sessionId, options);
+  let step = traversal.next();
+  while (!step.done) {
+    let node;
+    try { node = await getNode(step.value); } catch { node = null; }
+    step = traversal.next(node);
+  }
+  return step.value;
+}
+
+// see docs/decisions/0003-trigger-delivery-per-tab.md
+function resolveContinuationsSync(sessionId, getNode, options) {
+  const traversal = continuationTraversal(sessionId, options);
+  let step = traversal.next();
+  while (!step.done) {
+    let node;
+    try { node = getNode(step.value); } catch { node = null; }
+    step = traversal.next(node && typeof node.then === 'function' ? null : node);
+  }
+  return step.value;
+}
+
+module.exports = { continuationId, scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId };

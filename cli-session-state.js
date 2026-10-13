@@ -40,6 +40,7 @@ let processTableInFlight = null;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
+let deliveryInitialized = false;
 
 let watcher = null;
 let flushTimer = null;
@@ -264,6 +265,7 @@ async function defaultReadProcStartMany(pids) {
 }
 
 function init(ctx) {
+  deliveryInitialized = true;
   dir = ctx.dir || DEFAULT_DIR;
   activeSessions = ctx.activeSessions;
   onIdle = ctx.onIdle;
@@ -714,6 +716,113 @@ function readWriterDescriptors() {
   return { descriptors, unreadable };
 }
 
+// see docs/decisions/0003-trigger-delivery-per-tab.md
+function deliveryProcessIdentity(raw) {
+  if (processTableEnabled) {
+    if (!processTableFresh() || !processTable.map) return 'unknown';
+    const leaf = tableEntry(raw.pid);
+    if (!leaf || leaf.created == null || raw.pidDomain !== 'win32:anchor'
+      || typeof raw.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(raw.procStart)) return 'unknown';
+    if (leafIsTheDescriptorWriter(raw)) return 'valid';
+    return processTable.observedAt >= raw.descriptorMtimeMs ? 'stale' : 'unknown';
+  }
+  if (platform !== 'linux' || !canCompareProcStart(raw)) return 'unknown';
+  try {
+    const actual = readProcStart(raw.pid);
+    return actual == null ? 'unknown' : String(actual) === String(raw.procStart) ? 'valid' : 'stale';
+  } catch { return 'unknown'; }
+}
+
+function deliveryAncestry(raw, ptyPid, snapshot) {
+  const identity = deliveryProcessIdentity(raw);
+  if (identity === 'stale') return { state: 'stale' };
+  let current = raw.pid;
+  const visited = new Set();
+  let uncertain = identity !== 'valid';
+  let uncertainTree = processTableEnabled && !processTableFresh();
+  for (let depth = 0; depth < 64 && current > 1; depth++) {
+    if (current === ptyPid) return { state: uncertain ? 'unknown' : 'mine', depth };
+    if (visited.has(current) || snapshot.unreadable?.has(current)) return { state: 'unknown' };
+    visited.add(current);
+    const ancestor = current === raw.pid ? null : snapshot.descriptors.get(current);
+    if (ancestor) {
+      const proof = deliveryProcessIdentity(ancestor);
+      if (proof === 'unknown') uncertain = true;
+      if (proof === 'valid' && !['interactive', 'bg', 'headless'].includes(ancestor.kind)) uncertain = true;
+      if (proof === 'valid' && ancestor.kind === 'interactive') return { state: 'nested' };
+      if (proof === 'valid' && ['bg', 'headless'].includes(ancestor.kind)) return { state: 'nested' };
+    }
+    let parent;
+    try { parent = readParentPid(current); } catch { return { state: 'unknown' }; }
+    if (parent == null) return { state: 'unknown' };
+    if (parent <= 1) return { state: uncertainTree ? 'unknown' : 'outside' };
+    if (processTableEnabled) {
+      const child = tableEntry(current), above = tableEntry(parent);
+      if (!processTableFresh() || !child || !above || child.created == null || above.created == null) { uncertain = true; uncertainTree = true; }
+      else if (child.created < above.created) return { state: 'unknown' };
+    } else {
+      try {
+        const child = readProcStart(current), above = readProcStart(parent);
+        if (child == null || above == null) { uncertain = true; uncertainTree = true; }
+        else if (/^\d+$/.test(String(child)) && /^\d+$/.test(String(above)) && BigInt(child) < BigInt(above)) return { state: 'unknown' };
+      } catch { uncertain = true; uncertainTree = true; }
+    }
+    current = parent;
+  }
+  return { state: 'unknown' };
+}
+
+function observeTabWriter(ptyPid, snapshot) {
+  if (!deliveryInitialized || platform === 'darwin' || !Number.isInteger(ptyPid)) return { supported: false };
+  startProcessTableRefresh();
+  snapshot ||= readWriterDescriptors();
+  if (!snapshot.descriptors) return { supported: true };
+  const candidates = [];
+  let uncertain = false;
+  for (const raw of snapshot.descriptors.values()) {
+    if (raw.kind !== 'interactive') continue;
+    const ancestry = deliveryAncestry(raw, ptyPid, snapshot);
+    if (ancestry.state === 'unknown') uncertain = true;
+    if (ancestry.state === 'mine') candidates.push({ raw, depth: ancestry.depth });
+  }
+  candidates.sort((a, b) => a.depth - b.depth);
+  if (uncertain || candidates.length !== 1) return { supported: true };
+  const writer = candidates[0].raw;
+  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}` };
+}
+
+function deliveryPtyStart(pid) {
+  if (!deliveryInitialized) return null;
+  if (processTableEnabled) return processTableFresh() ? tableEntry(pid)?.created?.toString() ?? null : null;
+  if (platform !== 'linux') return null;
+  try { const start = readProcStart(pid); return start == null ? null : String(start); } catch { return null; }
+}
+
+function findDeliveryTab(sessionId, tabs, hint) {
+  if (!deliveryInitialized) return {};
+  const key = sessionId.toLowerCase();
+  const snapshot = readWriterDescriptors();
+  const matches = [...(snapshot.descriptors?.values() || [])].filter(raw => raw.sessionId.toLowerCase() === key);
+  const bg = matches.find(raw => raw.kind === 'bg' && deliveryProcessIdentity(raw) !== 'stale');
+  if (bg) return { background: bg };
+  if (platform === 'darwin') return {};
+  const candidates = [];
+  for (const tab of tabs) {
+    const observed = observeTabWriter(tab.pty?.pid, snapshot);
+    if (observed.writer?.sessionId.toLowerCase() === key) candidates.push({ tab, observed });
+  }
+  if (candidates.length === 1) return { tab: candidates[0].tab, hint: candidates[0].observed.writer };
+  if (candidates.length > 1) return { ambiguous: true };
+  for (const raw of [...matches, ...(hint ? [hint] : [])]) {
+    if (raw.kind !== 'interactive' || !isProcessAlive(raw.pid)) continue;
+    if (platform === 'linux' && (raw.procStart == null || tabs.every(tab => deliveryPtyStart(tab.pty?.pid) == null))) continue;
+    if (platform === 'win32' && raw.pidDomain !== 'win32:anchor') continue;
+    const states = tabs.map(tab => deliveryAncestry(raw, tab.pty?.pid, snapshot).state);
+    if (states.includes('unknown')) return { pending: true, hint: raw };
+  }
+  return {};
+}
+
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
 function closestWriterOwner(sessionId, ptyPid, { descriptors, unreadable }) {
   if (!descriptors) return 'pending';
@@ -844,6 +953,9 @@ module.exports = {
   liveElsewhereMany,
   liveElsewhereChecked,
   clearOwner,
+  observeTabWriter,
+  findDeliveryTab,
+  deliveryPtyStart,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,
