@@ -153,7 +153,7 @@ test('a trigger for the new id waits for a chain still running under the old id'
   }
 });
 
-test('a trigger waits for a chain whose session got a new PTY under the same id', async () => {
+test('a chain refuses a replaced PTY under the same id and releases the next trigger', async () => {
   const tmp = mkTmp('sw-clear-chain-triggers-');
   let s = null;
   s = clearingSession((text) => {
@@ -164,12 +164,16 @@ test('a trigger waits for a chain whose session got a new PTY under the same id'
     fs.writeFileSync(path.join(tmp, 'single.json'), JSON.stringify({ sessionId: 'old-id', command: 'other', wait: 'none', timeout_ms: 6000 }), 'utf8');
   });
   try {
-    const { chain } = await runTriggers(s.ctx, [['chain', { sessionId: 'old-id', chain: [{ command: 'first' }, { command: 'second' }] }]], 6000, tmp);
-    assert.equal(chain.ok, true, JSON.stringify(chain));
-    const resultPath = path.join(tmp, 'processed', 'single.result.json');
-    const deadline = Date.now() + 6000;
-    while (!fs.existsSync(resultPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-    assert.deepEqual(s.written.filter((d) => d !== '\r'), ['first', 'second', 'other']);
+    const { chain, single } = await runTriggers(s.ctx, [
+      ['chain', { sessionId: 'old-id', chain: [{ command: 'first' }, { command: 'second' }] }],
+      ['single', { sessionId: 'old-id', command: 'other' }],
+    ], 6000, tmp);
+    assert.equal(chain.ok, false, JSON.stringify(chain));
+    assert.equal(chain.error, 'step not confirmed');
+    assert.equal(chain.steps[0].text_written, true);
+    assert.equal(chain.steps[0].enter_written, false);
+    assert.deepEqual(s.written.filter((d) => d !== '\r'), ['first', 'other']);
+    assert.equal(single.ok, true);
   } finally {
     s.cleanup();
   }

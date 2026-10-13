@@ -224,6 +224,40 @@ any other value — an empty string, `null`, `"idel"` — is refused before anyt
 is written, with a `reason` naming the value received. Sending at once on a typo
 would type into a session that asked to be waited for.
 
+A trigger addresses its conversation. Conversation ids compare in lowercase,
+without trimming, while results preserve the requested spelling. An old id
+keeps reaching its tab only along proven `continued-in` links. After a user
+`/clear`, `/new`, `/reset` or fork, a verified unrelated conversation in that tab
+refuses the trigger with zero bytes, even before the sidebar re-keys it. When
+ownership cannot be observed, a live direct key keeps the normal availability
+fallback; an old historical alias must prove ownership before typing.
+Beyond 512 MiB of transcripts in a continuation traversal, Switchboard cannot distinguish a cleared conversation from the live one and delivers to the tab when the requested id still directly names it.
+
+Triggers reaching the same tab are serialized through the whole command or
+chain, including verification and result production. The mandatory same-id
+FIFO (also grouping historical aliases) waits outside `timeout_ms`. Descriptor
+lookup, the subsequent tab lock and alias ownership waits count inside the
+remaining budget. Distinct descriptor aliases can therefore expire waiting for
+the tab, while another same-id trigger waits outside that budget. Ordinary
+single-command verification retains its existing windows; chains and compacts
+keep their existing step deadlines. Different tabs progress independently.
+
+Delivery stays on the selected tab and PTY generation. It refuses a closed or
+replaced target instead of migrating to a reopened tab. An unattached remote
+snapshot retains precedence on a local miss. A local descriptor can reach an
+unrekeyed Claude tab only through a unique closest interactive writer with
+verified process identity; cwd, merged rows and nested headless/background CLIs
+do not establish that route. Unsupported macOS/namespace identity, no viable
+hint and proven external or ambiguous candidates fail lookup without an
+ownership wait; plausible cold evidence gets at most one shared refresh.
+
+Plain terminals and local/remote attach tabs retain their ordinary gates and
+gain serialization and generation checks. Eligible local Claude tabs also
+recheck conversation ownership at every text, Enter and recovery Enter. Direct
+unknown does not wait for a process refresh. An alias may wait only before text;
+unknown at either Enter stops synchronously without further bytes. These checks
+observe the CLI best-effort; they do not atomically bind its consumption of bytes.
+
 **A trigger file older than the staleness limit is refused unread.** Its age is
 its `mtime` against the moment the watcher picks it up, including after waiting
 in the watcher's queue: a `/compact` written six hours ago no longer targets the
@@ -246,6 +280,16 @@ each submitted and verified before the next:
 ```
 
 `command` and `chain` are mutually exclusive, and an empty chain is refused.
+
+A chain may follow its own `/clear`, `/new` or `/reset` after both text and Enter
+were guarded and written on the same tab/PTY. This permission is local to that
+chain, works without a UI re-key, and tolerates a lagging or unavailable successor
+descriptor. The first verified different successor id binds the new conversation;
+later unrelated changes refuse. A new writer process or PTY refuses too. Commands
+are recognized by the exact case-sensitive first token after trimming, with
+optional arguments. `/resume X`, uppercase variants and prose quoting `/clear`
+grant no such permission: a chain stops before its next write if it observes an
+unrelated resumed conversation. Other queued triggers receive no reset permission.
 
 **A chain's deadline is one budget for every step.** `timeout_ms`, or its
 300 000 ms default, is one deadline taken at the start and shared by the initial
@@ -530,6 +574,14 @@ A chain's top-level `submitted` is the **weakest** value any step reached; each
 entry of `steps[]` carries its own `submitted` on the same scale. Read the last
 entry to know whether the final step — a resume prompt after `/compact`, say —
 was itself confirmed.
+
+If ownership or the pinned generation changes after text but before Enter, that
+text may remain in the new conversation's input box. The result reports
+`error: "step not confirmed"`, a partial-write reason, `text_written: true`,
+`enter_written: false` and `written: false`. No cleanup, text replay or unguarded
+recovery Enter follows. `submitted: "no"` on such a partial step does not mean
+that resending is safe; inspect the residue first. `written: true` continues to
+mean the complete text-plus-Enter pair, including on an interrupted later retry.
 
 **What `confirmed` proves, and what it does not.** It means the three checked
 facts for ordinary commands, nothing more. The turn check is a level probe over the

@@ -274,6 +274,7 @@ function delayWithBusyPoll(ms, sessionId, ctx) {
 // been sent yet. See the "composerConfirmed" gate in submitWithVerify, which
 // this narrows.
 async function submitToPty(handle, command, sessionId, ctx) {
+  if (ctx.delivery) await ctx.delivery.prepareText(ctx.delivery.deadline);
   handle.write(command);
   const envMs = envNumber('SWITCHBOARD_SUBMIT_ENTER_DELAY_MS');
   const delayMs = envMs !== undefined ? envMs : DEFAULT_SUBMIT_ENTER_DELAY_MS;
@@ -727,13 +728,14 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   // Sampled before the write — see .ai/contexts/trigger-watcher.md ("submitted").
   const preBusy = ctx.isSessionBusy(sessionId);
 
-  const edgeMode = readCliStatus(ctx, sessionId) !== null;
+  let edgeMode = readCliStatus(ctx, sessionId) !== null;
 
   const compact = isCompactCommand(command);
   const compactSnapshot = compact ? readTranscriptTurn(ctx, sessionId) : null;
   if (compactSnapshot) compactSnapshot.compactBoundaries = [...(compactSnapshot.compactBoundaries || [])];
 
   const { midBusy, enterAt } = await submitToPty(handle, command, sessionId, ctx);
+  if (ctx.delivery?.reset && readCliStatus(ctx, sessionId) === null) edgeMode = false;
 
   if (compact) return waitForCompaction(sessionId, ctx, enterAt, deadlineMs ?? Date.now() + getIdleTimeout(), compactSnapshot);
 
@@ -775,6 +777,12 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
 
   // Nothing observed in the window — retry the Enter ONCE (bare '\r', never the text),
   // and only into a free composer. See docs/automation.md.
+  // see docs/decisions/0003-trigger-delivery-per-tab.md
+  if (require('./session-transitions').isClearCommand(command) && ctx.delivery?.resetCompleted()) {
+    return { enterAt, submit_retries: 0, sawBusy: false, confirmed: null, composerConfirmed: false,
+      sessionExited: false, timedOut: false, recoverySkipped: true,
+      recoveryReason: 'the clear-family reset completed; recovery Enter would reach its successor', waited_ms: first.waited_ms };
+  }
   const recoveryDeadline = Math.min(effectiveDeadline, Date.now() + windowMs);
   if (cliForbidsRecoveryEnter(ctx, sessionId)) {
     return {
@@ -1028,7 +1036,7 @@ function safeLogError(ctx, ...args) {
  *        `finally` below so a second trigger for the same session cannot
  *        touch its PTY/composer until this one is fully done.
  */
-async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock) {
+async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock) {
   // Only handle *.json files, ignore the processed/ subdir itself and
   // any stray files.
   if (!name.endsWith('.json')) return;
@@ -1074,6 +1082,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   let releaseSessionLock;
+  let releaseTabLock;
+  let delivery;
   let forgetTranscript = null;
   let stepsTotal = 0;
   let compactStepsTotal = 0;
@@ -1165,6 +1175,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   if (acquireSessionLock) {
     releaseSessionLock = await acquireSessionLock(sessionId);
   }
+
+  const budgetStarted = Date.now();
 
   // An unknown `wait` is refused before anything is written: falling back to
   // 'none' would submit immediately into a session that asked to be waited for.
@@ -1289,7 +1301,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // ── 4. Look up session ────────────────────────────────────────────────────
-  const sessionEntry = ctx.getPtyForSession(sessionId);
+  const deliveryDeadline = budgetStarted + (resolvedTimeoutMs !== undefined ? resolvedTimeoutMs : getIdleTimeout());
+  let sessionEntry = ctx.getPtyForSession(sessionId);
+  if (sessionEntry?.ambiguous) {
+    await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: 'ambiguous normalized local tab id; nothing was written', sessionId });
+    return;
+  }
   if (!sessionEntry) {
     const remote = ctx.remote;
     if (remote) {
@@ -1300,7 +1317,19 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         return;
       }
     }
-    const descriptor = typeof ctx.getLiveDescriptor === 'function'
+    if (typeof ctx.lookupDeliveryFallback === 'function') {
+      const found = await ctx.lookupDeliveryFallback(sessionId, deliveryDeadline);
+      if (found.background) {
+        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: 'background session, not attached here', jobId: found.background.jobId || null, sessionId });
+        return;
+      }
+      if (found.ambiguous) {
+        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: 'ambiguous descriptor-to-tab ownership; nothing was written', sessionId });
+        return;
+      }
+      sessionEntry = found.entry;
+    }
+    const descriptor = !sessionEntry && typeof ctx.lookupDeliveryFallback !== 'function' && typeof ctx.getLiveDescriptor === 'function'
       ? await ctx.getLiveDescriptor(sessionId) : null;
     if (descriptor?.kind === 'bg') {
       await writeResult({
@@ -1309,12 +1338,49 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       });
       return;
     }
-    ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
-    await writeResult({ ok: false, error: 'session not found', sessionId });
-    return;
+    if (!sessionEntry) {
+      ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
+      await writeResult({ ok: false, error: 'session not found', sessionId });
+      return;
+    }
   }
 
-  const handle = resolveHandle(sessionEntry);
+  let handle = resolveHandle(sessionEntry);
+  if (ctx.pinDelivery && sessionEntry.session) {
+    const pinned = ctx.pinDelivery(sessionId, sessionEntry, chain !== undefined);
+    delivery = pinned.binding;
+    handle = pinned.handle;
+    ctx = pinned.ctx;
+  }
+  if (acquireTabLock) {
+    releaseTabLock = await acquireTabLock(delivery?.tab || sessionEntry.session || String(ctx.resolveSessionId ? ctx.resolveSessionId(sessionId) : sessionId).toLowerCase(), deliveryDeadline);
+    if (!releaseTabLock) {
+      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DEADLINE_BEFORE_WRITE + '; the tab lock exhausted the delivery budget', sessionId });
+      return;
+    }
+  }
+  function deliveryFailure(err, steps = [], idx = 0) {
+    const current = delivery?.step || { written: false, text_written: false, enter_written: false };
+    const anyBytes = current.text_written || steps.some(step => step.text_written || step.written);
+    const reason = err.message + (current.text_written && !current.enter_written ? '; partial text remains in the composer; Enter was withheld and no cleanup was performed' : '');
+    return { ok: false, submitted: current.written ? SUBMITTED_ASSUMED : SUBMITTED_NO,
+      error: err.background ? 'background session, not attached here' : err.deadline && chain !== undefined && steps.length && !current.text_written
+        ? ERROR_CHAIN_TIMEOUT : anyBytes ? ERROR_UNCONFIRMED : ERROR_NOT_SENT,
+      reason, sessionId, written: !!current.written, text_written: !!current.text_written, enter_written: !!current.enter_written,
+      ...(err.background ? { jobId: err.background.jobId || null } : {}),
+      ...(chain !== undefined ? { partial: !!anyBytes, steps_completed: idx, steps: current.command
+        ? [...steps, { idx, command: current.command, written: !!current.written, text_written: !!current.text_written,
+          enter_written: !!current.enter_written, submitted: current.written ? SUBMITTED_ASSUMED : SUBMITTED_NO }] : steps } : anyBytes ? { partial: true } : {}),
+    };
+  }
+  if (delivery) {
+    try { await delivery.admit(deliveryDeadline); }
+    catch (err) {
+      if (!err.deliveryRefusal) throw err;
+      await writeResult(deliveryFailure(err));
+      return;
+    }
+  }
 
   // W7 — pre-flight liveness check.  main.js may keep a stale entry in its
   // activeSessions map after a Claude process exited "cleanly" (Ctrl+D, /exit)
@@ -1365,11 +1431,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   // ── 5. Single-command path ────────────────────────────────────────────────
   if (command !== undefined) {
     let waited_ms = 0;
-    const commandDeadline = Date.now() +
-      ((resolvedTimeoutMs !== undefined) ? resolvedTimeoutMs : getIdleTimeout());
+    const commandDeadline = deliveryDeadline;
     if (wait === 'idle') {
-      const result = await waitForIdle(sessionId, ctx, resolvedTimeoutMs);
-      waited_ms    = result.waited_ms;
+      const result = await waitForIdle(sessionId, ctx, Math.max(0, commandDeadline - Date.now()));
+      waited_ms += result.waited_ms;
 
       // Nothing is written yet — see .ai/contexts/trigger-watcher.md.
       // W5: session exited during wait
@@ -1481,6 +1546,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let compactionEvidence = {};
     let compactionReason = null;
     try {
+      if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
       const v = await submitWithVerify(handle, sessionId, command, ctx, isCompactCommand(command) ? commandDeadline : undefined);
       submitRetries     = v.submit_retries;
       submitConfirmed   = v.confirmed;
@@ -1498,6 +1564,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       waited_ms        += v.waited_ms;
       if (v.writeError) throw v.writeError;
     } catch (err) {
+      if (err.deliveryRefusal || delivery?.step?.text_written) {
+        await writeResult({ ...deliveryFailure(err), waited_ms });
+        return;
+      }
       ctx.log.error('[trigger-watcher] PTY write failed:', err.message);
       await writeResult({ ok: false, error: 'pty write failed: ' + err.message, sessionId });
       return;
@@ -1534,8 +1604,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   // ── 6. Chain path ─────────────────────────────────────────────────────────
   // Global deadline for the whole chain
-  const globalTimeout = (resolvedTimeoutMs !== undefined) ? resolvedTimeoutMs : getIdleTimeout();
-  const globalDeadline = Date.now() + globalTimeout;
+  const globalDeadline = deliveryDeadline;
 
   const steps = [];
   let totalWaitedMs = 0;
@@ -1585,6 +1654,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i];
+    if (delivery) delivery.beginStep(step.command);
     const readyAfterMs = compactSentAtMs;
     compactSentAtMs = null;
 
@@ -1719,13 +1789,22 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
     try {
+      if (delivery) delivery.deadline = stepDeadline;
       verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true });
     } catch (err) {
+      if (err.deliveryRefusal || delivery?.step?.text_written) {
+        await writeResult({ ...deliveryFailure(err, steps, i), total_waited_ms: totalWaitedMs });
+        return;
+      }
       ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, err.message);
       await writeResult({ ok: false, error: 'pty write failed: ' + err.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
     }
     if (verify.writeError) {
+      if (verify.writeError.deliveryRefusal || delivery?.step?.text_written) {
+        await writeResult({ ...deliveryFailure(verify.writeError, steps, i), total_waited_ms: totalWaitedMs });
+        return;
+      }
       ctx.log.error(`[trigger-watcher] PTY write failed at chain step ${i}:`, verify.writeError.message);
       await writeResult({ ok: false, error: 'pty write failed: ' + verify.writeError.message, partial: true, steps_completed: i, sessionId, sent_at: step0SentAt, steps, total_waited_ms: totalWaitedMs });
       return;
@@ -1870,6 +1949,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       name, err && err.message);
     await writeResult({ ok: false, error: 'internal error: ' + (err && err.message), internal: true });
   } finally {
+    if (releaseTabLock) releaseTabLock();
     if (forgetTranscript) {
       try { forgetTranscript(); } catch (_) { /* swallow */ }
     }
@@ -1923,8 +2003,9 @@ function start(ctx) {
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
   const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
-  const resolveId = (id) => (ctx.resolveSessionId ? ctx.resolveSessionId(id) : id);
+  const resolveId = (id) => String(ctx.resolveSessionId ? ctx.resolveSessionId(id.toLowerCase()) : id).toLowerCase();
   function acquireSessionLock(sessionId) {
+    sessionId = sessionId.toLowerCase();
     const target = resolveId(sessionId);
     const previous = Promise.all([...sessionLocks].filter(([id]) => resolveId(id) === target).map(([, t]) => t));
     let release;
@@ -1935,6 +2016,25 @@ function start(ctx) {
       release();
       if (sessionLocks.get(sessionId) === tail) sessionLocks.delete(sessionId);
     });
+  }
+
+  // see docs/decisions/0003-trigger-delivery-per-tab.md
+  const tabLocks = new Map();
+  async function acquireTabLock(tab, deadline) {
+    const previous = tabLocks.get(tab) || Promise.resolve();
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const tail = previous.then(() => held);
+    tabLocks.set(tab, tail);
+    tail.then(() => { if (tabLocks.get(tab) === tail) tabLocks.delete(tab); });
+    let timer;
+    const acquired = await Promise.race([previous.then(() => true), new Promise(resolve => {
+      timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+    })]);
+    clearTimeout(timer);
+    const unlock = () => { release(); };
+    if (!acquired || Date.now() >= deadline) { unlock(); return null; }
+    return unlock;
   }
 
   function scheduleNext() {
@@ -1948,7 +2048,7 @@ function start(ctx) {
 
   function dispatch(filename) {
     inFlight.add(filename);
-    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock)
+    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock)
       .catch((err) => {
         retained.add(filename);
         safeLogError(ctx, '[trigger-watcher] Trigger processing threw, will not be run again:',

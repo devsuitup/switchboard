@@ -61,19 +61,116 @@ free**.
 
 A proven `continued-in` conversation is reached through the tab's re-key to its new id, with no continuation lookup fallback.
 
-A fork or a `/clear` re-keys the open session in `activeSessions` under its new
-id (`session-transitions.js`; see cli-session-state.md, "Owner of a /clear
-transcript"), while a chain keeps the id it was given, and `/clear` is one of
-the commands a chain may send. `createTriggerContext` takes `resolveSessionId`
-(`sessionTransitions.currentSessionId` in main), and every lookup it makes
-(`getPtyForSession`, `isSessionBusy`, `getComposerState`, `getTranscriptTurn`,
-`getCliStatus`) goes through it, so the old id keeps reaching the same terminal
-and the CLI status is read under the id the CLI now writes, as is
-`getLiveDescriptor`. Results still carry the id the trigger named. An id a
-live session holds itself resolves to that session, so a trigger aimed at a
-cleared conversation that was reopened reaches its own terminal. When a lookup
-finds the transcript under a new id, the turn reader forgets the file it read
-under the old one.
+A fork or clear-family command can re-key the same active session object. That
+mapping locates a tab; it is not permission to write to its new conversation.
+The requested id remains verbatim in results, and the effective id starts as
+its lowercase form. An old id reaches the tab only along proven `continued-in`
+records and its verified closest interactive writer. After a user's `/clear`,
+`/new`, `/reset` or fork, an observable unrelated writer refuses the trigger
+with zero bytes, including before UI re-keying. An unreadable writer keeps the
+ADR's availability fallback for direct keys; a historical alias must prove
+ownership before text. A reopened live direct id takes lookup precedence.
+
+Delivery traverses `continued-in` with the existing depth/node limits, retaining
+intermediate reachable ids. The optional reachability output separately marks
+`incomplete` when a branch is missing or unresolved. A verified reachable writer
+remains `mine` beside a missing branch; an unreachable writer stays `unknown`
+until the traversal is complete. Cycles, malformed records and index waits
+remain unresolved. Restore's terminal-candidate and `unresolved` policy is unchanged.
+
+Admission skips the background-job traversal when the observed tab writer already
+names the requested id and the same descriptor snapshot has no `kind: "bg"`
+descriptor. Process identity does not prove descriptor content is current: a
+writer still naming R must not hide R's continuation into an unattached bg job.
+Other delivery traversals scan transcript nodes in 1 MiB
+chunks, under a total 512 MiB transcript-size cap and the existing 32-edge/128-node
+limits. A cap overflow or read failure leaves ownership unknown; chunk boundaries
+alone do not. The last serialized index, including an unfinished line, is shared
+by all bindings of a watcher per path, with at most 128 entries and 32 MiB of
+serialized strings (UTF-8 byte lengths). Oldest retained entries are evicted
+until both limits hold. The parsed index omits `pending`; the scanner derives
+that partial line from the serialized index on append. Unchanged size,
+mtime and file identity reuse the index without reading. Append resumes from the
+indexed byte offset after checking file identity and matching the first and last
+64 indexed bytes; only appended data and these validation bytes are read. A
+truncate, replacement, different head/tail or same-size mtime change rescans from
+byte zero. These boundary checks cannot detect arbitrary edits in the middle
+of a file that also grows while retaining its indexed head and tail.
+
+Descriptor-less CLI ancestors are recognized by the native Claude executable
+name or Node's first non-option script argument. The script may name the scoped
+`@anthropic-ai/claude-code/cli.js` directly or resolve to it through `readRealpath`
+(default `fs.realpathSync`), including Linux npm/nvm bin symlinks. A failed
+realpath is not evidence of a CLI; later launcher arguments do not qualify.
+
+Delivery pins the session object, `session.generation`, PTY object and available
+process-start identity. Busy/composer reads stay on that object; descriptor and
+transcript reads follow its effective identity. Re-keying does not change its
+lock. A new direct-key target or invalid generation refuses the pinned delivery
+instead of redirecting it. Transcript readers forget old cursors when the
+effective identity changes or the chain resets.
+
+Every delivery first joins the mandatory normalized-id FIFO, including the
+existing historical-id equivalence group, then a mutex keyed by the pinned tab.
+The FIFO wait remains outside `timeout_ms`; descriptor lookup, tab mutex and
+pre-text ownership waits consume the remaining command/chain budget. Different
+tabs progress independently. The mutex remains held through verification and
+result production, and canceled waiters cannot erase a still-held queue.
+Ordinary single-command verification retains its existing verification windows;
+compact and chained steps retain their existing deadlines.
+
+Lookup, pinning, admission and tab-lock waits consume that deadline budget but
+are excluded from published `waited_ms` and `total_waited_ms`. These fields
+retain the documented idle, composer, readiness, verification and turn waits:
+the chain total equals its initial idle wait plus its step waits, with the
+existing exception for a partial wait before an unrecorded step. They are not
+wall-clock delivery durations.
+
+The deadline is checked only before text. Once text is written, the initial
+and recovery Enter still check binding, liveness and ownership, even after the
+step deadline passes. This prevents leaving valid text stranded solely because
+the inter-keystroke delay crossed the deadline.
+
+On a local miss, the existing remote snapshot (including its failure or
+ambiguity) wins. Only then can a unique, identity-verified closest interactive
+descriptor locate an eligible local Claude tab without re-keying the UI.
+Background jobs still fail immediately with their job id. macOS and namespace-only
+sandbox aliases fail lookup immediately; no-hint, stale, external and ambiguous
+candidates do not authorize writes. A plausible cold/torn hint gets at most one
+shared process-table refresh/recheck within the remaining budget. Historical
+aliases already pin a tab and follow the separate alias ownership policy.
+
+Ownership checking applies exactly to `!isPlainTerminal && host == null &&
+!isAttach`. Other tabs retain normal gates, serialization and T/G/liveness
+checks. Each trigger text, Enter and recovery Enter rereads ownership. Direct
+unknown never awaits a process refresh. Alias unknown may wait before text;
+both Enter guards are synchronous and refuse unknown without waiting or
+replaying text. Nested headless/background writers cannot authorize a tab;
+interactive descendants cannot override the closest writer. Stale identities
+are discarded, and torn or unresolved ancestor roles remain unknown.
+
+Descriptor-less ancestors are also checked for a CLI process: Linux reads
+`/proc/<pid>/cmdline`; Windows retains `CommandLine` in its shared process
+table. A native `claude` executable or Node's Claude CLI script marks an
+intervening writer regardless of descriptor `kind`. An unreadable process
+command keeps the verdict unknown. Thus a nested interactive descriptor cannot
+become the tab writer when its parent CLI descriptor is absent. Background-job
+misses also match `bridgeSessionId`, without treating it as local ownership.
+
+A chain's own guarded clear-family text plus Enter authorizes only that chain
+on the same T/G, even without a re-key or readable successor descriptor. A lagging
+pre-reset id does not bind a successor. The first verified different id from
+the anchored writer generation binds the new effective id; subsequent unrelated
+moves refuse. `/resume X`, quoted `/clear` and uppercase variants do not grant
+reset authorization. A separately queued trigger receives none of it. Completed
+reset steps never send recovery Enter into an observed successor, and old
+compaction evidence never confirms a compact after reset.
+
+Expected refusals are ordinary results. Before any bytes, `not sent` is safe to
+retry. After text, refusal reports `step not confirmed`, `text_written` and
+`enter_written`; `written` still means a complete text-plus-Enter pair. Text-only
+residue is left in the composer without cleanup, so `submitted: "no"` alone is
+not permission to resend. See ADR 0003 for the process-observation limits.
 `test/trigger-clear-chain.test.js` runs `[/clear, reply]` through the shipped
 watcher, with the re-key done by `session-transitions.js` while step 0 is
 verified; without the resolution that chain ends with "session exited during
@@ -1998,7 +2095,10 @@ not only the code under test, so it is far more sensitive to CPU contention
 than the rest of the suite. `npm test` / `npm run coverage` (`scripts/run-tests.js`)
 run it alone, serially, after every other test file, specifically to remove
 the self-inflicted contention of ~150 sibling test-file processes running
-concurrently — that alone fixed most of what issue #260 measured. What's left
+concurrently — that alone fixed most of what issue #260 measured. The ADR 0003
+delivery tests (`test/trigger-delivery.test.js`,
+`test/trigger-continuation-delivery.test.js`) also run against real delivery
+budgets and are in the same serial stage. What's left
 after serializing is contention from outside the suite (other agents,
 antivirus, a second `node --test` run): under a synthetic load of that kind
 (measured 2026-09-11 with 8 CPU-saturating processes on an 8-core machine),

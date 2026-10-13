@@ -32,6 +32,8 @@ let isProcessAlive = defaultIsProcessAlive;
 let readProcStart = defaultReadProcStart;
 let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
+let readCliProcess = defaultReadCliProcess;
+let readRealpath = fs.realpathSync;
 let readProcessTable = defaultReadProcessTable;
 let processTableEnabled = false;
 let processTableEpoch = 0;
@@ -40,6 +42,7 @@ let processTableInFlight = null;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
+let deliveryInitialized = false;
 
 let watcher = null;
 let flushTimer = null;
@@ -95,14 +98,14 @@ function toCreated(value) {
   try { return BigInt(value); } catch { return null; }
 }
 
-const TABLE_LINE_RE = /^\s*(\d+)\s+(\d+)(?:\s+(\d+))?\s*$/;
+const TABLE_LINE_RE = /^\s*(\d+)\s+(\d+)(?:\s+(\d+))?\s*(?:\t(.*))?$/;
 const TABLE_LSTART_RE = /^\s*(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\d{4})\s*$/;
 
 function parseProcessTable(text) {
   const out = new Map();
   for (const line of String(text).split(/\r?\n/)) {
     let m = TABLE_LINE_RE.exec(line);
-    if (m) { out.set(Number(m[1]), { ppid: Number(m[2]), created: toCreated(m[3]) }); continue; }
+    if (m) { out.set(Number(m[1]), { ppid: Number(m[2]), created: toCreated(m[3]), ...(m[4] === undefined ? {} : { commandLine: m[4] }) }); continue; }
     m = TABLE_LSTART_RE.exec(line);
     if (m) {
       const ms = Date.parse(m[3]);
@@ -120,7 +123,7 @@ function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS
       resolve(parseProcessTable(stdout));
     };
     if (plat === 'win32') {
-      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { "" }; "$($_.ProcessId) $($_.ParentProcessId) $t" }';
+      const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { "" }; "$($_.ProcessId) $($_.ParentProcessId) $t`t$($_.CommandLine)" }';
       const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done);
     } else if (plat === 'darwin') {
@@ -144,7 +147,7 @@ function normaliseProcessTable(read) {
   const out = new Map();
   for (const [pid, value] of read) {
     if (typeof value === 'number') out.set(pid, { ppid: value, created: null });
-    else if (value && typeof value === 'object') out.set(pid, { ppid: value.ppid, created: toCreated(value.created) });
+    else if (value && typeof value === 'object') out.set(pid, { ppid: value.ppid, created: toCreated(value.created), ...(value.commandLine === undefined ? {} : { commandLine: value.commandLine }) });
   }
   return out.size > 0 ? out : null;
 }
@@ -231,6 +234,32 @@ function defaultReadProcStart(pid) {
   }
 }
 
+// see .ai/contexts/trigger-watcher.md
+function defaultReadCliProcess(pid) {
+  let args;
+  if (processTableEnabled) {
+    const commandLine = processTableFresh() ? tableEntry(pid)?.commandLine : null;
+    if (!commandLine) return null;
+    const executable = /^"([^"]*)"|^((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]*?\.exe)(?=\s|$)|^(\S+)/i.exec(commandLine.trim());
+    if (!executable) return null;
+    args = [executable[1] ?? executable[2] ?? executable[3]];
+    const rest = commandLine.trim().slice(executable[0].length);
+    const tokens = /"([^"]*)"|((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]*?\.(?:[cm]?js))(?=\s|$)|(\S+)/gi;
+    args.push(...[...rest.matchAll(tokens)].map(match => match[1] ?? match[2] ?? match[3]));
+  } else {
+    if (platform !== 'linux') return null;
+    try { args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return null; }
+  }
+  if (!args.length) return null;
+  const name = value => value.replaceAll('\\', '/').split('/').pop().toLowerCase();
+  if (/^claude(?:\.exe)?$/.test(name(args[0]))) return true;
+  const script = args.slice(1).find(arg => !arg.startsWith('-'));
+  if (!/^node(?:\.exe)?$/.test(name(args[0])) || typeof script !== 'string') return false;
+  const cliScript = /(?:^|[\\/])@anthropic-ai[\\/]claude-code[\\/]cli\.js$/i;
+  if (cliScript.test(script)) return true;
+  try { return cliScript.test(readRealpath(script)); } catch { return false; }
+}
+
 // see .ai/contexts/cli-session-state.md
 function probeProcStartWindows(pids, timeoutMs = PROBE_TIMEOUT_MS, exec = execFile) {
   const ids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
@@ -264,6 +293,7 @@ async function defaultReadProcStartMany(pids) {
 }
 
 function init(ctx) {
+  deliveryInitialized = true;
   dir = ctx.dir || DEFAULT_DIR;
   activeSessions = ctx.activeSessions;
   onIdle = ctx.onIdle;
@@ -277,6 +307,8 @@ function init(ctx) {
   now = ctx.now || Date.now;
   platform = ctx.platform || process.platform;
   readParentPid = ctx.readParentPid || defaultReadParentPid;
+  readCliProcess = ctx.readCliProcess || defaultReadCliProcess;
+  readRealpath = ctx.readRealpath || fs.realpathSync;
   ownPid = ctx.ownPid || process.pid;
   processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
@@ -714,6 +746,124 @@ function readWriterDescriptors() {
   return { descriptors, unreadable };
 }
 
+// see docs/decisions/0003-trigger-delivery-per-tab.md
+function deliveryProcessIdentity(raw) {
+  if (processTableEnabled) {
+    if (!processTableFresh() || !processTable.map) return 'unknown';
+    const leaf = tableEntry(raw.pid);
+    if (!leaf || leaf.created == null || raw.pidDomain !== 'win32:anchor'
+      || typeof raw.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(raw.procStart)) return 'unknown';
+    if (leafIsTheDescriptorWriter(raw)) return 'valid';
+    return processTable.observedAt >= raw.descriptorMtimeMs ? 'stale' : 'unknown';
+  }
+  if (platform !== 'linux' || !canCompareProcStart(raw)) return 'unknown';
+  try {
+    const actual = readProcStart(raw.pid);
+    return actual == null ? 'unknown' : String(actual) === String(raw.procStart) ? 'valid' : 'stale';
+  } catch { return 'unknown'; }
+}
+
+function deliveryAncestry(raw, ptyPid, snapshot) {
+  const identity = deliveryProcessIdentity(raw);
+  if (identity === 'stale') return { state: 'stale' };
+  let current = raw.pid;
+  const visited = new Set();
+  let uncertain = identity !== 'valid';
+  let uncertainTree = processTableEnabled && !processTableFresh();
+  for (let depth = 0; depth < 64 && current > 1; depth++) {
+    if (current === ptyPid) return { state: uncertain ? 'unknown' : 'mine', depth };
+    if (visited.has(current) || snapshot.unreadable?.has(current)) return { state: 'unknown' };
+    visited.add(current);
+    const ancestor = current === raw.pid ? null : snapshot.descriptors.get(current);
+    if (current !== raw.pid && !ancestor) {
+      let cli;
+      try { cli = readCliProcess(current); } catch { return { state: 'unknown' }; }
+      if (cli === true) return { state: 'nested' };
+      if (cli !== false) uncertain = true;
+    }
+    if (ancestor) {
+      const proof = deliveryProcessIdentity(ancestor);
+      if (proof === 'unknown') uncertain = true;
+      if (proof === 'valid' && !['interactive', 'bg', 'headless'].includes(ancestor.kind)) uncertain = true;
+      if (proof === 'valid' && ancestor.kind === 'interactive') return { state: 'nested' };
+      if (proof === 'valid' && ['bg', 'headless'].includes(ancestor.kind)) return { state: 'nested' };
+    }
+    let parent;
+    try { parent = readParentPid(current); } catch { return { state: 'unknown' }; }
+    if (parent == null) return { state: 'unknown' };
+    if (parent <= 1) return { state: uncertainTree ? 'unknown' : 'outside' };
+    if (processTableEnabled) {
+      const child = tableEntry(current), above = tableEntry(parent);
+      if (!processTableFresh() || !child || !above || child.created == null || above.created == null) { uncertain = true; uncertainTree = true; }
+      else if (child.created < above.created) return { state: 'unknown' };
+    } else {
+      try {
+        const child = readProcStart(current), above = readProcStart(parent);
+        if (child == null || above == null) { uncertain = true; uncertainTree = true; }
+        else if (/^\d+$/.test(String(child)) && /^\d+$/.test(String(above)) && BigInt(child) < BigInt(above)) return { state: 'unknown' };
+      } catch { uncertain = true; uncertainTree = true; }
+    }
+    current = parent;
+  }
+  return { state: 'unknown' };
+}
+
+function observeTabWriter(ptyPid, snapshot) {
+  if (!deliveryInitialized || platform === 'darwin' || !Number.isInteger(ptyPid)) return { supported: false };
+  startProcessTableRefresh();
+  snapshot ||= readWriterDescriptors();
+  if (!snapshot.descriptors) return { supported: true };
+  const candidates = [];
+  let uncertain = false;
+  for (const raw of snapshot.descriptors.values()) {
+    if (raw.kind !== 'interactive') continue;
+    const ancestry = deliveryAncestry(raw, ptyPid, snapshot);
+    if (ancestry.state === 'unknown') uncertain = true;
+    if (ancestry.state === 'mine') candidates.push({ raw, depth: ancestry.depth });
+  }
+  candidates.sort((a, b) => a.depth - b.depth);
+  if (uncertain || candidates.length !== 1) return { supported: true };
+  const writer = candidates[0].raw;
+  const hasBackground = [...snapshot.descriptors.values()].some(raw => raw.kind === 'bg');
+  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}`, hasBackground };
+}
+
+function deliveryPtyStart(pid) {
+  if (!deliveryInitialized) return null;
+  if (processTableEnabled) return processTableFresh() ? tableEntry(pid)?.created?.toString() ?? null : null;
+  if (platform !== 'linux') return null;
+  try { const start = readProcStart(pid); return start == null ? null : String(start); } catch { return null; }
+}
+
+function findDeliveryTab(sessionId, tabs, hint) {
+  if (!deliveryInitialized) return {};
+  const key = sessionId.toLowerCase();
+  const snapshot = readWriterDescriptors();
+  const matches = [...(snapshot.descriptors?.values() || [])].filter(raw => raw.sessionId.toLowerCase() === key);
+  const bg = [...(snapshot.descriptors?.values() || [])].find(raw => raw.kind === 'bg'
+    && (raw.sessionId.toLowerCase() === key || (typeof raw.bridgeSessionId === 'string'
+      && (raw.bridgeSessionId.toLowerCase() === key || (bridgeSessionKey(key) !== null
+        && bridgeSessionKey(key) === bridgeSessionKey(raw.bridgeSessionId.toLowerCase())))))
+    && deliveryProcessIdentity(raw) !== 'stale');
+  if (bg) return { background: bg };
+  if (platform === 'darwin') return {};
+  const candidates = [];
+  for (const tab of tabs) {
+    const observed = observeTabWriter(tab.pty?.pid, snapshot);
+    if (observed.writer?.sessionId.toLowerCase() === key) candidates.push({ tab, observed });
+  }
+  if (candidates.length === 1) return { tab: candidates[0].tab, hint: candidates[0].observed.writer };
+  if (candidates.length > 1) return { ambiguous: true };
+  for (const raw of [...matches, ...(hint ? [hint] : [])]) {
+    if (raw.kind !== 'interactive' || !isProcessAlive(raw.pid)) continue;
+    if (platform === 'linux' && (raw.procStart == null || tabs.every(tab => deliveryPtyStart(tab.pty?.pid) == null))) continue;
+    if (platform === 'win32' && raw.pidDomain !== 'win32:anchor') continue;
+    const states = tabs.map(tab => deliveryAncestry(raw, tab.pty?.pid, snapshot).state);
+    if (states.includes('unknown')) return { pending: true, hint: raw };
+  }
+  return {};
+}
+
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
 function closestWriterOwner(sessionId, ptyPid, { descriptors, unreadable }) {
   if (!descriptors) return 'pending';
@@ -844,6 +994,9 @@ module.exports = {
   liveElsewhereMany,
   liveElsewhereChecked,
   clearOwner,
+  observeTabWriter,
+  findDeliveryTab,
+  deliveryPtyStart,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,
