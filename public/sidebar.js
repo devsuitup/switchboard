@@ -7,10 +7,51 @@
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
 // showNewSessionPopover, showRemoteLaunchDialog, openSettingsViewer, showResumeSessionDialog,
-// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js)
+// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js), showRestoreNotice (app.js)
 
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+const archivingSessionIds = new Set();
+const archivingGroupIds = new Set();
+const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
+
+// see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
+function setArchiveBusy(sessionId, busy) {
+  if (busy) archivingSessionIds.add(sessionId); else archivingSessionIds.delete(sessionId);
+  const item = sessionItemEl(sessionId, sidebarContent);
+  const btn = item && item.querySelector('.session-archive-btn');
+  if (!btn) return;
+  btn.disabled = busy;
+  const session = sessionMap.get(sessionId);
+  btn.title = busy ? ARCHIVE_CHECKING_TITLE : (session && session.archived ? 'Unarchive' : 'Archive');
+}
+
+function setGroupArchiveBusy(domId, busy) {
+  if (busy) archivingGroupIds.add(domId); else archivingGroupIds.delete(domId);
+  const el = document.getElementById(domId);
+  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn');
+  if (btn) btn.disabled = busy;
+}
+
+async function stopForArchive(session, unreachable) {
+  try {
+    return await stopBeforeArchive(session, { unreachable });
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || 'unknown error' };
+  }
+}
+
+function announceNotStopped(entries) {
+  if (!entries.length) return;
+  const byAlias = new Map();
+  for (const e of entries) if (!byAlias.has(e.alias)) byAlias.set(e.alias, e.error);
+  const text = 'Archived, but not stopped: '
+    + [...byAlias].map(([alias, error]) => `${alias} did not answer (${error})`).join('; ')
+    + '. The session may still be running there; unarchive it to try again once the host is back.';
+  console.error('[stop-before-archive]', text);
+  if (typeof showRestoreNotice === 'function') showRestoreNotice('archive-not-stopped-toast', text);
 }
 
 function folderId(projectPath) {
@@ -548,6 +589,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, projec
   archiveSlugBtn.className = 'slug-group-archive-btn';
   archiveSlugBtn.title = 'Archive all sessions in group';
   archiveSlugBtn.innerHTML = ICONS.archive(14);
+  if (archivingGroupIds.has(id)) archiveSlugBtn.disabled = true;
 
   info.appendChild(nameEl);
   info.appendChild(meta);
@@ -914,6 +956,7 @@ function renderProjects(projects, resort) {
     archiveGroupBtn.className = 'project-archive-btn';
     archiveGroupBtn.title = 'Archive folder';
     archiveGroupBtn.innerHTML = ICONS.archive(18);
+    if (archivingGroupIds.has(header.id)) archiveGroupBtn.disabled = true;
     header.appendChild(archiveGroupBtn);
 
     if (project.missing) {
@@ -1164,6 +1207,13 @@ async function archiveProjectFolder(project, button) {
   const groupsArg = groups.map(g => ({ projectPath: g.projectPath, folderKey: g.folder }));
   const sessions = groups.flatMap(g => g.sessions.filter(s => !s.parentSessionId && !s.archived));
 
+  const refuseWhileBusy = () => {
+    if (!sessions.some(s => archivingSessionIds.has(s.sessionId))) return false;
+    surfaceStopFailure(button, `An archive is still in progress for ${shortProjectPath(parent.projectPath)}; try again when it finishes`);
+    return true;
+  };
+  if (refuseWhileBusy()) return;
+
   const plan = await window.api.getProjectArchivePlan(groupsArg);
   if (!plan || plan.indexing) {
     await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
@@ -1207,23 +1257,39 @@ async function archiveProjectFolder(project, button) {
     returnFocus: button,
   });
   if (!result) return;
+  if (refuseWhileBusy()) return;
 
   if (result.archiveSessions) {
     let refused = false;
-    for (const s of sessions) {
-      const stopResult = await stopBeforeArchive(s);
-      if (!stopResult.ok) {
-        refused = true;
-        const item = document.getElementById('si-' + s.sessionId);
-        surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
+    const notStopped = [];
+    const groupKey = 'ph-' + folderId(project.projectPath);
+    const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
+    setGroupArchiveBusy(groupKey, true);
+    for (const s of own) setArchiveBusy(s.sessionId, true);
+    const unreachable = new Map();
+    try {
+      for (const s of own) {
+        let stopResult;
+        try { stopResult = await stopForArchive(s, unreachable); } finally { setArchiveBusy(s.sessionId, false); }
+        if (!stopResult.ok) {
+          refused = true;
+          const item = document.getElementById('si-' + s.sessionId);
+          surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
+        } else {
+          notStopped.push(...(stopResult.notStopped || []));
+        }
       }
+    } finally {
+      for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
+      setGroupArchiveBusy(groupKey, false);
     }
+    announceNotStopped(notStopped);
     if (refused) {
       pollActiveSessions();
       loadProjects();
       return;
     }
-    for (const s of sessions) {
+    for (const s of own) {
       await window.api.archiveSession(s.sessionId, 1);
       s.archived = 1;
     }
@@ -1386,19 +1452,31 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const group = header.parentElement;
-        const sessionItems = group.querySelectorAll('.session-item:not([data-subagent])');
-        for (const item of sessionItems) {
-          const sid = item.dataset.sessionId;
-          const session = sessionMap.get(sid);
-          if (!session || session.archived) continue;
-          const stopResult = await stopBeforeArchive(session);
-          if (!stopResult.ok) {
-            surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error);
-            continue;
+        if (archivingGroupIds.has(group.id)) return;
+        setGroupArchiveBusy(group.id, true);
+        const todo = [...group.querySelectorAll('.session-item:not([data-subagent])')]
+          .map(item => ({ item, sid: item.dataset.sessionId, session: sessionMap.get(item.dataset.sessionId) }))
+          .filter(({ session, sid }) => session && !session.archived && !archivingSessionIds.has(sid));
+        for (const { sid } of todo) setArchiveBusy(sid, true);
+        const unreachable = new Map();
+        const notStopped = [];
+        try {
+          for (const { item, sid, session } of todo) {
+            let stopResult;
+            try { stopResult = await stopForArchive(session, unreachable); } finally { setArchiveBusy(sid, false); }
+            if (!stopResult.ok) {
+              surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error);
+              continue;
+            }
+            notStopped.push(...(stopResult.notStopped || []));
+            await window.api.archiveSession(sid, 1);
+            session.archived = 1;
           }
-          await window.api.archiveSession(sid, 1);
-          session.archived = 1;
+        } finally {
+          for (const { sid } of todo) if (archivingSessionIds.has(sid)) setArchiveBusy(sid, false);
+          setGroupArchiveBusy(group.id, false);
         }
+        announceNotStopped(notStopped);
         pollActiveSessions();
         loadProjects();
       };
@@ -1596,16 +1674,26 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
+        let notStoppedToAnnounce = [];
         if (newVal) {
-          const stopResult = await stopBeforeArchive(session);
+          if (archivingSessionIds.has(session.sessionId)) return;
+          setArchiveBusy(session.sessionId, true);
+          let stopResult;
+          try {
+            stopResult = await stopForArchive(session);
+          } finally {
+            setArchiveBusy(session.sessionId, false);
+          }
           if (!stopResult.ok) {
-            surfaceStopFailure(archiveBtn, stopResult.error);
+            surfaceStopFailure(sessionItemEl(session.sessionId, sidebarContent)?.querySelector('.session-archive-btn') || archiveBtn, stopResult.error);
             return;
           }
+          notStoppedToAnnounce = stopResult.notStopped || [];
           pollActiveSessions();
         }
         await window.api.archiveSession(session.sessionId, newVal);
         session.archived = newVal;
+        announceNotStopped(notStoppedToAnnounce);
         loadProjects();
       };
     }
@@ -1801,6 +1889,10 @@ function buildSessionItem(session) {
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
   archiveBtn.innerHTML = ICONS.archive(16);
+  if (archivingSessionIds.has(session.sessionId)) {
+    archiveBtn.disabled = true;
+    archiveBtn.title = ARCHIVE_CHECKING_TITLE;
+  }
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';

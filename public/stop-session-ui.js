@@ -36,23 +36,40 @@ async function liveBackgroundJobRefusal(sessionId) {
 }
 
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
-async function stopBeforeArchive(session) {
+async function stopBeforeArchive(session, { unreachable } = {}) {
   if (!session) return { ok: true };
   const ids = rowSessionIds(session);
   const alias = session.remoteAlias;
   if (alias) {
+    const notStopped = [];
     for (const id of ids) {
-      const member = id === session.sessionId ? session : { ...session, sessionId: id };
+      if (notStopped.length) continue;
+      const member = id === session.sessionId ? session : {
+        ...session,
+        sessionId: id,
+        remoteDescriptorSeen: session.remoteMemberDescriptorSeen?.[id] ?? session.remoteDescriptorSeen,
+      };
+      const hostUnsynced = member.remoteHostAt === null && !(typeof remoteSessionStates !== 'undefined'
+        && remoteSessionStates.has(id) && remoteSessionStates.get(id).snapshot().liveness === 'dead');
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
-      if (!isRemoteSessionAlive(member) && !(open && !open.closed)
+      if (!hostUnsynced && !isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
+      if (unreachable && unreachable.has(alias)) {
+        notStopped.push({ alias, error: unreachable.get(alias) });
+        continue;
+      }
       const result = await window.api.remoteStopSession(alias, id);
+      if (result && result.hostUnreachable) {
+        if (unreachable) unreachable.set(alias, result.error);
+        notStopped.push({ alias, error: result.error });
+        continue;
+      }
       if (!result || (result.ok === false && result.error !== 'session not found on that host')) {
         return { ok: false, error: (result && result.error) || 'unknown error' };
       }
       if (typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
     }
-    return { ok: true };
+    return notStopped.length ? { ok: true, notStopped } : { ok: true };
   }
   for (const id of ids) {
     const refusal = await liveBackgroundJobRefusal(id);

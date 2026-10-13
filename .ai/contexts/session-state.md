@@ -146,6 +146,42 @@ built on `resolveSessionStop` plus `isRemoteSessionAlive(session)` (the
 authoritative over a stale `session.remoteDescriptorSeen` right after this app
 itself just stopped it — falling back to `remoteDescriptorSeen` otherwise):
 
+For merged remote rows, main also sends `remoteMemberDescriptorSeen`, keyed by
+member id. `stopBeforeArchive` uses each member's own flag for the descriptor
+fallback, so an unseen representative cannot hide a live, unseeded member
+(#556). Confirmed adapter liveness still wins; older payloads without this
+map retain their existing fallback. A remote "session not found on that host"
+reply still counts as done.
+
+Main also sends `remoteHostAt` per remote session, the host's last successful
+sync (null when it has not synced in this run, e.g. after a restart, when rows
+come from the on-disk mirror). `stopBeforeArchive` treats a null `remoteHostAt`
+as liveness unknown and calls `remoteStopSession` for that member unless the
+adapter has confirmed it dead; `remote-stop-session` then refreshes the host
+once (at most `REMOTE_STOP_SYNC_TIMEOUT_MS`, 20 s) and answers from the fresh
+list. A host that does not answer (timeout, a failure of the ssh command itself (`remote-transport.js` tags only a
+timeout, ssh exit 255 and a spawn error or exit -1 with `remoteTransport`; a
+truncated inventory, any other non-zero exit and anything thrown by
+`syncMirror` mean the host answered and are not tagged, so the archive is
+refused with the error and "remove the host in Settings to archive without
+checking"), or no
+attempt finished after an in-flight refresh was awaited within the same bound;
+an in-flight refresh that is the global one is retried with a forced
+per-host refresh once it ends, since it skips hosts in backoff; the wait compares `getRemoteHostState(alias).attempts` with a snapshot taken at
+the click, so a stale `lastError` never ends it) makes `remote-stop-session`
+return `{ok:false, hostUnreachable:true, error}`; Archive is reversible, so
+`stopBeforeArchive` turns that into `{ok:true, notStopped:[{alias,error}]}`
+(asking the same host only once per row) and the caller archives anyway, then
+`announceNotStopped` shows a notice naming the host. A host that answers but
+refuses the stop, or a first sync that fails locally (mirror directory, index
+scan; `lastErrorTransport` false), still returns `{ok:false}` and blocks the
+archive. A host that
+is stopped or no longer configured (`refreshHostNow` reports `reason: 'stopped'`
+or `'unknown-host'`) answers "session not found on that host", so the row
+archives silently. The Archive button is disabled
+and titled "Checking the host before archiving…" while this runs (the folder and group Archive buttons too, kept in `archivingGroupIds` so a re-render re-applies them, plus each row they check; a folder or slug-group Archive asks an unreachable host once (`stopBeforeArchive`'s `unreachable` map, one per action) and marks all its rows busy before the first check; folder Archive is refused up front, with a message on its button, while a row of the folder is still checking, and rechecks after its dialog)
+(`archivingSessionIds`, `public/sidebar.js`), and a second click is ignored.
+
 | kind | alive / has PTY | call |
 |---|---|---|
 | remote | alive | `remoteStopSession(alias, sessionId)` |
@@ -210,6 +246,18 @@ local ssh attach for the now-dead session (`session.kind === 'remote-attach'`),
 `killPty` closes it too — the remote process is already gone, so there is
 nothing left to detach *from*, but the local ssh client would otherwise linger
 until it notices the far end closed on its own.
+
+When the descriptor is missing and this host has never completed a poll
+(`getRemoteSessions(alias).at` is null), the handler first awaits
+`refreshHostNow(alias, {force:true})` and reads the descriptor list again
+(#556). If a first poll still has not completed (failed, skipped, or already
+in flight), it refuses with the host error or "not yet synced with this host";
+Archive keeps the row and the attach PTY. If the poll finds the process, the
+normal stop and successful-stop PTY cleanup run. Absence after a completed
+poll keeps "session not found on that host" counted as done; this path still
+does not close the local attach. Tests exercise the shipped handler, real
+indexer and sidebar Archive with an injected sync port, without SSH or Electron:
+`test/remote-stop-cold-cache.test.js`, `test/dom-remote-merged-archive.test.js`.
 
 **The renderer side, immediately.** On a successful remote stop,
 `public/remote-activity-ui.js`'s `applyRemoteStopped(sessionId)` applies

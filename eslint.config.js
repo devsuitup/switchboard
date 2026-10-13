@@ -218,6 +218,7 @@ const rendererCrossFileGlobals = {
   resolveSessionStop: 'readonly',
   isRemoteSessionAlive: 'readonly',
   stopBeforeArchive: 'readonly',
+  showRestoreNotice: 'readonly',
   // read by sidebar.js's parentHasActiveSubagent() — see .ai/contexts/subagent-observability.md
   remoteSessionStates: 'readonly',
   // see .ai/contexts/subagent-observability.md

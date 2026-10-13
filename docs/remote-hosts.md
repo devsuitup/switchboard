@@ -275,7 +275,17 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
   the host: after checking that the pid is still a `claude` process, it kills
   the session's tmux pane (or window), or sends `SIGTERM` and, 3 seconds later,
   `SIGKILL`.
-- **Archive** stops a live session first, the same way.
+- **Archive** stops a live session first, the same way. On a merged row, it
+  checks each member's own live state before hiding the row. For an attached
+  session, or a row listed from the saved copy after a restart, whose host has
+  not synced yet in this run, it first tries a refresh, waiting at most 20
+  seconds (also for a refresh already in flight) with the button busy. If the
+  host does not answer, Archive still hides the row (it can be unarchived), skips
+  the stop, and shows a notice naming the host: the session may still be
+  running there. The same holds for folder and group Archive. A host that is
+  disabled or removed is not asked, so its rows archive without a notice. A host
+  that answers but refuses the stop still blocks the archive. A successful stop
+  also closes the local attached terminal.
 - **Delete** is refused: the mirrored transcript is a copy that the next pull
   would fetch again.
 

@@ -625,6 +625,9 @@ function annotateRemoteAttachable(projects) {
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
+        session.remoteHostAt = info.at;
+        session.remoteMemberDescriptorSeen = Object.fromEntries((session.mergedMemberIds || [])
+          .map(id => [id, info.byId.has(id)]));
       } else {
         // Same descriptor vocabulary, read from the local ~/.claude/sessions/<pid>.json
         // instead of a remote host's mirror -- see .ai/contexts/cli-session-state.md
@@ -1882,6 +1885,8 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   return { ok: true };
 });
 
+const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;
+
 // --- IPC: remote-stop-session ---
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 ipcMain.handle('remote-stop-session', async (_event, payload) => {
@@ -1890,7 +1895,39 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   if (typeof alias !== 'string' || !alias || typeof sessionId !== 'string' || !sessionId) {
     return { ok: false, error: 'invalid request' };
   }
-  const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
+  let remote = remoteIndexer.getRemoteSessions(alias);
+  let descriptor = remote.sessions.find(s => s.sessionId === sessionId);
+  if (!descriptor && !remote.at) {
+    let timer;
+    let abandoned = false;
+    const attemptsBefore = remoteIndexer.getRemoteHostState(alias).attempts;
+    const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), REMOTE_STOP_SYNC_TIMEOUT_MS); });
+    const sync = (async () => {
+      for (;;) {
+        if (remoteIndexer.getRemoteSessions(alias).at || remoteIndexer.getRemoteHostState(alias).attempts > attemptsBefore) return { skipped: false };
+        const attempt = await remoteIndexer.refreshHostNow(alias, { force: true });
+        if (!(attempt.skipped && attempt.reason === 'in-flight') || abandoned) return attempt;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    })();
+    const refreshed = await Promise.race([sync, timedOut]).finally(() => { abandoned = true; clearTimeout(timer); });
+    if (refreshed && (refreshed.reason === 'stopped' || refreshed.reason === 'unknown-host')) {
+      return { ok: false, error: 'session not found on that host' };
+    }
+    remote = remoteIndexer.getRemoteSessions(alias);
+    if (!remote.at) {
+      const state = remoteIndexer.getRemoteHostState(alias);
+      const newError = state.attempts > attemptsBefore && state.lastError;
+      if (newError && !state.lastErrorTransport) {
+        return { ok: false, error: `${state.lastError}. Archive cannot check this session on ${alias} until that is resolved; remove the host in Settings to archive without checking.` };
+      }
+      if (refreshed && refreshed.timedOut) {
+        return { ok: false, hostUnreachable: true, error: `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s` };
+      }
+      return { ok: false, hostUnreachable: true, error: state.attempts > attemptsBefore && state.lastError ? state.lastError : 'not yet synced' };
+    }
+    descriptor = remote.sessions.find(s => s.sessionId === sessionId);
+  }
   if (!descriptor) return { ok: false, error: 'session not found on that host' };
 
   const result = await remoteStopAdapter.stop(alias, descriptor);

@@ -115,7 +115,7 @@ function createRemoteIndexer(ctx) {
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
     if (!s) {
-      s = { failures: 0, lastError: null, nextAttemptAt: 0 };
+      s = { failures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
       hostBackoff.set(alias, s);
     }
     return s;
@@ -128,17 +128,22 @@ function createRemoteIndexer(ctx) {
     }
     const errorChanged = state.lastError !== null;
     state.failures = 0;
+    state.attempts += 1;
     state.lastError = null;
+    state.lastErrorTransport = false;
     state.nextAttemptAt = 0;
     return errorChanged;
   }
 
-  function onHostFailure(alias, err, intervalMs) {
+  function onHostFailure(alias, thrown, intervalMs) {
+    const err = thrown instanceof Error ? thrown : new Error(String(thrown));
     const state = backoffState(alias);
     const prevDelay = backoffDelayMs(state.failures, intervalMs);
     state.failures += 1;
+    state.attempts += 1;
     const errorChanged = state.lastError !== err.message;
     state.lastError = err.message;
+    state.lastErrorTransport = err.remoteTransport === true;
     const delay = backoffDelayMs(state.failures, intervalMs);
     state.nextAttemptAt = now() + delay;
     if (delay !== prevDelay) {
@@ -150,8 +155,8 @@ function createRemoteIndexer(ctx) {
 
   function getRemoteHostState(alias) {
     const s = hostBackoff.get(alias);
-    if (!s) return { consecutiveFailures: 0, lastError: null, nextAttemptAt: 0 };
-    return { consecutiveFailures: s.failures, lastError: s.lastError, nextAttemptAt: s.nextAttemptAt };
+    if (!s) return { consecutiveFailures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
+    return { consecutiveFailures: s.failures, lastError: s.lastError, lastErrorTransport: s.lastErrorTransport, attempts: s.attempts, nextAttemptAt: s.nextAttemptAt };
   }
 
   function hosts() {
@@ -316,7 +321,7 @@ function createRemoteIndexer(ctx) {
         } catch (err) {
           // A failed cycle keeps the last known descriptors — see
           // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
-          errors.push({ alias: host.alias, error: err.message });
+          errors.push({ alias: host.alias, error: err instanceof Error ? err.message : String(err) });
           if (onHostFailure(host.alias, err, intervalMs)) changed = true;
         }
       }
@@ -331,16 +336,17 @@ function createRemoteIndexer(ctx) {
   // see .ai/contexts/session-cache.md ("Remote hosts — watch channel" and,
   // for `force`, "Remote hosts backoff" — manual reconnect, issue #252)
   async function refreshHostNow(alias, { force = false } = {}) {
-    if (stopped || inFlight || hostInFlight.has(alias)) return { skipped: true };
+    if (stopped) return { skipped: true, reason: 'stopped' };
+    if (inFlight || hostInFlight.has(alias)) return { skipped: true, reason: 'in-flight' };
     const host = hosts().find(h => h.alias === alias);
-    if (!host) return { skipped: true };
+    if (!host) return { skipped: true, reason: 'unknown-host' };
     const state = backoffState(alias);
     if (force) {
       state.failures = 0;
       state.nextAttemptAt = 0;
       rearmProbe(alias);
     } else if (now() < state.nextAttemptAt) {
-      return { skipped: true };
+      return { skipped: true, reason: 'backoff' };
     }
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     hostInFlight.add(alias);
@@ -354,7 +360,7 @@ function createRemoteIndexer(ctx) {
       // A failed cycle keeps the last known descriptors — see
       // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
       if (onHostFailure(alias, err, intervalMs)) changed = true;
-      error = err.message;
+      error = err instanceof Error ? err.message : String(err);
     } finally {
       hostInFlight.delete(alias);
     }

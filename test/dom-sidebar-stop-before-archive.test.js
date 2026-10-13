@@ -376,3 +376,154 @@ test('project archive-all: a session a live background job runs keeps the whole 
     assert.match(failedBtn.title, /background job aaaaaaaa/);
   } finally { ctx.destroy(); }
 });
+
+// ---------------------------------------------------------------------------
+// A host that does not answer never blocks Archive (#556)
+// ---------------------------------------------------------------------------
+const unreachable = () => Promise.resolve({ ok: false, hostUnreachable: true, error: 'no answer within 20s' });
+
+test('stopBeforeArchive: an unreachable host is reported as not stopped, once per host, without refusing', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
+    const result = await ctx.window.stopBeforeArchive({ sessionId: 's1', mergedMemberIds: ['s2'], remoteAlias: 'vps', remoteDescriptorSeen: true, remoteMemberDescriptorSeen: { s2: true } });
+    assert.equal(result.ok, true);
+    assert.equal(JSON.stringify(result.notStopped), JSON.stringify([{ alias: 'vps', error: 'no answer within 20s' }]));
+    assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1, 'the host is not asked again for the next member');
+  } finally { ctx.destroy(); }
+});
+
+test('slug-group archive: sessions on an unreachable host are archived and one notice names the host', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
+    const r2 = remoteSession('r2', 'vps', true, { slug: 'grp' });
+    const project = { projectPath: '/home/dev/proj', sessions: [r1, r2] };
+    ctx.window.sessionMap.set('r1', r1);
+    ctx.window.sessionMap.set('r2', r2);
+    const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
+    const notices = [];
+    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
+    ctx.sidebar.renderProjects([project], true);
+    const button = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn');
+    const done = button.onclick(new ctx.window.MouseEvent('click'));
+    assert.equal(button.disabled, true);
+    await done;
+    assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]).sort(), ['r1', 'r2']);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0], /vps did not answer/);
+    assert.equal(button.disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('project archive-all: sessions on an unreachable host are archived with the folder and a notice names the host', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = { projectPath: '/home/dev/proj', sessions: [remoteSession('r1', 'vps', true)] };
+    const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
+    const notices = [];
+    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const button = headerFor(ctx, project).querySelector('.project-archive-btn');
+    const done = button.onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
+    assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]), ['r1']);
+    assert.equal(calls.filter(c => c.method === 'archiveProject').length, 1);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0], /vps did not answer/);
+    assert.equal(button.disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('folder archive is refused up front while a row of the folder is still checking its host', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const r1 = remoteSession('r1', 'vps', true);
+    const project = { projectPath: '/home/dev/proj', sessions: [r1] };
+    ctx.window.sessionMap.set('r1', r1);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const calls = installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: false, error: 'stop refused' })) });
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const rowBtn = ctx.document.querySelector('#si-r1 .session-archive-btn');
+    const own = rowBtn.onclick({ stopPropagation() {} });
+    await new Promise(r => setTimeout(r, 0));
+    const folderBtn = headerFor(ctx, project).querySelector('.project-archive-btn');
+    await folderBtn.onclick(new ctx.window.MouseEvent('click'));
+    assert.match(folderBtn.title, /An archive is still in progress for .*proj; try again when it finishes/);
+    assert.equal(calls.filter(c => c.method === 'archiveProject').length, 0);
+    assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
+    assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, true);
+    release();
+    await own;
+    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 0);
+    assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('a re-render keeps the slug-group and folder Archive buttons disabled while they check', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
+    const r2 = remoteSession('r2', 'vps', true, { slug: 'grp' });
+    const project = { projectPath: '/home/dev/proj', sessions: [r1, r2] };
+    ctx.window.sessionMap.set('r1', r1);
+    ctx.window.sessionMap.set('r2', r2);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    ctx.sidebar.renderProjects([project], true);
+    const done = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    ctx.sidebar.renderProjects([project], true);
+    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, true);
+    release();
+    await done;
+    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('folder archive asks an offline host once for all its rows, not once per row', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const rows = ['r1', 'r2', 'r3'].map(id => remoteSession(id, 'vps', true));
+    const project = { projectPath: '/home/dev/proj', sessions: rows };
+    const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
+    const notices = [];
+    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
+    assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
+    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 3);
+    assert.equal(notices.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('folder archive marks every row busy before it starts checking the first one', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const rows = ['r1', 'r2'].map(id => remoteSession(id, 'vps', true));
+    const project = { projectPath: '/home/dev/proj', sessions: rows };
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(ctx.document.querySelector('#si-r2 .session-archive-btn').disabled, true);
+    release();
+    await done;
+    assert.equal(ctx.document.querySelector('#si-r2 .session-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});
