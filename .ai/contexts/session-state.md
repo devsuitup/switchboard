@@ -172,7 +172,15 @@ the click, so a stale `lastError` never ends it) makes `remote-stop-session`
 return `{ok:false, hostUnreachable:true, error}`; Archive is reversible, so
 `stopBeforeArchive` turns that into `{ok:true, notStopped:[{alias,error}]}`
 (asking the same host only once per row) and the caller archives anyway, then
-`announceNotStopped` shows a notice naming the host. A host that answers but
+`announceNotStopped` shows a notice naming the host through
+`showAppNotice({ id: 'archive-not-stopped-toast', kind: 'error', message })`
+in `public/app-notices.js` (#566/S3). Its `Archived, but not stopped` wording
+is unchanged. It uses `role="alert"` and remains until Dismiss or
+`clearAppNotice`; a new failure replaces that id, without a console error or
+the old 15 s `showRestoreNotice` timeout. The shared brick also provides
+15 s info and 10 s Undo notices; Archive/Detach undo actions are wired in
+their own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).
+A host that answers but
 refuses the stop, or a first sync that fails locally (mirror directory, index
 scan; `lastErrorTransport` false), still returns `{ok:false}` and blocks the
 archive. A host that

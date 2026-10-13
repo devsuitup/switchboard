@@ -402,16 +402,15 @@ test('slug-group archive: sessions on an unreachable host are archived and one n
     ctx.window.sessionMap.set('r1', r1);
     ctx.window.sessionMap.set('r2', r2);
     const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
-    const notices = [];
-    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
     ctx.sidebar.renderProjects([project], true);
     const button = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn');
     const done = button.onclick(new ctx.window.MouseEvent('click'));
     assert.equal(button.disabled, true);
     await done;
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]).sort(), ['r1', 'r2']);
+    const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
     assert.equal(notices.length, 1);
-    assert.match(notices[0], /vps did not answer/);
+    assert.match(notices[0].textContent, /vps did not answer/);
     assert.equal(button.disabled, false);
   } finally { ctx.destroy(); }
 });
@@ -421,8 +420,6 @@ test('project archive-all: sessions on an unreachable host are archived with the
   try {
     const project = { projectPath: '/home/dev/proj', sessions: [remoteSession('r1', 'vps', true)] };
     const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
-    const notices = [];
-    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
     ctx.window.cachedAllProjects = [project];
     ctx.sidebar.renderProjects([project], true);
     const button = headerFor(ctx, project).querySelector('.project-archive-btn');
@@ -432,8 +429,9 @@ test('project archive-all: sessions on an unreachable host are archived with the
     await done;
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]), ['r1']);
     assert.equal(calls.filter(c => c.method === 'archiveProject').length, 1);
+    const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
     assert.equal(notices.length, 1);
-    assert.match(notices[0], /vps did not answer/);
+    assert.match(notices[0].textContent, /vps did not answer/);
     assert.equal(button.disabled, false);
   } finally { ctx.destroy(); }
 });
@@ -493,8 +491,6 @@ test('folder archive asks an offline host once for all its rows, not once per ro
     const rows = ['r1', 'r2', 'r3'].map(id => remoteSession(id, 'vps', true));
     const project = { projectPath: '/home/dev/proj', sessions: rows };
     const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
-    const notices = [];
-    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
     ctx.window.cachedAllProjects = [project];
     ctx.sidebar.renderProjects([project], true);
     const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
@@ -503,7 +499,7 @@ test('folder archive asks an offline host once for all its rows, not once per ro
     await done;
     assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
     assert.equal(calls.filter(c => c.method === 'archiveSession').length, 3);
-    assert.equal(notices.length, 1);
+    assert.equal(ctx.document.querySelectorAll('#app-notices [role="alert"]').length, 1);
   } finally { ctx.destroy(); }
 });
 

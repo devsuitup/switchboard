@@ -66,12 +66,15 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
   ctx.window.openSessions.set('A', { closed: false });
   ctx.window.activePtyIds.add('A');
-  const notices = [];
-  ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
   ctx.window.api.remoteStopSession = (alias, sessionId) => handler(null, { alias, sessionId });
   ctx.window.api.archiveSession = async (id, value) => { calls.push(['archive', id, value]); return { ok: true }; };
   t.after(() => { finishPoll?.(); indexer.dispose(); ctx.destroy(); fs.rmSync(dataDir, { recursive: true, force: true }); });
-  return { ...ctx, indexer, calls, notices, attached, session, polls: () => polls, pollsAtStop: () => pollsAtStop, isLive: () => live, finishPoll };
+  return {
+    ...ctx, indexer, calls, attached, session, polls: () => polls, pollsAtStop: () => pollsAtStop, isLive: () => live, finishPoll,
+    get notices() {
+      return [...ctx.document.querySelectorAll('#app-notices [role="alert"] .app-notice-message')].map(el => el.textContent);
+    },
+  };
 }
 
 async function archive(ctx) {

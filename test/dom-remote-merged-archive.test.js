@@ -108,3 +108,20 @@ test('Archive trusts a confirmed dead state even when the host never synced', as
   await archive(ctx);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
 });
+
+test('an unreachable host archives the row and leaves an alert saying it was not stopped', async t => {
+  const ctx = setup(t, { seen: ['A', 'B'] });
+  ctx.window.api.remoteStopSession = async (alias, id) => {
+    ctx.calls.push(['stop', alias, id]);
+    return { ok: false, hostUnreachable: true, error: 'SSH timed out' };
+  };
+  const errors = [];
+  ctx.window.console.error = (...args) => errors.push(args);
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['archive', 'A', 1]]);
+  const notice = ctx.document.querySelector('[role="alert"]');
+  assert.ok(notice, 'the archived-but-not-stopped failure must be visible');
+  assert.equal(notice.querySelector('.app-notice-message').textContent,
+    'Archived, but not stopped: host did not answer (SSH timed out). The session may still be running there; unarchive it to try again once the host is back.');
+  assert.deepEqual(errors, []);
+});
