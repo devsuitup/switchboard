@@ -78,7 +78,7 @@ function setup(t, { sandbox = false } = {}) {
   vm.runInContext(read('public/utils.js'), ctx);
   vm.runInContext(read('public/resume-guard.js'), ctx, { filename: path.join(ROOT, 'public/resume-guard.js') });
   vm.runInContext(`
-    var openSessions = new Map();
+    var openSessions = new Map(), pendingSessions = new Map();
     var sessionMap = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;

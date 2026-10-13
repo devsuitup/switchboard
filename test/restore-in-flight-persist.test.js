@@ -124,3 +124,48 @@ test('quitting while a continuation attaches keeps the resolved background sessi
     await restoring;
   }
 });
+
+test('quitting while a fresh active entry opens after an attached continuation keeps a single active entry', { timeout: 9000 }, async t => {
+  const h = setupExitRestore(t, { old: ['new'], new: [] }, {
+    live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } },
+    savedEntries: [
+      { sessionId: 'old', projectPath: '/project', active: false },
+      { sessionId: 'a', projectPath: '/project', active: true, fresh: true },
+    ],
+  });
+  const openTerminal = h.dom.window.api.openTerminal;
+  let release;
+  const blocked = new Promise(resolve => { release = () => resolve({ ok: true }); });
+  let reached;
+  const opened = new Promise(resolve => { reached = resolve; });
+  let calls = 0;
+  h.dom.window.api.openTerminal = async (...args) => {
+    await openTerminal(...args);
+    if (++calls < 2) return { ok: true };
+    reached(args[0]);
+    return blocked;
+  };
+  const restoring = h.app.runRestore(h.saved);
+  const newId = await opened;
+  try {
+    await h.app.flushStateForExit();
+    const set = h.settings().openWorkingSet;
+    assert.equal(set.filter(entry => entry.active).length, 1);
+    assert.deepEqual(set.find(entry => entry.sessionId === 'new'), { sessionId: 'new', projectPath: '/project', active: true, bg: true });
+    assert.equal(set.find(entry => entry.sessionId === newId).active, false);
+  } finally {
+    release();
+    await restoring;
+  }
+});
+
+test('a failed terminal open does not leave the active mark on the pending session', { timeout: 9000 }, async t => {
+  const h = setupExitRestore(t, {}, {
+    savedEntries: [{ sessionId: 'a', projectPath: '/project', active: true, fresh: true }],
+  });
+  let newId;
+  h.dom.window.api.openTerminal = async id => { newId = id; throw new Error('boom'); };
+  await assert.rejects(h.app.runRestore(h.saved), /boom/);
+  const pending = vm.runInContext('pendingSessions.get', h.ctx);
+  assert.equal(pending.call(vm.runInContext('pendingSessions', h.ctx), newId).openingActive, undefined);
+});

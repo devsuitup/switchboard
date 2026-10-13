@@ -204,10 +204,6 @@ function persistWorkingSet({ final = false } = {}) {
         ...(fresh ? { fresh: true } : {}),
       });
     }
-    if (!set.some(e => e.active)) {
-      const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
-      if (opening) opening.active = true;
-    }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
     const notStarted = pendingRestoreEntries()
       .filter(({ item }) => !openSessions.has(item.sessionId) || liveAttach(item.sessionId))
@@ -220,6 +216,10 @@ function persistWorkingSet({ final = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true } : {}) });
+    }
+    if (!set.some(e => e.active)) {
+      const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
+      if (opening) opening.active = true;
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -1405,8 +1405,12 @@ async function launchNewSession(project, sessionOptions, restoreSessionId) {
   }
 
   // Open terminal in main process with session options
-  const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
-  delete pendingSessions.get(sessionId)?.openingActive;
+  let result;
+  try {
+    result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+  } finally {
+    delete pendingSessions.get(sessionId)?.openingActive;
+  }
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
