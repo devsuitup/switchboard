@@ -1,14 +1,5 @@
 # Context: trigger-watcher
 
-For transcript cursor identity, device and inode are read as BigInts from both
-`statSync` and `fstatSync`. NTFS identifiers can exceed the exact integer range
-of JavaScript Numbers: a real rename and replacement can have distinct inodes
-that round to the same Number. Keep the exact identities through cache and
-cursor comparisons; sizes stay numeric for buffer offsets, and timestamps
-stay in milliseconds for readiness checks. The rounded-inode regression tests
-in `test/trigger-transcript-fallback.test.js` cover replacement before stat and
-between stat and the opened-file check.
-
 **Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill.
 
 ## Key files
@@ -1278,7 +1269,7 @@ transcript also logs one info line.
 (`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
 key>.jsonl`, local sessions only (a remote session returns `null`). The reader
 stats the file and re-reads the last 256 KiB only when its mtime, size or identity
-changes, so an ordinary turn poll costs a `stat`. Compaction evidence additionally
+(device and inode, compared as BigInt; see Compaction evidence) changes, so an ordinary turn poll costs a `stat`. Compaction evidence additionally
 uses the bounded cursor described below. The cache holds one entry per path, so
 two chains on two sessions do not re-read each other's files. A chain
 evicts its session's entry when it ends, whatever the outcome
@@ -1488,7 +1479,13 @@ write, sends text and a discrete Enter, then polls for a new main-thread
 Its timestamp must be at or after that Enter and its `(uuid, timestamp)` pair
 must be absent from the snapshot. Old boundaries, automatic compaction and
 sidechain records are excluded. The pre-write snapshot also creates a cursor
-at EOF, tied to the transcript path, device and inode. Each evidence poll reads
+at EOF, tied to the transcript path, device and inode. Device and inode are
+read as BigInt from both `statSync` and `fstatSync`: NTFS identifiers can
+exceed the exact integer range of a JavaScript Number, and a real
+rename-and-replace can give two distinct inodes that round to the same Number.
+Sizes stay numeric for buffer offsets and timestamps stay in milliseconds. The
+rounded-inode tests in `test/trigger-transcript-fallback.test.js` cover a
+replacement before the stat and between the stat and the opened-file check. Each evidence poll reads
 up to 256 KiB from that offset and advances it, even when the file's mtime and
 size have stopped changing. Retained records after the boundary can exceed
 the normal 256 KiB tail without hiding the evidence. The turn classification
@@ -1992,6 +1989,8 @@ before advancing time, yield between clock ticks for promise
 continuations, and keep result-file deadlines on performance.now() with real,
 ref'd timers. The watcher, transcript files, context and result path stay real;
 the 650 ms step budget and busy-fall settle assertions are not widened.
+The transcript files' mtimes stay on the real clock, so the transcript quiet
+window (`transcriptShowsTurnOver`) is not under the mock clock in this fixture.
 
 `test/trigger-watcher.test.js` uses real timers and real `fs.watch` against
 fixed wall-clock budgets outside that fixture. It measures the host,

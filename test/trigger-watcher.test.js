@@ -27,8 +27,9 @@ const os     = require('os');
 const path   = require('path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 
-// This file runs with real timers and real fs.watch against fixed wall-clock
-// budgets, so it measures the host, not just the code under test. Under host
+// Outside the i488 compaction fixture (mocked Date/setTimeout), this file runs
+// with real timers and real fs.watch against fixed wall-clock budgets, so it
+// measures the host, not just the code under test. Under host
 // load (see .ai/contexts/trigger-watcher.md, "timing tests and host load") a
 // ceiling can be exceeded, or an elapsed-time UPPER bound can be crossed by a
 // few hundred ms even though the code is correct. SWITCHBOARD_TEST_TIME_SCALE
