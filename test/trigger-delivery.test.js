@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { setTimeout: realSetTimeout } = require('node:timers');
 const cli = require('../cli-session-state');
 const { createTriggerContext } = require('../trigger-context');
 const { start } = require('../trigger-watcher');
@@ -108,17 +109,21 @@ function fixture(t, platform = 'linux', key = 'direct', options = {}) {
     ...options,
   });
   let count = 0;
-  f.run = async (trigger, timeout = 1600) => {
+  f.run = (trigger, timeout = 1600) => {
     const id = 'case-' + (++count);
     fs.writeFileSync(path.join(triggers, id + '.json'), JSON.stringify({ sessionId: key === 'alias' ? 'b' : 'a',
       command: 'prompt', wait: 'none', timeout_ms: timeout, ...trigger }));
     const file = path.join(triggers, 'processed', id + '.result.json');
-    const deadline = performance.now() + timeout + 3000;
-    while (!fs.existsSync(file)) {
-      if (performance.now() > deadline) throw new Error('missing result ' + id);
-      await new Promise(resolve => setTimeout(resolve, 5));
-    }
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    const result = (async () => {
+      const deadline = performance.now() + timeout + 3000;
+      while (!fs.existsSync(file)) {
+        if (performance.now() > deadline) throw new Error('missing result ' + id);
+        await new Promise(resolve => realSetTimeout(resolve, 5));
+      }
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    })();
+    result.ready = () => fs.existsSync(file);
+    return result;
   };
   process.env.SWITCHBOARD_TRIGGERS_DIR = triggers;
   const watcher = start(f.ctx);
@@ -146,6 +151,44 @@ async function provenFixture(t, platform, key = 'direct') {
   if (platform === 'sandbox') f.hostComparable = true;
   if (platform === 'darwin') f.observation = () => ({ writer: { pid: 200, sessionId: f.writerId, procStart: '200' }, identity: '200:200' });
   return f;
+}
+
+async function driveClock(t, predicate, maxMs = 5000) {
+  for (let elapsed = 0; elapsed < maxMs && !predicate(); elapsed += 5) {
+    t.mock.timers.tick(5);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.ok(predicate(), 'delivery did not reach the expected event within the mock-clock budget');
+}
+
+function observeDelivery(f) {
+  const events = new Map();
+  const pin = f.ctx.pinDelivery;
+  f.ctx.pinDelivery = (...args) => {
+    const pinned = pin(...args);
+    const read = pinned.ctx.getComposerState;
+    pinned.ctx.getComposerState = (...readArgs) => {
+      events.get(args[0])?.();
+      return read(...readArgs);
+    };
+    return pinned;
+  };
+  return id => new Promise(resolve => events.set(id, resolve));
+}
+
+async function eventOrResult(event, result) {
+  await Promise.race([event, result.then(() => { throw new Error('delivery ended before the expected event'); })]);
+  await new Promise(resolve => setImmediate(resolve));
+}
+
+function triggerRead(t, f, id) {
+  const file = path.join(f.triggers, id + '.json');
+  const read = fs.readFileSync;
+  return new Promise(resolve => t.mock.method(fs, 'readFileSync', (...args) => {
+    const content = read(...args);
+    if (args[0] === file) resolve();
+    return content;
+  }));
 }
 
 test('ADR admission delay: the chain total contains only published step waits', async t => {
@@ -313,12 +356,12 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
   }
 
   test(`ADR serialization ${platform}: descriptor alias shares the tab across re-key and independent tabs progress`, async t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
     const f = await provenFixture(t, platform);
     f.continueTo('a', 'b'); f.setWriter('b'); f.session.composerState.pending = 1;
-    let pinned;
-    const firstPinned = new Promise(resolve => { pinned = resolve; });
-    const original = f.ctx.getPtyForSession;
-    f.ctx.getPtyForSession = (...args) => { const entry = original(...args); pinned(); return entry; };
+    const observe = observeDelivery(f);
+    const firstWaiting = observe('a');
+    const otherWaiting = observe('other');
     f.onEnter = command => {
       if (command !== 'first') return;
       f.activeSessions.delete('a'); f.activeSessions.set('b', f.session);
@@ -328,47 +371,64 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
     f.activeSessions.set('other', { ...f.session, isPlainTerminal: true, composerState: { pending: 0, lastInputAt: 0 },
       pty: { pid: 401, write: data => otherBytes.push(data) } });
     const first = f.run({ sessionId: 'a', command: 'first' });
-    await firstPinned;
+    await eventOrResult(firstWaiting, first);
+    const aliasRead = triggerRead(t, f, 'case-2');
     const alias = f.run({ sessionId: 'b', command: 'second' });
-    const other = await f.run({ sessionId: 'other' });
-    assert.equal(other.ok, true); assert.deepEqual(otherBytes.slice(0, 2), ['prompt', '\r']);
+    await eventOrResult(aliasRead, alias);
+    const other = f.run({ sessionId: 'other' });
+    await eventOrResult(otherWaiting, other);
+    await driveClock(t, other.ready);
+    assert.equal((await other).ok, true); assert.deepEqual(otherBytes.slice(0, 2), ['prompt', '\r']);
     assert.deepEqual(f.written, []);
     f.session.composerState.pending = 0;
+    await driveClock(t, () => first.ready() && alias.ready());
     assert.equal((await first).ok, true); assert.equal((await alias).ok, true);
     assert.deepEqual(f.written, ['first', '\r', 'second', '\r']);
   });
 
   test(`ADR serialization ${platform}: normalized same-id FIFO waits outside the delivery budget`, async t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
     const f = await provenFixture(t, platform);
     f.session.composerState.pending = 1;
     f.activeSessions.set('A', f.session);
-    let pinned;
+    const observe = observeDelivery(f);
+    const firstWaiting = observe('A');
     let secondLookedUp = false;
-    const firstPinned = new Promise(resolve => { pinned = resolve; });
     const original = f.ctx.getPtyForSession;
-    f.ctx.getPtyForSession = (id) => { const entry = original(id); if (id === 'a') secondLookedUp = true; pinned(); return entry; };
+    f.ctx.getPtyForSession = (id) => { const entry = original(id); if (id === 'a') secondLookedUp = true; return entry; };
     const first = f.run({ sessionId: 'A', command: 'first' });
-    await firstPinned;
+    await eventOrResult(firstWaiting, first);
+    const secondRead = triggerRead(t, f, 'case-2');
     const second = f.run({ sessionId: 'a', command: 'second' }, 300);
-    await new Promise(resolve => setTimeout(resolve, 600));
+    await eventOrResult(secondRead, second);
+    let held = false;
+    setTimeout(() => { held = true; }, 600);
+    await driveClock(t, () => held);
     const lookedUpWhileQueued = secondLookedUp;
     assert.deepEqual(f.written, []);
     f.session.composerState.pending = 0;
+    await driveClock(t, () => first.ready() && second.ready());
     assert.equal((await first).ok, true); assert.equal((await second).ok, true);
     assert.equal(lookedUpWhileQueued, false);
     assert.deepEqual(f.written, ['first', '\r', 'second', '\r']);
   });
 
   test(`ADR serialization ${platform}: a reset chain keeps the tab lock when a new descriptor id appears`, async t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
     const f = await provenFixture(t, platform);
+    const firstWaiting = observeDelivery(f)('a');
     let separate;
     f.onEnter = command => {
       if (command !== '/clear') return;
       f.setWriter('c');
       separate = f.run({ sessionId: 'c', command: 'separate' });
     };
-    const chain = await f.run({ command: undefined, chain: [{ command: '/clear' }, { command: 'reply' }] });
-    assert.equal(chain.ok, true, JSON.stringify(chain));
+    const chain = f.run({ command: undefined, chain: [{ command: '/clear' }, { command: 'reply' }] });
+    await eventOrResult(firstWaiting, chain);
+    await driveClock(t, chain.ready);
+    const result = await chain;
+    assert.equal(result.ok, true, JSON.stringify(result));
+    await driveClock(t, separate.ready);
     assert.equal((await separate).ok, true);
     assert.deepEqual(f.written, ['/clear', '\r', 'reply', '\r', 'separate', '\r']);
   });
