@@ -188,7 +188,7 @@ test('a remote merged member stays alive across render and Stop keeps its host',
   assert.ok(item.classList.contains('is-alive'));
   assert.ok(render(ctx, [remoteRow]).classList.contains('is-alive'));
   const stopped = [];
-  Object.assign(ctx.window, { confirm: () => true, gridViewActive: false, refreshSidebar() {} });
+  Object.assign(ctx.window, { appConfirm: async () => true, gridViewActive: false, refreshSidebar() {} });
   ctx.window.api.remoteStopSession = async (alias, id) => { stopped.push([alias, id]); return { ok: true }; };
   ctx.window.api.stopSession = async id => { stopped.push(['local', id]); return { ok: true }; };
   loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession'] });

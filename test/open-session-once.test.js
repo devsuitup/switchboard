@@ -128,7 +128,7 @@ test('a click while an automatic open of a session live elsewhere is in flight a
     const lookups = [];
     h.window.api.getSessionLiveElsewhere = () => new Promise((resolve) => lookups.push(resolve));
     const confirms = [];
-    h.window.confirm = (msg) => { confirms.push(msg); return true; };
+    h.window.appConfirm = async ({ message: msg }) => { confirms.push(msg); return true; };
     const automatic = h.openSession(h.window.sessionMap.get('s1'), undefined, { automatic: true });
     h.row().click();
     assert.equal(h.window.eval('continuationRetryCancelled'), true, 'the click cancels held retries at once');
@@ -151,7 +151,7 @@ test('a double click on the row of a session live elsewhere asks once', async ()
     h.window.guardResume = require('../public/resume-guard').guardResume;
     h.window.api.getSessionLiveElsewhere = async () => ({ pid: 42 });
     let confirms = 0;
-    h.window.confirm = () => { confirms++; return false; };
+    h.window.appConfirm = async () => { confirms++; return false; };
     h.row().click();
     h.row().click();
     for (let i = 0; i < 5; i++) await settle();

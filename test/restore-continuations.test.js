@@ -63,6 +63,30 @@ test('B6 a plain attach tab is excluded from the saved set', { timeout: 9000 }, 
   assert.deepEqual(h.settings().openWorkingSet, []);
 });
 
+test('a continuation opens with Enter; only the live-elsewhere warning focuses Cancel', async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { live: { new: { pid: 4242, cwd: '/elsewhere' } } });
+  for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
+    const filename = path.join(__dirname, '../public', file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), h.ctx, { filename });
+  }
+  const opening = h.click();
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  const doc = h.dom.window.document;
+  assert.ok(doc.activeElement.classList.contains('choice-dialog-confirm'));
+  assert.ok(!doc.activeElement.classList.contains('delete-worktree-confirm-btn'));
+  assert.equal(doc.activeElement.textContent, 'Open session');
+  doc.activeElement.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await flush();
+  assert.match(doc.querySelector('.choice-dialog-body').textContent, /already running/);
+  assert.ok(doc.activeElement.classList.contains('choice-dialog-cancel'));
+  assert.deepEqual(h.spawned, []);
+  doc.querySelector('.choice-dialog-confirm').focus();
+  doc.activeElement.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await opening;
+  assert.deepEqual(h.spawned.map(call => call.id), ['new']);
+});
+
 for (const children of [['new', 'missing'], ['missing', 'new']]) {
   test(`R3 restore drops a disk-missing sibling (${children.join(', ')}) and persists the existing id`, { timeout: 9000 }, async t => {
     const h = setup(t, { old: children, new: [] });

@@ -718,7 +718,7 @@ test('the panel X over a dirty buffer asks first, and a refusal keeps both the e
   try {
     const { window, document } = ctx;
     const asked = [];
-    window.confirm = (message) => { asked.push(message); return asked.length > 1; };
+    window.appConfirm = async ({ message: message }) => { asked.push(message); return asked.length > 1; };
     stubChangesEditors(window);
 
     window.switchPanel('owner');
@@ -730,7 +730,7 @@ test('the panel X over a dirty buffer asks first, and a refusal keeps both the e
     await window.togglePanelTerminal('owner');
     ctx.inCtx("filePanelState.get('owner').currentTab").editorView.text = 'edited\n';
 
-    window.handleClose(); // the X on the tab toolbar, first answer: keep the edits
+    await window.handleClose(); // the X on the tab toolbar, first answer: keep the edits
 
     assert.equal(asked.length, 1, 'unsaved edits are never dropped without asking');
     assert.equal(document.getElementById('file-panel-changes').style.display, 'flex',
@@ -738,7 +738,7 @@ test('the panel X over a dirty buffer asks first, and a refusal keeps both the e
     assert.ok(ctx.inCtx("filePanelState.get('owner').currentTab"), 'and the buffer is still there to save');
     assert.ok(window.openSessions.has('panel:owner'), 'the shell below it is untouched');
 
-    window.handleClose(); // second answer: discard
+    await window.handleClose(); // second answer: discard
 
     assert.equal(asked.length, 2);
     assert.equal(document.getElementById('file-panel-changes').style.display, 'none');

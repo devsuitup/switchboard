@@ -147,7 +147,7 @@ function setupPanel() {
   window.openSessions = new Map(['terminal', 'transcript', 's1'].map(id => [id, { terminal: { focus() {} } }]));
   window.isMac = false;
   window.appShortcuts = {};
-  for (const file of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js',
+  for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js',
     'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evaluate(source(file));
   }

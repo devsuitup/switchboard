@@ -418,7 +418,7 @@ async function runAgentVerb(verb, entry) {
     attachBgAgent(entry);
     return;
   }
-  if (verb === 'rm' && !window.confirm('Delete this background session? Its conversation goes, and its worktree when that is safe.')) return;
+  if (verb === 'rm' && !await appConfirm({ title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true })) return;
   agentsPendingVerbs.add(key);
   agentsVerbErrors.delete(key);
   if (agentsViewActive) renderAgentsView();

@@ -74,7 +74,7 @@ function makeTerminalStub(spies) {
     hasSelection() { return false; }
     getSelection() { return ''; }
     attachCustomKeyEventHandler(cb) { this._customKeyHandler = cb; }
-    onData() {}
+    onData(cb) { this._onData = cb; }
     onResize(cb) { this._onResize = cb; }
     onTitleChange() {}
     onBell() {}
@@ -237,6 +237,7 @@ function setupTerminalDom(opts = {}) {
   // Same order as index.html: header-controls.js, process-exit.js and file-panel.js first, the panel-shell pair last.
   if (opts.filePanel) files.unshift('header-controls.js', 'tool-bar.js', 'process-exit.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
+  if (!window.registerModal) files.unshift('modal-stack.js');
   for (const file of files) {
     const fullPath = path.join(PUBLIC_DIR, file);
     // Absolute filename: what c8/V8 attributes the coverage of these files to.

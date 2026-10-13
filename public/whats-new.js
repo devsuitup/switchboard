@@ -68,15 +68,8 @@ function showWhatsNew(doc, api, escape, payload) {
 
   function close() {
     overlay.remove();
-    doc.removeEventListener('keydown', onKey, true);
+    unregister();
     api.whatsNewDismissed();
-  }
-  function onKey(e) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      close();
-    }
   }
 
   overlay.querySelector('.whats-new-close').addEventListener('click', close);
@@ -89,7 +82,7 @@ function showWhatsNew(doc, api, escape, payload) {
       close();
     }
   });
-  doc.addEventListener('keydown', onKey, true);
+  const unregister = doc.defaultView.registerModal({ overlay, cancel: close });
   overlay.querySelector('.whats-new-close').focus();
   return overlay;
 }

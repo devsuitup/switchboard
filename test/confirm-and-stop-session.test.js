@@ -29,7 +29,7 @@ function withHarness(overrides, fn) {
     window.refreshSidebar = () => { calls.refreshed++; };
     window.applyRemoteStopped = (id) => calls.remoteStopped.push(id);
     window.flashButtonText = (b, text, ms) => calls.flashed.push({ b, text, ms });
-    window.confirm = () => true;
+    window.appConfirm = async () => true;
     window.setTimeout = (cb) => cb();
     window.console = { error: (...args) => calls.logged.push(args) };
     window.api = {
@@ -111,11 +111,26 @@ test('a local session is stopped through stopSession, not the remote channel', a
 });
 
 test('declining the confirm() dialog calls neither IPC', async () => {
-  const declining = () => ({ confirm: () => false });
+  const declining = () => ({ appConfirm: async () => false });
   await withHarness(declining, async ({ confirmAndStopSession, window, calls }) => {
     await confirmAndStopSession('s1', null);
 
     assert.deepEqual(calls.ipc, []);
     assert.ok(window.activePtyIds.has('s1'));
+  });
+});
+
+test('an attached background session names its confirmation Detach', async () => {
+  let options;
+  const attached = () => ({
+    sessionMap: new Map(),
+    openSessions: new Map([['s1', { attach: true }]]),
+    appConfirm: async value => { options = value; return false; },
+  });
+  await withHarness(attached, async ({ confirmAndStopSession, calls }) => {
+    await confirmAndStopSession('s1', null);
+    assert.equal(options.confirmLabel, 'Detach');
+    assert.match(options.message, /keeps running/);
+    assert.deepEqual(calls.ipc, []);
   });
 });

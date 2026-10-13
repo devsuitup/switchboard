@@ -307,7 +307,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     calls.save.push({ filePath, content, expected, options });
     return Promise.resolve(saveImpl ? saveImpl(calls.save.length - 1) : { ok: true, version: 'v2' });
   };
-  window.confirm = (...args) => { calls.confirm++; return (confirmImpl || (() => true))(...args); };
+  window.appConfirm = async ({ message }) => { calls.confirm++; return (confirmImpl || (() => true))(message); };
   window.cmRevealLine = (_view, line) => calls.revealed.push(line);
   if (ownerOf) window.panelTerminalOwnerOf = ownerOf;
   const editors = [];
@@ -332,7 +332,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   const bundledMarked = window.marked;
   delete window.marked;
   window.loadCodeMirrorBundle = () => { window.marked = bundledMarked; return Promise.resolve(); };
-  for (const file of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
   window.openSessions = new Map();
@@ -367,6 +367,14 @@ function flush() {
   let p = Promise.resolve();
   for (let i = 0; i < 12; i++) p = p.then(() => Promise.resolve());
   return p;
+}
+
+async function waitForUnsavedDialog(ctx) {
+  for (let i = 0; i < 100; i++) {
+    if (ctx.document.getElementById('unsaved-edits-dialog')) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.fail('the queued unsaved dialog did not open');
 }
 
 async function openTab(ctx, sessionId = 's1') {
@@ -732,6 +740,8 @@ test('close and Escape restore the same Touched rows, scroll and selection witho
     const back = ctx.document.getElementById('changes-diff-close-btn');
     assert.ok(back, 'a shared panel back button');
     back.click();
+    await flush();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.equal(rows(ctx)[0], first);
     assert.equal(list.scrollTop, 123);
@@ -942,9 +952,12 @@ test('Close keeps a dirty file on refusal and discards it without stashing it af
     ctx.editors.at(-1).setText('unsaved edit');
     const back = ctx.document.getElementById('changes-diff-close-btn');
     back.click();
+    await flush();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'changes');
     agree = true;
     back.click();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab?.type, 'touched');
     assert.equal(ctx.stateOf('s1').touchedStashes?.size ?? 0, 0);
   } finally { ctx.destroy(); }
@@ -1214,6 +1227,7 @@ test('round 3: a symlink Touched pair uses the shared chrome read-only and canno
     await ctx.window.handleChangesSave('s1');
     assert.equal(ctx.calls.save.length, 0);
     ctx.document.getElementById('changes-diff-close-btn').click();
+    await flush();
     assert.equal(ctx.stateOf('s1').currentTab, list);
     assert.equal(rows(ctx)[0], row);
     assert.equal(ctx.calls.touched.length, 1);
@@ -1342,6 +1356,7 @@ test('Touched edits participate in the existing unsaved-file close prompt', asyn
     await flush();
     ctx.editors.at(-1).setText('unsaved');
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     const dialog = ctx.document.getElementById('unsaved-save');
     assert.ok(dialog, 'the unsaved-file prompt includes the Touched editor');
     dialog.click();
@@ -1370,6 +1385,7 @@ for (const [dirty, git] of [[true, true], [false, true], [true, false], [false, 
       assert.equal(ctx.editors.at(-1).current, dirty ? 'typing' : 'external');
       assert.equal(ctx.stateOf('s1').currentTab.externalChange, dirty);
       ctx.document.getElementById('changes-diff-close-btn').click();
+      await flush();
       assert.deepEqual(ctx.watchCalls.at(-1), ['unwatch', '/work/a.txt']);
       assert.equal(ctx.calls.touched.length, 1);
     } finally { ctx.destroy(); }
@@ -2152,6 +2168,7 @@ test('the quit check lists a stashed Touched file and Save writes it with its ve
     await dirtyTouched(ctx, '/work/a.txt', 'unsaved');
     ctx.window.openDiffTab('s1', 'd1', DIFF);
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     const items = [...ctx.document.querySelectorAll('#unsaved-edits-dialog li')];
     assert.deepEqual(items.map(li => [li.textContent, li.title]), [['a.txt', '/work/a.txt']]);
     ctx.document.getElementById('unsaved-save').click();
@@ -2283,6 +2300,7 @@ test('the quit check keeps a stash whose save is refused, and forgets only the s
     await dirtyTouched(ctx, '/work/a.txt', 'two');
     ctx.window.openDiffTab('s2', 'd2', DIFF);
     const pending = ctx.window.askAboutUnsavedEdits();
+    await waitForUnsavedDialog(ctx);
     ctx.document.getElementById('unsaved-save').click();
     await flush();
     assert.equal(ctx.calls.save.length, 2);

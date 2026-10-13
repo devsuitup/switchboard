@@ -278,19 +278,19 @@ class ViewerPanel {
 
   async _delete() {
     if (!this.opts.onDelete || !this.filePath) return;
-    // Confirm via native-ish browser confirm
-    const name = this.filePath.split('/').pop();
-    if (!window.confirm(`Delete "${name}"?\n\nThis cannot be undone.`)) return;
+    const filePath = this.filePath;
+    const myGen = this._openGen;
+    const name = filePath.split('/').pop();
+    if (!await appConfirm({ title: 'Delete?', message: `Delete "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Delete', danger: true }) || this._openGen !== myGen) return;
     try {
-      const result = await this.opts.onDelete(this.filePath);
+      const result = await this.opts.onDelete(filePath);
       if (result && result.ok !== false) {
-        // Close panel and trigger refresh through onClose
-        if (this.opts.onClose) this.opts.onClose();
+        if (this._openGen === myGen && this.opts.onClose) this.opts.onClose();
       } else {
-        window.alert(`Delete failed: ${result?.error || 'unknown error'}`);
+        await appAlert({ title: 'Switchboard', message: `Delete failed: ${result?.error || 'unknown error'}` });
       }
     } catch (err) {
-      window.alert(`Delete failed: ${err.message}`);
+      await appAlert({ title: 'Switchboard', message: `Delete failed: ${err.message}` });
     }
   }
 
@@ -467,12 +467,12 @@ class ViewerPanel {
     try {
       let result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       while (this._openGen === myGen && result && result.reason === 'stale' && typeof result.disk === 'string') {
-        this._lastSeenDisk = asEditorText(result.disk);
+        const overwriteBase = asEditorText(result.disk);
+        this._lastSeenDisk = overwriteBase;
         this._setNotice('stale');
-        if (typeof window.confirm !== 'function'
-          || !window.confirm('This file changed on disk since you opened it. Overwrite it with your edits?')
+        if (!await appConfirm({ title: 'Overwrite?', message: 'This file changed on disk since you opened it. Overwrite it with your edits?', confirmLabel: 'Overwrite', danger: true })
           || this._openGen !== myGen) break;
-        this._agreedBase = this._lastSeenDisk;
+        this._agreedBase = overwriteBase;
         result = await this.opts.onSave(this.filePath, content, this._agreedBase);
       }
       if (this._token !== token) {
@@ -590,10 +590,10 @@ class ViewerPanel {
   }
 
   async _reloadDiscardingEdits() {
-    if (this._isDirty() && typeof window.confirm === 'function'
-      && !window.confirm('This file has unsaved edits. Discard them?')) return;
-    if (!this.filePath || !window.api.readFileForPanel) return;
     const myGen = this._openGen;
+    if (this._isDirty()
+      && !await appConfirm({ title: 'Discard?', message: 'This file has unsaved edits. Discard them?', confirmLabel: 'Discard', danger: true })) return;
+    if (this._openGen !== myGen || !this.filePath || !window.api.readFileForPanel) return;
     const result = await window.api.readFileForPanel(this.filePath);
     if (this._openGen !== myGen || !this.editorView || !result) return;
     if (!result.ok) {

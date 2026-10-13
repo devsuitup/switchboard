@@ -332,7 +332,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
 
   function close(returnFocus = true) {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
+    unregister();
     if (!returnFocus) return;
     const targets = [
       opener,
@@ -377,17 +377,14 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
   dialog.querySelector('.new-session-start-btn').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  // Keyboard support
-  function onKey(e) {
-    if (e.defaultPrevented || (!overlay.contains(e.target) && e.target !== document.body)) return;
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input:not([type="checkbox"])')) {
-      e.preventDefault();
+  const unregister = registerModal({ overlay, cancel: () => close(), bodyEnter: true, restoreFocus: false, enter: e => {
+    if (!e.target.matches('input:not([type="checkbox"])')) {
       if (e.target.closest('.new-session-cancel-btn')) close();
       else start();
+      return true;
     }
-  }
-  document.addEventListener('keydown', onKey);
+    return false;
+  } });
   focusSelectedMode();
 }
 
@@ -465,7 +462,7 @@ function showRemoteLaunchDialog(project) {
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
+    unregister();
   }
 
   function start() {
@@ -485,11 +482,12 @@ function showRemoteLaunchDialog(project) {
   dialog.querySelector('.new-session-start-btn').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  function onKey(e) {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && e.target.matches('input')) start();
-  }
-  document.addEventListener('keydown', onKey);
+  const unregister = registerModal({ overlay, cancel: close, enter: e => {
+    if (!e.target.matches('input')) return false;
+    start();
+    return true;
+  } });
+  dialog.querySelector('#rld-path').focus();
 }
 
 async function showResumeSessionDialog(session) {
@@ -587,7 +585,7 @@ async function showResumeSessionDialog(session) {
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
+    unregister();
   }
 
   function resume() {
@@ -616,11 +614,13 @@ async function showResumeSessionDialog(session) {
   dialog.querySelector('.new-session-start-btn').onclick = resume;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  function onKey(e) {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input')) resume();
-  }
-  document.addEventListener('keydown', onKey);
+  const unregister = registerModal({ overlay, cancel: close, bodyEnter: true, enter: e => {
+    if (e.target.matches('input, button:not(.permission-option)')) return false;
+    resume();
+    return true;
+  } });
+  (modeGrid.querySelector(dangerousSkip ? '[data-mode="dangerous-skip"]' : '.permission-option.selected') ||
+    modeGrid.querySelector('button')).focus();
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")
@@ -653,11 +653,11 @@ function showSendPromptDialog(session) {
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   overlay.tabIndex = -1;
-  textarea.focus();
   dialog.addEventListener('click', (e) => { if (e.target !== textarea) textarea.focus(); });
 
   function close() {
     overlay.remove();
+    unregister();
   }
 
   async function send() {
@@ -684,10 +684,12 @@ function showSendPromptDialog(session) {
   sendBtn.onclick = send;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
-  });
+  const unregister = registerModal({ overlay, cancel: close, enter: e => {
+    if (!e.ctrlKey && !e.metaKey) return false;
+    send();
+    return true;
+  } });
+  textarea.focus();
 }
 
 // Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)
@@ -719,11 +721,10 @@ function showAddProjectDialog() {
 
   const pathInput = dialog.querySelector('#add-project-path');
   const errorEl = dialog.querySelector('#add-project-error');
-  pathInput.focus();
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
+    unregister();
   }
 
   async function addProject() {
@@ -754,11 +755,12 @@ function showAddProjectDialog() {
   dialog.querySelector('.add-project-add-btn').onclick = addProject;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  function onKey(e) {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter') addProject();
-  }
-  document.addEventListener('keydown', onKey);
+  const unregister = registerModal({ overlay, cancel: close, bodyEnter: true, enter: e => {
+    if (e.target.matches('button')) return false;
+    addProject();
+    return true;
+  } });
+  pathInput.focus();
 }
 
 // see .ai/contexts/bg-agents.md
@@ -926,7 +928,7 @@ async function showDispatchAgentDialog(project) {
 
   function close() {
     overlay.remove();
-    document.removeEventListener('keydown', onKey);
+    unregister();
   }
 
   async function start() {
@@ -962,10 +964,10 @@ async function showDispatchAgentDialog(project) {
   startBtn.onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  function onKey(e) {
-    if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input, textarea, select, button')) start();
-  }
-  document.addEventListener('keydown', onKey);
+  const unregister = registerModal({ overlay, cancel: close, bodyEnter: true, enter: e => {
+    if (e.target.matches('input, textarea, select, button')) return false;
+    start();
+    return true;
+  } });
   dialog.querySelector('#dad-prompt').focus();
 }

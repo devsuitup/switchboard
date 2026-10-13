@@ -77,7 +77,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     showJsonlViewer: (session) => calls.jsonl.push(session),
     refreshSidebar: () => { calls.sidebarRefreshes++; },
     fitAndScroll: () => {},
-    confirm: () => true,
+    appConfirm: async () => true,
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext());
@@ -898,4 +898,20 @@ test('the header counts the External rows it displays, and omits the segment whe
   assert.equal(count(), '1 running · 1 finished · 2 external');
   ctx.emitChanged({ roster: [ROSTER[0], ROSTER[1]], daemonReachable: true });
   assert.equal(count(), '1 running · 1 finished');
+});
+
+test('background Delete waits for its async confirmation and cancellation sends no verb', async t => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
+  await ctx.window.showAgentsView();
+  let answer;
+  ctx.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+  const pending = ctx.window.runAgentVerb('rm', ROSTER[1]);
+  assert.deepEqual(ctx.calls.verbs, []);
+  answer(false);
+  await pending;
+  assert.deepEqual(ctx.calls.verbs, []);
+  ctx.window.appConfirm = async () => true;
+  await ctx.window.runAgentVerb('rm', ROSTER[1]);
+  assert.deepEqual(ctx.calls.verbs, [['rm', ROSTER[1].id]]);
 });

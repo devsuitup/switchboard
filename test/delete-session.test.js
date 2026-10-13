@@ -132,7 +132,6 @@ test('delete button: uses the styled dialog, not a renderer-blocking native prom
   const dlg = sidebar.slice(start, sidebar.indexOf('// --- Delete worktree', start));
   assert.match(dlg, /deleteSessionPreview/, 'it must state what will be lost');
   assert.match(dlg, /Archive/, 'and point at the non-destructive alternative');
-  assert.match(dlg, /Escape/, 'Esc must cancel, like the worktree dialog');
 });
 
 test('delete button: closes the tab so it cannot point at a deleted transcript', () => {

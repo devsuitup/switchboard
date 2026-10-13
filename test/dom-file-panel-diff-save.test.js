@@ -41,8 +41,8 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
       return () => Promise.resolve({ ok: true });
     },
   });
-  window.confirm = (msg) => { calls.confirms.push(msg); return confirmAnswer; };
-  window.alert = (msg) => { calls.alerts.push(msg); };
+  window.appConfirm = async ({ message: msg }) => { calls.confirms.push(msg); return confirmAnswer; };
+  window.appAlert = async ({ message: msg }) => { calls.alerts.push(msg); };
   window.loadCodeMirrorBundle = () => Promise.resolve();
   window.localStorage.setItem('filePanelDiffMode', 'side-by-side');
 
@@ -60,7 +60,7 @@ function setup({ saveImpl, confirmAnswer = true } = {}) {
   });
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
-  for (const f of ['viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js']) {
+  for (const f of ['modal-stack.js', 'viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
   window.openSessions = new Map();
@@ -261,7 +261,7 @@ test('the diff tab asks again when the disk moves during its confirm, and never 
   const disk = fakeDisk('session\n');
   const ctx = setup({ saveImpl: disk.save });
   let asked = 0;
-  ctx.window.confirm = (msg) => {
+  ctx.window.appConfirm = async ({ message: msg }) => {
     ctx.calls.confirms.push(msg);
     asked += 1;
     if (asked === 1) { disk.text = 'second session write\n'; return true; }

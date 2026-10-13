@@ -23,6 +23,19 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const LIVE = { pid: 4242, cwd: '/work/proj', startedAt: 1790685077444 };
 const SESSION = { sessionId: 'sess-1', projectPath: '/work/proj' };
 
+test('a schedule notice without injection uses the renderer appAlert fallback', async () => {
+  const messages = [];
+  const ctx = vm.createContext({ appAlert: async options => messages.push(options) });
+  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx, { filename: GUARD_PATH });
+  assert.equal(await ctx.guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), false);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].message, /scheduled task/);
+});
+
+test('a schedule notice without any alert adapter fails with an explicit contract error', async () => {
+  await assert.rejects(guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), /guardResume requires an alert adapter/);
+});
+
 function makeApi(answer) {
   const asked = [];
   return {
@@ -37,24 +50,24 @@ function makeApi(answer) {
 
 function makeConfirm(result) {
   const messages = [];
-  const confirm = (msg) => { messages.push(msg); return result; };
-  return { confirm, messages };
+  const confirm = async (msg) => { messages.push(msg); return result; };
+  return { confirm, alert: async msg => { messages.push(msg); }, messages };
 }
 
 // --- Automatic resume (reload path, working-set restore) -------------------
 
 test('an automatic resume of a session live elsewhere is refused, without asking', async () => {
   const api = makeApi(LIVE);
-  const { confirm, messages } = makeConfirm(true);
-  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), false);
+  const { confirm, alert, messages } = makeConfirm(true);
+  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm, alert }), false);
   assert.deepEqual(api.asked, ['sess-1']);
   assert.equal(messages.length, 0, 'nobody asked for this resume, so there is nobody to ask');
 });
 
 test('an automatic resume of a session live nowhere else goes ahead', async () => {
   const api = makeApi(null);
-  const { confirm, messages } = makeConfirm(false);
-  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), true);
+  const { confirm, alert, messages } = makeConfirm(false);
+  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm, alert }), true);
   assert.equal(messages.length, 0);
 });
 
@@ -62,8 +75,8 @@ test('an automatic resume of a session live nowhere else goes ahead', async () =
 
 test('a user resume of a session live elsewhere asks, and a cancel stops it', async () => {
   const api = makeApi(LIVE);
-  const { confirm, messages } = makeConfirm(false);
-  assert.equal(await guardResume(SESSION, { api, confirm }), false);
+  const { confirm, alert, messages } = makeConfirm(false);
+  assert.equal(await guardResume(SESSION, { api, confirm, alert }), false);
   assert.equal(messages.length, 1);
   assert.match(messages[0], /pid 4242/);
   assert.match(messages[0], /\/work\/proj/);
@@ -71,14 +84,14 @@ test('a user resume of a session live elsewhere asks, and a cancel stops it', as
 
 test('a user resume of a session live elsewhere goes ahead once confirmed', async () => {
   const api = makeApi(LIVE);
-  const { confirm } = makeConfirm(true);
-  assert.equal(await guardResume(SESSION, { api, confirm }), true);
+  const { confirm, alert } = makeConfirm(true);
+  assert.equal(await guardResume(SESSION, { api, confirm, alert }), true);
 });
 
 test('a user resume of a session live nowhere else does not ask', async () => {
   const api = makeApi(null);
-  const { confirm, messages } = makeConfirm(false);
-  assert.equal(await guardResume(SESSION, { api, confirm }), true);
+  const { confirm, alert, messages } = makeConfirm(false);
+  assert.equal(await guardResume(SESSION, { api, confirm, alert }), true);
   assert.equal(messages.length, 0);
 });
 
@@ -86,28 +99,39 @@ test('a user resume of a session live nowhere else does not ask', async () => {
 
 test('a plain terminal is never checked: it has no claude session to duplicate', async () => {
   const api = makeApi(LIVE);
-  const { confirm } = makeConfirm(false);
-  assert.equal(await guardResume({ sessionId: 't', type: 'terminal' }, { automatic: true, api, confirm }), true);
+  const { confirm, alert } = makeConfirm(false);
+  assert.equal(await guardResume({ sessionId: 't', type: 'terminal' }, { automatic: true, api, confirm, alert }), true);
   assert.equal(api.asked.length, 0);
 });
 
 test('a failed check is silence: the resume proceeds as it did before the guard', async () => {
   const api = makeApi(new Error('No handler registered'));
-  const { confirm } = makeConfirm(false);
-  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), true);
+  const { confirm, alert } = makeConfirm(false);
+  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm, alert }), true);
 });
 
 test('loaded as a classic script, the guard is a global the renderer can call', async () => {
   const ctx = vm.createContext({});
-  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx, { filename: GUARD_PATH });
   assert.equal(typeof ctx.guardResume, 'function');
   const api = makeApi(LIVE);
-  assert.equal(await ctx.guardResume(SESSION, { automatic: true, api, confirm: () => true }), false);
+  assert.equal(await ctx.guardResume(SESSION, { automatic: true, api, confirm: () => true, alert: () => assert.fail('an automatic resume must not alert') }), false);
 });
 
 // --- Wiring in the shipped files -------------------------------------------
 
 const APP_SRC = read('public/app.js');
+
+for (const [file, expression] of [
+  ['test/restore-live-elsewhere.test.js', "read('resume-guard.js')"],
+  ['test/schedule-live-resume.test.js', "read('public/resume-guard.js')"],
+  ['test/continuations-harness.js', "fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8')"],
+]) {
+  test(`guard VM diagnostics name resume-guard.js in ${file}`, () => {
+    const line = read(file).split('\n').find(line => line.includes('vm.runInContext(' + expression));
+    assert.ok(line?.includes('{ filename'), 'guard evaluation must carry its source filename');
+  });
+}
 
 function functionBody(src, signature) {
   const start = src.indexOf(signature);
@@ -173,22 +197,22 @@ const LIVE_BG = { pid: 346590, cwd: '/w/em', startedAt: 1, kind: 'bg', jobId: 'b
 
 test('a user click on a session the daemon runs answers "attach", without asking', async () => {
   const api = makeApi(LIVE_BG);
-  const { confirm, messages } = makeConfirm(false);
-  assert.deepEqual(await guardResume(SESSION, { api, confirm }), { attach: 'bc3fd129', cwd: '/w/em' });
+  const { confirm, alert, messages } = makeConfirm(false);
+  assert.deepEqual(await guardResume(SESSION, { api, confirm, alert }), { attach: 'bc3fd129', cwd: '/w/em' });
   assert.equal(messages.length, 0);
 });
 
 test('an automatic resume of a session the daemon runs is still refused', async () => {
   const api = makeApi(LIVE_BG);
-  const { confirm } = makeConfirm(true);
-  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm }), false);
+  const { confirm, alert } = makeConfirm(true);
+  assert.equal(await guardResume(SESSION, { automatic: true, api, confirm, alert }), false);
 });
 
 test('a live bg descriptor without a usable jobId is refused: no resume offer, no attach', async () => {
   for (const jobId of [null, undefined, '']) {
     const api = makeApi({ ...LIVE_BG, jobId });
-    const { confirm, messages } = makeConfirm(true);
-    assert.equal(await guardResume(SESSION, { api, confirm }), false);
+    const { confirm, alert, messages } = makeConfirm(true);
+    assert.equal(await guardResume(SESSION, { api, confirm, alert }), false);
     assert.equal(messages.length, 0);
   }
 });

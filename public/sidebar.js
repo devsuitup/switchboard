@@ -1166,7 +1166,7 @@ async function archiveProjectFolder(project, button) {
 
   const plan = await window.api.getProjectArchivePlan(groupsArg);
   if (!plan || plan.indexing) {
-    alert(ARCHIVE_INDEXING_MESSAGE);
+    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
     return;
   }
   const schedules = plan.schedules || [];
@@ -1233,13 +1233,13 @@ async function archiveProjectFolder(project, button) {
     disableSchedules: result.disableSchedules ? disableable.map(s => s.filePath) : [],
   });
   if (res && res.error === 'indexing') {
-    alert(ARCHIVE_INDEXING_MESSAGE);
+    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
   } else if (res && res.error) {
-    alert('The folder could not be archived: ' + res.error
-      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : ''));
+    await appAlert({ title: 'Switchboard', message: 'The folder could not be archived: ' + res.error
+      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : '') });
   } else if (res && Array.isArray(res.failed) && res.failed.length > 0) {
-    alert('The folder is archived, but these schedules could not be disabled:\n'
-      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n'));
+    await appAlert({ title: 'Switchboard', message: 'The folder is archived, but these schedules could not be disabled:\n'
+      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n') });
   }
   pollActiveSessions();
   loadProjects();
@@ -1310,10 +1310,10 @@ function rebindSidebarEvents(projects) {
         const newPath = await window.api.browseFolder();
         if (!newPath) return;
         const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-        if (!confirm(`Remap ${projectShortName} to:\n${newPath}?`)) return;
+        if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
         const result = await window.api.remapProject(project.projectPath, newPath);
         if (result.error) {
-          alert('Failed to remap: ' + result.error);
+          await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
         } else {
           loadProjects();
         }
@@ -1370,7 +1370,7 @@ function rebindSidebarEvents(projects) {
           loadProjects();
         } else {
           const msg = (result && result.error) ? result.error : 'Unknown error';
-          alert(`Failed to delete worktree: ${msg}`);
+          await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
         }
       };
     }
@@ -1905,7 +1905,7 @@ async function showDeleteSessionDialog(session) {
     ? window.api.deleteSessionPreview(session.sessionId)
     : Promise.resolve(null);
 
-  return new Promise((resolve) => {
+  return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'new-session-overlay';
 
@@ -1953,7 +1953,7 @@ async function showDeleteSessionDialog(session) {
 
     function close(confirmed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
+      unregister();
       resolve(confirmed);
     }
 
@@ -1961,9 +1961,9 @@ async function showDeleteSessionDialog(session) {
     dialog.querySelector('#dss-confirm').onclick = () => close(true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
-    function onKey(e) { if (e.key === 'Escape') close(false); }
-    document.addEventListener('keydown', onKey);
-  });
+    const unregister = registerModal({ overlay, cancel: () => close(false) });
+    dialog.querySelector('#dss-cancel').focus();
+  }));
 }
 
 // --- Delete worktree confirmation dialog ---
@@ -1972,7 +1972,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
   // Fetch worktree status (dirty files) while the dialog is shown
   const statusPromise = window.api.worktreeStatus(worktreePath);
 
-  return new Promise((resolve) => {
+  return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'new-session-overlay';
 
@@ -2023,7 +2023,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
 
     function close(confirmed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
+      unregister();
       resolve(confirmed);
     }
 
@@ -2031,9 +2031,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
     dialog.querySelector('#dwt-confirm').onclick = () => close(true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
-    function onKey(e) {
-      if (e.key === 'Escape') close(false);
-    }
-    document.addEventListener('keydown', onKey);
-  });
+    const unregister = registerModal({ overlay, cancel: () => close(false) });
+    dialog.querySelector('#dwt-cancel').focus();
+  }));
 }

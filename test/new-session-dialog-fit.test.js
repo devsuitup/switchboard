@@ -31,7 +31,7 @@ function setup() {
   for (const [k, v] of Object.entries(stubs)) {
     Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
-  for (const f of ['setting-defaults.js', 'utils.js', 'dialogs.js']) {
+  for (const f of ['modal-stack.js', 'setting-defaults.js', 'utils.js', 'dialogs.js']) {
     const file = path.join(PUBLIC_DIR, f);
     vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }

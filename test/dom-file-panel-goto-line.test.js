@@ -38,7 +38,7 @@ function setup({ pair } = {}) {
     unwatchFile: () => Promise.resolve({ ok: true }),
     saveFileForPanel: () => Promise.resolve({ ok: true }),
   };
-  window.confirm = () => true;
+  window.appConfirm = async () => true;
   window.loadCodeMirrorBundle = () => Promise.resolve();
   window.cmRevealLine = (view, line) => calls.revealed.push({ view, line });
 
@@ -53,7 +53,7 @@ function setup({ pair } = {}) {
   window.createEditableViewer = (parent) => makeView(parent, 'plain');
   Object.defineProperty(window, 'activeSessionId', { value: null, writable: true, configurable: true });
 
-  for (const f of ['splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const f of ['modal-stack.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: f });
   }
   window.openSessions = new Map();

@@ -15,7 +15,7 @@ function setup(t) {
   Object.assign(ctx.window, {
     restoringWorkingSet: false, sessionOpenedOutsideRestore: false, continuationRetryCancelled: false,
     showSession: id => shown.push(id),
-    confirm: message => { prompts.push(message); return false; },
+    appConfirm: async ({ message }) => { prompts.push(message); return false; },
   });
   ctx.window.api.getSessionContinuations = async id => {
     checked.push(id);

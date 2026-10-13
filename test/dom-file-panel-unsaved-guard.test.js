@@ -12,6 +12,7 @@ const { JSDOM } = require('jsdom');
 const { registerPanelTerminals } = require('./terminal-manager-harness');
 const { EventEmitter } = require('node:events');
 const { createUnsavedGuard } = require('../unsaved-guard');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -72,6 +73,7 @@ function setup() {
     },
   });
   window.confirm = (msg) => { calls.confirms.push(msg); return calls.onConfirm ? calls.onConfirm(msg) : false; };
+  window.appConfirm = async ({ message: msg }) => { calls.confirms.push(msg); return false; };
   window.createEditableViewer = (parent, content) => {
     editor = fakeEditor(content);
     editor.dom = window.document.createElement('div');
@@ -88,7 +90,7 @@ function setup() {
     return el;
   };
 
-  for (const f of ['viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const f of ['modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC_DIR, f) });
   }
   window.openSessions = new Map();
@@ -98,7 +100,7 @@ function setup() {
   window.appShortcuts = {};
   window.initFilePanel();
   registerPanelTerminals(dom, ['s1', 's3']);
-  return { window, disk, calls, editor: () => editor, destroy: () => window.close() };
+  return { window, context: dom.getInternalVMContext(), disk, calls, editor: () => editor, destroy: () => window.close() };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 5));
@@ -148,6 +150,25 @@ const A = '/repo/a.md';
 const B = '/repo/b.md';
 const C = '/repo/c.md';
 
+test('the unsaved guard keeps its explicit opener restoration to one focus call', async () => {
+  const ctx = setup();
+  try {
+    const opener = ctx.window.document.createElement('button');
+    ctx.window.document.body.append(opener);
+    opener.focus();
+    let restored = 0;
+    const focus = opener.focus.bind(opener);
+    opener.focus = () => { restored++; focus(); };
+    const pending = ctx.window.showUnsavedEditsDialog([]);
+    ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true,
+    }));
+    assert.equal(await pending, false);
+    assert.equal(ctx.window.document.activeElement, opener);
+    assert.equal(restored, 1);
+  } finally { ctx.destroy(); }
+});
+
 async function dirtyTab(ctx, sessionId, file, text = 'mine') {
   ctx.disk.set(file, 'x0\n');
   ctx.window.switchPanel(sessionId);
@@ -164,6 +185,23 @@ function beforeUnload(ctx) {
   ctx.window.dispatchEvent(event);
   return event;
 }
+
+test('quit focuses Save so Enter saves the edits before approving quit', async () => {
+  const ctx = setup();
+  try {
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(60, 'quit');
+    await flush();
+    const save = button(ctx, 'unsaved-save');
+    assert.equal(ctx.window.document.activeElement, save);
+    dialogKey(ctx, 'Enter');
+    await flush();
+    assert.equal(ctx.disk.get(A), 'x0\nmine', 'Enter itself must save');
+    await checking;
+    assert.equal(ctx.disk.get(A), 'x0\nmine');
+    assert.deepEqual(ctx.calls.answers, [{ id: 60, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
 
 test('with nothing unsaved the check is answered at once and no dialog shows', async () => {
   const ctx = setup();
@@ -505,13 +543,23 @@ test('a window close while another choice dialog is open cancels that one and as
   } finally { ctx.destroy(); }
 });
 
-test('a choice dialog that does not ask to replace still yields to one already open', async () => {
+test('a choice dialog that does not ask to replace waits behind the open one, and shows once it closes', async () => {
   const ctx = setup();
   try {
-    ctx.window.showChoiceDialog({ title: 'first' });
-    const second = await ctx.window.showChoiceDialog({ title: 'second' });
+    const { document } = ctx.window;
+    const first = ctx.window.showChoiceDialog({ title: 'first' });
+    let second;
+    ctx.window.showChoiceDialog({ title: 'second' }).then((v) => { second = v; });
+    await flush();
+    assert.equal(second, undefined, 'the second question is not answered as a silent Cancel');
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'first');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(await first, null);
+    await flush();
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'second');
+    document.querySelector('.choice-dialog-cancel').click();
+    await flush();
     assert.equal(second, null);
-    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'first');
   } finally { ctx.destroy(); }
 });
 
@@ -555,7 +603,7 @@ test('a native dialog the page shows is reported around it, and the shipped guar
     };
     ctx.window.confirm('Delete "x"?');
     assert.deepEqual(during, { pings: 0, destroys: 0 }, 'a close that arrives behind a native dialog waits for the user to answer it');
-    await flush();
+    for (let i = 0; i < 40 && !dialog(ctx); i++) await flush();
     assert.ok(dialog(ctx), 'the page answers once the dialog is gone');
 
     ctx.calls.onConfirm = () => {
@@ -651,5 +699,228 @@ test('a check delivered twice, before and after the page said it is ready, is an
     await flush();
     assert.deepEqual(ctx.calls.acks.map((a) => a.id), [9]);
     assert.deepEqual(ctx.calls.answers, [{ id: 9, proceed: true }]);
+  } finally { ctx.destroy(); }
+});
+function loadAppDialogs(ctx) {
+  for (const f of ['app-dialogs.js']) {
+    const filename = path.join(PUBLIC_DIR, f);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+  }
+}
+function dialogKey(ctx, key, init = {}) {
+  ctx.window.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+}
+
+for (const reason of ['quit', 'close', 'reload']) {
+  test(`${reason} opens the unsaved guard on top of New Session without closing it first`, async () => {
+    const ctx = setup();
+    try {
+      loadAppDialogs(ctx);
+      for (const f of ['setting-defaults.js', 'dialogs.js']) {
+        const filename = path.join(PUBLIC_DIR, f);
+        vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+      }
+      await dirtyTab(ctx, 's1', A);
+      ctx.window.api.getEffectiveSettings = async () => ({});
+      await ctx.window.showNewSessionDialog({ projectPath: '/repo' });
+      const underneath = ctx.window.document.querySelector('.new-session-overlay');
+      const checking = ctx.calls.check(73, reason);
+      assert.deepEqual(ctx.calls.acks.map(x => x.id), [73]);
+      await flush();
+      assert.ok(dialog(ctx), 'a configuration modal must not delay the unsaved guard');
+      assert.equal(underneath.isConnected, true);
+      assert.ok(Number(dialog(ctx).parentElement.style.zIndex) > Number(underneath.style.zIndex));
+      assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+      dialogKey(ctx, 'Escape');
+      await checking;
+      assert.deepEqual(ctx.calls.answers, [{ id: 73, proceed: false }]);
+      assert.equal(underneath.isConnected, true);
+      dialogKey(ctx, 'Escape');
+      assert.equal(underneath.isConnected, false);
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('a session deletion question waits for the unsaved guard to close', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    ctx.window.cleanDisplayName = value => value;
+    ctx.window.escapeHtml = value => value;
+    const { showDeleteSessionDialog } = loadAppFunctions(ctx.context, {
+      sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'), functions: ['showDeleteSessionDialog'],
+    });
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(72, 'quit');
+    await flush();
+    const deleting = showDeleteSessionDialog({ sessionId: 's1' });
+    assert.equal(ctx.window.document.querySelector('.new-session-overlay'), null);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.equal(dialog(ctx), null);
+    assert.ok(ctx.window.document.querySelector('#dss-cancel'));
+    dialogKey(ctx, 'Escape');
+    assert.equal(await deleting, false);
+  } finally { ctx.destroy(); }
+});
+test('N2: unsaved guard traps Tab and cancels Escape from the body', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(71, 'quit');
+    await flush();
+    ctx.window.document.activeElement.blur();
+    dialogKey(ctx, 'Tab');
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-cancel'));
+    ctx.window.document.activeElement.blur();
+    dialogKey(ctx, 'Escape');
+    await flush();
+    assert.equal(dialog(ctx), null);
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 71, proceed: false }]);
+  } finally { ctx.destroy(); }
+});
+test('N4: unsaved guard waits for every continuation question, including the final fallback', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    const filename = path.join(PUBLIC_DIR, 'resume-guard.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    await dirtyTab(ctx, 's1', A);
+    const chain = ctx.window.resolveResumeSession({ sessionId: 'original' }, {
+      api: { getSessionContinuations: async () => ({ candidates: [{ sessionId: 'first' }, { sessionId: 'second' }] }) },
+      confirm: message => ctx.window.appConfirm({ message }),
+    });
+    await flush();
+    const checking = ctx.calls.check(70, 'quit');
+    for (let i = 0; i < 3; i++) {
+      await flush();
+      assert.equal(dialog(ctx), null, `guard must wait for question ${i + 1}`);
+      assert.equal(ctx.window.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+      dialogKey(ctx, 'Escape');
+    }
+    assert.equal(await chain, null);
+    await flush();
+    assert.ok(dialog(ctx));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 70, proceed: false }]);
+  } finally { ctx.destroy(); }
+});
+test('reload ACK is immediate while confirmations queue; quit upgrade waits for one focused unsaved guard', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const opener = ctx.window.document.createElement('button');
+    ctx.window.document.body.append(opener);
+    opener.focus();
+    let flushed = 0;
+    ctx.window.flushStateForExit = async () => { flushed++; };
+    const confirming = ctx.window.appConfirm({ title: 'Delete?', danger: true });
+    const alerting = ctx.window.appAlert({ message: 'Queued message' });
+    const checking = ctx.calls.check(44, 'reload');
+    ctx.calls.reason(44, 'quit');
+    assert.deepEqual(ctx.calls.acks.map(x => x.id), [44]);
+    await flush();
+    assert.equal(dialog(ctx), null, 'the unsaved guard must wait for the dialog queue');
+    dialogKey(ctx, 'Escape');
+    assert.equal(await confirming, false);
+    dialogKey(ctx, 'Enter');
+    await alerting;
+    await flush();
+    assert.ok(dialog(ctx));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+    dialogKey(ctx, 'Tab', { shiftKey: true });
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-discard'));
+    dialogKey(ctx, 'Tab');
+    assert.equal(ctx.window.document.activeElement, button(ctx, 'unsaved-save'));
+    button(ctx, 'unsaved-discard').click();
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 44, proceed: true }]);
+    assert.equal(flushed, 1);
+    assert.equal(ctx.window.document.activeElement, opener);
+  } finally { ctx.destroy(); }
+});
+test('an alert waits for the unsaved guard, then owns focus and Escape', async () => {
+  const ctx = setup();
+  try {
+    loadAppDialogs(ctx);
+    await dirtyTab(ctx, 's1', A);
+    const checking = ctx.calls.check(45, 'reload');
+    await flush();
+    const alerting = ctx.window.appAlert({ message: 'Foreground' });
+    dialogKey(ctx, 'Tab');
+    assert.ok(dialog(ctx).contains(ctx.window.document.activeElement));
+    assert.equal(ctx.window.document.querySelector('.choice-dialog-overlay'), null);
+    assert.deepEqual(ctx.calls.answers, []);
+    dialogKey(ctx, 'Escape');
+    await checking;
+    assert.deepEqual(ctx.calls.answers, [{ id: 45, proceed: false }]);
+    assert.equal(dialog(ctx), null);
+    assert.ok(ctx.window.document.activeElement.closest('.choice-dialog-overlay'));
+    dialogKey(ctx, 'Escape');
+    await alerting;
+  } finally { ctx.destroy(); }
+});
+
+function openOtherQuestion(ctx) {
+  const { document } = ctx.window;
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog';
+  const ok = document.createElement('button');
+  ok.textContent = 'Delete';
+  dialog.append(ok);
+  overlay.append(dialog);
+  return ctx.window.enqueueModalQuestion(() => new Promise((resolve) => {
+    document.body.append(overlay);
+    const unregister = ctx.window.registerModal({ overlay, cancel: () => { overlay.remove(); unregister(); resolve(false); }, restoreFocus: false });
+  }));
+}
+
+test('a quit that arrives while the close question waits behind another question answers yes without that question', async () => {
+  const ctx = setup();
+  const { document } = ctx.window;
+  try {
+    let answered = null;
+    openOtherQuestion(ctx).then((v) => { answered = v; });
+    await flush();
+    ctx.calls.check(1, 'close');
+    await flush();
+    ctx.calls.reason(1, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: true }]);
+    assert.equal(answered, null, 'the other question is still the user\'s to answer');
+    assert.ok(document.querySelector('.new-session-overlay'));
+  } finally { ctx.destroy(); }
+});
+
+test('the close question opens on top of another question and Escape returns to it', async () => {
+  const ctx = setup();
+  const { document } = ctx.window;
+  try {
+    let answered = null;
+    openOtherQuestion(ctx).then((v) => { answered = v; });
+    await flush();
+    const underneath = document.querySelector('.new-session-overlay');
+    ctx.calls.check(1, 'close');
+    await flush();
+    assert.equal(document.querySelectorAll('.choice-dialog').length, 1, 'the close question is shown, not held behind');
+    assert.ok(document.querySelector('.new-session-overlay'), 'the other question is not cancelled');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 1, proceed: false }]);
+    assert.equal(answered, null);
+    assert.equal(document.querySelector('.choice-dialog'), null);
+    assert.ok(underneath.isConnected);
+    assert.ok(underneath.contains(document.activeElement), 'focus returns to the other question');
+    document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    assert.equal(answered, false, 'Escape now reaches the other question');
   } finally { ctx.destroy(); }
 });

@@ -138,7 +138,7 @@ function initFilePanel() {
     if (event.defaultPrevented || event.isComposing) return;
     if (event.target.closest('.cm-panels, .cm-search, .cm-tooltip')) return;
     if (event.target.closest('input, textarea') && !event.target.closest('.cm-content')) return;
-    if (returnToPanelList()) {
+    if (returnToPanelList() === true) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -337,16 +337,17 @@ function initFilePanel() {
 
 // ── Handlers ────────────────────────────────────────────────────────
 
-function handleClose() {
-  if (!currentPanelSessionId) return;
-  const state = getSessionState(currentPanelSessionId);
+async function handleClose() {
+  const sessionId = currentPanelSessionId;
+  if (!sessionId) return;
+  const state = getSessionState(sessionId);
   const tab = state.currentTab;
   let pending = null;
 
   if (tab) {
-    if (!confirmDiscardChangesEdits(tab)) return;
+    if ((hasUnsavedChangesEdits(tab) && !await confirmDiscardChangesEdits(tab))) return;
     if (tab.type === 'diff' && !tab.resolved) {
-      window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
+      window.api.mcpDiffResponse(sessionId, tab.diffId, 'reject', null);
     }
     if (tab.type === 'diff') {
       pending = tab.pendingTouchedOpen || null;
@@ -357,30 +358,34 @@ function handleClose() {
       tab.editorView = null;
     }
     if (tab.type === 'changes') {
-      unwatchChangesFile(currentPanelSessionId, tab);
+      unwatchChangesFile(sessionId, tab);
       destroyChangesEditor(tab);
     }
     state.currentTab = null;
   }
 
-  endCurrentTab(currentPanelSessionId, state, { pending });
+  endCurrentTab(sessionId, state, { pending });
 }
 
 function returnToPanelList() {
-  if (!currentPanelSessionId) return false;
-  const state = getSessionState(currentPanelSessionId);
+  const sessionId = currentPanelSessionId;
+  if (!sessionId) return false;
+  const state = getSessionState(sessionId);
   const tab = state.currentTab;
   if (tab?.type === 'changes' && tab.selectedFile && !tab.returnList) {
-    closeChangesDiff(currentPanelSessionId);
-    return !tab.selectedFile;
+    const closing = closeChangesDiff(sessionId);
+    return !tab.selectedFile || closing.then(() => !tab.selectedFile);
   }
   if (!tab?.returnList) return false;
-  if (!confirmDiscardChangesEdits(tab)) return false;
-  const previous = tab.returnList;
-  destroyCurrentTab(state, { stash: false });
-  state.currentTab = previous;
-  renderPanel(currentPanelSessionId);
-  return true;
+  const restore = () => {
+    const previous = tab.returnList;
+    destroyCurrentTab(state, { stash: false });
+    state.currentTab = previous;
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return true;
+  };
+  if (hasUnsavedChangesEdits(tab)) return confirmDiscardChangesEdits(tab).then(confirmed => confirmed && restore());
+  return restore();
 }
 
 function snapshotPanelList(list, tab) {
@@ -454,8 +459,7 @@ async function saveDiffTab(tab) {
   try {
     let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     while (result && result.reason === 'stale' && typeof result.disk === 'string'
-      && typeof window.confirm === 'function'
-      && window.confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')) {
+      && await appConfirm({ title: 'Overwrite?', message: 'This file changed on disk since the diff opened. Overwrite it with your edits?', confirmLabel: 'Overwrite', danger: true })) {
       tab.diskBaseline = result.disk;
       result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     }
@@ -464,11 +468,11 @@ async function saveDiffTab(tab) {
       tab.diskBaseline = content.replace(/\r\n?/g, '\n');
       const btn = diffToolbarEl.querySelector('.fp-save-btn');
       if (btn) flashButtonText(btn, 'Saved!');
-    } else if (result && result.reason !== 'stale' && typeof window.alert === 'function') {
-      window.alert(`Save failed: ${result.error || 'unknown error'}`);
+    } else if (result && result.reason !== 'stale') {
+      await appAlert({ title: 'Switchboard', message: `Save failed: ${result.error || 'unknown error'}` });
     }
   } catch (err) {
-    if (typeof window.alert === 'function') window.alert(`Save failed: ${(err && err.message) || 'unknown error'}`);
+    await appAlert({ title: 'Switchboard', message: `Save failed: ${(err && err.message) || 'unknown error'}` });
   } finally {
     tab.saving = false;
     const queued = tab.saveQueued;
@@ -705,18 +709,17 @@ function showUnsavedEditsDialog(tabs) {
     dialog.appendChild(actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
-    saveBtn.focus();
 
     function finish(proceed) {
       overlay.remove();
-      document.removeEventListener('keydown', onKey);
-      if (!proceed && returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
+      unregister();
+      if (returnFocus?.isConnected) returnFocus.focus();
       resolve(proceed);
     }
-    function onKey(e) {
-      if (e.key === 'Escape') finish(false);
-    }
-    document.addEventListener('keydown', onKey);
+    const unregister = registerModal({ overlay, restoreFocus: false, cancel: () => {
+      if (!cancelBtn.disabled) finish(false);
+    } });
+    saveBtn.focus();
 
     cancelBtn.onclick = () => finish(false);
     discardBtn.onclick = () => finish(true);
@@ -776,7 +779,10 @@ function askAboutUnsavedEdits() {
   if (unsavedPrompt) return unsavedPrompt;
   const tabs = collectUnsavedFileTabs();
   if (!tabs.length) return Promise.resolve(true);
-  unsavedPrompt = showUnsavedEditsDialog(tabs).then((proceed) => {
+  unsavedPrompt = enqueueModalQuestion(() => {
+    const currentTabs = collectUnsavedFileTabs();
+    return currentTabs.length ? showUnsavedEditsDialog(currentTabs) : true;
+  }, { whenIdle: true }).then((proceed) => {
     unsavedPrompt = null;
     if (proceed) {
       unloadApproved = true;
@@ -1147,10 +1153,10 @@ function handleDiffAction(sessionId, tab, action) {
 
 // ── Changes Mode — see .ai/contexts/changes-view.md ──────────────────
 
-function toggleChangesTab(sessionId) {
+async function toggleChangesTab(sessionId) {
   const state = getSessionState(sessionId);
   if (state.currentTab && state.currentTab.type === 'changes' && !state.currentTab.returnList) {
-    if (!confirmDiscardChangesEdits(state.currentTab)) return;
+    if ((hasUnsavedChangesEdits(state.currentTab) && !await confirmDiscardChangesEdits(state.currentTab))) return;
     destroyCurrentTab(state, { stash: false });
     state.currentTab = null;
     endCurrentTab(sessionId, state);
@@ -1366,7 +1372,7 @@ async function openChangesDiff(sessionId, file) {
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
 
-  if (tab.selectedFile && !isSelectedChangesRow(tab, file) && !confirmDiscardChangesEdits(tab)) return;
+  if (tab.selectedFile && !isSelectedChangesRow(tab, file) && (hasUnsavedChangesEdits(tab) && !await confirmDiscardChangesEdits(tab))) return;
 
   if (!tab.selectedFile && currentPanelSessionId === sessionId) snapshotPanelList(changesListEl, tab);
   tab.selectedFile = file;
@@ -1471,15 +1477,15 @@ function applyUntrackedCounts(tab, expectedData, filePath, added, deleted, count
   tab.listRevision = (tab.listRevision || 0) + 1;
 }
 
-function closeChangesDiff(sessionId) {
+async function closeChangesDiff(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state || !state.currentTab || state.currentTab.type !== 'changes') return;
   const tab = state.currentTab;
   if (tab.returnList) {
-    if (currentPanelSessionId === sessionId) returnToPanelList();
+    if (currentPanelSessionId === sessionId) await returnToPanelList();
     return;
   }
-  if (!confirmDiscardChangesEdits(tab)) return;
+  if ((hasUnsavedChangesEdits(tab) && !await confirmDiscardChangesEdits(tab))) return;
   unwatchChangesFile(sessionId, tab);
   destroyChangesEditor(tab);
   tab.selectedFile = null;
@@ -1503,11 +1509,13 @@ function hasUnsavedChangesEdits(tab) {
   return !!tab && tab.type === 'changes' && isChangesBufferDirty(tab);
 }
 
-// Asks, and does nothing else.
-function confirmDiscardChangesEdits(tab) {
+// see .ai/contexts/app-dialogs.md
+async function confirmDiscardChangesEdits(tab) {
   if (!hasUnsavedChangesEdits(tab)) return true;
-  if (typeof window.confirm !== 'function') return true;
-  return window.confirm('This file has unsaved edits. Discard them?');
+  const state = [...filePanelState.values()].find(state => state.currentTab === tab);
+  const content = readChangesEditorContent(tab);
+  const confirmed = await appConfirm({ title: 'Discard edits?', message: 'This file has unsaved edits. Discard them?', confirmLabel: 'Discard', danger: true });
+  return confirmed && (!state || state.currentTab === tab) && readChangesEditorContent(tab) === content;
 }
 
 function renderChangesContent(sessionId, tab) {
@@ -2158,7 +2166,7 @@ async function reloadChangesFile(sessionId) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
   if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile) return;
-  if (!confirmDiscardChangesEdits(tab)) return;
+  if ((hasUnsavedChangesEdits(tab) && !await confirmDiscardChangesEdits(tab))) return;
 
   const file = tab.selectedFile;
   const result = await readChangesPair(sessionId, tab, file);

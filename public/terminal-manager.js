@@ -79,8 +79,7 @@ function handleFocusShortcut(e) {
   const toSidebar = matchShortcut('focusSidebar', e, isMac, appShortcuts);
   if (!toSidebar && !matchShortcut('focusTerminal', e, isMac, appShortcuts)) return false;
   if (e.type !== 'keydown' || e._handled) return true;
-  const overlays = document.querySelectorAll('.modal-overlay, .new-session-overlay, .add-project-overlay, .whats-new-overlay, .jsonl-screenshot-fullscreen, [aria-modal="true"]');
-  if ([...overlays].some(isFocusTargetVisible)) return false;
+  if (hasOpenModal()) return false;
   const focused = document.activeElement;
   if (toSidebar ? !focused?.closest('.terminal-container') : focused !== document.body && !focused?.closest('#sidebar')) return false;
   e.preventDefault();
@@ -106,6 +105,7 @@ function handleFocusShortcut(e) {
 
 function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } = {}) {
   terminal.attachCustomKeyEventHandler((e) => {
+    if (hasOpenModal()) return false;
     if (handleFocusShortcut(e)) return false;
     // Cmd/Ctrl+F → open terminal search bar
     if (e.key === 'f' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
@@ -1474,7 +1474,7 @@ function showSession(sessionId) {
       if (tr) revealLap(tr, 'restoreMs');
       entry.element.classList.add('visible');
       if (tr) revealLap(tr, 'visibleMs');
-      entry.terminal.focus();
+      if (!hasOpenModal()) entry.terminal.focus();
       fitAndScroll(entry, tr, entry.webglWanted);
       if (tr) revealLap(tr, 'focusMs');
     }

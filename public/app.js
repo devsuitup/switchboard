@@ -306,7 +306,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -1054,7 +1054,7 @@ async function triggerRebuildAndSearch() {
 async function confirmAndStopSession(sessionId, btn, rowSession) {
   const openEntry = openSessions.get(sessionId);
   const plan = resolveSessionStop(sessionMap.get(sessionId) || openEntry?.session || rowSession, { attach: !!(openEntry && openEntry.attach) });
-  if (!confirm(plan.confirmText)) return;
+  if (!await appConfirm({ title: plan.attach ? 'Detach session?' : 'Stop session?', message: plan.confirmText, confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: true })) return;
   const result = plan.remote
     ? await window.api.remoteStopSession(plan.alias, sessionId)
     : await window.api.stopSession(sessionId);
@@ -1520,7 +1520,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: msg => window.confirm(msg), resolutions: window._startupResumeResolutions });
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions });
     if (!session) return false;
     if (session.sessionId !== originalId) {
       live = undefined;
@@ -1552,7 +1552,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: (msg) => window.confirm(msg) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), alert: message => appAlert({ title: 'Scheduled task already running', message }) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
@@ -1760,6 +1760,7 @@ initAgentsView();
 
 function handleGlobalShortcut(e) {
   if (e._handled || e.type !== 'keydown') return;
+  if (hasOpenModal()) return;
   if (typeof handleFocusShortcut === 'function' && handleFocusShortcut(e)) return;
   if (matchShortcut('agentsToggle', e, isMac, appShortcuts)) {
     e.preventDefault();
@@ -1952,7 +1953,7 @@ document.getElementById('indexing-banner-dismiss').addEventListener('click', dis
 window.api.onFullScreenChanged(() => {
   requestAnimationFrame(() => {
     const entry = activeSessionId && openSessions.get(activeSessionId);
-    if (entry && !entry.closed) entry.terminal.focus();
+    if (entry && !entry.closed && !hasOpenModal()) entry.terminal.focus();
   });
 });
 

@@ -59,10 +59,11 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     },
     openTerminal: async (sessionId) => { openTerminalCalls.push(sessionId); return { ok: true }; },
   };
-  dom.window.confirm = () => { throw new Error('an automatic resume must never prompt'); };
+  dom.window.appConfirm = async () => { throw new Error('an automatic resume must never prompt'); };
+  dom.window.appAlert = async () => { throw new Error('an automatic resume must never alert'); };
 
   vm.runInContext(read('utils.js'), ctx);
-  vm.runInContext(read('resume-guard.js'), ctx);
+  vm.runInContext(read('resume-guard.js'), ctx, { filename: path.join(__dirname, '..', 'public', 'resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map();
     var pendingSessions = new Map();
@@ -174,7 +175,7 @@ test('a failed batch check fails open: every session is resumed, nothing is skip
 test('once the user opens the skipped session and closes it, it leaves the working set like any other', async () => {
   const h = setup({ savedSet: SAVED, liveIds: ['x'] });
   await h.restore();
-  h.dom.window.confirm = () => true;
+  h.dom.window.appConfirm = async () => true;
   await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
   assert.deepEqual(h.openTerminalCalls, ['a', 'b', 'x']);
   vm.runInContext('openSessions.get("x").closed = true;', h.ctx);

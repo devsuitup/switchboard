@@ -187,14 +187,73 @@ test('choice dialog: one paragraph per message line', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('choice dialog: a second call while one is open resolves null and leaves the first', async () => {
+test('choice dialog: a second call waits until the first closes', async () => {
   const ctx = setupSidebarDom();
   try {
     const first = open(ctx);
-    assert.equal(await open(ctx), null);
+    let secondSettled = false;
+    const second = open(ctx, { title: 'Second dialog' }).then(value => { secondSettled = true; return value; });
+    await Promise.resolve();
+    assert.equal(secondSettled, false, 'the queued call must remain pending');
     assert.equal(ctx.document.querySelectorAll('.modal-overlay').length, 1);
     confirmBtn(ctx).click();
     assert.deepEqual({ ...(await first) }, { a: true, b: true });
+    assert.equal(shown(ctx).querySelector('h2').textContent, 'Second dialog');
+    assert.equal(secondSettled, false, 'opening the queued dialog must not settle it');
+    cancelBtn(ctx).click();
+    assert.equal(await second, null);
+    assert.equal(overlay(ctx), null);
+  } finally { ctx.destroy(); }
+});
+
+for (const keyName of ['Escape', 'Tab']) {
+  test(`choice dialog: ${keyName} works after focus drifts to the body`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const pending = open(ctx);
+      ctx.document.activeElement.blur();
+      assert.equal(ctx.document.activeElement, ctx.document.body);
+      const event = key(ctx, ctx.document.body, keyName);
+      assert.equal(event.defaultPrevented, true);
+      if (keyName === 'Escape') assert.equal(await pending, null);
+      else {
+        assert.equal(ctx.document.activeElement, shown(ctx).querySelector('button'));
+        cancelBtn(ctx).click();
+        assert.equal(await pending, null);
+      }
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('choice dialog: only the topmost overlay handles keys from the body', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = open(ctx);
+    const foreground = ctx.document.createElement('div');
+    foreground.className = 'choice-dialog-overlay';
+    ctx.document.body.append(foreground);
+    const unregister = ctx.window.registerModal({ overlay: foreground, cancel: () => { foreground.remove(); unregister(); } });
+    key(ctx, ctx.document.body, 'Escape');
+    assert.equal(ctx.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+    assert.ok(overlay(ctx), 'only the registered topmost modal closes');
+    key(ctx, ctx.document.body, 'Escape');
+    assert.equal(ctx.document.querySelector('.choice-dialog-overlay'), null);
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: Enter on a danger dialog container waits for a focused button', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = open(ctx, { danger: true, initialFocus: 'cancel' });
+    const dialog = shown(ctx).querySelector('.choice-dialog');
+    dialog.focus();
+    key(ctx, dialog, 'Enter');
+    assert.ok(overlay(ctx), 'container Enter must not accept a dangerous action');
+    assert.equal(ctx.window.localStorage.length, 0);
+    confirmBtn(ctx).focus();
+    key(ctx, ctx.document.activeElement, 'Enter');
+    assert.deepEqual({ ...(await pending) }, { a: true, b: true });
   } finally { ctx.destroy(); }
 });
 
@@ -248,7 +307,7 @@ test('choice dialog: Enter outside the dialog does nothing', async () => {
     const pending = open(ctx);
     const event = key(ctx, outside, 'Enter');
     assert.ok(overlay(ctx), 'the dialog must stay open');
-    assert.equal(event.defaultPrevented, false);
+    assert.equal(event.defaultPrevented, true);
     cancelBtn(ctx).click();
     assert.equal(await pending, null);
   } finally { ctx.destroy(); }
@@ -276,5 +335,42 @@ test('choice dialog: closeWith closes it with its value, and does nothing once t
     late({});
     await new Promise((r) => setTimeout(r));
     assert.equal(ctx.document.activeElement, elsewhere, 'the focus is not taken back a second time');
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: replace cancels the open one and goes ahead of the queue; Escape on it gives the focus back', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const origin = ctx.document.createElement('button');
+    ctx.document.body.appendChild(origin);
+    origin.focus();
+    const first = open(ctx, { title: 'First' });
+    const queued = open(ctx, { title: 'Queued' });
+    const closing = open(ctx, { title: 'Close?', replace: true, initialFocus: 'cancel', returnFocus: origin });
+    assert.equal(await first, null, 'the open dialog is cancelled');
+    await new Promise((r) => setTimeout(r));
+    assert.equal(ctx.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+    assert.equal(shown(ctx).querySelector('#choice-dialog-title').textContent, 'Close?', 'it is not behind the queued one');
+    assert.equal(ctx.document.activeElement, cancelBtn(ctx));
+    key(ctx, ctx.document.activeElement, 'Escape');
+    assert.equal(await closing, null);
+    await new Promise((r) => setTimeout(r));
+    assert.equal(shown(ctx).querySelector('#choice-dialog-title').textContent, 'Queued', 'the queue resumes');
+    key(ctx, ctx.document.activeElement, 'Escape');
+    assert.equal(await queued, null);
+    assert.equal(ctx.window.hasOpenModal(), false, 'every path unregistered from the modal stack');
+    assert.equal(ctx.document.activeElement, origin);
+  } finally { ctx.destroy(); }
+});
+
+test('choice dialog: closeWith closes a replaced-in dialog and leaves the modal stack empty', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    let settle;
+    const pending = open(ctx, { replace: true, closeWith: new Promise((r) => { settle = r; }) });
+    assert.equal(ctx.window.hasOpenModal(), true);
+    settle({});
+    assert.deepEqual(await pending, {});
+    assert.equal(ctx.window.hasOpenModal(), false);
   } finally { ctx.destroy(); }
 });

@@ -24,6 +24,10 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  registerModal: 'readonly',
+  hasOpenModal: 'readonly',
+  enqueueModalQuestion: 'readonly',
+  hasActiveModalQuestion: 'readonly',
   TOOL_BAR: 'readonly',
   filePanelState: 'readonly',
   currentPanelSessionId: 'readonly',
@@ -124,6 +128,8 @@ const rendererCrossFileGlobals = {
   shortProjectPath: 'readonly',
   // public/choice-dialog.js and public/worktree-nesting.js
   showChoiceDialog: 'readonly',
+  appConfirm: 'readonly',
+  appAlert: 'readonly',
   SIDEBAR_WORKTREE_RE: 'readonly',
   worktreeParentPath: 'readonly',
   worktreeName: 'readonly',
@@ -353,6 +359,7 @@ const rendererCrossFileGlobals = {
   // Configurable keyboard shortcuts (public/shortcuts.js + grid-view.js)
   DEFAULT_SHORTCUTS: 'readonly',
   SHORTCUT_DEFS: 'readonly',
+  FIXED_SHORTCUTS: 'readonly',
   normalizeShortcuts: 'readonly',
   keyFamily: 'readonly',
   matchShortcut: 'readonly',
@@ -415,6 +422,8 @@ module.exports = [
     rules: {
       'no-undef': 'error',
       'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
+      'no-restricted-globals': ['error', ...['confirm', 'alert', 'prompt'].map(name => ({ name, message: 'Use public/app-dialogs.js (appConfirm/appAlert).' }))],
+      'no-restricted-properties': ['error', ...['window', 'globalThis', 'self'].flatMap(object => ['confirm', 'alert', 'prompt'].map(property => ({ object, property, message: 'Use public/app-dialogs.js (appConfirm/appAlert).' })))],
       'no-implicit-globals': 'off', // renderer relies on script-scope globals by design
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-unreachable': 'warn',

@@ -61,6 +61,26 @@ function event(window, key, extra = {}) {
   return new window.KeyboardEvent(extra.type || 'keydown', { key, ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra });
 }
 
+test('an open choice dialog suppresses the global Changes shortcut and resumes it after closing', async () => {
+  const ctx = setup();
+  try {
+    for (const file of ['choice-dialog.js', 'app-dialogs.js']) {
+      const filename = path.join(__dirname, '../public', file);
+      require('node:vm').runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    }
+    const { handleGlobalShortcut } = loadAppFunctions(ctx.context, { functions: ['handleGlobalShortcut'] });
+    const calls = [];
+    ctx.window.toggleChangesTab = id => calls.push(id);
+    const pending = ctx.window.appConfirm({ title: 'Discard edits?', danger: true });
+    handleGlobalShortcut(event(ctx.window, 'e'));
+    assert.deepEqual(calls, []);
+    ctx.window.document.querySelector('.choice-dialog-cancel').click();
+    assert.equal(await pending, false);
+    handleGlobalShortcut(event(ctx.window, 'e'));
+    assert.deepEqual(calls, ['s1']);
+  } finally { ctx.destroy(); }
+});
+
 for (const [route, invoke] of [
   ['Changes button', ctx => ctx.window.document.getElementById('changes-toggle-btn').click()],
   ['Touched button', ctx => ctx.window.document.getElementById('touched-toggle-btn').click()],

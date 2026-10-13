@@ -147,7 +147,9 @@ function setupSidebarDom() {
   // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
