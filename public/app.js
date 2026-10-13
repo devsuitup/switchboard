@@ -191,7 +191,7 @@ function persistWorkingSet({ final = false } = {}) {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
-      if (entry.attach) continue; // attach tabs are not restored
+      if (entry.attach && !entry.bgRestore) continue;
       if (entry.closed) continue;
       // see docs/session-restore.md ("A session with no transcript yet")
       const fresh = pendingSessions.has(sessionId);
@@ -200,6 +200,7 @@ function persistWorkingSet({ final = false } = {}) {
         sessionId,
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
+        ...(entry.attach ? { bg: true } : {}),
         ...(fresh ? { fresh: true } : {}),
       });
     }
@@ -211,7 +212,7 @@ function persistWorkingSet({ final = false } = {}) {
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(keepAttached || item.bg ? { bg: true } : {}) });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -323,7 +324,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       }
       let opened;
       try {
-        opened = await openSession(s, undefined, { automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId });
+        opened = await openSession(s, undefined, { automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true });
       } finally {
         restoreInFlight.delete(originalId);
       }
