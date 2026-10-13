@@ -103,6 +103,37 @@ for (const operation of ['truncate', 'replace', 'unreadable']) {
   });
 }
 
+for (const phase of ['stat', 'opened file']) {
+  test(`i488-fix2: a replacement with rounded-equal inodes fails closed at ${phase}`, () => {
+    const dir = mkTmp('sw-compact-rounded-inode-');
+    const file = path.join(dir, 'session.jsonl');
+    const reader = createTranscriptTurnReader();
+    const realStat = fs.statSync;
+    const realFstat = fs.fstatSync;
+    const original = 2n ** 54n;
+    const replacement = original + 1n;
+    let replaced = false;
+    const identity = (inode, options) => options?.bigint ? inode : Number(inode);
+    try {
+      assert.equal(Number(original), Number(replacement));
+      fs.statSync = (p, options) => ({ ...realStat(p, options),
+        ino: identity(replaced && phase === 'stat' ? replacement : original, options) });
+      fs.fstatSync = (fd, options) => ({ ...realFstat(fd, options),
+        ino: identity(replaced ? replacement : original, options) });
+      fs.writeFileSync(file, jsonl([userPrompt(1000)]));
+      const snapshot = reader.read(file);
+      fs.renameSync(file, path.join(dir, 'old.jsonl'));
+      fs.writeFileSync(file, jsonl([boundary(2000, 'manual'), { type: 'attachment', content: 'x'.repeat(2000) }]));
+      replaced = true;
+      assert.equal(reader.read(file, snapshot.compactionCursor), null);
+    } finally {
+      fs.statSync = realStat;
+      fs.fstatSync = realFstat;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test('i488-fix2: the cursor skips the remainder of an incomplete pre-write record', () => {
   const dir = mkTmp('sw-compact-old-partial-');
   const file = path.join(dir, 'session.jsonl');
@@ -125,8 +156,8 @@ test('i488-fix3: the cursor refuses a changed transcript path even with the same
     const snapshot = reader.read(file);
     fs.linkSync(file, alias);
     fs.appendFileSync(alias, jsonl([{ ...systemEntry(2000, 'compact_boundary'), uuid: 'fresh', compactMetadata: { trigger: 'manual' } }]));
-    assert.equal(fs.statSync(alias).dev, snapshot.compactionCursor.dev);
-    assert.equal(fs.statSync(alias).ino, snapshot.compactionCursor.ino);
+    assert.equal(fs.statSync(alias, { bigint: true }).dev, snapshot.compactionCursor.dev);
+    assert.equal(fs.statSync(alias, { bigint: true }).ino, snapshot.compactionCursor.ino);
     assert.equal(reader.read(alias, snapshot.compactionCursor), null);
     assert.equal(snapshot.compactionCursor.invalid, true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -142,7 +173,7 @@ test('i488-fix3: the cursor refuses a same-path device change with the same inod
     fs.writeFileSync(file, jsonl([userPrompt(1000)]));
     const snapshot = reader.read(file);
     fs.appendFileSync(file, jsonl([{ ...systemEntry(2000, 'compact_boundary'), uuid: 'fresh', compactMetadata: { trigger: 'manual' } }]));
-    const device = snapshot.compactionCursor.dev + 1;
+    const device = snapshot.compactionCursor.dev + 1n;
     fs.statSync = (...args) => ({ ...realStat(...args), dev: device });
     fs.fstatSync = (...args) => ({ ...realFstat(...args), dev: device });
     assert.equal(reader.read(file, snapshot.compactionCursor), null);
@@ -168,7 +199,7 @@ for (const race of ['device', 'size']) {
       const offset = snapshot.compactionCursor.offset;
       fs.fstatSync = (...args) => {
         const actual = realFstat(...args);
-        return { ...actual, ...(race === 'device' ? { dev: actual.dev + 1 } : { size: snapshot.compactionCursor.offset - 1 }) };
+        return { ...actual, ...(race === 'device' ? { dev: actual.dev + 1n } : { size: BigInt(snapshot.compactionCursor.offset - 1) }) };
       };
       assert.equal(reader.read(file, snapshot.compactionCursor), null);
       assert.equal(snapshot.compactionCursor.offset, offset);

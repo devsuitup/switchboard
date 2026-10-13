@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { setTimeout: realSetTimeout } = require('node:timers');
 const { start } = require('../trigger-watcher');
 const { createTriggerContext } = require('../trigger-context');
 const { createRemoteIndexer } = require('../remote-index');
@@ -35,23 +36,41 @@ function fixture(lookup, outcome = { ok: true }) {
   return { ctx, calls, descriptor, reads: () => reads };
 }
 
-async function run(s, extra = {}) {
+async function run(s, extra = {}, t) {
+  if (t) t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-trigger-remote-'));
   const old = process.env.SWITCHBOARD_TRIGGERS_DIR;
   process.env.SWITCHBOARD_TRIGGERS_DIR = dir;
   const hold = setInterval(() => {}, 20);
+  let started;
+  const processing = new Promise(resolve => { started = resolve; });
+  const remote = t ? s.ctx.remote : null;
+  const lookup = remote?.lookup;
+  if (t) remote.lookup = (...args) => { started(); return lookup(...args); };
   const watcher = start(s.ctx);
   try {
     fs.writeFileSync(path.join(dir, 'one.json'), JSON.stringify({ sessionId: 'remote', command: 'hello', timeout_ms: 500, ...extra }));
     const resultPath = path.join(dir, 'processed', 'one.result.json');
-    const deadline = Date.now() + 6000;
-    while (!fs.existsSync(resultPath)) {
-      if (Date.now() > deadline) throw new Error('result deadline');
-      await new Promise(r => setTimeout(r, 10));
+    const resultReady = (async () => {
+      const deadline = performance.now() + 15000;
+      while (!fs.existsSync(resultPath)) {
+        if (performance.now() > deadline) throw new Error('result deadline');
+        await new Promise(r => realSetTimeout(r, 10));
+      }
+      return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    })();
+    if (t) {
+      await Promise.race([processing, resultReady.then(() => { throw new Error('trigger ended before reading remote descriptors'); })]);
+      await new Promise(resolve => setImmediate(resolve));
+      for (let elapsed = 0; elapsed < 2500 && !fs.existsSync(resultPath); elapsed += 5) {
+        t.mock.timers.tick(5);
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    return await resultReady;
   } finally {
     watcher.close(); clearInterval(hold);
+    if (t) remote.lookup = lookup;
     if (old === undefined) delete process.env.SWITCHBOARD_TRIGGERS_DIR;
     else process.env.SWITCHBOARD_TRIGGERS_DIR = old;
     fs.rmSync(dir, { recursive: true, force: true });
@@ -101,10 +120,11 @@ test('U7: fresh busy then idle permits one send', async () => {
   assert.equal((await run(s, { wait: 'idle', timeout_ms: 1500 })).ok, true); assert.ok(s.calls[0].reads >= 4);
 });
 for (const [status, reason] of [['waiting', 'the CLI reports a dialog open (waiting); nothing was written into it'], ['busy', 'the CLI still reported a turn running (busy) at the deadline; nothing was written'], ['shell', SHELL]]) {
-  test(`U7/U8: fresh ${status} waits until its own deadline reason`, async () => {
+  test(`U7/U8: fresh ${status} waits until its own deadline reason`, async (t) => {
     const s = fixture((n, snap) => ({ ...snap, descriptor: { ...snap.descriptor, status } }));
-    const r = await run(s, { wait: 'idle', timeout_ms: 350 });
+    const r = await run(s, { wait: 'idle', timeout_ms: 350 }, t);
     assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason); assert.ok(r.waited_ms >= 350); assert.equal(s.calls.length, 0);
+    assert.ok(s.reads() >= 4, 'two post-start pulls must be observed before choosing the status reason');
   });
 }
 test('U7: an unchanged pull expires with the no-fresh-pull reason', async () => {
