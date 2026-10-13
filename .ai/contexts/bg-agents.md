@@ -442,8 +442,9 @@ takes `cwd` from the options, runs `claude attach <jobId>` and skips sandbox,
 pre-launch command and MCP emulation. The session is flagged `isAttach` with
 `attachJobId`, which `isAttachedHere` (passed to `bgAgents.init`) reads to set
 `attachedHere` on the roster entry. Ordinary attach tabs are excluded from the
-working set (`entry.attach`). An attach tab marked `bgRestore` or kept by
-continuation restore is saved with `bg: true`; the mark survives later saves,
+working set (`entry.attach`). An attach tab kept by continuation restore
+is saved with `bg: true` while it is open and not closed; closing or
+destroying it drops the mark; the mark survives later saves,
 so restore reattaches the live job at every restart. After a renderer reload
 the tab is reopened through the
 reattach branch of `open-terminal`, which returns `attach: !!session.isAttach`;

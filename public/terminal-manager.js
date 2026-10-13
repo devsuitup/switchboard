@@ -1395,6 +1395,7 @@ function destroySession(sessionId) {
   getTerminalPathResolver().forget(sessionId);
   entry.element.remove();
   openSessions.delete(sessionId);
+  if (typeof skippedWorkingSetEntries !== 'undefined') skippedWorkingSetEntries.delete(sessionId);
   if (typeof syncToolBar === 'function') syncToolBar();
   const li = lruOrder.indexOf(sessionId);
   if (li !== -1) lruOrder.splice(li, 1);

@@ -40,12 +40,27 @@ test('B3 a continuation attached at restore is saved with the background mark', 
   assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true }]);
 });
 
-test('B4 an attach tab marked bgRestore is saved while a plain attach tab is excluded', { timeout: 9000 }, async t => {
-  const h = setup(t, { old: [] }, { savedEntries: [] });
-  vm.runInContext(`openSessions.set('n1', { session: { sessionId: 'n1', projectPath: 'P' }, attach: true, bgRestore: true });
-                   openSessions.set('n2', { session: { sessionId: 'n2', projectPath: 'P' }, attach: true });`, h.ctx, { filename: __filename });
+test('B4 a continuation attach tab the user closed is not saved with the background mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } } });
+  await h.restore();
+  vm.runInContext(`openSessions.get('new').closed = true;`, h.ctx, { filename: __filename });
   await h.app.persistWorkingSet();
-  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'n1', projectPath: 'P', active: false, bg: true }]);
+  assert.deepEqual(h.settings().openWorkingSet.filter(item => item.bg), []);
+});
+
+test('B5 a continuation attach tab that was destroyed is not saved with the background mark', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { live: { new: { kind: 'bg', jobId: '1234abcd', cwd: '/bg', pid: 1 } } });
+  await h.restore();
+  vm.runInContext(`destroySession('new');`, h.ctx, { filename: __filename });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet.filter(item => item.bg), []);
+});
+
+test('B6 a plain attach tab is excluded from the saved set', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: [] }, { savedEntries: [] });
+  vm.runInContext(`openSessions.set('n2', { session: { sessionId: 'n2', projectPath: 'P' }, attach: true });`, h.ctx, { filename: __filename });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet, []);
 });
 
 for (const children of [['new', 'missing'], ['missing', 'new']]) {

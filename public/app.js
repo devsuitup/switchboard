@@ -191,7 +191,7 @@ function persistWorkingSet({ final = false } = {}) {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
-      if (entry.attach && !entry.bgRestore) continue;
+      if (entry.attach) continue;
       if (entry.closed) continue;
       // see docs/session-restore.md ("A session with no transcript yet")
       const fresh = pendingSessions.has(sessionId);
@@ -207,12 +207,13 @@ function persistWorkingSet({ final = false } = {}) {
     const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
+    const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
     const held = [...skippedWorkingSetEntries.values(), ...notStarted]
-      .filter(({ item, keepAttached }) => !openSessions.has(item.sessionId) || (keepAttached && openSessions.get(item.sessionId).attach))
+      .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) : !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(keepAttached || item.bg ? { bg: true } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true } : {}) });
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -673,6 +674,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
+    if (entry.attach) skippedWorkingSetEntries.delete(sessionId);
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).
     // Without this, a fast-failing pre-launch command would tear down the

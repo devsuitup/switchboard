@@ -80,6 +80,7 @@ const rendererCrossFileGlobals = {
 
   // Sidebar/session state (mutable in app.js but readonly from sibling files)
   openSessions: 'readonly',
+  skippedWorkingSetEntries: 'readonly',
   activeSessionId: 'writable', // reassigned in setActiveSession
   setActiveSession: 'readonly',
   activePtyIds: 'writable',
