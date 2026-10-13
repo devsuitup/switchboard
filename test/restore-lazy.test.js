@@ -886,6 +886,63 @@ test('lazy merged row: a member whose row has a reattached member is not marked,
   }
 });
 
+test('lazy merged row: a member is marked while a sibling opened during the marking is still opening, and kept saved if that open fails', async () => {
+  for (const ok of [false, true]) {
+    const label = ok ? 'A opens' : 'A fails';
+    let finishOpen;
+    const h = setupMerged({ saved: ['A', 'B', 'x'], openResult: () => new Promise((resolve) => { finishOpen = resolve; }) });
+    try {
+      h.indexMerged();
+      h.window.renderProjects(h.window.cachedProjects, true);
+      let clicked = false;
+      h.window.api.getActiveSessions = async () => {
+        if (clicked) return [];
+        clicked = true;
+        h.row('A').click();
+        for (let j = 0; j < 10; j++) await settle();
+        return [];
+      };
+      await h.fns.tickRestorePlanner();
+      assert.deepEqual(h.openTerminalCalls, ['A'], label);
+      assert.deepEqual(h.dormantIds(), ['B', 'x'], label);
+      finishOpen(ok ? { ok: true } : { ok: false, error: 'boom' });
+      for (let j = 0; j < 5; j++) await settle();
+      await h.fns.persistWorkingSet();
+      assert.deepEqual(h.dormantIds(), ok ? ['x'] : ['B', 'x'], label);
+      assert.deepEqual(h.savedIds(), ok ? ['A', 'x'] : ['B', 'x'], label);
+      assert.equal(h.row('A').classList.contains('dormant'), !ok, label);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy merged row: a member indexed into a row whose open member was opened before the merge clears the members marked earlier', async () => {
+  const savedSet = ['B', 'C', 'x'].map((sessionId) => ({ sessionId, projectPath: PROJECT, active: sessionId === 'x' }));
+  const h = setup({ savedSet });
+  try {
+    const project = h.window.cachedProjects[0];
+    project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1 });
+    h.window.renderProjects(h.window.cachedProjects, true);
+    h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT });
+    h.index(['B', 'x']);
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.dormantIds(), ['B', 'x']);
+    await h.open('A');
+    assert.deepEqual(h.dormantIds(), ['B', 'x'], 'A and B are not one row yet');
+
+    project.sessions = project.sessions.filter((s) => !['A', 'B', 'C'].includes(s.sessionId));
+    project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: ['B', 'C'] });
+    h.window.renderProjects(h.window.cachedProjects, true);
+    h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: ['B', 'C'] });
+    h.window.indexLocalMergedMemberRows([{ sessions: [h.window.sessionMap.get('A')] }]);
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.openTerminalCalls, ['A']);
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.row('A').classList.contains('dormant'), false);
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['A', 'x']);
+  } finally { h.destroy(); }
+});
+
 test('lazy merged row: the session keys on a dormant member of a row with an open member show that member and start nothing', async () => {
   const h = setupMerged();
   try {
