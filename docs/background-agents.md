@@ -116,6 +116,29 @@ Transcript checks the session index when clicked and shows a reason if the file
 is missing or not indexed yet. Click again after indexing to open it. A file
 removed after this check produces an error in the read-only viewer.
 
+## Send to background
+
+Use **Send to background** in a running session's header or its sidebar
+right-click menu to move it to the Claude daemon. The tab becomes an attached
+tab under the continuing conversation's new id. Closing it detaches it;
+the session keeps running. While the tab stays open it is saved for restore,
+so Switchboard reattaches it after each restart.
+
+Send or clear any unsubmitted prompt first, and answer any open terminal
+dialog. The action is unavailable for plain terminals, remote sessions,
+sandboxed sessions and sessions started through a pre-launch command.
+Switchboard also refuses when it cannot read Claude's state. A busy session
+can move; Claude may finish its current tool first. If subagents are running,
+Switchboard asks before sending: Claude may stop them during the move.
+If Claude asks for confirmation in the terminal, answer Background or Stay
+there; Switchboard does not answer that dialog for you.
+
+An unconfirmed move displays a notice with what to check. If the terminal
+has exited, open the conversation from the sidebar to check where it runs.
+If attaching fails after the move, the session still runs in the background;
+open it from the sidebar to attach again. Typing `/bg` yourself is not yet
+converted into an attach tab by Switchboard.
+
 ## Attaching
 
 Double-click a row you can attach to (a live `working` or `blocked` session,
@@ -126,8 +149,9 @@ header or on a button does nothing extra.
 An attach tab is an ordinary terminal tab running `claude attach`. Its stop
 button reads **Detach**: closing the tab sends Ctrl+Z, the attach client
 leaves, and the session keeps running under the daemon. Stopping the session
-is only offered in the Agents view. Attach tabs are not reopened by
-[session restore](session-restore.md). Quitting Switchboard or closing its
+is only offered in the Agents view. Tabs created by Send to background or
+background continuation restore are reopened by [session restore](session-restore.md);
+ordinary attach tabs are not. Quitting Switchboard or closing its
 window ends the attach client without the Ctrl+Z; the session still keeps
 running.
 

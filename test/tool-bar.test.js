@@ -182,13 +182,13 @@ test('a panel close over Changes leaves the parked diff retrievable', async () =
   } finally { ctx.destroy(); }
 });
 
-test('J1: only Refresh, Stop and indicators remain in the session header', () => {
+test('J1: Refresh, Send to background, Stop and indicators remain in the session header', () => {
   const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
   const dom = new JSDOM(html);
   try {
     const group = dom.window.document.getElementById('terminal-header-session');
     assert.ok(group, 'session group exists');
-    assert.deepEqual([...group.children].map(el => el.id), ['terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
+    assert.deepEqual([...group.children].map(el => el.id), ['terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
     assert.equal(dom.window.document.getElementById('terminal-header-controls'), null);
     const ctx = setup();
     try {

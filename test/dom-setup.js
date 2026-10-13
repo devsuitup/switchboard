@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
@@ -156,6 +157,8 @@ function setupSidebarDom() {
   vm.runInContext('initLocalTranscriptAdapter()', dom.getInternalVMContext());
 
   const ctx = dom.getInternalVMContext();
+  window.sandboxedSessions = new Map();
+  loadAppFunctions(ctx, { functions: ['backgroundActionReason'] });
   const read = (expr) => vm.runInContext(expr, ctx);
 
   return {

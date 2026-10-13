@@ -1571,7 +1571,8 @@ body { display: flex; flex-direction: column; }
   color: var(--accent);
 }
 
-#terminal-refresh-btn {
+#terminal-refresh-btn,
+#terminal-bg-btn {
   cursor: pointer;
   background: none;
   border: none;
@@ -1585,7 +1586,8 @@ body { display: flex; flex-direction: column; }
   border-radius: 4px;
 }
 
-#terminal-refresh-btn:hover {
+#terminal-refresh-btn:hover,
+#terminal-bg-btn:hover {
   color: inherit;
   background: rgba(255,255,255,0.1);
 }

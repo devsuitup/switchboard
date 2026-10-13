@@ -205,13 +205,14 @@ function persistWorkingSet({ final = false } = {}) {
       });
     }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
+    const failedBgAttach = (id) => { const open = openSessions.get(id); return !!open?.closed && !!open.attach && !!open.bgRestore; };
     const notStarted = pendingRestoreEntries()
       .filter(({ item }) => !openSessions.has(item.sessionId) || liveAttach(item.sessionId))
       .map(entry => ({ ...entry, keepAttached: liveAttach(entry.item.sessionId) }));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
     const held = [...skippedWorkingSetEntries.values(), ...notStarted]
-      .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) : !openSessions.has(item.sessionId))
+      .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) || (item.bg && failedBgAttach(item.sessionId)) : !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
@@ -1088,6 +1089,71 @@ async function confirmAndStopSession(sessionId, btn, rowSession) {
   refreshSidebar();
 }
 
+function backgroundActionReason(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed || !activePtyIds.has(sessionId)) return 'Open this session in a running terminal to send it to the background';
+  if (entry.attach) return 'This session already runs in the background';
+  if (entry.session.type === 'terminal') return 'A plain terminal has no Claude session to send to the background';
+  if (entry.session.remoteAlias) return 'A remote session cannot be sent to the background from Switchboard';
+  if (sandboxedSessions.get(sessionId)) return 'This session runs in the sandbox; the background worker would run outside it';
+  if (entry.backgrounding) return 'Moving to the background…';
+  return null;
+}
+
+async function sendSessionToBackground(sessionId) {
+  const reason = backgroundActionReason(sessionId);
+  if (reason) { showRestoreNotice([], 'Not sent to the background: ' + reason); return; }
+  const oldEntry = openSessions.get(sessionId);
+  const index = [...openSessions.keys()].indexOf(sessionId);
+  oldEntry.backgrounding = true;
+  updateTerminalHeader();
+  try {
+    const count = activeSubagentsByParent.get(sessionId)?.size || 0;
+    if (count && !await appConfirm({ title: 'Send to background?', message: `${count} subagent${count === 1 ? '' : 's'} are running in this session. Claude may stop them when the session moves to the background. Send it anyway?`, confirmLabel: 'Send to background', cancelLabel: 'Cancel' })) return;
+    if (openSessions.get(sessionId) !== oldEntry) return;
+    const result = await window.api.sendSessionToBackground(sessionId);
+    if (!result?.ok) { showRestoreNotice([], 'Not sent to the background: ' + (result?.error || 'The handoff could not be confirmed. Check the terminal and try again.')); return; }
+    const name = cleanDisplayName(oldEntry.session.name || oldEntry.session.aiTitle || oldEntry.session.summary) || sessionId;
+    if (openSessions.get(sessionId) !== oldEntry || oldEntry.closed) {
+      showRestoreNotice([], `${name} now runs in the background. Open it from the sidebar to attach.`);
+      return;
+    }
+    const active = activeSessionId === sessionId;
+    if (openSessions.get(sessionId) === oldEntry) destroySession(sessionId);
+    activePtyIds.delete(sessionId);
+    const target = openSessions.get(result.sessionId);
+    if (target && (!target.attach || target.closed)) destroySession(result.sessionId);
+    const session = { sessionId: result.sessionId, projectPath: result.cwd || oldEntry.session.projectPath, name };
+    sessionMap.set(result.sessionId, session);
+    skippedWorkingSetEntries.set(result.sessionId, { item: { sessionId: result.sessionId, projectPath: session.projectPath, bg: true }, index, keepAttached: true });
+    if (!openSessions.has(result.sessionId)) {
+      await openSession(session, { type: 'attach', jobId: result.jobId, cwd: result.cwd || session.projectPath }, { activate: active, activeFrom: sessionId });
+    } else if (active) showSession(result.sessionId);
+    const entry = openSessions.get(result.sessionId);
+    if (entry) {
+      entry.bgRestore = true;
+      skippedWorkingSetEntries.set(result.sessionId, { item: { sessionId: result.sessionId, projectPath: session.projectPath, bg: true }, index, keepAttached: true });
+    }
+    schedulePersistWorkingSet();
+    refreshSidebar();
+    showRestoreNotice([], entry && !entry.closed
+      ? `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`
+      : `${name} now runs in the background, but attaching failed: ${entry?.openError || 'the attach tab did not open'}. Open it from the sidebar.`);
+  } catch (err) {
+    showRestoreNotice([], 'The background handoff or attachment failed: ' + err.message + '. Open the conversation from the sidebar to check where it is running.');
+  } finally {
+    oldEntry.backgrounding = false;
+    updateTerminalHeader();
+  }
+}
+
+function initTerminalBackgroundControl() {
+  const button = document.getElementById('terminal-bg-btn');
+  button.addEventListener('click', () => { if (activeSessionId) sendSessionToBackground(activeSessionId); });
+  if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((_id, message) => showRestoreNotice([], message));
+}
+initTerminalBackgroundControl();
+
 // --- Terminal header controls ---
 terminalStopBtn.addEventListener('click', () => {
   if (activeSessionId) confirmAndStopSession(activeSessionId, terminalStopBtn);
@@ -1229,6 +1295,15 @@ function updateTerminalHeader() {
   refreshButton.disabled = !running;
   refreshButton.setAttribute('aria-disabled', String(!running));
   refreshButton.title = running ? 'Refresh screen' : 'Open this session in a terminal to refresh its screen';
+  const bgButton = document.getElementById('terminal-bg-btn');
+  if (bgButton) {
+    const entry = openSessions.get(activeSessionId);
+    const reason = backgroundActionReason(activeSessionId);
+    bgButton.style.display = running && entry && entry.session.type !== 'terminal' && !entry.session.remoteAlias && !entry.attach ? '' : 'none';
+    bgButton.disabled = !!reason;
+    bgButton.setAttribute('aria-disabled', String(!!reason));
+    bgButton.title = reason || 'Send to background: the session keeps running in the claude daemon, and survives a Switchboard restart';
+  }
   updatePtyTitle();
 }
 
@@ -1524,7 +1599,7 @@ function openSession(session, customOptions, flags = {}) {
   return open.promise;
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom } = {}, open = null) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1592,8 +1667,9 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   settlePtyOpen(sessionId, result);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+    entry.openError = result.error;
     entry.closed = true;
-    showSession(sessionId);
+    if (activate && (activeFrom === undefined || activeSessionId === activeFrom)) showSession(sessionId);
     return;
   }
   if (result.reattached) entry.attach = !!result.attach;
@@ -1609,7 +1685,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
-  showSession(sessionId);
+  if (activate && (activeFrom === undefined || activeSessionId === activeFrom)) showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
 }

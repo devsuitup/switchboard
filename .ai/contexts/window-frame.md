@@ -88,7 +88,7 @@ listener) placed in a drag region needs `no-drag` of its own.
 ## The session header's controls
 
 Immediately after `#terminal-header-info`, `#terminal-header-session` holds
-Refresh, Stop/Detach, Sandbox and IDE Emulation, in that order. The action ids,
+Refresh, Send to background, Stop/Detach, Sandbox and IDE Emulation, in that order. The action ids,
 disabled logic, red Stop styling and divider are retained. The indicators are
 state only: coloured dots and words, with tooltips and no click action.
 `HEADER_CONTROLS` declares this order; `placeHeaderControl` inserts a declared

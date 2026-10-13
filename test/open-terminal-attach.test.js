@@ -8,6 +8,17 @@ const path = require('node:path');
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const PRELOAD = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
 
+test('background handoff is registered and the local record retains pre-launch eligibility', () => {
+  assert.match(MAIN, /ipcMain\.handle\('send-session-to-background'/);
+  assert.match(MAIN, /preLaunch: !isAttach && !!sessionOptions\?\.preLaunchCmd/);
+  assert.match(PRELOAD, /sendSessionToBackground:.*invoke\('send-session-to-background'/);
+});
+
+test('a held physical exit cannot be reported as a live reattach during handoff', () => {
+  const idx = MAIN.indexOf("ipcMain.handle('open-terminal'");
+  assert.match(MAIN.slice(idx, idx + 900), /if \(session\.backgrounding && session\.exited\) return \{ ok: false/);
+});
+
 test('open-terminal builds `claude attach <id>` for an attach session and never a --resume', () => {
   assert.match(MAIN, /const isAttach = sessionOptions\?\.type === 'attach';/);
   assert.match(MAIN, /claudeArgs\.push\('attach', attachJobId\);/);

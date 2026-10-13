@@ -559,11 +559,13 @@ function runExitHandler({ releaseLiveSession }) {
   const end = main.indexOf('\n  });', start) + '\n  });'.length;
   assert.ok(start > 0 && end > start, 'the PTY exit handler is found in main.js');
   const calls = { released: [], notified: 0, warned: [], deletedBeforeRelease: null };
-  const activeSessions = new Map([['real', {}], ['orig', {}]]);
+  const session = { stopRequested: false, realSessionId: 'real', generation: 1 };
+  const activeSessions = new Map([['real', session], ['orig', session]]);
   let handler = null;
   const ctx = vm.createContext({
     ptyProcess: { onExit: (cb) => { handler = cb; } },
-    session: { stopRequested: false, realSessionId: 'real', generation: 1 },
+    session,
+    holdBackgroundExit: require('../bg-handoff').holdBackgroundExit,
     sessionId: 'orig',
     activeSessions,
     ptyExitSignalName: () => null,
@@ -582,7 +584,7 @@ function runExitHandler({ releaseLiveSession }) {
     notifyRendererProjectsChanged: () => { calls.notified++; },
     log: { warn: (m) => calls.warned.push(m) },
   });
-  vm.runInContext(main.slice(start, end), ctx);
+  vm.runInContext(main.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js') });
   handler({ exitCode: 0, signal: 0 });
   return calls;
 }

@@ -80,7 +80,7 @@ const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
@@ -1868,6 +1868,34 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
+const { sendToBackground, createContinuationReader, holdBackgroundExit } = require('./bg-handoff');
+
+ipcMain.handle('send-session-to-background', async (_event, sessionId) => {
+  const session = activeSessions.get(sessionId);
+  const oldId = session?.realSessionId || sessionId;
+  const read = session?.projectFolder
+    ? createContinuationReader(path.join(PROJECTS_DIR, session.projectFolder, oldId + '.jsonl'), oldId)
+    : async () => null;
+  return sendToBackground(sessionId, {
+    getSession: id => activeSessions.get(id),
+    getStatus: id => cliSessionState.getStatus(id)?.status,
+    write: (entry, text) => writePty(entry, text, sessionId),
+    tapOutput: (entry, fn) => { const listener = entry.pty.onData(fn); return () => listener.dispose(); },
+    readContinuationIds: read,
+    readDescriptors: () => cliSessionState.readAllDescriptors(),
+    now: Date.now,
+    delay: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    waitForChange: ms => new Promise(resolve => {
+      let timer;
+      const unsubscribe = cliSessionState.onDescriptorsChanged(() => { clearTimeout(timer); unsubscribe(); resolve(); });
+      timer = setTimeout(() => { unsubscribe(); resolve(); }, ms);
+    }),
+    notify: message => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bg-handoff-notice', sessionId, message);
+    },
+  });
+});
+
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
@@ -2560,31 +2588,32 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-    if (mainWindow && !mainWindow.isDestroyed() && !appQuitting) {
-      mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
-      // If a fork transition re-keyed this session under realId but the PTY
-      // exited before transition detection ran, also notify the renderer for
-      // the original sessionId so it doesn't stay stuck as "Running".
-      if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped, session.generation);
+    const finish = suppress => {
+      const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
+      const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
+      if (!suppress && mainWindow && !mainWindow.isDestroyed() && !appQuitting) {
+        mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
+        if (realId !== sessionId && activeSessions.get(sessionId) === session) {
+          mainWindow.webContents.send('process-exited', sessionId, exitCode, exitSignal, stopped, session.generation);
+        }
       }
-    }
-    if (session.kind === 'remote-attach') {
-      exitedRemoteSessionIds.add(realId);
-      exitedRemoteSessionIds.add(sessionId);
-    }
-    activeSessions.delete(realId);
-    // Clean up the original key too in case transition detection hasn't run yet
-    activeSessions.delete(sessionId);
-    activityReporter.sessionEnded(realId);
-    activityReporter.sessionEnded(sessionId);
-    try {
-      const releasedReal = sessionCache.releaseLiveSession(realId);
-      const releasedOriginal = sessionCache.releaseLiveSession(sessionId);
-      if (releasedReal || releasedOriginal) notifyRendererProjectsChanged();
-    } catch (err) {
-      log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
-    }
+      if (session.kind === 'remote-attach') {
+        exitedRemoteSessionIds.add(realId);
+        exitedRemoteSessionIds.add(sessionId);
+      }
+      if (activeSessions.get(realId) === session) activeSessions.delete(realId);
+      if (activeSessions.get(sessionId) === session) activeSessions.delete(sessionId);
+      if (releaseReal) activityReporter.sessionEnded(realId);
+      if (releaseOriginal) activityReporter.sessionEnded(sessionId);
+      try {
+        const releasedReal = releaseReal && sessionCache.releaseLiveSession(realId);
+        const releasedOriginal = releaseOriginal && sessionCache.releaseLiveSession(sessionId);
+        if (releasedReal || releasedOriginal) notifyRendererProjectsChanged();
+      } catch (err) {
+        log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
+      }
+    };
+    if (!holdBackgroundExit(session, finish)) finish(false);
   });
 }
 
@@ -2680,6 +2709,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // Reattach to existing session
   if (activeSessions.has(sessionId)) {
     const session = activeSessions.get(sessionId);
+    if (session.backgrounding && session.exited) return { ok: false, error: 'The terminal exited while its background handoff is being checked. Wait for the result, then open the conversation from the sidebar.' };
     session.rendererAttached = true;
     session.firstResize = !session.isPlainTerminal;
 
@@ -3024,6 +3054,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     projectFolder, knownJsonlFiles,
     isPlainTerminal, panelFor: panelOwnerId, forkFrom: sessionOptions?.forkFrom || null,
     isAttach, attachJobId,
+    preLaunch: !isAttach && !!sessionOptions?.preLaunchCmd,
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
     sandbox: !!sessionOptions?.sandbox,

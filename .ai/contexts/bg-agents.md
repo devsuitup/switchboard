@@ -17,6 +17,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
+| `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; `bgAgents.stop()` in the window's `closed` handler |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
@@ -454,6 +455,66 @@ The view's HTML puts CLI- and file-sourced values (name, cwd, href, session
 id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 `escapeHtml` does not, and a quote would otherwise let a value add a
 `data-verb` that a click runs.
+
+## Send to background
+
+The session header and sidebar context menu call `send-session-to-background`
+for one running local Claude tab. Main refuses plain terminals, attach tabs,
+remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
+unsubmitted composer text, unknown CLI state, open dialogs (`waiting`) and
+shell state before writing. Busy is allowed. Running subagents require an
+`appConfirm` warning first; cancel writes nothing. Composer input or a dialog
+appearing during the 300 ms text-to-Enter gap withholds Enter and names the
+residue to check. No recovery Enter is sent.
+
+Measured on Windows, CLI 2.1.296, 2026-10-13 (`.work-files/live-m1m2/`): `/bg`,
+300 ms, then CR runs `/background` through its completion menu. The original
+descriptor becomes `waiting` / `waitingFor: "dialog open"` at +65 ms and is
+deleted at +252 ms. A `continued-in` record names a new conversation at about
++0.2 s. Its live `kind: "bg"` descriptor appears at +1.6 s, with `jobId` equal
+to the new UUID's first eight hex digits; it has no status for about 0.7 s.
+The original PTY exits 0 at about +2 s; no `parkedJobId` or agents list appears.
+The daemon job survives that exit.
+
+Proof is a new `continued-in` target in the original transcript plus a live
+bg descriptor naming exactly that target and carrying a valid job id.
+`scanContinuationIndex` from `session-continuations.js` supplies the parser;
+`cliSessionState.readAllDescriptors` supplies live descriptors, including
+descriptors without status. A continuation alone, an unrelated job, malformed
+job id or ambiguous matching jobs cannot confirm the handoff. Existing
+continuations are snapshotted before writing and do not prove this request.
+
+The wait lasts at most two minutes while the original PTY runs, shortened to
+15 seconds after an exit is observed. `wireSessionPty` marks the physical exit
+and shuts down MCP immediately, but holds ordinary exit notification and map
+cleanup until the handoff settles. Success suppresses that notification; failure
+releases it and displays an actionable notice. The exiting CLI is not killed.
+Output subscriptions and descriptor-change waits exist only during handoff;
+100 ms bounded waits also cover transcript-only changes, with no new idle poll.
+
+`tab-input-lock.js` shares the existing trigger FIFO by session object. The
+action refuses while a trigger holds or queues that tab; triggers admitted
+during handoff wait under their existing deadline. This prevents automation
+text or Enter from interleaving with `/bg`. Typed terminal answers retain their
+ordinary input path. A physically exited handoff record cannot be reattached
+as a live PTY; reopening it asks the user to wait and use the sidebar.
+
+The renderer destroys the original entry, replaces any non-attach target,
+opens `{ type: 'attach', jobId, cwd }` under the new id, and follows the active
+tab without stealing focus from another tab. It sets `bgRestore` and uses
+the existing `skippedWorkingSetEntries` / `keepAttached` contract to save
+`bg: true`; closing the tab drops that entry. Restore intent is established
+before awaiting the attach spawn. A failed attach retains that intent alongside
+its error tab for the next restart. Merged-row member metadata is not copied
+onto the new conversation; a source closed or replaced during IPC reports the
+completed move without reopening a tab or changing replacement liveness.
+The success notice says the session now runs in the background and closing the tab detaches it. Attach
+failure says where to retry from the sidebar. A `/bg` typed by hand is not
+followed by this action; quit/update and grid actions remain separate slices.
+
+Tests: `test/bg-handoff.test.js`, `test/bg-handoff-main.test.js`,
+`test/send-to-background-renderer.test.js`, `test/bg-handoff-trigger.test.js`,
+header/control and restore neighbours.
 
 ## Detach
 
