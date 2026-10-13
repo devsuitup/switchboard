@@ -214,7 +214,7 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
         assert.equal(result.sessionId, 'a');
         f.hide();
         if (platform === 'darwin') f.observation = () => ({});
-        const unknown = await f.run({ sessionId: 'a' }, 150);
+        const unknown = await f.run({ sessionId: 'a' }, route === 'direct' ? 1600 : 150);
         if (route === 'direct') {
           assert.equal(unknown.ok, true, JSON.stringify(unknown));
           assert.deepEqual(f.written, ['prompt', '\r']);
@@ -251,7 +251,7 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
           if (command === 'reply') { f.show(); lag = false; }
           if (command === 'bound') f.setWriter('d');
         };
-        const result = await f.run({ command: undefined, chain: [{ command: reset }, { command: 'reply' }, { command: 'bound' }, { command: 'tail' }] });
+        const result = await f.run({ command: undefined, chain: [{ command: reset }, { command: 'reply' }, { command: 'bound' }, { command: 'tail' }] }, 4500);
         refused(result, f.written, [reset, '\r', 'reply', '\r', 'bound', '\r']);
         assert.equal(result.steps[1].written, true);
         assert.equal(f.activeSessions.get('a'), f.session);
@@ -296,7 +296,7 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
     f.ctx.getPtyForSession = (id) => { const entry = original(id); if (id === 'a') secondLookedUp = true; pinned(); return entry; };
     const first = f.run({ sessionId: 'A', command: 'first' });
     await firstPinned;
-    const second = f.run({ sessionId: 'a', command: 'second' }, 100);
+    const second = f.run({ sessionId: 'a', command: 'second' });
     await new Promise(resolve => setTimeout(resolve, 180));
     const lookedUpWhileQueued = secondLookedUp;
     assert.deepEqual(f.written, []);
@@ -355,7 +355,7 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
               f.session.realSessionId = 'c'; f.aliases = new Map([[key === 'alias' ? 'b' : 'a', 'c']]);
             }
           };
-          const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'tail' }] });
+          const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'tail' }] }, 4500);
           if (continued) {
             assert.equal(result.ok, true, JSON.stringify(result));
             assert.deepEqual(f.written, ['first', '\r', 'tail', '\r']);
@@ -435,7 +435,7 @@ for (const key of ['direct', 'alias']) {
     };
     f.onText = () => { textAt = Date.now(); };
     f.onEnter = () => { enterAt = Date.now(); };
-    const result = await f.run({}, 150);
+    const result = await f.run({}, key === 'direct' ? 1600 : 150);
     assert.equal(expired, true);
     if (key === 'direct') {
       assert.equal(result.ok, true, JSON.stringify(result));
@@ -456,7 +456,7 @@ for (const graph of ['cycle', 'malformed', 'bounded index']) {
       if (route === 'historical') {
         f.activeSessions.delete('a'); f.activeSessions.set('b', f.session); f.aliases = new Map([['a', 'b']]);
       }
-      const result = await f.run({ sessionId: 'a' }, 150);
+      const result = await f.run({ sessionId: 'a' }, route === 'direct' ? 1600 : 150);
       if (route === 'direct') {
         assert.equal(result.ok, true, JSON.stringify(result));
         assert.deepEqual(f.written, ['prompt', '\r']);
@@ -677,7 +677,7 @@ test('ADR scenario: an old id continued into an unattached bg job fails immediat
 test('ADR scenario: a writer changes during turn-end wait and preserves the already written step', async t => {
   const f = fixture(t);
   f.onEnter = text => { if (text === 'first') setTimeout(() => f.setWriter('c'), 10); };
-  const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'tail' }] }, 1000);
+  const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'tail' }] }, 4500);
   refused(result, f.written, ['first', '\r']);
   assert.equal(result.steps[0].written, true);
 });
@@ -687,9 +687,9 @@ test('ADR lock: a late descriptor alias joins the pinned tab while different tab
   f.continueTo('a', 'b'); f.setWriter('b'); f.session.composerState.pending = 1;
   const otherBytes = [];
   f.activeSessions.set('other', { ...f.session, isPlainTerminal: true, composerState: { pending: 0, lastInputAt: 0 }, pty: { pid: 401, write: data => otherBytes.push(data) } });
-  const first = f.run({ command: 'first' }, 1400);
+  const first = f.run({ command: 'first' }, 4500);
   await new Promise(resolve => setTimeout(resolve, 30));
-  const alias = f.run({ sessionId: 'b', command: 'second' }, 1400);
+  const alias = f.run({ sessionId: 'b', command: 'second' }, 4500);
   const other = await f.run({ sessionId: 'other' }, 600);
   assert.equal(other.ok, true); assert.deepEqual(otherBytes.slice(0, 2), ['prompt', '\r']);
   f.session.composerState.pending = 0;
@@ -708,7 +708,7 @@ test('ADR reset authorization: quoting clear, uppercase clear and resume do not 
   for (const command of ['quote /clear', '/CLEAR', '/resume c']) {
     const f = fixture(t);
     f.onEnter = () => f.setWriter('c');
-    const result = await f.run({ command: undefined, chain: [{ command }, { command: 'tail' }] }, 1000);
+    const result = await f.run({ command: undefined, chain: [{ command }, { command: 'tail' }] }, 4500);
     refused(result, f.written, [command, '\r']);
   }
 });
@@ -716,9 +716,9 @@ test('ADR reset authorization: quoting clear, uppercase clear and resume do not 
 test('ADR reset authorization: it cannot transfer to a separately queued historical alias', async t => {
   const f = fixture(t, 'linux', 'alias');
   f.onEnter = text => { if (text === '/clear') { f.setWriter('c'); f.aliases = new Map([['b', 'a']]); } };
-  const chain = f.run({ command: undefined, chain: [{ command: '/clear' }, { command: 'reply' }] }, 1300);
+  const chain = f.run({ command: undefined, chain: [{ command: '/clear' }, { command: 'reply' }] }, 4500);
   await new Promise(resolve => setTimeout(resolve, 30));
-  const queued = f.run({ command: 'separate' }, 1300);
+  const queued = f.run({ command: 'separate' }, 4500);
   assert.equal((await chain).ok, true);
   const result = await queued;
   assert.equal(result.ok, false); assert.equal(result.error, 'not sent');

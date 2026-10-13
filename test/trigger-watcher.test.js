@@ -211,8 +211,8 @@ async function runCompactEvidenceCase(t, { chain = false, evidence = 'none', des
     });
     let started;
     const processing = new Promise(resolve => { started = resolve; });
-    const getComposerState = ctx.getComposerState;
-    ctx.getComposerState = (...args) => { started(); return getComposerState(...args); };
+    const composerState = session.composerState;
+    Object.defineProperty(session, 'composerState', { get() { started(); return composerState; } });
     if (['missing', 'missing-then-future'].includes(evidence)) fs.unlinkSync(transcript);
     watcher = require('../trigger-watcher').start(ctx);
     writeTrigger(tmp, 'i488', {

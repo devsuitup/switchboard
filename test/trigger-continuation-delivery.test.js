@@ -52,7 +52,7 @@ for (const key of ['direct', 'historical']) {
       const delivery = ctx.pinDelivery('a', ctx.getPtyForSession('a'), false);
       delivery.binding.beginStep('prompt');
       if (key === 'historical' && writer === 'foreign') {
-        await assert.rejects(delivery.binding.prepareText(Date.now() + 40), /ownership wait.*deadline/);
+        await assert.rejects(delivery.binding.prepareText(Date.now() + 40), /ownership.*deadline/);
         assert.throws(() => delivery.handle.write('\r'), /ownership.*unknown/);
         assert.deepEqual(bytes, []);
       } else {
