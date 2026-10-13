@@ -33,6 +33,7 @@ let readProcStart = defaultReadProcStart;
 let readProcStartMany = defaultReadProcStartMany;
 let readParentPid = defaultReadParentPid;
 let readCliProcess = defaultReadCliProcess;
+let readRealpath = fs.realpathSync;
 let readProcessTable = defaultReadProcessTable;
 let processTableEnabled = false;
 let processTableEpoch = 0;
@@ -253,8 +254,10 @@ function defaultReadCliProcess(pid) {
   const name = value => value.replaceAll('\\', '/').split('/').pop().toLowerCase();
   if (/^claude(?:\.exe)?$/.test(name(args[0]))) return true;
   const script = args.slice(1).find(arg => !arg.startsWith('-'));
-  return /^node(?:\.exe)?$/.test(name(args[0]))
-    && typeof script === 'string' && /(?:^|[\\/])@anthropic-ai[\\/]claude-code[\\/]cli\.js$/i.test(script);
+  if (!/^node(?:\.exe)?$/.test(name(args[0])) || typeof script !== 'string') return false;
+  const cliScript = /(?:^|[\\/])@anthropic-ai[\\/]claude-code[\\/]cli\.js$/i;
+  if (cliScript.test(script)) return true;
+  try { return cliScript.test(readRealpath(script)); } catch { return false; }
 }
 
 // see .ai/contexts/cli-session-state.md
@@ -305,6 +308,7 @@ function init(ctx) {
   platform = ctx.platform || process.platform;
   readParentPid = ctx.readParentPid || defaultReadParentPid;
   readCliProcess = ctx.readCliProcess || defaultReadCliProcess;
+  readRealpath = ctx.readRealpath || fs.realpathSync;
   ownPid = ctx.ownPid || process.pid;
   processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
@@ -820,7 +824,8 @@ function observeTabWriter(ptyPid, snapshot) {
   candidates.sort((a, b) => a.depth - b.depth);
   if (uncertain || candidates.length !== 1) return { supported: true };
   const writer = candidates[0].raw;
-  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}` };
+  const hasBackground = [...snapshot.descriptors.values()].some(raw => raw.kind === 'bg');
+  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}`, hasBackground };
 }
 
 function deliveryPtyStart(pid) {

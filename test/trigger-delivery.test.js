@@ -766,12 +766,13 @@ test('ADR scenario: an old id continued into an unattached bg job fails immediat
   assert.deepEqual(f.written, []);
 });
 
-test('ADR scenario: a writer still naming R delivers without searching a continued background job', async t => {
+test('ADR scenario: a stale writer still naming R refuses its continued unattached background job', async t => {
   const f = fixture(t);
   f.continueTo('a', 'job'); f.descriptor('job', 400, 'bg', { jobId: '1234abcd' });
   const result = await f.run({});
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.deepEqual(f.written, ['prompt', '\r']);
+  assert.equal(result.error, 'background session, not attached here');
+  assert.equal(result.jobId, '1234abcd');
+  assert.deepEqual(f.written, []);
 });
 
 test('ADR scenario: a writer changes during turn-end wait and preserves the already written step', async t => {

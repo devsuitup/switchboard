@@ -48,6 +48,7 @@ function createTriggerContext(deps) {
   const matching = id => [...new Set([...activeSessions].filter(([key, session]) => normalizeSessionId(key) === normalizeSessionId(id)
     && session && !session.exited).map(([, session]) => session))];
   const indexes = new Map();
+  let indexBytes = 0;
   const makeEntry = (session, keyKind = 'direct') => ({ session, generation: session.generation, ptyProcess: session.pty,
     cwd: session.cwd, keyKind, handle: session.host == null ? createLocalSessionHandle(session.pty) : session.handle });
   function transcriptPath(session, id) {
@@ -161,9 +162,17 @@ function createTriggerContext(deps) {
             } while (!index.complete && index.bytes < index.size);
             const after = fs.statSync(file);
             if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return null;
+            delete index.pending;
+            indexBytes -= indexes.get(file)?.bytes || 0;
             indexes.delete(file);
-            indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, head, index, serialized });
-            if (indexes.size > 128) indexes.delete(indexes.keys().next().value);
+            const bytes = Buffer.byteLength(serialized);
+            indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, head, index, serialized, bytes });
+            indexBytes += bytes;
+            while (indexes.size > 128 || indexBytes > 32 * 1024 * 1024) {
+              const oldest = indexes.keys().next().value;
+              indexBytes -= indexes.get(oldest).bytes;
+              indexes.delete(oldest);
+            }
           }
           return { index: { ...index, ids: index.ids.map(normalizeSessionId), unresolved: index.unresolved || !index.complete } };
         } catch (err) { return err.code === 'ENOENT' ? { missing: true } : null; }
@@ -252,9 +261,10 @@ function createTriggerContext(deps) {
     };
     binding.admit = async deadline => {
       if (own) {
-        let writer;
-        try { writer = observe(pid)?.writer; } catch {}
-        if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)) {
+        let observation;
+        try { observation = observe(pid); } catch {}
+        const writer = observation?.writer;
+        if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId) || observation.hasBackground) {
           const continuation = graph(normalizeSessionId(requestedId));
           for (const candidate of continuation.candidates || []) {
             if (lookup(candidate.sessionId)) continue;

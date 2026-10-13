@@ -8,6 +8,37 @@ const os = require('node:os');
 const path = require('node:path');
 const cli = require('../cli-session-state');
 
+for (const [label, args, resolved, nested] of [
+  ['npm bin symlink', ['node', '/usr/local/bin/claude'], '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js', true],
+  ['nvm bin symlink', ['node', '/home/user/.nvm/versions/node/v22/bin/claude'], '/home/user/.nvm/versions/node/v22/lib/node_modules/@anthropic-ai/claude-code/cli.js', true],
+  ['launcher argument', ['node', 'launcher.js', 'claude'], '/tools/launcher.js', false],
+  ['launcher with a CLI argument', ['node', 'launcher.js', '/usr/local/bin/claude'], '/tools/launcher.js', false],
+  ['failed realpath', ['node', '/usr/local/bin/claude'], null, false],
+  ['direct CLI path with failed realpath', ['node', '/npm/@anthropic-ai/claude-code/cli.js'], null, true],
+  ['native CLI with failed realpath', ['/usr/local/bin/claude'], null, true],
+]) {
+  test(`delivery Linux ${label}: descriptor-less ancestors constrain the closest writer`, t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-592-linux-process-'));
+    t.after(() => { cli.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+    fs.writeFileSync(path.join(dir, '300.json'), JSON.stringify({ pid: 300, sessionId: 'child',
+      kind: 'interactive', status: 'idle', procStart: '300' }));
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (file, ...rest) => file === '/proc/200/cmdline' ? args.join('\0') + '\0' : read(file, ...rest));
+    cli.init({ dir, platform: 'linux', isProcessAlive: () => true,
+      readProcStart: pid => String(pid), readParentPid: pid => ({ 300: 200, 200: 100, 100: 1 })[pid],
+      readRealpath: script => {
+        assert.equal(script, args[1]);
+        if (resolved === null) throw new Error('realpath unavailable');
+        return resolved;
+      },
+    });
+    const tab = { pty: { pid: 100 } };
+    const observed = cli.observeTabWriter(100);
+    assert.equal(observed.writer?.sessionId, nested ? undefined : 'child');
+    assert.equal(cli.findDeliveryTab('child', [tab]).tab, nested ? undefined : tab);
+  });
+}
+
 test('delivery process table preserves quoted commands alongside process start identity', () => {
   const commandLine = '"C:\\Program Files\\Claude\\claude.exe" -p task';
   const table = cli.parseProcessTable('200 100 134000000000200000\t' + commandLine);

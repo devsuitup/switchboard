@@ -79,17 +79,29 @@ until the traversal is complete. Cycles, malformed records and index waits
 remain unresolved. Restore's terminal-candidate and `unresolved` policy is unchanged.
 
 Admission skips the background-job traversal when the observed tab writer already
-names the requested id. Other delivery traversals scan transcript nodes in 1 MiB
+names the requested id and the same descriptor snapshot has no `kind: "bg"`
+descriptor. Process identity does not prove descriptor content is current: a
+writer still naming R must not hide R's continuation into an unattached bg job.
+Other delivery traversals scan transcript nodes in 1 MiB
 chunks, under a total 512 MiB transcript-size cap and the existing 32-edge/128-node
 limits. A cap overflow or read failure leaves ownership unknown; chunk boundaries
 alone do not. The last serialized index, including an unfinished line, is shared
-by all bindings of a watcher per path, with at most 128 entries. Unchanged size,
+by all bindings of a watcher per path, with at most 128 entries and 32 MiB of
+serialized strings (UTF-8 byte lengths). Oldest retained entries are evicted
+until both limits hold. The parsed index omits `pending`; the scanner derives
+that partial line from the serialized index on append. Unchanged size,
 mtime and file identity reuse the index without reading. Append resumes from the
 indexed byte offset after checking file identity and matching the first and last
 64 indexed bytes; only appended data and these validation bytes are read. A
 truncate, replacement, different head/tail or same-size mtime change rescans from
 byte zero. These boundary checks cannot detect arbitrary edits in the middle
 of a file that also grows while retaining its indexed head and tail.
+
+Descriptor-less CLI ancestors are recognized by the native Claude executable
+name or Node's first non-option script argument. The script may name the scoped
+`@anthropic-ai/claude-code/cli.js` directly or resolve to it through `readRealpath`
+(default `fs.realpathSync`), including Linux npm/nvm bin symlinks. A failed
+realpath is not evidence of a CLI; later launcher arguments do not qualify.
 
 Delivery pins the session object, `session.generation`, PTY object and available
 process-start identity. Busy/composer reads stay on that object; descriptor and

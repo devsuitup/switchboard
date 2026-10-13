@@ -72,6 +72,30 @@ test('ADR admission: a writer already naming the requested id reads no continuat
   assert.equal(bytes, 0);
 });
 
+test('ADR continuation cache: retained bytes evict the oldest index before the entry limit', async t => {
+  const f = fixture(t, { b: [] });
+  const ctx = deliveryContext(f, 'b');
+  const line = JSON.stringify({ type: 'assistant', content: 'x'.repeat(1024 * 1024 - 64) });
+  const admitId = async id => {
+    const entry = ctx.getPtyForSession('a');
+    const pinned = ctx.pinDelivery(id, entry, false);
+    await pinned.binding.admit(Date.now() + 1000);
+  };
+  for (let i = 0; i < 25; i++) {
+    const id = 'root' + i;
+    fs.writeFileSync(path.join(f.projectsDir, 'proj', id + '.jsonl'),
+      JSON.stringify({ type: 'continued-in', sessionId: id, continuedInSessionId: 'b' }) + '\n' + line);
+    await admitId(id);
+  }
+  const read = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
+  await admitId('root24');
+  assert.equal(bytes, 0, 'newest index stays retained');
+  await admitId('root0');
+  assert.ok(bytes >= Buffer.byteLength(line), `oldest index must rescan after byte eviction, read ${bytes}`);
+});
+
 test('ADR continuation cache: an unfinished line resumes from the retained serialized index', async t => {
   const f = fixture(t, { a: ['b'], b: [] });
   const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
