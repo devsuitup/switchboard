@@ -495,12 +495,22 @@ test('round 2 M2: a local list resolves while the remote batch is pending', asyn
 
 test('round 2 M2: concurrent remote refreshes share one pending batch and the next refresh retries', async t => {
   const { deps: remoteDeps } = remoteListWorld454(t, ['/repo/a']);
+  const cache = require('../session-touched-files').createTouchedFilesCache();
+  const run = cache.run.bind(cache);
+  const parsed = [];
+  cache.run = (...args) => {
+    const result = run(...args);
+    parsed.push(result);
+    return result;
+  };
+  remoteDeps.cache = cache;
   let release, attempts = 0;
   const pending = new Promise(resolve => { release = resolve; });
   remoteDeps.runRemoteCommand = () => { attempts++; return pending; };
   const calls = Array.from({ length: 3 }, () => listSessionTouchedFiles('S1', remoteDeps));
   try {
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await Promise.all(parsed);
+    assert.equal(attempts, 1, 'all refreshes must reach the still-pending batch');
     release({ code: 0, stdout: 'present\t1\n' });
     const results = await Promise.all(calls);
     assert.equal(attempts, 1);
