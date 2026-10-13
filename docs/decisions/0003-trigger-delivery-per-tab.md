@@ -1,6 +1,6 @@
 # 0003 — Deliver triggers under one tab lock and a per-write ownership check
 
-**Status**: Proposed (2026-10-13). Maintainer review precedes implementation.
+**Status**: Accepted (2026-10-13). The maintainer's decisions on the four open questions (13/10) are recorded under "Maintainer decisions". No implementation exists yet.
 
 ## Context
 
@@ -122,13 +122,15 @@ commands and every chain step. Never switch a running delivery to another tab.
   lock, even if R or the numeric pid is reused. The old delivery must fail its
   per-write binding guard; it cannot rely on the new tab's lock. A map re-key of
   the same session preserves T/G (`session-transitions.js:424`).
-- **Effective id E** is initially the normalized R, except for the conditional
-  direct/historical-route initialization in open question 4. It subsequently changes
-  only for this chain's authorized clear-family transition, described below.
+- **Effective id E** starts as the normalized R: a trigger addresses a
+  conversation, not a tab (decision 4). E advances only (a) along `continued-in`
+  records from R's conversation, to a successor proven as described in
+  "Ownership outcomes", and (b) for this chain's authorized clear-family
+  transition, described below.
 - **Direct key** means the normalized requested live map key names T. A re-key
   mapping is a **historical alias**; a descriptor fallback is a **descriptor
-  alias**. Both are alias keys, subject to the question-4 historical-route
-  exception only if the maintainer selects option A. Direct-key precedence
+  alias**. Both are alias keys; neither changes E (decision 4).
+  Direct-key precedence
   applies at initial lookup, not as permission to retarget a pinned delivery.
   No extra `realSessionId` agreement condition is needed: current re-keying sets
   it together with the new map key (`session-transitions.js:427`,
@@ -213,20 +215,20 @@ Fallback has the following stopping rules, **before** waiting for ownership:
    the remaining delivery budget; loss/disproof of the hint ends lookup now.
 4. Once a unique T is pinned, do not retarget it. A historical alias already
    identifies T, so its `unknown` follows the alias ownership table rather than
-   the descriptor-miss fast-failure rule (subject to question 4).
+   the descriptor-miss fast-failure rule.
 
 Descriptor aliases are temporary lookup hints. A torn descriptor read may
 preserve a hint for bounded rechecking, but cannot authorize a write. Drop
 descriptor hints on a proven
 writer change, tab exit, generation invalidation or a new direct-key target.
 Historical mappings remain lookup routes, not reusable per-write permissions;
-question 4 decides their initial E and admission policy.
+E starts as R for them too (decision 4).
 
 ### One lock per tab
 
 Keep the per-requested-id FIFO **mandatory** for normalized same-id ordering,
 then acquire exactly one tab mutex, keyed by T. Resolve before joining that
-mutex, freeze E at initial pinning under the selected question-4 policy, and
+mutex, pin E=R at initial pinning (decision 4), and
 validate T, G and ownership again after acquisition. A fallback found
 late must join the same mutex before any readiness/composer wait or write. If
 the candidate changes while queued, refuse and release; do not migrate to another
@@ -250,14 +252,46 @@ re-key timeout or restart a budget after ownership changes. See open question 3.
 
 For ownership-eligible tabs, classify a fresh observation of T's **closest valid
 interactive writer** relative to E. Historical alias admission/initial E is
-conditional on question 4; the table is unconditional for descriptor aliases
-and applies to historical aliases after their option-specific admission:
+E starts as R for every key kind (decision 4). "Names E" below means the
+writer's id is E or is reachable from E by the continuation rule that follows
+the table; the table applies unchanged to descriptor and historical aliases:
 
 | Outcome | Meaning | Direct key action | Alias key action |
 |---|---|---|---|
 | `mine` | One verified closest writer for T/G names E. | Deliver once the existing composer/readiness/deadline gates allow. | Deliver under the same gates and T's lock. |
 | `other` (definite) | T's verified closest writer names a different id. For an alias candidate, complete identity-checked evidence of an exclusively foreign process tree also rules out that candidate. A foreign descriptor alone does not prove `other` for a direct key. | Refuse immediately; write no further bytes. | Refuse immediately and drop the alias. |
-| `unknown` | No decidable writer: absent/torn descriptor, cold/failed/obsolete table, unsupported identity domain, inaccessible namespace, ambiguous candidates or unreadable ancestry. | Deliver under the existing gates; do not wait for or require proven ownership. | Before text, wait/recheck only as allowed by Lookup fallback, then deliver on `mine`, refuse on `other`, or expire unwritten. At initial/recovery Enter, stop immediately without another write or refresh wait. Authorized reset is excepted; option-A historical routes use the direct action. |
+| `unknown` | No decidable writer: absent/torn descriptor, cold/failed/obsolete table, unsupported identity domain, inaccessible namespace, ambiguous candidates or unreadable ancestry. | Deliver under the existing gates; do not wait for or require proven ownership. | Before text, wait/recheck only as allowed by Lookup fallback, then deliver on `mine`, refuse on `other`, or expire unwritten. At initial/recovery Enter, stop immediately without another write or refresh wait. Authorized reset is excepted. |
+
+**Continuation rule (decision 4).** A writer id W is *reachable* from E when a
+chain of `continued-in` records, each in the transcript of the previous id and
+naming it in `sessionId` with the next id in `continuedInSessionId`, leads from
+E to W (`continuationId`, `session-continuations.js:5`). The traversal, with its
+cycle, missing-file and size bounds, is `resolveContinuations`
+(`session-continuations.js:83`), which `sessionCache.resolveSessionContinuations`
+wraps (`session-cache.js:1143`); the 32-edge and 128-node bounds are documented
+at `.ai/contexts/cli-session-state.md:569`. This is the proof the UI re-key
+already uses: a record alone moves nothing, and the target must also be the
+tab's closest verified writer (`detectContinuation`,
+`session-transitions.js:445`; scan at `session-transitions.js:452`;
+`clearOwner(..., { closestWriter: true })` at `session-transitions.js:468`;
+re-key at `session-transitions.js:470`). The delivery reuses that predicate and
+adds nothing weaker. For a verified closest writer W of T/G:
+
+- W is E, or reachable from E: `mine`, and E advances to W (the same
+  conversation after a continuation, resume or compaction successor).
+- W is neither: definite `other`, refuse with zero bytes (the user's `/clear`,
+  `/new`, `/reset`, or a fork, which leaves the original conversation
+  un-continued). `/clear` writes no `continued-in` record
+  (`.ai/contexts/cli-session-state.md:527`), so it is always unreachable; only
+  the chain's own reset follows it.
+- A traversal that is `unresolved` or still waiting for the index
+  (`session-continuations.js:114`) yields `unknown`, never `mine` or `other`.
+- If R's conversation continued into a `kind: "bg"` job that is not attached
+  here, keep the immediate `background session, not attached here` error
+  (`trigger-watcher.js:1307`); routing to bg jobs belongs to #546 slice 4.
+- When no writer is decidable (`unknown`), nothing binds: a direct key delivers
+  under the direct-key rules, and E advances only at the first decidable
+  observation before the text.
 
 A descriptor alias that has not yet identified a tab waits only when the Lookup
 fallback stopping rules permit it, for lookup evidence, not
@@ -340,8 +374,7 @@ After this chain writes both that text and Enter under the guard, grant a
 **chain-local reset authorization** for the same T/G. The following steps are
 explicitly addressed to that tab's reset successor. They do not require a UI
 re-key, a new transcript file, or continued ownership of pre-clear E. This is
-the chain-local exception to the ownership-gated alias table (option-A
-historical routes already use the direct policy): an admitted alias chain may
+the chain-local exception to the ownership-gated alias table: an admitted alias chain may
 continue on `unknown` after its own reset, just as a direct chain may, on this
 same live PTY. Other triggers receive no such authorization.
 
@@ -360,7 +393,7 @@ Once a successor is observed, bind E to it and reject later definite moves to
 another conversation. Another guarded clear-family step can authorize the next
 reset. A continuation unrequested by the chain never grants reset authorization.
 Outside this chain-local reset mode, a binding admitted before an external
-conversation change never follows that change, under either question-4 option.
+conversation change follows that change only through the continuation rule in "Ownership outcomes" (decision 4).
 
 Other conversation-switching commands, including `/resume X`, are **not** reset
 authorizations. A chain `[/resume X, prompt]` keeps E at the pre-resume id and
@@ -409,8 +442,8 @@ delivery (`docs/automation.md:580`; `.ai/contexts/trigger-watcher.md:1548`,
 
 ## Test matrix for the implementation step
 
-The 24 platform/key cells and nine scenario rows below are required synthetic
-`node:test` cases, with both question-4 options exercised until one is selected,
+The 24 platform/key cells and twelve scenario rows below are required synthetic
+`node:test` cases, exercising decision 4,
 not tests added or executed by this ADR. In every cell, assert the PTY byte log **and** result
 classification, with ready/free/alive fixtures unless the row specifies a hold.
 Run each write-time identity change at text, initial Enter, and ordinary-command
@@ -452,21 +485,22 @@ metadata-only continuation record follows the ordinary policy, not that record.
 
 Unless a cell explicitly names a historical route, the alias rows exercise
 descriptor aliases. Historical routes must additionally exercise their
-question-4 admission policy, including option-A direct-unknown availability.
-Movement/refusal cells start after E has been pinned; option A must not silently
-reinitialize E during a later wait. `unknown` waits in alias rows mean before
+decision-4 rule (E=R, advance only by `continued-in`).
+Movement/refusal cells start after E has been pinned. In the "Step after a
+continuation" column, B means a conversation not reachable from E by
+`continued-in`; a reachable B is `mine` and E advances to it. `unknown` waits in alias rows mean before
 text only; an ordinary alias's Enter guard stops immediately on `unknown`.
 
 | Platform / key | Plain step | Clear-family step and following step | Step after a continuation |
 |---|---|---|---|
-| Windows / direct | W+T: matching writer delivers; cold/failed table delivers on `unknown`; verified different tab writer refuses. | W+T: admit reset under the same policy; write successor step on the same T/G even with cold table and no re-key. Warm successor binds E; later definite unrelated move refuses. Parameterize all three commands. | W+T: A pinned E=A refuses if writer moves to B during delivery despite a stale direct key; a change predating admission uses question 4. R=B after re-key delivers. Cold ownership stays `unknown` and direct delivers, without claiming conversation proof. |
-| Windows / alias | W+T: unique matching closest writer delivers; torn read or cold table waits, then delivers if proof arrives or expires with no write; definite other refuses. | W+T: `mine` admits reset; `unknown` before reset waits. After its own Enter, successor step proceeds on pinned T/G without re-key, including `unknown`; no permission transfers to a separately queued alias trigger. | W+T: R=B fallback delivers before re-key and uses T's lock. A new R=A historical trigger uses question 4; a pinned E=A delivery refuses on verified B, with unknown handled at the next write boundary. A later B to C move blocks the next write for R=B. |
+| Windows / direct | W+T: matching writer delivers; cold/failed table delivers on `unknown`; verified different tab writer refuses. | W+T: admit reset under the same policy; write successor step on the same T/G even with cold table and no re-key. Warm successor binds E; later definite unrelated move refuses. Parameterize all three commands. | W+T: A pinned E=A refuses if writer moves to B during delivery despite a stale direct key; a change predating admission follows decision 4. R=B after re-key delivers. Cold ownership stays `unknown` and direct delivers, without claiming conversation proof. |
+| Windows / alias | W+T: unique matching closest writer delivers; torn read or cold table waits, then delivers if proof arrives or expires with no write; definite other refuses. | W+T: `mine` admits reset; `unknown` before reset waits. After its own Enter, successor step proceeds on pinned T/G without re-key, including `unknown`; no permission transfers to a separately queued alias trigger. | W+T: R=B fallback delivers before re-key and uses T's lock. A new R=A historical trigger follows decision 4; a pinned E=A delivery refuses on verified B, with unknown handled at the next write boundary. A later B to C move blocks the next write for R=B. |
 | Linux / direct | L+T: matching writer delivers; null ancestry/start evidence delivers on `unknown`; verified different writer refuses. | L+T: reset admission uses ordinary policy; successor proceeds on pinned T/G without re-key, with all three command names. After known successor E, a definite later move refuses. | L+T: proven movement to B during delivery rejects pinned E=A; direct R=B after re-key delivers. Unreadable ancestry allows direct `unknown`; transcript-only A to B is insufficient contrary evidence. |
-| Linux / alias | L+T: unique closest match delivers; missing/torn ancestry waits then expires or delivers on recovered proof; definite other refuses. | L+T: prove alias before reset; after guarded Enter, successor follows same writer/T/G even when descriptors become unreadable and map remains A. Before reset text, `unknown` still waits; initial reset Enter on `unknown` stops without granting reset authorization. | L+T: R=B reaches unrekeyed A only with writer proof. A new R=A re-key alias uses question 4; an already pinned E=A refuses once writer is B (pre-text unknown may wait). Proven later move B to C prevents Enter/recovery for B. |
+| Linux / alias | L+T: unique closest match delivers; missing/torn ancestry waits then expires or delivers on recovered proof; definite other refuses. | L+T: prove alias before reset; after guarded Enter, successor follows same writer/T/G even when descriptors become unreadable and map remains A. Before reset text, `unknown` still waits; initial reset Enter on `unknown` stops without granting reset authorization. | L+T: R=B reaches unrekeyed A only with writer proof. A new R=A re-key alias follows decision 4; an already pinned E=A refuses once writer is B (pre-text unknown may wait). Proven later move B to C prevents Enter/recovery for B. |
 | Linux sandbox / direct | S+T: namespace-only descriptor yields `unknown`, direct still delivers; unrelated host pid collision cannot cause refusal. Positive host-identity control can refuse a proven different writer. | S+T: `[/clear, reply]`, `[/new, reply]`, `[/reset, reply]` continue on the same T/G with no re-key and no host identity. Keep unknown confirmation explicit. | S+T: R=A cannot be refused on namespace uncertainty alone; R=B direct after an injected re-key delivers. Host-verifiable different writer control refuses R=A. |
-| Linux sandbox / alias | S+T: namespace-only ownership cannot admit descriptor fallback; fail lookup immediately with no write. Historical aliases use question 4. Comparable-host control admits a unique `mine`, rejects definite other. | S+T: unknown alias cannot start reset. Admit with host-identity control, then remove visibility: following step continues under its own reset authorization without re-key. | S+T: R=B unrekeyed lookup fails immediately and stays unwritten with namespace-only data; host-comparable proof permits B. New historical R=A uses question 4; an already pinned E=A cannot follow proven B. |
+| Linux sandbox / alias | S+T: namespace-only ownership cannot admit descriptor fallback; fail lookup immediately with no write. Historical aliases follow decision 4. Comparable-host control admits a unique `mine`, rejects definite other. | S+T: unknown alias cannot start reset. Admit with host-identity control, then remove visibility: following step continues under its own reset authorization without re-key. | S+T: R=B unrekeyed lookup fails immediately and stays unwritten with namespace-only data; host-comparable proof permits B. New historical R=A follows decision 4; an already pinned E=A cannot follow proven B. |
 | macOS / direct | M+T: missing comparable anchor remains `unknown`, direct delivers. Injected classifier `other` control refuses; do not infer it from `unsupported`. | M+T: all three reset chains reach the successor step on the same T/G without a re-key; unavailable identity does not create a re-key wait. Submission/readiness failures remain ordinary failures. | M+T: unrekeyed R=A remains direct `unknown` and may deliver; R=B direct after injected re-key delivers. A classifier-proven B refuses R=A. This is the documented observability limit. |
-| macOS / alias | M+T: real-source descriptor fallback fails lookup immediately; a historical alias uses question 4. Injected `mine` control delivers; `other` control refuses. | M+T: unknown alias cannot admit reset. Injected `mine` admits it; return to unsupported identity after Enter and verify successor step continues without re-key under the chain-local exception. | M+T: R=B before re-key cannot obtain real-source descriptor proof; fail lookup immediately. A new historical R=A uses question 4. Injected B proof delivers R=B and blocks an already pinned E=A. |
+| macOS / alias | M+T: real-source descriptor fallback fails lookup immediately; a historical alias follows decision 4. Injected `mine` control delivers; `other` control refuses. | M+T: unknown alias cannot admit reset. Injected `mine` admits it; return to unsupported identity after Enter and verify successor step continues without re-key under the chain-local exception. | M+T: R=B before re-key cannot obtain real-source descriptor proof; fail lookup immediately. A new historical R=A follows decision 4. Injected B proof delivers R=B and blocks an already pinned E=A. |
 
 Additional required scenario rows (apply W/L/S/M where meaningful):
 
@@ -474,12 +508,14 @@ Additional required scenario rows (apply W/L/S/M where meaningful):
 |---|---|
 | Plain terminal P running Claude X | Bypass the POSIX shim in the fixture or use an unshimmed shell; X differs from P. Direct delivery preserves text+Enter and normal result gates, with no ownership call/probe/wait. T/G guards and tab mutex still apply. |
 | Local Claude tab with missing own descriptor and nested non-interactive writer | A nested `kind != interactive` writer naming X never becomes T's writer: direct R=A is `unknown` and delivers; descriptor fallback for X fails lookup with no bytes. Repeat with torn ancestor data, and with a valid interactive ancestor as control. |
-| User `/clear`, then a new trigger to the old id A | Establish writer C before trigger admission, first with map still A, then after historical re-key A→C. Option A binds initial E=C and delivers; a historical route with no evidence delivers as direct `unknown`. Option B keeps E=A and refuses on proven C; before re-key direct `unknown` delivers, after re-key historical `unknown` waits only before text then expires unwritten. A reopened live direct A wins under both. Assert R=A in results. |
-| Cold table at admission, warm before text (writer already C, map still A, direct R=A) | Windows: first table read is cold, then warms before the text with C verified. Option A leaves E unbound at admission, binds E=C at the first decidable observation and delivers; if the table never warms before the text, it delivers as a direct key on `unknown`. Option B pins E=A, so the warmed definite `other` refuses with zero bytes. Assert both outcomes and R=A in results. |
+| User `/clear`, then a new trigger to the old id A (decision 4) | Establish writer C (no `continued-in` from A) before trigger admission, first with map still A, then after historical re-key A→C. E=A. Verified C: definite `other`, refuse with zero bytes in both cases. Unknown writer: direct key delivers, historical alias waits only before text then expires unwritten. A reopened live direct A wins and is judged by its own writer. Assert R=A in results. Repeat with `/new`, `/reset` and a fork whose original is un-continued. |
+| Continuation, resume or compaction successor | Transcript of A holds a `continued-in` record A→B and B is the tab's closest verified writer (map still A, then re-keyed to B): `mine`, E advances to B, delivers; also a two-hop A→B→C. A record without a matching verified writer, or a writer that is not the closest, never counts. A cycle or unresolved graph never yields `mine`. |
+| R continued into an unattached `kind: "bg"` job | Immediate `background session, not attached here` with the job id and zero bytes, including with a cold table. |
+| Cold table at admission, warm before text (writer already C, map still A, direct R=A) | Windows: first table read is cold, then warms before the text with C verified. `unknown` at admission: delivery proceeds as a direct key under the direct-key rules and nothing binds. If C is verified before the text, it is definite `other` (C unreachable from A) and refuses with zero bytes; if C is verified only after the text, the next write boundary refuses. If the writer is A or reachable from A, E advances and it delivers. Assert R=A in results. |
 | Descriptor lags this chain's guarded clear Enter | Keep descriptor naming pre-reset A across completion/status polls and the successor step. It neither binds E=A as successor nor causes refusal or a mandatory identity wait. First verified C different from A binds E=C; later proven D refuses. Test all three reset commands and unavailable descriptors, with no UI re-key. |
 | Windows direct table expires between text and Enter | Start/share a deferred refresh at expiry, keep it unresolved beyond the 50 ms default Enter gap. Direct `unknown` still writes Enter at the configured gap (allow timer tolerance); assert no added process-refresh delay and no dependency on its 5 s completion. Repeat at text and recovery Enter; ordinary alias unknown at either Enter stops with explicit partial-write accounting. |
 | Unknown id with no viable fallback | macOS and namespace-only sandbox return `session not found` with zero bytes and zero ownership wait, even if a descriptor names R. Supported-domain no-hint or proven external candidates also fail now. An unattached bg job immediately keeps its specific error/job id, including with a cold table; a supported cold candidate with a plausible hint waits for at most one shared process-table refresh, then the fallback decides with what it has; no candidate verified returns the existing fast `session not found` error. |
-| Explicit continuation during step i's turn-end wait | Step i's text+Enter is logged. Change verified writer E→B before its turn-end wait completes, optionally re-key the map; step i+1 writes no bytes and the result preserves step i, identifies ownership refusal rather than `not sent`. If ordinary recovery Enter is attempted during the wait, guard it too. Run direct/alias and both question-4 initializations; a metadata-only record has no effect. |
+| Explicit continuation during step i's turn-end wait | Step i's text+Enter is logged. Change verified writer E→B before its turn-end wait completes, optionally re-key the map; step i+1 writes no bytes and the result preserves step i, identifies ownership refusal rather than `not sent`. If ordinary recovery Enter is attempted during the wait, guard it too. Run direct/alias; a metadata-only record has no effect, and a writer B reachable from E by `continued-in` is the continuation rule (E advances), not a refusal. |
 | Local bg attach and remote attach tabs | Existing direct/historical route writes under one T lock with T/G/liveness and ordinary gates; no local ownership classifier or descriptor fallback runs. A remote snapshot on local miss wins over a local descriptor candidate, including a remote error; unattached socket delivery keeps its separate contract. |
 | Close and reopen R during a wait | Close T/G, remove its keys and create T2/G2, optionally reusing the numeric pid. The old delivery fails its write guard and cannot migrate; the new trigger has T2's distinct lock and may proceed. No old bytes reach T2; text-only old submission is reported as partial. |
 
@@ -537,11 +573,10 @@ descriptor reads per write, bounded ownership waits for aliases, and careful
 partial-write accounting. It preserves direct-key availability under unknown
 ownership, at the stated cost of incomplete cross-conversation protection there.
 macOS and namespace-only sandbox descriptor-alias delivery remain unavailable
-until there is comparable process identity (historical routes depend on
-question 4). No
+until there is comparable process identity (historical routes follow decision 4). No
 changes are proposed to UI re-key detection, merged display rows, restoration,
 protocol replies or unattached socket sending. This does not preserve every
-existing trigger-routing promise: question 4 decides the old-id contract.
+existing trigger-routing promise: after a user `/clear`, `/new`, `/reset` or fork, the old id no longer reaches the tab (decision 4).
 
 At implementation, update `.ai/contexts/trigger-watcher.md` and
 `docs/automation.md` for pinned T/G, per-write scope, mandatory FIFO and its
@@ -552,17 +587,25 @@ verified identity change. Today's chain loop submits commands without that gate
 entry to `CHANGELOG.md` then. These current-behavior docs remain unchanged in
 this docs-only revision, before a maintainer choice or runtime implementation.
 
-Question-4 option A must document historical ids as tab addresses at admission,
-with E frozen through subsequent waits and writes. Option B must remove the
-unconditional promise that an old id keeps reaching the same terminal
-(`.ai/contexts/trigger-watcher.md:64`, `.ai/contexts/trigger-watcher.md:70`) and
-explain refusal after a known user reset, including its pre-re-key interval.
-Current re-keying after detected `/clear` requires `clearOwner(...) === 'mine'`
-(`session-transitions.js:565`, `session-transitions.js:566`,
-`session-transitions.js:587`), then current id resolution forwards the old id
-(`session-transitions.js:53`, `session-transitions.js:59`,
-`trigger-context.js:43`). The call at `session-transitions.js:566` passes no
-`closestWriter` argument (the continuation policy above is separate).
+Decision 4 changes the published old-id contract. At implementation:
+`.ai/contexts/trigger-watcher.md:64` and `.ai/contexts/trigger-watcher.md:70`
+("the old id keeps reaching the same terminal") must say that an old id keeps
+reaching its tab only along `continued-in` (the sentence at
+`.ai/contexts/trigger-watcher.md:62` stays true), and that after a user
+`/clear`, `/new`, `/reset` or a fork the trigger is refused with zero bytes,
+including during the interval before the UI re-key. `docs/automation.md`
+documents the same for callers (it has no old-id sentence today, checked at
+this revision; add one). The `CHANGELOG.md` entry under `## Unreleased`
+states the behavior change in user terms: a trigger to a conversation that was
+cleared is no longer delivered to the terminal that now holds a new
+conversation. Current re-keying after detected `/clear` requires
+`clearOwner(...) === 'mine'` (`session-transitions.js:565`,
+`session-transitions.js:566`, `session-transitions.js:587`), then current id
+resolution forwards the old id (`session-transitions.js:53`,
+`session-transitions.js:59`, `trigger-context.js:43`); the call at
+`session-transitions.js:566` passes no `closestWriter` argument. The
+implementation must not let that forwarding stand in for E: resolution finds T,
+and E=R is judged against T's writer.
 
 The five supplied #587 commit messages are evidence of design revisions, not
 independent proof of each review's exact chronology or runtime failure. In
@@ -584,22 +627,22 @@ Do not transplant it. Also reject locking by requested id alone, sticky alias
 permission after a known move, changing the global PTY writer to guard protocol
 replies, and treating `getDescriptorIdentity` as a process-generation check.
 
-## Open questions for the maintainer
+## Maintainer decisions (13/10)
 
 1. **Accept tab-local reset authorization where successor identity is unknown?**
-   Recommended: yes, for the same chain after its own guarded clear-family Enter,
+   Decision: yes, for the same chain after its own guarded clear-family Enter,
    on the same tab, PTY and observed writer generation; no global alias permission.
    It is necessary to preserve reset chains without re-key support. It authorizes
    the reset successor without claiming causal proof when all identity evidence
    is unavailable. Keep the limitation explicit and bind E once observable.
 2. **Keep macOS and namespace-only sandbox descriptor aliases unavailable without
-   positive process identity?** Recommended: yes. Fail descriptor fallback fast
-   there; deliver direct `unknown`, but never infer descriptor-alias ownership
+   positive process identity?** Decision: yes. Fail descriptor fallback fast
+   there; direct keys still deliver on `unknown`, but never infer descriptor-alias ownership
    from a row, cwd, unsupported anchor or continuation record. Historical
-   mappings use question 4 independently. A platform identity adapter would be
+   mappings follow decision 4 independently. A platform identity adapter would be
    a separate, measured follow-up.
 3. **Count the new tab-mutex and ownership waits inside `timeout_ms`?**
-   Recommended: yes, after reaching the existing per-id FIFO's head. This gives
+   Decision: yes, after reaching the existing per-id FIFO's head. This gives
    the new waits one bounded delivery budget while retaining same-id dispatch
    order. The FIFO is mandatory: same-id queue time is outside the budget,
    but a distinct descriptor alias waits for T inside it and can expire first.
@@ -607,55 +650,37 @@ replies, and treating `getDescriptorIdentity` as a process-generation check.
    documentation; do not grant a fresh budget after a fallback or reset.
 
 4. **What does a new trigger to an old id mean after a user `/clear`?**
-   No decision is made in this revision. Today the old id still reaches the
-   same terminal after the map re-key (`session-transitions.js:53`,
-   `session-transitions.js:59`, `trigger-context.js:43`; the published promise
-   is `.ai/contexts/trigger-watcher.md:64`). Consider writer A→C before this
-   trigger is admitted, with map still A or with historical mapping A→C:
+   **Decision: a trigger addresses a conversation, not a tab.** E starts as R
+   and advances only along `continued-in` records, using the proof described
+   under "Ownership outcomes" (the one the #579 re-key uses,
+   `session-transitions.js:445` to `session-transitions.js:470`). A
+   continuation, resume or compaction successor is the same conversation: a
+   successor reached from R by `continued-in` and verified as T's closest
+   writer is `mine`. A tab whose writer names a conversation not reachable
+   from R (the user's `/clear`, `/new`, `/reset`, or a fork, which leaves the
+   original un-continued) is a definite `other`: refuse, zero bytes. If R
+   continued into a `kind: "bg"` job not attached here, the immediate
+   `background session, not attached here` error stays
+   (`trigger-watcher.js:1307`). Unknown writer at admission: a direct key
+   delivers under the direct-key rules and nothing binds until a decidable
+   observation; a historical alias follows the alias column of the ownership
+   table. A live direct A reopened elsewhere still wins the lookup. The
+   chain's own reset keeps its authorization; Refusal rules are unchanged.
 
-   - **Option A — preserve tab addressing at admission.** For a direct or
-     historical route, initialize E once from T's verified interactive writer
-     at initial pinning, or otherwise from the normalized resolved live map key.
-     An `unknown` writer at admission leaves E unbound until the first
-     decidable observation before the text; if none arrives before the text,
-     deliver as a direct key on `unknown` per the direct-key rules. (Freezing E
-     to the map key on a cold Windows table would bind A while the writer is
-     already C, then refuse once the table warms, where a warm table delivers
-     with E=C.) Under A, a `/compact` sent to the old id after an unrekeyed
-     continuation lands in the new conversation.
-     A historical route uses the direct-key `unknown` policy from admission
-     onward; a descriptor alias still requires positive `mine`. Thus a new
-     trigger R=A after user clear reaches C even before UI re-key if C is
-     observable; after re-key, unavailable identity also preserves delivery.
-     Freeze a bound E before joining the tab mutex/readiness/turn waits. Never
-     rebind E after a subsequent move, except this chain's own reset. The live
-     direct A, if reopened elsewhere, still wins. This option necessarily
-     generalizes to other pre-admission conversation changes reachable by the
-     same direct/historical route: no reset-cause discriminator is proposed.
-   - **Option B — address the requested conversation.** Initialize E to R for
-     direct and both alias types. A verified writer C refuses immediately,
-     both before and after re-key. Unavailable evidence keeps direct-key
-     availability before re-key, but a historical alias waits only before text
-     within the deadline and cannot write without `mine`. An admitted chain's
-     own reset remains the sole permission to bind its successor. This is a
-     change to the published old-id routing contract, not merely protection
-     against a conversation change while a trigger waited.
+   Rejected, briefly:
+   - **Option A, preserve tab addressing at admission** (E initialized from
+     the tab's writer or live map key). It made an old id a tab address, so a
+     trigger meant for a conversation could land in an unrelated one after a
+     user clear, and it generalized to every pre-admission conversation change
+     with no reset-cause discriminator.
+   - **Option B, E=R with no continuation rule.** It refused after a known
+     reset, as decided, but also refused legitimate continuation, resume and
+     compaction successors of the same conversation, which the re-key already
+     treats as one.
 
-   **Recommendation: option B**, because the requested conversation remains
-   the address unless the caller explicitly authorizes a reset in its chain.
-   Its availability limits and required automation-doc migration must be
-   accepted by the maintainer; the recommendation is not an implementation
-   choice. Both options prohibit following a proven later move during a
-   delivery and retain the direct-unknown observability limitation.
-
-   **Sections affected by the answer:** Delivery invariant and vocabulary
-   (initial E and key semantics), Lookup fallback (historical versus descriptor
-   admission), Ownership outcomes (historical action column), One lock per tab
-   (freeze E before waits), Test matrix (all historical-alias cases and the
-   user-clear row), and Consequences (old-id promise/doc migration). The chain's
-   own reset and Refusal rules remain the same under both. Until selection,
-   interpret every historical alias through these conditional rules, never
-   infer option B from the ordinary descriptor-alias table.
+   **Sections affected:** Delivery invariant and vocabulary (E), Ownership
+   outcomes (continuation rule), One lock per tab (pin E=R), Test matrix
+   (Q4 rows) and Consequences (old-id promise and documentation).
 
 ## Verification boundary
 
@@ -665,4 +690,4 @@ source-derived inferences; they were not reproduced against a running app here.
 Real macOS ownership, Linux namespace descriptors, Windows cold-table/PID reuse,
 and reset/continuation causality were not measured with a live CLI in this step.
 No claim is made that the proposed invariant is implemented or that its future
-test matrix passes. Maintainer acceptance is the next gate.
+test matrix passes. Implementation behind the accepted decisions is the next gate; the `-p` descriptor `kind` and the continuation behavior of live CLIs remain to be measured there.
