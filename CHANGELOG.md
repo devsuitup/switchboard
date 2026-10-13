@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - Markdown previews now show a file's frontmatter as a readable header above its content, including its name, description and metadata. (#593)
+- Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, a single close waits, and closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. A window closed while it is still starting asks once it has loaded. (#478)
 
 ### Fixed
 - On Windows and Linux, automation triggers follow a running conversation when its id changes, except in WSL or the Linux sandbox. (#579)

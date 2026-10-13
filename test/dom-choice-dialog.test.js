@@ -253,3 +253,28 @@ test('choice dialog: Enter outside the dialog does nothing', async () => {
     assert.equal(await pending, null);
   } finally { ctx.destroy(); }
 });
+
+test('choice dialog: closeWith closes it with its value, and does nothing once the user has answered', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    let settle;
+    const pending = open(ctx, { closeWith: new Promise((r) => { settle = r; }) });
+    settle({ a: true });
+    assert.deepEqual(await pending, { a: true });
+    assert.equal(overlay(ctx), null);
+
+    const before = ctx.document.createElement('button');
+    ctx.document.body.appendChild(before);
+    before.focus();
+    let late;
+    const answered = open(ctx, { closeWith: new Promise((r) => { late = r; }), returnFocus: before });
+    cancelBtn(ctx).click();
+    assert.equal(await answered, null);
+    const elsewhere = ctx.document.createElement('button');
+    ctx.document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    late({});
+    await new Promise((r) => setTimeout(r));
+    assert.equal(ctx.document.activeElement, elsewhere, 'the focus is not taken back a second time');
+  } finally { ctx.destroy(); }
+});
