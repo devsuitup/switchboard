@@ -159,9 +159,12 @@ come from the on-disk mirror). `stopBeforeArchive` treats a null `remoteHostAt`
 as liveness unknown and calls `remoteStopSession` for that member unless the
 adapter has confirmed it dead; `remote-stop-session` then refreshes the host
 once (at most `REMOTE_STOP_SYNC_TIMEOUT_MS`, 20 s) and answers from the fresh
-list. A host that does not answer (timeout, a failure of the ssh command itself (`remote-transport.js` tags its
-timeout, truncation and non-zero exit with `remoteTransport`; nothing thrown by
-`syncMirror` is tagged), or no
+list. A host that does not answer (timeout, a failure of the ssh command itself (`remote-transport.js` tags only a
+timeout, ssh exit 255 and a spawn error or exit -1 with `remoteTransport`; a
+truncated inventory, any other non-zero exit and anything thrown by
+`syncMirror` mean the host answered and are not tagged, so the archive is
+refused with the error and "remove the host in Settings to archive without
+checking"), or no
 attempt finished after an in-flight refresh was awaited within the same bound;
 an in-flight refresh that is the global one is retried with a forced
 per-host refresh once it ends, since it skips hosts in backoff; the wait compares `getRemoteHostState(alias).attempts` with a snapshot taken at
@@ -176,7 +179,7 @@ archive. A host that
 is stopped or no longer configured (`refreshHostNow` reports `reason: 'stopped'`
 or `'unknown-host'`) answers "session not found on that host", so the row
 archives silently. The Archive button is disabled
-and titled "Checking the host before archiving…" while this runs (the folder and group Archive buttons too, kept in `archivingGroupIds` so a re-render re-applies them, plus each row they check; folder Archive is refused up front, with a message on its button, while a row of the folder is still checking, and rechecks after its dialog)
+and titled "Checking the host before archiving…" while this runs (the folder and group Archive buttons too, kept in `archivingGroupIds` so a re-render re-applies them, plus each row they check; a folder or slug-group Archive asks an unreachable host once (`stopBeforeArchive`'s `unreachable` map, one per action) and marks all its rows busy before the first check; folder Archive is refused up front, with a message on its button, while a row of the folder is still checking, and rechecks after its dialog)
 (`archivingSessionIds`, `public/sidebar.js`), and a second click is ignored.
 
 | kind | alive / has PTY | call |

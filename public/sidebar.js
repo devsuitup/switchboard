@@ -35,9 +35,9 @@ function setGroupArchiveBusy(domId, busy) {
   if (btn) btn.disabled = busy;
 }
 
-async function stopForArchive(session) {
+async function stopForArchive(session, unreachable) {
   try {
-    return await stopBeforeArchive(session);
+    return await stopBeforeArchive(session, { unreachable });
   } catch (err) {
     return { ok: false, error: (err && err.message) || 'unknown error' };
   }
@@ -1265,11 +1265,12 @@ async function archiveProjectFolder(project, button) {
     const groupKey = 'ph-' + folderId(project.projectPath);
     const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
     setGroupArchiveBusy(groupKey, true);
+    for (const s of own) setArchiveBusy(s.sessionId, true);
+    const unreachable = new Map();
     try {
       for (const s of own) {
-        setArchiveBusy(s.sessionId, true);
         let stopResult;
-        try { stopResult = await stopForArchive(s); } finally { setArchiveBusy(s.sessionId, false); }
+        try { stopResult = await stopForArchive(s, unreachable); } finally { setArchiveBusy(s.sessionId, false); }
         if (!stopResult.ok) {
           refused = true;
           const item = document.getElementById('si-' + s.sessionId);
@@ -1279,9 +1280,9 @@ async function archiveProjectFolder(project, button) {
         }
       }
     } finally {
+      for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
       setGroupArchiveBusy(groupKey, false);
-    }
-    announceNotStopped(notStopped);
+    }    announceNotStopped(notStopped);
     if (refused) {
       pollActiveSessions();
       loadProjects();
@@ -1452,16 +1453,16 @@ function rebindSidebarEvents(projects) {
         const group = header.parentElement;
         if (archivingGroupIds.has(group.id)) return;
         setGroupArchiveBusy(group.id, true);
-        const sessionItems = group.querySelectorAll('.session-item:not([data-subagent])');
+        const todo = [...group.querySelectorAll('.session-item:not([data-subagent])')]
+          .map(item => ({ item, sid: item.dataset.sessionId, session: sessionMap.get(item.dataset.sessionId) }))
+          .filter(({ session, sid }) => session && !session.archived && !archivingSessionIds.has(sid));
+        for (const { sid } of todo) setArchiveBusy(sid, true);
+        const unreachable = new Map();
         const notStopped = [];
         try {
-          for (const item of sessionItems) {
-            const sid = item.dataset.sessionId;
-            const session = sessionMap.get(sid);
-            if (!session || session.archived || archivingSessionIds.has(sid)) continue;
-            setArchiveBusy(sid, true);
+          for (const { item, sid, session } of todo) {
             let stopResult;
-            try { stopResult = await stopForArchive(session); } finally { setArchiveBusy(sid, false); }
+            try { stopResult = await stopForArchive(session, unreachable); } finally { setArchiveBusy(sid, false); }
             if (!stopResult.ok) {
               surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error);
               continue;
@@ -1471,6 +1472,7 @@ function rebindSidebarEvents(projects) {
             session.archived = 1;
           }
         } finally {
+          for (const { sid } of todo) if (archivingSessionIds.has(sid)) setArchiveBusy(sid, false);
           setGroupArchiveBusy(group.id, false);
         }
         announceNotStopped(notStopped);

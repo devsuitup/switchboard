@@ -36,7 +36,7 @@ async function liveBackgroundJobRefusal(sessionId) {
 }
 
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
-async function stopBeforeArchive(session) {
+async function stopBeforeArchive(session, { unreachable } = {}) {
   if (!session) return { ok: true };
   const ids = rowSessionIds(session);
   const alias = session.remoteAlias;
@@ -54,8 +54,13 @@ async function stopBeforeArchive(session) {
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
       if (!hostUnsynced && !isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
+      if (unreachable && unreachable.has(alias)) {
+        notStopped.push({ alias, error: unreachable.get(alias) });
+        continue;
+      }
       const result = await window.api.remoteStopSession(alias, id);
       if (result && result.hostUnreachable) {
+        if (unreachable) unreachable.set(alias, result.error);
         notStopped.push({ alias, error: result.error });
         continue;
       }

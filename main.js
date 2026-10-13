@@ -1904,9 +1904,9 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), REMOTE_STOP_SYNC_TIMEOUT_MS); });
     const sync = (async () => {
       for (;;) {
+        if (remoteIndexer.getRemoteSessions(alias).at || remoteIndexer.getRemoteHostState(alias).attempts > attemptsBefore) return { skipped: false };
         const attempt = await remoteIndexer.refreshHostNow(alias, { force: true });
         if (!(attempt.skipped && attempt.reason === 'in-flight') || abandoned) return attempt;
-        if (remoteIndexer.getRemoteSessions(alias).at || remoteIndexer.getRemoteHostState(alias).attempts > attemptsBefore) return attempt;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     })();
@@ -1918,7 +1918,9 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
     if (!remote.at) {
       const state = remoteIndexer.getRemoteHostState(alias);
       const newError = state.attempts > attemptsBefore && state.lastError;
-      if (newError && !state.lastErrorTransport) return { ok: false, error: state.lastError };
+      if (newError && !state.lastErrorTransport) {
+        return { ok: false, error: `${state.lastError}. Archive cannot check this session on ${alias} until that is resolved; remove the host in Settings to archive without checking.` };
+      }
       if (refreshed && refreshed.timedOut) {
         return { ok: false, hostUnreachable: true, error: `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s` };
       }

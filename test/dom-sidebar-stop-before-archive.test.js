@@ -486,3 +486,44 @@ test('a re-render keeps the slug-group and folder Archive buttons disabled while
     assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, false);
   } finally { ctx.destroy(); }
 });
+
+test('folder archive asks an offline host once for all its rows, not once per row', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const rows = ['r1', 'r2', 'r3'].map(id => remoteSession(id, 'vps', true));
+    const project = { projectPath: '/home/dev/proj', sessions: rows };
+    const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
+    const notices = [];
+    ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await done;
+    assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
+    assert.equal(calls.filter(c => c.method === 'archiveSession').length, 3);
+    assert.equal(notices.length, 1);
+  } finally { ctx.destroy(); }
+});
+
+test('folder archive marks every row busy before it starts checking the first one', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const rows = ['r1', 'r2'].map(id => remoteSession(id, 'vps', true));
+    const project = { projectPath: '/home/dev/proj', sessions: rows };
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
+    ctx.window.cachedAllProjects = [project];
+    ctx.sidebar.renderProjects([project], true);
+    const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    await new Promise(r => setTimeout(r, 0));
+    await answerChoiceDialog(ctx, { confirm: true });
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(ctx.document.querySelector('#si-r2 .session-archive-btn').disabled, true);
+    release();
+    await done;
+    assert.equal(ctx.document.querySelector('#si-r2 .session-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});
