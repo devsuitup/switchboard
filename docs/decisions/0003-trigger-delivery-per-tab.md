@@ -155,10 +155,9 @@ T/G/liveness checks only; do not run the ownership classifier for them, even
 when a nested CLI descriptor names a different id. Preserve their existing
 composer/readiness/result gates. Do not add descriptor fallback to these tabs.
 Today's public contract includes plain terminals (`docs/automation.md:196`).
-The review's shim example needs qualification: the POSIX/fish shims block
-`claude` with a hint and return 1 (`plain-terminal-shell.js:10`,
-`plain-terminal-shell.js:14`); no shim runs in PowerShell/cmd
-(`.ai/contexts/plain-terminal.md:52`). The synthetic nested-CLI scenario remains
+The POSIX/fish shims block `claude` with a hint and return 1
+(`plain-terminal-shell.js:10`, `plain-terminal-shell.js:14`); no shim runs in
+PowerShell/cmd (`.ai/contexts/plain-terminal.md:52`). The synthetic nested-CLI scenario remains
 required, for a bypassed shim or an unshimmed shell. Unattached remote socket
 delivery retains its
 existing route and contract (`trigger-watcher.js:1294`,
@@ -200,7 +199,14 @@ Fallback has the following stopping rules, **before** waiting for ownership:
    an ownership wait; this is a lookup miss, not a pinned historical alias.
 3. On a supported domain, wait only if a descriptor naming R or a previously
    read hint names a live process plausibly under an eligible local PTY, with
-   verification temporarily unavailable (e.g. a cold table or torn read). A
+   verification temporarily unavailable (e.g. a cold table or torn read).
+   "Plausibly under an eligible local PTY" means: the hinted PID is alive and,
+   from whatever ancestry is readable, is not demonstrably outside every
+   eligible local PTY's process tree. A cold table justifies waiting for at
+   most one shared process-table refresh; then the fallback decides with what
+   it has, and if no candidate is verified it returns the existing fast
+   `session not found` error. A torn read is rechecked once within the same
+   bound. A
    descriptor proven external, nested non-interactive, stale or multiply owned
    is not a candidate hint. If none remains, return `session not found` now,
    the existing miss result (`trigger-watcher.js:1312`). A hint may consume only
@@ -272,7 +278,17 @@ writers, on Windows as well as Linux. Unreadable/uncomparable identity remains
 uncertain; never accept it as `mine` or use it as definite contrary evidence.
 Require descriptor `kind === "interactive"` (the current parser exposes `kind`,
 `cli-session-state.js:316`; descriptor examples use `interactive`,
-`.ai/contexts/cli-session-state.md:44`). Non-interactive descriptors, including
+`.ai/contexts/cli-session-state.md:44`). **UNVERIFIED:** what `kind` a nested
+`claude -p` writes is not established; `.ai/contexts/cli-session-state.md:441`
+lists only `bg` and `interactive`. The implementation must not rely on the
+`kind` filter until a canary test (spawn `claude -p` under a tab's PTY and read
+its descriptor) or a live check records the value. If `-p` writes
+`interactive`, the filter alone is insufficient and `mine`/`other` must also
+require the writer to be T's closest interactive CLI by ancestry: the
+descriptor's PID must be the shallowest interactive-descriptor process between
+the PTY root and any other descriptor-bearing process below it; a deeper
+interactive descriptor never overrides it, and two at equal depth yield
+`unknown`. Non-interactive descriptors, including
 headless/background writers with non-interactive `kind`, never establish `mine`
 or definite `other` for T. Validate ancestor identity/creation order and select the closest verified interactive
 writer by ancestry depth from the PTY, not by descriptor enumeration order. If
@@ -459,9 +475,10 @@ Additional required scenario rows (apply W/L/S/M where meaningful):
 | Plain terminal P running Claude X | Bypass the POSIX shim in the fixture or use an unshimmed shell; X differs from P. Direct delivery preserves text+Enter and normal result gates, with no ownership call/probe/wait. T/G guards and tab mutex still apply. |
 | Local Claude tab with missing own descriptor and nested non-interactive writer | A nested `kind != interactive` writer naming X never becomes T's writer: direct R=A is `unknown` and delivers; descriptor fallback for X fails lookup with no bytes. Repeat with torn ancestor data, and with a valid interactive ancestor as control. |
 | User `/clear`, then a new trigger to the old id A | Establish writer C before trigger admission, first with map still A, then after historical re-key A→C. Option A binds initial E=C and delivers; a historical route with no evidence delivers as direct `unknown`. Option B keeps E=A and refuses on proven C; before re-key direct `unknown` delivers, after re-key historical `unknown` waits only before text then expires unwritten. A reopened live direct A wins under both. Assert R=A in results. |
+| Cold table at admission, warm before text (writer already C, map still A, direct R=A) | Windows: first table read is cold, then warms before the text with C verified. Option A leaves E unbound at admission, binds E=C at the first decidable observation and delivers; if the table never warms before the text, it delivers as a direct key on `unknown`. Option B pins E=A, so the warmed definite `other` refuses with zero bytes. Assert both outcomes and R=A in results. |
 | Descriptor lags this chain's guarded clear Enter | Keep descriptor naming pre-reset A across completion/status polls and the successor step. It neither binds E=A as successor nor causes refusal or a mandatory identity wait. First verified C different from A binds E=C; later proven D refuses. Test all three reset commands and unavailable descriptors, with no UI re-key. |
 | Windows direct table expires between text and Enter | Start/share a deferred refresh at expiry, keep it unresolved beyond the 50 ms default Enter gap. Direct `unknown` still writes Enter at the configured gap (allow timer tolerance); assert no added process-refresh delay and no dependency on its 5 s completion. Repeat at text and recovery Enter; ordinary alias unknown at either Enter stops with explicit partial-write accounting. |
-| Unknown id with no viable fallback | macOS and namespace-only sandbox return `session not found` with zero bytes and zero ownership wait, even if a descriptor names R. Supported-domain no-hint or proven external candidates also fail now. An unattached bg job immediately keeps its specific error/job id, including with a cold table; a supported cold candidate may wait within the deadline. |
+| Unknown id with no viable fallback | macOS and namespace-only sandbox return `session not found` with zero bytes and zero ownership wait, even if a descriptor names R. Supported-domain no-hint or proven external candidates also fail now. An unattached bg job immediately keeps its specific error/job id, including with a cold table; a supported cold candidate with a plausible hint waits for at most one shared process-table refresh, then the fallback decides with what it has; no candidate verified returns the existing fast `session not found` error. |
 | Explicit continuation during step i's turn-end wait | Step i's text+Enter is logged. Change verified writer E→B before its turn-end wait completes, optionally re-key the map; step i+1 writes no bytes and the result preserves step i, identifies ownership refusal rather than `not sent`. If ordinary recovery Enter is attempted during the wait, guard it too. Run direct/alias and both question-4 initializations; a metadata-only record has no effect. |
 | Local bg attach and remote attach tabs | Existing direct/historical route writes under one T lock with T/G/liveness and ordinary gates; no local ownership classifier or descriptor fallback runs. A remote snapshot on local miss wins over a local descriptor candidate, including a remote error; unattached socket delivery keeps its separate contract. |
 | Close and reopen R during a wait | Close T/G, remove its keys and create T2/G2, optionally reusing the numeric pid. The old delivery fails its write guard and cannot migrate; the new trigger has T2's distinct lock and may proceed. No old bytes reach T2; text-only old submission is reported as partial. |
@@ -544,9 +561,8 @@ Current re-keying after detected `/clear` requires `clearOwner(...) === 'mine'`
 (`session-transitions.js:565`, `session-transitions.js:566`,
 `session-transitions.js:587`), then current id resolution forwards the old id
 (`session-transitions.js:53`, `session-transitions.js:59`,
-`trigger-context.js:43`). The review's `/clear` citation must not be described
-as a `closestWriter: true` call: that argument is absent at
-`session-transitions.js:566` (the continuation policy above is separate).
+`trigger-context.js:43`). The call at `session-transitions.js:566` passes no
+`closestWriter` argument (the continuation policy above is separate).
 
 The five supplied #587 commit messages are evidence of design revisions, not
 independent proof of each review's exact chronology or runtime failure. In
@@ -600,11 +616,18 @@ replies, and treating `getDescriptorIdentity` as a process-generation check.
    - **Option A — preserve tab addressing at admission.** For a direct or
      historical route, initialize E once from T's verified interactive writer
      at initial pinning, or otherwise from the normalized resolved live map key.
+     An `unknown` writer at admission leaves E unbound until the first
+     decidable observation before the text; if none arrives before the text,
+     deliver as a direct key on `unknown` per the direct-key rules. (Freezing E
+     to the map key on a cold Windows table would bind A while the writer is
+     already C, then refuse once the table warms, where a warm table delivers
+     with E=C.) Under A, a `/compact` sent to the old id after an unrekeyed
+     continuation lands in the new conversation.
      A historical route uses the direct-key `unknown` policy from admission
      onward; a descriptor alias still requires positive `mine`. Thus a new
      trigger R=A after user clear reaches C even before UI re-key if C is
      observable; after re-key, unavailable identity also preserves delivery.
-     Freeze that E before joining the tab mutex/readiness/turn waits. Never
+     Freeze a bound E before joining the tab mutex/readiness/turn waits. Never
      rebind E after a subsequent move, except this chain's own reset. The live
      direct A, if reopened elsewhere, still wins. This option necessarily
      generalizes to other pre-admission conversation changes reachable by the
