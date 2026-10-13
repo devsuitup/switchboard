@@ -69,7 +69,7 @@ the restore is still starting (`pendingRestoreEntries`). So quitting during a
 cold index, before answering the prompt, or in the middle of a restore keeps
 them for the next start, while a session you stopped during the restore is
 left out. The saved active marker stays on its session until the restore has
-opened it. An exit before the saved set has even been read writes nothing.
+opened it, and passes to the replacement of a fresh entry while that one opens. An entry still awaiting consent that you attach by hand is saved during the ask window. An exit before the saved set has even been read writes nothing.
 
 If the exit does not happen after all (an installer that fails to start),
 saving resumes after the 10 s, and the set is written then if anything asked

@@ -204,16 +204,22 @@ function persistWorkingSet({ final = false } = {}) {
         ...(fresh ? { fresh: true } : {}),
       });
     }
-    const notStarted = pendingRestoreEntries().filter(({ item }) => !openSessions.has(item.sessionId));
+    const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
+    const notStarted = pendingRestoreEntries()
+      .filter(({ item }) => !openSessions.has(item.sessionId) || liveAttach(item.sessionId))
+      .map(entry => ({ ...entry, keepAttached: liveAttach(entry.item.sessionId) }));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
-    const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
     const held = [...skippedWorkingSetEntries.values(), ...notStarted]
       .filter(({ item, keepAttached }) => keepAttached ? liveAttach(item.sessionId) : !openSessions.has(item.sessionId))
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true } : {}) });
+    }
+    if (!set.some(e => e.active)) {
+      const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
+      if (opening) opening.active = true;
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
@@ -288,7 +294,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const options = await resolveDefaultSessionOptions(project);
           delete options.worktree;
           delete options.worktreeName;
-          const newId = await launchNewSession(project, options);
+          const newId = await launchNewSession(project, options, item.sessionId);
           if (newId) startedAs.set(item.sessionId, newId);
         } finally {
           restoreInFlight.delete(item.sessionId);
@@ -1359,7 +1365,7 @@ async function loadProjects({ resort = false } = {}) {
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
 
-async function launchNewSession(project, sessionOptions) {
+async function launchNewSession(project, sessionOptions, restoreSessionId) {
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
@@ -1393,9 +1399,18 @@ async function launchNewSession(project, sessionOptions) {
   refreshSidebar();
 
   const entry = createTerminalEntry(session);
+  if (restoreSessionId) {
+    if (restoreInFlight.get(restoreSessionId)?.active) pendingSessions.get(sessionId).openingActive = true;
+    restoreInFlight.delete(restoreSessionId);
+  }
 
   // Open terminal in main process with session options
-  const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+  let result;
+  try {
+    result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+  } finally {
+    delete pendingSessions.get(sessionId)?.openingActive;
+  }
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;

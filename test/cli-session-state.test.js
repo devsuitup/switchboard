@@ -568,3 +568,45 @@ test('clearOwner: walks the state file pid up to the PTY pid', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('clearOwner: uses the Windows process table to identify the PTY owner', async () => {
+  const dir = mkTmp();
+  try {
+    const created = n => String(134360000000000000n + BigInt(n) * 1000n);
+    let reads = 0;
+    cliSessionState.init({
+      dir, activeSessions: new Map(), log: silentLog, platform: 'win32',
+      isProcessAlive: pid => pid !== 500,
+      readProcessTable: async () => {
+        reads++;
+        return new Map([
+          [100, { ppid: 1, created: created(10) }],
+          [200, { ppid: 100, created: created(20) }],
+          [300, { ppid: 200, created: created(30) }],
+          [400, { ppid: 1, created: created(40) }],
+        ]);
+      },
+    });
+    writeState(dir, 300, { sessionId: 'cleared', status: 'idle', pidDomain: 'win32:anchor', procStart: created(30) });
+    writeState(dir, 400, { sessionId: 'elsewhere', status: 'idle', pidDomain: 'win32:anchor', procStart: created(40) });
+    writeState(dir, 500, { sessionId: 'dead', status: 'idle' });
+    writeState(dir, 600, { sessionId: 'no-proc', status: 'idle' });
+
+    assert.equal(cliSessionState.clearOwner('cleared', 100), 'pending', 'the table has not arrived yet');
+    await cliSessionState.refreshProcessTable();
+    assert.equal(reads, 1);
+    assert.equal(cliSessionState.clearOwner('cleared', 100), 'mine');
+    assert.equal(cliSessionState.clearOwner('CLEARED', 100), 'mine');
+    assert.equal(cliSessionState.clearOwner('cleared', 300), 'mine', 'the PTY runs the descriptor writer');
+    assert.equal(cliSessionState.clearOwner('elsewhere', 100), 'other');
+    assert.equal(cliSessionState.clearOwner('dead', 100), 'pending');
+    assert.equal(cliSessionState.clearOwner('absent', 100), 'pending');
+    assert.equal(cliSessionState.clearOwner('no-proc', 100), 'pending', 'the pid is absent from the table');
+    assert.equal(cliSessionState.clearOwner('cleared', undefined), 'pending');
+    writeState(dir, 300, { sessionId: 'cleared', status: 'idle', pidDomain: 'win32:anchor', procStart: created(100000) });
+    assert.equal(cliSessionState.clearOwner('cleared', 100), 'other', 'a reused pid is not the descriptor writer');
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
