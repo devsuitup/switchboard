@@ -88,9 +88,14 @@ offered files that still read `enabled: false`.
   their nested worktrees; host-qualified remote entries do not suspend local
   schedules. The predicate resolves existing local roots on disk and normalizes
   separators, so Run now's resolved cwd, directory junctions and native Windows
-  worktree paths follow the same suspension. Already running commands continue. Unarchive clears the entry and
-  restores local registration (for legacy Hide), so subsequent checks resume;
-  opted-in catch-up keeps its usual missed-minute policy. Archive folder remains
+  worktree paths follow the same suspension; on Windows the comparison uses
+  `fs.realpathSync.native` and is case-insensitive. Already running commands
+  continue. Unarchive clears the entry and passes over the catch-up record of the
+  project's schedules (`skipMissedRuns` in `schedule-runner.js` claims the
+  previous minute), so a run that fell due while archived is not replayed and the
+  next due minute runs normally. It registers the project only for a legacy Hide
+  entry (no `hiddenProjectKinds` mark) whose folder still exists; an Archive
+  leaves the registry untouched, and a Delete is never registered again. Archive folder remains
   a separate operation that can write `enabled: false` and offer re-enabling.
 
 - **Schedules are scanned fresh every check** (`scanSchedules` on every minute boundary, at start and on `resume`). No in-memory cache — adding/editing a `.md` file takes effect within 60 seconds without any restart.

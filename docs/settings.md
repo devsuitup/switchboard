@@ -108,7 +108,8 @@ only migrates forward.
 
 - `sidebarWidth` (default 340): the sidebar's width, set by dragging its edge.
 - `hiddenProjects`: projects archived with **Archive Project**, including legacy
-  hidden entries and projects deleted from Switchboard. Listed in **Archived projects**.
+  hidden entries, and projects deleted from Switchboard (kept out of the sidebar;
+  not listed in **Archived projects**). `hiddenProjectKinds` records which is which.
 - `archivedProjects`, a setting of its own: folders hidden with
   [Archive folder](session-browser.md#archive-a-folder), each with the session
   ids it held and the schedule files it disabled.
@@ -135,7 +136,7 @@ but Switchboard suspends their launches until you unarchive the project.
 Already running sessions and schedules continue.
 
 In Global Settings → **Archived projects**, **Unarchive** restores the sidebar
-row and resumes scheduling; **Add Project** on the same local folder also
+row and resumes scheduling (a run that fell due while archived is not replayed); **Add Project** on the same local folder also
 restores it. Previously hidden projects appear here too, with default settings
 because the old Hide action already removed their settings. A remote entry
 includes its host alias; unarchiving it does not register a local schedule.

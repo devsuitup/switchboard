@@ -456,7 +456,8 @@
 
     if (!isProject) {
       const list = settingsViewerBody.querySelector('#sv-archived-projects');
-      let archived = [...(current.hiddenProjects || [])];
+      const deleted = current.hiddenProjectKinds || {};
+      let archived = (current.hiddenProjects || []).filter(entry => deleted[entry] !== 'delete');
       function renderArchived() {
         list.innerHTML = archived.length ? archived.map((entry, i) => `
           <div class="settings-field">

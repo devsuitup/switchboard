@@ -44,7 +44,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `add-project` | `(projectPath)` | Register a project (creates folder index) |
 | `archive-project-settings` | `(projectPath, folderKey)` | Archive the project reversibly; preserve settings/cache/registration, suspend schedules through hidden-state filtering. Bridge: `archiveProjectSettings`. |
 | `unarchive-project` | `(entry)` | Remove one stored hidden entry; refresh its folder and restore local schedule registration. Bridge: `unarchiveProject`. |
-| `remove-project` | `(projectPath, folderKey)` | Destructive Delete Project: drop settings, cache/search and schedule registration; no disk deletion. Bridge: `deleteProject` (`removeProject` retained for compatibility). |
+| `remove-project` | `(projectPath, folderKey)` | Destructive Delete Project: drop settings, cache/search and schedule registration; no disk deletion. Bridge: `deleteProject`. |
 | `remap-project` | `(oldPath, newPath)` | **Atomic JSONL `cwd` rewrite**, refuses if active sessions exist. See PR #20. |
 | `delete-worktree` | `(worktreePath)` | `git worktree remove` |
 | `worktree-status` | `(worktreePath)` | Dirty-file count |

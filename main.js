@@ -714,11 +714,24 @@ function scheduleProjects() {
   return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+
+function skipMissedScheduleRuns(projectPath) {
+  try {
+    require('./schedule-runner').skipMissedRuns(log, [projectPath], path.join(path.dirname(DB_PATH), 'schedule-state'));
+  } catch (err) {
+    log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
+  }
+}
+
 function isProjectSettingsArchived(projectPath) {
   const hidden = (getSetting('global') || {}).hiddenProjects || [];
   const normalize = value => {
-    try { value = fs.realpathSync(value); } catch {}
-    return value.replace(/\\/g, '/');
+    try { value = fs.realpathSync.native(value); } catch {}
+    value = value.replace(/\\/g, '/');
+    return process.platform === 'win32' ? value.toLowerCase() : value;
   };
   const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalize);
   const target = normalize(projectPath);
@@ -733,6 +746,7 @@ ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
     const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
     const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
     global.hiddenProjects = [...new Set([...(global.hiddenProjects || []), entry])];
+    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [entry]: 'archive' };
     setSetting('global', global);
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -748,9 +762,12 @@ ipcMain.handle('unarchive-project', (_event, entry) => {
     const { alias, folder: projectPath } = parseFolderKey(entry);
     const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
     refreshFolder(folder);
-    if (alias === null) scheduleProjects().add(projectPath);
+    const { [entry]: kind, ...kinds } = global.hiddenProjectKinds || {};
+    if (alias === null && kind === undefined && isDirectory(projectPath)) scheduleProjects().add(projectPath);
+    if (alias === null) skipMissedScheduleRuns(projectPath);
     clearArchivedEntry(getSetting, setSetting, alias, projectPath);
     global.hiddenProjects = global.hiddenProjects.filter(p => p !== entry);
+    global.hiddenProjectKinds = kinds;
     setSetting('global', global);
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -770,6 +787,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     const global = getSetting('global') || {};
     if (global.hiddenProjects && global.hiddenProjects.includes(projectPath)) {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
+      if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[projectPath];
       setSetting('global', global);
     }
     clearArchivedEntry(getSetting, setSetting, null, projectPath);
@@ -811,6 +829,7 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
     const hiddenEntry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
     if (!hidden.includes(hiddenEntry)) hidden.push(hiddenEntry);
     global.hiddenProjects = hidden;
+    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [hiddenEntry]: 'delete' };
     setSetting('global', global);
 
     // Clean up DB cache and search index for this folder
@@ -989,6 +1008,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
         const global = getSetting('global') || {};
         if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
           global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
+          if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[normalizedPath];
           setSetting('global', global);
         }
       } catch {}

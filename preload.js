@@ -82,7 +82,6 @@ contextBridge.exposeInMainWorld('api', {
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
-  removeProject: (projectPath, folderKey) => ipcRenderer.invoke('remove-project', projectPath, folderKey),
   deleteProject: (projectPath, folderKey) => ipcRenderer.invoke('remove-project', projectPath, folderKey),
   archiveProjectSettings: (projectPath, folderKey) => ipcRenderer.invoke('archive-project-settings', projectPath, folderKey),
   unarchiveProject: (entry) => ipcRenderer.invoke('unarchive-project', entry),

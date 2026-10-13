@@ -19,7 +19,7 @@ they live:
   - the `.md` files directly in `<project>/.claude/` and
     `<project>/.claude/commands/`.
 
-No directory is scanned recursively. Hidden projects are left out.
+No directory is scanned recursively. Archived and deleted projects are left out.
 
 Files named `schedule-*.md` carry a clock icon and a **Run now** button — see
 [Automation](automation.md#schedules).

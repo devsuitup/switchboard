@@ -10,7 +10,7 @@ const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
-const { setupSidebarDom } = require('./dom-setup');
+const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 const { encodeProjectPath } = require('../encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('../remote-hosts');
 const { applyAndPersistArchived, clearArchivedEntry } = require('../archived-projects');
@@ -20,18 +20,18 @@ const ROOT = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function setup(t, { hidden = [] } = {}) {
+function setup(t, { hidden = [], cron = '* * * * *', registered = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-project-archive-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const projectPath = path.join(dir, 'project');
   const commands = path.join(projectPath, '.claude', 'commands');
   fs.mkdirSync(commands, { recursive: true });
   const scheduleFile = path.join(commands, 'schedule-audit.md');
-  const scheduleBytes = '---\nname: Audit\ncron: * * * * *\nenabled: true\ncatch-up: true\n---\nAudit this project.\n';
+  const scheduleBytes = `---\nname: Audit\ncron: ${cron}\nenabled: true\ncatch-up: true\n---\nAudit this project.\n`;
   fs.writeFileSync(scheduleFile, scheduleBytes);
   const settingsFile = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({ global: { hiddenProjects: hidden },
-    ['project:' + projectPath]: { permissionMode: 'plan', addDirs: '/extra' }, scheduleProjects: [projectPath] }));
+    ['project:' + projectPath]: { permissionMode: 'plan', addDirs: '/extra' }, scheduleProjects: registered ? [projectPath] : [] }));
   const getSetting = key => JSON.parse(fs.readFileSync(settingsFile, 'utf8'))[key];
   const setSetting = (key, value) => {
     const state = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
@@ -50,7 +50,7 @@ function setup(t, { hidden = [] } = {}) {
   const handlers = new Map();
   let notices = 0;
   const context = vm.createContext({
-    fs, path, encodeProjectPath, parseFolderKey, joinFolderKey, getSetting, setSetting, deleteSetting,
+    fs, path, process, skipMissedScheduleRuns: () => {}, encodeProjectPath, parseFolderKey, joinFolderKey, getSetting, setSetting, deleteSetting,
     clearArchivedEntry, require: createRequire(path.join(ROOT, 'main.js')),
     scheduleProjects: () => scheduleRegistry(getSetting, setSetting),
     deleteCachedFolder: key => cache.delete(key), deleteSearchFolder: key => search.delete(key),
@@ -59,12 +59,13 @@ function setup(t, { hidden = [] } = {}) {
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
   });
   const source = read('main.js');
+  vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
   if (source.includes('function isProjectSettingsArchived(')) {
-    vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: 'main.js' });
+    vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: path.join(ROOT, 'main.js') });
   }
   for (const channel of ['remove-project', 'archive-project-settings', 'unarchive-project']) {
     const start = source.indexOf(`ipcMain.handle('${channel}'`);
-    if (start !== -1) vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context, { filename: 'main.js' });
+    if (start !== -1) vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context, { filename: path.join(ROOT, 'main.js') });
   }
   const invoke = (channel, ...args) => {
     assert.ok(handlers.has(channel), `${channel} must be available`);
@@ -159,11 +160,11 @@ test('delete drops project settings, cache, search and schedules without changin
   assert.ok(fs.statSync(h.projectPath).isDirectory());
 });
 
-test('archived schedules cannot run on ticks or catch-up and resume after unarchive', t => {
-  const h = setup(t);
+test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', t => {
+  const h = setup(t, { cron: '0 * * * *' });
   const localRequire = createRequire(path.join(ROOT, 'schedule-runner.js'));
   const timers = [];
-  let now = Date.now();
+  let now = new Date(2026, 0, 5, 10, 50).getTime();
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
@@ -173,26 +174,32 @@ test('archived schedules cannot run on ticks or catch-up and resume after unarch
     process: { env: {} }, Date: Clock, setTimeout: fn => { const timer = { fn }; timers.push(timer); return timer; },
     setInterval: () => ({}), clearTimeout() {}, clearInterval() {},
   });
-  vm.runInContext(read('schedule-runner.js'), runnerContext, { filename: 'schedule-runner.js' });
+  vm.runInContext(read('schedule-runner.js'), runnerContext, { filename: path.join(ROOT, 'schedule-runner.js') });
+  const stateDir = path.join(h.dir, 'schedule-state');
+  const log = { info() {}, warn() {}, error() {} };
+  h.context.skipMissedScheduleRuns = projectPath => runnerContext.module.exports.skipMissedRuns(log, [projectPath], stateDir);
   const source = read('main.js');
   const projectsLine = source.split('\n').find(line => line.includes('projects: () => scheduleProjects().list()'));
-  const projects = vm.runInContext('({' + projectsLine.trim() + '}).projects', h.context, { filename: 'main.js' });
+  const projects = vm.runInContext('({' + projectsLine.trim() + '}).projects', h.context, { filename: path.join(ROOT, 'main.js') });
   const runs = [];
   const resume = new EventEmitter();
-  const stop = runnerContext.module.exports.startScheduler({ info() {}, warn() {}, error() {} },
+  const stop = runnerContext.module.exports.startScheduler(log,
     (_args, cwd, _name, done) => { runs.push(cwd); done(); },
-    { projects, resumeSource: resume, stateDir: path.join(h.dir, 'schedule-state') });
+    { projects, resumeSource: resume, stateDir });
   t.after(stop);
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, 0);
   h.archive();
-  now += 60_000;
+  now = new Date(2026, 0, 5, 11, 30).getTime();
   timers[0].fn();
   resume.emit('resume');
-  assert.equal(runs.length, 1, 'archive must suspend ticks and resume catch-up checks');
+  assert.equal(runs.length, 0, 'archive must suspend ticks and resume catch-up checks');
   h.invoke('unarchive-project', h.projectPath);
-  fs.writeFileSync(h.scheduleFile, h.scheduleBytes.replace('catch-up: true\n', ''));
+  now = new Date(2026, 0, 5, 11, 31).getTime();
   timers[0].fn();
-  assert.equal(runs.length, 2, 'the same registration becomes runnable again');
+  assert.equal(runs.length, 0, 'the 11:00 run missed while archived is not caught up');
+  now = new Date(2026, 0, 5, 12, 0).getTime();
+  timers[0].fn();
+  assert.equal(runs.length, 1, 'the same registration runs again at its next due minute');
 });
 
 function runNowHarness(h) {
@@ -210,7 +217,7 @@ function runNowHarness(h) {
         return localRequire(name);
       },
     });
-    vm.runInContext(read(file), context, { filename: file });
+    vm.runInContext(read(file), context, { filename: path.join(ROOT, file) });
     modules.set(file, context.module.exports);
     return context.module.exports;
   }
@@ -258,7 +265,7 @@ test('the shared schedule launch refuses an archived project and releases its ru
   let done = 0;
   h.context.log = { info() {} };
   const source = read('main.js').replace(/^    function runScheduleCommand/m, 'function runScheduleCommand');
-  vm.runInContext(extractFunction(source, 'runScheduleCommand'), h.context, { filename: 'main.js' });
+  vm.runInContext(extractFunction(source, 'runScheduleCommand'), h.context, { filename: path.join(ROOT, 'main.js') });
   h.context.runScheduleCommand([], h.projectPath, 'Audit', () => { done++; });
   assert.equal(done, 1);
 });
@@ -271,7 +278,7 @@ test('preload forwards Archive, Unarchive and Delete to their distinct IPC handl
     contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } },
     ipcRenderer: { invoke: (...args) => calls.push(args) },
   }) });
-  vm.runInContext(read('preload.js'), context, { filename: 'preload.js' });
+  vm.runInContext(read('preload.js'), context, { filename: path.join(ROOT, 'preload.js') });
   api.archiveProjectSettings(h.projectPath, h.folder);
   api.unarchiveProject('server::' + h.projectPath);
   api.deleteProject(h.projectPath, h.folder);
@@ -297,7 +304,7 @@ function settingsDom(t, h) {
   let reloads = 0;
   dom.window.loadProjects = async () => { reloads++; };
   for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'choice-dialog.js', 'settings-panel.js']) {
-    vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: 'public/' + file });
+    vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public', file) });
   }
   return { window: dom.window, document: dom.window.document, calls, reloads: () => reloads };
 }
@@ -397,4 +404,82 @@ test('a pending session arriving during project fetch cannot reinsert an archive
   await loading;
   assert.equal(ctx.window.cachedProjects.length, 0);
   assert.equal(ctx.window.cachedAllProjects.length, 0);
+});
+
+test('unarchiving a project that was never registered or was deleted registers no schedule', t => {
+  const never = setup(t, { registered: false });
+  never.archive();
+  assert.equal(never.invoke('unarchive-project', never.projectPath).ok, true);
+  assert.deepEqual(never.getSetting('scheduleProjects'), []);
+  const deleted = setup(t);
+  deleted.invoke('remove-project', deleted.projectPath, deleted.folder);
+  assert.equal(deleted.invoke('unarchive-project', deleted.projectPath).ok, true);
+  assert.deepEqual(deleted.getSetting('scheduleProjects'), []);
+});
+
+test('a legacy hidden entry whose folder is gone is not registered on unarchive', t => {
+  const h = setup(t, { registered: false });
+  const gone = path.join(h.dir, 'gone');
+  h.setSetting('global', { hiddenProjects: [gone] });
+  assert.equal(h.invoke('unarchive-project', gone).ok, true);
+  assert.deepEqual(h.getSetting('scheduleProjects'), []);
+});
+
+test('Archive matches a project path whatever its letter case on Windows', { skip: process.platform !== 'win32' }, t => {
+  const h = setup(t);
+  h.archive();
+  assert.equal(h.context.isProjectSettingsArchived(h.projectPath.toUpperCase()), true);
+  const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'w');
+  fs.mkdirSync(worktree, { recursive: true });
+  assert.equal(h.context.isProjectSettingsArchived(worktree.toLowerCase()), true);
+});
+
+test('Settings lists archived projects but not deleted ones, and Delete and Archive record which they were', async t => {
+  const h = setup(t);
+  const other = path.join(h.dir, 'other');
+  h.setSetting('global', { hiddenProjects: [h.projectPath, other], hiddenProjectKinds: { [other]: 'delete' } });
+  const dom = settingsDom(t, h);
+  await dom.window.openSettingsViewer('global');
+  const text = dom.document.querySelector('#sv-archived-projects').textContent;
+  assert.ok(text.includes(h.projectPath));
+  assert.equal(text.includes(other), false);
+  h.setSetting('global', {});
+  h.archive();
+  assert.deepEqual(h.getSetting('global').hiddenProjectKinds, { [h.projectPath]: 'archive' });
+  h.invoke('unarchive-project', h.projectPath);
+  assert.deepEqual(h.getSetting('global').hiddenProjectKinds, {});
+  h.invoke('remove-project', h.projectPath, h.folder);
+  assert.deepEqual(h.getSetting('global').hiddenProjectKinds, { [h.projectPath]: 'delete' });
+});
+
+test('the worktree Archive button asks in the app dialog and archives that project', async t => {
+  const h = setup(t);
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const repo = { folder: 'repo', projectPath: '/home/dev/myrepo', sessions: [] };
+  const worktree = { folder: 'wt-folder', projectPath: '/home/dev/myrepo/.claude/worktrees/agent-1', sessions: [] };
+  const calls = [];
+  let confirmed = 0;
+  ctx.window.confirm = () => { confirmed++; return true; };
+  ctx.window.api.archiveProjectSettings = async (...args) => { calls.push(args); return { ok: true }; };
+  ctx.window.loadProjects = async () => {};
+  ctx.sidebar.renderProjects([repo, worktree], true);
+  ctx.document.querySelector('.worktree-hide-btn').click();
+  await answerChoiceDialog(ctx);
+  await settle();
+  assert.deepEqual(calls, [[worktree.projectPath, worktree.folder]]);
+  assert.equal(confirmed, 0);
+});
+
+test('the worktree Archive button reports a failed archive instead of reloading', async t => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const worktree = { folder: 'wt-folder', projectPath: '/home/dev/myrepo/.claude/worktrees/agent-1', sessions: [] };
+  ctx.window.api.archiveProjectSettings = async () => ({ error: 'disk full' });
+  ctx.window.loadProjects = async () => { throw new Error('must not reload'); };
+  ctx.sidebar.renderProjects([{ folder: 'repo', projectPath: '/home/dev/myrepo', sessions: [] }, worktree], true);
+  ctx.document.querySelector('.worktree-hide-btn').click();
+  await answerChoiceDialog(ctx);
+  await settle();
+  assert.match(ctx.document.querySelector('.modal-overlay').textContent, /disk full/);
 });

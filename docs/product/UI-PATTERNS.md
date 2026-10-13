@@ -171,7 +171,7 @@ The Changes badge is the one place that already meets "never colour alone".
 - `Attach` reads `Go to tab` when an attach tab is already open (audit
   proposal, not yet decided).
 
-### 2.2 Archive, Delete, Hide
+### 2.2 Archive, Delete
 
 | Control | Where | Label | Effect | Confirmation |
 |---|---|---|---|---|
@@ -181,8 +181,9 @@ The Changes badge is the one place that already meets "never colour alone".
 | Row Delete | `sidebar.js:1525-1568`, button `1798-1801`, dialog `1881-1945` | `Delete session (removes the transcript from disk)` → `Delete permanently` | stop then delete transcript; refused up front on a merged row with a live member (`1529-1533`) | custom modal with preview of what goes |
 | Agents Delete | `agents-view.js:340, 421` | `Delete` | `claude rm` (conversation + worktree when safe) | `window.confirm` |
 | Worktree Delete | `sidebar.js:1337-1352`, dialog `1949-2017` | `Delete anyway` | `git worktree remove` | custom modal with dirty-file list |
-| Worktree Hide | `sidebar.js:1327-1336` | — | hide | `confirm('Hide worktree "<name>"?\n\nSession files are not deleted.')` |
-| Project Hide | `settings-panel.js:704` | — | hide + drop project settings (CONCEPT-MAP M6) | `confirm('Hide project … Your session files are not deleted.')` |
+| Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | `showChoiceDialog` states what is kept |
+| Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | `showChoiceDialog` states what is kept |
+| Project Delete | `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
 | File delete (Agent Files / Work Files) | `viewer-panel.js:283` | — | delete file | `confirm('Delete "<name>"?\n\nThis cannot be undone.')` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
@@ -193,7 +194,6 @@ The Changes badge is the one place that already meets "never colour alone".
 2. Three delete confirmations: custom modal with preview (session, worktree),
    OS `confirm` (Agents, files). The confirm button says `Delete permanently`,
    `Delete anyway`, or `OK`.
-3. Project Hide's confirmation omits that project settings are dropped.
 
 **Proposed convergence.**
 - Archive of a non-running session stays instant (undo = Unarchive). Archive
