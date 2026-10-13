@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const { setTimeout: realSetTimeout } = require('node:timers');
 
 const { start, waitForBusyFall, waitForCliIdleAfter } = require('../trigger-watcher');
 
@@ -64,12 +65,12 @@ async function runChain(chain, session, uuid, timeoutMs = 20000) {
     fs.writeFileSync(path.join(tmp, uuid + '.json'),
       JSON.stringify({ sessionId: uuid, wait: 'idle', chain, timeout_ms: timeoutMs }), 'utf8');
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    const deadline = Date.now() + 15000;
+    const deadline = performance.now() + 15000;
     while (!fs.existsSync(resultPath)) {
-      if (Date.now() > deadline) throw new Error('no result file');
-      await new Promise((r) => setTimeout(r, 20));
+      if (performance.now() > deadline) throw new Error('no result file');
+      await new Promise((r) => realSetTimeout(r, 20));
     }
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => realSetTimeout(r, 20));
     return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
   } finally {
     watcher.close();
@@ -301,21 +302,35 @@ test('waitForBusyFall: an idle that flickers back to busy inside the settle wind
   assert.ok(r.waited_ms >= 240, 'ended after ' + r.waited_ms + ' ms, before the second idle had held');
 });
 
-test('a descriptor that vanishes after it was read keeps the wait going to the deadline: nothing is written', async () => {
+test('a descriptor that vanishes after it was read keeps the wait going to the deadline: nothing is written', { timeout: 10000 }, async (t) => {
+  fakeClock(t);
   const uuid = 'sess-every-vanish-' + Date.now();
   const session = chainSession(uuid, { log: recordingLog(), onEnter: () => {} });
   session.desc.status = 'busy';
   session.desc.statusUpdatedAt = Date.now();
-  setTimeout(() => { session.ctx.getCliStatus = () => undefined; }, 500);
-
-  const started = Date.now();
-  const result = await runChain([{ command: 'first step' }], session, uuid, 1800);
-  await new Promise((r) => setTimeout(r, 300));
+  let read;
+  const descriptorRead = new Promise((resolve) => { read = resolve; });
+  const getCliStatus = session.ctx.getCliStatus;
+  session.ctx.getCliStatus = (id) => { read(); return getCliStatus(id); };
+  const chain = runChain([{ command: 'first step' }], session, uuid, 1800);
+  await descriptorRead;
+  let missingReads = 0;
+  session.ctx.getCliStatus = () => { missingReads++; return undefined; };
+  for (let elapsed = 0; elapsed < 1600; elapsed += 200) {
+    t.mock.timers.tick(200);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(missingReads > 0, 'the readiness wait must observe the descriptor loss');
+  assert.deepEqual(session.written, []);
+  t.mock.timers.tick(200);
+  const result = await chain;
 
   assert.deepEqual(session.written, []);
-  assert.ok(Date.now() - started >= 1700, 'the wait must run to the deadline');
+  assert.equal(result.total_waited_ms, 1800, 'the wait must run to the deadline');
   assert.equal(result.ok, false);
   assert.equal(result.error, 'not sent');
+  assert.equal(result.steps_completed, 0);
+  assert.equal(result.steps[0].submitted, 'no');
 });
 
 test('a descriptor that vanishes and reappears idle: the wait resumes and the step is written', async () => {
