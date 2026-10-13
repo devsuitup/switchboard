@@ -13,6 +13,9 @@ function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+const archivingSessionIds = new Set();
+const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
+
 function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -1597,7 +1600,19 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
         if (newVal) {
-          const stopResult = await stopBeforeArchive(session);
+          if (archivingSessionIds.has(session.sessionId)) return;
+          archivingSessionIds.add(session.sessionId);
+          const idleTitle = archiveBtn.title;
+          archiveBtn.disabled = true;
+          archiveBtn.title = ARCHIVE_CHECKING_TITLE;
+          let stopResult;
+          try {
+            stopResult = await stopBeforeArchive(session);
+          } finally {
+            archivingSessionIds.delete(session.sessionId);
+            archiveBtn.disabled = false;
+            archiveBtn.title = idleTitle;
+          }
           if (!stopResult.ok) {
             surfaceStopFailure(archiveBtn, stopResult.error);
             return;
@@ -1801,6 +1816,10 @@ function buildSessionItem(session) {
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
   archiveBtn.innerHTML = ICONS.archive(16);
+  if (archivingSessionIds.has(session.sessionId)) {
+    archiveBtn.disabled = true;
+    archiveBtn.title = ARCHIVE_CHECKING_TITLE;
+  }
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';

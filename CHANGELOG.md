@@ -11,7 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - A session sent to the background is reattached at every restart, not only the first. (#546)
-- Archiving a merged remote conversation now stops its live members even when the visible session is no longer running. Archiving an attached session before its host first syncs now checks the host before hiding the row, and keeps it visible if that check fails. (#556)
+- Archiving a merged remote conversation now stops its live members even when the visible session is no longer running. Archiving a remote session whose host has not synced yet in this run (attached, or listed from the saved copy after a restart) now checks the host before hiding the row, shows the button busy meanwhile, and keeps the row visible with the reason if the host does not answer within 20 seconds. A row whose host is disabled or removed still archives. (#556)
 - On Windows and Linux, automation triggers follow a running conversation when its id changes, except in WSL or the Linux sandbox. (#579)
 - The New Session dialog now opens with focus on the selected permission mode, and Enter starts the session with that mode. Cancelling returns focus to the + button that opened the dialog; starting moves it to the new terminal. (#583)
 - Tab and Shift+Tab now close the New session (+) menu and move on from its + button, instead of leaving the menu open with no way to close it from the keyboard. (#582)

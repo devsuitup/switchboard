@@ -625,6 +625,7 @@ function annotateRemoteAttachable(projects) {
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
+        session.remoteHostAt = info.at;
         session.remoteMemberDescriptorSeen = Object.fromEntries((session.mergedMemberIds || [])
           .map(id => [id, info.byId.has(id)]));
       } else {
@@ -1884,6 +1885,8 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   return { ok: true };
 });
 
+const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;
+
 // --- IPC: remote-stop-session ---
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 ipcMain.handle('remote-stop-session', async (_event, payload) => {
@@ -1895,9 +1898,18 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   let remote = remoteIndexer.getRemoteSessions(alias);
   let descriptor = remote.sessions.find(s => s.sessionId === sessionId);
   if (!descriptor && !remote.at) {
-    await remoteIndexer.refreshHostNow(alias, { force: true });
+    let timer;
+    const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), REMOTE_STOP_SYNC_TIMEOUT_MS); });
+    const refreshed = await Promise.race([remoteIndexer.refreshHostNow(alias, { force: true }), timedOut]).finally(() => clearTimeout(timer));
+    if (refreshed && (refreshed.reason === 'stopped' || refreshed.reason === 'unknown-host')) {
+      return { ok: false, error: 'session not found on that host' };
+    }
     remote = remoteIndexer.getRemoteSessions(alias);
-    if (!remote.at) return { ok: false, error: remote.error || 'not yet synced with this host' };
+    if (!remote.at) {
+      if (refreshed && refreshed.timedOut) return { ok: false, error: `${alias} did not answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s; try again once it is reachable` };
+      if (remote.error) return { ok: false, error: `${alias} did not answer (${remote.error}); archive again once it is reachable, or remove the host in Settings` };
+      return { ok: false, error: 'not yet synced with this host; try again in a moment' };
+    }
     descriptor = remote.sessions.find(s => s.sessionId === sessionId);
   }
   if (!descriptor) return { ok: false, error: 'session not found on that host' };

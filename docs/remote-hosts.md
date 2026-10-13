@@ -277,8 +277,11 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
   `SIGKILL`.
 - **Archive** stops a live session first, the same way. On a merged row, it
   checks each member's own live state before hiding the row. For an attached
-  session whose host has not synced yet, it first tries a refresh; if that
-  cannot complete, the row stays visible with the error. A successful stop
+  session, or a row listed from the saved copy after a restart, whose host has
+  not synced yet in this run, it first tries a refresh, waiting at most 20
+  seconds with the button busy; if the host does not answer, the row stays
+  visible with the reason. A host that is disabled or removed is not asked, so
+  its rows still archive. A successful stop
   also closes the local attached terminal.
 - **Delete** is refused: the mirrored transcript is a copy that the next pull
   would fetch again.

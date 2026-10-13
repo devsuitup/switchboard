@@ -613,7 +613,10 @@ test('refreshHostNow reports skipped for an alias that is not declared', async (
       sync: () => { throw new Error('sync must not be called for an unknown alias'); },
     });
 
-    assert.deepEqual(await indexer.refreshHostNow('ghost'), { skipped: true });
+    assert.deepEqual(await indexer.refreshHostNow('ghost'), { skipped: true, reason: 'unknown-host' });
+
+    indexer.stop();
+    assert.deepEqual(await indexer.refreshHostNow('vps'), { skipped: true, reason: 'stopped' });
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

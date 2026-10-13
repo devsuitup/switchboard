@@ -47,8 +47,10 @@ async function stopBeforeArchive(session) {
         sessionId: id,
         remoteDescriptorSeen: session.remoteMemberDescriptorSeen?.[id] ?? session.remoteDescriptorSeen,
       };
+      const hostUnsynced = member.remoteHostAt === null && !(typeof remoteSessionStates !== 'undefined'
+        && remoteSessionStates.has(id) && remoteSessionStates.get(id).snapshot().liveness === 'dead');
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
-      if (!isRemoteSessionAlive(member) && !(open && !open.closed)
+      if (!hostUnsynced && !isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
       const result = await window.api.remoteStopSession(alias, id);
       if (!result || (result.ok === false && result.error !== 'session not found on that host')) {

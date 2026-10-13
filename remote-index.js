@@ -331,16 +331,17 @@ function createRemoteIndexer(ctx) {
   // see .ai/contexts/session-cache.md ("Remote hosts — watch channel" and,
   // for `force`, "Remote hosts backoff" — manual reconnect, issue #252)
   async function refreshHostNow(alias, { force = false } = {}) {
-    if (stopped || inFlight || hostInFlight.has(alias)) return { skipped: true };
+    if (stopped) return { skipped: true, reason: 'stopped' };
+    if (inFlight || hostInFlight.has(alias)) return { skipped: true, reason: 'in-flight' };
     const host = hosts().find(h => h.alias === alias);
-    if (!host) return { skipped: true };
+    if (!host) return { skipped: true, reason: 'unknown-host' };
     const state = backoffState(alias);
     if (force) {
       state.failures = 0;
       state.nextAttemptAt = 0;
       rearmProbe(alias);
     } else if (now() < state.nextAttemptAt) {
-      return { skipped: true };
+      return { skipped: true, reason: 'backoff' };
     }
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     hostInFlight.add(alias);

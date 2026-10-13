@@ -153,6 +153,19 @@ fallback, so an unseen representative cannot hide a live, unseeded member
 map retain their existing fallback. A remote "session not found on that host"
 reply still counts as done.
 
+Main also sends `remoteHostAt` per remote session, the host's last successful
+sync (null when it has not synced in this run, e.g. after a restart, when rows
+come from the on-disk mirror). `stopBeforeArchive` treats a null `remoteHostAt`
+as liveness unknown and calls `remoteStopSession` for that member unless the
+adapter has confirmed it dead; `remote-stop-session` then refreshes the host
+once (at most `REMOTE_STOP_SYNC_TIMEOUT_MS`, 20 s) and answers from the fresh
+list. A host that does not answer refuses the archive with the reason; a host
+that is stopped or no longer configured (`refreshHostNow` reports
+`reason: 'stopped'` or `'unknown-host'`) answers "session not found on that
+host", so the row archives as it did before. The Archive button is disabled
+and titled "Checking the host before archiving…" while this runs
+(`archivingSessionIds`, `public/sidebar.js`), and a second click is ignored.
+
 | kind | alive / has PTY | call |
 |---|---|---|
 | remote | alive | `remoteStopSession(alias, sessionId)` |

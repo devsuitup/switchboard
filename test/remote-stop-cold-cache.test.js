@@ -14,14 +14,14 @@ const mainSource = fs.readFileSync(mainPath, 'utf8');
 const start = mainSource.indexOf("ipcMain.handle('remote-stop-session'");
 const end = mainSource.indexOf("ipcMain.handle('remote-launch-session'", start);
 
-function setup(t, { present = true, pollError = null, stopError = null, polling = false } = {}) {
+function setup(t, { present = true, pollError = null, stopError = null, polling = false, configured = true, timeoutMs = 60000 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-556-'));
   let live = present;
   let polls = 0;
   let finishPoll;
   const pollGate = polling ? new Promise(resolve => { finishPoll = resolve; }) : null;
   const indexer = createRemoteIndexer({
-    getHosts: () => [{ alias: 'host' }], dataDir, transport: {},
+    getHosts: () => (configured ? [{ alias: 'host' }] : []), dataDir, transport: {},
     sync: async () => {
       polls++;
       if (pollGate) await pollGate;
@@ -35,6 +35,8 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   const main = vm.createContext({
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
     remoteIndexer: indexer,
+    REMOTE_STOP_SYNC_TIMEOUT_MS: timeoutMs,
+    setTimeout, clearTimeout,
     remoteStopAdapter: { stop: async (alias, descriptor) => {
       calls.push(['stop', alias, descriptor.sessionId]);
       if (stopError) return { ok: false, error: stopError };
@@ -117,4 +119,48 @@ test('Archive keeps an already synced absent session harmless without another po
   await archive(ctx);
   assert.equal(ctx.polls(), polls);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
+});
+
+test('Archive still archives a row whose host is no longer configured', async t => {
+  const ctx = setup(t, { configured: false });
+  const button = await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
+  assert.doesNotMatch(button.title, /not yet synced/);
+});
+
+test('Archive still archives a row when the remote indexer is stopped', async t => {
+  const ctx = setup(t);
+  ctx.indexer.stop();
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
+});
+
+test('Archive stops waiting for a host that does not answer the first sync', async t => {
+  const ctx = setup(t, { polling: true, timeoutMs: 20 });
+  const button = await archive(ctx);
+  assert.deepEqual(ctx.calls, []);
+  assert.match(button.title, /did not answer/);
+  assert.equal(ctx.isLive(), true);
+});
+
+test('Archive is busy while it checks the host and ignores a second click', async t => {
+  const ctx = setup(t, { polling: true });
+  const button = ctx.document.querySelector('#si-A .session-archive-btn');
+  const first = button.onclick({ stopPropagation() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(button.disabled, true);
+  assert.match(button.title, /Checking the host/);
+  await button.onclick({ stopPropagation() {} });
+  assert.match(button.title, /Checking the host/);
+  ctx.finishPoll();
+  await first;
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
+  assert.equal(button.disabled, false);
+  assert.equal(button.title, 'Archive');
+});
+
+test('Archive re-enables its button after a refusal', async t => {
+  const ctx = setup(t, { pollError: 'host unreachable' });
+  const button = await archive(ctx);
+  assert.equal(button.disabled, false);
 });

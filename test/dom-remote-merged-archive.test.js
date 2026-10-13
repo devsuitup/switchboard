@@ -12,11 +12,11 @@ const { attachBlockReason, sendBlockReason, computeHostProfile } = require('../r
 const mainPath = path.join(__dirname, '..', 'main.js');
 const annotateSource = extractFunction(fs.readFileSync(mainPath, 'utf8'), 'annotateRemoteAttachable');
 
-function setup(t, { seen, members = ['B'] }) {
+function setup(t, { seen, members = ['B'], at = 1000 }) {
   const descriptors = seen.map(sessionId => ({ sessionId, pid: 100 }));
   const main = vm.createContext({
     remoteIndexer: {
-      getRemoteSessions: () => ({ sessions: descriptors, at: 1000, error: null }),
+      getRemoteSessions: () => ({ sessions: descriptors, at, error: null }),
       getRemoteHostState: () => ({ consecutiveFailures: 0 }),
       getRemoteHostProfile: () => computeHostProfile({ at: 1000, descriptors, tools: null }),
     },
@@ -85,4 +85,26 @@ test('Archive keeps a live member state authoritative when its descriptor is abs
   ctx.read("remoteState('B').apply({ type: 'liveness', value: 'alive' })");
   await archive(ctx);
   assert.deepEqual(ctx.calls, [['stop', 'host', 'B'], ['archive', 'A', 1]]);
+});
+
+test('Archive asks the host about a row whose host never synced this run', async t => {
+  const ctx = setup(t, { seen: [], members: [], at: null });
+  assert.equal(ctx.session.remoteHostAt, null);
+  ctx.window.openSessions.delete('A');
+  ctx.window.activePtyIds.delete('A');
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['archive', 'A', 1]]);
+});
+
+test('Archive asks the host about every member of a merged row whose host never synced', async t => {
+  const ctx = setup(t, { seen: [], members: ['B'], at: null });
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['stop', 'host', 'B'], ['archive', 'A', 1]]);
+});
+
+test('Archive trusts a confirmed dead state even when the host never synced', async t => {
+  const ctx = setup(t, { seen: [], members: [], at: null });
+  ctx.read("remoteState('A').apply({ type: 'liveness', value: 'dead' })");
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
 });
