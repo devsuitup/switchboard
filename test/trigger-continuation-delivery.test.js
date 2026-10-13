@@ -25,6 +25,44 @@ function fixture(t, edges) {
   } };
 }
 
+test('ADR continuation cache: new bindings reuse complete indexes and invalidate size and mtime changes', t => {
+  const f = fixture(t, { a: [], b: [] });
+  const bytes = [];
+  const session = { generation: 1, host: null, projectFolder: 'proj',
+    pty: { pid: process.pid, write(data) { bytes.push(data); } } };
+  const ctx = createTriggerContext({ activeSessions: new Map([['a', session]]),
+    projectsDir: f.projectsDir, isPtyAlive: () => true,
+    cliSessionState: { deliveryPtyStart: () => 'start' },
+    observeTabWriter: () => ({ writer: { sessionId: 'b' }, identity: '200:200' }),
+  });
+  const write = () => {
+    const pinned = ctx.pinDelivery('a', ctx.getPtyForSession('a'), false);
+    pinned.binding.beginStep('prompt');
+    pinned.handle.write('prompt');
+  };
+  const read = fs.readSync;
+  let reads = 0;
+  t.mock.method(fs, 'readSync', (...args) => { reads++; return read(...args); });
+  assert.throws(write, /ownership writer/);
+  assert.ok(reads > 0);
+  reads = 0;
+  assert.throws(write, /ownership writer/);
+  assert.equal(reads, 0);
+  const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+  const record = JSON.stringify({ type: 'continued-in', sessionId: 'a', continuedInSessionId: 'b' }) + '\n';
+  fs.appendFileSync(file, record);
+  write();
+  assert.deepEqual(bytes, ['prompt']);
+  assert.ok(reads > 0);
+  const before = fs.statSync(file);
+  fs.writeFileSync(file, '\n' + record.replace('"b"', '"c"'));
+  assert.equal(fs.statSync(file).size, before.size);
+  fs.utimesSync(file, before.atime, new Date(before.mtimeMs + 2000));
+  fs.writeFileSync(path.join(f.projectsDir, 'proj', 'c.jsonl'), '\n');
+  assert.throws(write, /ownership writer/);
+  assert.deepEqual(bytes, ['prompt']);
+});
+
 test('ADR missing branch: delivery exposes incomplete reachability without changing restore selection', async t => {
   const f = fixture(t, { a: ['b', 'missing'], b: [] });
   const restore = await resolveContinuations('a', f.node);

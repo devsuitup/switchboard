@@ -1430,7 +1430,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   // ── 5. Single-command path ────────────────────────────────────────────────
   if (command !== undefined) {
-    let waited_ms = Date.now() - budgetStarted;
+    let waited_ms = 0;
     const commandDeadline = deliveryDeadline;
     if (wait === 'idle') {
       const result = await waitForIdle(sessionId, ctx, Math.max(0, commandDeadline - Date.now()));
@@ -1546,7 +1546,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let compactionEvidence = {};
     let compactionReason = null;
     try {
-      if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; delivery.boundEnter = isCompactCommand(command); }
+      if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
       const v = await submitWithVerify(handle, sessionId, command, ctx, isCompactCommand(command) ? commandDeadline : undefined);
       submitRetries     = v.submit_retries;
       submitConfirmed   = v.confirmed;
@@ -1607,7 +1607,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   const globalDeadline = deliveryDeadline;
 
   const steps = [];
-  let totalWaitedMs = Date.now() - budgetStarted;
+  let totalWaitedMs = 0;
   let step0SentAt = null;
   // A chain reports the weakest thing any of its steps achieved. Starts at the
   // top of the order so a chain whose every step is genuinely confirmed can
@@ -1789,7 +1789,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
     try {
-      if (delivery) { delivery.deadline = stepDeadline; delivery.boundEnter = true; }
+      if (delivery) delivery.deadline = stepDeadline;
       verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true });
     } catch (err) {
       if (err.deliveryRefusal || delivery?.step?.text_written) {

@@ -47,6 +47,7 @@ function createTriggerContext(deps) {
   const live = () => [...new Set([...activeSessions.values()].filter(session => session && !session.exited))];
   const matching = id => [...new Set([...activeSessions].filter(([key, session]) => normalizeSessionId(key) === normalizeSessionId(id)
     && session && !session.exited).map(([, session]) => session))];
+  const indexes = new Map();
   const makeEntry = (session, keyKind = 'direct') => ({ session, generation: session.generation, ptyProcess: session.pty,
     cwd: session.cwd, keyKind, handle: session.host == null ? createLocalSessionHandle(session.pty) : session.handle });
   function transcriptPath(session, id) {
@@ -113,7 +114,6 @@ function createTriggerContext(deps) {
     const pid = pty?.pid;
     const own = eligible(session);
     let start = own ? source.deliveryPtyStart(pid) : null;
-    const indexes = new Map();
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
       resetAuthorized: false, step: null, observation: null, lastDialog: null };
     function fail(reason, background, deadline = false) {
@@ -134,6 +134,7 @@ function createTriggerContext(deps) {
     }
     function graph(id) {
       if (!projectsDir || !session.projectFolder) return { unresolved: true, reachable: [], candidates: [] };
+      let remainingBytes = 64 * 1024 * 1024;
       return resolveContinuationsSync(id, nodeId => {
         const folder = path.join(projectsDir, session.projectFolder);
         const names = fs.readdirSync(folder).filter(name => name.endsWith('.jsonl') && normalizeSessionId(name.slice(0, -6)) === normalizeSessionId(nodeId));
@@ -141,9 +142,28 @@ function createTriggerContext(deps) {
         if (!names.length) return { missing: true };
         const file = path.join(folder, names[0]);
         try {
-          const serialized = scanContinuationIndex(file, names[0].slice(0, -6), indexes.get(file));
-          indexes.set(file, serialized);
-          const index = JSON.parse(serialized);
+          const stat = fs.statSync(file);
+          const cached = indexes.get(file);
+          let index = cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs ? cached.index : null;
+          if (!index) {
+            if (stat.size > remainingBytes) return null;
+            let serialized;
+            do {
+              const chunkBytes = Math.min(1024 * 1024, remainingBytes);
+              if (chunkBytes < 1) return null;
+              const before = index?.bytes || 0;
+              serialized = scanContinuationIndex(file, names[0].slice(0, -6), serialized, chunkBytes);
+              index = JSON.parse(serialized);
+              remainingBytes -= index.bytes - before;
+            } while (!index.complete && index.bytes < index.size);
+            const after = fs.statSync(file);
+            if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return null;
+            if (index.complete) {
+              indexes.delete(file);
+              indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, index });
+              if (indexes.size > 128) indexes.delete(indexes.keys().next().value);
+            }
+          }
           return { index: { ...index, ids: index.ids.map(normalizeSessionId), unresolved: index.unresolved || !index.complete } };
         } catch (err) { return err.code === 'ENOENT' ? { missing: true } : null; }
       }, { includeReachable: true });
@@ -206,7 +226,7 @@ function createTriggerContext(deps) {
       return { outcome: 'other', reason: `ownership writer names ${id}, outside conversation ${binding.effectiveId}` };
     }
     function check(phase) {
-      const boundedWrite = phase === 'text' || binding.boundEnter;
+      const boundedWrite = phase === 'text';
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the delivery deadline passed; no further bytes were written', null, true);
       if (!valid()) fail('the pinned tab/PTY generation binding changed; no further bytes were written');
       if (!(isPtyAlive ? isPtyAlive(pty) : entry.handle.isAlive())) fail('the pinned tab process exited; no further bytes were written');

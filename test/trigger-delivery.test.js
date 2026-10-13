@@ -28,6 +28,7 @@ function fixture(t, platform = 'linux', key = 'direct', options = {}) {
   let clock = Date.now() + 10000;
   const starts = new Map([[100, '100'], [200, '200'], [300, '300'], [400, '400']]);
   const parents = new Map([[100, 1], [200, 100], [300, 200], [400, 1]]);
+  const cliPids = new Set([200]);
   const created = pid => String(134000000000000000n + BigInt(pid * 1000));
   const table = () => new Map([...parents].map(([pid, ppid]) => [pid, { ppid, created: created(pid) }]));
   let tableReader = async () => table();
@@ -46,6 +47,7 @@ function fixture(t, platform = 'linux', key = 'direct', options = {}) {
   }
   const user = (id, text, at) => ({ type: 'user', sessionId: id, timestamp: iso(at), message: { role: 'user', content: text } });
   function descriptor(id, pid = 200, kind = 'interactive', overrides = {}) {
+    cliPids.add(pid);
     const raw = { pid, sessionId: id, kind, status: 'idle', procStart: starts.get(pid), ...overrides };
     if (platform === 'win32') { raw.procStart = created(pid); raw.pidDomain = 'win32:anchor'; }
     fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ ...raw, ...overrides }));
@@ -86,6 +88,7 @@ function fixture(t, platform = 'linux', key = 'direct', options = {}) {
   transcript('a');
   f.setWriter(writer);
   cli.init({ dir, platform: platform === 'sandbox' ? 'linux' : platform, log,
+    readCliProcess: pid => cliPids.has(pid),
     isProcessAlive: () => true,
     now: () => clock,
     ...(platform === 'linux' || platform === 'sandbox' ? {
@@ -143,6 +146,57 @@ async function provenFixture(t, platform, key = 'direct') {
   if (platform === 'sandbox') f.hostComparable = true;
   if (platform === 'darwin') f.observation = () => ({ writer: { pid: 200, sessionId: f.writerId, procStart: '200' }, identity: '200:200' });
   return f;
+}
+
+test('ADR admission delay: the chain total contains only published step waits', async t => {
+  const f = await provenFixture(t, 'linux');
+  const pin = f.ctx.pinDelivery;
+  let admissionMs = 0;
+  const now = Date.now;
+  t.mock.method(Date, 'now', () => now() + admissionMs);
+  f.ctx.pinDelivery = (...args) => {
+    const pinned = pin(...args);
+    const admit = pinned.binding.admit;
+    pinned.binding.admit = async (...args) => {
+      admissionMs += 5;
+      return admit(...args);
+    };
+    return pinned;
+  };
+  const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'last' }] });
+  assert.equal(admissionMs, 5);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.total_waited_ms, result.steps.reduce((sum, step) => sum + step.waited_ms, 0));
+});
+
+for (const command of ['prompt', '/compact']) {
+  test(`ADR watcher deadline after text ${command}: expiry during the keystroke gap still sends Enter`, async t => {
+    const f = await provenFixture(t, 'linux');
+    const now = Date.now;
+    let offset = 0;
+    t.mock.method(Date, 'now', () => now() + offset);
+    f.onText = () => { offset += 2000; };
+    const trigger = command === '/compact' ? { command } : { command: undefined, chain: [{ command }] };
+    const result = await f.run(trigger);
+    assert.deepEqual(f.written, [command, '\r']);
+    assert.equal(command === '/compact' ? result.written : result.steps[0].written, true);
+  });
+
+  test(`ADR deadline after text ${command}: initial and recovery Enter keep their writer guards`, async t => {
+    const f = await provenFixture(t, 'linux');
+    const pinned = f.ctx.pinDelivery('a', f.ctx.getPtyForSession('a'), command === 'prompt');
+    pinned.binding.beginStep(command);
+    pinned.binding.boundEnter = true;
+    pinned.binding.deadline = Date.now() + 1000;
+    pinned.handle.write(command);
+    pinned.binding.deadline = Date.now() - 1;
+    pinned.handle.write('\r');
+    pinned.handle.write('\r');
+    assert.deepEqual(f.written, [command, '\r', '\r']);
+    f.setWriter('foreign');
+    assert.throws(() => pinned.handle.write('\r'), /ownership writer/);
+    assert.deepEqual(f.written, [command, '\r', '\r']);
+  });
 }
 
 function changeAt(f, boundary, id, continued = false) {
@@ -296,8 +350,8 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
     f.ctx.getPtyForSession = (id) => { const entry = original(id); if (id === 'a') secondLookedUp = true; pinned(); return entry; };
     const first = f.run({ sessionId: 'A', command: 'first' });
     await firstPinned;
-    const second = f.run({ sessionId: 'a', command: 'second' });
-    await new Promise(resolve => setTimeout(resolve, 180));
+    const second = f.run({ sessionId: 'a', command: 'second' }, 300);
+    await new Promise(resolve => setTimeout(resolve, 600));
     const lookedUpWhileQueued = secondLookedUp;
     assert.deepEqual(f.written, []);
     f.session.composerState.pending = 0;
@@ -369,6 +423,43 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
 }
 
 for (const platform of ['linux', 'win32']) {
+  for (const mb of [12, 40]) {
+    test(`ADR large transcript ${platform}/${mb} MB: a definite other refuses without bytes`, async t => {
+      const f = await provenFixture(t, platform);
+      const file = path.join(f.folder, 'a.jsonl');
+      const padding = JSON.stringify({ type: 'system', payload: 'x'.repeat(64 * 1024 - 32) }) + '\n';
+      fs.writeFileSync(file, padding.repeat(Math.ceil(mb * 1024 * 1024 / Buffer.byteLength(padding))));
+      f.setWriter('c');
+      refused(await f.run({}), f.written);
+    });
+  }
+
+  test(`ADR missing parent descriptor ${platform}: nested interactive is unknown and cannot alias the tab`, async t => {
+    const f = await provenFixture(t, platform);
+    f.hide();
+    f.descriptor('child', 300);
+    if (platform === 'win32') { f.expire(); await f.warm(); }
+    assert.equal(cli.observeTabWriter(100).writer, undefined);
+    const direct = await f.run({});
+    assert.equal(direct.ok, true, JSON.stringify(direct));
+    assert.deepEqual(f.written, ['prompt', '\r']);
+    f.written.length = 0;
+    const child = await f.run({ sessionId: 'child' });
+    assert.equal(child.error, 'session not found', JSON.stringify(child));
+    assert.deepEqual(f.written, []);
+  });
+
+  for (const [bridgeId, requestedId] of [['bridge', 'BRIDGE'], ['cse_bridge', 'session_bridge']]) {
+    test(`ADR background bridge ${platform}/${requestedId}: bridgeSessionId keeps the unattached job error`, async t => {
+      const f = await provenFixture(t, platform);
+      f.descriptor('background', 400, 'bg', { bridgeSessionId: bridgeId, jobId: 'job-bridge' });
+      const result = await f.run({ sessionId: requestedId });
+      assert.equal(result.error, 'background session, not attached here');
+      assert.equal(result.jobId, 'job-bridge');
+      assert.deepEqual(f.written, []);
+    });
+  }
+
   test(`ADR closest writer ${platform}: unrelated branches cannot pick a first ancestor`, async t => {
     const f = await provenFixture(t, platform, 'alias');
     f.parents.set(250, 100); f.starts.set(250, '250');
@@ -384,6 +475,7 @@ for (const platform of ['linux', 'win32']) {
     f.onEnter = command => {
       if (command !== '/clear') return;
       f.parents.set(300, 100); f.hide(); f.descriptor('c', 300); f.transcript('c');
+      if (platform === 'win32') f.expire();
     };
     const result = await f.run({ command: undefined, chain: [{ command: '/clear' }, { command: 'reply' }] });
     refused(result, f.written, ['/clear', '\r']);

@@ -78,6 +78,12 @@ remains `mine` beside a missing branch; an unreachable writer stays `unknown`
 until the traversal is complete. Cycles, malformed records and index waits
 remain unresolved. Restore's terminal-candidate and `unresolved` policy is unchanged.
 
+Each delivery traversal scans every transcript node to completion in 1 MiB
+chunks, under a total 64 MiB read cap. A cap overflow or read failure leaves
+ownership unknown; chunk boundaries alone do not. Completed indexes are shared
+by all bindings of a watcher, keyed by path, size and mtime, with at most 128
+entries. Append, replacement or a changed mtime invalidates the cached index.
+
 Delivery pins the session object, `session.generation`, PTY object and available
 process-start identity. Busy/composer reads stay on that object; descriptor and
 transcript reads follow its effective identity. Re-keying does not change its
@@ -93,6 +99,18 @@ tabs progress independently. The mutex remains held through verification and
 result production, and canceled waiters cannot erase a still-held queue.
 Ordinary single-command verification retains its existing verification windows;
 compact and chained steps retain their existing deadlines.
+
+Lookup, pinning, admission and tab-lock waits consume that deadline budget but
+are excluded from published `waited_ms` and `total_waited_ms`. These fields
+retain the documented idle, composer, readiness, verification and turn waits:
+the chain total equals its initial idle wait plus its step waits, with the
+existing exception for a partial wait before an unrecorded step. They are not
+wall-clock delivery durations.
+
+The deadline is checked only before text. Once text is written, the initial
+and recovery Enter still check binding, liveness and ownership, even after the
+step deadline passes. This prevents leaving valid text stranded solely because
+the inter-keystroke delay crossed the deadline.
 
 On a local miss, the existing remote snapshot (including its failure or
 ambiguity) wins. Only then can a unique, identity-verified closest interactive
@@ -111,6 +129,14 @@ both Enter guards are synchronous and refuse unknown without waiting or
 replaying text. Nested headless/background writers cannot authorize a tab;
 interactive descendants cannot override the closest writer. Stale identities
 are discarded, and torn or unresolved ancestor roles remain unknown.
+
+Descriptor-less ancestors are also checked for a CLI process: Linux reads
+`/proc/<pid>/cmdline`; Windows retains `CommandLine` in its shared process
+table. A native `claude` executable or Node's Claude CLI script marks an
+intervening writer regardless of descriptor `kind`. An unreadable process
+command keeps the verdict unknown. Thus a nested interactive descriptor cannot
+become the tab writer when its parent CLI descriptor is absent. Background-job
+misses also match `bridgeSessionId`, without treating it as local ownership.
 
 A chain's own guarded clear-family text plus Enter authorizes only that chain
 on the same T/G, even without a re-key or readable successor descriptor. A lagging
