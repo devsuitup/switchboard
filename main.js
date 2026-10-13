@@ -1870,7 +1870,7 @@ ipcMain.handle('get-active-terminals', () => {
 // --- IPC: stop-session ---
 const { sendToBackground, createContinuationReader, holdBackgroundExit } = require('./bg-handoff');
 
-ipcMain.handle('send-session-to-background', async (_event, sessionId) => {
+async function handleSendToBackground(_event, sessionId) {
   const session = activeSessions.get(sessionId);
   const oldId = session?.realSessionId || sessionId;
   const read = session?.projectFolder
@@ -1893,8 +1893,11 @@ ipcMain.handle('send-session-to-background', async (_event, sessionId) => {
     notify: message => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bg-handoff-notice', sessionId, message);
     },
+    schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
+    kill: entry => killPty(entry, sessionId),
   });
-});
+}
+ipcMain.handle('send-session-to-background', handleSendToBackground);
 
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);

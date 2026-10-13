@@ -2,12 +2,13 @@
 
 const { stripVTControlCharacters } = require('node:util');
 const { scanContinuationIndex } = require('./session-continuations');
-const { isComposerEmpty } = require('./composer-state');
+const { isComposerEmpty, noteUserInput } = require('./composer-state');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { tryAcquireTabInput } = require('./tab-input-lock');
 
 const BG_HANDOFF_TIMEOUT_MS = 120000;
 const BG_HANDOFF_EXIT_TIMEOUT_MS = 15000;
+const BG_CONFIRM_NOTICE_MS = 1000;
 
 function backgroundRefusal(session, status) {
   if (!session || session.exited) return 'This session is not running.';
@@ -21,6 +22,7 @@ function backgroundRefusal(session, status) {
   if (!status) return 'Switchboard cannot read this session’s state. Wait for its state to appear, then try again.';
   if (status === 'waiting') return 'Claude is waiting for an answer in the terminal. Answer it, then try again.';
   if (status === 'shell') return 'A shell command is running in the prompt. Wait for it to finish, then try again.';
+  if (status === 'busy') return 'Claude is working. Send to background once it is idle.';
   return null;
 }
 
@@ -67,22 +69,27 @@ async function sendToBackground(sessionId, deps) {
   if (!unlock) return { ok: false, code: 'refused', error: 'An automation trigger is using this terminal. Wait for it to finish, then try again.' };
   session.backgrounding = true;
   let output = '', dispose;
-  const inputAt = session.composerState?.lastInputAt;
   const deadline = deps.now() + (deps.timeoutMs ?? BG_HANDOFF_TIMEOUT_MS);
-  let exitDeadline = Infinity, notified = false;
+  let exitDeadline = Infinity, notified = false, waitingSince = null;
   const bound = () => deps.getSession(sessionId) === session && (session.realSessionId || sessionId).toLowerCase() === oldId.toLowerCase();
   try {
-    const previous = new Set((await deps.readContinuationIds(oldId, session) || []).map(id => id.toLowerCase()));
+    const snapshot = await deps.readContinuationIds(oldId, session) || await deps.readContinuationIds(oldId, session);
+    if (!snapshot) return { ok: false, code: 'refused', error: 'Switchboard could not read this conversation’s transcript, so it could not tell a new handoff from an earlier one. Try again in a moment.' };
+    const previous = new Set(snapshot.map(id => id.toLowerCase()));
     const recheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId));
     if (recheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: recheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
+    const composer = session.composerState;
+    if (composer) noteUserInput(composer, '/bg', deps.now());
+    const inputAt = composer?.lastInputAt;
     if (!deps.write(session, '/bg')) return { ok: false, code: 'write-failed', error: 'Could not write to the terminal. Try again when it is running.' };
     await deps.delay(300);
     const status = deps.getStatus(oldId);
-    if (!bound() || session.exited || status === 'waiting' || status === 'shell' || !status || !isComposerEmpty(session.composerState) || session.composerState?.lastInputAt !== inputAt) {
+    if (!bound() || session.exited || status === 'waiting' || status === 'shell' || status === 'busy' || !status || (composer && (composer.text !== '/bg' || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
       return { ok: false, code: 'write-failed', error: 'The terminal changed after /bg was typed, so Enter was withheld. Check the terminal and clear the command before trying again.' };
     }
     if (!deps.write(session, '\r')) return { ok: false, code: 'write-failed', error: 'Could not submit /bg to the terminal. Check the terminal before trying again.' };
+    if (composer) noteUserInput(composer, '\r', deps.now());
     for (;;) {
       if (session.exited && exitDeadline === Infinity) exitDeadline = deps.now() + (deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
       if (deps.now() >= Math.min(deadline, exitDeadline)) {
@@ -97,10 +104,13 @@ async function sendToBackground(sessionId, deps) {
         const job = findHandoff(deps.readDescriptors(), ids);
         if (job) {
           session.backgrounded = true;
+          deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
           return { ok: true, oldSessionId: sessionId, jobId: job.jobId, sessionId: job.sessionId, cwd: job.cwd || session.cwd };
         }
       }
-      if (!notified && deps.getStatus(oldId) === 'waiting') {
+      if (deps.getStatus(oldId) !== 'waiting') waitingSince = null;
+      else if (waitingSince === null) waitingSince = deps.now();
+      if (!notified && waitingSince !== null && deps.now() - waitingSince >= BG_CONFIRM_NOTICE_MS) {
         notified = true;
         deps.notify?.('Claude asks you to confirm in the terminal (Background / Stay).');
       }

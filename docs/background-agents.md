@@ -127,8 +127,8 @@ so Switchboard reattaches it after each restart.
 Send or clear any unsubmitted prompt first, and answer any open terminal
 dialog. The action is unavailable for plain terminals, remote sessions,
 sandboxed sessions and sessions started through a pre-launch command.
-Switchboard also refuses when it cannot read Claude's state. A busy session
-can move; Claude may finish its current tool first. If subagents are running,
+Switchboard also refuses when it cannot read Claude's state, and while Claude
+is working: send it to the background once it is idle. If subagents are running,
 Switchboard asks before sending: Claude may stop them during the move.
 If Claude asks for confirmation in the terminal, answer Background or Stay
 there; Switchboard does not answer that dialog for you.

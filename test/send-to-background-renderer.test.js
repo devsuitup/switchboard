@@ -18,6 +18,8 @@ function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', 
     var activeSubagentsByParent = new Map(), activePtyIds = new Set(['old']);
     var sandboxedSessions = new Map();
     function refreshSidebar() {} function updateTerminalHeader() {}
+    var droppedPty = [];
+    function dropLocalPtySession(id, via) { droppedPty.push([id, via]); }
     openSessions.set('old', { session: rows.find(row => row.sessionId === 'old') });
     activeSessionId = 'old';
   `, h.ctx, { filename: __filename });
@@ -207,4 +209,22 @@ test('R13: the proven job is saved while the attach spawn is still pending', asy
     await h.app.persistWorkingSet();
     assert.equal(h.settings().openWorkingSet.find(row => row.sessionId === 'new')?.bg, true);
   } finally { clearTimeout(timer); release(); await pending; }
+});
+
+test('R14: success drops the old local PTY state, so its busy and running marks do not stick on an unrendered row', async t => {
+  const h = handoff(t);
+  await h.app.sendSessionToBackground('old');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.ctx.droppedPty)), [['old', 'backgrounded']]);
+  assert.equal(h.ctx.activePtyIds.has('old'), false);
+});
+
+test('R15: the attach tab takes the original tab position in openSessions', async t => {
+  const h = handoff(t);
+  const old = h.ctx.openSessions.get('old');
+  h.ctx.openSessions.clear();
+  h.ctx.openSessions.set('a', { session: { sessionId: 'a' } });
+  h.ctx.openSessions.set('old', old);
+  h.ctx.openSessions.set('b', { session: { sessionId: 'b' } });
+  await h.app.sendSessionToBackground('old');
+  assert.deepEqual([...h.ctx.openSessions.keys()], ['a', 'new', 'b']);
 });

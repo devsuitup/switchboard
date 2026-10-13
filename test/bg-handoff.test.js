@@ -6,12 +6,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sendToBackground, holdBackgroundExit, createContinuationReader } = require('../bg-handoff');
-const { acquireTabInput } = require('../tab-input-lock');
+const { acquireTabInput, tryAcquireTabInput } = require('../tab-input-lock');
+const { createComposerState, noteUserInput } = require('../composer-state');
 
 function setup(options = {}) {
   let time = 0, output;
-  const writes = [], exits = [], notices = [];
-  const session = { kind: 'local-pty', composerState: { pending: 0 }, ...options.session };
+  const writes = [], exits = [], notices = [], scheduled = [], kills = [];
+  const session = { kind: 'local-pty', composerState: createComposerState(), ...options.session };
   const bg = { sessionId: 'new', kind: 'bg', jobId: '1234abcd', cwd: '/project' };
   const deps = {
     getSession: () => session,
@@ -24,9 +25,11 @@ function setup(options = {}) {
     readContinuationIds: () => time >= 400 ? options.ids || ['new'] : [],
     readDescriptors: () => time >= 500 ? options.descriptors || [bg] : [],
     notify: text => notices.push(text),
+    schedule: (fn, ms) => { scheduled.push({ fn, ms }); },
+    kill: entry => { kills.push(entry); },
     timeoutMs: 1000, exitTimeoutMs: 300,
   };
-  return { session, bg, deps, writes, exits, notices, outputAttached: () => !!output };
+  return { session, bg, deps, writes, exits, notices, scheduled, kills, outputAttached: () => !!output };
 }
 
 test('T1: unsent composer text refuses before any write', async () => {
@@ -54,8 +57,8 @@ test('T3: unavailable and ineligible tabs refuse before any write', async () => 
   assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
 });
 
-test('T4: busy is allowed; separate /bg and Enter after 300ms convert only on matched proof', async () => {
-  const h = setup({ status: 'busy' });
+test('T4: separate /bg and Enter after 300ms convert only on matched proof', async () => {
+  const h = setup();
   const times = [];
   h.deps.write = (_, text) => { h.writes.push(text); times.push(h.deps.now()); return true; };
   assert.deepEqual(await sendToBackground('old', h.deps), { ok: true, oldSessionId: 'old', jobId: '1234abcd', sessionId: 'new', cwd: '/project' });
@@ -126,8 +129,10 @@ test('T9: failed text or Enter writes never convert', async () => {
   }
 });
 
-test('T10: a dialog appearing after submission asks for terminal confirmation without another Enter', async () => {
+test('T10: a dialog that stays open after submission asks for terminal confirmation without another Enter', async () => {
   const h = setup();
+  h.deps.timeoutMs = 5000;
+  h.deps.readDescriptors = () => h.deps.now() >= 2000 ? [h.bg] : [];
   h.deps.getStatus = () => h.deps.now() >= 400 ? 'waiting' : 'idle';
   assert.equal((await sendToBackground('old', h.deps)).ok, true);
   assert.equal(h.notices.length, 1);
@@ -157,7 +162,7 @@ test('T13: a dialog or user input during the text-to-Enter gap withholds Enter',
     const h = setup();
     h.deps.delay = async () => {
       if (change === 'dialog') h.deps.getStatus = () => 'waiting';
-      else h.session.composerState = { pending: 1, lastInputAt: 1 };
+      else noteUserInput(h.session.composerState, 'x', 1);
     };
     assert.equal((await sendToBackground('old', h.deps)).ok, false);
     assert.deepEqual(h.writes, ['/bg']);
@@ -186,5 +191,121 @@ test('T15: a re-key or replacement during the text-to-Enter gap withholds Enter'
     };
     assert.equal((await sendToBackground('old', h.deps)).ok, false);
     assert.deepEqual(h.writes, ['/bg']);
+  }
+});
+
+test('T16: a withheld Enter leaves /bg in the composer model, so a retry refuses instead of typing /bg/bg', async () => {
+  const h = setup();
+  h.deps.delay = async () => { h.deps.getStatus = () => 'waiting'; };
+  assert.equal((await sendToBackground('old', h.deps)).code, 'write-failed');
+  h.deps.getStatus = () => 'idle';
+  const retry = await sendToBackground('old', h.deps);
+  assert.equal(retry.code, 'refused');
+  assert.match(retry.error, /have not sent/);
+  assert.deepEqual(h.writes, ['/bg']);
+});
+
+test('T17: input that settles back to an empty composer during the snapshot does not withhold Enter', async () => {
+  const h = setup();
+  const read = h.deps.readContinuationIds;
+  let first = true;
+  h.deps.readContinuationIds = async (...args) => {
+    if (first) { first = false; noteUserInput(h.session.composerState, 'x\x7f', 7); }
+    return read(...args);
+  };
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});
+
+test('T18: an unreadable pre-write snapshot refuses after one retry, with zero writes', async () => {
+  const h = setup();
+  let reads = 0;
+  h.deps.readContinuationIds = () => { reads++; return null; };
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /transcript/);
+  assert.equal(reads, 2);
+  assert.deepEqual(h.writes, []);
+});
+
+test('T18b: a snapshot that reads on the retry proceeds', async () => {
+  const h = setup();
+  const read = h.deps.readContinuationIds;
+  let reads = 0;
+  h.deps.readContinuationIds = (...args) => (++reads === 1 ? null : read(...args));
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+});
+
+test('T19: the measured transient waiting after Enter shows no confirmation notice', async () => {
+  const h = setup();
+  h.deps.getStatus = () => {
+    const now = h.deps.now();
+    if (now <= 300) return 'idle';
+    return now < 500 ? 'waiting' : null;
+  };
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(h.notices, []);
+});
+
+test('T20: a busy session is refused before any write', async () => {
+  const h = setup({ status: 'busy' });
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'refused');
+  assert.equal(result.error, 'Claude is working. Send to background once it is idle.');
+  assert.deepEqual(h.writes, []);
+});
+
+test('T21: input that leaves the same /bg text during the gap still withholds Enter', async () => {
+  const h = setup();
+  h.deps.delay = async ms => { noteUserInput(h.session.composerState, 'x\x7f', ms); };
+  assert.equal((await sendToBackground('old', h.deps)).code, 'write-failed');
+  assert.deepEqual(h.writes, ['/bg']);
+});
+
+test('T22: two live jobs for the proven conversation are ambiguous and never confirm', async () => {
+  const h = setup({ descriptors: [{ sessionId: 'new', kind: 'bg', jobId: '1234abcd' }, { sessionId: 'new', kind: 'bg', jobId: '5678abcd' }] });
+  assert.equal((await sendToBackground('old', h.deps)).code, 'timeout');
+  assert.equal(h.session.backgrounded, undefined);
+});
+
+test('T23: a dialog or composer text appearing during the snapshot refuses with zero writes', async () => {
+  for (const change of ['dialog', 'input']) {
+    const h = setup();
+    h.deps.readContinuationIds = async () => {
+      if (change === 'dialog') h.deps.getStatus = () => 'waiting';
+      else noteUserInput(h.session.composerState, 'x', 1);
+      return [];
+    };
+    assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
+    assert.deepEqual(h.writes, []);
+  }
+});
+
+test('T24: a descriptor naming the proven conversation in upper case confirms it', async () => {
+  const h = setup({ descriptors: [{ sessionId: 'NEW', kind: 'bg', jobId: '1234abcd', cwd: '/project' }] });
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.jobId, '1234abcd');
+});
+
+test('T25: a throwing exit release still frees the tab input lock', async () => {
+  const h = setup({ tick: ({ session, time }) => {
+    if (time === 400) { session.exited = true; holdBackgroundExit(session, () => { throw new Error('release failed'); }); }
+  } });
+  await assert.rejects(sendToBackground('old', h.deps), /release failed/);
+  const unlock = tryAcquireTabInput(h.session);
+  assert.equal(typeof unlock, 'function');
+  unlock();
+});
+
+test('T26: after success the old CLI is stopped if it has not exited within the hold window', async () => {
+  for (const exitsInTime of [false, true]) {
+    const h = setup();
+    assert.equal((await sendToBackground('old', h.deps)).ok, true);
+    assert.equal(h.scheduled.length, 1);
+    assert.equal(h.scheduled[0].ms, 300);
+    if (exitsInTime) h.session.exited = true;
+    h.scheduled[0].fn();
+    assert.deepEqual(h.kills, exitsInTime ? [] : [h.session]);
   }
 });

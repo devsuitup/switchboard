@@ -54,3 +54,58 @@ test('M2: a failed handoff releases ordinary exit once and does not remove a rep
   assert.equal(h.sessions.get('old'), replacement);
   assert.deepEqual(h.ended, []);
 });
+
+function ipcSetup(t, { status = 'idle' } = {}) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-ipc-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'folder'));
+  const transcript = path.join(root, 'folder', 'OLD.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
+  const writes = [], kills = [], listeners = new Set(), statusAsked = [], taps = [];
+  let descriptors = [];
+  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: 'folder', composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
+  const ctx = vm.createContext({
+    setTimeout, clearTimeout, Date, Promise, path, PROJECTS_DIR: root,
+    activeSessions: new Map([['tab', session]]),
+    mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
+    writePty: (entry, text) => {
+      writes.push(text);
+      if (text === '\r') {
+        fs.appendFileSync(transcript, JSON.stringify({ type: 'continued-in', sessionId: 'OLD', continuedInSessionId: 'new' }) + '\n');
+        setTimeout(() => { descriptors = [{ kind: 'bg', sessionId: 'new', jobId: '1234abcd', cwd: '/bg' }]; for (const fn of [...listeners]) fn(); }, 10);
+      }
+      return true;
+    },
+    killPty: entry => { kills.push(entry); },
+    cliSessionState: {
+      getStatus: id => { statusAsked.push(id); return descriptors.length ? null : { status, waitingFor: null }; },
+      readAllDescriptors: () => descriptors,
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+    ...require('../bg-handoff'),
+  });
+  const { handleSendToBackground } = loadAppFunctions(ctx, { functions: ['handleSendToBackground'], sourcePath: path.join(__dirname, '../main.js') });
+  return { handleSendToBackground, session, writes, kills, listeners, statusAsked, taps };
+}
+
+test('M3: the shipped IPC handler maps CLI status, reads the tab transcript and wakes on descriptor changes', async t => {
+  const h = ipcSetup(t);
+  const started = Date.now();
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, oldSessionId: 'tab', jobId: '1234abcd', sessionId: 'new', cwd: '/bg' });
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(h.statusAsked.every(id => id === 'OLD'), true);
+  assert.equal(h.listeners.size, 0);
+  assert.equal(h.taps.length, 1);
+  assert.equal(h.taps[0].disposed, true);
+});
+
+test('M4: the shipped IPC handler refuses a waiting CLI status object before any write', async t => {
+  const h = ipcSetup(t, { status: 'waiting' });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.code, 'refused');
+  assert.deepEqual(h.writes, []);
+});

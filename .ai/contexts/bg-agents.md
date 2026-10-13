@@ -462,10 +462,21 @@ The session header and sidebar context menu call `send-session-to-background`
 for one running local Claude tab. Main refuses plain terminals, attach tabs,
 remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
 unsubmitted composer text, unknown CLI state, open dialogs (`waiting`) and
-shell state before writing. Busy is allowed. Running subagents require an
-`appConfirm` warning first; cancel writes nothing. Composer input or a dialog
-appearing during the 300 ms text-to-Enter gap withholds Enter and names the
-residue to check. No recovery Enter is sent.
+shell state before writing. Busy is refused ("Claude is working. Send to
+background once it is idle.") until a busy `/bg` is measured; the live run
+below was idle. Running subagents require an `appConfirm` warning first;
+cancel writes nothing. Composer input, busy or a dialog appearing during the
+300 ms text-to-Enter gap withholds Enter and names the residue to check. No
+recovery Enter is sent.
+
+The written `/bg` is recorded in `session.composerState` through
+`noteUserInput` before the write, and the Enter after it, as
+`terminal-input.js` does for typed keys. A withheld Enter therefore leaves the
+model non-empty: a trigger queued behind the handoff refuses through its
+politeness check, and a retry is refused as unsent text instead of typing
+`/bg/bg`. The gap check compares the model's text to `/bg` and its
+`lastInputAt` to the value our own write set, so any keystroke in the gap
+withholds Enter even when it nets out.
 
 Measured on Windows, CLI 2.1.296, 2026-10-13 (`.work-files/live-m1m2/`): `/bg`,
 300 ms, then CR runs `/background` through its completion menu. The original
@@ -483,12 +494,24 @@ bg descriptor naming exactly that target and carrying a valid job id.
 descriptors without status. A continuation alone, an unrelated job, malformed
 job id or ambiguous matching jobs cannot confirm the handoff. Existing
 continuations are snapshotted before writing and do not prove this request.
+A snapshot that cannot be read whole is retried once, then the action is
+refused with zero writes: an empty snapshot would let the live job of an
+earlier hand-typed `/bg` prove this one.
+
+The `waiting` / `dialog open` transient measured at +65 ms is part of the
+success path. The confirm notice ("Claude asks you to confirm in the
+terminal") is shown only when `waiting` persists for 1 s
+(`BG_CONFIRM_NOTICE_MS`) without proof.
 
 The wait lasts at most two minutes while the original PTY runs, shortened to
 15 seconds after an exit is observed. `wireSessionPty` marks the physical exit
 and shuts down MCP immediately, but holds ordinary exit notification and map
 cleanup until the handoff settles. Success suppresses that notification; failure
-releases it and displays an actionable notice. The exiting CLI is not killed.
+releases it and displays an actionable notice. The exiting CLI is not killed
+while the handoff is pending. After a proven handoff, if the original PTY has
+not exited within the 15 s hold window (`BG_HANDOFF_EXIT_TIMEOUT_MS`), it is
+stopped with `killPty`: the conversation already runs in the daemon, and a
+lingering CLI would keep the old tab's process alive.
 Output subscriptions and descriptor-change waits exist only during handoff;
 100 ms bounded waits also cover transcript-only changes, with no new idle poll.
 
@@ -501,7 +524,13 @@ as a live PTY; reopening it asks the user to wait and use the sidebar.
 
 The renderer destroys the original entry, replaces any non-attach target,
 opens `{ type: 'attach', jobId, cwd }` under the new id, and follows the active
-tab without stealing focus from another tab. It sets `bgRestore` and uses
+tab without stealing focus from another tab. It drops the old id's local PTY
+state (`dropLocalPtySession(oldId, 'backgrounded')`, as `applyProcessExit`
+would), so busy and running marks do not stick on a row that is not rendered.
+The attach entry is moved back to the original tab's position in
+`openSessions`. Known limit: a grid already on screen appends the new card at
+the end of its project group; the next grid layout orders it by the sidebar
+again. It sets `bgRestore` and uses
 the existing `skippedWorkingSetEntries` / `keepAttached` contract to save
 `bg: true`; closing the tab drops that entry. Restore intent is established
 before awaiting the attach spawn. A failed attach retains that intent alongside
@@ -511,6 +540,9 @@ completed move without reopening a tab or changing replacement liveness.
 The success notice says the session now runs in the background and closing the tab detaches it. Attach
 failure says where to retry from the sidebar. A `/bg` typed by hand is not
 followed by this action; quit/update and grid actions remain separate slices.
+
+The IPC handler is the named `handleSendToBackground` in `main.js`, so
+`test/bg-handoff-main.test.js` loads it through `loadAppFunctions`.
 
 Tests: `test/bg-handoff.test.js`, `test/bg-handoff-main.test.js`,
 `test/send-to-background-renderer.test.js`, `test/bg-handoff-trigger.test.js`,

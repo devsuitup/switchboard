@@ -1121,6 +1121,7 @@ async function sendSessionToBackground(sessionId) {
     const active = activeSessionId === sessionId;
     if (openSessions.get(sessionId) === oldEntry) destroySession(sessionId);
     activePtyIds.delete(sessionId);
+    dropLocalPtySession(sessionId, 'backgrounded');
     const target = openSessions.get(result.sessionId);
     if (target && (!target.attach || target.closed)) destroySession(result.sessionId);
     const session = { sessionId: result.sessionId, projectPath: result.cwd || oldEntry.session.projectPath, name };
@@ -1131,6 +1132,11 @@ async function sendSessionToBackground(sessionId) {
     } else if (active) showSession(result.sessionId);
     const entry = openSessions.get(result.sessionId);
     if (entry) {
+      const after = [...openSessions].filter(([id], at) => at >= index && id !== result.sessionId);
+      if (index >= 0 && after.length) {
+        for (const [id] of after) openSessions.delete(id);
+        for (const [id, value] of after) openSessions.set(id, value);
+      }
       entry.bgRestore = true;
       skippedWorkingSetEntries.set(result.sessionId, { item: { sessionId: result.sessionId, projectPath: session.projectPath, bg: true }, index, keepAttached: true });
     }

@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- **Send to background**, in a running session's header and right-click menu, moves it to the Claude daemon and keeps it open as an attached tab, reattached after each restart. Remote, sandboxed and pre-launch-command sessions cannot move; running subagents require confirmation because Claude may stop them. (#546)
+- **Send to background**, in a running session's header and right-click menu, moves it to the Claude daemon and keeps it open as an attached tab, reattached after each restart. Remote, sandboxed and pre-launch-command sessions cannot move, and a busy session must be idle first; running subagents require confirmation because Claude may stop them. (#546)
 
 ### Changed
 - Confirmations and error messages now use Switchboard’s own dialog, matching the rest of the app. Only the top dialog receives keys and keeps focus, with terminal typing, paste and app shortcuts paused while it is open; closing it gives focus back to the control that opened it when that control is still there. The unsaved-edits guard waits for pending questions, opens over other dialogs, and keeps its Save/Discard/Cancel layout: Enter saves, Escape cancels, and Tab or Shift+Tab moves between its buttons. (#585)
