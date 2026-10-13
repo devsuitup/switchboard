@@ -35,3 +35,22 @@ test('the last registered modal is visually above the previous question', async 
     assert.equal(await question, false);
   } finally { ctx.destroy(); }
 });
+
+test('settleWith resolves a queued question before it opens and removes it from the queue', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { enqueueModalQuestion, hasActiveModalQuestion } = ctx.window;
+    let release;
+    enqueueModalQuestion(() => new Promise((r) => { release = r; }));
+    assert.equal(hasActiveModalQuestion(), true);
+    let opened = 0;
+    let settle;
+    const queued = enqueueModalQuestion(() => { opened++; return 'opened'; }, { settleWith: new Promise((r) => { settle = r; }) });
+    settle('settled');
+    assert.equal(await Promise.race([queued, new Promise((r) => setTimeout(() => r('still queued'), 50))]), 'settled');
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(opened, 0, 'a settled question never opens');
+    assert.equal(hasActiveModalQuestion(), false);
+  } finally { ctx.destroy(); }
+});
