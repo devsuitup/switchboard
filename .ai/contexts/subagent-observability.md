@@ -135,8 +135,11 @@ agent before the result; this avoids duplicate provisional/concrete pills.
 Snapshots retain terminal ids so delayed transcript growth and IPC heartbeats
 cannot revive completed tasks. A later assistant SendMessage tool-use addressed
 to a known agent explicitly reopens it until its next terminal notification.
-The matching SendMessage tool-result rolls back that reopen on is_error=true;
-it does not end an agent that was already running or undo a newer reopen.
+Overlapping SendMessages share a reopen group until all their results arrive.
+The agent rolls back only if every result has is_error=true; any successful
+send keeps it running. A terminal notification clears that group, so a failed
+older send cannot undo a newer reopen. Sends to already running agents do not
+acquire rollback ownership.
 The snapshot carries separate agent entries and
 a background-work boolean, including validated in-flight Bash, Monitor and
 cron evidence; those tasks do not increase the subagent count.

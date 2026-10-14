@@ -20,7 +20,7 @@ const resume = (at = '2026-10-14T00:12:00Z', uuid = 'resume') => ({
 for (const variant of ['completedNoTool', 'failedNoTool', 'killed', 'stoppedNoOutput']) {
   test(`authenticated ${variant} ends a known agent through the worker snapshot path`, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-review-'));
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     const file = path.join(dir, id + '.jsonl');
     const renderer = createTaskRegistry();
     const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
@@ -70,7 +70,7 @@ test('SendMessage reopens a completed known agent until its next terminal notifi
 
 test('aggregate stopped notification ends every listed known agent through worker snapshots', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-aggregate-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const file = path.join(dir, id + '.jsonl');
   const renderer = createTaskRegistry();
   const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
@@ -104,9 +104,39 @@ const sendResult = (toolUseId, isError, timestamp = '2026-10-14T00:12:01Z') => (
   message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: isError, content: 'Synthetic SendMessage result' }] },
 });
 
+for (const [firstError, secondError, running] of [[true, true, 0], [true, false, 1], [false, true, 1]]) {
+  for (const reverse of [false, true]) {
+    test(`overlapping SendMessages through worker snapshots: errors ${firstError}/${secondError}, ${reverse ? 'reversed' : 'ordered'} results leave ${running} running`, async t => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-send-overlap-'));
+      const file = path.join(dir, id + '.jsonl');
+      const renderer = createTaskRegistry();
+      const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+      t.after(async () => {
+        await client.dispose();
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      });
+      fs.writeFileSync(file, [fixture.use, fixture.launch, fixture.notification,
+        resume('2026-10-14T00:12:00Z', 'send-first'), resume('2026-10-14T00:12:01Z', 'send-second'),
+      ].map(e => JSON.stringify(e)).join('\n') + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, 1);
+      const results = [sendResult('send-first', firstError, '2026-10-14T00:12:02Z'), sendResult('send-second', secondError, '2026-10-14T00:12:03Z')];
+      if (reverse) results.reverse();
+      fs.appendFileSync(file, JSON.stringify(results[0]) + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, 1, 'a pending send keeps the reopened agent running');
+      fs.appendFileSync(file, JSON.stringify(results[1]) + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, running, 'all failed reopeners roll back; any success keeps the agent running');
+      assert.equal(renderer.background(id), running > 0);
+      assert.equal(renderer.snapshot(id).tasks.find(t => t.id === agent).terminal, running === 0);
+    });
+  }
+}
+
 test('failed SendMessage restores the terminal agent through worker snapshots', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-send-error-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const file = path.join(dir, id + '.jsonl');
   const renderer = createTaskRegistry();
   const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
@@ -226,7 +256,7 @@ test('the client bounds continuation aliases while retaining its newest worker r
 
 test('unchanged same-size transcript with newer mtime reads only the 128-byte boundary', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-boundary-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const file = path.join(dir, 'parent.jsonl');
   fs.writeFileSync(file, [fixture.use, fixture.launch].map(e => JSON.stringify(e)).join('\n') + '\n');
   let bytes = 0, ingested = 0;

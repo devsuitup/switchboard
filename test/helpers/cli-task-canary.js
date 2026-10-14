@@ -27,7 +27,12 @@ async function scanTaskFiles(files, version) {
           }
         }
       }
-    } finally { lines.close(); stream.destroy(); }
+    } finally {
+      const closed = stream.closed ? Promise.resolve() : new Promise(resolve => stream.once('close', resolve));
+      lines.close();
+      stream.destroy();
+      await closed;
+    }
     const subdir = path.join(path.dirname(file), path.basename(file, '.jsonl'), 'subagents');
     let names;
     try { names = await fsp.readdir(subdir); } catch (error) {

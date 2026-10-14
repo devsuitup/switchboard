@@ -58,6 +58,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     t.terminal = true;
     t.at = at;
     t.sources.clear();
+    delete t.reopenGroup;
     changed(id);
   }
   function prune(ttl) {
@@ -152,10 +153,13 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       for (const b of blocks) {
         if (b.type === 'tool_use' && b.name === 'SendMessage' && typeof b.id === 'string' && p.tasks.get(b.input?.to)?.kind === 'agent') {
           const previous = p.tasks.get(b.input.to);
-          const call = { id: b.input.to, at, sendMessage: true, reopened: previous.terminal };
+          const reopenGroup = previous.terminal ? { pending: new Set(), succeeded: false, at } :
+            previous.reopenGroup?.at === previous.at ? previous.reopenGroup : undefined;
+          const call = { id: b.input.to, at, sendMessage: true, reopenGroup };
           const active = open(id, b.input.to, 'agent', at, { origin: 'transcript' });
           if (!active.terminal && active.at === at) {
-            active.reopenedBy = b.id;
+            if (reopenGroup) { reopenGroup.pending.add(b.id); reopenGroup.at = at; }
+            active.reopenGroup = reopenGroup;
             p.calls.set(b.id, call);
           }
           continue;
@@ -182,7 +186,16 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
         if (call.sendMessage) {
           const active = p.tasks.get(call.id);
-          if (b.is_error === true && call.reopened && active?.reopenedBy === b.tool_use_id && active.at === call.at) end(id, call.id, at);
+          const group = call.reopenGroup;
+          if (group && active?.reopenGroup === group && active.at === group.at) {
+            group.pending.delete(b.tool_use_id);
+            group.succeeded ||= b.is_error !== true;
+            group.finishedAt = Math.max(group.finishedAt || 0, at);
+            if (!group.pending.size) {
+              delete active.reopenGroup;
+              if (!group.succeeded) end(id, call.id, Math.max(group.at, group.finishedAt));
+            }
+          }
           continue;
         }
         const result = entry.toolUseResult;
