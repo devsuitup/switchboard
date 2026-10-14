@@ -353,6 +353,13 @@ reported by `showLiveElsewhereNotice` as one line in the restore toast style
 (`Not reopened: <name> is live in pid N`, or a count and the pids), dismissible
 and removed after 15 s.
 
+For a merged row, `guardResume` also checks its head. Its optional `onBlocked`
+callback reports the exact live part and descriptor through `openSessionNow`
+to `runRestore`. The notice uses that part's id when it differs from the saved
+session, while the saved entry remains keyed by the requested id. Reporting
+the guard's result avoids an extra liveness query just to build the notice.
+`test/restore-merged-member.test.js` covers saved A with head B live elsewhere.
+
 **The batch is read once, before the first spawn, on purpose.** A CLI started
 elsewhere on one of the batch's sessions during the restore stagger (500 ms per
 session) is not seen; that session is resumed as before the guard. A re-check

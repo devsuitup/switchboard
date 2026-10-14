@@ -331,15 +331,20 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         try { live = await window.api.getSessionLiveElsewhere(s.sessionId); } catch { live = null; }
       }
       let opened;
+      let blockedBy;
       try {
-        opened = await openSession(s, undefined, { automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true });
+        opened = await openSession(s, undefined, {
+          automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
+          onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId }, live: part.live }; },
+        });
       } finally {
         restoreInFlight.delete(originalId);
       }
       if (opened === false) {
         const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
         skippedWorkingSetEntries.set(item.sessionId, { item, index });
-        if (live) skippedNow.push({ session: s, live });
+        if (blockedBy) skippedNow.push(blockedBy);
+        else if (live) skippedNow.push({ session: s, live });
         continue;
       }
       if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
@@ -1605,7 +1610,7 @@ function openSession(session, customOptions, flags = {}) {
   return open.promise;
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked } = {}, open = null) {
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1648,7 +1653,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), alert: message => appAlert({ title: 'Scheduled task already running', message }) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, onBlocked, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), alert: message => appAlert({ title: 'Scheduled task already running', message }) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };

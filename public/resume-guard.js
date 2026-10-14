@@ -17,7 +17,7 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false, onBlocked } = {}) {
   if (!session || session.type === 'terminal') return true;
   const sessionIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])]
     .filter(id => typeof id === 'string' && id))];
@@ -30,7 +30,10 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
       const partVerdict = await guardResume({ sessionId: id }, {
         automatic, api, confirm, alert, live: liveById[id], allowBgAttach,
       });
-      if (partVerdict === false) return false;
+      if (partVerdict === false) {
+        onBlocked?.({ sessionId: id, live: liveById[id] });
+        return false;
+      }
       if (typeof partVerdict === 'object') verdict = partVerdict;
     }
     return verdict;
@@ -43,7 +46,10 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
     }
   }
   if (!live) return true;
-  if (automatic && !(allowBgAttach && live.kind === 'bg')) return false;
+  if (automatic && !(allowBgAttach && live.kind === 'bg')) {
+    onBlocked?.({ sessionId: session.sessionId, live });
+    return false;
+  }
   if (live.kind === 'schedule') {
     if (typeof alert !== 'function') throw new TypeError('guardResume requires an alert adapter for a scheduled task notice');
     const where = live.cwd ? ` in ${live.cwd}` : '';
