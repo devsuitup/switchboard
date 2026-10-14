@@ -265,6 +265,23 @@ control.
 
 ## 3. Feedback
 
+**Shared notices (#566, S3).** `public/app-notices.js` provides B8 through
+`showAppNotice({ id, kind, message, actionLabel, onAction })` and
+`clearAppNotice(id)`. Notices stack at the bottom right, wrap long text and
+replace only an earlier notice with the same id. Errors use `role="alert"`
+and persist until Dismiss, their action or an explicit clear; information
+uses `role="status"` and expires after 15 s. The #604 `Archived, but not
+stopped` notice now uses this persistent error variant, with its wording
+unchanged and no console-only duplicate.
+
+The Undo variant (`kind: 'undo'`) lasts 10 s and uses `role="status"`. Its
+caller supplies the undo callback, `actionLabel: 'Undo'`, and text explaining
+the completed action. Undo and Dismiss are keyboard-reachable native buttons
+with visible focus; the notification does not take focus. The action runs
+once and removes the notice. Archive/Detach wiring follows in S6/S8; restore
+and update toasts remain separate until #441's follow-up. The table below
+records the other feedback mechanisms from the measured baseline.
+
 | Mechanism | Where | Notes |
 |---|---|---|
 | Button text flash `Failed` + reason in `title` for 3 s | `surfaceStopFailure` (`sidebar.js:21-28`): Archive, slug Archive, folder Archive, Delete pre-check, Delete stop; `confirmAndStopSession` (`app.js:1062-1067`) | the bar is `opacity:0` unless hovered or a button has keyboard focus (`:focus-visible`) (`style.css`, `.session-actions:has(:focus-visible)`): after both pointer and keyboard focus leave, nothing is seen |

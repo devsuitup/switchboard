@@ -66,12 +66,15 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
   ctx.window.openSessions.set('A', { closed: false });
   ctx.window.activePtyIds.add('A');
-  const notices = [];
-  ctx.window.showRestoreNotice = (_id, text) => notices.push(text);
   ctx.window.api.remoteStopSession = (alias, sessionId) => handler(null, { alias, sessionId });
   ctx.window.api.archiveSession = async (id, value) => { calls.push(['archive', id, value]); return { ok: true }; };
   t.after(() => { finishPoll?.(); indexer.dispose(); ctx.destroy(); fs.rmSync(dataDir, { recursive: true, force: true }); });
-  return { ...ctx, indexer, calls, notices, attached, session, polls: () => polls, pollsAtStop: () => pollsAtStop, isLive: () => live, finishPoll };
+  return {
+    ...ctx, indexer, calls, attached, session, polls: () => polls, pollsAtStop: () => pollsAtStop, isLive: () => live, finishPoll,
+    get notices() {
+      return [...ctx.document.querySelectorAll('#app-notices .app-notice')].map(el => el.querySelector('.app-notice-message').textContent);
+    },
+  };
 }
 
 async function archive(ctx) {
@@ -79,6 +82,14 @@ async function archive(ctx) {
   await button.onclick({ stopPropagation() {} });
   return button;
 }
+
+test('the notices getter includes error, info and Undo messages', t => {
+  const ctx = setup(t);
+  for (const kind of ['error', 'info', 'undo']) {
+    ctx.window.showAppNotice({ id: kind, kind, message: kind });
+  }
+  assert.deepEqual(ctx.notices, ['error', 'info', 'undo']);
+});
 
 test('Archive before the first remote poll stops the live process and closes its local attach', async t => {
   const ctx = setup(t);

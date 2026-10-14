@@ -7,7 +7,7 @@
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
 // showNewSessionPopover, showRemoteLaunchDialog, openSettingsViewer, showResumeSessionDialog,
-// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js), showRestoreNotice (app.js)
+// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js), showAppNotice (app-notices.js)
 
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -50,8 +50,7 @@ function announceNotStopped(entries) {
   const text = 'Archived, but not stopped: '
     + [...byAlias].map(([alias, error]) => `${alias} did not answer (${error})`).join('; ')
     + '. The session may still be running there; unarchive it to try again once the host is back.';
-  console.error('[stop-before-archive]', text);
-  if (typeof showRestoreNotice === 'function') showRestoreNotice('archive-not-stopped-toast', text);
+  showAppNotice({ id: 'archive-not-stopped-toast', kind: 'error', message: text });
 }
 
 function folderId(projectPath) {

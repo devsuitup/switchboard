@@ -32,6 +32,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     <div id="memory-content"></div>
     <div id="placeholder"></div>
     <div id="terminals"></div>
+    <div id="app-notices" aria-live="polite"></div>
   </body>
 </html>`;
 
@@ -151,6 +152,7 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));

@@ -130,6 +130,8 @@ const rendererCrossFileGlobals = {
   showChoiceDialog: 'readonly',
   appConfirm: 'readonly',
   appAlert: 'readonly',
+  showAppNotice: 'readonly',
+  clearAppNotice: 'readonly',
   SIDEBAR_WORKTREE_RE: 'readonly',
   worktreeParentPath: 'readonly',
   worktreeName: 'readonly',

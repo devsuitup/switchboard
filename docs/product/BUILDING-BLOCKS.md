@@ -23,7 +23,7 @@ app was not run. The patterns these bricks serve are in
 | B5 | Confirmation dialog | `showChoiceDialog` | exists, used once |
 | B6 | Chooser dialog | — | missing |
 | B7 | Form dialog | `.new-session-overlay` family | exists, no dialog semantics |
-| B8 | Notice | `.restore-toast` / `#update-toast` | exists twice, restore/update only |
+| B8 | Notice | `app-notices.js` | exists, shared error/info/Undo notices; restore/update remain separate |
 | B9 | Inline error | `.agents-detail-error`, `.dwt-error`, dialog error lines | exists, ad hoc |
 | B10 | Section header (foldable) | `.agents-group-header`, `.slug-group-header`, project header | exists, two behaviours |
 | B11 | Empty state | `.plans-empty` and others | exists, ad hoc, mixed with errors |
@@ -191,21 +191,34 @@ focus) with a form body.
 ## B8. Notice
 
 - **Job.** Tell the user something happened that is not tied to a control.
-- **Exists.** `.restore-toast` (`app.js:418-498`; `showRestoreNotice`
-  `457-472`, 15 s timeout) and `#update-toast` (`index.html:127-131`,
-  `app.js:1968-1982`).
-- **Anatomy.** Message, optional action (`Restore`, `Restart`), a dismiss
-  button: `Dismiss` (restore) or `Later` (update, `index.html:130`).
-- **Divergences.** Same CSS twice (`style.css:78-96` and `137-154`), same
-  position (overlap supposed); message `white-space: nowrap`
-  (`style.css:96, 154`); no `role="status"`/`aria-live`.
-- **Duplicates that should become it.** 12 `alert()` calls; the `Failed`
-  flashes visible on hover or keyboard focus (`:focus-visible`); the
-  info-only `confirm` (`resume-guard.js:33`).
-
-**Proposed convergence.** One notice brick, stacked, wrapping, `role`
-`status` (info) or `alert` (error), an optional action, an optional
-timeout for informational notices only.
+- **Exists.** `public/app-notices.js`, loaded before `sidebar.js`.
+  `showAppNotice({ id, kind, message, actionLabel, onAction })` adds a notice;
+  `clearAppNotice(id)` removes it and cancels its timeout. Reusing an id
+  replaces only that notice and cancels its previous timeout.
+- **Anatomy.** Plain-text message, optional text action button, and `Dismiss`.
+  A fixed `#app-notices` container stacks notices at the bottom right with
+  wrapping text and scrolls when they exceed the available height.
+  It is an empty, persistent `aria-live="polite"` region in `index.html`.
+  Caller ids are stored in `data-notice-id`, without assigning a DOM id.
+- **Variants.** `kind: 'error'` has `role="alert"` and remains until dismissed,
+  acted on or cleared. `kind: 'info'` (the default) has `role="status"` and
+  expires after 15 s. `kind: 'undo'` has `role="status"` and expires after
+  10 s; the caller supplies `actionLabel: 'Undo'`, `onAction` and a message
+  explaining what happened, so the button is not the only cue.
+- **Behaviour.** Buttons are native keyboard-reachable buttons with the
+  shared focus ring; showing a notice does not move focus. An action removes
+  its notice and invokes its callback once. The caller owns asynchronous
+  action results and can report a failure with a new error notice.
+  Info and Undo timeouts pause while hovered or focused and resume with the
+  remaining time after both leave. Pointer presses preserve existing focus;
+  removing a focused notice returns focus to the previously focused control
+  if it is still connected.
+- **Used.** `announceNotStopped` in `public/sidebar.js` reports an archived
+  remote session that could not be stopped as a persistent error (#604/#566).
+- **Remaining separate.** `.restore-toast` and `#update-toast` retain their
+  existing behaviour; their migration waits for #441. Other failure flashes
+  and information dialogs are future callers. Archive and Detach Undo wiring
+  belongs to their own slices; S3 provides the shared variant.
 
 ## B9. Inline error
 
