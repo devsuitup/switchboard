@@ -59,6 +59,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS session_meta_fields (
   sessionId TEXT NOT NULL, field TEXT NOT NULL, revision INTEGER NOT NULL, source TEXT NOT NULL,
   PRIMARY KEY (sessionId, field)
 )`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS session_cache (
@@ -282,9 +283,6 @@ const migrations = [
         } catch {}
       })();
     } catch {}
-  },
-  (db) => {
-    db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
   },
 ];
 

@@ -334,11 +334,12 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   assert.doesNotMatch(sidebar.document.body.textContent, /Original \(2\)/);
 });
 
-test('metadata revision migration uses an ordered index without invalidating cached sessions', t => {
+for (const version of [9, 42]) test(`metadata revision index preserves db_version ${version} and cached sessions`, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641d-revisions-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict'), db = require('./db');
+    assert.equal(db.getSetting('db_version'), 9);
     db.setName('old', 'User rename'); db.setName('head', 'Indexed title', 'transcript');
     db.upsertCachedSessions([{ sessionId: 'cached', folder: 'project', summary: 'Keep me' }]);
     db.setFolderMeta('project', '/project', 123);
@@ -348,13 +349,14 @@ test('metadata revision migration uses an ordered index without invalidating cac
     for (const index of sql.prepare('PRAGMA index_list(session_meta_fields)').all()) {
       if (index.origin === 'c') sql.exec('DROP INDEX "' + index.name + '"');
     }
-    sql.prepare("UPDATE settings SET value = '9' WHERE key = 'db_version'").run();
+    sql.prepare("UPDATE settings SET value = ? WHERE key = 'db_version'").run(String(${version}));
     sql.close();
     delete require.cache[require.resolve('./db')];
     const reopened = require('./db');
+    assert.equal(reopened.getSetting('db_version'), ${version});
     const inspect = new (require('better-sqlite3'))(reopened.DB_PATH);
     const plan = inspect.prepare('EXPLAIN QUERY PLAN SELECT MAX(revision) FROM session_meta_fields').all();
-    assert.match(plan.map(row => row.detail).join(' '), /USING COVERING INDEX/);
+    assert.match(plan.map(row => row.detail).join(' '), /USING COVERING INDEX idx_session_meta_fields_revision/);
     assert.equal(reopened.getCachedSession('cached').summary, 'Keep me');
     assert.equal(reopened.getFolderMeta('project').indexMtimeMs, 123);
     assert.equal(reopened.isInitialScanComplete(), true);
