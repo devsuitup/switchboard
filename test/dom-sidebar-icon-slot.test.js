@@ -110,7 +110,7 @@ test('a remote row past the decay window shows the age with no response-ready gl
       assert.ok(slot);
       assert.ok(!slot.classList.contains('session-icon--response-ready'),
         'a silence-based decay must never claim response-ready');
-      assert.equal(slot.title, 'Turn state unavailable');
+      assert.equal(slot.title, 'Waiting for input');
 
       const statusEl = ctx.document.querySelector('#si-remote-decayed .session-status');
       assert.ok(statusEl, 'the age must still show via .session-status');

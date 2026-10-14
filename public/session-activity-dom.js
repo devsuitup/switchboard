@@ -5,7 +5,7 @@ function applyHeadTurnSnapshot(turn) {
   const previous = headTurns.get(turn.sessionId);
   if (previous && previous.revision >= turn.revision) return;
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
-  const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt || previous.mtimeMs !== turn.mtimeMs;
+  const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
   headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed') });
   if (previous && changed) {

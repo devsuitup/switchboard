@@ -131,7 +131,7 @@ function setActivity(sessionId, active, via, opts) {
   const wasBusy = before.busy;
   const effectiveArmReady = active ? armReady : (wasBusy && armReady && sessionId !== activeSessionId);
 
-  state.apply({ type: 'busy', active, armReady: effectiveArmReady });
+  state.apply({ type: 'busy', active, armReady: effectiveArmReady, at: opts?.at ?? Date.now() });
   const after = state.snapshot();
 
   activitySeq += 1;

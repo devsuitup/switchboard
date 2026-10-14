@@ -54,6 +54,10 @@ function createSessionState(kind) {
     if (event && event.source !== undefined) lastActivitySource = event.source;
   }
 
+  function clearPromptHint(at) {
+    if (at > Math.max(idleHintAt ?? -Infinity, promptHintAt ?? -Infinity)) promptHint = false;
+  }
+
   function apply(event) {
     if (!event || typeof event.type !== 'string') return;
     switch (event.type) {
@@ -61,7 +65,7 @@ function createSessionState(kind) {
         if (event.active) {
           clearExclusive();
           busy = true;
-          promptHint = false;
+          clearPromptHint(event.at ?? Date.now());
         } else {
           busy = false;
           waitingForInput = true;
@@ -97,12 +101,12 @@ function createSessionState(kind) {
         attached = !!event.value;
         break;
       case 'transcriptTouched':
-        promptHint = false;
+        clearPromptHint(event.at ?? Date.now());
         touch({ at: event.at !== undefined ? event.at : Date.now(), source: event.source || 'transcript' });
         break;
       case 'descriptorStatus':
         if ((event.status === 'busy' || event.status === 'shell')
-          && (lastDescriptorStatus !== event.status || Number.isFinite(event.at) && event.at > (lastDescriptorAt ?? -Infinity))) promptHint = false;
+          && (lastDescriptorStatus !== event.status || Number.isFinite(event.at) && event.at > (lastDescriptorAt ?? -Infinity))) clearPromptHint(event.at ?? Date.now());
         if (event.status === 'idle' && (lastDescriptorStatus !== 'idle' || Number.isFinite(event.at) && event.at > (idleHintAt ?? -Infinity))) {
           promptHint = true;
           if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);

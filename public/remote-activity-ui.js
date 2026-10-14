@@ -72,8 +72,8 @@ function markRemoteBusy(sessionId, via, at) {
   if (state.snapshot().attached) return;
   const t = at || Date.now();
   state.apply({ type: 'transcriptTouched', at: t, source: via });
-  state.apply({ type: 'busy', active: true });
-  setActivity(sessionId, true, via);
+  state.apply({ type: 'busy', active: true, at: t });
+  setActivity(sessionId, true, via, { at: t });
   projectRemoteState(sessionId);
 }
 

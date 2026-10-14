@@ -28,11 +28,15 @@ is prompt evidence. Descriptor idle is ordered against the transcript's last
 entry on the CLI host's clock. OSC idle is ordered against the latest changed
 transcript evidence's arrival time in the renderer, on this machine's clock;
 attached remote sessions therefore tolerate host clock skew. The worker carries
-the transcript mtime as well as the last entry timestamp, so a changed oversized
-tail also replaces the observation. A higher revision rereading the same state,
-last entry and mtime retains the prior observation time. A newer observation
+the transcript mtime as well as the last entry timestamp. Only a changed state
+or last entry timestamp replaces the observation and records a head-turn touch
+in the adapters. Mtime-only writes, including untimestamped bookkeeping and
+oversized tails without readable timestamped evidence, retain the prior
+observation time and adapter activity source. A newer observation
 wins over OSC idle; a newer entry wins over descriptor idle. Busy signals and
-new transcript evidence clear the prompt hint used for an unknown head, and
+transcript touches clear the prompt hint used for an unknown head only when
+their time is strictly later than its descriptor-idle and OSC-idle timestamps.
+Adapter busy events retain their originating activity time, and
 reapplying the same idle descriptor does not restore a consumed hint.
 An actual descriptor transition back to idle supplies a new hint, including
 when the descriptor has no timestamp.
