@@ -151,6 +151,7 @@ test('updateRunningIndicators: gridCards loop runs on every call, not gated by p
     assert.equal(card.querySelector('.grid-card-stop-btn').style.display, '', 'stop button visible');
 
     ctx.sessionBusyState.set('s1', true);
+    ctx.emitHeadTurn('s1', 'open');
     update();
     assert.equal(card.querySelector('.grid-card-dot').className, 'grid-card-dot busy',
       'grid card dot updated to busy on second call even though pty-set unchanged');
@@ -209,6 +210,8 @@ test('F7: a remote row busy via onRemoteActivityEvent stays .cli-busy across an 
   withIndicators(({ ctx, update }) => {
     const localItem = addSessionItem(ctx, 'local-1');
     const remoteItem = addSessionItem(ctx, 'remote-1', { remoteAlias: 'vps' });
+    ctx.read('remoteState("remote-1").apply({ type: "liveness", value: "alive" })');
+    ctx.emitHeadTurn('remote-1', 'open');
 
     ctx.window.onRemoteActivityEvent({ sessionId: 'remote-1' });
     assert.ok(remoteItem.classList.contains('cli-busy'), 'precondition: remote row busy via the real dispatcher');
@@ -230,9 +233,10 @@ test('F7: a remote row busy via onRemoteActivityEvent stays .cli-busy across an 
 test('F7: a local non-running row is still purged through purgeActivityFor', () => {
   withIndicators(({ ctx, update }) => {
     const localItem = addSessionItem(ctx, 'local-1');
+    ctx.emitHeadTurn('local-1', 'open');
 
-    ctx.setActivity('local-1', true, 'onCliBusyState');
     ctx.window.activePtyIds = new Set(['local-1']);
+    ctx.setActivity('local-1', true, 'onCliBusyState');
     update();
     assert.ok(localItem.classList.contains('cli-busy'), 'precondition: local row busy while its pty runs');
 

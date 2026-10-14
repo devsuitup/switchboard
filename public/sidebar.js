@@ -1774,9 +1774,10 @@ function buildSessionItem(session) {
   if (session.archived) item.classList.add('archived-item');
   if (rowSessionIds(session).some(id => activePtyIds.has(id))) item.classList.add('has-running-pty');
   const ids = rowSessionIds(session);
+  item.dataset.headSessionId = rowHeadId(session);
   if (session.mergedMemberIds?.length) item.dataset.mergedMemberIds = session.mergedMemberIds.join(' ');
   const snapshot = mergedRowSnapshot(ids, session.sessionId,
-    storedActivitySnapshot(session.sessionId, session));
+    storedActivitySnapshot(session.sessionId, session), session);
   const remoteAttention = ids.map(remoteAttentionSnapshot).find(Boolean);
   setNeedsAttention(item, snapshot.attention || !!remoteAttention);
   setResponseReady(item, snapshot.responseReady);

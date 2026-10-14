@@ -30,6 +30,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
     cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }, { sessionId: remote }] },
     activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
     getAllCached: () => [{ sessionId: id }, { sessionId: dead }, { sessionId: remote, remoteAlias: 'host' }],
+    remoteIndexer: { getRemoteSessions: () => ({ sessions: [{ sessionId: remote }] }) },
     getCachedFolder: () => 'folder', projectsDirForFolder: () => dir, getCachedByParent: () => [],
   });
   const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
@@ -39,7 +40,9 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   const client = vm.runInContext('taskRecords', ctx);
   t.after(async () => { await client.dispose(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   const snapshots = await handler();
-  assert.deepEqual(snapshots.map(s => s.parentSessionId), [id]);
+  assert.deepEqual(snapshots.map(s => s.parentSessionId).sort(), [id, remote].sort());
+  assert.equal(renderer.agents(remote).length, 0, 'remote head reads never replay remote tasks');
+  assert.equal(snapshots.find(s => s.parentSessionId === remote).headTurn.state, 'open');
   assert.equal(renderer.agents(id).length, 1, 'old write timestamp does not expire explicit live-owner evidence');
   fs.appendFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify({ type: 'continued-in', sessionId: id, continuedInSessionId: next, timestamp: '2026-10-14T00:02:00Z' }) + '\n');
   await client.read(path.join(dir, `${id}.jsonl`), id);

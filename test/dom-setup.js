@@ -196,6 +196,9 @@ function setupSidebarDom({ loadTaskRegistry = true } = {}) {
     emitTaskSnapshot(payload) {
       apiTarget._taskSnapshotCb(payload);
     },
+    emitHeadTurn(sessionId, state, { revision = 1, lastEntryAt = Date.now() } = {}) {
+      window.applyHeadTurnSnapshot({ sessionId, state, revision, lastEntryAt });
+    },
     emitSubagentCompleted(payload) {
       if (typeof apiTarget._subagentCompletedCb === 'function') apiTarget._subagentCompletedCb(payload);
     },

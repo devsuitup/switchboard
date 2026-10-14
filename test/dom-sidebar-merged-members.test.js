@@ -6,7 +6,13 @@ const path = require('node:path');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 
-const row = { sessionId: 'A', mergedMemberIds: ['B', 'C'], summary: 'Conversation', modified: new Date().toISOString(), messageCount: 3 };
+const row = { sessionId: 'A', headSessionId: 'B', mergedMemberIds: ['B', 'C'], summary: 'Conversation', modified: new Date().toISOString(), messageCount: 3 };
+
+function turn(ctx, sessionId, state) {
+  const revision = (ctx.turnRevision || 0) + 1;
+  ctx.turnRevision = revision;
+  ctx.window.applyHeadTurnSnapshot({ sessionId, state, revision });
+}
 
 function render(ctx, sessions = [row]) {
   ctx.window.sessionMap = new Map(sessions.map(s => [s.sessionId, s]));
@@ -47,9 +53,9 @@ test('showSession highlights the merged row when switching to its member', t => 
 });
 
 for (const [name, prepare, className] of [
-  ['busy', ctx => ctx.sessionBusyState.set('B', true), 'cli-busy'],
+  ['busy', ctx => { ctx.window.activePtyIds.add('B'); turn(ctx, 'B', 'open'); }, 'cli-busy'],
   ['attention', ctx => ctx.attentionSessions.add('B'), 'needs-attention'],
-  ['response ready', ctx => ctx.responseReadySessions.add('B'), 'response-ready'],
+  ['response ready', ctx => { turn(ctx, 'B', 'open'); turn(ctx, 'B', 'closed'); }, 'response-ready'],
 ]) {
   test(`a merged row renders its member's ${name} state`, t => {
     const ctx = setupSidebarDom();
@@ -63,11 +69,14 @@ test('member activity updates the merged row and a sibling idle update preserves
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const item = render(ctx);
+  ctx.window.activePtyIds.add('B');
+  turn(ctx, 'B', 'open');
   ctx.setActivity('B', true, 'test');
   assert.ok(item.classList.contains('cli-busy'));
   ctx.setActivity('C', false, 'test');
   assert.ok(item.classList.contains('cli-busy'));
   ctx.setActivity('B', false, 'test');
+  turn(ctx, 'B', 'closed');
   assert.ok(item.classList.contains('response-ready'));
   ctx.read("setAttention('B', true, 'test')");
   assert.ok(item.classList.contains('needs-attention'));
@@ -81,6 +90,7 @@ test('running polls keep a merged member running and clear it when the member st
   const { updateRunningIndicators } = loadAppFunctions(ctx.context, { functions: ['updateRunningIndicators'], declarations: ['_lastPtySignature'] });
   ctx.window.activePtyIds.add('B');
   updateRunningIndicators();
+  turn(ctx, 'B', 'open');
   assert.ok(item.classList.contains('has-running-pty'));
   ctx.setActivity('B', true, 'test');
   ctx.window.activePtyIds.add('unrelated');
@@ -118,16 +128,19 @@ test('a sibling projection preserves the merged member waiting-for-input icon', 
   t.after(() => ctx.destroy());
   const item = render(ctx);
   ctx.window.activePtyIds.add('B');
+  turn(ctx, 'B', 'closed');
   ctx.setActivity('B', false, 'test', { armReady: false });
   assert.equal(item.querySelector('.session-icon').title, 'Waiting for input');
   ctx.read("projectLocalPtyState('A')");
   assert.equal(item.querySelector('.session-icon').title, 'Waiting for input');
 });
 
-test('a sibling transcript decay preserves another merged member still writing', t => {
+test('a sibling transcript decay preserves the head with an open turn', t => {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const item = render(ctx);
+  ctx.window.activePtyIds.add('B');
+  turn(ctx, 'B', 'open');
   ctx.emitSessionTranscriptActivity({ sessionId: 'B' });
   ctx.emitSessionTranscriptActivity({ sessionId: 'C' });
   ctx.read("decayLocalTranscriptBusy('C')");
@@ -174,6 +187,7 @@ test('running polls attach the actual remote member and retain its local activit
   updateRunningIndicators();
   assert.equal(ctx.remoteSessionStates.get('B').snapshot().attached, true);
   assert.equal(ctx.remoteSessionStates.get('A').snapshot().attached, false);
+  turn(ctx, 'B', 'open');
   ctx.setActivity('B', true, 'test');
   ctx.read("decayRemoteBusy('B')");
   assert.ok(item.classList.contains('cli-busy'));
@@ -201,7 +215,7 @@ test('remote member subagent activity survives a merged row render', t => {
   t.after(() => ctx.destroy());
   const remoteRow = { ...row, remoteAlias: 'host', remoteAttachable: true };
   render(ctx, [remoteRow]);
-  ctx.read("remoteState('B').apply({ type: 'subagentSpawned' }); projectRemoteState('B')");
+  ctx.window.onRemoteActivityEvent({ kind: 'subagent', parentSessionId: 'B', agentId: 'worker' });
   assert.ok(ctx.document.getElementById('si-A').classList.contains('has-busy-agents'));
   assert.ok(render(ctx, [remoteRow]).classList.contains('has-busy-agents'));
 });

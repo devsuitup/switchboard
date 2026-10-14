@@ -189,10 +189,19 @@ A failing host is retried with a doubling delay, up to 30 minutes, and never
 dropped; one success resets it. **Reconnect** on the header retries at once and
 restarts the watch connection. The sidebar's global refresh retries every host.
 
-A remote session shows the working spinner while its transcript is being
-written, until 20 seconds of silence (3 seconds while a subagent is busy), and
-never "response ready". A session that has a live descriptor but no transcript
+A live remote session shows the working spinner while its conversation head
+has an open turn. A newer idle descriptor or terminal idle signal stops it;
+silence alone does not. At the prompt, known background work uses a static
+spinner. Attention and unseen responses keep priority in the same slot.
+A live session without turn evidence says **Turn state unavailable**, unless
+its descriptor already confirms the prompt. A session without a transcript
 yet (before its first prompt) is listed under its directory's name.
+
+Turn changes are read from local mirrored transcripts after indexing, so they
+can lag by about 15 seconds with the host watch, or by the configured full-pull
+interval without it (default 5 minutes). Refresh pulls the mirror sooner.
+Live top-level rows are read in one worker batch; archived, absent-descriptor
+and child rows are skipped. This adds no SSH polling per row.
 
 A session that is not open in a tab and is waiting on a dialog on the host
 (a permission prompt or a question) shows the orange attention state, and its

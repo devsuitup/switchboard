@@ -82,6 +82,7 @@ test('a disabled probe site never evaluates its payload expression', () => {
 test('an enabled trace forwards each mutation with its before/after and caller', () => {
   const { window, sent, run } = setup({ traceEnabled: true });
   assert.equal(window.ATRACE, true);
+  run('globalThis.activePtyIds = new Set(["s1"]); headTurns.set("s1", { sessionId: "s1", state: "open", revision: 1 })');
 
   run('setActivity("s1", true, "onCliBusyState")');
   const busy = sent.find(e => e.cat === 'store.mutate' && e.fields.map === 'sessionBusyState');

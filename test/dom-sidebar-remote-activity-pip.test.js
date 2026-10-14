@@ -53,7 +53,7 @@ function installFakeTimers(win) {
   };
 }
 
-test('a session active within the decay window renders busy on first render', () => {
+test('a session active within the hint decay window cannot infer an open head on first render', () => {
   const ctx = setupSidebarDom();
   try {
     const session = {
@@ -65,7 +65,7 @@ test('a session active within the decay window renders busy on first render', ()
 
     const item = ctx.document.querySelector('#si-remote-active');
     assert.ok(item, 'the session row must exist');
-    assert.ok(item.classList.contains('cli-busy'), 'a sighting 5s ago is still inside the 20s decay window');
+    assert.equal(item.classList.contains('cli-busy'), false, 'a recent sighting is a hint only');
   } finally { ctx.destroy(); }
 });
 
@@ -132,7 +132,7 @@ test('a local session is not marked busy by the remote paint path', () => {
   } finally { ctx.destroy(); }
 });
 
-test('a seeded remote session goes idle once the remaining decay window elapses, and not before', () => {
+test('a seeded remote hint never animates an unknown head across its remaining decay window', () => {
   const ctx = setupSidebarDom();
   try {
     const timers = installFakeTimers(ctx.window);
@@ -144,11 +144,11 @@ test('a seeded remote session goes idle once the remaining decay window elapses,
     ctx.sidebar.renderProjects([remoteProject(session)], true);
 
     let item = ctx.document.querySelector('#si-remote-partial');
-    assert.ok(item.classList.contains('cli-busy'), 'seeded busy on first render (15s old, still inside 20s)');
+    assert.equal(item.classList.contains('cli-busy'), false, 'a recent seed is not open-turn evidence');
 
     timers.advance(4000); // total 4000ms — remaining window (~5000ms) not yet elapsed
     item = ctx.document.querySelector('#si-remote-partial');
-    assert.ok(item.classList.contains('cli-busy'), 'must not decay before the remaining window elapses');
+    assert.equal(item.classList.contains('cli-busy'), false, 'the timer cannot establish turn evidence');
 
     timers.advance(1001); // total 5001ms — past the ~5000ms remaining window
     item = ctx.document.querySelector('#si-remote-partial');

@@ -1,7 +1,40 @@
+const headTurns = new Map();
+
+function applyHeadTurnSnapshot(turn) {
+  if (!turn || typeof turn.sessionId !== 'string' || !['open', 'closed', 'unknown'].includes(turn.state) || !Number.isFinite(turn.revision)) return;
+  const previous = headTurns.get(turn.sessionId);
+  if (previous && previous.revision >= turn.revision) return;
+  const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
+  const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
+  const observedAt = changed ? Date.now() : previous.observedAt;
+  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed') });
+  if (previous && changed) {
+    for (const states of [typeof localPtyStates !== 'undefined' && localPtyStates,
+      typeof localTranscriptStates !== 'undefined' && localTranscriptStates,
+      typeof remoteSessionStates !== 'undefined' && remoteSessionStates]) {
+      if (states) states.get(turn.sessionId)?.apply({ type: 'transcriptTouched', at: observedAt, source: 'head-turn' });
+    }
+  }
+  applyStateClasses(turn.sessionId, storedActivitySnapshot(turn.sessionId));
+  if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
+}
+
+function headActivitySnapshot(sessionId, snapshot) {
+  const s = snapshot || {};
+  const turn = headTurns.get(sessionId);
+  const alive = s.liveness === 'alive' || (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
+  const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
+    || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
+  const headTurn = idleNewer || (s.promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
+  return { ...s, headTurn, busy: alive && headTurn === 'open',
+    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',
+    liveness: alive ? 'alive' : s.liveness };
+}
+
 function taskActivitySnapshot(sessionId, snapshot) {
-  if (!window.taskRegistry) return snapshot;
+  if (!window.taskRegistry) return headActivitySnapshot(sessionId, snapshot);
   const agentsBusy = window.taskRegistry.agents(sessionId).length > 0;
-  return { ...snapshot, agentsBusy: agentsBusy || (!window.taskRegistry.known(sessionId) && !!snapshot?.agentsBusy), backgroundWork: window.taskRegistry.background(sessionId) };
+  return headActivitySnapshot(sessionId, { ...snapshot, agentsBusy, backgroundWork: window.taskRegistry.background(sessionId) });
 }
 
 // DOM projection for session activity, sole writer of the activity classes — see .ai/contexts/session-state.md
@@ -70,11 +103,17 @@ function storedActivitySnapshot(sessionId, session) {
   return taskActivitySnapshot(sessionId, transcript || local);
 }
 
-function mergedRowSnapshot(ids, sessionId, snapshot) {
+function mergedRowSnapshot(ids, sessionId, snapshot, row) {
   if (ids.length === 1) return snapshot;
+  row ||= localMergedMemberRows.get(sessionId) || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+  if (!row) {
+    const item = sessionItemEl(sessionId);
+    row = item && { sessionId: item.dataset.sessionId, headSessionId: item.dataset.headSessionId };
+  }
+  const head = row ? rowHeadId(row) : sessionId;
   const snapshots = ids.map(id => id === sessionId ? snapshot : storedActivitySnapshot(id)).filter(Boolean);
-  const combined = { ...snapshot };
-  for (const field of ['attention', 'responseReady', 'busy', 'agentsBusy', 'waitingForInput']) {
+  const combined = { ...(head === sessionId ? snapshot : storedActivitySnapshot(head)) };
+  for (const field of ['attention', 'agentsBusy', 'backgroundWork']) {
     combined[field] = snapshots.some(s => s[field]);
   }
   if (snapshots.some(s => s.liveness === 'alive')) combined.liveness = 'alive';
@@ -110,6 +149,7 @@ function isSessionAlive(sessionId) {
 
 // Snapshot-driven projection — the one path for all three kinds — see .ai/contexts/session-state.md ("The local-pty adapter")
 function applyStateClasses(sessionId, snapshot) {
+  if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
@@ -139,6 +179,8 @@ function writeIconSlot(el, icon) {
   }
   for (const cls of icon.slotClasses) el.classList.add(cls);
   el.title = icon.title || '';
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', icon.title || 'Idle');
   el.dataset.glyph = icon.glyph || '';
 }
 
@@ -171,5 +213,5 @@ function paintSessionIcon(el, sessionId, session) {
   const snapshot = storedActivitySnapshot(sessionId, session);
   const item = el.closest('.session-item');
   const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
-  writeIconSlot(el, renderSessionIcon(mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot)));
+  writeIconSlot(el, renderSessionIcon(mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row)));
 }

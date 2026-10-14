@@ -550,7 +550,11 @@ const remoteIndexer = createRemoteIndexer({
   getRefreshMs: () => (getSetting('global') || {}).remoteRefreshMs,
   dataDir: path.dirname(DB_PATH),
   transport: remoteTransport,
-  scanFolders: scanFoldersViaWorker,
+  scanFolders: async options => {
+    const result = await scanFoldersViaWorker(options);
+    await refreshRemoteHeadTurns(options.folderPrefix);
+    return result;
+  },
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
   dropFolder: (folderKey) => {
     deleteCachedFolder(folderKey);
@@ -3146,6 +3150,22 @@ const taskRecords = createTaskRecordsClient({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId, continued });
   },
 });
+async function refreshRemoteHeadTurns(folderPrefix) {
+  const rows = [];
+  const liveByHost = new Map();
+  for (const row of getAllCached()) {
+    if (!row.remoteAlias || row.isSidechain || row.parentSessionId || row.archived) continue;
+    const folder = getCachedFolder(row.sessionId);
+    if (!folder || (folderPrefix && !folder.startsWith(folderPrefix))) continue;
+    if (!liveByHost.has(row.remoteAlias)) {
+      liveByHost.set(row.remoteAlias, new Set(remoteIndexer.getRemoteSessions(row.remoteAlias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(row.remoteAlias).has(row.sessionId)) continue;
+    const dir = projectsDirForFolder(folder);
+    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
+  }
+  if (rows.length) await taskRecords.readBatch(rows);
+}
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
   for (const [key, session] of activeSessions) {
@@ -3154,6 +3174,7 @@ ipcMain.handle('get-task-snapshots', async () => {
   for (const job of bgAgents.getSnapshot().roster) {
     if (job.sessionId && ['working', 'blocked'].includes(job.state)) live.add(job.sessionId);
   }
+  await refreshRemoteHeadTurns();
   for (const row of getAllCached()) {
     if (row.isSidechain || row.parentSessionId || row.remoteAlias || !live.has(row.sessionId)) continue;
     const folder = getCachedFolder(row.sessionId);

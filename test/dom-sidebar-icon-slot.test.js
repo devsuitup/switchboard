@@ -35,6 +35,8 @@ test('a busy local row carries the busy icon-slot markup (mutation-provable agai
   const ctx = setupSidebarDom();
   try {
     ctx.sessionBusyState.set('local-busy', true);
+    ctx.emitHeadTurn('local-busy', 'open');
+    ctx.window.activePtyIds.add('local-busy');
     ctx.sidebar.renderProjects([makeSampleProject({
       sessions: [{
         sessionId: 'local-busy', summary: 'busy local', modified: '2026-09-06T10:00:00.000Z',
@@ -54,6 +56,9 @@ test('a local busy row and a remote busy row produce the same icon-slot markup',
   const ctx = setupSidebarDom();
   try {
     ctx.sessionBusyState.set('local-busy-2', true);
+    ctx.emitHeadTurn('local-busy-2', 'open');
+    ctx.window.activePtyIds.add('local-busy-2');
+    ctx.emitHeadTurn('remote-busy-2', 'open');
     const localProj = makeSampleProject({
       sessions: [{
         sessionId: 'local-busy-2', summary: 'busy local', modified: '2026-09-06T10:00:00.000Z',
@@ -61,7 +66,7 @@ test('a local busy row and a remote busy row produce the same icon-slot markup',
       }],
     });
     const remoteProj = remoteProject({
-      sessionId: 'remote-busy-2', summary: 'busy remote', modified: '2026-09-06T10:00:00.000Z',
+      sessionId: 'remote-busy-2', summary: 'busy remote', modified: '2026-09-06T10:00:00.000Z', remoteAlias: 'planificator', remoteDescriptorSeen: true,
       starred: false, archived: 0, messageCount: 1,
     });
 
@@ -90,7 +95,7 @@ test('a remote row past the decay window shows the age with no response-ready gl
       const session = {
         sessionId: 'remote-decayed', summary: 'quiet now', modified: '2026-09-08T10:00:00.000Z',
         starred: false, archived: 0, messageCount: 1,
-        remoteAlias: 'planificator', status: 'idle', statusUpdatedAt: now - 5000,
+        remoteAlias: 'planificator', status: 'idle', statusUpdatedAt: now - 5000, remoteDescriptorSeen: true,
       };
       ctx.sidebar.renderProjects([remoteProject(session)], true);
 
@@ -127,7 +132,7 @@ test('a subagent row also gets an icon slot, painted the same way as a session r
           modified: '2026-05-22T10:00:00.000Z', starred: false, archived: 0, messageCount: 1,
         },
         {
-          sessionId: 'sub:s-top-1:agent-1', parentSessionId: 's-top-1', agentId: 'agent-1',
+          sessionId: 'sub:s-top-1:agent-1', parentSessionId: 's-top-1', agentId: 'agent-1', status: 'busy',
           subagentType: 'explore', description: 'explore subagent',
           modified: '2026-05-22T09:59:00.000Z', messageCount: 1,
         },
@@ -136,6 +141,7 @@ test('a subagent row also gets an icon slot, painted the same way as a session r
 
     const slot = ctx.document.querySelector('#si-sub\\:s-top-1\\:agent-1 .session-icon');
     assert.ok(slot, 'the subagent row must carry a .session-icon slot');
-    assert.deepEqual(slotClassesOf(slot), ['session-icon--busy']);
+    assert.deepEqual(slotClassesOf(slot), ['session-icon--waiting']);
+    assert.equal(slot.title, 'Turn state unavailable');
   } finally { ctx.destroy(); }
 });

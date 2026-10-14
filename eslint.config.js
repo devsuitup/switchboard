@@ -24,6 +24,7 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  clearHeadUnread: 'readonly',
   registerModal: 'readonly',
   hasOpenModal: 'readonly',
   enqueueModalQuestion: 'readonly',
@@ -242,6 +243,9 @@ const rendererCrossFileGlobals = {
   // public/sidebar.js — see .ai/contexts/subagent-observability.md
   noteSubagentActivity: 'readonly',
   taskActivitySnapshot: 'readonly',
+  applyHeadTurnSnapshot: 'readonly',
+  headTurns: 'readonly',
+  renderAgentsView: 'readonly',
   updateGridSubagentPills: 'readonly',
   reflectSubagentRunningState: 'readonly',
   scheduleSubagentTtlTick: 'readonly',

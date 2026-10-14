@@ -107,7 +107,7 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
-test('Agents rows supply the waiting, idle and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
+test('Agents rows supply attention, unknown-live and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
   const { window, document, setSnapshot, destroy } = setup();
   try {
     setSnapshot({ daemonReachable: true, roster: [
@@ -117,7 +117,7 @@ test('Agents rows supply the waiting, idle and finished glyphs to the shared slo
     ] });
     await window.showAgentsView();
     const { renderSessionIcon } = require('../public/session-state');
-    for (const [rung, snapshot] of [['waiting', { waitingForInput: true }], ['idle', {}], ['stale', { stale: true }]]) {
+    for (const [rung, snapshot] of [['attention', { attention: true }], ['waiting', { waitingForInput: true }], ['stale', { stale: true }]]) {
       const slot = document.querySelector(`.agents-row .session-icon--${rung}`);
       assert.ok(slot, `${rung} row must have the shared slot class`);
       assert.equal(slot.dataset.glyph, renderSessionIcon(snapshot).glyph, `${rung} glyph must reach the rendered row`);

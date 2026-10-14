@@ -353,6 +353,20 @@ test('classify: the synthetic stop_sequence message followed by its turn_duratio
   assert.equal(classifyTranscriptTail(jsonl([assistant(2000, 'stop_sequence', { message: { role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence', content: [] } }), turnDuration(2100)])).closed, true);
 });
 
+test('classify: stop_sequence then tool_result remains open, including before the result arrives', () => {
+  const entries = [userPrompt(1000), assistant(2000, 'stop_sequence')];
+  assert.equal(classifyTranscriptTail(jsonl(entries)).state, 'open');
+  entries.push(toolResult(4000));
+  assert.equal(classifyTranscriptTail(jsonl(entries)).state, 'open');
+});
+
+test('classify: only an API-error stop_sequence closes without turn_duration, and a later result reopens it', () => {
+  const entries = [userPrompt(1000), assistant(2000, 'stop_sequence', { isApiErrorMessage: true })];
+  assert.equal(classifyTranscriptTail(jsonl(entries)).state, 'closed');
+  entries.push(toolResult(4000));
+  assert.equal(classifyTranscriptTail(jsonl(entries)).state, 'open');
+});
+
 test('classify: a dequeue after the closed turn means a queued prompt is running', () => {
   assert.equal(classifyTranscriptTail(jsonl([assistant(2000, 'end_turn'), turnDuration(2100), queueOp(2500, 'dequeue')])).closed, false);
 });

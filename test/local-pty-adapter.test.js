@@ -168,6 +168,8 @@ test('attention fired while busy clears busy — an attention edge still wins', 
 // .ai/contexts/session-state.md ("The local-pty adapter").
 test('a busy edge after attention does NOT clear attention — attention is orthogonal to busy', () => {
   const t = setup();
+  t.window.activePtyIds = new Set(['s1']);
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
   t.setAttention('s1', true, 'onTerminalNotification');
   assert.equal(t.snapshot('s1').attention, true);
 
@@ -238,6 +240,8 @@ test('decided (not a regression): attention after response-ready, then clearing 
 
 test('decided: a local row going idle while active shows "Waiting for input", not "Idle"', () => {
   const t = setup();
+  t.window.activePtyIds = new Set(['s1']);
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 1 });
   t.window.activeSessionId = 's1'; // s1 IS the focused session
 
   t.setActivity('s1', true);
@@ -253,8 +257,11 @@ test('decided: a local row going idle while active shows "Waiting for input", no
   t.destroy();
 });
 
-test('decided: a local row going idle NOT active still arms response-ready (unchanged)', () => {
+test('an unseen closed turn retains unread state and the response-ready glyph', () => {
   const t = setup();
+  t.window.activePtyIds = new Set(['s1']);
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
   t.window.activeSessionId = 's2'; // s1 not focused
 
   t.setActivity('s1', true);
@@ -263,6 +270,7 @@ test('decided: a local row going idle NOT active still arms response-ready (unch
   assert.equal(snap.responseReady, true);
 
   const icon = t.icon('s1');
+  assert.ok(t.item('s1').classList.contains('response-ready'));
   assert.ok(icon.classList.contains('session-icon--response-ready'));
   assert.equal(icon.title, 'Response ready');
   t.destroy();

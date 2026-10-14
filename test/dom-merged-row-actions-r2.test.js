@@ -265,10 +265,11 @@ test('a merged row paints its local icon once while retaining member activity', 
   t.after(() => ctx.destroy());
   ctx.window.activePtyIds.add('B');
   ctx.setActivity('B', true, 'test');
+  ctx.emitHeadTurn('B', 'open');
   let paints = 0;
   const original = ctx.window.writeIconSlot;
   ctx.window.writeIconSlot = (...args) => { paints++; return original(...args); };
-  const item = ctx.sidebar.buildSessionItem(row);
+  const item = ctx.sidebar.buildSessionItem({ ...row, headSessionId: 'B' });
   assert.equal(item.querySelector('.session-icon').title, 'Working');
   assert.equal(paints, 1);
 });

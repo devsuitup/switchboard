@@ -30,16 +30,18 @@ test('sort: a blocked job is live and ranks with the working ones', () => {
   assert.deepEqual(sorted.map(e => e.id), ['b1', 'w1', 's1', 'd1']);
 });
 
-test('row icon: busy spinner, waiting, idle for live rows; stale for finished ones', () => {
-  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--busy');
-  assert.equal(agentRowIcon(bg({ status: 'waiting' })).slotClass, 'session-icon--waiting');
-  assert.equal(agentRowIcon(bg({ status: 'idle' })).slotClass, 'session-icon--idle');
+test('row icon: busy hints alone stay static, waiting descriptors raise attention, finished jobs stay stale', () => {
+  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--waiting');
+  assert.equal(agentRowIcon(bg({ status: 'waiting' })).slotClass, 'session-icon--attention');
+  assert.equal(agentRowIcon(bg({ status: 'idle' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'done', status: 'busy' })).slotClass, 'session-icon--stale');
   assert.equal(agentRowIcon(bg({ state: 'stopped', status: 'idle' })).slotClass, 'session-icon--stale');
-  assert.equal(agentRowIcon({ kind: 'interactive', status: 'busy' }).slotClass, 'session-icon--busy');
+  assert.equal(agentRowIcon({ kind: 'interactive', status: 'busy' }).slotClass, 'session-icon--waiting');
 });
 
-test('row icon: a blocked job shows the waiting dot whatever its status', () => {
+test('row icon: a blocked job shows the waiting dot whatever its status', t => {
+  global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'open', busy: true, waitingForInput: false });
+  t.after(() => { delete global.taskActivitySnapshot; });
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'idle' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: null })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'busy' })).slotClass, 'session-icon--waiting');

@@ -370,14 +370,21 @@ if (typeof window !== 'undefined') window.taskRegistry = createTaskRegistry({ on
     for (const id of ids) reflectSubagentRunningState(snapshot.parentSessionId, id);
   }
   if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(snapshot.parentSessionId);
+  if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
 } });
 
 if (typeof window !== 'undefined' && window.api) {
   if (typeof window.api.onTaskRekey === 'function') window.api.onTaskRekey(({ oldId, newId, continued }) => window.taskRegistry.rekey(oldId, newId, { continued }));
-  if (typeof window.api.onTaskSnapshot === 'function') window.api.onTaskSnapshot(s => window.taskRegistry.applySnapshot(s));
+  if (typeof window.api.onTaskSnapshot === 'function') window.api.onTaskSnapshot(s => {
+    if (typeof applyHeadTurnSnapshot === 'function') applyHeadTurnSnapshot(s?.headTurn);
+    window.taskRegistry.applySnapshot(s);
+  });
   if (typeof window.api.getTaskSnapshots === 'function') {
     Promise.resolve(window.api.getTaskSnapshots()).then(snapshots => {
-      if (Array.isArray(snapshots)) for (const s of snapshots) window.taskRegistry.applySnapshot(s);
+      if (Array.isArray(snapshots)) for (const s of snapshots) {
+        if (typeof applyHeadTurnSnapshot === 'function') applyHeadTurnSnapshot(s?.headTurn);
+        window.taskRegistry.applySnapshot(s);
+      }
     }).catch(() => {});
   }
 }

@@ -72,8 +72,8 @@ function markRemoteBusy(sessionId, via, at) {
   if (state.snapshot().attached) return;
   const t = at || Date.now();
   state.apply({ type: 'transcriptTouched', at: t, source: via });
-  state.apply({ type: 'busy', active: true });
-  setActivity(sessionId, true, via);
+  state.apply({ type: 'busy', active: true, at: t });
+  setActivity(sessionId, true, via, { at: t });
   projectRemoteState(sessionId);
 }
 
@@ -163,6 +163,7 @@ function applyRemoteDescriptor(session, hostError) {
   if (!session || !session.remoteAlias) return;
   const state = remoteState(session.sessionId);
   if (session.remoteDescriptorSeen) state.apply({ type: 'liveness', value: 'alive' });
+  else if (session.remoteDescriptorSeen === false && !hostError) state.apply({ type: 'liveness', value: 'unknown' });
   if (session.status !== undefined) {
     state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt, attention: !hostError });
   }
@@ -205,6 +206,10 @@ function applyRemoteStopped(sessionId) {
 
 function seedRemoteActivity(session, hostError) {
   if (!session || !session.remoteAlias) return;
+  for (const [id, alive] of Object.entries(session.remoteMemberDescriptorSeen || {})) {
+    if (alive) remoteState(id).apply({ type: 'liveness', value: 'alive' });
+    else if (!hostError) remoteState(id).apply({ type: 'liveness', value: 'unknown' });
+  }
   applyRemoteDescriptor(session, hostError);
 
   if (!Number.isFinite(session.remoteActiveAt)) return;

@@ -8,7 +8,7 @@ const ICON_BY_RUNG = {
   attention: { classes: ['needs-attention'], slotClasses: ['session-icon--attention'], glyph: '!', title: 'Needs your attention' },
   responseReady: { classes: ['response-ready'], slotClasses: ['session-icon--response-ready'], glyph: '●', title: 'Response ready' },
   busy: { classes: ['cli-busy'], slotClasses: ['session-icon--busy'], glyph: '⠋', title: 'Working' },
-  agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' },
+  agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '⠿', title: 'Background work running' },
   waitingForInput: { classes: [], slotClasses: ['session-icon--waiting'], glyph: '○', title: 'Waiting for input' },
   idle: { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' },
   stale: { classes: [], slotClasses: ['session-icon--stale'], glyph: '', title: 'Stale' },
@@ -31,6 +31,11 @@ function createSessionState(kind) {
   let attachable = null;
   let archived = false;
   let stale = false;
+  let idleHintAt = null;
+  let promptHint = false;
+  let promptHintAt = null;
+  let lastDescriptorStatus = null;
+  let lastDescriptorAt = null;
 
   function clearExclusive() {
     busy = false;
@@ -49,6 +54,10 @@ function createSessionState(kind) {
     if (event && event.source !== undefined) lastActivitySource = event.source;
   }
 
+  function clearPromptHint(at) {
+    if (at > Math.max(idleHintAt ?? -Infinity, promptHintAt ?? -Infinity)) promptHint = false;
+  }
+
   function apply(event) {
     if (!event || typeof event.type !== 'string') return;
     switch (event.type) {
@@ -56,12 +65,17 @@ function createSessionState(kind) {
         if (event.active) {
           clearExclusive();
           busy = true;
+          clearPromptHint(event.at ?? Date.now());
         } else {
           busy = false;
           waitingForInput = true;
           responseReady = event.armReady !== false;
         }
         touch(event);
+        break;
+      case 'promptHint':
+        promptHint = true;
+        if (Number.isFinite(event.at)) promptHintAt = Math.max(promptHintAt ?? -Infinity, event.at);
         break;
       case 'attention':
         attentionFromDescriptor = false;
@@ -87,9 +101,18 @@ function createSessionState(kind) {
         attached = !!event.value;
         break;
       case 'transcriptTouched':
+        clearPromptHint(event.at ?? Date.now());
         touch({ at: event.at !== undefined ? event.at : Date.now(), source: event.source || 'transcript' });
         break;
       case 'descriptorStatus':
+        if ((event.status === 'busy' || event.status === 'shell')
+          && (lastDescriptorStatus !== event.status || Number.isFinite(event.at) && event.at > (lastDescriptorAt ?? -Infinity))) clearPromptHint(event.at ?? Date.now());
+        if (event.status === 'idle' && (lastDescriptorStatus !== 'idle' || Number.isFinite(event.at) && event.at > (idleHintAt ?? -Infinity))) {
+          promptHint = true;
+          if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);
+        }
+        lastDescriptorStatus = event.status;
+        if (Number.isFinite(event.at)) lastDescriptorAt = Math.max(lastDescriptorAt ?? -Infinity, event.at);
         liveness = event.status === 'alive' || event.status === 'dead' ? event.status : liveness;
         if (event.attention === false) releaseDescriptorAttention();
         if (event.attention === true) {
@@ -144,6 +167,9 @@ function createSessionState(kind) {
       attachable,
       archived,
       stale,
+      idleHintAt,
+      promptHint,
+      promptHintAt,
     };
   }
 
@@ -156,7 +182,8 @@ function renderSessionIcon(snapshot) {
   for (const rung of PRIORITY) {
     if (rungActive(s, rung)) {
       const icon = ICON_BY_RUNG[rung];
-      return { classes: icon.classes.slice(), slotClasses: icon.slotClasses.slice(), glyph: icon.glyph, title: icon.title };
+      const title = s.headTurn === 'unknown' && rung === 'waitingForInput' ? 'Turn state unavailable' : icon.title;
+      return { classes: icon.classes.slice(), slotClasses: icon.slotClasses.slice(), glyph: icon.glyph, title };
     }
   }
   const idle = ICON_BY_RUNG.idle;
@@ -167,8 +194,8 @@ function rungActive(s, rung) {
   switch (rung) {
     case 'attention': return !!s.attention;
     case 'responseReady': return !!s.responseReady;
-    case 'busy': return !!s.busy;
-    case 'agentsBusy': return !!s.agentsBusy;
+    case 'busy': return !!s.busy && (s.headTurn === undefined || s.headTurn === 'open');
+    case 'agentsBusy': return !!(s.agentsBusy || s.backgroundWork);
     case 'waitingForInput': return !!s.waitingForInput;
     case 'idle': return false; // fallback rung, never matched directly here
     case 'stale': return !!s.stale;

@@ -118,8 +118,9 @@ function onLocalTranscriptActivity(payload) {
   if (typeof sessionId !== 'string' || !sessionId) return;
   if (activePtyIds.has(sessionId)) return;
   const state = localTranscriptState(sessionId);
-  state.apply({ type: 'transcriptTouched', at: payload.at || Date.now(), source: 'local-transcript' });
-  state.apply({ type: 'busy', active: true });
+  const at = payload.at || Date.now();
+  state.apply({ type: 'transcriptTouched', at, source: 'local-transcript' });
+  state.apply({ type: 'busy', active: true, at });
   seedLocalTranscriptDescriptor(sessionId);
   if (!localTranscriptStates.has(sessionId)) return;
   projectLocalTranscriptState(sessionId);

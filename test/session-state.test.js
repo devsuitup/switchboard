@@ -211,7 +211,7 @@ test('renderSessionIcon: every rung returns a distinct, well-shaped icon', () =>
     [{ attention: true }, 'needs-attention', '!'],
     [{ responseReady: true }, 'response-ready', '●'],
     [{ busy: true }, 'cli-busy', '⠋'],
-    [{ agentsBusy: true }, 'has-busy-agents', '◆'],
+    [{ agentsBusy: true }, 'has-busy-agents', '⠿'],
   ];
   for (const [snap, cls, glyph] of cases) {
     const icon = renderSessionIcon(snap);
@@ -252,7 +252,7 @@ test('renderSessionIcon: slot class, glyph and title move together with the rung
   const busy = renderSessionIcon({ busy: true });
   const agentsBusy = renderSessionIcon({ agentsBusy: true });
   assert.deepEqual(busy, { classes: ['cli-busy'], slotClasses: ['session-icon--busy'], glyph: '⠋', title: 'Working' });
-  assert.deepEqual(agentsBusy, { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' });
+  assert.deepEqual(agentsBusy, { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '⠿', title: 'Background work running' });
   assert.notDeepEqual(busy, agentsBusy);
 });
 

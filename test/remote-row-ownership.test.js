@@ -93,6 +93,8 @@ test('symptom 1 (#273): a remote-watch event must not overwrite an attached row 
   // The local-pty path, via reconcileBusyState: busy, then idle+response-ready.
   t.reconcileBusyState([{ sessionId: 's1', busy: true }], 0);
   t.reconcileBusyState([{ sessionId: 's1', busy: false }], 999999);
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+  t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
   assert.equal(t.responseReadySessions.has('s1'), true, 'precondition: local-pty armed response-ready');
   assert.ok(t.item('s1').classList.contains('response-ready'), 'precondition: painted response-ready');
 
@@ -115,7 +117,7 @@ test('symptom 2 (#273): pty.exit of a remote attach clears busy at once, no 20s 
   // tab attaches to it — the adapter's own internal state is left busy.
   t.emit({ sessionId: 's1', at: Date.now() });
   t.setRemoteAttached('s1', true);
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'precondition: row shows busy');
+  assert.equal(t.item('s1').classList.contains('cli-busy'), false, 'a remote write hint alone never animates the row');
 
   const remoteActiveAt = Date.now() - 5000; // last known activity before the death, captured before the handoff
   t.setRemoteAttached('s1', false); // pty.exit of the local ssh attach

@@ -64,7 +64,7 @@ function setup(sessionIds = ['s1', 's2']) {
 // The bug: the response-ready lock swallowed whole turns
 // ---------------------------------------------------------------------------
 
-test('busy=true on a response-ready session updates the map, sets .cli-busy and drops the unread marker', () => {
+test('busy=true on a response-ready session updates the hint map without animating an unobserved head turn', () => {
   const t = setup();
   t.window.activeSessionId = 's2'; // s1 is NOT the focused session
 
@@ -78,30 +78,30 @@ test('busy=true on a response-ready session updates the map, sets .cli-busy and 
 
   assert.equal(t.sessionBusyState.get('s1'), true, 'sessionBusyState updated despite the response-ready lock');
   assert.ok(!t.responseReadySessions.has('s1'), 's1 removed from responseReadySessions — the unread marker is stale');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), '.cli-busy set');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'a hint without turn evidence must not animate');
   assert.ok(!t.item('s1').classList.contains('response-ready'), '.response-ready removed');
 
   t.destroy();
 });
 
-test('busy → idle (unfocused) → busy: the spinner is back on the second busy', () => {
+test('busy → idle (unfocused) → busy: the hint map accepts a second busy without asserting a head turn', () => {
   const t = setup();
   t.window.activeSessionId = 's2';
 
   t.setActivity('s1', true);
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'spinner on first busy');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'hint-only activity does not animate');
 
   t.setActivity('s1', false);
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'spinner off when the turn ends');
-  assert.ok(t.item('s1').classList.contains('response-ready'), 'response-ready while unread');
+  assert.ok(!t.item('s1').classList.contains('response-ready'), 'idle hints do not establish an unread turn');
 
   t.setActivity('s1', true);
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'spinner back on the second busy — this is the reported bug');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'a second busy hint still needs turn evidence');
 
   // And a third cycle still behaves.
   t.setActivity('s1', false);
   t.setActivity('s1', true);
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'spinner back on the third busy');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'a third busy hint still needs turn evidence');
 
   t.destroy();
 });
@@ -119,7 +119,7 @@ test('busy=false on a response-ready session does NOT overwrite the unread marke
   t.setActivity('s1', false);
 
   assert.ok(t.responseReadySessions.has('s1'), 'response-ready preserved');
-  assert.ok(t.item('s1').classList.contains('response-ready'), '.response-ready still on the item');
+  assert.ok(!t.item('s1').classList.contains('response-ready'), 'hint-only idle must not assert an unread turn');
   assert.equal(t.currentActivitySeq(), seqAfterMarker, 'the ignored idle signal is not counted as a transition');
 
   t.destroy();
@@ -139,7 +139,7 @@ test('a focused session going idle is not marked response-ready', () => {
   t.destroy();
 });
 
-test('clearUnread does not clear cli-busy when the session is generating again', () => {
+test('clearUnread does not clear a new busy hint', () => {
   const t = setup();
   t.window.activeSessionId = 's2';
 
@@ -147,11 +147,11 @@ test('clearUnread does not clear cli-busy when the session is generating again',
   t.setActivity('s1', false); // response-ready armed
   t.setActivity('s1', true); // busy again — going busy already drops the marker
   assert.ok(!t.responseReadySessions.has('s1'), 'precondition: marker already cleared by the busy transition itself');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'precondition: busy');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'hint-only activity does not animate');
 
   t.clearUnread('s1');
 
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'cli-busy untouched by clearUnread');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'cli-busy untouched by clearUnread');
   assert.ok(!t.item('s1').classList.contains('response-ready'));
 
   t.destroy();
@@ -184,7 +184,7 @@ test('a local PTY source (no opts) going idle while unfocused still arms respons
   t.setActivity('s1', false, 'onCliBusyState');
 
   assert.ok(t.responseReadySessions.has('s1'), 'local PTY idle must still claim an unread response');
-  assert.ok(t.item('s1').classList.contains('response-ready'));
+  assert.ok(!t.item('s1').classList.contains('response-ready'));
   t.destroy();
 });
 
@@ -245,7 +245,7 @@ test('purgeActivityFor drops attention state and its class', () => {
 test('purgeActivityFor on a busy session removes .cli-busy too', () => {
   const t = setup();
   t.setActivity('s1', true);
-  assert.ok(t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
 
   t.purgeActivityFor('s1', 'pty-gone');
 
@@ -258,18 +258,18 @@ test('purgeActivityFor on a busy session removes .cli-busy too', () => {
 // Fork / session-detected re-keying
 // ---------------------------------------------------------------------------
 
-test('rekeyActivityState carries busy state and DOM class from oldId to newId', () => {
+test('rekeyActivityState carries busy hints from oldId to newId without copying head evidence', () => {
   const t = setup(['old', 'new']);
   t.window.activeSessionId = 'other';
 
   t.setActivity('old', true);
-  assert.ok(t.item('old').classList.contains('cli-busy'), 'precondition: old is busy');
+  assert.ok(!t.item('old').classList.contains('cli-busy'), 'hint-only activity does not animate');
 
   t.rekeyActivityState('old', 'new');
 
   assert.equal(t.sessionBusyState.get('new'), true, 'busy state moved to newId');
   assert.ok(!t.sessionBusyState.has('old'), 'old key dropped');
-  assert.ok(t.item('new').classList.contains('cli-busy'), '.cli-busy follows to the new item');
+  assert.ok(!t.item('new').classList.contains('cli-busy'), 'rekeyed hints cannot open the new head turn');
   assert.ok(!t.item('old').classList.contains('cli-busy'), '.cli-busy removed from the stale item');
 
   t.destroy();
@@ -286,7 +286,7 @@ test('rekeyActivityState carries response-ready too', () => {
   t.rekeyActivityState('old', 'new');
 
   assert.ok(t.responseReadySessions.has('new') && !t.responseReadySessions.has('old'));
-  assert.ok(t.item('new').classList.contains('response-ready'));
+  assert.ok(!t.item('new').classList.contains('response-ready'));
   assert.ok(!t.item('old').classList.contains('response-ready'));
 
   t.destroy();
@@ -315,14 +315,14 @@ test('rekeyActivityState carries needs-attention too', () => {
 // Resynchronisation against the backend snapshot
 // ---------------------------------------------------------------------------
 
-test('reconcileBusyState marks a session busy with no transition event ever emitted', () => {
+test('reconcileBusyState recovers a busy hint without inventing an open turn', () => {
   const t = setup();
   assert.equal(t.sessionBusyState.size, 0, 'renderer starts blind (fresh reload)');
 
   t.reconcileBusyState([{ sessionId: 's1', busy: true }, { sessionId: 's2', busy: false }], t.currentActivitySeq());
 
   assert.equal(t.sessionBusyState.get('s1'), true, 's1 realigned from the poll snapshot');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), '.cli-busy set without any cli-busy-state front');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'a hint without turn evidence must not animate');
   assert.ok(!t.item('s2').classList.contains('cli-busy'), 's2 left alone');
 
   t.destroy();
@@ -341,7 +341,7 @@ test('reconcileBusyState is not swallowed by the response-ready lock', () => {
 
   assert.equal(t.sessionBusyState.get('s1'), true);
   assert.ok(!t.responseReadySessions.has('s1'));
-  assert.ok(t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
 
   t.destroy();
 });
@@ -370,7 +370,7 @@ test('reconcileBusyState does not overwrite an event that landed while the poll 
   t.reconcileBusyState([{ sessionId: 's1', busy: false }], seq);
 
   assert.equal(t.sessionBusyState.get('s1'), true, 'the fresher live event wins');
-  assert.ok(t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
 
   t.destroy();
 });
@@ -490,5 +490,5 @@ test('public/app.js: the pty-stop cleanup routes through the shared drop and pre
   assert.deepEqual(drops, ['local']);
   assert.equal(ctx.sessionBusyState.has('local'), false);
   assert.equal(ctx.sessionBusyState.get('remote'), true);
-  assert.ok(ctx.document.getElementById('si-remote').classList.contains('cli-busy'));
+  assert.equal(ctx.document.getElementById('si-remote').classList.contains('cli-busy'), false, 'remote hints also require turn evidence');
 });

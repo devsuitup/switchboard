@@ -1,5 +1,92 @@
 # Session state — one domain module, one icon slot
 
+## Conversation head turn and the single spinner (#625)
+
+The row's animation is selected from its `headSessionId || sessionId`, with
+three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
+retains its existing `closed` API for trigger delivery and adds `state`.
+An empty or unreadable tail, or one without a main-thread user/assistant record,
+is unknown. A timestamped
+main-thread prompt or assistant record supplies open evidence; `end_turn` or
+plain `stop_sequence` plus a later `turn_duration`, an API error, an interrupted
+request, or a local-command/manual-compaction closure supplies closed evidence
+only when the queue is idle. Task notifications without an assistant reply do
+not reopen a closed turn. Automatic compaction summaries are skipped so the
+preceding turn survives; an isolated summary is unknown. Existing queued or
+dequeued work prevents closure. The live head-turn canary alarms on the consumed
+stop-reason/timestamp/duration pairing; an absent sample is explicitly skipped,
+and does not validate the installed CLI.
+
+The existing task-record worker reads a cached 256 KiB transcript tail after a
+verified invalidation. Its task snapshot carries independently revisioned
+`headTurn` evidence. The renderer applies turn evidence before the background
+snapshot, rejects older turn revisions, and repaints on turn-state changes.
+Liveness gates animation: a PTY here or a live descriptor is required. Job
+`working`, descriptor `busy`, OSC spinner/progress and transcript touches remain
+hints; they cannot open a head turn. An idle descriptor or explicit OSC idle
+is prompt evidence. Descriptor idle is ordered against the transcript's last
+entry on the CLI host's clock. OSC idle is ordered against the latest changed
+transcript evidence's arrival time in the renderer, on this machine's clock;
+attached remote sessions therefore tolerate host clock skew. The worker carries
+the transcript mtime as well as the last entry timestamp. Only a changed state
+or last entry timestamp replaces the observation and records a head-turn touch
+in the adapters. Mtime-only writes, including untimestamped bookkeeping and
+oversized tails without readable timestamped evidence, retain the prior
+observation time and adapter activity source. A newer observation
+wins over OSC idle; a newer entry wins over descriptor idle. Busy signals and
+transcript touches clear the prompt hint used for an unknown head only when
+their time is strictly later than its descriptor-idle and OSC-idle timestamps.
+Adapter busy events retain their originating activity time, and
+reapplying the same idle descriptor does not restore a consumed hint.
+An actual descriptor transition back to idle supplies a new hint, including
+when the descriptor has no timestamp.
+Untimestamped idle only resolves an otherwise unknown head. The 3 s/20 s adapter clocks retain
+hints, but never close or reopen the projected turn.
+
+`headActivitySnapshot` selects the authoritative icon inputs, while
+`mergedRowSnapshot` retains the head's busy, prompt and unread states. Attention,
+background work and row liveness may aggregate across members; an older
+member's open turn cannot animate the head. `taskRegistry.background` is the
+source of background work, including non-agent kinds. A closed live head uses
+the existing waiting glyph, or the static full-braille glyph when background
+work remains. Attention owns the one slot first, followed by Response ready.
+An unseen confirmed closure keeps both the unread flag and its response-ready
+glyph until read or consumed by explicit or descriptor-owned attention.
+Maintainer decision (JB, 2026-10-14): retain the **● Response ready** glyph
+and its existing priority. It may mask the static background-work glyph until
+the row is seen. The slot has five visible states: animated, static, waiting,
+attention, and response-ready.
+Projection does not mutate stored turn evidence; event handlers replace it.
+An unknown
+live head cannot animate and uses the tooltip "Turn state unavailable" when
+there is no known background work. This does not implement #626 title colour
+or #627 subagent counts.
+
+The CLI also emits job fan kind `shell` (observed live on 2.1.296). The job
+normalizer accepts it as the existing canonical `bash` kind; otherwise one
+shell entry would invalidate the entire job's background snapshot. The
+existing job-state canary covers this consumed alias alongside the offline
+registry-to-static-glyph regression.
+
+Both initial sidebar paint and incremental updates use this selection. Agents
+view rows use the same turn and registry facts; job state alone supplies only
+liveness. Its list repaints on turn changes and task changes while visible.
+The legacy adapter snapshots and Map-like views retain their hint state for
+other readers; they are not the sidebar's authoritative busy classification.
+
+Local bootstrap reuses #624's positively live-owner transcript reads. Verified
+local top-level watch notifications already reach the worker even when a PTY
+owns the session. Remote bootstrap and the existing mirror indexing callback
+read live, unarchived mirrored heads in one `turnOnly` worker batch, without replaying
+remote lifecycle records into #624's registry and without additional SSH calls
+or per-row network polling. Remote head members receive their own descriptor
+liveness. A descriptor missing from a successful host snapshot makes liveness
+unknown without completing tasks; a failed host snapshot retains the previous
+freshness contract. Remote turn precision is limited by mirror refresh: about
+15 seconds with the host watch, otherwise the configured pull interval
+(default 5 minutes). Worker turn retention is capped at 2048, oldest first.
+Grid card animation uses the same merged-head projection as the sidebar.
+
 Origin: issue #246 (step 3 of the alignment sequence #244 → #245 → #246 → #247).
 Full design: the issue body and its 2026-09-11 lifecycle comment. This doc covers
 what actually shipped, not the whole plan.
@@ -288,8 +375,8 @@ per remote session id in `remoteSessionStates` (a `Map`, pruned in
 
 - **The watch channel** (`onRemoteActivityEvent`, `main.js`'s `remote-activity`
   IPC): `transcriptTouched` + `busy: true`; the 20s decay timer then applies
-  `busy: false, armReady: false` — a remote row must never reach
-  `.response-ready`, it has no PTY to confirm a turn actually ended. Tested in
+  `busy: false, armReady: false` — decay never creates a verified closure
+  or unread response. Head-turn snapshots can establish these independently. Tested in
   `test/remote-session-adapter.test.js` and mutation-proven (see below).
 - **The descriptor** (`applyRemoteDescriptor`, called from `seedRemoteActivity`
   at every render for every remote session): `descriptorStatus(status, at)`
@@ -364,96 +451,28 @@ and the local-pty path owns their attention. The sidebar's status line appends
 `waitingFor` while the status is `waiting` (`waiting · permission prompt · 3m
 ago`). Latency is the refresh cycle, not the dialog.
 
-### A parent's busy decay shortens while a subagent is running (issue #284)
+### Remote activity hint retention (#284, #625)
 
-A Task-tool invocation typically appends to the parent's own top-level
-transcript (recording the tool_use/tool_result around the spawn) at almost
-the same moment it appends to the subagent's own file. On the remote-ssh
-adapter this used to mean a plain `busy` edge could win the icon rung over
-`agentsBusy` for its full 20s decay, even though the top-level agent was
-really just idle waiting on the subagent — visibly different from a local-pty
-row, which reflects the OSC-driven busy edge instantly and clears it just as
-fast.
+The remote adapter retains file-touch hints for 20 seconds, shortened to
+3 seconds while an agent hint is present. Each touch re-arms its timer; a
+subagent touch can shorten a pending parent timer. Cold-start seeding uses the
+same duration. These timers only expire adapter hints. They do not select the
+single spinner, infer a prompt from silence, or interrupt a silent tool call.
 
-**First attempt (reverted in review): a 3s coincidence window keyed off the
-`agentsBusy` false→true edge.** Two adversarial-review findings killed it.
-First, a genuinely busy parent that spawns a subagent lost `busy` outright:
-every touch inside the post-spawn window was swallowed and never re-applied,
-so a parent writing every ~1s could sit at `agentsBusy` even while it was
-still producing output itself. Second, the edge only fires once — a second
-subagent spawned while the first was still running had no edge to key off,
-`remoteSubagentSpawnAt` stayed stale, and its coincident parent-file touch
-armed the full 20s `busy` decay again: the original bug, for the ordinary
-sequential-agents case.
-
-**Current design: no window, no edge — the decay *length* itself depends on
-`agentsBusy`.** `remoteBusyDecayMs(sessionId)` (`public/remote-activity-ui.js`)
-returns `SUBAGENT_PARENT_DECAY_MS` (3000ms) when `agentsBusy` is true,
-`PIP_DECAY_MS` (20000ms) otherwise; `onRemoteActivityEvent`'s plain-touch
-branch arms the decay with whichever value applies at that instant. Every
-`busy` touch still applies `busy:true` unconditionally — nothing is ever
-swallowed or synchronously cleared. `markRemoteSubagentBusy` runs on **every**
-subagent touch, not only the first: if a busy decay is currently pending with
-more than `SUBAGENT_PARENT_DECAY_MS` left, it reschedules that pending timer
-down to 3s from now (`remoteActivityDecayRemaining`, tracked as `fireAt` on
-`remoteActivityDecayTimers`'s entries) — it never touches `busy` itself,
-only how soon its decay fires. The outcome: a parent genuinely still writing
-while a subagent runs re-touches at the ~1s IPC throttle, always inside the
-3s window, so `busy` never lapses — it keeps the same violet-tinted spinner a
-local row would show in the same situation
-(`.has-busy-agents .session-icon--busy::before`). A parent that only
-bookends the spawn (one touch at spawn, one at completion) has its single
-post-spawn touch decay in 3s instead of 20s, landing on `agentsBusy` — the
-same rung as the local row — within a few seconds instead of up to 20. A
-parent with **no** subagent keeps the full 20s decay unchanged (a long silent
-tool call must not read as idle). `PRIORITY` in `session-state.js` is
-unchanged — this only changes which decay duration a renderer-side timer
-picks, never the priority ladder.
-
-**`seedRemoteActivity` (cold-start / rebuild paint) is migrated too, not just
-the live-touch path.** Its own arm used to stay `PIP_DECAY_MS`-based
-regardless of `agentsBusy`, computing `remaining = remoteActiveAt +
-PIP_DECAY_MS - now`. `renderProjects()` calls `seedRemoteActivity` on every
-full sidebar rebuild, and a rebuild is itself commonly provoked by the
-subagent's own writes — so a parent whose short decay had *already* fired
-got put back on the animated busy rung for up to 20s at the very next
-rebuild (measured: touch t=0, spawn t=1000 reschedules the decay to fire at
-t=4000, busy correctly false at t=4000, then a rebuild at t=5000 re-armed
-busy for another ~15s). Fixed by using `remoteBusyDecayMs(sessionId)` in that
-same arithmetic (`remaining = remoteActiveAt + remoteBusyDecayMs(sessionId) -
-now`) — with `agentsBusy` true the seed window is 3s from `remoteActiveAt`
-instead of 20s, so a seed older than that does nothing, exactly mirroring
-what the live-touch path already does. A seed with `agentsBusy` false is
-byte-identical to before (`remoteBusyDecayMs` returns `PIP_DECAY_MS`), which
-is why `test/dom-sidebar-remote-activity-pip.test.js` (no subagent in any of
-its fixtures) needed no changes.
-
-**Accepted trade-off, not a bug: with a subagent running, a genuinely busy
-parent can visibly flap between the `busy` and `agentsBusy` rungs.** If the
-parent's own transcript stays silent for more than `SUBAGENT_PARENT_DECAY_MS`
-(3s) — a long tool call — its `busy` decays to `agentsBusy` until the next
-write brings it back to `busy`. Both rungs are violet-tinted
-(`.has-busy-agents .session-icon--busy::before` / `.session-icon--agents-busy::before`),
-so the visible change is animation only (spinner vs. static diamond), not a
-color or row-class change. This is deliberate: the alternative — decaying at
-the full `PIP_DECAY_MS` (20s) whenever `agentsBusy` is true — is exactly
-issue #284's original symptom, a parent idling on `busy` long after it
-stopped producing output. **The local-pty row has no equivalent gap**: its
-busy signal is the OSC title stream, edge-triggered on the CLI's own
-idle/busy transitions rather than decayed from silence, so it never flaps
-while genuinely idle-but-subagent-running. This asymmetry between local and
-remote is a known, accepted consequence of the remote-ssh adapter having no
-edge-triggered signal to key off — only transcript touches — not an
-oversight to fix later.
+The head transcript selects animation for both remote and local rows. A newer
+idle descriptor or explicit terminal idle hint can neutralise open evidence;
+a newer head entry reopens it. Background work is read from taskRegistry,
+including non-agent kinds. Spawn/completion bookends therefore cannot make
+the head oscillate between animated and static states just through clock decay.
 
 ### Row ownership: attached vs unattached (issue #273)
 
 An attached remote row (a tab open on it) is owned by the local-pty path —
-OSC busy/idle/attention/response-ready, exactly like a local session.  An
-unattached remote row is owned by the remote-ssh adapter — busy from the
-watch channel and seed, decayed, never response-ready (no PTY to confirm a
-turn ended). Only one side may write a given row at a time; `attached`
-(above) is the arbiter, not a cosmetic fact.
+OSC hints and attention, exactly like a local session. An unattached remote
+row is owned by the remote-ssh adapter for descriptor and watch hints. Both
+project the same mirrored head-turn evidence; a confirmed unseen closure can
+set Response ready. Only one adapter may paint a row at a time; `attached`
+is the arbiter.
 
 Concretely, in `public/remote-activity-ui.js`: `markRemoteBusy`/
 `decayRemoteBusy` (fed by remote-watch, remote-seed and the decay timer) are
@@ -739,8 +758,10 @@ watch-channel descriptor list to poll; its only inputs are:
   constants) applies `busy: false, armReady: false` — never
   `responseReady`, exactly like the remote-ssh decay, because this adapter
   has no PTY to confirm a turn actually ended either.
-  The reducer sets `waitingForInput: true` on that busy-false event, so silence
-  displays **Waiting for input**, without claiming a completed response.
+  The reducer retains `waitingForInput: true` as a legacy hint. The head
+  projection requires turn closure or descriptor/OSC prompt evidence to show
+  **Waiting for input**; unknown live heads show **Turn state unavailable**.
+  Silence neither ends an open turn nor proves an unseen response.
   A fresh sidebar row and later icon repaints read `storedActivitySnapshot`
   (including `localTranscriptStates`) before falling back to `snapshotForLocal`;
   `mergedRowSnapshot` uses that same adapter selection for merged members.
@@ -775,7 +796,7 @@ watch-channel descriptor list to poll; its only inputs are:
   The descriptor-loss marker survives decay so late parent/subagent writes
   remain bounded, and clears on a returning descriptor, PTY takeover or prune.
   A session that never had a descriptor stays unknown; its transcript-driven
-  Working/Waiting state still survives refreshes.
+  activity hint survives refreshes, but unknown liveness cannot animate a head.
   Child-row attribution retains its separate, existing 60s TTL. An active PTY
   keeps ownership.
   `main.js` includes `mergedMemberStatuses` for every local merged member;
@@ -790,9 +811,9 @@ watch-channel descriptor list to poll; its only inputs are:
   merged stop/delete paths use the index rather than scanning sessionMap.
   The representative's status is never borrowed by a hidden member.
 
-- **Nothing else.** No attention or verified completion signal. Waiting for
-  input is the silence inference described above, not proof that a response
-  completed — see the ports-table note below the table.
+- **Head-turn snapshots** come independently from the task-record worker.
+  They supply verified closure and unread response evidence to the shared
+  projection. Adapter touches and silence remain activity hints.
 
 **Registration waits for `app.js`.** The adapter script loads before `app.js`, and its handler reads `activePtyIds` (declared in `app.js`), so the script does not register the listener itself: `app.js` calls `initLocalTranscriptAdapter()` right after its own state exists, next to the other `window.api.on*` listeners (`test/local-transcript-adapter.test.js` pins the order). A `session-transcript-activity` message sent before that point reaches no listener and is dropped, which loses at most one busy signal: the main-process tracker emits at most once per second per session, has no trailing emission, and re-emits on the next transcript write, so a session still writing is marked busy within about a second of `app.js` loading. Before this, such a message threw `activePtyIds is not defined` in the renderer (issue #415). The other `window.api.on*` registrations in scripts loaded before `app.js` read only state owned by those scripts or by earlier ones, so none needed the same change.
 
@@ -852,12 +873,13 @@ persistent per-session-id adapter (`localPtyStates` / `localTranscriptStates` /
 | `kind` | which adapter produced this state |
 | `liveness` | `'alive' \| 'dead' \| 'unknown'` — is the CLI process running |
 | `attached` | Switchboard holds a PTY / ssh attach for it — **separate from liveness** (2026-09-11 lifecycle decision: a row is active because the process is alive, not because a tab is open) |
-| `busy` | OSC 0 — generating |
-| `waitingForInput` | idle, sitting at the prompt |
+| `busy` | adapter activity hint; projected busy requires a live, open head turn |
+| `waitingForInput` | adapter prompt hint; projected waiting uses head and ordered idle evidence |
 | `attention` | OSC 9 — needs the user right now (permission/approval/plan) |
 | `responseReady` | subset of `waitingForInput`: idle **and** unseen when it went idle (the legacy "Claude finished, you haven't looked" rung). Not in the issue's original field list — added because the priority order names it as its own rung, distinct from plain `waitingForInput`; see "Design notes" below. |
 | `agentsBusy` | subagents running under this session |
 | `lastActivityAt` / `lastActivitySource` | last touch — `transcriptTouched`/`descriptorStatus` events carry `at`/`source`; local-pty now feeds `descriptorStatus` too (`snapshotForLocal`'s seed from `session.status`), so this is populated on all three kinds. Not read by `renderSessionIcon` on any kind today. |
+| `idleHintAt` / `promptHint` | latest idle descriptor or explicit OSC idle timestamp, and known prompt hint |
 | `label` / `labelConfidence` | reserved, unused |
 | `attachable` | reserved, unused |
 | `archived` / `stale` | reserved, unused |
@@ -1122,17 +1144,17 @@ the others assert on the dot/slot element itself, only on row classes and
 | event | local-pty | local-transcript | remote-ssh |
 |---|---|---|---|
 | `busy` / `attention` (OSC 0 / 9) | yes — `setActivity`/`setAttention` | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
-| `transcriptTouched(at)` | no — local-pty's busy signal is the OSC title, not a transcript write; a real PTY makes this port redundant for it | yes (only signal) — `onLocalTranscriptActivity` | yes — `onRemoteActivityEvent`/`markRemoteBusy` |
+| `transcriptTouched(at)` | no adapter touch; independent head-turn reads still apply | yes (activity hint) — `onLocalTranscriptActivity` | yes (activity hint) — `onRemoteActivityEvent`/`markRemoteBusy` |
 | `descriptorStatus(status, at)` / `liveness` | yes — `snapshotForLocal`'s seed from `session.status`/`statusUpdatedAt`, same two calls the other kinds make | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition; also the row-ownership arbiter since #273 (see "Row ownership" above) |
 | `subagentSpawned` / `subagentCompleted` | yes — `syncLocalPtyAgentsBusy`, mirroring `activeSubagentsByParent` (fed by `detectSubagentTransitions()` IPC) rather than a second IPC feed — see "The local-pty adapter" above | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 
-An adapter without a PTY cannot verify a completed response, so remote-ssh
-and local-transcript decay pass `busy: false, armReady: false`. The reducer
-still sets `waitingForInput: true`: silence displays Waiting for input as an
-inference, while `responseReady` stays false. Loss of a previously observed
-local live descriptor clears that inference rather than leaving a dead
-process permanently waiting.
+Remote-ssh and local-transcript decay pass `busy: false, armReady: false`.
+These are hint transitions; silence supplies neither a closed turn nor unread
+response evidence. The separate head-turn snapshot and ordered prompt hints
+select Working, Waiting for input, or Turn state unavailable. Loss of a
+previously observed live descriptor gates animation and waiting with unknown
+liveness, without completing tasks.
 
 ## Placeholder rows (issue #278)
 
