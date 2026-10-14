@@ -88,7 +88,7 @@ function setupGridDom() {
   };
 }
 
-test('subagent-spawned: grid-view reads the payload from its first argument and renders a pill', () => {
+test('subagent-spawned: grid-view tracks its first argument without presenting an inferred count', () => {
   const ctx = setupGridDom();
   try {
     assert.ok(ctx.hasSpawnedCb(), 'grid-view registered a subagent-spawned listener');
@@ -96,24 +96,24 @@ test('subagent-spawned: grid-view reads the payload from its first argument and 
     // preload.js calls back with the payload alone — no leading event object.
     ctx.emitSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore' });
 
-    assert.equal(ctx.inCtx('activeSubagents.get("parent-1")?.size ?? 0'), 1,
+    assert.equal(ctx.inCtx('window.taskRegistry.agents("parent-1").length'), 1,
       'the spawn must be tracked — a handler declared (event, data) sees data === undefined and bails');
-    const pills = ctx.card.querySelectorAll('.grid-subagent-pills .grid-subagent-pill');
-    assert.equal(pills.length, 1, 'one pill rendered on the parent card');
+    assert.equal(ctx.card.querySelector('.grid-subagent-pills, .grid-subagent-pill, .grid-subagent-count'), null,
+      'fallback activity has no trustworthy count or green pill');
   } finally {
     ctx.destroy();
   }
 });
 
-test('subagent-completed: grid-view reads the payload from its first argument and drops the pill', () => {
+test('subagent-completed: grid-view reads its first argument and releases fallback activity', () => {
   const ctx = setupGridDom();
   try {
     ctx.emitSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore' });
-    assert.equal(ctx.inCtx('activeSubagents.get("parent-1")?.size ?? 0'), 1);
+    assert.equal(ctx.inCtx('window.taskRegistry.agents("parent-1").length'), 1);
 
     ctx.emitCompleted({ parentSessionId: 'parent-1', agentId: 'agent-1' });
 
-    assert.equal(ctx.inCtx('activeSubagents.has("parent-1")'), false, 'completion clears the parent entry');
+    assert.equal(ctx.inCtx('window.taskRegistry.agents("parent-1").length'), 0, 'completion clears the parent entry');
     assert.equal(ctx.card.querySelector('.grid-subagent-pills'), null, 'the pill row is removed');
   } finally {
     ctx.destroy();
@@ -125,7 +125,7 @@ test('a heartbeat for an untracked agent does not create a grid pill', () => {
   try {
     ctx.emitSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore', _heartbeat: true });
 
-    assert.equal(ctx.inCtx('activeSubagents.has("parent-1")'), false,
+    assert.equal(ctx.inCtx('window.taskRegistry.agents("parent-1").length'), 0,
       'a heartbeat means "still alive", never "started"');
     assert.equal(ctx.card.querySelector('.grid-subagent-pills'), null);
   } finally {
@@ -137,12 +137,12 @@ test('a heartbeat for a tracked agent refreshes its liveness stamp', () => {
   const ctx = setupGridDom();
   try {
     ctx.emitSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore' });
-    const first = ctx.inCtx('activeSubagents.get("parent-1").get("agent-1").spawnedAt');
+    const first = ctx.inCtx('Math.max(...window.taskRegistry.agentView.get("parent-1").get("agent-1").values())');
 
     ctx.window.Date.now = () => first + 40000;
     ctx.emitSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore', _heartbeat: true });
 
-    const after = ctx.inCtx('activeSubagents.get("parent-1").get("agent-1").spawnedAt');
+    const after = ctx.inCtx('Math.max(...window.taskRegistry.agentView.get("parent-1").get("agent-1").values())');
     assert.ok(after > first, 'the heartbeat refreshed the stamp the 60s prune reads');
   } finally {
     ctx.destroy();

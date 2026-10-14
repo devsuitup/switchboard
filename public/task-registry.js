@@ -29,6 +29,15 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     return [...(parents.get(id)?.tasks.values() || [])].filter(t => !t.terminal && t.sources.size);
   }
   function agents(id) { return list(id).filter(t => t.kind === 'agent'); }
+  function runningAgentCount(ids) {
+    const active = new Set();
+    for (const id of ids) {
+      for (const t of agents(resolve(id))) {
+        if (t.sources.has('cli-task')) active.add(t.id);
+      }
+    }
+    return active.size;
+  }
   function note(id, taskId, source = 'local-ipc', info = {}) {
     id = resolve(id);
     if (source === 'cli-task' && info.toolUseId && !correlateAgent(id, taskId, info)) return false;
@@ -356,7 +365,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     *values() { for (const [, map] of this) yield map; },
     get size() { return [...this].length; },
   };
-  return { note, release, end, prune, oldestFallback, primary, ingest, notification, correlateAgent, applyJob, ownerDied, ownerAlive, snapshot, applySnapshot, rekey, resolve, agents, list, agentView,
+  return { note, release, end, prune, oldestFallback, primary, ingest, notification, correlateAgent, applyJob, ownerDied, ownerAlive, snapshot, applySnapshot, rekey, resolve, agents, runningAgentCount, list, agentView,
     snapshots: () => [...parents.keys()].map(snapshot),
     known: id => !!parents.get(id)?.known,
     background: id => !!parents.get(id)?.backgroundUnknown || list(id).length > 0 };

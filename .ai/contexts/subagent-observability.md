@@ -52,7 +52,41 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 - **Subagent status badges**: derived from the most recent JSONL line — `isSidechain: true` means active, completion is inferred from mtime stability (see PR #48 observability follow-up).
 - **The "Resume in terminal anyway" button** in the transcript view bypasses the routing and calls the original `openSession` opener. This is intentional — for the rare debugging case where a user genuinely wants to re-enter the subagent's session.
 
-## Live "running" indicator in the sidebar (PR #130, fixes #129)
+## Running subagent count (#627)
+
+The parent row shows plain secondary text beneath its title: `1 subagent
+running` or `N subagents running`, with the same pluralized `aria-label`.
+The count is outside the child container, so expanding, collapsing, filtering,
+or capping that list cannot hide or reduce it. No text is created for zero or
+unknown activity. Inferred file/IPC activity can still drive the conversation's
+single status glyph, but does not supply a numeric count.
+
+`taskRegistry.runningAgentCount(rowSessionIds(session))` counts distinct active
+`agent` identities with a `cli-task` contribution. It resolves continuation
+redirects and deduplicates task ids across merged members and source adapters.
+Bash/shell, Monitor, cron, unresolved fan totals and rendered child metadata
+never increase it. A launch can therefore appear before any child transcript
+is indexed, and primary tasks remain counted through silent tools. Terminal
+records remove the task once, including replayed completions.
+
+`buildSessionItem` uses `updateSessionSubagentCount` on initial paint;
+`reflectSubagentRunningState` refreshes the same element on snapshots and
+source changes, locating the merged row from any member id. Child `.running`
+and caret `has-running-child` remain registry-backed state markers, but neither
+adds a green liveness dot. Host reachability dots retain their own styling.
+Grid cards use the same count under their header, replacing the coloured
+subagent pills. `updateGridSubagentPills` retains its callback name and updates
+cards whose row contains the changed member or its continuation alias.
+
+`test/dom-subagent-running-count-627.test.js` exercises shipped sidebar and
+grid functions with snapshots and actual registry ingestion: count before
+metadata, non-agent exclusion, completion/replay, zero/unknown/fallback,
+adapter overlap, ten-minute silence, collapsed/expanded/capped/filtered lists,
+merged members and redirects, accessibility, and removal of green subagent
+dots while retaining host reachability. Existing lifecycle, TTL and IPC tests
+retain their state checks and assert the new presentation.
+
+## Registry-backed child state (originally PR #130, fixes #129)
 
 - **Why `activePtyIds` can't work for subagents**: a subagent runs inside its
   parent's process and never owns a PTY, so `activePtyIds.has(sessionId)` is
@@ -62,8 +96,9 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   `grid-view.js` and `jsonl-viewer.js`).
 - **State**: `activeSubagentsByParent` in `public/sidebar.js` —
   `parentSessionId → Map<agentId, Map<source, lastSeenAt(ms)>>` of live source contributions
-  subagents. `buildSubagentItem()` / `appendSubagentChildren()` re-derive
-  `.running` from this Map on every render, so the state survives a full
+  subagents. `buildSubagentItem()` re-derives child `.running` and
+  `appendSubagentChildren()` derives caret state from this view on every render,
+  so the state survives a full
   sidebar rebuild; the IPC handlers only fast-path the visual toggle between
   rebuilds (`reflectSubagentRunningState`).
 - **Why a TTL** (`SUBAGENT_LIVE_TTL_MS` = 60s, shared with grid-view — see
@@ -74,26 +109,25 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   `pruneStaleSubagents()` runs at the top of every `renderProjects()` — a
   render-time prune, not a standalone timer (ADR 0002: no added steady-state
   cost).
-- **Collapsed parents**: a running child's own dot is hidden inside the
-  collapsed `childrenContainer`, so `appendSubagentChildren` also toggles
-  `has-running-child` on the caret row (`.caret-running-dot` in style.css) to
-  surface liveness at the caret level.
+- **Collapsed parents**: the numeric count lives in the parent's `.session-info`,
+  outside `childrenContainer`. The former child and caret green dots were
+  removed in #627.
 - **The `updateRunningIndicators` guard** (`public/app.js`): the periodic PTY
   poll must skip `dataset.subagent` items, or it would clear the `.running`
   state within one cycle of the IPC setting it.
 - **`subagentDomId()`** mirrors `subagentSessionId()` in
   `read-session-file.js` — that file is main-process and not `require()`-able
   from the renderer (sidebar.js loads as a plain script), hence the local copy.
-- **Grid view keeps its own parallel tracking** (`activeSubagents` +
-  `pruneStaleGridSubagents()` in `grid-view.js`, pruned from `wrapInGridCard()`
-  rather than on a timer). Renderer files are plain non-module `<script>`s
+- **Grid view shares the registry** and reads its authoritative count.
+  `pruneStaleGridSubagents()` expires fallback evidence only. Renderer files are
+  plain non-module `<script>`s
   sharing one global scope and `sidebar.js` loads *after* `grid-view.js`
   (`index.html:135` then `:139`), so a top-level function declared under the
   same name in both is silently shadowed — that is what froze the grid's TTL
   prune until PR #137. Keep cross-file names distinct;
   `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
 
-## The child row's own `.running` dot, for every source (issue #285)
+## The child row's `.running` state, for every source (issue #285)
 
 `activeSubagentsByParent` (above) used to be fed only by the local
 `subagent-spawned`/`subagent-completed` IPC pair, so a remote or
@@ -128,10 +162,10 @@ adapter state through the projection.
 
 `public/task-registry.js` supplies the keyed task model used by the task-record
 worker and its renderer snapshot. Sidebar child rows, adapter projection and
-grid pills read that renderer registry; the grid no longer owns another map or
+grid count read that renderer registry; the grid no longer owns another map or
 TTL timer. Its agent view is a derived compatibility view, not another store.
 Validated child `.meta.json` toolUseId links a synchronous call to its concrete
-agent before the result; this avoids duplicate provisional/concrete pills.
+agent before the result; this avoids duplicate provisional/concrete identities.
 Snapshots retain terminal ids so delayed transcript growth and IPC heartbeats
 cannot revive completed tasks. A later assistant SendMessage tool-use addressed
 to a known agent explicitly reopens it until its next terminal notification.
@@ -857,7 +891,7 @@ Each list now renders, by default, the **union** of
 a `+ N more` toggle is emitted (`appendSubagentRestToggle`). Same fixture after
 the change: 217 elements in the sidebar, 20 subagent rows. The union is
 deliberate, not a truncated sort: a long-running subagent whose transcript
-stopped growing hours ago must keep its `.running` dot, which a
+stopped growing hours ago must keep its `.running` state and preview row, which a
 recency-only cut would silently extinguish — the exact class of bug PR #130
 was about. Row order inside each list is unchanged; only membership is.
 

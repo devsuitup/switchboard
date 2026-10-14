@@ -294,13 +294,28 @@ function subagentDomId(parentSessionId, agentId) {
   return 'si-sub:' + parentSessionId + ':' + agentId;
 }
 
+function updateSessionSubagentCount(item, session) {
+  if (!item) return;
+  const count = window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0;
+  let text = item.querySelector('.session-subagent-count');
+  if (!count) {
+    text?.remove();
+    return;
+  }
+  if (!text) {
+    text = document.createElement('div');
+    text.className = 'session-subagent-count';
+    item.querySelector('.session-info').appendChild(text);
+  }
+  text.textContent = `${count} subagent${count === 1 ? '' : 's'} running`;
+  text.setAttribute('aria-label', text.textContent);
+}
+
 function reflectSubagentRunningState(parentSessionId, agentId) {
   const running = isSubagentActive(parentSessionId, agentId);
   const el = document.getElementById(subagentDomId(parentSessionId, agentId));
   if (el) {
     el.classList.toggle('running', running);
-    const icon = el.querySelector('.session-icon');
-    if (icon) icon.classList.toggle('running', running);
   }
   const caret = document.getElementById(caretIdFor(parentSessionId));
   if (caret) caret.classList.toggle('has-running-child', parentHasActiveSubagent(parentSessionId));
@@ -317,6 +332,7 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   const parentEl = sessionItemEl(parentSessionId);
   const parentRow = parentEl && sessionMap.get(parentEl.dataset.sessionId);
   setHasBusyAgents(parentEl, rowSessionIds(parentRow || { sessionId: parentSessionId }).some(parentHasActiveSubagent));
+  updateSessionSubagentCount(parentEl, parentRow || { sessionId: parentSessionId });
   // see .ai/contexts/subagent-observability.md
   if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
@@ -390,7 +406,7 @@ function buildSubagentItem(session) {
 
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
-  icon.className = 'session-icon' + (isRunning ? ' running' : '');
+  icon.className = 'session-icon';
   paintSessionIcon(icon, session.sessionId, session);
 
   const info = document.createElement('div');
@@ -473,7 +489,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.id = caretId;
   if (isExpanded) caret.classList.add('expanded');
   if (parentHasActiveSubagent(parentSessionId)) caret.classList.add('has-running-child');
-  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}<span class="caret-running-dot"></span>`;
+  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
 
   const domKey = parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const childrenContainer = document.createElement('div');
@@ -1941,6 +1957,7 @@ function buildSessionItem(session) {
   row.appendChild(actions);
   item.appendChild(row);
 
+  updateSessionSubagentCount(item, session);
   return item;
 }
 

@@ -112,7 +112,7 @@ test('a remote subagent watch event sets .running on the child row without a ful
 
     assert.ok(item.classList.contains('running'), '.running set on the remote subagent item after the watch event, no rebuild needed');
     const dot = item.querySelector('.session-icon');
-    assert.ok(dot.classList.contains('running'), '.running set on the dot too');
+    assert.ok(!dot.classList.contains('running'), 'child has no green liveness dot');
 
     // The parent's own icon slot must still reflect the remote-ssh adapter's
     // own snapshot (agentsBusy), not get overwritten by a local-pty snapshot —
@@ -137,7 +137,7 @@ test('a local-transcript subagent activity event sets .running on the child row 
     ctx.emitSessionTranscriptActivity({ parentSessionId: 'l-top-1', agentId: 'agent-1', at: Date.now(), kind: 'subagent' });
 
     assert.ok(item.classList.contains('running'), '.running set on the local-transcript subagent item, no rebuild needed');
-    assert.ok(item.querySelector('.session-icon').classList.contains('running'), '.running set on the dot too');
+    assert.ok(!item.querySelector('.session-icon').classList.contains('running'), 'child has no green liveness dot');
   } finally {
     ctx.destroy();
   }

@@ -196,7 +196,7 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
   }
 });
 
-test('grid: a stale subagent pill is removed by the TTL tick with no card rebuild', () => {
+test('grid: stale fallback activity expires with no card rebuild or inferred count', () => {
   const ctx = setupCombinedDom();
   try {
     const element = ctx.document.createElement('div');
@@ -209,15 +209,17 @@ test('grid: a stale subagent pill is removed by the TTL tick with no card rebuil
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
 
     const card = ctx.document.querySelector('.grid-card[data-session-id="' + PARENT + '"]');
-    assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 1, 'the pill renders on spawn');
+    assert.equal(card.querySelector('.grid-subagent-count'), null, 'fallback has no trustworthy count');
+    assert.equal(ctx.window.taskRegistry.agents(PARENT).length, 1);
     assert.equal(ctx.scheduled.length, 1, 'both views share one TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     ctx.advanceTime(61000);
     ctx.runScheduled();
 
-    assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 0,
-      'the TTL tick must clear the pill without waiting for wrapInGridCard');
+    assert.equal(card.querySelector('.grid-subagent-count'), null);
+    assert.equal(ctx.window.taskRegistry.agents(PARENT).length, 0,
+      'TTL clears fallback activity without waiting for wrapInGridCard');
   } finally {
     ctx.destroy();
   }

@@ -99,10 +99,10 @@ test('primary snapshots keep the adapter glyph, child dot and grid pill consiste
   h.window.runSubagentTtlTick();
   assert.ok(h.document.getElementById('si-parent-1').classList.contains('has-busy-agents'));
   assert.ok(h.document.getElementById('si-sub:parent-1:agent-1').classList.contains('running'));
-  assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 1);
+  assert.equal(card.querySelector('.grid-subagent-count').textContent, '1 subagent running');
   h.emitSessionTranscriptActivity({ kind: 'subagent', parentSessionId: 'parent-1', agentId: 'agent-1', at: Date.now() });
   h.window.taskRegistry.applySnapshot({ parentSessionId: 'parent-1', revision: 2, known: true, tasks: [{ id: 'agent-1', kind: 'agent', terminal: true, at: 2 }] });
   assert.equal(h.document.getElementById('si-parent-1').classList.contains('has-busy-agents'), false);
   assert.equal(h.document.getElementById('si-sub:parent-1:agent-1').classList.contains('running'), false);
-  assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 0);
+  assert.equal(card.querySelector('.grid-subagent-count'), null);
 });

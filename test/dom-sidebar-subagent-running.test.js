@@ -49,7 +49,7 @@ function projectWithLiveSubagent(overrides = {}) {
   });
 }
 
-test('subagent-spawned: .running lands on the subagent item + its dot', () => {
+test('subagent-spawned: child state updates without a green liveness dot', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
@@ -61,7 +61,7 @@ test('subagent-spawned: .running lands on the subagent item + its dot', () => {
 
     assert.ok(item.classList.contains('running'), '.running set on the subagent item after spawn');
     const dot = item.querySelector('.session-icon');
-    assert.ok(dot.classList.contains('running'), '.running set on the dot after spawn');
+    assert.ok(!dot.classList.contains('running'), 'child has no green liveness dot');
   } finally {
     ctx.destroy();
   }
