@@ -1,7 +1,9 @@
 'use strict';
 
 // see .ai/contexts/session-cache.md ("Projects query worker")
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, maxDiscards = 3 }) {
+const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
+
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
   let stopped = false;
   let active = null;
@@ -18,6 +20,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
   }
 
   function resetWorker() {
+    clearTimeout(active?.timer);
     const old = worker;
     worker = null;
     active = null;
@@ -48,6 +51,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         return;
       }
       const job = active;
+      clearTimeout(job.timer);
       const result = message.result;
       const readOnly = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
       const stale = job.stale || (!readOnly && state.version !== job.version);
@@ -77,6 +81,9 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       }
       const state = snapshot();
       active = { ...job, id: ++nextId, version: state.version, stale: false };
+      if (job.options.reconcile) {
+        active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), reconcileTimeoutMs);
+      }
       worker.postMessage({ ...state, ...job.options, id: active.id });
     } catch (error) { fail(error); }
   }

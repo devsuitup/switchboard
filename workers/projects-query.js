@@ -62,10 +62,15 @@ function build(message) {
   });
   cache.setRemoteRoots(new Map(message.remoteRoots || []));
   cache.resetProjectsWorkerRetainedRows();
+  let publishedLiveRows = new Map();
   const reconciled = !!message.reconcile && adapter.isInitialScanComplete();
   if (reconciled) cache.reconcileCacheFromFilesystem({ throttle: false, onFolder: () => {
-    parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows: cache.getProjectsWorkerRetainedRows() } });
-    if (workerData.reconcileFolderDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.reconcileFolderDelayMs);
+    const keptLiveRows = cache.getProjectsWorkerRetainedRows();
+    const liveRowsChanged = keptLiveRows.length !== publishedLiveRows.size
+      || keptLiveRows.some(([id, folder]) => publishedLiveRows.get(id) !== folder);
+    if (!effects.length && !liveRowsChanged) return;
+    parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows } });
+    publishedLiveRows = new Map(keptLiveRows);
   } });
   const defaultProjects = cache.buildProjectsFromCache(false);
   const allProjects = cache.buildProjectsFromCache(true);
