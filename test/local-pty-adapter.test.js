@@ -257,7 +257,7 @@ test('decided: a local row going idle while active shows "Waiting for input", no
   t.destroy();
 });
 
-test('an unseen closed turn retains unread state while the one icon shows the prompt glyph', () => {
+test('an unseen closed turn retains unread state and the response-ready glyph', () => {
   const t = setup();
   t.window.activePtyIds = new Set(['s1']);
   t.window.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
@@ -271,8 +271,8 @@ test('an unseen closed turn retains unread state while the one icon shows the pr
 
   const icon = t.icon('s1');
   assert.ok(t.item('s1').classList.contains('response-ready'));
-  assert.ok(icon.classList.contains('session-icon--waiting'));
-  assert.equal(icon.title, 'Waiting for input');
+  assert.ok(icon.classList.contains('session-icon--response-ready'));
+  assert.equal(icon.title, 'Response ready');
   t.destroy();
 });
 

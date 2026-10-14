@@ -39,7 +39,9 @@ test('row icon: busy hints alone stay static, waiting descriptors raise attentio
   assert.equal(agentRowIcon({ kind: 'interactive', status: 'busy' }).slotClass, 'session-icon--waiting');
 });
 
-test('row icon: a blocked job shows the waiting dot whatever its status', () => {
+test('row icon: a blocked job shows the waiting dot whatever its status', t => {
+  global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'open', busy: true, waitingForInput: false });
+  t.after(() => { delete global.taskActivitySnapshot; });
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'idle' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: null })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'busy' })).slotClass, 'session-icon--waiting');

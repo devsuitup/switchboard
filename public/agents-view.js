@@ -139,13 +139,26 @@ function groupAgentEntries(entries, mode, opts = {}) {
 
 function agentRowIcon(entry) {
   const live = agentIsLive(entry);
+  const stored = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId) : {};
   const ports = {
+    ...stored,
     liveness: live ? 'alive' : 'dead',
     attention: live && entry.status === 'waiting',
     waitingForInput: live,
     stale: !live,
+    promptHint: entry.status === 'idle' || stored.promptHint,
+    idleHintAt: entry.status === 'idle' && Number.isFinite(entry.statusUpdatedAt)
+      ? Math.max(stored.idleHintAt ?? -Infinity, entry.statusUpdatedAt) : stored.idleHintAt,
   };
   const snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
+  if (live && entry.state === 'blocked') {
+    snapshot.busy = false;
+    snapshot.agentsBusy = false;
+    snapshot.backgroundWork = false;
+    snapshot.responseReady = false;
+    snapshot.waitingForInput = true;
+    snapshot.headTurn = 'closed';
+  }
   const icon = renderSessionIcon(snapshot);
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
 }

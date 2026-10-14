@@ -6,7 +6,6 @@ function applyHeadTurnSnapshot(turn) {
   if (previous && previous.revision >= turn.revision) return;
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   headTurns.set(turn.sessionId, { ...turn, ready: ready || (previous?.ready && turn.state === 'closed') });
-  if (previous?.state === turn.state) return;
   applyStateClasses(turn.sessionId, storedActivitySnapshot(turn.sessionId));
   if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
 }
@@ -14,10 +13,11 @@ function applyHeadTurnSnapshot(turn) {
 function headActivitySnapshot(sessionId, snapshot) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
-  if (turn && s.attention) turn.ready = false;
   const alive = s.liveness === 'alive' || (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
-  return { ...s, headTurn: turn?.state || 'unknown', busy: alive && turn?.state === 'open',
-    responseReady: !!turn?.ready, waitingForInput: alive && turn?.state !== 'open',
+  const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt;
+  const headTurn = idleNewer || (s.promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
+  return { ...s, headTurn, busy: alive && headTurn === 'open',
+    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',
     liveness: alive ? 'alive' : s.liveness };
 }
 
@@ -139,6 +139,7 @@ function isSessionAlive(sessionId) {
 
 // Snapshot-driven projection — the one path for all three kinds — see .ai/contexts/session-state.md ("The local-pty adapter")
 function applyStateClasses(sessionId, snapshot) {
+  if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
@@ -168,6 +169,8 @@ function writeIconSlot(el, icon) {
   }
   for (const cls of icon.slotClasses) el.classList.add(cls);
   el.title = icon.title || '';
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', icon.title || 'Idle');
   el.dataset.glyph = icon.glyph || '';
 }
 

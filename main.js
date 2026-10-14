@@ -3151,14 +3151,20 @@ const taskRecords = createTaskRecordsClient({
   },
 });
 async function refreshRemoteHeadTurns(folderPrefix) {
-  if (!folderPrefix) return;
+  const rows = [];
+  const liveByHost = new Map();
   for (const row of getAllCached()) {
-    if (!row.remoteAlias || row.isSidechain || row.parentSessionId) continue;
+    if (!row.remoteAlias || row.isSidechain || row.parentSessionId || row.archived) continue;
     const folder = getCachedFolder(row.sessionId);
-    if (!folder?.startsWith(folderPrefix)) continue;
+    if (!folder || (folderPrefix && !folder.startsWith(folderPrefix))) continue;
+    if (!liveByHost.has(row.remoteAlias)) {
+      liveByHost.set(row.remoteAlias, new Set(remoteIndexer.getRemoteSessions(row.remoteAlias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(row.remoteAlias).has(row.sessionId)) continue;
     const dir = projectsDirForFolder(folder);
-    if (dir) await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId, { turnOnly: true });
+    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
   }
+  if (rows.length) await taskRecords.readBatch(rows);
 }
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
@@ -3168,12 +3174,8 @@ ipcMain.handle('get-task-snapshots', async () => {
   for (const job of bgAgents.getSnapshot().roster) {
     if (job.sessionId && ['working', 'blocked'].includes(job.state)) live.add(job.sessionId);
   }
+  await refreshRemoteHeadTurns();
   for (const row of getAllCached()) {
-    if (row.remoteAlias && !row.isSidechain && !row.parentSessionId) {
-      const dir = projectsDirForFolder(getCachedFolder(row.sessionId));
-      if (dir) await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId, { turnOnly: true });
-      continue;
-    }
     if (row.isSidechain || row.parentSessionId || row.remoteAlias || !live.has(row.sessionId)) continue;
     const folder = getCachedFolder(row.sessionId);
     const dir = folder && !folder.includes('::') && projectsDirForFolder(folder);

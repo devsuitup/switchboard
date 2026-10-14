@@ -45,10 +45,12 @@ test('a busy session with no subagents carries cli-busy alone', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sessionBusyState.set('s-top-1', true);
+    ctx.window.activePtyIds.add('s-top-1');
+    ctx.emitHeadTurn('s-top-1', 'open');
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
 
     const parent = ctx.document.getElementById('si-s-top-1');
-    assert.ok(parent.classList.contains('cli-busy'), 'cli-busy set from sessionBusyState');
+    assert.ok(parent.classList.contains('cli-busy'), 'cli-busy set from the live open head');
     assert.ok(!parent.classList.contains('has-busy-agents'), 'no subagent indicator without a live subagent');
   } finally {
     ctx.destroy();
@@ -59,6 +61,8 @@ test('a busy session with live subagents carries cli-busy AND has-busy-agents at
   const ctx = setupSidebarDom();
   try {
     ctx.sessionBusyState.set('s-top-1', true);
+    ctx.window.activePtyIds.add('s-top-1');
+    ctx.emitHeadTurn('s-top-1', 'open');
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
@@ -117,7 +121,7 @@ test('style.css: subagents without cli-busy still get the static glyph, unchange
   assert.ok(rule, 'the idle-parent indicator rule must still exist');
   assert.match(rule[0], /content:\s*"\\283F"/, 'still the static ⠿ cell');
   assert.match(rule[0], new RegExp('color:\\s*' + VIOLET), 'still violet');
-  assert.ok(!/animation\s*:/.test(rule[0]), 'still static');
+  assert.match(rule[0], /animation:\s*none/, 'still static');
 });
 
 test('the tint can never collide with response-ready: renderSessionIcon keeps them exclusive', () => {

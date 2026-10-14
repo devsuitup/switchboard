@@ -49,10 +49,10 @@ test('head turn is unknown without evidence, open through a silent tool call, cl
   assert.equal(classifyTranscriptTail(jsonl([prompt, answer, duration, { type: 'queue-operation', operation: 'enqueue', timestamp: stamp, content: 'next' }])).state, 'open');
 });
 
-function setup(t, { merged = false, remote = false } = {}) {
+function setup(t, { merged = false, remote = false, status = 'idle' } = {}) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
-  const row = { sessionId: 'root', status: 'idle', modified: stamp,
+  const row = { sessionId: 'root', status, modified: stamp,
     ...(merged ? { headSessionId: 'head', mergedMemberIds: ['old', 'head'], mergedMemberStatuses: { head: { status: 'idle' }, old: { status: 'busy' } } } : {}),
     ...(remote ? { remoteAlias: 'host', remoteDescriptorSeen: !merged,
       mergedMemberStatuses: undefined, remoteMemberDescriptorSeen: merged ? { head: true } : {} } : {}) };
@@ -147,23 +147,23 @@ test('a remote descriptor disappearance makes turn liveness unknown without endi
   assert.equal(ctx.window.taskRegistry.agents('root').length, 1);
 });
 
-test('an unseen closure keeps the prompt glyph static, and OSC cannot create or consume unread turn evidence', t => {
+test('an unseen closure keeps response-ready priority, and OSC cannot create or consume unread turn evidence', t => {
   const { ctx, turn, icon } = setup(t);
   ctx.window.activeSessionId = 'other';
   turn('open');
   turn('closed');
-  assert.equal(icon().classList.contains('session-icon--waiting'), true);
+  assert.equal(icon().classList.contains('session-icon--response-ready'), true);
   assert.equal(ctx.document.getElementById('si-root').classList.contains('response-ready'), true);
   ctx.setActivity('root', true, 'OSC');
   assert.equal(ctx.document.getElementById('si-root').classList.contains('response-ready'), true);
   ctx.window.taskRegistry.note('root', 'cron', 'cli-task', { kind: 'cron' });
-  assert.equal(icon().classList.contains('session-icon--agents-busy'), true);
+  assert.equal(icon().classList.contains('session-icon--response-ready'), true);
   ctx.window.clearUnread('root');
   assert.equal(ctx.document.getElementById('si-root').classList.contains('response-ready'), false);
 });
 
 test('an unknown live head exposes degraded information, and owner death gates stale open evidence', t => {
-  const { ctx, turn, icon } = setup(t);
+  const { ctx, turn, icon } = setup(t, { status: 'busy' });
   turn('unknown');
   assert.equal(icon().title, 'Turn state unavailable');
   turn('open');
@@ -200,9 +200,11 @@ test('mirror indexing feeds head turns through local reads without requesting SS
     path, getAllCached: () => [{ sessionId: 'remote', remoteAlias: 'host' }, { sessionId: 'local' }],
     getCachedFolder: () => 'host::project', projectsDirForFolder: () => 'mirror/project',
     taskRecords: { read: async (...args) => reads.push(args) },
-    createRemoteIndexer: options => options, scanFoldersViaWorker: async () => {},
+    createRemoteIndexer: options => ({ ...options, getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote' }] }) }), scanFoldersViaWorker: async () => {},
     DB_PATH: 'data/db', remoteTransport: {}, setRemoteRoots() {}, notifyRendererProjectsChanged() {}, log: {},
   });
+  context.taskRecords.readBatch = async rows => reads.push(...Array.from(rows, row => [row.file, row.parentSessionId, { turnOnly: row.turnOnly }]));
+  context.remoteIndexer = { getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote' }] }) };
   if (source.includes('function refreshRemoteHeadTurns(')) vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
   const start = source.indexOf('const remoteIndexer = createRemoteIndexer(');
   const end = source.indexOf('\n});', start) + 4;

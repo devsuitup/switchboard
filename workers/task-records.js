@@ -12,13 +12,26 @@ const turnReader = createTranscriptTurnReader();
 const turns = new Map();
 let turnRevision = 0;
 let queue = Promise.resolve();
+async function readHead(message) {
+  const { file, parentSessionId, turnOnly } = message;
+  if (!turnOnly) await reader.read(file, parentSessionId);
+  const turn = turnReader.read(file);
+  turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown',
+    lastEntryAt: turn?.lastEntryAt ?? null, revision: ++turnRevision });
+  while (turns.size > 2048) turns.delete(turns.keys().next().value);
+}
 parentPort.on('message', message => {
   queue = queue.then(async () => {
     const { type, parentSessionId } = message;
     if (type === 'read') {
-      if (!message.turnOnly) await reader.read(message.file, parentSessionId);
-      const turn = turnReader.read(message.file);
-      turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown', revision: ++turnRevision });
+      await readHead(message);
+    }
+    else if (type === 'readBatch') {
+      for (const row of message.rows) {
+        await readHead(row);
+        const id = registry.resolve(row.parentSessionId);
+        parentPort.postMessage({ snapshot: { ...registry.snapshot(id), headTurn: turns.get(id) } });
+      }
     }
     else if (type === 'child') {
       try {

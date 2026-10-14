@@ -1278,7 +1278,9 @@ function updateRunningIndicators() {
   // The gridCards map is bounded (visible grid sessions only) so this is cheap.
   for (const [sid, card] of gridCards) {
     const running = activePtyIds.has(sid);
-    const busy = sessionBusyState.get(sid) || false;
+    const row = sessionMap.get(sid) || { sessionId: sid };
+    const snapshot = mergedRowSnapshot(rowSessionIds(row), sid, storedActivitySnapshot(sid), row);
+    const busy = snapshot.busy === true;
     const dot = card.querySelector('.grid-card-dot');
     if (dot) dot.className = 'grid-card-dot ' + (busy ? 'busy' : (running ? 'running' : 'stopped'));
     const footer = card.querySelector('.grid-card-footer');

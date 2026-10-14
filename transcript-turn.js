@@ -31,9 +31,16 @@ function isManualCompactBoundary(entry) {
 function endsTurn(entry, turnDurationAfter, previous) {
   if (entry.type === 'user') {
     if (entry.isCompactSummary === true) return isManualCompactBoundary(previous);
-    return isLocalCommandOutput(entry);
+    return isLocalCommandOutput(entry) || /^\[Request interrupted by user(?:\]| for tool use\])/.test(entryText(entry));
   }
-  return turnDurationAfter && CLOSED_STOP_REASONS.has(entry.message && entry.message.stop_reason);
+  return entry.isApiErrorMessage === true || entry.message?.stop_reason === 'stop_sequence'
+    || turnDurationAfter && CLOSED_STOP_REASONS.has(entry.message && entry.message.stop_reason);
+}
+
+function entryText(entry) {
+  const content = entry.message?.content;
+  return typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter(block => block.type === 'text').map(block => block.text).join('\n') : '';
 }
 
 function parseMainThread(text) {
@@ -107,6 +114,8 @@ function classifyTranscriptTail(text) {
     }
     if (entry.type === 'system' && entry.subtype === 'turn_duration') turnDurationAfter = true;
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+    if (entry.type === 'user' && (entryText(entry).trim().startsWith('<task-notification>')
+      || entry.isCompactSummary === true && !isManualCompactBoundary(entries[i - 1]))) continue;
     const queueIdle = enqueued <= removed && dequeued === 0;
     const closed = endsTurn(entry, turnDurationAfter, entries[i - 1]) && queueIdle && at !== null;
     return { state: at === null ? 'unknown' : (closed ? 'closed' : 'open'), closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries };

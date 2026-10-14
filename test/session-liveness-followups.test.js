@@ -131,12 +131,12 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   assert.equal(missed.querySelector('.session-icon').title, 'Idle');
   const returned = h.render([{ sessionId: 'A', status: 'idle' }]);
   assert.ok(returned.classList.contains('is-alive'));
-  assert.equal(returned.querySelector('.session-icon').title, 'Idle');
+  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input');
 });
 
 test('576 a never-standalone merged member uses its own descriptor without creating a sidebar map entry', { timeout: 8000 }, t => {
   const h = sidebar(t);
-  const row = { sessionId: 'A', mergedMemberIds: ['B'], mergedMemberStatuses: { B: { status: 'idle', statusUpdatedAt: 10 } } };
+  const row = { sessionId: 'A', headSessionId: 'B', mergedMemberIds: ['B'], mergedMemberStatuses: { B: { status: 'idle', statusUpdatedAt: 10 } } };
   assert.ok(h.render([row]).classList.contains('is-alive'));
   assert.deepEqual([...h.window.sessionMap.keys()], ['A']);
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
@@ -167,7 +167,7 @@ test('576 item 4: a late transcript write after descriptor loss cannot leave Wai
   h.render([{ sessionId: 'A', status: undefined }]);
   h.expire();
   h.emitSessionTranscriptActivity({ sessionId: 'A', at: 20 });
-  assert.ok(h.document.getElementById('si-A').classList.contains('cli-busy'));
+  assert.equal(h.document.getElementById('si-A').classList.contains('cli-busy'), false);
   h.expire();
   const item = h.document.getElementById('si-A');
   assert.equal(item.querySelector('.session-icon').title, 'Idle');
@@ -198,7 +198,7 @@ test('576 late subagent writes with unknown liveness expire both parent signals'
   h.expire();
   h.emitSessionTranscriptActivity({ sessionId: 'A' });
   h.emitSessionTranscriptActivity({ kind: 'subagent', parentSessionId: 'A' });
-  assert.ok(h.document.getElementById('si-A').classList.contains('has-busy-agents'));
+  assert.equal(h.document.getElementById('si-A').classList.contains('has-busy-agents'), false);
   h.expire();
   assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle');
   assert.equal(h.document.getElementById('si-A').classList.contains('has-busy-agents'), false);
@@ -261,7 +261,7 @@ test('576r2 minor 4: a stale archived merged owner cannot override the current e
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
   assert.equal(h.read('localTranscriptStates.get("B").snapshot().liveness'), 'unknown');
   h.expire();
-  assert.equal(item.querySelector('.session-icon').title, 'Waiting for input', 'a member that never had a live descriptor keeps its silence inference');
+  assert.equal(item.querySelector('.session-icon').title, 'Idle', 'a transcript write without head liveness cannot imply a prompt');
   h.render([{ sessionId: 'A', mergedMemberIds: ['B'], mergedMemberStatuses: { B: { status: 'idle' } } }]);
   assert.equal(h.read('localSessionForStatus("B").status'), 'idle');
   const dead = h.render([{ sessionId: 'A', mergedMemberIds: ['B'], mergedMemberStatuses: { B: null } }]);

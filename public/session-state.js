@@ -31,6 +31,8 @@ function createSessionState(kind) {
   let attachable = null;
   let archived = false;
   let stale = false;
+  let idleHintAt = null;
+  let promptHint = false;
 
   function clearExclusive() {
     busy = false;
@@ -63,6 +65,10 @@ function createSessionState(kind) {
         }
         touch(event);
         break;
+      case 'promptHint':
+        promptHint = true;
+        if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);
+        break;
       case 'attention':
         attentionFromDescriptor = false;
         if (event.active === false) {
@@ -90,6 +96,10 @@ function createSessionState(kind) {
         touch({ at: event.at !== undefined ? event.at : Date.now(), source: event.source || 'transcript' });
         break;
       case 'descriptorStatus':
+        if (event.status === 'idle') {
+          promptHint = true;
+          if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);
+        }
         liveness = event.status === 'alive' || event.status === 'dead' ? event.status : liveness;
         if (event.attention === false) releaseDescriptorAttention();
         if (event.attention === true) {
@@ -144,6 +154,8 @@ function createSessionState(kind) {
       attachable,
       archived,
       stale,
+      idleHintAt,
+      promptHint,
     };
   }
 
@@ -167,7 +179,7 @@ function renderSessionIcon(snapshot) {
 function rungActive(s, rung) {
   switch (rung) {
     case 'attention': return !!s.attention;
-    case 'responseReady': return s.headTurn === undefined && !!s.responseReady;
+    case 'responseReady': return !!s.responseReady;
     case 'busy': return !!s.busy && (s.headTurn === undefined || s.headTurn === 'open');
     case 'agentsBusy': return !!(s.agentsBusy || s.backgroundWork);
     case 'waitingForInput': return !!s.waitingForInput;

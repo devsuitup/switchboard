@@ -112,6 +112,9 @@ function dropLocalPtySession(sessionId, via) {
 function setActivity(sessionId, active, via, opts) {
   const armReady = !(opts && opts.armReady === false);
   const state = localPtyState(sessionId);
+  if (!active && ['onCliBusyState', 'onTerminalNotification'].includes(via)) {
+    state.apply({ type: 'promptHint', at: opts?.at ?? Date.now() });
+  }
   const before = state.snapshot();
 
   // response-ready-holds-idle: a duplicate/late idle signal is not a transition — see .ai/contexts/session-state.md
@@ -144,8 +147,13 @@ function setActivity(sessionId, active, via, opts) {
   if (wasBusy && !active) notifySessionIdle(sessionId);
 }
 
+function clearHeadUnread(sessionId) {
+  const turn = headTurns.get(sessionId);
+  if (turn?.ready) headTurns.set(sessionId, { ...turn, ready: false });
+}
+
 function clearUnread(sessionId, via) {
-  if (headTurns.has(sessionId)) headTurns.get(sessionId).ready = false;
+  clearHeadUnread(sessionId);
   const state = localPtyState(sessionId);
   if (window.ATRACE && state.snapshot().responseReady) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'clearUnread', via });
   state.apply({ type: 'clearUnread' });
@@ -154,7 +162,7 @@ function clearUnread(sessionId, via) {
 
 // OSC 9 "needs attention" — supersedes and consumes response-ready, see .ai/contexts/session-state.md ("The local-pty adapter")
 function setAttention(sessionId, on, via) {
-  if (on && headTurns.has(sessionId)) headTurns.get(sessionId).ready = false;
+  if (on) clearHeadUnread(sessionId);
   const state = localPtyState(sessionId);
   const before = state.snapshot();
   if (window.ATRACE && before.attention !== !!on) window.atrace('store.mutate', sessionId, { map: 'attentionSessions', op: on ? 'add' : 'delete', from: before.attention, to: !!on, fn: 'setAttention', via });

@@ -31,6 +31,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
           const s = message.snapshot;
           if (!s.headTurn && snapshots.get(s.parentSessionId)?.headTurn) s.headTurn = snapshots.get(s.parentSessionId).headTurn;
           snapshots.set(s.parentSessionId, s);
+          while (snapshots.size > maxEntries) snapshots.delete(snapshots.keys().next().value);
           onSnapshot(s);
         }
         if (message.error) onError(message.error);
@@ -64,6 +65,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
     return work.promise;
   }
   return { read,
+    readBatch: rows => send({ type: 'readBatch', rows }),
     job: (parentSessionId, evidence) => send({ type: 'job', parentSessionId, evidence }),
     child: (file, parentSessionId, agentId) => send({ type: 'child', file, parentSessionId, agentId }),
     ownerDied: parentSessionId => send({ type: 'death', parentSessionId }),

@@ -1147,12 +1147,14 @@ body { display: flex; flex-direction: column; }
    and stillness distinguish it from the light-blue animated cli-busy
    spinner. */
 .session-icon--agents-busy {
+  animation: none !important;
   background: transparent !important;
   box-shadow: none !important;
   position: relative;
 }
 
 .session-icon--agents-busy::before {
+  animation: none !important;
   content: "\283F"; /* ⠿ — all dots lit: agents at work */
   color: var(--accent);
   font-size: 11px;

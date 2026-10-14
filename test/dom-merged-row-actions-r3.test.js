@@ -39,6 +39,7 @@ test('a remote merged representative rebuild keeps its Working icon consistent w
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   ctx.read("remoteState('A').apply({ type: 'liveness', value: 'alive' }); remoteState('A').apply({ type: 'busy', active: true })");
+  ctx.emitHeadTurn('A', 'open');
   for (let rebuild = 0; rebuild < 2; rebuild++) {
     const item = ctx.sidebar.buildSessionItem({ ...row, remoteAlias: 'host' });
     assert.ok(item.classList.contains('cli-busy'));
@@ -50,6 +51,7 @@ test('a merged representative rebuild uses its stored transcript activity for th
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   ctx.read("localTranscriptState('A').apply({ type: 'liveness', value: 'alive' }); localTranscriptState('A').apply({ type: 'busy', active: true })");
+  ctx.emitHeadTurn('A', 'open');
   const item = ctx.sidebar.buildSessionItem({ ...row, status: 'busy', statusUpdatedAt: Date.now() });
   assert.ok(item.classList.contains('cli-busy'));
   assert.equal(item.querySelector('.session-icon').title, 'Working');
@@ -60,10 +62,11 @@ test('a merged local member still paints Working exactly once', t => {
   t.after(() => ctx.destroy());
   ctx.window.activePtyIds.add('B');
   ctx.setActivity('B', true, 'test');
+  ctx.emitHeadTurn('B', 'open');
   let paints = 0;
   const original = ctx.window.writeIconSlot;
   ctx.window.writeIconSlot = (...args) => { paints++; return original(...args); };
-  const item = ctx.sidebar.buildSessionItem(row);
+  const item = ctx.sidebar.buildSessionItem({ ...row, headSessionId: 'B' });
   assert.ok(item.classList.contains('cli-busy'));
   assert.equal(item.querySelector('.session-icon').title, 'Working');
   assert.equal(paints, 1);
