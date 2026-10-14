@@ -1229,9 +1229,15 @@ function updateRunningIndicators() {
   // Build a cheap signature for the current running set.
   const sig = Array.from(activePtyIds).sort().join(',');
   const ptySetChanged = sig !== _lastPtySignature;
+  const previousPtyIds = new Set(_lastPtySignature ? _lastPtySignature.split(',') : []);
   _lastPtySignature = sig;
 
   if (ptySetChanged) {
+    for (const sid of previousPtyIds) {
+      if (activePtyIds.has(sid)) continue;
+      if (sessionMap.get(sid)?.remoteAlias || sessionItemEl(sid)?.dataset.remoteAlias) continue;
+      dropLocalPtySession(sid, 'pty-gone');
+    }
     // Full sidebar DOM scan: only when the set of running sessions changed.
     // Each call hits every .session-item and every .slug-group in the sidebar
     // which can be expensive on large projects; skip when nothing moved.
@@ -1243,23 +1249,13 @@ function updateRunningIndicators() {
       const ids = rowSessionIds(session);
       const running = ids.some(sid => activePtyIds.has(sid));
       item.classList.toggle('has-running-pty', running);
-      // remote rows are owned by the remote adapter — see .ai/contexts/session-cache.md ("Remote hosts — busy spinner")
-      if (!running && !item.dataset.remoteAlias) {
-        setHasBusyAgents(item, false);
-        // A stopped PTY can never emit subagent-completed (stop-session kills
-        // the process; detectSubagentTransitions skips exited sessions), so
-        // drop the live-subagent state now instead of waiting for the TTL.
-        dropLocalPtySession(id, 'pty-gone');
-        for (const sid of ids.slice(1)) dropLocalPtySession(sid, 'pty-gone');
-      }
       if (item.dataset.remoteAlias) {
         for (const sid of ids) setRemoteAttached(sid, activePtyIds.has(sid));
       }
       // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md
       if (running && !item.dataset.remoteAlias) {
         for (const sid of ids) {
-          if (activePtyIds.has(sid)) localTranscriptPtyTakeover(sid);
-          else dropLocalPtySession(sid, 'pty-gone');
+          if (activePtyIds.has(sid) && !previousPtyIds.has(sid)) localTranscriptPtyTakeover(sid);
         }
       }
       const icon = item.querySelector('.session-icon');

@@ -94,12 +94,16 @@ function purgeActivityFor(sessionId, via) {
   if (window.ATRACE) window.atrace('store.purge', sessionId, { reason: via, busy: beforeSnap ? beforeSnap.busy : null, ready: beforeSnap ? beforeSnap.responseReady : false, attention: beforeSnap ? beforeSnap.attention : false, fn: 'purgeActivityFor' });
   localPtyStates.delete(sessionId);
   forgetActivitySeq(sessionId);
-  applyStateClasses(sessionId, createSessionState('local-pty').snapshot());
+  const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
+  const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
+  const snapshot = transcript || (remote && !remote.attached && remote) || createSessionState('local-pty').snapshot();
+  const agentsBusy = typeof parentHasActiveSubagent === 'function' && parentHasActiveSubagent(sessionId);
+  applyStateClasses(sessionId, { ...snapshot, agentsBusy: snapshot.agentsBusy || agentsBusy });
 }
 
 // see .ai/contexts/session-state.md ("A session main drops")
 function dropLocalPtySession(sessionId, via) {
-  clearActiveSubagentsFor(sessionId);
+  clearActiveSubagentsFor(sessionId, 'local-ipc');
   purgeActivityFor(sessionId, via);
 }
 
@@ -189,6 +193,8 @@ function rekeyActivityState(oldId, newId) {
     activitySeqBySession.set(newId, seq);
   }
 
+  if (typeof rekeyActiveSubagents === 'function') rekeyActiveSubagents(oldId, newId);
+  localPtyStates.delete(oldId);
   projectLocalPtyState(newId);
 }
 
