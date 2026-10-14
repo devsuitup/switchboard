@@ -153,11 +153,11 @@ Later growth or advancing write mtime must pass asynchronous handle/path
 metadata verification, without a content read. Monotonic writes racing the
 check retain the baseline and pending delivery and request a dirty retry.
 Replacement, truncation and open/stat failures invalidate activity without
-a spawn or completion. Baselines are pruned on errors and on `dispose()`;
-their cache lifetime and eviction remain owned by #622.
-The final validated child update within the existing parent throttle window
-is delivered after reverification. Parent-key throttling still merges distinct
-children here; #622 owns the identity-preserving change. See
+a spawn or completion. Since #622, each `record()` performs at most two
+verification attempts; continuous appends retain the previous evidence for
+the next notification rather than keeping one call alive indefinitely.
+The final validated child update within its own throttle window is delivered
+after reverification. Distinct children have distinct throttle keys. See
 `.ai/contexts/session-state.md`, "Verified watch notifications", for the
 verification bounds and write-metadata evidence limits.
 ### PTY cleanup provenance (issue #623)
@@ -229,8 +229,8 @@ existing top-level check fails:
   tries `subagentParentFromParts(parts)`. A resolved attribution is dropped
   if `hasPty(parentSessionId)` — the parent already has a PTY in this app, so
   `detectSubagentTransitions()` owns it and must not be double-fed. Otherwise
-  it's coalesced (same `ipcMinMs` throttle, keyed `'sub:' + parentSessionId`
-  — a namespace no UUID sessionId can collide with) and returned as
+  it's coalesced by `(parentSessionId, agentId)` in a separate subagent
+  namespace, with the same `ipcMinMs` throttle, and returned as
   `{ parentSessionId, agentId, at, kind: 'subagent' }` on the same
   `session-transcript-activity` channel the top-level signal already uses —
   one channel, discriminated by `kind`, not a second IPC event.
@@ -238,9 +238,52 @@ existing top-level check fails:
   first (unchanged); on `null`, splits `rel` on `/` and tries
   `subagentParentFromParts`. No `hasPty` gate here — a remote session has no
   local PTY concept the same way. Coalesced independently of the top-level
-  signal (again `'sub:' + parentSessionId` inside the existing `alias`-keyed
-  map) and returned as `{ alias, parentSessionId, agentId, at, kind:
-  'subagent' }` on the existing `remote-activity` channel.
+  signal by `(alias, parentSessionId, agentId)` and returned as
+  `{ alias, parentSessionId, agentId, at, kind: 'subagent' }` on the existing
+  `remote-activity` channel. `onActivity` delivers both leading and trailing
+  payloads; `main.js` sends through that callback only, avoiding duplicate
+  leading IPC. A consumer using only the synchronous return value still
+  receives leading events, but must supply the callback for trailing delivery.
+
+### Bounded activity retention (#622)
+
+The local tracker retains at most 4096 per-file baselines (`maxFiles`), in
+least-recently-observed order, and expires observations after five idle
+minutes (`baselineTtlMs`). Pruning runs on `record()` and `stats()`; a missing
+or unreadable transcript is forgotten when verification fails. Eviction and
+errors release the file's throttle entry and cancel its pending delivery;
+`dispose()` clears all retained state and timers. Capacity eviction is global,
+not a per-parent limit on the number of children.
+
+After forgetting a baseline, the first-write mtime floor advances to the
+eviction time minus the existing 2 s resolution allowance. An older file
+rebaselines quietly, even if it was written after tracker startup. This is a
+conservative fallback: a first notification delayed beyond that floor may
+also rebaseline quietly; subsequent verified growth remains activity. Files
+still retained keep their previous metadata comparison. Each identity has
+at most one pending payload and timer; alternate transcript layouts for the
+same `(parent, agent)` share the identity.
+
+The remote tracker retains at most 4096 identities (`maxEntries`), also in
+least-recently-observed order, and prunes idle state after `decayMs` (20 s by
+default). One trailing payload per identity survives to the throttle boundary,
+carrying the last observation's `at`, without a new watch event. Pending
+deliveries are kept until delivery or capacity eviction; top-level liveness
+still expires based on observation time. Disposal cancels pending timers and
+is wired into app shutdown. Capacity eviction can discard a trailing payload
+in either tracker; retained identities never overwrite another child's
+payload. No completion channel is throttled here, and no lifecycle detection
+or full-sidebar refresh was added.
+
+Coverage: `test/local-transcript-activity.test.js` and
+`test/remote-activity.test.js` pin A/B/C delivery, identity independence,
+trailing updates, cache bounds, idle expiry, deletion and bounded dirty retry.
+`test/main-local-transcript-wiring.test.js` exercises the shipped remote
+watcher callback through IPC with controlled timers.
+`test/dom-sidebar-remote-subagent-attribution.test.js` routes each real
+tracker's output into the renderer's shared `activeSubagentsByParent` registry
+and removes all three agents independently through completion IPC. Shared
+lifecycle normalization remains the subsequent #624 work.
 
 On the renderer side, each adapter's `on*ActivityEvent` branches on
 `payload.kind === 'subagent'` and applies `subagentSpawned` to the **parent's

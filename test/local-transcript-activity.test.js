@@ -410,3 +410,118 @@ test('dispose during a stat prevents in-flight activity from escaping', async t 
   assert.equal(await work, null);
   assert.deepEqual(f.events, []);
 });
+
+test('three children keep independent leading and trailing activity within one parent window', async t => {
+  const f = timedFixture(t);
+  const children = ['7', '8', '9'].map(id => ['folder', UUID_A, 'subagents', `agent-${id}.jsonl`]);
+  for (const parts of children) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'first\n');
+    assert.ok(await f.tracker.record(parts), 'each distinct child must surface immediately');
+  }
+  for (const parts of children) {
+    fs.appendFileSync(f.file(parts), 'final\n');
+    assert.equal(await f.tracker.record(parts), null);
+  }
+  assert.deepEqual(f.events.map(e => e.agentId), ['7', '8', '9']);
+  await f.advance(50);
+  assert.deepEqual(f.events.map(e => e.agentId), ['7', '8', '9', '7', '8', '9']);
+  await f.advance(50);
+  assert.equal(f.events.length, 6, 'unchanged files must not redeliver');
+});
+
+test('a child identity is independent of its parent, layout and ordinary parent activity', async t => {
+  const f = timedFixture(t);
+  for (const parts of [child, ['folder', UUID_B, 'agent-7.jsonl'], parent]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'new\n');
+    assert.ok(await f.tracker.record(parts));
+  }
+  const legacy = ['folder', UUID_A, 'agent-7.jsonl'];
+  f.write(legacy, 'old\n');
+  await f.tracker.record(legacy);
+  fs.appendFileSync(f.file(legacy), 'new\n');
+  assert.equal(await f.tracker.record(legacy), null, 'alternate layouts share the same agent identity');
+  await f.advance(50);
+  assert.equal(f.events.length, 4);
+});
+
+test('baseline capacity evicts the least recently observed file and its trailing activity', async t => {
+  const f = timedFixture(t, { maxFiles: 2 });
+  const other = ['folder', UUID_A, 'subagents', 'agent-8.jsonl'];
+  for (const parts of [parent, child]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    f.write(parts, 'old\nnew\n');
+    await f.tracker.record(parts);
+  }
+  f.write(child, 'old\nnew\npending\n');
+  await f.tracker.record(child);
+  await f.tracker.record(parent);
+  f.write(other, 'old\n');
+  await f.tracker.record(other);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'an evicted baseline cannot authorize trailing activity');
+  f.write(child, 'new history after eviction\n', 200);
+  assert.equal(await f.tracker.record(child), null, 'evicted history establishes a new baseline');
+  assert.deepEqual(f.tracker.stats(), { baselines: 2, ipc: 0, pending: 0, inFlight: 0 });
+  fs.appendFileSync(f.file(child), 'fresh\n');
+  assert.ok(await f.tracker.record(child));
+  assert.equal(f.tracker.stats().baselines, 2);
+});
+
+test('baseline idle expiry and file deletion also release throttle and pending entries', async t => {
+  for (const mode of ['expiry', 'delete']) {
+    const f = timedFixture(t, { baselineTtlMs: 100 });
+    f.write(child, 'old\n');
+    await f.tracker.record(child);
+    f.write(child, 'old\nfirst\n');
+    await f.tracker.record(child);
+    if (mode === 'delete') {
+      fs.appendFileSync(f.file(child), 'pending\n');
+      await f.tracker.record(child);
+      fs.unlinkSync(f.file(child));
+      await f.tracker.record(child);
+    } else {
+      await f.advance(101);
+      f.write(child, 'history after expiry\n', 200);
+      assert.equal(await f.tracker.record(child), null, 'expired metadata must not report historical growth');
+      fs.unlinkSync(f.file(child));
+      await f.tracker.record(child);
+    }
+    assert.deepEqual(f.tracker.stats(), { baselines: 0, ipc: 0, pending: 0, inFlight: 0 });
+    await f.advance(50);
+    assert.equal(f.events.length, 1);
+  }
+});
+
+test('continuous appends finish after one dirty retry and the next event can recover', async t => {
+  let racing = false;
+  let calls = 0;
+  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (racing && ++calls <= 8) fs.appendFileSync(file, 'racing append\n');
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  racing = true;
+  assert.equal(await f.tracker.record(parent), null, 'unstable metadata must not emit');
+  assert.equal(calls, 2, 'one record must perform at most two verification attempts');
+  racing = false;
+  assert.ok(await f.tracker.record(parent), 'a later event detects growth from the retained baseline');
+  assert.equal(f.events.length, 1);
+});
+
+test('expired post-start history rebaselines quietly while a new first write still surfaces', async t => {
+  const f = timedFixture(t, { baselineTtlMs: 100 });
+  f.write(parent, 'first write\n', 1000);
+  assert.ok(await f.tracker.record(parent));
+  await f.advance(5000);
+  assert.equal(await f.tracker.record(parent), null, 'eviction must not replay a post-start historical write');
+  const other = ['folder', `${UUID_B}.jsonl`];
+  f.write(other, 'new first write\n', 1005);
+  assert.ok(await f.tracker.record(other));
+  assert.equal(f.events.length, 2);
+});
