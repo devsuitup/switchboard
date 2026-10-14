@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { resolveContinuations, resolveContinuationsSync, scanContinuationIndex } = require('../session-continuations');
 const { createTriggerContext } = require('../trigger-context');
 
@@ -25,11 +27,11 @@ function fixture(t, edges) {
   } };
 }
 
-function deliveryContext(f, writer) {
+function deliveryContext(f, writer, createContext = createTriggerContext) {
   const session = { generation: 1, host: null, projectFolder: 'proj', pty: { pid: process.pid, write() {} } };
-  return createTriggerContext({ activeSessions: new Map([['a', session]]), projectsDir: f.projectsDir,
+  return createContext({ activeSessions: new Map([['a', session]]), projectsDir: f.projectsDir,
     isPtyAlive: () => true,
-    cliSessionState: { deliveryPtyStart: () => 'start', findDeliveryTab: () => ({}) },
+    cliSessionState: { deliveryPtyStart: () => 'start', findDeliveryTab: () => ({}), refreshProcessTable: async () => {} },
     observeTabWriter: () => ({ writer: { sessionId: writer }, identity: '200:200' }),
   });
 }
@@ -40,6 +42,7 @@ async function admit(ctx) {
 }
 
 test('ADR growing 40 MiB transcript: the second trigger reads only appended data and validation bytes', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const f = fixture(t, { a: ['b'], b: [] });
   const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { content: 'x'.repeat(4000) } }) + '\n';
@@ -139,20 +142,79 @@ for (const change of ['truncate', 'replace', 'different head']) {
 }
 
 test('ADR continuation size cap: a 65 MiB uncontinued conversation refuses a foreign writer', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const f = fixture(t, { a: [] });
   const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { content: 'x'.repeat(4000) } }) + '\n';
   fs.appendFileSync(file, line.repeat(Math.ceil(65 * 1024 * 1024 / line.length)));
-  await assert.rejects(admit(deliveryContext(f, 'foreign')), /ownership writer/);
+  const ctx = deliveryContext(f, 'foreign');
+  const pinned = ctx.pinDelivery('a', ctx.getPtyForSession('a'), false);
+  const written = [];
+  t.mock.method(pinned.binding.tab.pty, 'write', data => written.push(data));
+  await assert.rejects(pinned.binding.admit(Date.now() + 1000), /ownership writer/);
+  pinned.binding.beginStep('prompt');
+  assert.throws(() => pinned.handle.write('prompt'), /ownership writer/);
+  assert.deepEqual(written, []);
 });
 
-test('ADR continuation size cap: over 512 MiB stays unknown without reading the transcript', async t => {
+test('ADR continuation size cap: the production limit is 512 MiB', () => {
+  const source = fs.readFileSync(require.resolve('../trigger-context'), 'utf8');
+  const expression = source.match(/let remainingBytes = ([^;]+);/);
+  assert.ok(expression, 'production scan limit must be declared');
+  assert.equal(vm.runInNewContext(expression[1]), 512 * 1024 * 1024);
+});
+
+test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias without bytes', { timeout: 30000 }, async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const f = fixture(t, { a: [] });
-  fs.truncateSync(path.join(f.projectsDir, 'proj', 'a.jsonl'), 512 * 1024 * 1024 + 1);
+  const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+  fs.appendFileSync(file, '{}\n'.repeat(1024 * 1024));
+  const stat = fs.statSync;
+  t.mock.method(fs, 'statSync', (...args) => {
+    const result = stat(...args);
+    if (args[0] === file) result.size = 512 * 1024 * 1024 + 1;
+    return result;
+  });
+  const graphs = [];
+  const filename = require.resolve('../trigger-context');
+  const localRequire = createRequire(filename);
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, require: id => {
+    const loaded = localRequire(id);
+    if (id !== './session-continuations') return loaded;
+    return { ...loaded, resolveContinuationsSync: (...args) => {
+      const graph = loaded.resolveContinuationsSync(...args);
+      graphs.push(graph);
+      return graph;
+    } };
+  }, setTimeout, clearTimeout, Date, Buffer }, { filename });
+  const ctx = deliveryContext(f, 'foreign', module.exports.createTriggerContext);
   const read = fs.readSync;
   let bytes = 0;
   t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); bytes += n; return n; });
-  await admit(deliveryContext(f, 'foreign'));
+  await admit(ctx);
+  assert.ok(graphs.length > 0);
+  assert.ok(graphs.every(graph => graph.unresolved === true));
+  assert.equal(bytes, 0);
+  const entry = ctx.getPtyForSession('a');
+  entry.keyKind = 'historical';
+  const pinned = ctx.pinDelivery('a', entry, false);
+  const written = [];
+  t.mock.method(pinned.binding.tab.pty, 'write', data => written.push(data));
+  const refusal = assert.rejects(pinned.binding.admit(Date.now() + 1000), /ownership.*deadline/);
+  let finished = false;
+  refusal.then(() => { finished = true; }, () => { finished = true; });
+  for (let elapsed = 0; elapsed < 1100 && !finished; elapsed += 10) {
+    t.mock.timers.tick(10);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.ok(finished, 'unresolved alias must refuse at the deadline');
+  await refusal;
+  assert.ok(graphs.every(graph => graph.unresolved === true));
+  pinned.binding.beginStep('prompt');
+  assert.throws(() => pinned.handle.write('prompt'), /ownership.*unknown/);
+  assert.throws(() => pinned.handle.write('\r'), /ownership.*unknown/);
+  assert.deepEqual(written, []);
   assert.equal(bytes, 0);
 });
 
