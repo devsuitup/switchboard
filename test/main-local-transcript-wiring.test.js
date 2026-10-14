@@ -128,4 +128,18 @@ test('injected projects-watch notifications verify real files while indexing sta
   assert.equal(sent[1][1].kind, 'subagent');
   assert.equal(sent[1][1].parentSessionId, id);
   assert.equal(sent[1][1].agentId, '7');
+  const freshId = '22222222-2222-4222-8222-222222222222';
+  const freshParts = ['folder', `${freshId}.jsonl`];
+  const freshChildParts = ['folder', freshId, 'subagents', 'agent-8.jsonl'];
+  for (const fresh of [freshParts, freshChildParts]) {
+    const freshName = path.join(...fresh);
+    fs.mkdirSync(path.dirname(path.join(root, freshName)), { recursive: true });
+    fs.writeFileSync(path.join(root, freshName), 'first write\n');
+    callback('change', freshName);
+    await tracker.record(fresh);
+  }
+  assert.equal(sent.length, 4, 'new parent and child first writes must reach the activity channel');
+  assert.equal(sent[2][1].sessionId, freshId);
+  assert.equal(sent[3][1].parentSessionId, freshId);
+  assert.equal(sent[3][1].agentId, '8');
 });

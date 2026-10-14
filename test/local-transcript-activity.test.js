@@ -31,7 +31,7 @@ function fixture(t, opts = {}) {
 }
 
 function timedFixture(t, opts = {}) {
-  let at = 0;
+  let at = 1_000_000;
   const timers = new Set();
   const f = fixture(t, {
     ...opts, ipcMinMs: 50, now: () => at,
@@ -70,7 +70,7 @@ test('startup and injected notifications after reading old parent and child stay
   assert.deepEqual(f.events, [], 'no Working, unread, or subagent signal');
 });
 
-test('a new file is baselined and a later append emits once despite duplicate notifications', async t => {
+test('an old file is baselined and a later append emits once despite duplicate notifications', async t => {
   const f = fixture(t);
   assert.equal(await f.tracker.record(parent), null);
   f.write(parent, 'first\n');
@@ -79,6 +79,53 @@ test('a new file is baselined and a later append emits once despite duplicate no
   const update = await f.tracker.record(parent);
   assert.equal(update.sessionId, UUID_A);
   assert.equal(await f.tracker.record(parent), null);
+  assert.equal(f.events.length, 1);
+});
+
+test('a new parent or child file after tracker start emits on its first write', async t => {
+  let at = 1_000_000;
+  const f = fixture(t, { now: () => at });
+  for (const parts of [parent, child]) {
+    assert.equal(await f.tracker.record(parts), null);
+    at += 10_000;
+    f.write(parts, 'first write\n', at / 1000);
+    assert.ok(await f.tracker.record(parts), 'a fresh first write supplies activity');
+    assert.equal(await f.tracker.record(parts), null, 'duplicate notification stays quiet');
+  }
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events[0].sessionId, UUID_A);
+  assert.equal(f.events[1].parentSessionId, UUID_A);
+  assert.equal(f.events[1].agentId, '7');
+});
+
+test('a file written after tracker start emits when first seen later', async t => {
+  let at = 1_000_000;
+  const f = fixture(t, { now: () => at });
+  at += 10_000;
+  f.write(parent, 'written before notification\n', at / 1000);
+  at += 60_000;
+  assert.ok(await f.tracker.record(parent));
+  assert.equal(f.events.length, 1);
+});
+
+test('a recent startup write allows filesystem clock resolution but old files stay quiet', async t => {
+  const f = fixture(t, { now: () => 1_000_000 });
+  f.write(parent, 'recent\n', 998);
+  assert.ok(await f.tracker.record(parent));
+  const old = ['folder', `${UUID_B}.jsonl`];
+  f.write(old, 'old\n', 997);
+  assert.equal(await f.tracker.record(old), null);
+  fs.readFileSync(f.file(old));
+  assert.equal(await f.tracker.record(old), null);
+  assert.equal(f.events.length, 1);
+});
+
+test('an empty newly created transcript stays quiet until it receives content', async t => {
+  const f = fixture(t, { now: () => 1_000_000 });
+  f.write(parent, '', 1000);
+  assert.equal(await f.tracker.record(parent), null);
+  f.write(parent, 'first\n', 1000);
+  assert.ok(await f.tracker.record(parent));
   assert.equal(f.events.length, 1);
 });
 
@@ -101,13 +148,13 @@ test('same-size content rewrite with advancing mtime emits once', async t => {
   assert.equal(f.events.length, 1);
 });
 
-test('a same-size rewrite outside the bounded tail is not ignored when write mtime advances', async t => {
+test('a same-size rewrite anywhere in the transcript emits when write mtime advances', async t => {
   const f = fixture(t);
   const original = 'a' + 'x'.repeat(128 * 1024);
   f.write(parent, original);
   await f.tracker.record(parent);
   f.write(parent, 'b' + original.slice(1), 300);
-  assert.ok(await f.tracker.record(parent), 'write mtime must cover rewrites outside the read window');
+  assert.ok(await f.tracker.record(parent), 'write mtime must cover rewrites anywhere in the file');
   assert.equal(f.events.length, 1);
 });
 
@@ -165,6 +212,7 @@ test('read failure invalidates the baseline without emitting or claiming complet
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
   fs.appendFileSync(f.file(parent), 'during failure\n');
+  fs.utimesSync(f.file(parent), 300, 300);
   deny = true;
   assert.equal(await f.tracker.record(parent), null);
   deny = false;
@@ -187,6 +235,49 @@ test('a final changed event inside the existing throttle window is eventually em
   assert.equal(await f.tracker.record(parent), null);
 });
 
+test('an append racing path verification preserves the final throttled delivery', async t => {
+  let injectWrite = false;
+  let f;
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (injectWrite) {
+      injectWrite = false;
+      fs.appendFileSync(file, 'racing append\n');
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'first\n');
+  assert.ok(await f.tracker.record(parent));
+  await f.advance(5);
+  fs.appendFileSync(f.file(parent), 'pending\n');
+  await f.tracker.record(parent);
+  await f.advance(5);
+  fs.appendFileSync(f.file(parent), 'final\n');
+  injectWrite = true;
+  await f.tracker.record(parent);
+  await f.tracker.record(parent);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'racing growth must not cancel the pending final activity');
+  assert.equal(await f.tracker.record(parent), null);
+});
+
+test('a racing first write retries without requiring another watch notification', async t => {
+  let injectWrite = false;
+  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (injectWrite) {
+      injectWrite = false;
+      fs.appendFileSync(file, 'racing append\n');
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  injectWrite = true;
+  assert.ok(await f.tracker.record(parent), 'the verification retry must observe the append');
+  assert.equal(f.events.length, 1);
+});
+
 test('invalidation cancels pending activity and PTY takeover suppresses trailing delivery', async t => {
   for (const mode of ['truncate', 'pty']) {
     let pty = false;
@@ -206,7 +297,7 @@ test('invalidation cancels pending activity and PTY takeover suppresses trailing
   }
 });
 
-test('content reads are bounded and unchanged notifications do not reread content', async t => {
+test('metadata verification does not read transcript content', async t => {
   const lengths = [];
   const f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
     const handle = await fs.promises.open(...args);
@@ -217,31 +308,24 @@ test('content reads are bounded and unchanged notifications do not reread conten
   } } });
   f.write(parent, 'x'.repeat(256 * 1024));
   await f.tracker.record(parent);
-  assert.deepEqual(lengths, [64 * 1024]);
+  assert.deepEqual(lengths, []);
   await f.tracker.record(parent);
-  assert.deepEqual(lengths, [64 * 1024]);
+  assert.deepEqual(lengths, []);
   fs.appendFileSync(f.file(parent), 'new\n');
   assert.ok(await f.tracker.record(parent));
-  assert.deepEqual(lengths, [64 * 1024, 64 * 1024]);
+  assert.deepEqual(lengths, []);
 });
 
-test('replacement during a bounded read rejects stale evidence and recovers quietly', async t => {
+test('replacement during path verification rejects stale evidence and recovers quietly', async t => {
   let replace = false;
   let f;
-  f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
-    const handle = await fs.promises.open(...args);
-    return {
-      stat: () => handle.stat(), close: () => handle.close(),
-      read: async (...readArgs) => {
-        const result = await handle.read(...readArgs);
-        if (replace) {
-          replace = false;
-          fs.renameSync(f.file(parent), f.file(parent) + '.old');
-          f.write(parent, 'replacement\n', 300);
-        }
-        return result;
-      },
-    };
+  f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (replace) {
+      replace = false;
+      fs.renameSync(file, file + '.old');
+      f.write(parent, 'replacement\n', 300);
+    }
+    return fs.promises.stat(file);
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
@@ -279,23 +363,21 @@ test('dispose cancels trailing work and prevents late asynchronous delivery', as
   assert.equal(f.events.length, 1);
 });
 
-test('short reads and I/O failures invalidate content verification without activity', async t => {
-  for (const mode of ['short', 'error']) {
+test('shrink and stat failures invalidate verification without activity', async t => {
+  for (const mode of ['shrink', 'error']) {
     let fail = false;
-    const f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
-      const handle = await fs.promises.open(...args);
-      return {
-        stat: () => handle.stat(), close: () => handle.close(),
-        read: async (...readArgs) => {
-          if (fail && mode === 'error') throw Object.assign(new Error('read failed'), { code: 'EIO' });
-          const result = await handle.read(...readArgs);
-          return fail ? { bytesRead: result.bytesRead - 1 } : result;
-        },
-      };
+    const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+      if (fail && mode === 'error') throw Object.assign(new Error('stat failed'), { code: 'EIO' });
+      if (fail) {
+        fs.truncateSync(file, 1);
+        fs.utimesSync(file, 300, 300);
+      }
+      return fs.promises.stat(file);
     } } });
     f.write(parent, 'old\n');
     await f.tracker.record(parent);
     fs.appendFileSync(f.file(parent), 'new\n');
+    fs.utimesSync(f.file(parent), 300, 300);
     fail = true;
     assert.equal(await f.tracker.record(parent), null);
     fail = false;
@@ -304,24 +386,18 @@ test('short reads and I/O failures invalidate content verification without activ
   }
 });
 
-test('dispose during a content read prevents in-flight activity from escaping', async t => {
+test('dispose during a stat prevents in-flight activity from escaping', async t => {
   let hold = false;
   let release;
   let reached;
   const entered = new Promise(resolve => { reached = resolve; });
-  const f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
-    const handle = await fs.promises.open(...args);
-    return {
-      stat: () => handle.stat(), close: () => handle.close(),
-      read: async (...readArgs) => {
-        const result = await handle.read(...readArgs);
-        if (hold) {
-          reached();
-          await new Promise(resolve => { release = resolve; });
-        }
-        return result;
-      },
-    };
+  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    const result = await fs.promises.stat(file);
+    if (hold) {
+      reached();
+      await new Promise(resolve => { release = resolve; });
+    }
+    return result;
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);

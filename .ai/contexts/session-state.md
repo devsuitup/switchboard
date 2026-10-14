@@ -686,18 +686,22 @@ gone. The pre-fix sequence is reasoned from the code, not reproduced live;
 the callback delivers both immediate and trailing activity. A named watch
 notification invalidates indexing independently, but cannot itself light a
 row. The tracker asynchronously opens only that transcript, keeping its
-device/inode/birth-time identity and size/write-mtime watermark. First sight,
-including a newly created file, establishes a quiet baseline. Later growth or
-an advancing write mtime requests a bounded content read (at most the last
-64 KiB); unchanged size/mtime requires no content read. Access time is ignored.
-The read must be complete and nonempty, and handle/path identity, size and
-mtime must still match afterwards. An advancing write mtime also covers a
-same-size rewrite outside the tail: this is write-metadata evidence after a
-successful content check, not a byte comparison of the entire history. A
-metadata-only operation that advances write mtime can therefore signal
-activity; a read-only access-time update cannot.
+device/inode/birth-time identity and size/write-mtime watermark. On first
+sight, a nonempty file whose write mtime is at or after tracker creation
+minus `FIRST_WRITE_MTIME_ALLOWANCE_MS` (2 s for clock/filesystem resolution)
+supplies activity; older files establish a quiet baseline. The cutoff stays
+anchored to tracker creation, so a write first observed later still counts.
+Later growth or an advancing write mtime supplies activity after asynchronous
+handle/path metadata verification, without reading transcript content.
+Access time is ignored. Identity, size and write mtime must match across
+the check; if identity stays unchanged and size/mtime only advance, the
+tracker keeps its baseline and pending delivery and retries the dirty file.
+An advancing write mtime covers same-size rewrites anywhere in the file.
+This is write-metadata evidence, not a byte comparison: a metadata-only
+operation that advances write mtime can therefore signal activity; a
+read-only access-time update cannot.
 
-Truncation, replacement, backwards write mtime, deletion and read/stat failure
+Truncation, replacement, backwards write mtime, deletion and open/stat failure
 invalidate the baseline and pending activity quietly, without a turn or
 completion event. Each file's asynchronous verification is serialized and
 concurrent notifications request another check, rejecting stale results.

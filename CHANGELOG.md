@@ -16,7 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, a single close waits, and closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. A window closed while it is still starting asks once it has loaded. (#478)
 
 ### Fixed
-- Reading old transcripts no longer marks sessions as Working or makes historical subagents appear active. Transcript writes still update activity, including a final write during a burst. (#621)
+- Reading old transcripts no longer marks sessions as Working or makes historical subagents appear active. Transcript writes still update activity, including a newly created transcript's first write and a final write during a burst. (#621)
 - Refresh screen holds the temporary resize longer so the running CLI redraws a garbled screen, and the replay of a hidden or reattached tab no longer answers stale terminal queries. (#603)
 - Opening a compacted conversation that is not open now resumes its latest part, not the transcript from before the compaction. When both parts have open tabs, clicking the conversation shows the latest part's tab. (#564)
 - The sidebar project list reloads without blocking the window. (#616)
