@@ -140,7 +140,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('cli-busy-state', (_event, sessionId, busy) => callback(sessionId, busy));
   },
   onSessionForked: (callback) => {
-    ipcRenderer.on('session-forked', (_event, oldId, newId, kind) => callback(oldId, newId, kind));
+    ipcRenderer.on('session-forked', (_event, oldId, newId, kind, background) => callback(oldId, newId, kind, background));
   },
   getTaskSnapshots: () => ipcRenderer.invoke('get-task-snapshots'),
   onTaskRekey: cb => {

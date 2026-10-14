@@ -87,7 +87,7 @@ test('projects snapshot carries cached background state and attach identity in i
   const start = source.indexOf('function projectsSnapshot()');
   const end = source.indexOf('\nconst projectsClient', start);
   const descriptor = { sessionId: 'head', kind: 'bg', jobId: 'job', name: 'registry', nameSource: 'user' };
-  const job = { state: 'working', name: 'launch' };
+  const job = { state: 'working', name: 'launch', nameSource: 'collision', sessionId: 'head' };
   const context = {
     activeSessions: new Map([['tab', { isAttach: true, attachJobId: 'job', realSessionId: 'head', cwd: '/fixture', host: null }]]),
     cliSessionState: { getSidebarDescriptors: () => [descriptor] },
@@ -99,6 +99,8 @@ test('projects snapshot carries cached background state and attach identity in i
   const first = context.projectsSnapshot();
   assert.equal(first.localDescriptors[0].name, 'registry');
   assert.equal(first.localJobs[0][1].state, 'working');
+  assert.equal(first.localJobs[0][1].nameSource, 'collision');
+  assert.equal(first.localJobs[0][1].sessionId, 'head');
   const attach = first.activeSessions[0][1];
   for (const field of ['isAttach', 'attachJobId', 'realSessionId', 'cwd', 'host']) {
     assert.equal(attach[field], context.activeSessions.get('tab')[field]);

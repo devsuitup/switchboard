@@ -89,6 +89,26 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
       root.mergedMemberIds = [...members].sort((a, b) =>
         (localRows.get(key(b))?.modified || '').localeCompare(localRows.get(key(a))?.modified || '') || a.localeCompare(b));
       for (const id of [root.sessionId, ...root.mergedMemberIds]) visibleRows.set(key(id), root);
+      const originalId = root.sessionId;
+      root.sessionId = descriptor.sessionId;
+      root.headSessionId = descriptor.sessionId;
+      root.mergedMemberIds = [...new Set([originalId, ...root.mergedMemberIds])].filter(id => key(id) !== head);
+      const meta = metaMap.get(descriptor.sessionId);
+      if (meta) {
+        const originalMeta = metaMap.get(originalId), originalName = originalMeta?.name;
+        const headRename = meta.nameSource === 'user', sourceRename = originalMeta?.nameSource === 'user';
+        if (headRename || sourceRename) {
+          const chosen = headRename && (!sourceRename || (meta.nameRevision || 0) >= (originalMeta.nameRevision || 0)) ? meta : originalMeta;
+          root.name = chosen.name || localRows.get(key(originalId))?.customTitle || root.aiTitle || root.summary || null;
+        } else if (!originalName || originalName === localRows.get(key(originalId))?.customTitle) root.name = meta.name || root.name;
+        root.starred = meta.starred ?? root.starred;
+        root.archived = meta.archived ?? root.archived;
+      }
+      if (!showArchived && root.archived) {
+        for (const project of projects) project.sessions = project.sessions.filter(row => row !== root);
+        suppressedNames.add(head);
+        continue;
+      }
       visible = root;
     }
     if (!visible) {
@@ -103,7 +123,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
       }
       const modified = Number.isFinite(descriptor.startedAt) && Math.abs(descriptor.startedAt) <= 8640000000000000
         ? new Date(descriptor.startedAt).toISOString() : null;
-      visible = { sessionId: descriptor.sessionId, projectPath, remoteAlias: null, summary: descriptor.name || 'Background session',
+      visible = { sessionId: descriptor.sessionId, projectPath, remoteAlias: null, summary: (descriptor.nameSource !== 'collision' && descriptor.name) || 'Background session',
         name: metaMap.get(descriptor.sessionId)?.name || null, messageCount: 0, modified, created: modified,
         starred: metaMap.get(descriptor.sessionId)?.starred || 0, archived: metaMap.get(descriptor.sessionId)?.archived || 0,
         mergedMemberIds: [], descriptorOnly: true };

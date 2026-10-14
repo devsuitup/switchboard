@@ -582,6 +582,7 @@ function rekeyFilePanelState(oldId, newId) {
     filePanelState.delete(oldId);
     filePanelState.set(newId, state);
   }
+  if (currentPanelSessionId === oldId) currentPanelSessionId = newId;
 }
 
 // ── Tab Operations ──────────────────────────────────────────────────

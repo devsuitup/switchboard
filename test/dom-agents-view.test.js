@@ -107,6 +107,18 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('Agents row and detail retain the original conversation name over a collision title', async () => {
+  const h = setup();
+  try {
+    h.window.sessionMap.set('s-a', { sessionId: 's-a', name: 'JB rename' });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[0], name: 'daemon (2)', nameSource: 'collision' }] });
+    await h.window.showAgentsView();
+    assert.equal(h.document.querySelector('.agents-row-name').textContent, 'JB rename');
+    h.document.querySelector('.agents-row').click();
+    assert.equal(h.document.querySelector('.agents-detail-name').textContent, 'JB rename');
+  } finally { h.destroy(); }
+});
+
 test('Agents rows supply attention, unknown-live and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
   const { window, document, setSnapshot, destroy } = setup();
   try {

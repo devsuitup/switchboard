@@ -145,6 +145,7 @@ function wrapInGridCard(sessionId) {
   const card = document.createElement('div');
   card.className = 'grid-card';
   card.dataset.sessionId = sessionId;
+  card.rekeySessionId = newId => { sessionId = newId; card.dataset.sessionId = newId; };
 
   // Header
   const header = document.createElement('div');
@@ -277,6 +278,17 @@ function unwrapGridCards() {
   // Remove project headings inserted by showGridView
   terminalsEl.querySelectorAll('.grid-project-heading').forEach(el => el.remove());
 }
+
+function rekeyGridCard(oldId, newId) {
+  const card = gridCards.get(oldId);
+  if (card) {
+    gridCards.delete(oldId);
+    gridCards.set(newId, card);
+    card.rekeySessionId(newId);
+  }
+  if (gridFocusedSessionId === oldId) gridFocusedSessionId = newId;
+}
+window.rekeyGridCard = rekeyGridCard;
 
 function focusGridCard(sessionId) {
   const previousSessionId = gridFocusedSessionId;

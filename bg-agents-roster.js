@@ -54,7 +54,8 @@ function parseJobState(text) {
     template: str(raw.template),
     agent: flagValue(raw.respawnFlags, '--agent'),
     model: flagValue(raw.respawnFlags, '--model'),
-    name: flagValue(raw.respawnFlags, '--name'),
+    name: raw.nameSource === 'collision' ? null : str(raw.name) || flagValue(raw.respawnFlags, '--name'),
+    nameSource: str(raw.nameSource),
     sessionId: sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId) || sessionIdField(raw.resumeSessionId),
     transcriptPath: str(raw.linkScanPath),
     bridgeSessionId: str(raw.bridgeSessionId),
@@ -168,6 +169,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.pid = descriptor.pid || e.pid;
     e.startedAt = e.startedAt ?? descriptor.startedAt;
   }
+  if (job?.nameSource === 'collision' || descriptor?.nameSource === 'collision') e.name = null;
   return e;
 }
 

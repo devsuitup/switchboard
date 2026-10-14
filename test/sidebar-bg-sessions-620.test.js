@@ -112,11 +112,11 @@ test('a two-hop proven bg continuation stays on one representative row before an
   const h = setup(t, { graph: { [OLD]: [MID], [MID]: [HEAD] } });
   const sessions = h.projects().flatMap(p => p.sessions);
   assert.equal(sessions.length, 1, 'one conversation row, no separate continuation row');
-  assert.equal(sessions[0].sessionId, OLD);
-  assert.ok(sessions[0].mergedMemberIds.includes(HEAD));
+  assert.equal(sessions[0].sessionId, HEAD);
+  assert.ok(sessions[0].mergedMemberIds.includes(OLD));
   assert.ok(sessions[0].mergedMemberIds.includes(MID));
   assert.equal(sessions[0].messageCount, 4);
-  const row = h.render().querySelector(`[data-session-id="${OLD}"]`);
+  const row = h.render().querySelector(`[data-session-id="${HEAD}"]`);
   assert.equal(row.querySelector('.bg-badge')?.textContent, 'bg');
   assert.equal(sessions[0].name, 'fixture renamed');
   h.firstTurn();
@@ -171,7 +171,7 @@ test('a fork that converges on the bg head does not collapse the branching prede
   const rows = h.projects().flatMap(p => p.sessions);
   assert.equal(rows.length, 2);
   assert.equal(rows.find(row => row.sessionId === OLD).bgJobId, undefined);
-  assert.equal(rows.find(row => row.sessionId === MID).bgJobId, '33333333');
+  assert.equal(rows.find(row => row.sessionId === HEAD).bgJobId, '33333333');
 });
 
 test('hidden projects and archived predecessors are not resurrected by their bg descriptor', t => {
@@ -371,11 +371,11 @@ test('continuation projection matches the bounded forward resolver on graph fixt
       && result.candidates.length === 1 && result.candidates[0].sessionId === HEAD);
     const roots = paths.filter(candidate => !paths.some(other => other !== candidate && other.result.reachable.includes(candidate.id)));
     const expected = roots.length === 1
-      ? [roots[0].id, ...Object.keys(graph).filter(id => !roots[0].result.reachable.includes(id))].sort()
+      ? [HEAD, ...Object.keys(graph).filter(id => !roots[0].result.reachable.includes(id))].sort()
       : [...Object.keys(graph), HEAD].sort();
     assert.deepEqual(h.projects().flatMap(p => p.sessions).map(row => row.sessionId).sort(), expected);
     if (roots.length === 1) assert.deepEqual(h.projects().flatMap(p => p.sessions).find(row => row.bgJobId).mergedMemberIds.slice().sort(),
-      roots[0].result.reachable.filter(id => id !== roots[0].id).sort());
+      roots[0].result.reachable.filter(id => id !== HEAD).sort());
   }
 });
 
@@ -385,5 +385,5 @@ test('bridge members on a continuation path contribute their visible row only on
   const sessions = h.projects().flatMap(project => project.sessions);
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].messageCount, 7);
-  assert.deepEqual(sessions[0].mergedMemberIds.slice().sort(), [MID, HEAD].sort());
+  assert.deepEqual(sessions[0].mergedMemberIds.slice().sort(), [OLD, MID].sort());
 });

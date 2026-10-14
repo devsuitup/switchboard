@@ -566,6 +566,7 @@ function runExitHandler({ releaseLiveSession }) {
     ptyProcess: { onExit: (cb) => { handler = cb; } },
     session,
     holdBackgroundExit: require('../bg-handoff').holdBackgroundExit,
+    sessionTransitions: require('../session-transitions'),
     sessionId: 'orig',
     activeSessions,
     ptyExitSignalName: () => null,

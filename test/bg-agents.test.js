@@ -143,6 +143,22 @@ test('projects listeners receive only coalesced job state/name membership change
   } finally { rmTmp(dir); }
 });
 
+test('late job conversation identity notifies continuation detection without a state or name change', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working', name: 'launch', nameSource: 'collision' });
+    boot(dir);
+    let changes = 0;
+    const unsubscribe = bgAgents.onJobsChanged(() => { changes++; });
+    bgAgents.start();
+    await waitFor(() => changes === 1);
+    writeJob(dir, 'aaaaaaaa', { state: 'working', name: 'launch', nameSource: 'collision', sessionId: '11111111-1111-4111-8111-111111111111' });
+    await waitFor(() => changes === 2);
+    assert.equal(bgAgents.getCachedJobs().get('aaaaaaaa').sessionId, '11111111-1111-4111-8111-111111111111');
+    unsubscribe();
+  } finally { rmTmp(dir); }
+});
+
 test('macOS window close and activate preserve sidebar job watching without an Agents request', async () => {
   const dir = mkTmp();
   try {

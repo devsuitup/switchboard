@@ -621,21 +621,30 @@ window.api.onSessionDetected((tempId, realId) => {
   pollActiveSessions();
 });
 
-window.api.onSessionForked((oldId, newId, kind) => {
+window.api.onSessionForked((oldId, newId, kind, background) => {
   if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
   const entry = openSessions.get(oldId);
   if (!entry) return;
 
   entry.session.sessionId = newId;
   if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
+  if ((kind === 'background' || kind === 'continuation') && typeof rekeySessionEnvironment === 'function') rekeySessionEnvironment(oldId, newId);
   if (activeSessionId === oldId) setActiveSession(newId);
 
-  openSessions.delete(oldId);
-  openSessions.set(newId, entry);
+  if (kind === 'background') {
+    const rekeyedEntries = [...openSessions].filter(([id]) => id !== newId).map(([id, value]) => [id === oldId ? newId : id, value]);
+    openSessions.clear();
+    for (const [id, value] of rekeyedEntries) openSessions.set(id, value);
+  } else {
+    openSessions.delete(oldId);
+    openSessions.set(newId, entry);
+  }
 
   if (typeof syncToolBar === 'function') syncToolBar();
 
-  rekeyActivityState(oldId, newId);
+  if (kind === 'background') rekeyActivityState(oldId, newId, true);
+  else if (kind === 'continuation') rekeyActivityState(oldId, newId, false, true);
+  else rekeyActivityState(oldId, newId);
 
   // Re-key pending session to newId so sidebar item persists until DB has real data
   const pendingEntry = pendingSessions.get(oldId);
@@ -652,6 +661,11 @@ window.api.onSessionForked((oldId, newId, kind) => {
   }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
+  if (kind === 'background' && background?.jobId) {
+    entry.session.bgJobId = background.jobId;
+    entry.session.bgSessionId = newId;
+    entry.backgroundAttach = attachBackgroundContinuation(entry, background);
+  }
 
   terminalHeaderId.textContent = newId;
 
@@ -1106,6 +1120,64 @@ function backgroundActionReason(sessionId) {
   return null;
 }
 
+function rekeySessionEnvironment(oldId, newId) {
+  if (oldId === newId) return;
+  const terminalSession = openSessions.get(oldId)?.session;
+  if (terminalSession?.headSessionId === oldId) terminalSession.headSessionId = newId;
+  const session = sessionMap.get(oldId);
+  if (session) {
+    sessionMap.delete(oldId);
+    session.sessionId = newId;
+    if (session.headSessionId === oldId) session.headSessionId = newId;
+    sessionMap.set(newId, session);
+  }
+  if (typeof window.rekeyPanelTerminalState === 'function') window.rekeyPanelTerminalState(oldId, newId);
+  if (typeof window.rekeyTerminalBuffers === 'function') window.rekeyTerminalBuffers(oldId, newId);
+  for (const map of [lastActivityTime, sandboxedSessions, ptyGenerations, pendingOpens]) {
+    if (!map.has(oldId)) continue;
+    const value = map.get(oldId);
+    map.delete(oldId);
+    map.set(newId, value);
+  }
+  if (activePtyIds.delete(oldId)) activePtyIds.add(newId);
+  for (const map of [skippedWorkingSetEntries, restoreSavedIndex, openingSessions]) {
+    const value = map.get(oldId);
+    if (value === undefined) continue;
+    map.delete(oldId);
+    if (value.item) value.item = { ...value.item, sessionId: newId };
+    map.set(newId, value);
+  }
+  if (typeof window.rekeyGridCard === 'function') window.rekeyGridCard(oldId, newId);
+}
+
+async function attachBackgroundContinuation(entry, background) {
+  const sessionId = entry.session.sessionId;
+  entry.attach = true;
+  entry.bgRestore = true;
+  const index = [...openSessions.keys()].indexOf(sessionId);
+  skippedWorkingSetEntries.set(sessionId, { item: { sessionId, projectPath: entry.session.projectPath, bg: true }, index, keepAttached: true });
+  beginPtyOpen(sessionId);
+  try {
+    const result = await window.api.openTerminal(sessionId, entry.session.projectPath, false,
+      { type: 'attach', jobId: background.jobId, cwd: background.cwd || entry.session.projectPath }, entry.initialSize);
+    if (openSessions.get(sessionId) !== entry) return;
+    entry.closed = !result?.ok;
+    entry.openError = result?.ok ? null : result?.error || 'the attach tab did not open';
+    settlePtyOpen(sessionId, result);
+    if (result?.ok) syncPtySizeAfterOpen(entry, result);
+    else showRestoreNotice([], `The conversation now runs in the background, but attaching failed: ${entry.openError}. Open it from the sidebar.`);
+  } catch (err) {
+    if (openSessions.get(sessionId) !== entry) return;
+    settlePtyOpen(sessionId, null);
+    entry.closed = true;
+    entry.openError = err.message;
+    showRestoreNotice([], `The conversation now runs in the background, but attaching failed: ${err.message}. Open it from the sidebar.`);
+  } finally {
+    schedulePersistWorkingSet();
+    pollActiveSessions();
+  }
+}
+
 async function sendSessionToBackground(sessionId) {
   const reason = backgroundActionReason(sessionId);
   if (reason) { showRestoreNotice([], 'Not sent to the background: ' + reason); return; }
@@ -1120,17 +1192,28 @@ async function sendSessionToBackground(sessionId) {
     const result = await window.api.sendSessionToBackground(sessionId);
     if (!result?.ok) { showRestoreNotice([], 'Not sent to the background: ' + (result?.error || 'The handoff could not be confirmed. Check the terminal and try again.')); return; }
     const name = cleanDisplayName(oldEntry.session.name || oldEntry.session.aiTitle || oldEntry.session.summary) || sessionId;
+    if (openSessions.get(result.sessionId) === oldEntry && oldEntry.backgroundAttach) {
+      await oldEntry.backgroundAttach;
+      showRestoreNotice([], oldEntry.closed
+        ? `${name} now runs in the background, but attaching failed: ${oldEntry.openError}. Open it from the sidebar.`
+        : `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`);
+      return;
+    }
     if (openSessions.get(sessionId) !== oldEntry || oldEntry.closed) {
       showRestoreNotice([], `${name} now runs in the background. Open it from the sidebar to attach.`);
       return;
     }
     const active = activeSessionId === sessionId;
+    rekeySessionEnvironment(sessionId, result.sessionId);
+    if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(sessionId, result.sessionId);
+    rekeyActivityState(sessionId, result.sessionId, true);
     if (openSessions.get(sessionId) === oldEntry) destroySession(sessionId);
     activePtyIds.delete(sessionId);
     dropLocalPtySession(sessionId, 'backgrounded');
     const target = openSessions.get(result.sessionId);
     if (target && (!target.attach || target.closed)) destroySession(result.sessionId);
-    const session = { sessionId: result.sessionId, projectPath: result.cwd || oldEntry.session.projectPath, name };
+    const session = { ...oldEntry.session, sessionId: result.sessionId, projectPath: oldEntry.session.projectPath || result.cwd, name,
+      bgJobId: result.jobId, bgSessionId: result.sessionId };
     sessionMap.set(result.sessionId, session);
     skippedWorkingSetEntries.set(result.sessionId, { item: { sessionId: result.sessionId, projectPath: session.projectPath, bg: true }, index, keepAttached: true });
     if (!openSessions.has(result.sessionId)) {
@@ -1625,7 +1708,9 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
-  const openId = rowOpenId(session);
+  const openId = customOptions?.type === 'attach'
+    ? (openSessions.has(session.sessionId) && !openSessions.get(session.sessionId).closed ? session.sessionId : null)
+    : rowOpenId(session);
   if (openId) {
     showSession(openId);
     return;

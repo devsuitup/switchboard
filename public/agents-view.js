@@ -24,6 +24,14 @@ function agentsEntryKey(entry) {
   return entry.kind === 'background' ? 'bg:' + entry.id : 'int:' + entry.sessionId;
 }
 
+function agentDisplayName(entry) {
+  const session = typeof sessionMap !== 'undefined' && sessionMap.get(entry.sessionId);
+  const continuation = session?.bgSessionId === entry.sessionId && session?.mergedMemberIds?.length > 0;
+  if (entry.nameSource !== 'collision' && !continuation && entry.name) return entry.name;
+  return session?.name || session?.aiTitle || session?.summary
+    || (entry.nameSource !== 'collision' && entry.name) || entry.sessionId || entry.id || '';
+}
+
 function agentJobIsLive(entry) {
   return entry.kind === 'background' && (entry.state === 'working' || entry.state === 'blocked');
 }
@@ -237,7 +245,7 @@ function renderAgentRow(entry, nested = false) {
   if (agentsPendingVerbs.has(key)) classes.push('pending');
   return `<div class="${classes.join(' ')}" data-key="${agentsEscapeAttr(key)}">
     <span class="session-icon ${icon.slotClass}${icon.live ? ' running' : ''}" data-glyph="${agentsEscapeAttr(icon.glyph)}" title="${agentsEscapeAttr(icon.title)}"></span>
-    <span class="agents-row-name">${escapeHtml(entry.name || entry.sessionId || entry.id || '')}</span>
+    <span class="agents-row-name">${escapeHtml(agentDisplayName(entry))}</span>
     <span class="agents-row-agent">${escapeHtml(entry.agent || '—')}</span>
     <span class="agents-row-state"><span class="agents-state-emoji" aria-hidden="true">${stateEmoji}</span> ${escapeHtml(state + status)}</span>
     <span class="agents-row-cwd" title="${agentsEscapeAttr(entry.cwd || '')}">${escapeHtml(entry.cwd ? shortProjectPath(entry.cwd) : '')}</span>
@@ -350,7 +358,7 @@ function renderAgentDetail(entry) {
   const error = agentsVerbErrors.get(key);
   return `
     <div class="agents-detail-head">
-      <span class="agents-detail-name">${escapeHtml(entry.name || entry.sessionId || '')}</span>
+      <span class="agents-detail-name">${escapeHtml(agentDisplayName(entry))}</span>
       <span class="agents-detail-actions">
         ${btn('attach', 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
       </span>

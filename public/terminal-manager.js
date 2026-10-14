@@ -583,6 +583,25 @@ function flushTerminalBuffer(sessionId) {
   });
 }
 
+function rekeyTerminalBuffers(oldId, newId) {
+  for (const map of [terminalWriteBuffers, lastFlushAt, hiddenAccumulators, renderStats]) {
+    if (!map.has(oldId)) continue;
+    const value = map.get(oldId);
+    map.delete(oldId);
+    map.set(newId, value);
+  }
+  const buffer = terminalWriteBuffers.get(newId);
+  if (buffer) {
+    cancelAnimationFrame(buffer.rafId);
+    clearTimeout(buffer.timerId);
+    buffer.timerId = 0;
+    buffer.rafId = requestAnimationFrame(() => flushTerminalBuffer(newId));
+  }
+  const index = lruOrder.indexOf(oldId);
+  if (index !== -1) lruOrder[index] = newId;
+}
+if (typeof window !== 'undefined') window.rekeyTerminalBuffers = rekeyTerminalBuffers;
+
 // Only ever called for a session that is active or part of an open grid (see
 // handleTerminalData below) — a hidden single-view session never reaches
 // this function at all, so there is no hidden-cadence branch here anymore.

@@ -26,7 +26,7 @@ const SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 
 function setup(sessionIds = ['s1', 's2']) {
   const items = sessionIds
-    .map(id => `<div class="session-item" data-session-id="${id}"><div class="session-status-dot"></div></div>`)
+    .map(id => `<div class="session-item" data-session-id="${id}"><div class="session-icon"></div></div>`)
     .join('');
   const dom = new JSDOM(`<!DOCTYPE html><html><body><div id="sidebar-content">${items}</div></body></html>`,
     { url: 'http://localhost/', runScripts: 'outside-only' });
@@ -43,6 +43,8 @@ function setup(sessionIds = ['s1', 's2']) {
   const read = (expr) => vm.runInContext(expr, ctx);
   return {
     window,
+    read,
+    applyHeadTurnSnapshot: read('applyHeadTurnSnapshot'),
     document: window.document,
     item: (id) => window.document.querySelector(`.session-item[data-session-id="${id}"]`),
     setActivity: read('setActivity'),
@@ -59,6 +61,93 @@ function setup(sessionIds = ['s1', 's2']) {
     destroy: () => window.close(),
   };
 }
+
+test('a background rekey preserves the unread marker on the existing row before reload', () => {
+  const h = setup(['s1']);
+  try {
+    h.setActivity('s1', true);
+    h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+    h.setActivity('s1', false);
+    h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
+    assert.equal(h.item('s1').classList.contains('response-ready'), true);
+    h.rekeyActivityState('s1', 'bg', true);
+    assert.equal(h.responseReadySessions.has('bg'), true);
+    assert.equal(h.item('bg')?.classList.contains('response-ready'), true);
+    assert.equal(h.item('s1'), null);
+    assert.equal(h.item('bg').querySelector('.session-icon').dataset.glyph, '●');
+    h.clearUnread('bg');
+    assert.equal(h.item('bg').classList.contains('response-ready'), false);
+  } finally { h.destroy(); }
+});
+
+test('a background rekey carries the open head and its observation time into the preserved row', t => {
+  const h = setup(['s1']);
+  t.after(h.destroy);
+  h.window.activePtyIds = new Set(['s1', 'bg']);
+  h.window.Date.now = () => 2000;
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1, lastEntryAt: 1000 });
+  h.item('s1').dataset.headSessionId = 's1';
+  h.item('s1').dataset.mergedMemberIds = 'prior s1';
+  h.window.Date.now = () => 4000;
+  h.rekeyActivityState('s1', 'bg', true);
+  assert.equal(h.item('bg').classList.contains('cli-busy'), true);
+  assert.equal(h.item('bg').querySelector('.session-icon').dataset.glyph, '⠋');
+  assert.equal(h.item('bg').dataset.headSessionId, 'bg');
+  assert.equal(h.read("headTurns.get('bg').sessionId"), 'bg');
+  assert.equal(h.read("headTurns.get('bg').observedAt"), 2000);
+  assert.equal(h.read("headTurns.has('s1')"), false);
+});
+
+test('a background rekey preserves ordered prompt hints until newer turn evidence arrives', t => {
+  const h = setup(['s1']);
+  t.after(h.destroy);
+  h.window.activePtyIds = new Set(['s1', 'bg']);
+  h.window.Date.now = () => 2000;
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1, lastEntryAt: 1000 });
+  h.setActivity('s1', false, 'onCliBusyState', { at: 3000 });
+  h.window.Date.now = () => 4000;
+  h.rekeyActivityState('s1', 'bg', true);
+  assert.equal(h.item('bg').querySelector('.session-icon').title, 'Waiting for input');
+  h.applyHeadTurnSnapshot({ sessionId: 'bg', state: 'open', revision: 2, lastEntryAt: 1000 });
+  assert.equal(h.item('bg').querySelector('.session-icon').title, 'Waiting for input');
+  h.applyHeadTurnSnapshot({ sessionId: 'bg', state: 'open', revision: 3, lastEntryAt: 3500 });
+  assert.equal(h.item('bg').classList.contains('cli-busy'), true);
+});
+
+test('a background rekey retains newer destination head evidence over the source unread closure', t => {
+  const h = setup(['s1']);
+  t.after(h.destroy);
+  h.window.activePtyIds = new Set(['bg']);
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
+  h.applyHeadTurnSnapshot({ sessionId: 'bg', state: 'open', revision: 3 });
+  h.rekeyActivityState('s1', 'bg', true);
+  assert.equal(h.item('bg').classList.contains('cli-busy'), true);
+  assert.equal(h.item('bg').classList.contains('response-ready'), false);
+  assert.equal(h.read("headTurns.has('s1')"), false);
+});
+
+test('a fresh fork or clear does not inherit the previous conversations unread head', t => {
+  const h = setup(['s1', 'fresh']);
+  t.after(h.destroy);
+  h.window.activePtyIds = new Set(['fresh']);
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
+  h.rekeyActivityState('s1', 'fresh');
+  assert.equal(h.item('fresh').classList.contains('response-ready'), false);
+  assert.equal(h.item('fresh').querySelector('.session-icon').title, 'Turn state unavailable');
+});
+
+test('an ordinary continuation carries head evidence without preserving the source row', t => {
+  const h = setup(['s1', 'next']);
+  t.after(h.destroy);
+  h.window.activePtyIds = new Set(['next']);
+  h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 });
+  h.rekeyActivityState('s1', 'next', false, true);
+  assert.equal(h.item('next').classList.contains('cli-busy'), true);
+  assert.equal(h.item('s1').classList.contains('cli-busy'), false);
+  assert.equal(h.read("headTurns.has('s1')"), false);
+});
 
 // ---------------------------------------------------------------------------
 // The bug: the response-ready lock swallowed whole turns

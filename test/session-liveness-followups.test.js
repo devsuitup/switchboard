@@ -20,6 +20,7 @@ function bootMain(t, opts = {}) {
   let unsubscribe;
   const context = vm.createContext({
     activeSessions: new Map(), log: { info() {}, debug() {}, warn() {} },
+    sessionTransitions: { detectPendingBackgroundContinuations() {} },
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: channel => sent.push(channel) } }),
     setTimeout: fn => { timers.push(fn); return timers.length; },
     require: () => ({

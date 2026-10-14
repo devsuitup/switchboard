@@ -180,7 +180,7 @@ function syncLocalPtyAgentsBusy(sessionId, active) {
 }
 
 // Carry the activity state across a session-detected / session-forked re-key.
-function rekeyActivityState(oldId, newId) {
+function rekeyActivityState(oldId, newId, preserveRow = false, preserveHead = preserveRow) {
   if (oldId === newId) return;
   const state = localPtyStates.get(oldId);
   if (window.ATRACE) {
@@ -188,6 +188,10 @@ function rekeyActivityState(oldId, newId) {
     window.atrace('store.rekey', newId, { from: oldId, busy: snap ? snap.busy : null, ready: snap ? snap.responseReady : false, attention: snap ? snap.attention : false, fn: 'rekeyActivityState' });
   }
   const oldItem = sessionItemEl(oldId);
+  if (preserveRow && oldItem && !sessionItemEl(newId)) {
+    oldItem.dataset.sessionId = newId;
+    if (oldItem.dataset.headSessionId === oldId) oldItem.dataset.headSessionId = newId;
+  }
   setCliBusy(oldItem, false);
   setResponseReady(oldItem, false);
   setNeedsAttention(oldItem, false);
@@ -195,6 +199,13 @@ function rekeyActivityState(oldId, newId) {
   if (state) {
     localPtyStates.delete(oldId);
     localPtyStates.set(newId, state);
+  }
+
+  const turn = headTurns.get(oldId);
+  if (preserveHead && turn) {
+    headTurns.delete(oldId);
+    const target = headTurns.get(newId);
+    if (!target || target.revision < turn.revision) headTurns.set(newId, { ...turn, sessionId: newId });
   }
 
   const seq = activitySeqBySession.get(oldId);

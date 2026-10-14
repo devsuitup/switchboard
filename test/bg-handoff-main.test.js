@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { loadAppFunctions } = require('./app-source');
 
 function setup() {
-  const messages = [], ended = [], sessions = new Map();
+  const messages = [], ended = [], dead = [], sessions = new Map();
   let exit;
   const session = { realSessionId: 'old', backgrounding: true, kind: 'local-pty' };
   sessions.set('old', session);
@@ -21,7 +21,7 @@ function setup() {
     activeSessions: sessions,
     exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded: id => ended.push(id) },
-    taskRecords: { ownerDied() {} },
+    taskRecords: { ownerDied: id => dead.push(id) },
     sessionCache: { releaseLiveSession: () => false },
     notifyRendererProjectsChanged() {},
     log: { warn() {} },
@@ -29,7 +29,7 @@ function setup() {
   });
   const { wireSessionPty } = loadAppFunctions(ctx, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   wireSessionPty(session, 'old', { onData() {}, onExit: fn => { exit = fn; } });
-  return { session, messages, sessions, exit, ended };
+  return { session, messages, sessions, exit, ended, dead };
 }
 
 test('M1: shipped PTY exit wiring holds process-exited until handoff settles', () => {
@@ -56,6 +56,18 @@ test('M2: a failed handoff releases ordinary exit once and does not remove a rep
   assert.deepEqual(h.ended, []);
 });
 
+test('the interactive exit does not terminate the tasks of a confirmed background continuation', () => {
+  const h = setup();
+  h.exit({ exitCode: 0 });
+  assert.deepEqual(h.dead, []);
+  h.session.realSessionId = 'bg';
+  h.sessions.delete('old');
+  h.sessions.set('bg', h.session);
+  h.session.backgroundExit(true);
+  assert.deepEqual(h.dead, []);
+  assert.equal(h.sessions.has('bg'), false);
+});
+
 function ipcSetup(t, { status = 'idle' } = {}) {
   const fs = require('node:fs');
   const os = require('node:os');
@@ -69,6 +81,7 @@ function ipcSetup(t, { status = 'idle' } = {}) {
   const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: 'folder', composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
   const ctx = vm.createContext({
     setTimeout, clearTimeout, Date, Promise, path, PROJECTS_DIR: root,
+    detectSessionTransitions() {},
     activeSessions: new Map([['tab', session]]),
     mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
     writePty: (entry, text) => {

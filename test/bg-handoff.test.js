@@ -97,6 +97,19 @@ test('T7: exit before proof is held; a bg descriptor without status succeeds and
   assert.deepEqual(h.exits, [true]);
 });
 
+test('confirmed handoff rekeys before the held exit releases the source environment', async () => {
+  const order = [];
+  const h = setup({ tick: ({ session, time }) => {
+    if (time === 400) {
+      session.exited = true;
+      holdBackgroundExit(session, () => order.push('exit'));
+    }
+  } });
+  h.deps.onConfirmed = job => { assert.equal(job.sessionId, 'new'); order.push('rekey'); };
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(order, ['rekey', 'exit']);
+});
+
 test('T7b: exit without proof is released at its bounded deadline with an actionable failure', async () => {
   const h = setup({ descriptors: [], tick: ({ session, time, exits }) => {
     if (time === 400) {

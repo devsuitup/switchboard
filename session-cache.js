@@ -69,6 +69,12 @@ function init(ctx) {
   reindexRepairedFolders();
 }
 
+function setTranscriptName(id, name) {
+  const collision = getLocalDescriptors().some(d => d.sessionId?.toLowerCase() === id.toLowerCase() && d.nameSource === 'collision')
+    || [...getLocalJobs().values()].some(job => job.sessionId?.toLowerCase() === id.toLowerCase() && job.nameSource === 'collision');
+  if (!collision) setName(id, name, 'transcript');
+}
+
 // alias -> that host's mirrored projects root; empty unless one is declared.
 let remoteRoots = new Map();
 function setRemoteRoots(roots) {
@@ -457,7 +463,7 @@ function refreshFolder(folder, opts = {}) {
     upsertSearchEntries(searchEntriesToUpsert);
   }
   for (const { id, name } of namesToSet) {
-    setName(id, name);
+    setTranscriptName(id, name);
   }
   for (const sessionId of sessionsToDelete) {
     if (keepIfRunning(sessionId, folder)) continue;
@@ -603,7 +609,7 @@ function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
 
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
-  const metaMap = getAllMeta();
+  const metaMap = getAllMeta(true);
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
@@ -900,7 +906,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     for (const s of sessions) {
       // Only JSONL custom-title (genuine user title) promotes to the DB name column.
       // AI titles must not -- see refreshFolder for the rationale.
-      if (s.customTitle) setName(s.sessionId, s.customTitle);
+      if (s.customTitle) setTranscriptName(s.sessionId, s.customTitle);
       // Worker called readSessionFile, so dailyMetrics is present.
       replaceSessionMetrics(s.sessionId, s.dailyMetrics);
     }
@@ -931,7 +937,7 @@ function writeScannedFolderPartial(r) {
   if (sessions.length > 0) {
     upsertCachedSessions(sessions);
     for (const s of sessions) {
-      if (s.customTitle) setName(s.sessionId, s.customTitle);
+      if (s.customTitle) setTranscriptName(s.sessionId, s.customTitle);
       replaceSessionMetrics(s.sessionId, s.dailyMetrics);
     }
     for (const s of sessions) deleteSearchSession(s.sessionId);

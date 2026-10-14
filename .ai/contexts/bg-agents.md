@@ -37,7 +37,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
 4. Job watchers start with the app to keep the sidebar cache current. They
-   notify projects only when the job id to state/name projection changes;
+   notify projects only when the job id to state/name/name-source/conversation projection changes;
    token/detail/tempo/fan updates do not notify projects. Automatic roster
    rebuilds require an `onChange` subscriber, first installed by
    `get-bg-agents`, and stop when the last subscriber leaves. Explicit CLI
@@ -101,6 +101,81 @@ continuation can therefore badge its conversation row before a new turn is
 indexed. See `session-cache.md`, "Local background sidebar rows", for identity
 and registry-name precedence. This changes the membership marker, not the
 status glyph policy from the indicators audit.
+
+### Background continuations (#639)
+
+A complete, unambiguous new `continued-in` record in the interactive conversation
+plus a working/blocked cached job identifies a background continuation; any
+descriptor for the target must agree on a single `kind: bg` job. Before
+spawning, the tab snapshots continuation ids
+and the transcript byte offset. Snapshots before spawn yield between
+one-megabyte chunks to keep the event loop available for large resumed
+conversations. Only a target absent from that snapshot, in the appended tail,
+can authorize the re-key. A partial record already present
+at spawn and a rewritten prefix cannot become fresh evidence. The tab must
+also have submitted `/bg` itself (`terminal-input.js` tracks the composer),
+or have a confirmed button handoff. Ctrl+C and the CLI's cancellation message
+revoke the typed command, while an empty confirmation Enter preserves it.
+Another process backgrounding the same conversation cannot take over its PTY.
+Its worker belongs to the daemon, so the interactive PTY ancestry check cannot
+authorize it. `session-transitions.js` checks this
+proof before the closest-writer cache and before requiring a target transcript.
+The job and descriptor subscriptions in `main.js` reconsider only unresolved
+fresh background continuations, without scanning folders or subagents. This
+works even when no transcript has changed and Agents has never opened.
+Ambiguous links and interactive strangers do not authorize a background re-key.
+
+The original row becomes the background UUID. `sidebar-bg-sessions.js` retains
+the original conversation fields, keeps predecessors as merged members, and
+suppresses the target's separate row. The existing `bg` marker remains the
+membership signal. `parseJobState` reads `name`/`nameSource`; collision names
+cannot win through CLI, descriptor or job fallback. The Agents row and detail
+prefer the conversation's Switchboard name or original title for a collision
+or a proven continuation; independently named jobs retain their name. The
+handoff still submits `/bg` only, without `--name` or a suffix.
+
+Before publishing the re-key, `db.rekeySessionMeta` copies name, star and archive
+in one transaction, retaining the original metadata for when the job finishes.
+Only Switchboard renames are copied as names; transcript titles remain titles.
+`session_meta_fields` records a monotonic revision and source per field, so an
+existing target retains whichever value was updated later, including explicit
+false star/archive values. For names, only user rename revisions participate;
+a newer transcript title cannot defeat a genuine rename. Legacy fields have
+no revision: a target field wins a tie, and an original name equal to its
+cached title is treated as a title. A copied legacy rename gains user source
+with revision zero so its provenance survives subsequent continuations.
+The projects cache and query worker carry name source and revision into the
+sidebar merger. It selects the newest genuine rename from the two ids,
+including a cleared name, before falling back to the original transcript
+title. Retaining the old metadata cannot mask a newer background-head rename.
+The renderer keeps the existing xterm and open-set position, migrates activity,
+panel state and toolbar owner, panel-shell ownership and in-flight flags,
+last activity, sandbox flag, PTY generations, pending opens and restore entries.
+Terminal output buffers and grid handlers follow the new UUID. The stored
+head-turn snapshot keeps its revision, observation time and unread marker at
+the new UUID; newer destination evidence wins. Ordered prompt hints retain
+their original adapter state, and both the session map and preserved row
+select the new head before the next sidebar/grid/Agents projection. An in-flight
+panel-shell completion reads the migrated owner from its original state object;
+its physical `panel:<old>` PTY id stays unchanged until that shell closes.
+
+The background payload crosses `preload.js` and attaches in the preserved
+terminal. `open-terminal` replaces only the proven handoff's interactive PTY,
+validates the matching job id before doing so, and spawns `claude attach`.
+The button confirms/re-keys before releasing a held physical exit. A submitted
+`/bg` (with optional arguments) and one fresh continuation retain a just-exited
+source for at most 15 seconds, even before the jobs watcher sees the daemon.
+The re-key requires both a background target and a working/blocked cached job.
+Job and descriptor notifications reconsider the held source. Partial tails
+retry once a second; expiry releases the ordinary exit. An old link without
+this tab's command never delays `process-exited`, task owner death or activity end.
+`session.forked` activity traces include `kind: background` and `jobId`, including
+when Diagnostics is enabled after startup.
+
+Regression evidence: `test/bg-continuation-641b.test.js`, `test/bg-continuation-639.test.js`,
+`test/bg-rekey-renderer-639.test.js`, and the handoff, panel, activity,
+sidebar and Agents suites. `/clear` and fork keep their existing ownership and
+fresh-conversation rules; metadata migration applies only to background.
 
 ## Header counters
 
@@ -614,6 +689,16 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 ## Known limits
 
+- ADR 0004 slice 2 follow-ups: the pre-spawn continuation snapshot still reads
+  the transcript before opening the PTY. It yields between one-megabyte chunks
+  but makes large resumes wait for that read. Re-keying still snapshots the
+  target synchronously on the main process, and exit-time freshness checking
+  drains the source tail synchronously. Move these scans off the main process
+  while preserving the pre-spawn freshness boundary and unambiguous identity.
+- A `/bg` the tab never saw as text (recalled with the up arrow, or completed
+  by the CLI's slash menu from a prefix) does not arm the exit hold: the
+  composer only sees keystrokes. If the daemon's job is not cached when the
+  CLI exits, the conversation falls back to a separate attach row.
 - Archiving or deleting a session that a live daemon job runs is refused by
   `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
   failing closed) before anything is detached; a folder archive (#482) that
