@@ -1,132 +1,412 @@
 'use strict';
 
-// local-transcript-activity.js: the pure factory behind the local-transcript
-// adapter's main-process signal — see .ai/contexts/session-state.md
-// (migration step 4). Properties proven here:
-//   1. A watch `filename` split that isn't exactly `<folder>/<sessionId>.jsonl`
-//      (a subagent leg, a non-.jsonl file, a non-UUID name) never resolves to a
-//      session id.
-//   2. A session id resolved from the watch event, but reported by hasPty() as
-//      already carrying a PTY in this app, is skipped — the OSC path owns it.
-//   3. A first sighting of an eligible session is always forwarded.
-//   4. A second sighting inside the 1s coalescing window is swallowed.
-//   5. Once the window has passed, the next sighting is forwarded again.
-//   6. Two distinct sessions never share coalescing state.
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createLocalTranscriptTracker, sessionIdFromWatchParts } = require('../local-transcript-activity');
 
 const UUID_A = '11111111-1111-4111-8111-111111111111';
 const UUID_B = '22222222-2222-4222-8222-222222222222';
+const parent = ['folder', `${UUID_A}.jsonl`];
+const child = ['folder', UUID_A, 'subagents', 'agent-7.jsonl'];
 
-function clock(startAt = 1000) {
-  let t = startAt;
-  return { now: () => t, advance: (ms) => { t += ms; } };
+function fixture(t, opts = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-621-'));
+  const events = [];
+  const tracker = createLocalTranscriptTracker({ projectsDir: root, ipcMinMs: 20, onActivity: e => events.push(e), ...opts });
+  const file = parts => path.join(root, ...parts);
+  function write(parts, content, mtime = 100) {
+    fs.mkdirSync(path.dirname(file(parts)), { recursive: true });
+    fs.writeFileSync(file(parts), content);
+    fs.utimesSync(file(parts), mtime, mtime);
+  }
+  t.after(() => {
+    tracker.dispose?.();
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { tracker, events, file, write };
 }
 
-test('sessionIdFromWatchParts accepts a bare top-level transcript, rejects a subagent leg and non-transcripts', () => {
-  assert.equal(sessionIdFromWatchParts(['folder-name', `${UUID_A}.jsonl`]), UUID_A);
-  assert.equal(sessionIdFromWatchParts(['folder-name', UUID_A, 'subagents', 'agent-7.jsonl']), null,
-    'a subagent leg has more than two segments — out of scope for step 4');
-  assert.equal(sessionIdFromWatchParts(['folder-name', UUID_A, 'agent-7.jsonl']), null,
-    'the legacy nested subagent layout also has more than two segments');
-  assert.equal(sessionIdFromWatchParts(['folder-name', 'sessions-index.json']), null, 'not a .jsonl file');
-  assert.equal(sessionIdFromWatchParts(['folder-name', 'not-a-uuid.jsonl']), null, 'basename is not a session id');
-  assert.equal(sessionIdFromWatchParts(['folder-name']), null, 'a bare top-level folder event, not a file');
-  assert.equal(sessionIdFromWatchParts(null), null);
+function timedFixture(t, opts = {}) {
+  let at = 1_000_000;
+  const timers = new Set();
+  const f = fixture(t, {
+    ...opts, ipcMinMs: 50, now: () => at,
+    setTimeout: (fn, ms) => { const timer = { fn, at: at + ms }; timers.add(timer); return timer; },
+    clearTimeout: timer => timers.delete(timer),
+  });
+  return { ...f, advance: async ms => {
+    at += ms;
+    for (const timer of [...timers]) {
+      if (timer.at > at) continue;
+      timers.delete(timer);
+      await timer.fn();
+    }
+  } };
+}
+
+test('watch path attribution rejects non-transcripts and nested parent paths', () => {
+  assert.equal(sessionIdFromWatchParts(parent), UUID_A);
+  for (const parts of [child, ['folder', UUID_A, 'agent-7.jsonl'], ['folder', 'sessions-index.json'], ['folder', 'bad.jsonl'], ['folder'], null]) {
+    assert.equal(sessionIdFromWatchParts(parts), null);
+  }
 });
 
-test('record() forwards the first sighting of an eligible session', () => {
-  const c = clock(5000);
-  const tracker = createLocalTranscriptTracker({ now: c.now });
-  const result = tracker.record(['folder-name', `${UUID_A}.jsonl`]);
-  assert.deepEqual(result, { sessionId: UUID_A, at: 5000 });
+test('bare paths without filesystem evidence never emit activity', async () => {
+  assert.equal(await createLocalTranscriptTracker().record(parent), null);
 });
 
-test('record() never forwards for a session that already has a PTY in this app', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: (id) => id === UUID_A });
-  assert.equal(tracker.record(['folder-name', `${UUID_A}.jsonl`]), null,
-    'the OSC path already owns a row with a live PTY');
-  assert.ok(tracker.record(['folder-name', `${UUID_B}.jsonl`]),
-    'a different session with no PTY is unaffected');
+test('startup and injected notifications after reading old parent and child stay quiet', async t => {
+  const f = fixture(t);
+  for (const parts of [parent, child]) {
+    f.write(parts, 'old transcript\n');
+    assert.equal(await f.tracker.record(parts), null, 'first sighting establishes a baseline');
+    fs.readFileSync(f.file(parts));
+    assert.equal(await f.tracker.record(parts), null, 'an unchanged read notification is not activity');
+  }
+  assert.deepEqual(f.events, [], 'no Working, unread, or subagent signal');
 });
 
-test('record() coalesces a second sighting inside the 1s window, then forwards again once it has elapsed', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now, ipcMinMs: 1000 });
-  const parts = ['folder-name', `${UUID_A}.jsonl`];
-
-  assert.ok(tracker.record(parts), 'first sighting always forwards');
-  c.advance(400);
-  assert.equal(tracker.record(parts), null, 'a sighting inside the coalescing window must not forward again');
-
-  c.advance(700); // total 1100ms since the first forward
-  const third = tracker.record(parts);
-  assert.ok(third, 'once ipcMinMs has elapsed since the last forward, the next sighting forwards again');
-  assert.equal(third.at, 1100);
+test('an old file is baselined and a later append emits once despite duplicate notifications', async t => {
+  const f = fixture(t);
+  assert.equal(await f.tracker.record(parent), null);
+  f.write(parent, 'first\n');
+  assert.equal(await f.tracker.record(parent), null);
+  fs.appendFileSync(f.file(parent), 'second\n');
+  const update = await f.tracker.record(parent);
+  assert.equal(update.sessionId, UUID_A);
+  assert.equal(await f.tracker.record(parent), null);
+  assert.equal(f.events.length, 1);
 });
 
-test('two sessions never share coalescing state', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now, ipcMinMs: 1000 });
-  assert.ok(tracker.record(['folder-name', `${UUID_A}.jsonl`]));
-  assert.ok(tracker.record(['folder-name', `${UUID_B}.jsonl`]),
-    'session B has never been seen — its own throttle window must be independent of A');
+test('a new parent or child file after tracker start emits on its first write', async t => {
+  let at = 1_000_000;
+  const f = fixture(t, { now: () => at });
+  for (const parts of [parent, child]) {
+    assert.equal(await f.tracker.record(parts), null);
+    at += 10_000;
+    f.write(parts, 'first write\n', at / 1000);
+    assert.ok(await f.tracker.record(parts), 'a fresh first write supplies activity');
+    assert.equal(await f.tracker.record(parts), null, 'duplicate notification stays quiet');
+  }
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events[0].sessionId, UUID_A);
+  assert.equal(f.events[1].parentSessionId, UUID_A);
+  assert.equal(f.events[1].agentId, '7');
 });
 
-// Subagent attribution (issue #247) — see .ai/contexts/subagent-observability.md.
-// A parent with no PTY in this app never reaches the IPC path
-// (session-transitions.js:detectSubagentTransitions() only scans
-// activeSessions), so this out-of-band signal is its only source.
-
-test('record() attributes a subagent leg (preferred layout) to its parent when the parent has no PTY', () => {
-  const c = clock(5000);
-  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: () => false });
-  const result = tracker.record(['folder-name', UUID_A, 'subagents', 'agent-7.jsonl']);
-  assert.deepEqual(result, { parentSessionId: UUID_A, agentId: '7', at: 5000, kind: 'subagent' });
+test('a file written after tracker start emits when first seen later', async t => {
+  let at = 1_000_000;
+  const f = fixture(t, { now: () => at });
+  at += 10_000;
+  f.write(parent, 'written before notification\n', at / 1000);
+  at += 60_000;
+  assert.ok(await f.tracker.record(parent));
+  assert.equal(f.events.length, 1);
 });
 
-test('record() attributes a subagent leg (legacy layout) to its parent when the parent has no PTY', () => {
-  const c = clock(5000);
-  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: () => false });
-  const result = tracker.record(['folder-name', UUID_A, 'agent-7.jsonl']);
-  assert.deepEqual(result, { parentSessionId: UUID_A, agentId: '7', at: 5000, kind: 'subagent' });
+test('a recent startup write allows filesystem clock resolution but old files stay quiet', async t => {
+  const f = fixture(t, { now: () => 1_000_000 });
+  f.write(parent, 'recent\n', 998);
+  assert.ok(await f.tracker.record(parent));
+  const old = ['folder', `${UUID_B}.jsonl`];
+  f.write(old, 'old\n', 997);
+  assert.equal(await f.tracker.record(old), null);
+  fs.readFileSync(f.file(old));
+  assert.equal(await f.tracker.record(old), null);
+  assert.equal(f.events.length, 1);
 });
 
-test('record() drops a subagent leg whose parent already has a PTY in this app', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now, hasPty: (id) => id === UUID_A });
-  assert.equal(tracker.record(['folder-name', UUID_A, 'subagents', 'agent-7.jsonl']), null,
-    'the IPC path (detectSubagentTransitions) already owns this parent');
-  assert.ok(tracker.record(['folder-name', UUID_B, 'subagents', 'agent-9.jsonl']),
-    'a different, PTY-less parent is unaffected');
+test('an empty newly created transcript stays quiet until it receives content', async t => {
+  const f = fixture(t, { now: () => 1_000_000 });
+  f.write(parent, '', 1000);
+  assert.equal(await f.tracker.record(parent), null);
+  f.write(parent, 'first\n', 1000);
+  assert.ok(await f.tracker.record(parent));
+  assert.equal(f.events.length, 1);
 });
 
-test('record() coalesces subagent attribution for the same parent independently of the parent\'s own top-level throttle', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now, ipcMinMs: 1000 });
-  const subParts = [`folder-name`, UUID_A, 'subagents', 'agent-1.jsonl'];
-
-  assert.ok(tracker.record(subParts), 'first sighting always forwards');
-  c.advance(400);
-  assert.equal(tracker.record(subParts), null, 'a sighting inside the coalescing window must not forward again');
-  // The parent's own top-level transcript signal has its own, independent throttle key.
-  assert.ok(tracker.record(['folder-name', `${UUID_A}.jsonl`]),
-    'the parent\'s own transcript signal is not throttled by the subagent leg\'s window');
-
-  c.advance(700); // total 1100ms since the subagent leg's first forward
-  const third = tracker.record(subParts);
-  assert.ok(third, 'once ipcMinMs has elapsed, the next subagent sighting forwards again');
-  assert.equal(third.at, 1100);
+test('growth with unchanged write mtime is activity', async t => {
+  const f = fixture(t);
+  f.write(parent, 'a');
+  await f.tracker.record(parent);
+  f.write(parent, 'ab');
+  assert.ok(await f.tracker.record(parent));
+  assert.equal(f.events.length, 1);
 });
 
-test('record() returns null for a top-level transcript when treated as a subagent leg (no false attribution)', () => {
-  const c = clock(0);
-  const tracker = createLocalTranscriptTracker({ now: c.now });
-  // A top-level transcript resolves via sessionIdFromWatchParts, never falls
-  // through to subagent attribution.
-  assert.ok(tracker.record(['folder-name', `${UUID_A}.jsonl`]));
+test('same-size content rewrite with advancing mtime emits once', async t => {
+  const f = fixture(t);
+  f.write(parent, 'alpha\n');
+  await f.tracker.record(parent);
+  f.write(parent, 'bravo\n', 300);
+  assert.ok(await f.tracker.record(parent));
+  assert.equal(await f.tracker.record(parent), null);
+  assert.equal(f.events.length, 1);
+});
+
+test('a same-size rewrite anywhere in the transcript emits when write mtime advances', async t => {
+  const f = fixture(t);
+  const original = 'a' + 'x'.repeat(128 * 1024);
+  f.write(parent, original);
+  await f.tracker.record(parent);
+  f.write(parent, 'b' + original.slice(1), 300);
+  assert.ok(await f.tracker.record(parent), 'write mtime must cover rewrites anywhere in the file');
+  assert.equal(f.events.length, 1);
+});
+
+test('preferred and legacy child layouts retain parent attribution and separate top-level throttle', async t => {
+  const f = fixture(t);
+  const legacy = ['folder', UUID_B, 'agent-9.jsonl'];
+  for (const parts of [parent, child, legacy]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'new\n');
+    assert.ok(await f.tracker.record(parts));
+  }
+  assert.equal(f.events[0].sessionId, UUID_A);
+  assert.equal(f.events[1].parentSessionId, UUID_A);
+  assert.equal(f.events[1].agentId, '7');
+  assert.equal(f.events[1].kind, 'subagent');
+  assert.equal(f.events[2].agentId, '9');
+});
+
+test('a live PTY owns both parent and child activity', async t => {
+  const f = fixture(t, { hasPty: id => id === UUID_A });
+  for (const parts of [parent, child]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'new\n');
+    assert.equal(await f.tracker.record(parts), null);
+  }
+  assert.deepEqual(f.events, []);
+});
+
+test('truncation, replacement and deletion rebaseline quietly, then accept new growth', async t => {
+  for (const mode of ['truncate', 'replace', 'delete']) {
+    const f = fixture(t);
+    f.write(parent, 'old history\n');
+    await f.tracker.record(parent);
+    if (mode === 'truncate') f.write(parent, 'x', 200);
+    else {
+      fs.renameSync(f.file(parent), f.file(parent) + '.old');
+      if (mode === 'delete') assert.equal(await f.tracker.record(parent), null);
+      f.write(parent, 'replacement history\n', 200);
+    }
+    assert.equal(await f.tracker.record(parent), null, `${mode} is not a turn`);
+    assert.deepEqual(f.events, []);
+    fs.appendFileSync(f.file(parent), 'new\n');
+    assert.ok(await f.tracker.record(parent), 'growth after invalidation remains detectable');
+  }
+});
+
+test('read failure invalidates the baseline without emitting or claiming completion', async t => {
+  let deny = false;
+  const f = fixture(t, { fs: { ...fs.promises, open: (...args) => {
+    if (deny) return Promise.reject(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    return fs.promises.open(...args);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'during failure\n');
+  fs.utimesSync(f.file(parent), 300, 300);
+  deny = true;
+  assert.equal(await f.tracker.record(parent), null);
+  deny = false;
+  assert.equal(await f.tracker.record(parent), null, 'recovery establishes a fresh baseline');
+  assert.deepEqual(f.events, []);
+  fs.appendFileSync(f.file(parent), 'after recovery\n');
+  assert.ok(await f.tracker.record(parent));
+});
+
+test('a final changed event inside the existing throttle window is eventually emitted once', async t => {
+  const f = timedFixture(t);
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'first\n');
+  assert.ok(await f.tracker.record(parent));
+  fs.appendFileSync(f.file(parent), 'final\n');
+  assert.equal(await f.tracker.record(parent), null);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'the final validated change must survive throttling');
+  assert.equal(await f.tracker.record(parent), null);
+});
+
+test('an append racing path verification preserves the final throttled delivery', async t => {
+  let injectWrite = false;
+  let f;
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (injectWrite) {
+      injectWrite = false;
+      fs.appendFileSync(file, 'racing append\n');
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'first\n');
+  assert.ok(await f.tracker.record(parent));
+  await f.advance(5);
+  fs.appendFileSync(f.file(parent), 'pending\n');
+  await f.tracker.record(parent);
+  await f.advance(5);
+  fs.appendFileSync(f.file(parent), 'final\n');
+  injectWrite = true;
+  await f.tracker.record(parent);
+  await f.tracker.record(parent);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'racing growth must not cancel the pending final activity');
+  assert.equal(await f.tracker.record(parent), null);
+});
+
+test('a racing first write retries without requiring another watch notification', async t => {
+  let injectWrite = false;
+  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (injectWrite) {
+      injectWrite = false;
+      fs.appendFileSync(file, 'racing append\n');
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  injectWrite = true;
+  assert.ok(await f.tracker.record(parent), 'the verification retry must observe the append');
+  assert.equal(f.events.length, 1);
+});
+
+test('invalidation cancels pending activity and PTY takeover suppresses trailing delivery', async t => {
+  for (const mode of ['truncate', 'pty']) {
+    let pty = false;
+    const f = timedFixture(t, { hasPty: () => pty });
+    f.write(parent, 'old\n');
+    await f.tracker.record(parent);
+    fs.appendFileSync(f.file(parent), 'first\n');
+    await f.tracker.record(parent);
+    fs.appendFileSync(f.file(parent), 'final\n');
+    await f.tracker.record(parent);
+    if (mode === 'truncate') {
+      f.write(parent, 'x', 300);
+      await f.tracker.record(parent);
+    } else pty = true;
+    await f.advance(50);
+    assert.equal(f.events.length, 1, `${mode} must suppress obsolete pending activity`);
+  }
+});
+
+test('metadata verification does not read transcript content', async t => {
+  const lengths = [];
+  const f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
+    const handle = await fs.promises.open(...args);
+    return {
+      stat: () => handle.stat(), close: () => handle.close(),
+      read: (...readArgs) => { lengths.push(readArgs[2]); return handle.read(...readArgs); },
+    };
+  } } });
+  f.write(parent, 'x'.repeat(256 * 1024));
+  await f.tracker.record(parent);
+  assert.deepEqual(lengths, []);
+  await f.tracker.record(parent);
+  assert.deepEqual(lengths, []);
+  fs.appendFileSync(f.file(parent), 'new\n');
+  assert.ok(await f.tracker.record(parent));
+  assert.deepEqual(lengths, []);
+});
+
+test('replacement during path verification rejects stale evidence and recovers quietly', async t => {
+  let replace = false;
+  let f;
+  f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (replace) {
+      replace = false;
+      fs.renameSync(file, file + '.old');
+      f.write(parent, 'replacement\n', 300);
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'new\n');
+  replace = true;
+  assert.equal(await f.tracker.record(parent), null);
+  assert.equal(await f.tracker.record(parent), null);
+  assert.deepEqual(f.events, []);
+  fs.appendFileSync(f.file(parent), 'fresh\n');
+  assert.ok(await f.tracker.record(parent));
+});
+
+test('two parent sessions retain independent throttle state', async t => {
+  const f = timedFixture(t);
+  for (const parts of [parent, ['folder', `${UUID_B}.jsonl`]]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'new\n');
+    assert.ok(await f.tracker.record(parts));
+  }
+  assert.equal(f.events.length, 2);
+});
+
+test('dispose cancels trailing work and prevents late asynchronous delivery', async t => {
+  const f = timedFixture(t);
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'first\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'final\n');
+  await f.tracker.record(parent);
+  f.tracker.dispose();
+  await f.advance(50);
+  assert.equal(await f.tracker.record(parent), null);
+  assert.equal(f.events.length, 1);
+});
+
+test('shrink and stat failures invalidate verification without activity', async t => {
+  for (const mode of ['shrink', 'error']) {
+    let fail = false;
+    const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+      if (fail && mode === 'error') throw Object.assign(new Error('stat failed'), { code: 'EIO' });
+      if (fail) {
+        fs.truncateSync(file, 1);
+        fs.utimesSync(file, 300, 300);
+      }
+      return fs.promises.stat(file);
+    } } });
+    f.write(parent, 'old\n');
+    await f.tracker.record(parent);
+    fs.appendFileSync(f.file(parent), 'new\n');
+    fs.utimesSync(f.file(parent), 300, 300);
+    fail = true;
+    assert.equal(await f.tracker.record(parent), null);
+    fail = false;
+    assert.equal(await f.tracker.record(parent), null);
+    assert.deepEqual(f.events, []);
+  }
+});
+
+test('dispose during a stat prevents in-flight activity from escaping', async t => {
+  let hold = false;
+  let release;
+  let reached;
+  const entered = new Promise(resolve => { reached = resolve; });
+  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    const result = await fs.promises.stat(file);
+    if (hold) {
+      reached();
+      await new Promise(resolve => { release = resolve; });
+    }
+    return result;
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  fs.appendFileSync(f.file(parent), 'new\n');
+  hold = true;
+  const work = f.tracker.record(parent);
+  await entered;
+  f.tracker.dispose();
+  release();
+  assert.equal(await work, null);
+  assert.deepEqual(f.events, []);
 });

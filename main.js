@@ -3305,7 +3305,15 @@ function sessionHasPty(sessionId) {
   }
   return false;
 }
-const localTranscriptTracker = createLocalTranscriptTracker({ hasPty: sessionHasPty });
+const localTranscriptTracker = createLocalTranscriptTracker({
+  hasPty: sessionHasPty,
+  projectsDir: PROJECTS_DIR,
+  onActivity: (activity) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('session-transcript-activity', activity);
+    }
+  },
+});
 
 // see .ai/contexts/cli-session-state.md ("Live elsewhere")
 ipcMain.handle('session-live-elsewhere', (_event, sessionId) => cliSessionState.liveElsewhere(sessionId, sessionHasPty, ptyPids));
@@ -3423,10 +3431,7 @@ function startProjectsWatcher() {
         const rel = parts.slice(1).join(path.sep);
         recordChange(folder, rel);
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
-        const activity = localTranscriptTracker.record(parts);
-        if (activity && mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('session-transcript-activity', activity);
-        }
+        localTranscriptTracker.record(parts);
       } else {
         return;
       }
@@ -3695,6 +3700,7 @@ app.on('before-quit', (event) => {
   shutdownAllMcp();
 
   // Close filesystem watcher
+  localTranscriptTracker.dispose();
   if (projectsWatcher) {
     projectsWatcher.close();
     projectsWatcher = null;

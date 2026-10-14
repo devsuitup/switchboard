@@ -144,6 +144,23 @@ once a PTY takes the row over, so `.has()` alone stays correct.
 
 ## Attribution across sources (issue #247)
 
+Since #621, the local tracker verifies each child transcript's identity,
+size and write mtime before attribution can emit activity. Initial old files
+and unchanged read notifications stay quiet. A nonempty first sighting whose
+write mtime is at or after tracker creation minus the 2 s clock/filesystem
+resolution allowance supplies activity, including a new child's first write.
+Later growth or advancing write mtime must pass asynchronous handle/path
+metadata verification, without a content read. Monotonic writes racing the
+check retain the baseline and pending delivery and request a dirty retry.
+Replacement, truncation and open/stat failures invalidate activity without
+a spawn or completion. Baselines are pruned on errors and on `dispose()`;
+their cache lifetime and eviction remain owned by #622.
+The final validated child update within the existing parent throttle window
+is delivered after reverification. Parent-key throttling still merges distinct
+children here; #622 owns the identity-preserving change. See
+`.ai/contexts/session-state.md`, "Verified watch notifications", for the
+verification bounds and write-metadata evidence limits.
+
 `.has-busy-agents` used to light only for a parent reachable from
 `activeSessions` — the IPC pair `subagent-spawned`/`subagent-completed`
 emitted by `detectSubagentTransitions()` (see above), which only scans
