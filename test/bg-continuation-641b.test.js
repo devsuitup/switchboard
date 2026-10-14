@@ -167,17 +167,85 @@ test('an old continuation exits immediately through shipped PTY wiring', t => {
   assert.ok(ended.includes(OLD));
 });
 
-test('a fresh link without an existing bg job does not hold an unrelated exit', t => {
+test('a fresh authorized link holds the shipped PTY exit until late daemon proof rekeys the tab', t => {
   const h = fixture(t);
-  h.bg(); h.append(); h.setProof(null); h.entry.exited = true;
-  assert.equal(transitions.holdContinuationExit(OLD, h.entry, () => {}), false);
-  assert.equal(h.timers.length, 0);
+  h.bg(); h.append(); h.setProof(null); h.setJobExists(false);
+  const messages = [], ended = [], dead = [];
+  let exit;
+  const context = vm.createContext({ TRACE: { on: false }, ptyGenerationCounter: 0, ptyExitSignalName: () => null,
+    shutdownMcpServer() {}, mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => messages.push(args) } },
+    appQuitting: false, activeSessions: h.activeSessions, exitedRemoteSessionIds: new Set(),
+    activityReporter: { sessionEnded: id => ended.push(id) }, taskRecords: { ownerDied: id => dead.push(id) },
+    sessionCache: { releaseLiveSession: () => false }, notifyRendererProjectsChanged() {}, log: { warn() {} },
+    holdBackgroundExit: () => false, sessionTransitions: transitions });
+  const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
+  wireSessionPty(h.entry, OLD, { onData() {}, onExit: fn => { exit = fn; } });
+  const environment = { shell: '/saved/shell' };
+  h.entry.environment = environment;
+  const rekeyed = [];
+  h.setReceiver((from, to) => rekeyed.push({ from, to, session: h.activeSessions.get(to), environment: h.activeSessions.get(to)?.environment }));
+  exit({ exitCode: 0 });
+  assert.equal(h.activeSessions.get(OLD), h.entry);
+  assert.equal(messages.length, 0);
+  assert.deepEqual(dead, []);
+  assert.deepEqual(ended, []);
+  assert.equal(h.timers.find(timer => timer.ms === 15000)?.ms, 15000);
+  h.setProof({ sessionId: HEAD, kind: 'bg', jobId: '1234abcd' });
+  h.detect();
+  assert.equal(h.activeSessions.has(HEAD), false);
+  h.setJobExists(true);
+  transitions.detectPendingBackgroundContinuations();
+  assert.equal(h.activeSessions.has(OLD), false);
+  assert.deepEqual(rekeyed, [{ from: OLD, to: HEAD, session: h.entry, environment }]);
+  assert.equal(h.entry.environment, environment);
+  assert.equal(h.entry._continuationExit, undefined);
+  assert.equal(messages.length, 0);
+  assert.deepEqual(dead, []);
 });
 
-test('a bg descriptor alone cannot delay exit when its job does not exist', t => {
+for (const [name, input] of [
+  ['optional arguments', '/bg task-name\r'],
+  ['slash menu completion and optional arguments', '/bg\t task-name\r'],
+]) {
+  test(`a submitted /bg with ${name} authorizes this tab's fresh continuation`, t => {
+    const h = fixture(t);
+    handleTerminalInput(h.activeSessions, OLD, input, Date.now());
+    assert.equal(h.entry.backgroundCommandSource, OLD);
+    h.append(); h.detect();
+    assert.equal(h.activeSessions.get(HEAD), h.entry);
+  });
+}
+
+for (const input of ['/bg-other\r', 'please run /bg\r', '/bg/other\r', '/bg\x7f\r']) {
+  test(`a non-background submission ${JSON.stringify(input)} cannot authorize a handoff`, t => {
+    const h = fixture(t);
+    handleTerminalInput(h.activeSessions, OLD, input, Date.now());
+    h.append(); h.detect();
+    assert.equal(h.activeSessions.get(OLD), h.entry);
+    assert.equal(h.events.length, 0);
+  });
+}
+
+test('an authorized fresh link without a cached job holds for at most fifteen seconds', t => {
   const h = fixture(t);
   h.bg(); h.append(); h.setJobExists(false); h.entry.exited = true;
-  assert.equal(transitions.holdContinuationExit(OLD, h.entry, () => {}), false);
+  const finished = [];
+  assert.equal(transitions.holdContinuationExit(OLD, h.entry, suppress => finished.push(suppress)), true);
+  assert.equal(h.activeSessions.has(HEAD), false);
+  assert.deepEqual(finished, []);
+  h.timers.find(timer => timer.ms === 15000).fn();
+  assert.deepEqual(finished, [false]);
+  assert.equal(h.entry._continuationExit, undefined);
+});
+
+test('a live typed background continuation waits for the job as well as the descriptor before rekeying', t => {
+  const h = fixture(t);
+  h.bg(); h.append(); h.setJobExists(false); h.detect();
+  assert.equal(h.activeSessions.get(OLD), h.entry);
+  assert.equal(h.events.length, 0);
+  h.setJobExists(true);
+  transitions.detectPendingBackgroundContinuations();
+  assert.equal(h.activeSessions.get(HEAD), h.entry);
 });
 
 test('held partial fresh tails use bounded recheck ticks', t => {
@@ -264,6 +332,40 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   assert.equal(sidebar.document.querySelector(`[data-session-id="${HEAD}"] .bg-badge`)?.textContent, 'bg');
   assert.match(sidebar.document.querySelector(`[data-session-id="${HEAD}"]`).textContent, /Original/);
   assert.doesNotMatch(sidebar.document.body.textContent, /Original \(2\)/);
+});
+
+test('metadata revision migration uses an ordered index without invalidating cached sessions', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641d-revisions-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = spawnSync(require('electron'), ['-e', `
+    const assert = require('node:assert/strict'), db = require('./db');
+    db.setName('old', 'User rename'); db.setName('head', 'Indexed title', 'transcript');
+    db.upsertCachedSessions([{ sessionId: 'cached', folder: 'project', summary: 'Keep me' }]);
+    db.setFolderMeta('project', '/project', 123);
+    db.setInitialScanComplete();
+    db.closeDb();
+    const sql = new (require('better-sqlite3'))(require('node:path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+    for (const index of sql.prepare('PRAGMA index_list(session_meta_fields)').all()) {
+      if (index.origin === 'c') sql.exec('DROP INDEX "' + index.name + '"');
+    }
+    sql.prepare("UPDATE settings SET value = '9' WHERE key = 'db_version'").run();
+    sql.close();
+    delete require.cache[require.resolve('./db')];
+    const reopened = require('./db');
+    const inspect = new (require('better-sqlite3'))(reopened.DB_PATH);
+    const plan = inspect.prepare('EXPLAIN QUERY PLAN SELECT MAX(revision) FROM session_meta_fields').all();
+    assert.match(plan.map(row => row.detail).join(' '), /USING COVERING INDEX/);
+    assert.equal(reopened.getCachedSession('cached').summary, 'Keep me');
+    assert.equal(reopened.getFolderMeta('project').indexMtimeMs, 123);
+    assert.equal(reopened.isInitialScanComplete(), true);
+    reopened.setName('old', 'Newest rename');
+    const revisions = inspect.prepare("SELECT sessionId, revision FROM session_meta_fields WHERE field = 'name'").all();
+    assert.ok(revisions.find(row => row.sessionId === 'old').revision > revisions.find(row => row.sessionId === 'head').revision);
+    reopened.rekeySessionMeta('old', 'head');
+    assert.equal(reopened.getMeta('head').name, 'Newest rename');
+    inspect.close(); reopened.closeDb();
+  `], { cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: root } });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('SQLite continuation copies metadata, avoids title names and keeps the newest value per field', t => {

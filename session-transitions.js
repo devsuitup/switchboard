@@ -495,7 +495,7 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
     const newId = fresh.ids[0];
     if (newId !== sourceId && !isLive(newId)) {
       const background = getBackgroundTarget(newId);
-      if (background?.kind === 'bg' && background.jobId) {
+      if (background?.kind === 'bg' && background.jobId && backgroundJobExists(background.jobId)) {
         rekeySession(sessionId, newId, session, currentFiles, 'background', background);
         return true;
       }
@@ -541,8 +541,6 @@ function holdContinuationExit(sessionId, session, finish) {
   }
   catch { return false; }
   if (!index || index.unresolved || index.ids.length !== 1 || index.ids[0] === sourceId) return false;
-  const background = getBackgroundTarget(index.ids[0]);
-  if (background?.kind !== 'bg' || !background.jobId || !backgroundJobExists(background.jobId)) return false;
   const timer = setTimeoutFn(() => {
     delete session._continuationExit;
     finish(false);

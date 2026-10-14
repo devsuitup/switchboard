@@ -283,6 +283,9 @@ const migrations = [
       })();
     } catch {}
   },
+  (db) => {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
+  },
 ];
 
 const currentDbVersion = (() => {

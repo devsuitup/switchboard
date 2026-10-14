@@ -105,8 +105,9 @@ status glyph policy from the indicators audit.
 ### Background continuations (#639)
 
 A complete, unambiguous new `continued-in` record in the interactive conversation
-plus a live `kind: bg` descriptor or a working/blocked job identifies a
-background continuation. Before spawning, the tab snapshots continuation ids
+plus a working/blocked cached job identifies a background continuation; any
+descriptor for the target must agree on a single `kind: bg` job. Before
+spawning, the tab snapshots continuation ids
 and the transcript byte offset. Snapshots before spawn yield between
 one-megabyte chunks to keep the event loop available for large resumed
 conversations. Only a target absent from that snapshot, in the appended tail,
@@ -161,11 +162,13 @@ its physical `panel:<old>` PTY id stays unchanged until that shell closes.
 The background payload crosses `preload.js` and attaches in the preserved
 terminal. `open-terminal` replaces only the proven handoff's interactive PTY,
 validates the matching job id before doing so, and spawns `claude attach`.
-The button confirms/re-keys before releasing a held physical exit. A typed
-`/bg` with one fresh continuation and an existing live bg job retains a
-just-exited source for at most 15 seconds while its tail completes. Rechecks
-wait one second; expiry releases the ordinary exit. Old links and absent jobs
-never delay `process-exited`, task owner death or activity end.
+The button confirms/re-keys before releasing a held physical exit. A submitted
+`/bg` (with optional arguments) and one fresh continuation retain a just-exited
+source for at most 15 seconds, even before the jobs watcher sees the daemon.
+The re-key requires both a background target and a working/blocked cached job.
+Job and descriptor notifications reconsider the held source. Partial tails
+retry once a second; expiry releases the ordinary exit. An old link without
+this tab's command never delays `process-exited`, task owner death or activity end.
 `session.forked` activity traces include `kind: background` and `jobId`, including
 when Diagnostics is enabled after startup.
 
@@ -686,6 +689,16 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 ## Known limits
 
+- ADR 0004 slice 2 follow-ups: the pre-spawn continuation snapshot still reads
+  the transcript before opening the PTY. It yields between one-megabyte chunks
+  but makes large resumes wait for that read. Re-keying still snapshots the
+  target synchronously on the main process, and exit-time freshness checking
+  drains the source tail synchronously. Move these scans off the main process
+  while preserving the pre-spawn freshness boundary and unambiguous identity.
+- A `/bg` the tab never saw as text (recalled with the up arrow, or completed
+  by the CLI's slash menu from a prefix) does not arm the exit hold: the
+  composer only sees keystrokes. If the daemon's job is not cached when the
+  CLI exits, the conversation falls back to a separate attach row.
 - Archiving or deleting a session that a live daemon job runs is refused by
   `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
   failing closed) before anything is detached; a folder archive (#482) that

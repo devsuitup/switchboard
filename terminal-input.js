@@ -20,7 +20,7 @@ function handleTerminalInput(activeSessions, sessionId, data, now) {
         if (!part) continue;
         if (part === '\x03' && !session.composerState.inPaste) session.backgroundCommandSource = null;
         if ((part === '\r' || part === '\n') && !session.composerState.inPaste && !session.composerState.partial && session.composerState.text.trim()) {
-          session.backgroundCommandSource = session.composerState.text.trim() === '/bg' ? session.realSessionId || sessionId : null;
+          session.backgroundCommandSource = /^\/bg(?:\s|$)/.test(session.composerState.text.trim()) ? session.realSessionId || sessionId : null;
           session.backgroundCommandOutput = '';
         }
         noteUserInput(session.composerState, part, now);
