@@ -67,9 +67,10 @@ function rowIds(doc) {
   return [...doc.getElementById('terminal-header-session').children].map((e) => e.id);
 }
 
-test('the row is declared once: Refresh, Stop, then indicators', () => {
+test('the row is declared once: Refresh, Send to background, Stop, then indicators', () => {
   assert.deepEqual(HEADER_CONTROLS.map((c) => [c.id, c.kind]), [
     ['terminal-refresh-btn', 'action'],
+    ['terminal-bg-btn', 'action'],
     ['terminal-stop-btn', 'action'],
     ['terminal-header-sandbox', 'indicator'],
     ['ide-emulation-indicator', 'indicator'],
@@ -85,7 +86,7 @@ test('index.html carries its static controls in the declared order, marked with 
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
+  assert.deepEqual(staticIds, ['terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -95,8 +96,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['ide-emulation-indicator', 'terminal-stop-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
-    ['terminal-header-sandbox', 'ide-emulation-indicator', 'terminal-stop-btn', 'terminal-refresh-btn'],
+    ['ide-emulation-indicator', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
+    ['terminal-header-sandbox', 'ide-emulation-indicator', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {

@@ -1746,6 +1746,18 @@ function showSessionContextMenu(event, sessionId) {
     requestTerminalRefresh(openId);
   };
   menu.appendChild(button);
+  const bgButton = document.createElement('button');
+  bgButton.className = 'popover-option session-bg-btn';
+  bgButton.setAttribute('role', 'menuitem');
+  bgButton.textContent = 'Send to background';
+  const reason = backgroundActionReason(openId);
+  bgButton.disabled = !!reason;
+  if (reason) bgButton.title = reason;
+  bgButton.onclick = () => {
+    closeSessionContextMenu();
+    sendSessionToBackground(openId);
+  };
+  menu.appendChild(bgButton);
   document.body.appendChild(menu);
   menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - SESSION_MENU_EDGE_MARGIN)) + 'px';
   menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - SESSION_MENU_EDGE_MARGIN)) + 'px';

@@ -116,6 +116,10 @@ The FIFO wait remains outside `timeout_ms`; descriptor lookup, tab mutex and
 pre-text ownership waits consume the remaining command/chain budget. Different
 tabs progress independently. The mutex remains held through verification and
 result production, and canceled waiters cannot erase a still-held queue.
+The FIFO implementation is shared through `tab-input-lock.js` with the Send
+to background action. That action refuses while automation owns the tab;
+new triggers wait behind a pending handoff and revalidate their pinned binding
+after acquiring it. See bg-agents.md, "Send to background".
 Ordinary single-command verification retains its existing verification windows;
 compact and chained steps retain their existing deadlines.
 

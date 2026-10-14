@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('api', {
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  sendSessionToBackground: (id) => ipcRenderer.invoke('send-session-to-background', id),
+  onBgHandoffNotice: (callback) => ipcRenderer.on('bg-handoff-notice', (_event, sessionId, message) => callback(sessionId, message)),
   // see .ai/contexts/bg-agents.md
   getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),
   bgAgentVerb: (verb, id) => ipcRenderer.invoke('bg-agent-verb', verb, id),

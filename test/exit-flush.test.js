@@ -211,7 +211,7 @@ test('a not-started entry holding the saved active marker keeps it over a reatta
 test('main stops reporting session exits once the quit starts killing them', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   const onExit = main.slice(main.indexOf('ptyProcess.onExit('), main.indexOf('\n  });', main.indexOf('ptyProcess.onExit(')));
-  assert.match(onExit, /if \(mainWindow && !mainWindow\.isDestroyed\(\) && !appQuitting\) \{\n\s*mainWindow\.webContents\.send\('process-exited'/);
+  assert.match(onExit, /if \(!suppress && mainWindow && !mainWindow\.isDestroyed\(\) && !appQuitting\) \{\n\s*mainWindow\.webContents\.send\('process-exited'/);
   const quitStart = main.indexOf("app.on('before-quit'");
   const quit = main.slice(quitStart, main.indexOf('\n});', quitStart));
   const flag = quit.indexOf('appQuitting = true;');
