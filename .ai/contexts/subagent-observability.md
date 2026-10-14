@@ -298,8 +298,9 @@ remote watcher callbacks through IPC with controlled timers, including a
 local burst that settles after exhausting both immediate attempts.
 `test/dom-sidebar-remote-subagent-attribution.test.js` routes each real
 tracker's output into the renderer's shared `activeSubagentsByParent` registry
-and removes all three agents independently through completion IPC. Shared
-lifecycle normalization remains the subsequent #624 work.
+and releases all three agents independently by their activity source. IPC
+completion preserves tracker-only evidence and removes only overlapping IPC
+contributions. Shared lifecycle normalization remains the subsequent #624 work.
 
 On the renderer side, each adapter's `on*ActivityEvent` branches on
 `payload.kind === 'subagent'` and applies `subagentSpawned` to the **parent's

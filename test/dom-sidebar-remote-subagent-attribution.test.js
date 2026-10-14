@@ -114,11 +114,12 @@ test('a local-transcript parent (no PTY in this app) gets has-busy-agents from a
 });
 
 for (const source of ['local', 'remote']) {
-  test(`${source} tracker delivers all three identities into the shared registry and completion removes each separately`, async t => {
+  test(`${source} tracker delivers all three identities into the shared registry and source-scoped completion removes each separately`, async t => {
     const ctx = setupSidebarDom();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-delivery-622-'));
     const parentSessionId = '11111111-1111-4111-8111-111111111111';
     const agentIds = ['A', 'B', 'C'];
+    const activitySource = source === 'local' ? 'local-transcript' : 'remote-watch';
     const remote = source === 'remote' ? { remoteAlias: 'vps' } : {};
     const project = makeSampleProject({ ...remote, sessions: [
       { sessionId: parentSessionId, ...remote, modified: '2026-05-22T10:00:00Z' },
@@ -158,8 +159,17 @@ for (const source of ['local', 'remote']) {
     const active = () => Array.from(ctx.read(`activeSubagentsByParent.get('${parentSessionId}')?.keys() || []`));
     assert.deepEqual(active(), agentIds);
     for (let i = 0; i < agentIds.length; i++) {
-      ctx.emitSubagentCompleted({ parentSessionId, agentId: agentIds[i] });
-      assert.deepEqual(active(), agentIds.slice(i + 1), 'completion is independent of heartbeat throttle');
+      const agentId = agentIds[i];
+      const sources = () => Array.from(ctx.read(`activeSubagentsByParent.get('${parentSessionId}')?.get('${agentId}')?.keys() || []`));
+      ctx.emitSubagentCompleted({ parentSessionId, agentId });
+      assert.deepEqual(active(), agentIds.slice(i), 'IPC completion preserves tracker-only identities');
+      ctx.emitSubagentSpawned({ parentSessionId, agentId });
+      assert.deepEqual(sources(), [activitySource, 'local-ipc']);
+      ctx.emitSubagentCompleted({ parentSessionId, agentId });
+      assert.deepEqual(sources(), [activitySource], 'IPC completion removes only its own contribution');
+      assert.deepEqual(active(), agentIds.slice(i), 'tracker evidence survives overlapping IPC completion');
+      ctx.window.releaseSubagentSource(parentSessionId, agentId, activitySource, 'test');
+      assert.deepEqual(active(), agentIds.slice(i + 1), 'source release removes only its agent, independently of heartbeat throttle');
     }
   });
 }
