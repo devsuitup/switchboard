@@ -204,10 +204,7 @@ function subagentTypeColor(type) {
 }
 
 // --- Live subagent tracking — see .ai/contexts/subagent-observability.md ---
-// parentSessionId → Map<agentId, lastSeenAtMs>. A spawn — real or _bootstrap —
-// adds an agent; a _heartbeat only refreshes one already tracked. The TTL below
-// then evicts agents that went silent without evicting one that merely runs
-// longer than a minute.
+// parentSessionId → Map<agentId, Map<source, lastSeenAtMs>>.
 const activeSubagentsByParent = new Map();
 
 function isSubagentActive(parentSessionId, agentId) {
@@ -374,14 +371,16 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
       const { parentSessionId, agentId, _heartbeat } = payload || {};
       if (!parentSessionId || !agentId) return;
       const map = activeSubagentsByParent.get(parentSessionId);
-      const source = openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc';
-      // A heartbeat means "still alive", never "started": it must not create
-      // an entry for an agent we are not tracking.
-      if (_heartbeat && !map?.get(agentId)?.has(source)) {
+      const sources = _heartbeat
+        ? ['local-ipc', 'attached-ipc'].filter(source => map?.get(agentId)?.has(source))
+        : [openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc'];
+      if (!sources.length) {
         if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'ignore', agentId, heartbeat: true, applied: false, reason: 'heartbeat-for-untracked-agent', fn: 'onSubagentSpawned' });
         return;
       }
-      noteSubagentActivity(parentSessionId, agentId, source, { bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat });
+      for (const source of sources) {
+        noteSubagentActivity(parentSessionId, agentId, source, { bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat });
+      }
     });
   }
 
@@ -389,8 +388,8 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
     window.api.onSubagentCompleted((payload) => {
       const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
-      const source = openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc';
-      releaseSubagentSource(parentSessionId, agentId, source, 'ipc');
+      releaseSubagentSource(parentSessionId, agentId, 'local-ipc', 'ipc');
+      releaseSubagentSource(parentSessionId, agentId, 'attached-ipc', 'ipc');
     });
   }
 })();

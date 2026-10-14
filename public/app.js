@@ -1238,6 +1238,11 @@ function updateRunningIndicators() {
       if (sessionMap.get(sid)?.remoteAlias || sessionItemEl(sid)?.dataset.remoteAlias) continue;
       dropLocalPtySession(sid, 'pty-gone');
     }
+    for (const sid of activePtyIds) {
+      if (previousPtyIds.has(sid)) continue;
+      if (sessionMap.get(sid)?.remoteAlias || sessionItemEl(sid)?.dataset.remoteAlias) continue;
+      localTranscriptPtyTakeover(sid);
+    }
     // Full sidebar DOM scan: only when the set of running sessions changed.
     // Each call hits every .session-item and every .slug-group in the sidebar
     // which can be expensive on large projects; skip when nothing moved.
@@ -1251,12 +1256,6 @@ function updateRunningIndicators() {
       item.classList.toggle('has-running-pty', running);
       if (item.dataset.remoteAlias) {
         for (const sid of ids) setRemoteAttached(sid, activePtyIds.has(sid));
-      }
-      // local-pty takes over a row the user just opened — see .ai/contexts/session-state.md
-      if (running && !item.dataset.remoteAlias) {
-        for (const sid of ids) {
-          if (activePtyIds.has(sid) && !previousPtyIds.has(sid)) localTranscriptPtyTakeover(sid);
-        }
       }
       const icon = item.querySelector('.session-icon');
       if (icon) {

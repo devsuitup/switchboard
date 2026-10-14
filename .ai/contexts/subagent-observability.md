@@ -167,22 +167,27 @@ verification bounds and write-metadata evidence limits.
 An agent remains tracked while at least one contribution exists. The existing
 60s TTL expires each source separately; the timer targets the earliest source
 deadline. IPC from a daemon attach is tagged `attached-ipc` at ingestion;
-ordinary owned PTY IPC is `local-ipc`. IPC heartbeats refresh only an existing
-contribution from that IPC source, and IPC completion removes only that
-contribution. A released IPC source
+ordinary owned PTY IPC is `local-ipc`. Both IPC sources belong to the same
+main-process watcher: heartbeats refresh whichever IPC contributions already
+exist, even if the open entry has changed to an attach or disappeared, and
+completion releases both `local-ipc` and `attached-ipc`. A released IPC source
 cannot be resurrected by a heartbeat while another source still tracks the agent.
 
 `updateRunningIndicators` compares the previous and current PTY sets, cleaning
 only ids that were attached and have disappeared, independently of whether
 their row is rendered. An unrelated tab change does not call the cleanup path
 for an external row or an unattached member of a merged row. Transcript takeover
-also runs only for newly attached members. Row ownership uses the existing
+also runs only for newly attached members, outside the DOM scan so filtered
+or not-yet-rendered rows receive it. Row ownership uses the existing
 `rowSessionIds` and `sessionItemEl` helpers; it adds no conversation-head selector.
 
 `dropLocalPtySession` removes `local-ipc` evidence for an ordinary owned PTY,
 then purges only its adapter state. For a daemon attach (`openSessions.attach`),
 the transport ending does not clear `attached-ipc` agents, even after terminal
-teardown has removed the open entry. SSH detach retains the remote
+teardown has removed the open entry. After the attach tab closes, these agents
+stay visible for up to a minute, bounded by the last IPC sighting's 60s TTL;
+no ongoing job-lifecycle source owns them yet. The job-lifecycle source planned
+in #624 (D4, CLI task records) will own that evidence. SSH detach retains the remote
 adapter's existing handoff. A confirmed remote stop still uses the explicit
 all-source `clearActiveSubagentsFor` path. Purge repaints from surviving
 transcript/remote state and task evidence, without deleting another adapter's

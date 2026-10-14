@@ -66,14 +66,71 @@ test('releasing X removes its IPC contribution while preserving the same agent f
   assert.equal(h.sessionBusyState.has('X'), false, 'the PTY adapter itself is purged');
 });
 
-test('an IPC completion preserves overlapping transcript and job evidence for the same agent', t => {
+test('an IPC completion preserves overlapping transcript and remote-watch evidence for the same agent', t => {
   const h = setup(t);
   h.transcript('X');
-  h.window.noteSubagentActivity('X', 'agent', 'job-state');
+  h.window.noteSubagentActivity('X', 'agent', 'remote-watch');
   h.ipc('X');
   h.emitSubagentCompleted({ parentSessionId: 'X', agentId: 'agent' });
   assert.ok(h.tracked('X'));
   assert.ok(h.row('X').classList.contains('has-busy-agents'));
+});
+
+for (const { source, entryAfterSpawn } of [
+  { source: 'local', entryAfterSpawn: 'attached' },
+  { source: 'local', entryAfterSpawn: 'removed' },
+  { source: 'attached', entryAfterSpawn: 'removed' },
+]) {
+  test(`a ${source} IPC heartbeat survives when the open entry is ${entryAfterSpawn}, then completion clears it`, t => {
+    const h = setup(t);
+    const originalNow = h.window.Date.now;
+    const now = originalNow();
+    t.after(() => { h.window.Date.now = originalNow; });
+    h.window.Date.now = () => now;
+    h.window.openSessions.set('X', { attach: source === 'attached' });
+    h.ipc('X');
+    if (entryAfterSpawn === 'attached') h.window.openSessions.get('X').attach = true;
+    else h.window.openSessions.delete('X');
+    h.window.Date.now = () => now + 50000;
+    h.emitSubagentSpawned({ parentSessionId: 'X', agentId: 'agent', _heartbeat: true });
+    h.window.Date.now = () => now + 61000;
+    h.window.runSubagentTtlTick();
+    assert.ok(h.tracked('X'), 'the watcher heartbeat keeps the agent alive beyond its spawn TTL');
+    assert.ok(h.row('X').classList.contains('has-busy-agents'));
+    h.emitSubagentCompleted({ parentSessionId: 'X', agentId: 'agent' });
+    assert.equal(h.tracked('X'), false, 'watcher completion clears the original IPC contribution');
+    assert.equal(h.row('X').classList.contains('has-busy-agents'), false);
+  });
+}
+
+test('watcher completion releases both IPC sources and preserves transcript evidence', t => {
+  const h = setup(t);
+  h.transcript('X');
+  h.ipc('X');
+  h.window.openSessions.set('X', { attach: true });
+  h.ipc('X');
+  h.emitSubagentCompleted({ parentSessionId: 'X', agentId: 'agent' });
+  assert.ok(h.tracked('X'), 'the independent transcript contribution remains');
+  h.window.clearActiveSubagentsFor('X', 'local-transcript');
+  assert.equal(h.tracked('X'), false, 'neither IPC source survives completion');
+});
+
+test('a new PTY takes over transcript state before its row is rendered', t => {
+  const h = setup(t);
+  h.emitSessionTranscriptActivity({ sessionId: 'X', at: Date.now() });
+  h.transcript('X');
+  const row = h.row('X');
+  row.remove();
+  h.refresh(['X']);
+  assert.equal(h.read("localTranscriptStates.has('X')"), false, 'PTY ownership changes without a rendered row');
+  assert.equal(h.read("localTranscriptDecayTimers.has('X')"), false);
+  assert.equal(h.read("localTranscriptAgentsDecayTimers.has('X')"), false);
+  h.document.body.append(row);
+  h.refresh(['X']);
+  h.setActivity('X', false, 'pty-idle', { armReady: false });
+  h.window.decayLocalTranscriptBusy('X');
+  h.window.decayLocalTranscriptAgentsBusy('X');
+  assert.equal(row.classList.contains('cli-busy'), false, 'a late transcript decay cannot override PTY idle');
 });
 
 test('a confirmed X process exit clears X IPC agents but preserves unrelated external and Y activity', t => {
