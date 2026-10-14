@@ -18,8 +18,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - Refresh screen holds the temporary resize longer so the running CLI redraws a garbled screen, and the replay of a hidden or reattached tab no longer answers stale terminal queries. (#603)
 - Opening a compacted conversation that is not open now resumes its latest part, not the transcript from before the compaction. When both parts have open tabs, clicking the conversation shows the latest part's tab. (#564)
-- Sidebar reloads no longer hold up terminal typing while checking session files and assembling the project list. (#616)
-- The sidebar project list is built outside the main process and loaded once per reload. (#616)
 - The sidebar project list reloads without blocking the window. (#616)
 - On Windows, opening a project with different letter case no longer makes its scheduled tasks run twice. Existing duplicate registrations are cleaned up automatically. (#607)
 - Quitting while startup is restoring sessions no longer opens an extra new session on the next start or forgets a conversation being reattached in the background. (#550)
