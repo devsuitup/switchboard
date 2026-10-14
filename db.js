@@ -557,6 +557,11 @@ function getAllCached() {
   return stmts.cacheGetAll.all();
 }
 
+const projectsRevisionQuery = db.prepare('SELECT total_changes() AS changes');
+function getProjectsRevision() {
+  return `${projectsRevisionQuery.get().changes}:${db.pragma('data_version', { simple: true })}`;
+}
+
 const upsertCachedSessionsBatch = db.transaction((sessions) => {
   for (const s of sessions) {
     stmts.cacheUpsert.run(
@@ -940,4 +945,5 @@ module.exports = {
   // Exported so main.js can pass the resolved path to the search-query worker
   // without re-deriving the SWITCHBOARD_DATA_DIR logic in a second place.
   DB_PATH,
+  getProjectsRevision,
 };

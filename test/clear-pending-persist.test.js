@@ -51,7 +51,7 @@ function setup() {
     RESTORE_STAGGER_MS: 0,
   });
   window.api = {
-    getProjects: async (showArchived) => JSON.parse(JSON.stringify(showArchived ? [...projects, ...archived] : projects)),
+    getProjects: async () => JSON.parse(JSON.stringify({ defaultProjects: projects, allProjects: [...projects, ...archived] })),
     getActiveTerminals: async () => [],
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
     setSetting: async (key, value) => { settings[key] = JSON.parse(JSON.stringify(value)); },
@@ -99,6 +99,7 @@ test('after /clear, the new id has no transcript yet: it is saved as a fresh ses
     assert.ok(h.window.pendingSessions.has('new-id'), 'the cleared session is a pending row');
     await h.persistWorkingSet();
     assert.deepEqual(h.saved(), [{ sessionId: 'new-id', projectPath: '/srv/app', active: true, fresh: true }]);
+    await new Promise(resolve => setImmediate(resolve));
   } finally { h.destroy(); }
 });
 
@@ -210,6 +211,7 @@ test('a fork re-key adds no pending row and is never saved as fresh', async () =
     assert.ok(!h.window.pendingSessions.has('forked'));
     await h.persistWorkingSet();
     assert.deepEqual(h.saved(), [{ sessionId: 'forked', projectPath: '/srv/app', active: true }]);
+    await new Promise(resolve => setImmediate(resolve));
   } finally { h.destroy(); }
 });
 

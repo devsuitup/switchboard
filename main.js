@@ -1,5 +1,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
+const { performance } = require('node:perf_hooks');
+const { createMainLoopMonitor } = require('./main-loop-monitor');
 const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -162,7 +164,7 @@ const {
   isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
-  DB_PATH,
+  DB_PATH, getProjectsRevision,
 } = require('./db');
 
 // see docs/changelog.md ("What's new in the app")
@@ -179,6 +181,7 @@ activityTrace.setEnabled(
 if (TRACE.on) {
   log.info(`[activity-trace] enabled → ${activityTrace.currentFile() || '(failed to open)'}`);
 }
+const mainLoopMonitor = createMainLoopMonitor({ enabled: () => TRACE.on, trace });
 
 // see .ai/contexts/activitywatch.md
 const activityWatchClient = createActivityWatchClient({ fetchFn: fetch, hostname: os.hostname(), log });
@@ -494,9 +497,31 @@ sessionCache.init({
     isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex,
   },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
+const { readSessionFile, readFolderFromFilesystem, refreshFolder,
         buildProjectsFromCache, backfillEntrypoints, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
+// see .ai/contexts/session-cache.md ("Projects query worker")
+const { createProjectsWorkerClient } = require('./projects-worker-client');
+let projectsReconciledAt = 0;
+function projectsSnapshot() {
+  const state = {
+    activeSessions: [...activeSessions].map(([id, s]) => [id, {
+      exited: !!s.exited, isPlainTerminal: !!s.isPlainTerminal, projectPath: s.projectPath,
+      _openedAt: s._openedAt, panelFor: s.panelFor,
+    }]),
+    remoteRoots: [...sessionCache.getRemoteRoots()],
+  };
+  return { ...state, version: getProjectsRevision() + JSON.stringify(state) };
+}
+const projectsClient = createProjectsWorkerClient({
+  workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
+  snapshot: projectsSnapshot,
+  apply: result => {
+    sessionCache.applyProjectsWorkerEffects(result);
+    if (result.reconciled) projectsReconciledAt = Date.now();
+  },
+});
+
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
@@ -1225,16 +1250,8 @@ ipcMain.handle('rebuild-cache', async () => {
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
 
 ipcMain.handle('get-projects', async (_event, showArchived) => {
+  const started = TRACE.on ? performance.now() : null;
   try {
-    // "Cache has rows" is NOT enough to call the start warm: the scan worker
-    // streams one DB write per folder, so killing the app mid-scan leaves
-    // session_cache partially populated. Only the completeness marker —
-    // written when the worker's final done message arrives — proves the
-    // initial scan actually finished. Without it, a partial cache must take
-    // the cold branch below: the warm branch's reconcileCacheFromFilesystem()
-    // would find every still-missing folder stat-dirty and re-parse them all
-    // synchronously on the main thread — the original multi-minute freeze,
-    // reachable by simply relaunching after an interrupted first scan.
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
     let repairPending = false;
     if (Array.isArray(repairFolders) && repairFolders.length) {
@@ -1248,44 +1265,20 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
-    if (needsPopulate) {
-      // First call after a migration that clears session_cache (e.g. v4), or a
-      // genuine first launch, finds an empty cache. Used to `await` the full
-      // scan here so the response carried the freshly-populated cache — but on
-      // a large ~/.claude/projects/ (1GB+, witnessed live) that scan takes many
-      // minutes, and awaiting it left the renderer's very first get-projects
-      // call — and therefore the whole sidebar — blocked the entire time with
-      // nothing but a "Loading…" label (the user force-quit believing the app
-      // had hung). Kick the scan off in the background instead: it now writes
-      // each folder to the DB and pushes `projects-changed` as it completes
-      // (see populateCacheViaWorker in session-cache.js), and emits
-      // `indexing-progress` events the renderer turns into a one-time banner.
-      // This immediate response returns whatever's cached right now (empty
-      // session rows on a true first run, but buildProjectsFromCache still
-      // lists every on-disk project directory synchronously below).
-      populateCacheViaWorker();
-    } else {
-      // Cache already populated: pick up folders changed while the app was
-      // closed, or never indexed by an older build, so sessions/worktrees don't
-      // silently go missing. Stat-gated, so it's cheap when nothing has changed.
-      //
-      // Deliberately NOT called in the needsPopulate branch above: on a truly
-      // cold cache, cache_meta is still empty at this point (the background
-      // worker hasn't written a single folder yet), so this stat-gate would be
-      // true for every folder and reconcileCacheFromFilesystem would run a full
-      // synchronous refreshFolder() sweep -- a full JSONL parse of the entire
-      // tree, on the main thread, before this handler could return. That
-      // reintroduces the exact multi-minute blocking hang the fire-and-forget
-      // populateCacheViaWorker() call above exists to avoid (PR #124 review
-      // finding F1 -- see test/get-projects-cold-start-reconcile.test.js).
-      reconcileCacheFromFilesystem();
-    }
+    if (needsPopulate) populateCacheViaWorker();
     backfillEntrypoints();
-
-    return annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(buildProjectsFromCache(showArchived)), showArchived, { getSetting, setSetting }));
+    const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
+    const assemble = (projects, archived) => annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(projects), archived, { getSetting, setSetting }));
+    const reply = showArchived === 'both'
+      ? { defaultProjects: assemble(result.defaultProjects, false), allProjects: assemble(result.allProjects, true) }
+      : assemble(showArchived ? result.allProjects : result.defaultProjects, !!showArchived);
+    if (TRACE.on) {
+      if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
+    }
+    return reply;
   } catch (err) {
     console.error('Error listing projects:', err);
-    return [];
+    throw err;
   }
 });
 
@@ -3203,6 +3196,7 @@ ipcMain.handle('set-activity-trace-enabled', async (_event, enabled) => {
       resolve();
     });
   });
+  mainLoopMonitor.sync();
   const global = getSetting('global') || {};
   global.activityTrace = on;
   setSetting('global', global);
@@ -3693,6 +3687,7 @@ app.on('before-quit', (event) => {
     return;
   }
   activityReporter.stop();
+  mainLoopMonitor.stop();
   if (TRACE.on) trace('app.quit', null, {});
   activityTrace.close();
 
@@ -3722,6 +3717,7 @@ app.on('will-quit', () => {
   // Terminate the search worker gracefully before closing the DB, so the
   // worker's read-only connection is released before the WAL checkpoint.
   // shutdown() suppresses the restart logic before calling terminate().
+  projectsClient.shutdown();
   searchClient.shutdown();
   closeDb();
 });

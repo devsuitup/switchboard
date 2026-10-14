@@ -99,7 +99,10 @@ test('archive and unarchive filter the public project payload and restore its si
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const project = { folder: h.folder, projectPath: h.projectPath, sessions: [] };
-  ctx.window.api.getProjects = async show => applyAndPersistArchived([structuredClone(project)], show, h);
+  ctx.window.api.getProjects = async () => ({
+    defaultProjects: applyAndPersistArchived([structuredClone(project)], false, h),
+    allProjects: applyAndPersistArchived([structuredClone(project)], true, h),
+  });
   ctx.window.api.getActiveTerminals = async () => [];
   ctx.window.api.getSetting = async key => h.getSetting(key);
   ctx.window.loadingStatus = ctx.document.createElement('div');
@@ -457,7 +460,7 @@ test('archiving an exact project does not reinsert a pending session into the si
   const h = setup(t);
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
-  ctx.window.api.getProjects = async () => [];
+  ctx.window.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
   ctx.window.api.getActiveTerminals = async () => [];
   ctx.window.api.getSetting = async key => h.getSetting(key);
   ctx.window.loadingStatus = ctx.document.createElement('div');
@@ -490,7 +493,7 @@ test('a pending session arriving during project fetch cannot reinsert an archive
   const loading = loadAppFunctions(ctx.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
   ctx.window.pendingSessions.set('pending', { projectPath: h.projectPath, folder: h.folder,
     session: { sessionId: 'pending', projectPath: h.projectPath } });
-  release.forEach(resolve => resolve([]));
+  release.forEach(resolve => resolve({ defaultProjects: [], allProjects: [] }));
   await loading;
   assert.equal(ctx.window.cachedProjects.length, 0);
   assert.equal(ctx.window.cachedAllProjects.length, 0);

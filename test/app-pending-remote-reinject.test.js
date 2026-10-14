@@ -24,7 +24,7 @@ function run(projects, pendingSession, pendingFolder) {
     window.renderDefaultStatus = () => {};
     window.encodeProjectPath = (p) => p.replace(/\//g, '-');
     window.api = {
-      getProjects: async () => JSON.parse(JSON.stringify(projects)),
+      getProjects: async () => JSON.parse(JSON.stringify({ defaultProjects: projects, allProjects: projects })),
       getActiveTerminals: async () => [],
       getSetting: async () => ({}),
     };

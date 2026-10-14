@@ -43,12 +43,14 @@ function extractGetProjectsHandlerBody() {
 
 function makeHandler(mocks) {
   const body = extractGetProjectsHandlerBody();
-  const fn = new Function(
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const fn = new AsyncFunction(
     'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
     'populateCacheViaWorker',
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
     'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
     'backfillEntrypoints', 'normalizeHosts', 'parseFolderKey',
+    'projectsClient', 'TRACE', 'projectsReconciledAt',
     body
   );
   // annotateRemoteAttachable (remote-attach join, issue #221),
@@ -64,11 +66,15 @@ function makeHandler(mocks) {
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
     annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), mocks.setSetting || (() => {}), false,
-    mocks.backfillEntrypoints || (() => {}), normalizeHosts, parseFolderKey
+    mocks.backfillEntrypoints || (() => {}), normalizeHosts, parseFolderKey,
+    { request: options => {
+      if (options.reconcile) mocks.reconcileCacheFromFilesystem();
+      return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
+    } }, { on: false }, 0
   );
 }
 
-test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synchronously', () => {
+test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synchronously', async () => {
   const calls = [];
   const handler = makeHandler({
     isCachePopulated: () => false, // cold cache: needsPopulate branch
@@ -79,7 +85,7 @@ test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synch
     buildProjectsFromCache: () => { calls.push('build'); return []; },
   });
 
-  handler();
+  await handler();
 
   assert.ok(!calls.includes('reconcile'),
     'reconcileCacheFromFilesystem must never run in the same synchronous window as a cold-cache ' +
@@ -89,7 +95,7 @@ test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synch
   assert.deepEqual(calls, ['populate', 'build']);
 });
 
-test('get-projects on a warm cache still reconciles (stat-gated, cheap when nothing changed)', () => {
+test('get-projects on a warm cache still reconciles (stat-gated, cheap when nothing changed)', async () => {
   const calls = [];
   const handler = makeHandler({
     isCachePopulated: () => true, // warm cache: else branch
@@ -100,13 +106,13 @@ test('get-projects on a warm cache still reconciles (stat-gated, cheap when noth
     buildProjectsFromCache: () => { calls.push('build'); return []; },
   });
 
-  handler();
+  await handler();
 
   assert.ok(!calls.includes('populate'), 'a warm start must not kick off a fresh worker scan');
   assert.deepEqual(calls, ['reconcile', 'build']);
 });
 
-test('get-projects cannot turn a one-time warm repair into a full cache scan when all rows were invalidated', { timeout: 9000 }, () => {
+test('get-projects cannot turn a one-time warm repair into a full cache scan when all rows were invalidated', { timeout: 9000 }, async () => {
   const calls = [];
   const handler = makeHandler({
     isCachePopulated: () => false,
@@ -117,12 +123,12 @@ test('get-projects cannot turn a one-time warm repair into a full cache scan whe
     reconcileCacheFromFilesystem: () => calls.push('reconcile'),
     buildProjectsFromCache: () => { calls.push('build'); return []; },
   });
-  handler();
-  handler();
+  await handler();
+  await handler();
   assert.deepEqual(calls, ['reconcile', 'build', 'reconcile', 'build']);
 });
 
-test('pending unreachable remote repairs cannot block empty local cache or search population', { timeout: 9000 }, () => {
+test('pending unreachable remote repairs cannot block empty local cache or search population', { timeout: 9000 }, async () => {
   for (const empty of ['cache', 'search']) {
     const calls = [];
     const handler = makeHandler({
@@ -136,12 +142,12 @@ test('pending unreachable remote repairs cannot block empty local cache or searc
       reconcileCacheFromFilesystem: () => calls.push('reconcile'),
       buildProjectsFromCache: () => { calls.push('build'); return []; },
     });
-    handler();
+    await handler();
     assert.deepEqual(calls, ['populate', 'build'], empty);
   }
 });
 
-test('get-projects clears undeclared remote repairs even without cached folder metadata', { timeout: 9000 }, () => {
+test('get-projects clears undeclared remote repairs even without cached folder metadata', { timeout: 9000 }, async () => {
   const settings = new Map([
     ['global', { remoteHosts: [{ alias: 'vps' }] }],
     ['bridge_uuid_reindex_folders', ['gone::-srv-old', 'vps::-srv-demo', 'local-repair']],
@@ -157,12 +163,12 @@ test('get-projects clears undeclared remote repairs even without cached folder m
     reconcileCacheFromFilesystem: () => calls.push('reconcile'),
     buildProjectsFromCache: () => { calls.push('build'); return []; },
   });
-  handler();
+  await handler();
   assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), ['vps::-srv-demo', 'local-repair']);
   assert.deepEqual(calls, ['reconcile', 'build'], 'the pending local repair still prevents a duplicate full scan');
   settings.set('bridge_uuid_reindex_folders', ['gone::-srv-old']);
   calls.length = 0;
-  handler();
+  await handler();
   assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), []);
   assert.deepEqual(calls, ['populate', 'build']);
 });
@@ -177,7 +183,7 @@ test('get-projects clears undeclared remote repairs even without cached folder m
 // folder stat-dirty and re-parse them all on the main thread before
 // get-projects could return — the original multi-minute freeze, reached by
 // simply relaunching after an interrupted first scan.
-test('get-projects on a partial cache (interrupted first scan: rows present, marker absent) resumes the scan instead of reconciling synchronously', () => {
+test('get-projects on a partial cache (interrupted first scan: rows present, marker absent) resumes the scan instead of reconciling synchronously', async () => {
   const calls = [];
   const handler = makeHandler({
     isCachePopulated: () => true, // partial cache looks populated by row count
@@ -188,7 +194,7 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
     buildProjectsFromCache: () => { calls.push('build'); return []; },
   });
 
-  handler();
+  await handler();
 
   assert.ok(!calls.includes('reconcile'),
     'a partially-populated cache without the completeness marker must take the cold branch -- ' +
@@ -198,7 +204,7 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
 });
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-test('get-projects starts the entrypoint backfill on a cold and on a warm cache, before building the list', () => {
+test('get-projects starts the entrypoint backfill on a cold and on a warm cache, before building the list', async () => {
   for (const warm of [false, true]) {
     const calls = [];
     const handler = makeHandler({
@@ -210,7 +216,7 @@ test('get-projects starts the entrypoint backfill on a cold and on a warm cache,
       backfillEntrypoints: () => { calls.push('backfill'); },
       buildProjectsFromCache: () => { calls.push('build'); return []; },
     });
-    handler();
+    await handler();
     assert.deepEqual(calls, ['backfill', 'build'], warm ? 'warm cache' : 'cold cache');
   }
 });
