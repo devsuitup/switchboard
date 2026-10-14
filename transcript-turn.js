@@ -3,6 +3,7 @@
 'use strict';
 
 const fs = require('fs');
+const { createHash } = require('node:crypto');
 
 const CLOSED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 const DEFAULT_TAIL_BYTES = 256 * 1024;
@@ -54,6 +55,40 @@ function parseMainThread(text) {
     entries.push(entry);
   }
   return entries;
+}
+
+function latestWrittenOutput(text) {
+  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
+  const entries = parseMainThread(complete);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.isMeta || entry.isCompactSummary || !['assistant', 'user'].includes(entry.type)) continue;
+    const content = entry.message?.content;
+    const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    if (!Array.isArray(blocks)) continue;
+    const visible = blocks.filter(block => block && ['text', 'thinking', 'tool_use', 'tool_result', 'image'].includes(block.type));
+    if (!visible.length) continue;
+    if (entry.type === 'user' && !visible.some(block => block.type === 'tool_result'
+      || block.type === 'text' && /^\s*<(?:task-notification|local-command-stdout|local-command-stderr)>/.test(block.text || ''))) continue;
+    if (visible.every(block => ['text', 'thinking'].includes(block.type) && !(block.text || block.thinking || '').trim())) continue;
+    const output = visible.map(block => {
+      switch (block.type) {
+        case 'text': return ['text', block.text];
+        case 'thinking': return ['thinking', block.thinking];
+        case 'tool_use': return ['tool_use', block.id, block.name, canonicalWrittenValue(block.input)];
+        case 'tool_result': return ['tool_result', block.tool_use_id, canonicalWrittenValue(block.content || block.output)];
+        case 'image': return ['image', canonicalWrittenValue(block.source)];
+      }
+    });
+    return createHash('sha256').update(JSON.stringify([entry.uuid || entry.message?.id || entry.timestamp || null, entry.type, output])).digest('hex');
+  }
+  return null;
+}
+
+function canonicalWrittenValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalWrittenValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalWrittenValue(value[key])]));
+  return value;
 }
 
 function promptOf(entry) {
@@ -123,10 +158,22 @@ function classifyTranscriptTail(text) {
   return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
 }
 
-function readTail(filePath, size, tailBytes) {
+function readTail(filePath, size, tailBytes, includeWritten) {
   const start = Math.max(0, size - tailBytes);
   const length = size - start;
-  return readRange(filePath, start, length).toString('utf8');
+  const chunks = [readRange(filePath, start, length)];
+  const text = chunks[0].toString('utf8');
+  const extendWritten = includeWritten && start > 0 && !latestWrittenOutput(text);
+  let offset = start;
+  while (extendWritten && offset > 0) {
+    const count = Math.min(tailBytes, offset);
+    const chunk = readRange(filePath, offset - count, count);
+    const newline = chunk.lastIndexOf(10);
+    chunks.unshift(chunk.subarray(newline + 1));
+    if (newline >= 0) break;
+    offset -= count;
+  }
+  return { text, writtenText: Buffer.concat(chunks).toString('utf8') };
 }
 
 function readRange(filePath, start, length, expectedStat) {
@@ -190,12 +237,15 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
       } catch (_) { return null; }
       const hit = cache.get(filePath);
       let cached = hit;
-      if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev) {
+      if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev
+        || !compactionCursor && !hit.writtenComplete) {
         let tail;
-        try { tail = readTail(filePath, stat.size, tailBytes); } catch (_) { return null; }
-        const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs };
+        try { tail = readTail(filePath, stat.size, tailBytes, !compactionCursor); } catch (_) { return null; }
+        const turn = { ...classifyTranscriptTail(tail.text), mtimeMs: stat.mtimeMs,
+          writtenOutput: latestWrittenOutput(tail.writtenText) ?? hit?.turn.writtenOutput ?? '' };
         cached = { mtimeMs: stat.mtimeMs, size: stat.size, dev: stat.dev, ino: stat.ino,
-          skipLine: tail.length > 0 && !tail.endsWith('\n'), turn };
+          writtenComplete: !compactionCursor,
+          skipLine: tail.text.length > 0 && !tail.text.endsWith('\n'), turn };
         cache.set(filePath, cached);
       }
       const turn = { ...cached.turn };

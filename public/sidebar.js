@@ -1787,6 +1787,7 @@ function buildSessionItem(session) {
   const remoteAttention = ids.map(remoteAttentionSnapshot).find(Boolean);
   setNeedsAttention(item, snapshot.attention || !!remoteAttention);
   setResponseReady(item, snapshot.responseReady);
+  setUnseenWrittenActivity(item, snapshot.unseenWrittenActivity);
   setCliBusy(item, snapshot.busy);
   setHasBusyAgents(item, ids.some(id => parentHasActiveSubagent(id)));
   // initial-paint mirror of the remote-ssh adapter's liveness — see .ai/contexts/session-state.md

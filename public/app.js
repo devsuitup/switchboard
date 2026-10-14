@@ -575,8 +575,8 @@ function trackActivity(sessionId, data) {
   lastActivityTime.set(sessionId, new Date());
 }
 
-function clearNotifications(sessionId) {
-  clearUnread(sessionId, 'clearNotifications');
+function clearNotifications(sessionId, watermark) {
+  clearUnread(sessionId, 'clearNotifications', watermark);
   setAttention(sessionId, false, 'clearNotifications');
 }
 // Terminal themes, utils (cleanDisplayName, formatDate, escapeHtml, shellEscape)
@@ -1122,6 +1122,7 @@ function backgroundActionReason(sessionId) {
 
 function rekeySessionEnvironment(oldId, newId) {
   if (oldId === newId) return;
+  if (typeof rekeyWrittenActivity === 'function') rekeyWrittenActivity(oldId, newId);
   const terminalSession = openSessions.get(oldId)?.session;
   if (terminalSession?.headSessionId === oldId) terminalSession.headSessionId = newId;
   const session = sessionMap.get(oldId);

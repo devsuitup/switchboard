@@ -591,47 +591,70 @@ test's precondition setup, legitimately does before any row or `setActivity`
 call exists) lands in the same persisted object `snapshotForLocal`/
 `paintSessionIcon` read from.
 
-#### Decided: attention supersedes and consumes the unseen-response state
+#### Written output and title colour (#626)
 
-**Behavior change, not a regression to fix.** Before this migration,
-`responseReadySessions` and `attentionSessions` were two independent `Set`s: a
-row could carry both `response-ready` and `needs-attention` at once (CSS gave
-`needs-attention` visual precedence over `response-ready`), and clearing
-attention left `responseReadySessions` untouched — the row fell back to
-showing `response-ready`, "Claude finished, you haven't looked", because that
-fact had never actually been erased underneath the attention overlay.
+The title's blue colour belongs to unseen written head output, independently
+of busy, attention, turn closure and background work. The response-ready ●
+glyph retains #638's priority and consumption policy; it no longer colours
+the title. Attention has visual precedence, and clearing it reveals any
+still-unseen blue title.
 
-Concretely, the old sequence: session goes idle unseen (`response-ready`
-armed) → an OSC 9 notification fires (`needs-attention`, drawn on top) → the
-user handles it and attention clears → the row reverts to `response-ready`,
-because the unseen-response fact was still sitting in the Set the whole time.
+The domain reducer carries a monotonic written watermark and a seen watermark.
+Only a writtenActivity event advances the former; writtenActivitySeen consumes
+at most its captured watermark. A delayed clear or render callback cannot
+consume a newer write. Session-activity keeps this facet in a separate map so
+adapter takeover, descriptor loss, terminal teardown and sidebar rebuilding
+cannot reset it. Initial and incremental row projections select #564's head
+identity. They never aggregate child transcript text or older members' unread.
+Both activity and environment re-keying move the watermark to the new id.
+There is no restart persistence.
 
-Now the two facts live as fields on one persisted object
-(`localPtyState(id)`), and `session-state.js`'s `apply()` treats `attention`,
-`busy` and `waitingForInput` (which `responseReady` is a subset of) as
-mutually exclusive: setting `attention: true` calls `clearExclusive()`, which
-zeroes `responseReady` along with `busy`/`waitingForInput`, not just the
-rung the icon happens to render. Clearing attention afterwards does not
-restore it — the row lands on plain idle, not back on `response-ready`. Same
-sequence today: idle unseen → attention fires (response-ready fact erased,
-not just outshone) → attention clears → idle, unread marker gone.
+For every head, including attached PTYs, the existing worker's cached transcript tail carries
+a digest of the latest complete main-thread output record: assistant content,
+tool results, task notifications or local-command output. The first snapshot
+establishes a baseline. A changed digest advances unread; unchanged reads,
+watch events, mtime-only updates, descriptors, scans, sidechains, bookkeeping
+and background existence do not. Incomplete JSONL records wait for a newline.
+The existing bounded tail and mirror-refresh limits still apply. PTY data is
+used only to acknowledge rendered output, never to detect written activity:
+spinner and timer frames, resize repaints, attach/history replays and input
+echo cannot advance the written watermark.
 
-This is a deliberate consequence of unifying local-pty into the same domain
-model the remote-ssh/local-transcript adapters already used (`test/session-state.test.js`'s
-pre-existing "exclusivity: attention while busy..." pins the same
-`clearExclusive()` behavior for those kinds) — not something to special-case
-back for local-pty. Read "attention" as *consuming* whatever unseen-response
-state it interrupts, the same way going busy again already consumed it before
-this change. `test/local-pty-adapter.test.js`'s "attention after
-response-ready, then clearing attention does not restore response-ready" pins
-this exact scenario so a future reader finds it intentional, not a bug to fix.
+The written-output digest extends the tail backwards to a complete record
+boundary only when the bounded tail has no complete output record. Complete large tool results
+therefore contribute their content digest, while partial writes, large
+metadata and child records retain the usual filtering. This can read more
+than 256 KiB for a single oversized record. Turn classification and timestamp
+evidence still use only the original bounded tail.
+Reads carrying a compaction cursor retain their tail-plus-cursor I/O budget
+and defer oversized digests. A later read without that cursor refreshes the
+digest even when file metadata has not changed.
 
-One remaining consequence flagged, not fixed: `.has()` on
-`attentionSessions`/`responseReadySessions` (the legacy views above) now means
-"that facet is currently true", not "was ever added and not yet removed" — no
-shipped behavior currently depends on reading a stale `responseReady`/`busy`
-value after an attention transition, but a future feature reintroducing that
-combination would need its own domain field, not a Set-level workaround.
+Seen means the output was rendered and the page is visible, even without
+keyboard focus, at its latest position. A terminal write callback records
+the watermark captured for that batch. A digest arriving after the render
+also advances the rendered watermark when the terminal is visible at the
+bottom, with no queued flush, hidden replay or write callback pending. A
+digest arriving during a write waits for its callback. Scroll, focus,
+visibility, reveal and grid intersection events recheck those conditions.
+A single terminal must be active; a grid card must be at least 99% within the
+viewport. Scrolling above the latest output preserves unread. Transcript
+reads capture the watermark before IPC; their static main viewer consumes
+only that captured watermark after rendering at the bottom of a visible page.
+Later digests cannot advance the viewer's watermark without another read.
+Empty reads and nested child transcripts cannot consume them.
+The existing explicit clear consumes its capture without a visibility
+requirement. Single-view and grid selection instead pass watermark zero:
+they clear notifications, while output is consumed by the visibility check
+after reveal. A newer write after a captured clear stays unseen. Rendering a
+grid card only advances the written watermark's seen state; attention and
+the response-ready glyph keep their existing focus/clear policy. The terminal
+seen check returns before style queries when there is no unseen writing.
+
+Coverage lives in test/session-written-activity.test.js and
+test/written-output-validation.test.js, alongside the updated reducer, local
+PTY and head-turn attention tests. The existing glyph policy is intentionally
+still covered separately.
 
 #### Decided: a local row idling while active (or with `armReady:false`) now shows "Waiting for input", not "Idle"
 
@@ -902,7 +925,7 @@ clears the other two. `attention` is **orthogonal to busy**: an `attention`
 event still clears `busy`/`waitingForInput`/`responseReady` (unchanged), but
 a `busy` event — either direction — never clears `attention`. `attention` is
 exclusive with `responseReady` only, one-directionally: setting it clears
-`responseReady` (consumes the unseen-response fact, see "Decided" below), but
+`responseReady` (consumes the response-ready glyph state, see "Written output and title colour" below), but
 clearing `attention` does not resurrect anything. Rationale: an OSC-0 busy
 title and an OSC-9 permission prompt are two independent IPC streams: a busy
 edge arriving while attention is pending must not silently dismiss the

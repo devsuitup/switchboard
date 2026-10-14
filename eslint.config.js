@@ -24,6 +24,13 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  writtenActivitySnapshot: 'readonly',
+  noteWrittenActivity: 'readonly',
+  markWrittenActivitySeen: 'readonly',
+  rekeyWrittenActivity: 'readonly',
+  markTerminalOutputSeen: 'readonly',
+  markTranscriptOutputSeen: 'readonly',
+  setUnseenWrittenActivity: 'readonly',
   clearHeadUnread: 'readonly',
   registerModal: 'readonly',
   hasOpenModal: 'readonly',
@@ -357,6 +364,7 @@ const rendererCrossFileGlobals = {
   handleTerminalData: 'readonly',
   createTerminalEntry: 'readonly',
   terminalWriteBuffers: 'readonly',
+  hiddenAccumulators: 'readonly',
   ESC_SYNC_START: 'readonly',
   ESC_SYNC_END: 'readonly',
   SYNC_BUFFER_TIMEOUT: 'readonly',

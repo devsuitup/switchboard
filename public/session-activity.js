@@ -1,5 +1,43 @@
 // Session activity state — the local-pty adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
 const localPtyStates = new Map();
+const writtenActivityStates = new Map();
+let writtenActivitySeq = 0;
+
+function writtenActivityState(sessionId) {
+  if (!writtenActivityStates.has(sessionId)) writtenActivityStates.set(sessionId, createSessionState('written'));
+  return writtenActivityStates.get(sessionId);
+}
+
+function writtenActivitySnapshot(sessionId) {
+  const snapshot = writtenActivityStates.get(sessionId)?.snapshot();
+  return { writtenWatermark: snapshot?.writtenWatermark || 0, seenWrittenWatermark: snapshot?.seenWrittenWatermark || 0,
+    unseenWrittenActivity: snapshot?.unseenWrittenActivity || false };
+}
+
+function noteWrittenActivity(sessionId) {
+  const unseen = writtenActivitySnapshot(sessionId).unseenWrittenActivity;
+  const watermark = ++writtenActivitySeq;
+  writtenActivityState(sessionId).apply({ type: 'writtenActivity', watermark });
+  if (!unseen) applyStateClasses(sessionId, storedActivitySnapshot(sessionId));
+  return watermark;
+}
+
+function markWrittenActivitySeen(sessionId, watermark) {
+  const state = writtenActivityStates.get(sessionId);
+  if (!state || !Number.isSafeInteger(watermark) || watermark <= state.snapshot().seenWrittenWatermark) return;
+  state.apply({ type: 'writtenActivitySeen', watermark });
+  if (!state.snapshot().unseenWrittenActivity) applyStateClasses(sessionId, storedActivitySnapshot(sessionId));
+}
+
+function rekeyWrittenActivity(oldId, newId) {
+  const state = writtenActivityStates.get(oldId);
+  if (!state || oldId === newId) return;
+  const source = state.snapshot();
+  const target = writtenActivityState(newId);
+  target.apply({ type: 'writtenActivity', watermark: source.writtenWatermark });
+  target.apply({ type: 'writtenActivitySeen', watermark: source.seenWrittenWatermark });
+  writtenActivityStates.delete(oldId);
+}
 
 function localPtyState(sessionId) {
   let state = localPtyStates.get(sessionId);
@@ -152,7 +190,8 @@ function clearHeadUnread(sessionId) {
   if (turn?.ready) headTurns.set(sessionId, { ...turn, ready: false });
 }
 
-function clearUnread(sessionId, via) {
+function clearUnread(sessionId, via, watermark = writtenActivitySnapshot(sessionId).writtenWatermark) {
+  markWrittenActivitySeen(sessionId, watermark);
   clearHeadUnread(sessionId);
   const state = localPtyState(sessionId);
   if (window.ATRACE && state.snapshot().responseReady) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'clearUnread', via });
@@ -182,6 +221,7 @@ function syncLocalPtyAgentsBusy(sessionId, active) {
 // Carry the activity state across a session-detected / session-forked re-key.
 function rekeyActivityState(oldId, newId, preserveRow = false, preserveHead = preserveRow) {
   if (oldId === newId) return;
+  rekeyWrittenActivity(oldId, newId);
   const state = localPtyStates.get(oldId);
   if (window.ATRACE) {
     const snap = state ? state.snapshot() : null;
@@ -195,6 +235,7 @@ function rekeyActivityState(oldId, newId, preserveRow = false, preserveHead = pr
   setCliBusy(oldItem, false);
   setResponseReady(oldItem, false);
   setNeedsAttention(oldItem, false);
+  setUnseenWrittenActivity(oldItem, false);
 
   if (state) {
     localPtyStates.delete(oldId);

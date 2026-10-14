@@ -36,6 +36,8 @@ function createSessionState(kind) {
   let promptHintAt = null;
   let lastDescriptorStatus = null;
   let lastDescriptorAt = null;
+  let writtenWatermark = 0;
+  let seenWrittenWatermark = 0;
 
   function clearExclusive() {
     busy = false;
@@ -61,6 +63,12 @@ function createSessionState(kind) {
   function apply(event) {
     if (!event || typeof event.type !== 'string') return;
     switch (event.type) {
+      case 'writtenActivity':
+        if (Number.isSafeInteger(event.watermark) && event.watermark > writtenWatermark) writtenWatermark = event.watermark;
+        break;
+      case 'writtenActivitySeen':
+        if (Number.isSafeInteger(event.watermark) && event.watermark >= 0) seenWrittenWatermark = Math.max(seenWrittenWatermark, Math.min(writtenWatermark, event.watermark));
+        break;
       case 'busy':
         if (event.active) {
           clearExclusive();
@@ -170,6 +178,9 @@ function createSessionState(kind) {
       idleHintAt,
       promptHint,
       promptHintAt,
+      writtenWatermark,
+      seenWrittenWatermark,
+      unseenWrittenActivity: writtenWatermark > seenWrittenWatermark,
     };
   }
 

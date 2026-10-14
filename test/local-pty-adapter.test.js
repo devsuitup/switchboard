@@ -203,16 +203,9 @@ test('attention while response-ready clears response-ready — cannot force the 
   t.destroy();
 });
 
-test('decided (not a regression): attention after response-ready, then clearing attention does not restore response-ready', () => {
-  // Behavior change from the pre-migration independent Sets, documented in
-  // .ai/contexts/session-state.md ("Decided: attention supersedes and
-  // consumes the unseen-response state"). Old behavior: responseReadySessions
-  // and attentionSessions were independent, so clearing attention re-exposed
-  // response-ready underneath it. New behavior: attention:true calls the
-  // domain's clearExclusive(), erasing responseReady, not just outshining it
-  // — clearing attention afterwards lands on plain idle, never back on
-  // response-ready.
+test('attention preserves unseen title writing while consuming only the response-ready glyph', () => {
   const t = setup();
+  t.window.noteWrittenActivity('s1');
   t.window.activeSessionId = 's2'; // s1 unfocused, the case that arms response-ready
 
   t.setActivity('s1', true);
@@ -226,7 +219,9 @@ test('decided (not a regression): attention after response-ready, then clearing 
   t.setAttention('s1', false, 'clearNotifications'); // user handles it, attention clears
   const snap = t.snapshot('s1');
   assert.equal(snap.attention, false);
-  assert.equal(snap.responseReady, false, 'must NOT fall back to response-ready — that fact is gone, not hidden');
+  assert.equal(snap.responseReady, false, 'the glyph retains its existing consumption policy');
+  assert.equal(t.window.writtenActivitySnapshot('s1').unseenWrittenActivity, true);
+  assert.ok(t.item('s1').classList.contains('unseen-written-activity'));
   assert.ok(!t.item('s1').classList.contains('response-ready'));
   assert.ok(!t.item('s1').classList.contains('needs-attention'));
   t.destroy();

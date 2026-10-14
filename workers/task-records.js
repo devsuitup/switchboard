@@ -17,7 +17,8 @@ async function readHead(message) {
   if (!turnOnly) await reader.read(file, parentSessionId);
   const turn = turnReader.read(file);
   turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown',
-    lastEntryAt: turn?.lastEntryAt ?? null, mtimeMs: turn?.mtimeMs ?? null, revision: ++turnRevision });
+    lastEntryAt: turn?.lastEntryAt ?? null, mtimeMs: turn?.mtimeMs ?? null,
+    writtenOutput: turn?.writtenOutput ?? turns.get(parentSessionId)?.writtenOutput ?? '', revision: ++turnRevision });
   while (turns.size > 2048) turns.delete(turns.keys().next().value);
 }
 parentPort.on('message', message => {
@@ -48,7 +49,15 @@ parentPort.on('message', message => {
     else if (type === 'job') registry.applyJob(parentSessionId, message.evidence);
     else if (type === 'death') registry.ownerDied(parentSessionId);
     else if (type === 'alive') registry.ownerAlive(parentSessionId);
-    else if (type === 'rekey') registry.rekey(message.oldId, message.newId, { continued: message.continued });
+    else if (type === 'rekey') {
+      registry.rekey(message.oldId, message.newId, { continued: message.continued });
+      const turn = turns.get(message.oldId);
+      if (message.continued && turn) {
+        const target = turns.get(message.newId);
+        if (!target || turn.revision > target.revision) turns.set(message.newId, { ...turn, sessionId: message.newId });
+        turns.delete(message.oldId);
+      }
+    }
     if (parentSessionId) {
       const id = registry.resolve(parentSessionId);
       parentPort.postMessage({ snapshot: { ...registry.snapshot(id), headTurn: turns.get(id) } });
