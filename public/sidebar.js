@@ -1535,7 +1535,7 @@ function rebindSidebarEvents(projects) {
       } else if (session.remoteAlias && !session.remoteAttachable) {
         showJsonlViewer(session);
       } else {
-        const head = rowHeadId(session);
+        const head = session.remoteAlias ? (session.remoteAttachSessionId || rowHeadId(session)) : rowHeadId(session);
         const mergedMemberIds = [
           ...(session.mergedMemberIds || []).filter(id => id !== head),
           ...(session.sessionId !== head ? [session.sessionId] : []),
