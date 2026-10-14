@@ -681,6 +681,36 @@ gone. The pre-fix sequence is reasoned from the code, not reproduced live;
 
 ### The local-transcript adapter (step 4)
 
+**Verified watch notifications (#621).** `createLocalTranscriptTracker` takes
+`projectsDir`, `hasPty` and `onActivity`; `record(parts)` returns a promise and
+the callback delivers both immediate and trailing activity. A named watch
+notification invalidates indexing independently, but cannot itself light a
+row. The tracker asynchronously opens only that transcript, keeping its
+device/inode/birth-time identity and size/write-mtime watermark. First sight,
+including a newly created file, establishes a quiet baseline. Later growth or
+an advancing write mtime requests a bounded content read (at most the last
+64 KiB); unchanged size/mtime requires no content read. Access time is ignored.
+The read must be complete and nonempty, and handle/path identity, size and
+mtime must still match afterwards. An advancing write mtime also covers a
+same-size rewrite outside the tail: this is write-metadata evidence after a
+successful content check, not a byte comparison of the entire history. A
+metadata-only operation that advances write mtime can therefore signal
+activity; a read-only access-time update cannot.
+
+Truncation, replacement, backwards write mtime, deletion and read/stat failure
+invalidate the baseline and pending activity quietly, without a turn or
+completion event. Each file's asynchronous verification is serialized and
+concurrent notifications request another check, rejecting stale results.
+The existing 1 s throttle keys remain a session UUID for a parent and
+`sub:<parentSessionId>` for a child. The last verified update in a window is
+retained and its file is reverified before trailing delivery; PTY ownership
+is checked again then. `dispose()` cancels pending delivery at actual quit.
+Distinct-child throttling and cache lifetime remain #622's responsibility;
+this is not a new scan worker or a historical transcript scan (#616).
+Disposable-file regression tests cover the tracker and the shipped projects
+watch callback in `test/local-transcript-activity.test.js` and
+`test/main-local-transcript-wiring.test.js`.
+
 `public/local-transcript-adapter.js` keeps one persistent
 `createSessionState('local-transcript')` per session id, in
 `localTranscriptStates` — same shape as `remoteSessionStates` above, pruned
