@@ -19,8 +19,12 @@ function assertNotification(entry, version) {
   assert.ok(Number.isFinite(Date.parse(entry.timestamp)), `${why}: timestamp`);
   const result = createTaskRegistry().notification(entry);
   assert.ok(result, `${why}: origin, wrapper, task-id, output-file or status`);
-  assert.match(result.id, /^[a-z][a-z0-9]+$/, `${why}: task-id`);
+  const ids = [...entry.message.content.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map(match => match[1].trim());
+  assert.equal(ids.length, [...entry.message.content.matchAll(/<task-id>/g)].length, `${why}: complete task-id fields`);
+  assert.deepEqual(result.ids || [result.id], ids, `${why}: every listed task-id is parsed`);
+  if (!result.ids) assert.match(result.id, /^[a-z][a-z0-9]+$/, `${why}: task-id`);
   if (result.tool !== null) assert.equal(typeof result.tool, 'string', `${why}: tool-use-id`);
+  return result;
 }
 
 function assertChildMeta(meta, version) {

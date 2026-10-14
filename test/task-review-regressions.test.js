@@ -68,6 +68,81 @@ test('SendMessage reopens a completed known agent until its next terminal notifi
   assert.equal(r.agents(id).length, 0);
 });
 
+test('aggregate stopped notification ends every listed known agent through worker snapshots', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-aggregate-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, id + '.jsonl');
+  const renderer = createTaskRegistry();
+  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+  t.after(() => client.dispose());
+  const second = e => ({ ...JSON.parse(JSON.stringify(e).replaceAll(agent, 'a2222222222222222').replaceAll('toolu_111', 'toolu_222')), uuid: `${e.uuid}-second` });
+  fs.writeFileSync(file, [fixture.use, fixture.launch, second(fixture.use), second(fixture.launch)].map(e => JSON.stringify(e)).join('\n') + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 2);
+  fs.appendFileSync(file, JSON.stringify(fixture.aggregateStopped) + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 0, 'aggregate must end both agents');
+  assert.equal(renderer.background(id), false);
+});
+
+test('aggregate stopped notifications ignore unknown ids and non-agent tasks and require origin', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  r.note(id, 'a2222222222222222', 'local-ipc', { kind: 'monitor' });
+  const entry = structuredClone(fixture.aggregateStopped);
+  entry.message.content = entry.message.content.replace('<status>', '<task-id>__orphan_summary__:shell</task-id><status>');
+  r.ingest(id, { ...entry, uuid: 'no-origin', origin: undefined });
+  assert.equal(r.agents(id).length, 1);
+  r.ingest(id, entry);
+  assert.equal(r.agents(id).length, 0);
+  assert.deepEqual(r.list(id).map(t => t.id), ['a2222222222222222']);
+  assert.equal(r.snapshot(id).tasks.some(t => t.id === '__orphan_summary__:shell'), false);
+});
+
+const sendResult = (toolUseId, isError, timestamp = '2026-10-14T00:12:01Z') => ({
+  type: 'user', uuid: `result-${toolUseId}`, timestamp,
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: isError, content: 'Synthetic SendMessage result' }] },
+});
+
+test('failed SendMessage restores the terminal agent through worker snapshots', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-send-error-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, id + '.jsonl');
+  const renderer = createTaskRegistry();
+  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+  t.after(() => client.dispose());
+  fs.writeFileSync(file, [fixture.use, fixture.launch, fixture.notification, resume()].map(e => JSON.stringify(e)).join('\n') + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 1);
+  fs.appendFileSync(file, JSON.stringify(sendResult('resume', true)) + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 0, 'failed send must undo its reopen');
+  assert.equal(renderer.snapshot(id).tasks.find(t => t.id === agent).terminal, true);
+  assert.equal(renderer.background(id), false);
+});
+
+test('successful SendMessage and failed sends to already running agents keep them running', () => {
+  for (const completed of [false, true]) {
+    const r = createTaskRegistry();
+    launch(r);
+    if (completed) r.ingest(id, fixture.notification);
+    r.ingest(id, resume());
+    r.ingest(id, sendResult('resume', !completed));
+    assert.equal(r.primary(id, agent), true);
+  }
+});
+
+test('an old failed SendMessage cannot undo a newer reopen', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  r.ingest(id, fixture.notification);
+  r.ingest(id, resume());
+  r.ingest(id, { ...fixture.completedNoTool, uuid: 'done-again', timestamp: '2026-10-14T00:13:00Z' });
+  r.ingest(id, resume('2026-10-14T00:14:00Z', 'resume-new'));
+  r.ingest(id, sendResult('resume', true, '2026-10-14T00:15:00Z'));
+  assert.equal(r.primary(id, agent), true);
+});
+
 for (const kind of ['clear', 'fork']) {
   test(`${kind} moves tasks without redirecting old notes or old owner death`, async t => {
     const r = createTaskRegistry();

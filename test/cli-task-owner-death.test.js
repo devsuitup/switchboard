@@ -21,7 +21,7 @@ test('a confirmed external owner PID death ends primary tasks while descriptor u
   fs.writeFileSync(file, JSON.stringify({ pid: 4242, procStart: '111', sessionId: id, cwd: dir, version: '2.1.296', status: 'idle', updatedAt: at, statusUpdatedAt: at }));
   cli.init({ dir, activeSessions: new Map(), isProcessAlive: () => alive, now: () => at, onIdle() {},
     onOwnerExit: sessionId => registry.ownerDied(sessionId), log: { info() {}, warn() {}, debug() {}, error() {} } });
-  t.after(() => { cli.stop(); assert.equal(path.dirname(dir), path.resolve(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { cli.stop(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   cli.ensureWatching();
   assert.equal(cli.getStatus(id).status, 'idle');
   fs.writeFileSync(file, '{');
@@ -48,7 +48,7 @@ test('a stale dead descriptor does not end tasks owned by another live descripto
     fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: id, status: 'idle', statusUpdatedAt: Date.now() }));
   }
   cli.init({ dir, activeSessions: new Map(), isProcessAlive: pid => pid === 5252, onIdle() {}, onOwnerExit: sessionId => registry.ownerDied(sessionId) });
-  t.after(() => { cli.stop(); assert.equal(path.dirname(dir), path.resolve(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { cli.stop(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   cli.ensureWatching();
   await Promise.resolve();
   assert.equal(cli.getStatus(id).status, 'idle');

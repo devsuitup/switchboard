@@ -102,10 +102,12 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       return matches.length === 1 ? matches[0][1].trim() : null;
     };
     const id = field('task-id');
+    const ids = [...text.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map(match => match[1].trim());
     const tool = field('tool-use-id');
     const status = field('status');
     const output = field('output-file');
     if ((text.includes('<tool-use-id>') && !tool) || (text.includes('<output-file>') && !output)) return null;
+    if (ids.length > 1 && ids.every(Boolean) && status === 'stopped' && !tool && !output) return { ids, tool, status };
     if (!id || !['completed', 'failed', 'stopped', 'killed'].includes(status) ||
         (!output && status !== 'stopped') || (output && !output.replace(/\\/g, '/').endsWith(`/tasks/${id}.output`))) return null;
     return { id, tool, status };
@@ -142,14 +144,20 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     if (!n && !blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && parents.get(id)?.tasks.get(b.input?.to)?.kind === 'agent')) &&
         !blocks.some(b => b.type === 'tool_result' && (parents.get(id)?.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId))) return;
     const p = parent(id);
-    const key = entry.uuid || `${entry.type}:${entry.timestamp}:${blocks.map(b => b.id || b.tool_use_id).join(',')}:${n?.id || ''}`;
+    const key = entry.uuid || `${entry.type}:${entry.timestamp}:${blocks.map(b => b.id || b.tool_use_id).join(',')}:${n?.id || n?.ids?.join(',') || ''}`;
     if (p.seen.has(key)) return;
     p.seen.add(key);
     bound(p.seen);
     if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
       for (const b of blocks) {
-        if (b.type === 'tool_use' && b.name === 'SendMessage' && p.tasks.get(b.input?.to)?.kind === 'agent') {
-          open(id, b.input.to, 'agent', at, { origin: 'transcript' });
+        if (b.type === 'tool_use' && b.name === 'SendMessage' && typeof b.id === 'string' && p.tasks.get(b.input?.to)?.kind === 'agent') {
+          const previous = p.tasks.get(b.input.to);
+          const call = { id: b.input.to, at, sendMessage: true, reopened: previous.terminal };
+          const active = open(id, b.input.to, 'agent', at, { origin: 'transcript' });
+          if (!active.terminal && active.at === at) {
+            active.reopenedBy = b.id;
+            p.calls.set(b.id, call);
+          }
           continue;
         }
         if (b.type !== 'tool_use' || b.name !== 'Agent' || typeof b.id !== 'string') continue;
@@ -172,6 +180,11 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
         const call = p.calls.get(b.tool_use_id);
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
+        if (call.sendMessage) {
+          const active = p.tasks.get(call.id);
+          if (b.is_error === true && call.reopened && active?.reopenedBy === b.tool_use_id && active.at === call.at) end(id, call.id, at);
+          continue;
+        }
         const result = entry.toolUseResult;
         if (b.is_error === true) { end(id, call.id, at); continue; }
         if (result?.isAsync === true && result.status === 'async_launched' && typeof result.agentId === 'string') {
@@ -192,9 +205,13 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         }
       }
       if (n) {
-        const call = p.calls.get(n.tool);
-        if ((n.tool && call && call.id === n.id) || (!n.tool && p.tasks.get(n.id)?.kind === 'agent')) end(id, n.id, at);
-        else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
+        if (n.ids) {
+          for (const taskId of n.ids) if (p.tasks.get(taskId)?.kind === 'agent') end(id, taskId, at);
+        } else {
+          const call = p.calls.get(n.tool);
+          if ((n.tool && call && call.id === n.id) || (!n.tool && p.tasks.get(n.id)?.kind === 'agent')) end(id, n.id, at);
+          else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
+        }
       }
     }
     changed(id);

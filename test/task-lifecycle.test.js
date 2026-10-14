@@ -202,7 +202,7 @@ test('rekeyed snapshots and continuation notifications finish tasks under their 
 
 function disk(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-624-'));
-  t.after(() => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync.native(root)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); assert.equal(fs.existsSync(root), false); });
   return path.join(root, `${id}.jsonl`);
 }
 const jsonl = (...entries) => entries.map(e => JSON.stringify(e) + '\n').join('');

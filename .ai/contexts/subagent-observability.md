@@ -134,7 +134,10 @@ Validated child `.meta.json` toolUseId links a synchronous call to its concrete
 agent before the result; this avoids duplicate provisional/concrete pills.
 Snapshots retain terminal ids so delayed transcript growth and IPC heartbeats
 cannot revive completed tasks. A later assistant SendMessage tool-use addressed
-to a known agent explicitly reopens it until its next terminal notification. The snapshot carries separate agent entries and
+to a known agent explicitly reopens it until its next terminal notification.
+The matching SendMessage tool-result rolls back that reopen on is_error=true;
+it does not end an agent that was already running or undo a newer reopen.
+The snapshot carries separate agent entries and
 a background-work boolean, including validated in-flight Bash, Monitor and
 cron evidence; those tasks do not increase the subagent count.
 
@@ -145,8 +148,10 @@ end it. A synchronous Agent ends on its matching result. An anchored user
 one task-id, a recognized terminal status (completed, failed, stopped or killed)
 and a matching task output filename when present. A stopped notification may
 omit the output filename. With a tool-use-id it must correlate with the launch;
-without one it must identify a known agent. Multiple task ids are ambiguous and
-ignored. Monitor event envelopes without a terminal status are ignored.
+without one it must identify a known agent. Aggregate stopped envelopes without
+tool-use-id or output-file end every listed known agent; unknown ids and other
+task kinds are ignored. The canary verifies extraction of every aggregate id.
+Monitor event envelopes without a terminal status are ignored.
 Assistant text, tool output, quoted XML, partial envelopes, unrelated
 ids and unknown terminal statuses do not complete tasks. The records are an
 undocumented CLI interface, not cryptographic authentication of user content.

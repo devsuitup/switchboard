@@ -7,7 +7,7 @@ const readline = require('node:readline');
 const { assertLaunch, assertNotification, assertChildMeta } = require('./cli-task-format');
 
 async function scanTaskFiles(files, version) {
-  const counts = { launches: 0, notifications: 0, metadata: 0, completedNoTool: 0, failedNoTool: 0, aggregates: 0 };
+  const counts = { launches: 0, notifications: 0, metadata: 0, completedNoTool: 0, failedNoTool: 0, aggregates: 0, aggregateIds: 0 };
   for (const file of files) {
     const stream = fs.createReadStream(file);
     const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -18,8 +18,8 @@ async function scanTaskFiles(files, version) {
         if (e.toolUseResult?.isAsync === true && e.toolUseResult?.agentId) { assertLaunch(e, version); counts.launches++; }
         if (e.type === 'user' && typeof e.message?.content === 'string' &&
             e.message.content.trim().startsWith('<task-notification>') && /<status>/.test(e.message.content)) {
-          if ([...e.message.content.matchAll(/<task-id>/g)].length > 1) { counts.aggregates++; continue; }
-          assertNotification(e, version);
+          const parsed = assertNotification(e, version);
+          if (parsed.ids) { counts.aggregates++; counts.aggregateIds += parsed.ids.length; continue; }
           counts.notifications++;
           if (!e.message.content.includes('<tool-use-id>')) {
             if (e.message.content.includes('<status>completed</status>')) counts.completedNoTool++;

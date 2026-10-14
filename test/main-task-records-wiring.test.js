@@ -37,7 +37,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   assert.ok(start >= 0 && end > start);
   vm.runInContext(source.slice(start, end), ctx);
   const client = vm.runInContext('taskRecords', ctx);
-  t.after(async () => { await client.dispose(); assert.equal(path.dirname(dir), path.resolve(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { await client.dispose(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   const snapshots = await handler();
   assert.deepEqual(snapshots.map(s => s.parentSessionId), [id]);
   assert.equal(renderer.agents(id).length, 1, 'old write timestamp does not expire explicit live-owner evidence');

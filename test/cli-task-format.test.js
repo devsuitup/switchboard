@@ -10,7 +10,7 @@ test('mandatory CLI 2.1.296 fixtures pin consumed launch, notification, job and 
   assert.equal(fixture.cliVersion, '2.1.296');
   assertLaunch(fixture.launch, fixture.cliVersion);
   assertNotification(fixture.notification, fixture.cliVersion);
-  for (const key of ['completedNoTool', 'failedNoTool', 'killed', 'stoppedNoOutput']) assertNotification(fixture[key], fixture.cliVersion);
+  for (const key of ['completedNoTool', 'failedNoTool', 'killed', 'stoppedNoOutput', 'aggregateStopped']) assertNotification(fixture[key], fixture.cliVersion);
   assertChildMeta(fixture.childMeta, fixture.cliVersion);
   assert.equal(fixture.childMeta.toolUseId, fixture.use.message.content[0].id);
   assert.equal(fixture.use.message.content[0].name, 'Agent');
@@ -55,4 +55,11 @@ test('notification correlation accepts opaque CLI tool ids including Monitor inn
   const e = structuredClone(fixture.notification);
   e.message.content = e.message.content.replaceAll('toolu_111', '11111111-1111-4111-8111-111111111111:inner');
   assertNotification(e, fixture.cliVersion);
+});
+
+test('aggregate canary extracts opaque orphan-summary ids alongside agent ids', () => {
+  const entry = structuredClone(fixture.aggregateStopped);
+  entry.message.content = entry.message.content.replace('<status>', '<task-id>__orphan_summary__:shell</task-id><status>');
+  const parsed = assertNotification(entry, fixture.cliVersion);
+  assert.deepEqual(parsed.ids, [fixture.agentId, 'a2222222222222222', '__orphan_summary__:shell']);
 });
