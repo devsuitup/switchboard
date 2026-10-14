@@ -657,8 +657,15 @@ redrawn by `loadProjects()`.
   `dropLocalPtySession(id, 'process-exited')` for a non-remote row, and runs
   `updateRunningIndicators()` at once instead of waiting for the next poll.
 - `dropLocalPtySession` (`session-activity.js`) is the single drop: live
-  subagents first (`clearActiveSubagentsFor`), then `purgeActivityFor`. The
-  `pty-gone` scan uses the same helper.
+  PTY-source subagents first (`clearActiveSubagentsFor(id, 'local-ipc')`), then
+  `purgeActivityFor`. Attach transport exits preserve agents. Since #623,
+  `updateRunningIndicators` calls this helper only for previous-to-current
+  PTY removals, including hidden rows, rather than every non-running local row.
+  Unattached merged members and unrelated transcript rows retain their state.
+  Purge deletes only `localPtyStates` and its activity sequence, then projects
+  surviving transcript/remote snapshots and source-tracked agents; rekey moves
+  agent provenance with PTY state. See subagent-observability.md, "PTY cleanup
+  provenance", for the per-agent source contract.
 - `updateRunningIndicators()` calls `renderDefaultStatus()` whenever the set
   changed, so the status bar count follows `activePtyIds`.
 

@@ -465,25 +465,30 @@ test('public/app.js: the poll reconciles busy state and re-keys it on fork/detec
   assert.match(detected, /rekeyActivityState\(tempId, realId\)/, 'session detection must carry the activity state to the real id');
 });
 
-test('public/app.js: the pty-stop cleanup routes through purgeActivityFor and skips remote rows (F7)', () => {
-  // purgeActivityFor (session-activity.js) is the single writer for
-  // sessionBusyState/responseReadySessions/attentionSessions/activitySeqBySession
-  // outside setActivity/rekeyActivityState — app.js must not touch those maps
-  // directly, and must not purge a row whose busy state is owned by the
-  // remote watch channel instead of local PTY presence.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const scanStart = src.indexOf("document.querySelectorAll('.session-item').forEach(item => {");
-  assert.notEqual(scanStart, -1, 'the .session-item pty-set scan must still exist');
-  const body = src.slice(scanStart, scanStart + 1200);
-
-  assert.match(body, /if\s*\(!running\s*&&\s*!item\.dataset\.remoteAlias\)\s*\{/,
-    'the purge branch must skip rows carrying dataset.remoteAlias');
-  assert.match(body, /dropLocalPtySession\(id,\s*'pty-gone'\)/,
-    'the purge must go through the shared drop helper');
-  assert.ok(!/sessionBusyState\.delete\(id\)/.test(body),
-    'app.js must not delete from sessionBusyState directly anymore');
-  assert.ok(!/responseReadySessions\.delete\(id\)/.test(body),
-    'app.js must not delete from responseReadySessions directly anymore');
-  assert.ok(!/attentionSessions\.delete\(id\)/.test(body),
-    'app.js must not delete from attentionSessions directly anymore');
+test('public/app.js: the pty-stop cleanup routes through the shared drop and preserves remote activity (F7)', t => {
+  const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+  const { loadAppFunctions } = require('./app-source');
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  Object.assign(ctx.window, { gridCards: new Map(), renderDefaultStatus() {} });
+  ctx.sidebar.renderProjects([makeSampleProject({ sessions: [
+    { sessionId: 'local', modified: new Date().toISOString() },
+    { sessionId: 'remote', remoteAlias: 'vps', modified: new Date().toISOString() },
+  ] })], true);
+  const { updateRunningIndicators } = loadAppFunctions(ctx.context, {
+    functions: ['updateRunningIndicators'], declarations: ['_lastPtySignature'],
+  });
+  const drops = [];
+  const drop = ctx.window.dropLocalPtySession;
+  ctx.window.dropLocalPtySession = (id, via) => { drops.push(id); drop(id, via); };
+  ctx.window.activePtyIds.add('local');
+  updateRunningIndicators();
+  ctx.setActivity('local', true, 'test');
+  ctx.window.onRemoteActivityEvent({ sessionId: 'remote', alias: 'vps', at: Date.now() });
+  ctx.window.activePtyIds.delete('local');
+  updateRunningIndicators();
+  assert.deepEqual(drops, ['local']);
+  assert.equal(ctx.sessionBusyState.has('local'), false);
+  assert.equal(ctx.sessionBusyState.get('remote'), true);
+  assert.ok(ctx.document.getElementById('si-remote').classList.contains('cli-busy'));
 });

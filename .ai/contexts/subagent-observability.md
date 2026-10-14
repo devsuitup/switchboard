@@ -61,7 +61,7 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
   `session-transitions.js:detectSubagentTransitions()` (also consumed by
   `grid-view.js` and `jsonl-viewer.js`).
 - **State**: `activeSubagentsByParent` in `public/sidebar.js` —
-  `parentSessionId → Map<agentId, spawnedAt(ms)>` of spawned-but-not-completed
+  `parentSessionId → Map<agentId, Map<source, lastSeenAt(ms)>>` of live source contributions
   subagents. `buildSubagentItem()` / `appendSubagentChildren()` re-derive
   `.running` from this Map on every render, so the state survives a full
   sidebar rebuild; the IPC handlers only fast-path the visual toggle between
@@ -160,6 +160,45 @@ is delivered after reverification. Parent-key throttling still merges distinct
 children here; #622 owns the identity-preserving change. See
 `.ai/contexts/session-state.md`, "Verified watch notifications", for the
 verification bounds and write-metadata evidence limits.
+### PTY cleanup provenance (issue #623)
+
+`noteSubagentActivity` records independent timestamps for `local-ipc`,
+`attached-ipc`, `local-transcript`, `remote-watch`, and any future job source for each agent.
+An agent remains tracked while at least one contribution exists. The existing
+60s TTL expires each source separately; the timer targets the earliest source
+deadline. IPC from a daemon attach is tagged `attached-ipc` at ingestion;
+ordinary owned PTY IPC is `local-ipc`. Both IPC sources belong to the same
+main-process watcher: heartbeats refresh whichever IPC contributions already
+exist, even if the open entry has changed to an attach or disappeared, and
+completion releases both `local-ipc` and `attached-ipc`. A released IPC source
+cannot be resurrected by a heartbeat while another source still tracks the agent.
+
+`updateRunningIndicators` compares the previous and current PTY sets, cleaning
+only ids that were attached and have disappeared, independently of whether
+their row is rendered. An unrelated tab change does not call the cleanup path
+for an external row or an unattached member of a merged row. Transcript takeover
+also runs only for newly attached members, outside the DOM scan so filtered
+or not-yet-rendered rows receive it. Row ownership uses the existing
+`rowSessionIds` and `sessionItemEl` helpers; it adds no conversation-head selector.
+
+`dropLocalPtySession` removes `local-ipc` evidence for an ordinary owned PTY,
+then purges only its adapter state. For a daemon attach (`openSessions.attach`),
+the transport ending does not clear `attached-ipc` agents, even after terminal
+teardown has removed the open entry. After the attach tab closes, these agents
+stay visible for up to a minute, bounded by the last IPC sighting's 60s TTL;
+no ongoing job-lifecycle source owns them yet. The job-lifecycle source planned
+in #624 (D4, CLI task records) will own that evidence. SSH detach retains the remote
+adapter's existing handoff. A confirmed remote stop still uses the explicit
+all-source `clearActiveSubagentsFor` path. Purge repaints from surviving
+transcript/remote state and task evidence, without deleting another adapter's
+state. Rekey moves source contributions, merging matching sources by their
+latest timestamp, along with the PTY activity state.
+
+`test/dom-pty-cleanup-provenance.test.js` invokes the shipped app functions
+through `test/app-source.js` with the real sidebar and adapters. It covers
+unrelated tab changes, overlap, completion, owned exit, daemon/SSH detach,
+merged members, hidden rows, rekey and late heartbeats. This is a renderer
+contract regression; it does not launch Electron or stop external processes.
 
 `.has-busy-agents` used to light only for a parent reachable from
 `activeSessions` — the IPC pair `subagent-spawned`/`subagent-completed`

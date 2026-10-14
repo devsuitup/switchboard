@@ -204,10 +204,7 @@ function subagentTypeColor(type) {
 }
 
 // --- Live subagent tracking — see .ai/contexts/subagent-observability.md ---
-// parentSessionId → Map<agentId, lastSeenAtMs>. A spawn — real or _bootstrap —
-// adds an agent; a _heartbeat only refreshes one already tracked. The TTL below
-// then evicts agents that went silent without evicting one that merely runs
-// longer than a minute.
+// parentSessionId → Map<agentId, Map<source, lastSeenAtMs>>.
 const activeSubagentsByParent = new Map();
 
 function isSubagentActive(parentSessionId, agentId) {
@@ -233,11 +230,9 @@ function parentHasActiveSubagent(parentSessionId) {
 function pruneStaleSubagents() {
   const cutoff = Date.now() - SUBAGENT_LIVE_TTL_MS;
   for (const [parentId, map] of activeSubagentsByParent) {
-    for (const [agentId, lastSeenAt] of map) {
-      if (lastSeenAt < cutoff) {
-        // see docs/activity-trace.md (recv.subagent-completed via:ttl)
-        if (window.ATRACE) window.atrace('recv.subagent-completed', parentId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: lastSeenAt, to: null, via: 'ttl', fn: 'pruneStaleSubagents' });
-        map.delete(agentId);
+    for (const [agentId, sources] of map) {
+      for (const [source, lastSeenAt] of sources) {
+        if (lastSeenAt < cutoff) releaseSubagentSource(parentId, agentId, source, 'ttl');
       }
     }
     if (map.size === 0) activeSubagentsByParent.delete(parentId);
@@ -251,8 +246,10 @@ function scheduleSubagentTtlTick() {
   if (subagentTtlTimer) return;
   let oldest = Infinity;
   for (const map of activeSubagentsByParent.values()) {
-    for (const lastSeenAt of map.values()) {
-      if (lastSeenAt < oldest) oldest = lastSeenAt;
+    for (const sources of map.values()) {
+      for (const lastSeenAt of sources.values()) {
+        if (lastSeenAt < oldest) oldest = lastSeenAt;
+      }
     }
   }
   if (oldest === Infinity) return;
@@ -273,22 +270,41 @@ function runSubagentTtlTick() {
   scheduleSubagentTtlTick();
 }
 
-// Drop all live-subagent state for a parent whose PTY just stopped, and sync
-// the DOM immediately. Called from app.js's updateRunningIndicators():
-// stop-session kills the PTY without emitting subagent-completed, and
-// detectSubagentTransitions skips exited sessions, so no completion event
-// will ever arrive — without this the parent's has-busy-agents indicator
-// (and the children's .running) would linger until the TTL prune.
-function clearActiveSubagentsFor(parentSessionId) {
+// see .ai/contexts/subagent-observability.md (PTY cleanup provenance)
+function releaseSubagentSource(parentSessionId, agentId, source, via) {
+  const map = activeSubagentsByParent.get(parentSessionId);
+  const sources = map?.get(agentId);
+  if (!sources || (source !== undefined && !sources.has(source))) return;
+  const from = Math.max(...sources.values());
+  if (source === undefined) sources.clear();
+  else sources.delete(source);
+  const to = sources.size ? Math.max(...sources.values()) : null;
+  if (!sources.size) map.delete(agentId);
+  if (!map.size) activeSubagentsByParent.delete(parentSessionId);
+  if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: to === null ? 'delete' : 'set', agentId, from, to, source, via, fn: 'releaseSubagentSource' });
+  reflectSubagentRunningState(parentSessionId, agentId);
+}
+
+function clearActiveSubagentsFor(parentSessionId, source) {
   const map = activeSubagentsByParent.get(parentSessionId);
   if (!map) return;
-  const agentIds = [...map.keys()];
-  if (window.ATRACE) window.atrace('store.mutate', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete-parent', from: map.size, to: 0, agentIds, fn: 'clearActiveSubagentsFor' });
-  activeSubagentsByParent.delete(parentSessionId);
-  for (const agentId of agentIds) {
-    // see docs/activity-trace.md (recv.subagent-completed via:parent-cleared)
-    if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: map.get(agentId) ?? null, to: null, via: 'parent-cleared', fn: 'clearActiveSubagentsFor' });
-    reflectSubagentRunningState(parentSessionId, agentId);
+  for (const agentId of [...map.keys()]) releaseSubagentSource(parentSessionId, agentId, source, 'parent-cleared');
+}
+
+function rekeyActiveSubagents(oldId, newId) {
+  const oldMap = activeSubagentsByParent.get(oldId);
+  if (!oldMap) return;
+  const newMap = activeSubagentsByParent.get(newId) || new Map();
+  for (const [agentId, sources] of oldMap) {
+    const target = newMap.get(agentId) || new Map();
+    for (const [source, at] of sources) target.set(source, Math.max(target.get(source) || 0, at));
+    newMap.set(agentId, target);
+  }
+  activeSubagentsByParent.delete(oldId);
+  activeSubagentsByParent.set(newId, newMap);
+  for (const agentId of oldMap.keys()) {
+    reflectSubagentRunningState(oldId, agentId);
+    reflectSubagentRunningState(newId, agentId);
   }
 }
 
@@ -333,12 +349,15 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
 // single write path into activeSubagentsByParent, sole emitter of recv.subagent-spawned — see docs/activity-trace.md
 function noteSubagentActivity(parentSessionId, agentId, source, extra) {
   let map = activeSubagentsByParent.get(parentSessionId);
-  const from = map ? (map.get(agentId) ?? null) : null;
+  const previous = map?.get(agentId);
+  const from = previous ? Math.max(...previous.values()) : null;
   if (!map) {
     map = new Map();
     activeSubagentsByParent.set(parentSessionId, map);
   }
-  map.set(agentId, Date.now());
+  const sources = previous || new Map();
+  sources.set(source || 'local-ipc', Date.now());
+  map.set(agentId, sources);
   if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from, applied: true, source: source || 'local-ipc', fn: 'noteSubagentActivity', ...(extra || {}) });
   scheduleSubagentTtlTick();
   reflectSubagentRunningState(parentSessionId, agentId);
@@ -352,13 +371,16 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
       const { parentSessionId, agentId, _heartbeat } = payload || {};
       if (!parentSessionId || !agentId) return;
       const map = activeSubagentsByParent.get(parentSessionId);
-      // A heartbeat means "still alive", never "started": it must not create
-      // an entry for an agent we are not tracking.
-      if (_heartbeat && !(map && map.has(agentId))) {
+      const sources = _heartbeat
+        ? ['local-ipc', 'attached-ipc'].filter(source => map?.get(agentId)?.has(source))
+        : [openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc'];
+      if (!sources.length) {
         if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'ignore', agentId, heartbeat: true, applied: false, reason: 'heartbeat-for-untracked-agent', fn: 'onSubagentSpawned' });
         return;
       }
-      noteSubagentActivity(parentSessionId, agentId, 'local-ipc', { bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat });
+      for (const source of sources) {
+        noteSubagentActivity(parentSessionId, agentId, source, { bootstrap: !!payload._bootstrap, heartbeat: !!_heartbeat });
+      }
     });
   }
 
@@ -366,13 +388,8 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
     window.api.onSubagentCompleted((payload) => {
       const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
-      const map = activeSubagentsByParent.get(parentSessionId);
-      if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: 'delete', agentId, from: map ? (map.get(agentId) ?? null) : null, to: null, via: 'ipc', fn: 'onSubagentCompleted' });
-      if (map) {
-        map.delete(agentId);
-        if (map.size === 0) activeSubagentsByParent.delete(parentSessionId);
-      }
-      reflectSubagentRunningState(parentSessionId, agentId);
+      releaseSubagentSource(parentSessionId, agentId, 'local-ipc', 'ipc');
+      releaseSubagentSource(parentSessionId, agentId, 'attached-ipc', 'ipc');
     });
   }
 })();
