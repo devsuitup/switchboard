@@ -83,10 +83,11 @@ test('OSC idle is ordered against local head observation; stale progress and dec
   ctx.setActivity('root', false, 'onCliBusyState', { at: 1_800_000_000_015 });
   assert.equal(icon().title, 'Working');
 });
-test('projection is pure, attention consumes unread at its event boundary, and response ready keeps its slot', t => {
+test('projection is pure, attention consumes the ready glyph while unseen title writing survives', t => {
   const { ctx, turn, icon } = sidebar(t);
   ctx.window.activeSessionId = 'elsewhere';
   turn('open'); turn('closed');
+  ctx.window.noteWrittenActivity('root');
   assert.equal(icon().title, 'Response ready');
   const before = JSON.stringify(ctx.read('headTurns.get("root")'));
   ctx.window.headActivitySnapshot('root', { attention: true, liveness: 'alive' });
@@ -94,6 +95,7 @@ test('projection is pure, attention consumes unread at its event boundary, and r
   ctx.window.setAttention('root', true);
   ctx.window.setAttention('root', false);
   assert.equal(icon().title, 'Waiting for input');
+  assert.equal(ctx.document.querySelector('#si-root').classList.contains('unseen-written-activity'), true);
 });
 test('the slot exposes accessible text on initial paint and incremental updates', t => {
   const { turn, icon } = sidebar(t);

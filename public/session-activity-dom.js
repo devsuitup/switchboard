@@ -1,9 +1,51 @@
 const headTurns = new Map();
 
+function outputSurfaceVisible(element) {
+  if (!element?.isConnected || document.hidden || !document.hasFocus()) return false;
+  for (let parent = element; parent; parent = parent.parentElement) {
+    const style = window.getComputedStyle(parent);
+    if (parent.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+  }
+  return true;
+}
+
+function markTerminalOutputSeen(entry) {
+  if (!entry?.terminal || !outputSurfaceVisible(entry.element) || !entry.element.classList.contains('visible')) return;
+  const sessionId = entry.session.sessionId;
+  const buffer = entry.terminal.buffer.active;
+  if (buffer.viewportY < buffer.baseY) return;
+  const card = entry.element.closest('.grid-card');
+  if (typeof gridViewActive !== 'undefined' && gridViewActive) {
+    if (card?.dataset.outputVisible !== 'true') return;
+  } else if (sessionId !== activeSessionId) return;
+  const watermark = entry.renderedWrittenWatermark ?? 0;
+  markWrittenActivitySeen(sessionId, watermark);
+  if (watermark > 0 && watermark >= writtenActivitySnapshot(sessionId).writtenWatermark
+    && (headTurns.get(sessionId)?.ready || storedActivitySnapshot(sessionId).attention)) {
+    clearHeadUnread(sessionId);
+    setAttention(sessionId, false, 'output-seen');
+  }
+}
+
+function markTranscriptOutputSeen(sessionId, body, watermark) {
+  if (!outputSurfaceVisible(body) || body.scrollTop + body.clientHeight < body.scrollHeight - 1) return;
+  markWrittenActivitySeen(sessionId, watermark);
+}
+
+function markVisibleOutputSeen() {
+  if (typeof openSessions !== 'undefined') for (const entry of openSessions.values()) markTerminalOutputSeen(entry);
+  if (typeof jsonlViewerBody !== 'undefined' && outputSurfaceVisible(jsonlViewerBody)) jsonlViewerBody.onscroll?.();
+}
+
+window.addEventListener('focus', markVisibleOutputSeen);
+document.addEventListener('visibilitychange', markVisibleOutputSeen);
+
 function applyHeadTurnSnapshot(turn) {
   if (!turn || typeof turn.sessionId !== 'string' || !['open', 'closed', 'unknown'].includes(turn.state) || !Number.isFinite(turn.revision)) return;
   const previous = headTurns.get(turn.sessionId);
   if (previous && previous.revision >= turn.revision) return;
+  if (typeof turn.writtenOutput === 'string' && previous?.writtenOutput !== undefined && turn.writtenOutput !== previous.writtenOutput
+    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(turn.sessionId))) noteWrittenActivity(turn.sessionId);
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
@@ -26,7 +68,7 @@ function headActivitySnapshot(sessionId, snapshot) {
   const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
     || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
   const headTurn = idleNewer || (s.promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
-  return { ...s, headTurn, busy: alive && headTurn === 'open',
+  return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
     responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',
     liveness: alive ? 'alive' : s.liveness };
 }
@@ -132,6 +174,10 @@ function setCliBusy(el, on) {
   if (el) el.classList.toggle('cli-busy', !!on);
 }
 
+function setUnseenWrittenActivity(el, on) {
+  if (el) el.classList.toggle('unseen-written-activity', !!on);
+}
+
 function setHasBusyAgents(el, on) {
   if (el) el.classList.toggle('has-busy-agents', !!on);
 }
@@ -167,6 +213,7 @@ function applyStateClasses(sessionId, snapshot) {
   setCliBusy(item, busy);
   setHasBusyAgents(item, agentsBusy);
   setIsAlive(item, alive);
+  setUnseenWrittenActivity(item, snapshot?.unseenWrittenActivity);
   writeIconSlot(item.querySelector('.session-icon'), icon);
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'needs-attention': attention, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }

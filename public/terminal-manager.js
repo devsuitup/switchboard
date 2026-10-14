@@ -572,14 +572,16 @@ function flushTerminalBuffer(sessionId) {
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
   const savedViewportY = entry.terminal.buffer.active.viewportY;
+  const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
   entry.terminal.write(data, () => {
-    if (sessionId !== activeSessionId) return;
-    if (wasAtBottom) {
+    entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
+    if (sessionId === activeSessionId && wasAtBottom) {
       entry.terminal.scrollToBottom();
-    } else {
+    } else if (sessionId === activeSessionId) {
       // Restore scroll position so redraws don't yank the user away
       entry.terminal.scrollLines(savedViewportY - entry.terminal.buffer.active.viewportY);
     }
+    if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
 }
 
@@ -916,7 +918,11 @@ function replayHiddenBuffer(sessionId) {
   if (!raw && !acc.reset) return;
   if (acc.reset) entry.terminal.reset();
   if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
-  entry.terminal.write(raw);
+  const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
+  entry.terminal.write(raw, () => {
+    entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
+    if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
+  });
 }
 
 // Entry point for PTY data (wired to window.api.onTerminalData in app.js).
@@ -925,6 +931,10 @@ function replayHiddenBuffer(sessionId) {
 // this logic sat in untestable app.js.
 function handleTerminalData(sessionId, data) {
   const entry = openSessions.get(sessionId);
+  if (entry && entry.session.type !== 'terminal' && typeof createWrittenOutputFilter === 'function' && typeof noteWrittenActivity === 'function') {
+    entry.writtenOutputFilter ||= createWrittenOutputFilter();
+    if (entry.writtenOutputFilter(data)) noteWrittenActivity(sessionId);
+  }
   const hidden = !!entry && isHiddenSingleViewSession(sessionId);
   if (window.ATRACE) {
     const s = renderStatFor(sessionId);
@@ -1201,6 +1211,12 @@ function createTerminalEntry(session, opts = {}) {
     if (data === '\x1b[I' || data === '\x1b[O') return;
     window.api.sendInput(entry.session.sessionId, data);
   });
+  terminal.onScroll?.(() => {
+    if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
+  });
+  terminal.onRender?.(() => {
+    if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
+  });
   setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId, { onFind: openSearchBar });
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
@@ -1437,7 +1453,7 @@ function showSession(sessionId) {
   const item = sessionItemEl(sessionId);
   if (item) item.classList.add('active');
   setActiveSession(sessionId);
-  clearNotifications(sessionId);
+  clearNotifications(sessionId, 0);
   lruTouch(sessionId);
 
   if (gridViewActive) {
@@ -1489,6 +1505,7 @@ function showSession(sessionId) {
       if (tr) revealLap(tr, 'visibleMs');
       if (!hasOpenModal()) entry.terminal.focus();
       fitAndScroll(entry, tr, entry.webglWanted);
+      if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
       if (tr) revealLap(tr, 'focusMs');
     }
     refreshRemoteTerminalOnReturn(sessionId, previousActiveSessionId);

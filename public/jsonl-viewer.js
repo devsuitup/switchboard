@@ -748,6 +748,7 @@ function renderJsonlEntry(entry, toolResultMap) {
 }
 
 async function showJsonlViewer(session) {
+  const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(session.sessionId).writtenWatermark : 0;
   // Drain any watches from the previously-rendered viewer first — the new
   // render replaces the DOM and we'd otherwise keep polling files for blocks
   // the user no longer sees.
@@ -811,6 +812,11 @@ async function showJsonlViewer(session) {
 
   // Scroll to the bottom so the most recent messages are visible
   jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+  const markSeen = () => {
+    if (rendered > 0 && currentViewerSessionId === session.sessionId && typeof markTranscriptOutputSeen === 'function') markTranscriptOutputSeen(session.sessionId, jsonlViewerBody, watermark);
+  };
+  jsonlViewerBody.onscroll = markSeen;
+  requestAnimationFrame(markSeen);
 }
 
 // --- Subagent transcript view ---

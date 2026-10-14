@@ -1135,7 +1135,7 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Static tint replaces the animated shimmer — see docs/decisions/0002 */
-.session-item.cli-busy:not(.needs-attention) .session-summary {
+.session-item.unseen-written-activity:not(.needs-attention) .session-summary {
   color: #7fd4f9;
 }
 
@@ -1385,12 +1385,12 @@ body { display: flex; flex-direction: column; }
   animation: none;
 }
 
-.session-item.response-ready .session-name {
+.session-item.unseen-written-activity:not(.needs-attention) .session-name {
   color: #4fc3f7;
   font-weight: 600;
 }
 
-.session-item.response-ready .session-summary {
+.session-item.unseen-written-activity:not(.needs-attention) .session-summary {
   color: #4fc3f7;
 }
 

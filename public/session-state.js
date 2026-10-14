@@ -36,6 +36,8 @@ function createSessionState(kind) {
   let promptHintAt = null;
   let lastDescriptorStatus = null;
   let lastDescriptorAt = null;
+  let writtenWatermark = 0;
+  let seenWrittenWatermark = 0;
 
   function clearExclusive() {
     busy = false;
@@ -61,6 +63,12 @@ function createSessionState(kind) {
   function apply(event) {
     if (!event || typeof event.type !== 'string') return;
     switch (event.type) {
+      case 'writtenActivity':
+        if (Number.isSafeInteger(event.watermark) && event.watermark > writtenWatermark) writtenWatermark = event.watermark;
+        break;
+      case 'writtenActivitySeen':
+        if (Number.isSafeInteger(event.watermark) && event.watermark >= 0) seenWrittenWatermark = Math.max(seenWrittenWatermark, Math.min(writtenWatermark, event.watermark));
+        break;
       case 'busy':
         if (event.active) {
           clearExclusive();
@@ -170,10 +178,38 @@ function createSessionState(kind) {
       idleHintAt,
       promptHint,
       promptHintAt,
+      writtenWatermark,
+      seenWrittenWatermark,
+      unseenWrittenActivity: writtenWatermark > seenWrittenWatermark,
     };
   }
 
   return { apply, snapshot };
+}
+
+function createWrittenOutputFilter() {
+  let mode = 'text';
+  let escaped = false;
+  return data => {
+    let text = '';
+    for (const char of data) {
+      if (mode === 'string') {
+        if (char === '\x07' || escaped && char === '\\') mode = 'text';
+        escaped = char === '\x1b';
+      } else if (mode === 'escape') {
+        if (char === '[') mode = 'csi';
+        else if (']PX^_'.includes(char)) mode = 'string';
+        else if (char >= '0' && char <= '~') mode = 'text';
+      } else if (mode === 'csi') {
+        if (char >= '@' && char <= '~') mode = 'text';
+      } else if (char === '\x1b') {
+        mode = 'escape';
+      } else if (char >= ' ' && char !== '\x7f') {
+        text += char;
+      }
+    }
+    return !!text.trim();
+  };
 }
 
 // One icon slot per row, highest rung wins — see .ai/contexts/session-state.md
@@ -205,5 +241,5 @@ function rungActive(s, rung) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { createSessionState, renderSessionIcon };
+  module.exports = { createSessionState, renderSessionIcon, createWrittenOutputFilter };
 }

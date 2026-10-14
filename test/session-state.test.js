@@ -143,17 +143,20 @@ test('exclusivity: attention set while already busy leaves busy untouched — or
   assert.equal(snap.attention, true, 'a busy edge must never clear attention');
 });
 
-test('exclusivity: attention is exclusive with responseReady only — clearing attention does not resurrect it', () => {
+test('attention consumes the response-ready glyph but preserves unseen writing when cleared', () => {
   const s = createSessionState('local-pty');
+  s.apply({ type: 'writtenActivity', watermark: 1 });
   s.apply({ type: 'busy', active: true });
   s.apply({ type: 'busy', active: false, armReady: true }); // idle, unseen -> responseReady armed
   assert.equal(s.snapshot().responseReady, true);
 
   s.apply({ type: 'attention', active: true });
-  assert.equal(s.snapshot().responseReady, false, 'attention consumes the pending unread state');
+  assert.equal(s.snapshot().responseReady, false, 'attention consumes the response-ready glyph state');
+  assert.equal(s.snapshot().unseenWrittenActivity, true);
 
   s.apply({ type: 'attention', active: false });
   assert.equal(s.snapshot().responseReady, false, 'clearing attention must not restore responseReady — see .ai/contexts/session-state.md');
+  assert.equal(s.snapshot().unseenWrittenActivity, true);
 });
 
 // ---------------------------------------------------------------------------
