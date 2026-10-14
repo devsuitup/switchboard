@@ -615,8 +615,12 @@ function annotateRemoteAttachable(projects) {
       if (session.remoteAlias) {
         const info = hostInfo(session.remoteAlias);
         const descriptor = info.byId.get(session.sessionId);
+        const attachId = [session.headSessionId || session.sessionId, session.sessionId, ...(session.mergedMemberIds || [])]
+          .find(id => info.byId.has(id));
+        const attachDescriptor = info.byId.get(attachId);
+        session.remoteAttachSessionId = attachId || null;
         const hostBlocked = attachBlockReason(info.profile, info.consecutiveFailures);
-        const supportsAttach = !!(descriptor && remoteAttachAdapter.supports(descriptor));
+        const supportsAttach = !!(attachDescriptor && remoteAttachAdapter.supports(attachDescriptor));
         session.remoteAttachable = supportsAttach && !hostBlocked;
         session.remoteAttachBlocked = supportsAttach ? hostBlocked : null;
         session.remoteSendBlocked = sendBlockReason(info.profile);

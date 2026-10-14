@@ -41,6 +41,42 @@ function fixture(t) {
   return { root, folder, dir, write, msg, reread, rows, meta, db, metrics, search, settings, activeSessions };
 }
 
+test('a newer compaction mirror is the merged row head', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('opening', '01'), f.msg('shared', '02')]);
+  f.write('b', [f.msg('shared', '02'), f.msg('mirror-own', '04')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  const row = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'a');
+  assert.deepEqual(row.mergedMemberIds, ['b']);
+  assert.equal(row.headSessionId, 'b');
+});
+
+test('a representative resumed after its compaction mirror becomes the merged row head', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('opening', '01'), f.msg('shared', '02')]);
+  f.write('b', [f.msg('shared', '02'), f.msg('mirror-own', '04')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  fs.appendFileSync(path.join(f.dir, 'a.jsonl'), JSON.stringify(f.msg('resumed', '09')) + '\n');
+  cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) });
+  const row = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'a');
+  assert.deepEqual(row.mergedMemberIds, ['b']);
+  assert.equal(row.headSessionId, 'a');
+});
+
+test('equal modification times choose the first merged member as head, including a representative tie', t => {
+  const f = fixture(t);
+  const modified = '2026-10-04T10:00:00.000Z';
+  const base = { folder: f.folder, projectPath: f.root, modified, messageCount: 1 };
+  f.db.upsertCachedSessions([
+    { ...base, sessionId: 'root' },
+    { ...base, sessionId: 'z', mergedIntoSessionId: 'root' },
+    { ...base, sessionId: 'b', mergedIntoSessionId: 'root' },
+  ]);
+  const row = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'root');
+  assert.deepEqual(row.mergedMemberIds, ['b', 'z']);
+  assert.equal(row.headSessionId, 'b');
+});
+
 test('a three-member bridge attaches B continuation to B and keeps its sidebar activity there', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('opening', '01'), f.msg('a-own', '09')]);

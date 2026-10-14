@@ -17,7 +17,7 @@ async function waitUntil(check, { tries = 500, intervalMs = 10 } = {}) {
   return check();
 }
 
-function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live = false, fresh = false, indexed = true, remembered = false } = {}) {
+function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode = 'auto', live = false, liveId = id, fresh = false, indexed = true, remembered = false } = {}) {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
   const saved = ids.map(sessionId => ({ sessionId, projectPath: PROJECT, active: sessionId === ids.at(-1), ...(fresh ? { fresh: true } : {}) }));
@@ -26,7 +26,7 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live =
   const continuationQueries = [];
   const liveQueries = [];
   const row = {
-    sessionId: 'A', mergedMemberIds: members, projectPath: PROJECT,
+    sessionId: 'A', headSessionId, mergedMemberIds: members, projectPath: PROJECT,
     name: 'Web conversation', created: new Date().toISOString(), modified: new Date().toISOString(),
     messageCount: 1,
   };
@@ -41,9 +41,9 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], mode = 'auto', live =
     },
     getSessionsLiveElsewhere: async ids => {
       liveQueries.push([...ids]);
-      return live ? { [id]: LIVE } : {};
+      return live && ids.includes(liveId) ? { [liveId]: LIVE } : {};
     },
-    getSessionLiveElsewhere: async () => live ? LIVE : null,
+    getSessionLiveElsewhere: async sessionId => live && sessionId === liveId ? LIVE : null,
     openTerminal: async (sessionId, projectPath) => {
       spawned.push({ sessionId, projectPath });
       return { ok: true };
@@ -146,6 +146,15 @@ test('saved merged member B live elsewhere is skipped, checked by B and kept', a
   assert.deepEqual(h.liveQueries, [['B']], 'liveness must be checked for member B');
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped member stays saved like any live-elsewhere session');
   assert.match(h.document.getElementById('restore-live-elsewhere-toast')?.textContent || '', /live in pid 4242/);
+  assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
+});
+
+test('saved primary A with head B live elsewhere is skipped with a notice naming B and kept', async t => {
+  const h = setup(t, { id: 'A', headSessionId: 'B', live: true, liveId: 'B' });
+  await h.restoreWorkingSet();
+  assert.deepEqual(h.spawned, [], 'restore must not resume a conversation whose head is live elsewhere');
+  assert.match(h.document.getElementById('restore-live-elsewhere-toast')?.textContent || '', /Not reopened: B is live in pid 4242/);
+  assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped primary stays saved');
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
 });
 

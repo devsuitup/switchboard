@@ -605,6 +605,11 @@ function buildProjectsFromCache(showArchived) {
     if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
+    const orderedChildren = [...children].sort((a, b) =>
+      (b.modified || '').localeCompare(a.modified || '') || a.sessionId.localeCompare(b.sessionId)
+    );
+    const head = orderedChildren[0];
+    const headSessionId = head && (head.modified || '') >= (row.modified || '') ? head.sessionId : row.sessionId;
     let messageCount = row.messageCount;
     let modified = row.modified;
     for (const child of children) {
@@ -631,9 +636,8 @@ function buildProjectsFromCache(showArchived) {
       archived: meta?.archived || 0,
       remoteAlias: alias,
       bridgeSessionId: row.bridgeSessionId || null,
-      mergedMemberIds: [...children].sort((a, b) =>
-        (b.modified || '').localeCompare(a.modified || '') || a.sessionId.localeCompare(b.sessionId)
-      ).map(child => child.sessionId),
+      headSessionId,
+      mergedMemberIds: orderedChildren.map(child => child.sessionId),
     };
     if (!showArchived && s.archived) continue;
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")

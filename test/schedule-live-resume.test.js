@@ -104,7 +104,7 @@ function setup(t, { sandbox = false } = {}) {
     function pollActiveSessions() {}
   `, ctx);
   loadAppFunctions(ctx, {
-    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
+    functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
   });
   const app = loadAppFunctions(ctx, {
     functions: ['openSession', 'openSessionNow', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice'],

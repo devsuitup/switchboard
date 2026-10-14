@@ -17,8 +17,27 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false, onBlocked } = {}) {
   if (!session || session.type === 'terminal') return true;
+  const sessionIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])]
+    .filter(id => typeof id === 'string' && id))];
+  if (sessionIds.length > 1) {
+    const liveById = await liveElsewhereMany(sessionIds, { api });
+    if (live) liveById[session.sessionId] = live;
+    let verdict = true;
+    for (const id of sessionIds) {
+      if (!liveById[id]) continue;
+      const partVerdict = await guardResume({ sessionId: id }, {
+        automatic, api, confirm, alert, live: liveById[id], allowBgAttach,
+      });
+      if (partVerdict === false) {
+        onBlocked?.({ sessionId: id, live: liveById[id] });
+        return false;
+      }
+      if (typeof partVerdict === 'object') verdict = partVerdict;
+    }
+    return verdict;
+  }
   if (live === undefined) {
     try {
       live = await api.getSessionLiveElsewhere(session.sessionId);
@@ -27,7 +46,10 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
     }
   }
   if (!live) return true;
-  if (automatic && !(allowBgAttach && live.kind === 'bg')) return false;
+  if (automatic && !(allowBgAttach && live.kind === 'bg')) {
+    onBlocked?.({ sessionId: session.sessionId, live });
+    return false;
+  }
   if (live.kind === 'schedule') {
     if (typeof alert !== 'function') throw new TypeError('guardResume requires an alert adapter for a scheduled task notice');
     const where = live.cwd ? ` in ${live.cwd}` : '';
@@ -56,7 +78,8 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     if (automatic) return null;
     return await confirm('Could not check this conversation for continuations.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
   }
-  const candidates = result?.candidates || [];
+  const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
+  const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
   const listing = candidates.map(c => c.sessionId + ' (last activity: ' + (c.modified || 'unknown') + ')').join('\n');
   if (!result || result.unresolved) {
     if (automatic) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }

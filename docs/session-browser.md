@@ -111,6 +111,12 @@ Clicking a row opens the session in the terminal: it attaches to the running
 process, or resumes the session with `claude --resume`. A subagent row opens its
 transcript instead — see [Subagents](subagents.md).
 
+A compacted conversation can have several transcripts on one row. Clicking it
+first shows the open tab of its latest-modified part, then another open part
+from newest to oldest, then the original transcript's tab. If no part is open,
+it resumes the latest-modified part, including the original transcript if it
+was used again after compaction.
+
 ### Names
 
 The name shown is, in order of preference: a name given in Switchboard, the

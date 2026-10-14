@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 
-const row = { sessionId: 'A', mergedMemberIds: ['B', 'C'], projectPath: '/project' };
+const row = { sessionId: 'A', mergedMemberIds: ['B', 'C'], headSessionId: 'B', projectPath: '/project' };
 
 function setup(t) {
   const ctx = setupSidebarDom();
@@ -19,7 +19,7 @@ function setup(t) {
   });
   ctx.window.api.getSessionContinuations = async id => {
     checked.push(id);
-    return { candidates: [{ sessionId: 'B' }], unresolved: false };
+    return { candidates: [{ sessionId: 'D' }], unresolved: false };
   };
   const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow'], declarations: ['openingSessions'] });
   return { ctx, openSession, shown, prompts, checked };
@@ -34,13 +34,30 @@ test('opening a merged row focuses its open member without a continuation prompt
   assert.deepEqual(h.shown, ['B']);
 });
 
-test('opening a merged row keeps its own open tab as the first choice', async t => {
+test('opening a merged row prefers its head over its representative open tab', async t => {
   const h = setup(t);
   h.ctx.window.openSessions.set('A', { closed: false });
   h.ctx.window.openSessions.set('B', { closed: false });
   await h.openSession(row);
-  assert.deepEqual(h.shown, ['A']);
+  assert.deepEqual(h.shown, ['B']);
   assert.deepEqual(h.prompts, []);
+});
+
+test('opening a merged row prefers its representative head over open mirrors', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('A', { closed: false });
+  h.ctx.window.openSessions.set('B', { closed: false });
+  await h.openSession({ ...row, headSessionId: 'A' });
+  assert.deepEqual(h.shown, ['A']);
+});
+
+test('opening a merged row tries other parts before the representative when its head is closed', async t => {
+  const h = setup(t);
+  h.ctx.window.openSessions.set('A', { closed: false });
+  h.ctx.window.openSessions.set('B', { closed: true });
+  h.ctx.window.openSessions.set('C', { closed: false });
+  await h.openSession(row);
+  assert.deepEqual(h.shown, ['C']);
 });
 
 test('opening a merged row skips a closed member for another open member', async t => {

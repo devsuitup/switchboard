@@ -73,7 +73,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   loadAppFunctions(ctx, {
-    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+    functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
   });
   const app = loadAppFunctions(ctx, {
     declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],

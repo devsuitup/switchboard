@@ -94,7 +94,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function pollActiveSessions() {}
   `, ctx);
   loadAppFunctions(ctx, {
-    functions: ['rowSessionIds', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+    functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
   });
   vm.runInContext(topLevelDeclarations(APP_SRC, ['LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);

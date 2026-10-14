@@ -80,9 +80,14 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   member is alive (V, `public/session-activity-dom.js:27-36`).
 - R1.2 Identity, name, pin, archive flag, `bg` badge, status text and short id
   come from the representative only (V, `public/sidebar.js:1716-1747`).
-- R1.3 Clicking a row shows its first member with a non-closed open session;
-  otherwise it resolves continuations, then the live-elsewhere guard, then
-  attaches or resumes (V, `public/app.js:1498-1560`).
+- R1.3 Clicking a row shows its head's non-closed open tab, then the other
+  members newest first, then the representative. The head (`headSessionId`)
+  is the part with the newest own modification time; ties follow
+  `mergedMemberIds` order, with the representative last. With no open part,
+  the sidebar passes the head to continuation resolution, the live-elsewhere
+  guard and attach or resume (V, `session-cache.js` `buildProjectsFromCache`,
+  `public/session-activity-dom.js` `rowOpenId`, `public/sidebar.js`
+  `rebindSidebarEvents`, `public/app.js` `openSessionNow`).
 - R1.4 Stop on a row targets the first member with a local PTY, else the first
   alive member, else the representative — one member per click
   (V, `public/sidebar.js:1468-1473`).
