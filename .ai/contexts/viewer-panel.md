@@ -2,6 +2,111 @@
 
 **Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **3 callsites**: `memoryPanel` (Memory tab) and `workFilesPanel` (.work-files tab) in `public/app.js`, and the Activity trace viewer in `public/activity-trace-panel.js`. The file panel does not use it: a file opened there goes to the Touched editor (`.ai/contexts/touched-files.md`). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
 
+
+## File list workers
+
+Issue #616 slice 2 routes `get-memories` and `get-work-files` through
+`file-lists-worker-client.js` to `workers/file-lists-query.js`.
+`file-lists.js` contains the previous synchronous listing algorithms, executed
+only inside the worker. Main snapshots hidden projects and live project roots
+without walking the filesystem; live roots participate only in Memory's version,
+so session start/stop does not discard Work Files jobs. The worker adds the
+roots derived from the on-disk project folders, then uses the unchanged `isAllowedMemoryPath` and
+`scan-md-files` acceptance rules. Hidden-project filtering, Memory display
+paths and ordering, Work Files worktree deduplication, recursive traversal,
+the 200-file cap and total counts retain their previous behavior.
+
+Each list has its own lazy worker and client. They are separate from the
+Projects worker so a large Work Files traversal cannot queue ahead of a
+Projects query or Memory listing. This adds at most two filesystem workers,
+with no SQLite connection in either. Each client follows the Projects client
+pattern: one in-flight scan, one coalesced pending scan, fixed 30-second deadlines
+from caller registration, a five-minute dispatch ceiling, worker termination
+after errors or unobserved timed-out work, and three bounded snapshot conflicts.
+Unlike the Projects client's read-only fallback, an exhausted policy conflict
+rejects the listing rather than publishing files from an obsolete allowlist or
+hidden-project setting. Quit shuts down both clients. There is no main-thread
+filesystem fallback. A rejected list load keeps the renderer's previous list and
+shows a persistent error notice asking the user to reopen that tab to retry;
+a successful reload clears the notice.
+
+FTS preparation happens in the worker. Memory caches each file's acceptance
+and first 32,768 characters by precise mtime, size and real path; empty files
+are remembered too, and files no longer visited are evicted. `acceptMdFile`
+and `scanMdFiles` accept an optional content reader after their normal guards.
+That reader can return a string or `{content, nonempty}`: the latter retains
+the acceptance of a file whose non-whitespace text starts beyond the FTS body
+window, without retaining its entire body. The renderer payload contains no
+bodies. Work Files keeps the previous text policy: title-only entries for
+`.jsonl` and files over 64 KiB. Unchanged files produce no upserts. Changed,
+added, removed, newly hidden and cap-displaced entries produce targeted deltas;
+the title is part of the signature. Duplicate Memory paths share one FTS row.
+
+Main remains the sole SQLite writer. On the first request per type it reads
+existing indexed IDs so old rows absent from the current view can be removed.
+Signatures live for the application lifetime; a restart refreshes all visible
+files once in the background. A valid view is published before FTS applies;
+the client yields with `setImmediate` before the first write. A published scan
+releases its scan slot immediately, so the next request can scan and publish
+while indexing is still running. Applies have a separate single slot per kind
+and one coalesced pending delta, replaced by the latest published scan. Each
+scan snapshots the signatures already acknowledged by SQLite. Main reconciles
+deletions against those currently acknowledged IDs before applying the delta;
+if an omitted body has become necessary since the scan, it requests a fresh
+background scan while preserving the published view. This covers writes that
+the preceding apply completed after the newer scan took its snapshot, as well
+as changes in replaced pending applies. Cancelling or restarting a
+worker invalidates an apply but retains its slot until it unwinds, preventing
+overlapping writes across worker generations. Expiring an unpublished scan
+terminates only that worker and leaves an already published apply valid.
+Main applies at most `FILE_LIST_INDEX_MAX_ENTRIES`
+(50) changes and `FILE_LIST_INDEX_MAX_BODY_BYTES` (128 KiB of UTF-8 bodies)
+per `applySearchFileBatch` transaction and yields with `setImmediate` between
+batches. An oversized body is clamped to the byte cap at a complete UTF-8
+character without changing the worker payload, so later entries still apply.
+Before every batch it checks the apply generation and the hidden/live-root/save version. Accepted
+signatures advance only after a successful transaction; a conflict retries
+from those accepted batches even without pending callers, and a failed write
+  leaves its files dirty and logs the background failure without retracting the
+  published view. Apply failures retry through a fresh background scan, sharing
+  an already active scan when possible, within the same three-discard limit.
+  They preserve unrelated active and queued scan callers. A published job's
+  dispatch ceiling invalidates only that apply and retries its background work;
+  the apply retains its slot until it unwinds. Retried scans get a fresh ceiling
+  and become published only on their own reply. Caller timeouts do not cancel
+  a published apply; shutdown still stops it. Save and delete hooks invalidate the
+particular path, including Memory aliases of
+the resolved path, with Windows case and separator folding. Resolved Memory
+targets remain associated with listed IDs when their signatures become dirty.
+An inverse map of normalized literal and resolved path keys to listed IDs is
+built when the manifest is accepted for indexing (and seeded from existing
+SQLite IDs at the first snapshot). A save normalizes only its own path and
+looks up all matching IDs, including shared targets, without scanning the index.
+Successful deletions remove their IDs from this map; invalidation does not add
+unwritten entries to the accepted signatures.
+Unrelated Markdown saves leave the epochs alone: invalidations cover Claude
+memory directories, project instruction files, known listed aliases, and
+`.work-files/` for Work Files. Before a first snapshot there is no per-path set;
+afterwards `FILE_LIST_MAX_INVALIDATED_PATHS` (256) bounds it, collapsing overflow
+to whole-type invalidation until a successful apply. Saving an unlisted file
+does not grow the accepted-signature map. Invalidating a whole type is still
+supported. Structured clone and bounded SQLite/FTS writes remain on main; no live responsiveness or
+stress measurement was performed for this slice.
+
+Diagnostics records `ipc.get-memories` and `ipc.get-work-files` with `totalMs`
+(time to a valid view, including queue, listing and pre-publication retries)
+and `entries` (listed file descriptors, including duplicate Memory paths),
+behind the existing mutable
+`TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories both.
+`totalMs` excludes background index batches, including any previous job's apply.
+Only scan work can queue a list request.
+The new tests compare real-worker lists and initial FTS deltas to a frozen
+pre-change synchronous fixture, verify unchanged-body read counts and per-file
+changes, path guards, hidden projects and cap behavior, exercise client
+deadlines/conflicts/errors/shutdown, execute main's guarded batch writer, and
+verify row preservation, deletion and FTS integrity in an isolated real WAL DB
+under Electron's Node mode. The normal CI test runner discovers these files.
+
 ## Key files
 
 | File | LOC | Role |

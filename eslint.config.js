@@ -709,6 +709,9 @@ module.exports = [
   {
     files: [
       'main.js',
+      'file-lists.js',
+      'file-lists-worker-client.js',
+      'scan-md-files.js',
       'preload.js',
       'activity-trace.js',
       'db.js',

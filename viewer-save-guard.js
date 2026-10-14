@@ -51,8 +51,8 @@ function createPanelSaveHandlers(deps) {
       return writeIfUnmoved(resolved, content, expected, {
         ...io,
         afterWrite: () => {
-          if (/[\\/]\.work-files[\\/]/.test(resolved)) deps.invalidateFtsSignature('work-file');
-          if (resolved.endsWith('.md')) deps.invalidateFtsSignature('memory');
+          if (/[\\/]\.work-files[\\/]/.test(resolved)) deps.invalidateFtsSignature('work-file', resolved);
+          if (resolved.endsWith('.md')) deps.invalidateFtsSignature('memory', resolved);
         },
       });
     } catch (err) {
@@ -69,7 +69,7 @@ function createPanelSaveHandlers(deps) {
       if (!existsSync(resolved)) return { ok: false, error: 'file does not exist' };
       return writeIfUnmoved(resolved, content, expected, {
         ...io,
-        afterWrite: () => deps.invalidateFtsSignature('memory'),
+        afterWrite: () => deps.invalidateFtsSignature('memory', resolved),
       });
     } catch (err) {
       if (deps.onError) deps.onError(err);
