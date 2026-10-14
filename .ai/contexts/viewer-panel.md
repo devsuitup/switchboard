@@ -2,6 +2,67 @@
 
 **Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **3 callsites**: `memoryPanel` (Memory tab) and `workFilesPanel` (.work-files tab) in `public/app.js`, and the Activity trace viewer in `public/activity-trace-panel.js`. The file panel does not use it: a file opened there goes to the Touched editor (`.ai/contexts/touched-files.md`). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
 
+
+## File list workers
+
+Issue #616 slice 2 routes `get-memories` and `get-work-files` through
+`file-lists-worker-client.js` to `workers/file-lists-query.js`.
+`file-lists.js` contains the previous synchronous listing algorithms, executed
+only inside the worker. Main snapshots hidden projects and live project roots
+without walking the filesystem. The worker adds the roots derived from the
+on-disk project folders, then uses the unchanged `isAllowedMemoryPath` and
+`scan-md-files` acceptance rules. Hidden-project filtering, Memory display
+paths and ordering, Work Files worktree deduplication, recursive traversal,
+the 200-file cap and total counts retain their previous behavior.
+
+Each list has its own lazy worker and client. They are separate from the
+Projects worker so a large Work Files traversal cannot queue ahead of a
+Projects query or Memory listing. This adds at most two filesystem workers,
+with no SQLite connection in either. Each client follows the Projects client
+pattern: one in-flight job, one coalesced pending job, fixed 30-second deadlines
+from caller registration, a five-minute dispatch ceiling, worker termination
+after errors or unobserved timed-out work, and three bounded snapshot conflicts.
+Unlike the Projects client's read-only fallback, an exhausted policy conflict
+rejects the listing rather than publishing files from an obsolete allowlist or
+hidden-project setting. Quit shuts down both clients. There is no main-thread
+filesystem fallback.
+
+FTS preparation happens in the worker. Memory caches each file's acceptance
+and first 32,768 characters by precise mtime, size and real path; empty files
+are remembered too, and files no longer visited are evicted. `acceptMdFile`
+and `scanMdFiles` accept an optional content reader after their normal guards.
+That reader can return a string or `{content, nonempty}`: the latter retains
+the acceptance of a file whose non-whitespace text starts beyond the FTS body
+window, without retaining its entire body. The renderer payload contains no
+bodies. Work Files keeps the previous text policy: title-only entries for
+`.jsonl` and files over 64 KiB. Unchanged files produce no upserts. Changed,
+added, removed, newly hidden and cap-displaced entries produce targeted deltas;
+the title is part of the signature. Duplicate Memory paths share one FTS row.
+
+Main remains the sole SQLite writer. On the first request per type it reads
+existing indexed IDs so old rows absent from the current view can be removed.
+Signatures live for the application lifetime; a restart refreshes all visible
+files once. Main applies at most 50 changes per `applySearchFileBatch`
+transaction and yields with `setImmediate` between batches. Before every
+batch it checks the worker job and the hidden/live-root/save version. Accepted
+signatures advance only after a successful transaction; a conflict retries
+from those accepted batches, and a failed write leaves its files dirty. Save
+and delete hooks invalidate the particular path, including Memory aliases of
+the resolved path. Invalidating a whole type is still supported. Structured
+clone and bounded SQLite/FTS writes remain on main; no live responsiveness or
+stress measurement was performed for this slice.
+
+Diagnostics records `ipc.get-memories` and `ipc.get-work-files` with `totalMs`
+(including queue, retries and index batches) and `entries` (listed file
+descriptors, including duplicate Memory paths), behind the existing mutable
+`TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories both.
+The new tests compare real-worker lists and initial FTS deltas to a frozen
+pre-change synchronous fixture, verify unchanged-body read counts and per-file
+changes, path guards, hidden projects and cap behavior, exercise client
+deadlines/conflicts/errors/shutdown, execute main's guarded batch writer, and
+verify row preservation, deletion and FTS integrity in an isolated real WAL DB
+under Electron's Node mode. The normal CI test runner discovers these files.
+
 ## Key files
 
 | File | LOC | Role |

@@ -76,7 +76,6 @@ const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRe
 const { applyAndPersistArchived, clearArchivedEntry, archivePlanForGroups, validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanMdFiles, acceptMdFile } = require('./scan-md-files');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
@@ -159,6 +158,7 @@ const {
   deleteCachedSession, deleteCachedFolder, replaceSessionMetrics, touchCachedModified,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
+  getSearchFileIds, applySearchFileBatch,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles, getCachedMissingCustomTitle,
@@ -479,7 +479,7 @@ ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
-const { deriveProjectPath, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
 const { remapProjectTranscripts } = require('./project-remap');
 const { resolveDeletionTargets } = require('./delete-session-target');
 
@@ -1212,8 +1212,8 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected
     if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
     const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
     if (!result.ok) return result;
-    if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file');
-    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file', result.savedPath);
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory', result.savedPath);
     return { ok: true, version: result.version };
   } catch (err) {
     return { ok: false, error: err.code === 'ENOENT' ? 'File does not exist' : err.message };
@@ -1373,194 +1373,82 @@ ipcMain.handle('get-usage', async () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// FTS dirty-flag: skip full reindex when file set hasn't changed.
-// Each tab handler (get-memories, get-work-files) computes a cheap signature
-// from the collected file list (sorted filePath + mtimeMs + size) and compares
-// it to the last-indexed signature stored here. If equal, the expensive
-// deleteSearchType + upsertSearchEntries block is skipped entirely — including
-// the full-file readFileSync calls on every file.
-//
-// Invariant: the result payload (file tree returned to the UI) is built and
-// returned unconditionally; only the FTS side-effect is gated.
-//
-// Invalidation: save-memory and delete-work-file mutations clear the stored
-// signature for their respective type, forcing a fresh reindex on the next
-// tab open (even if mtime precision rounds to the same second on some FSes).
-// ---------------------------------------------------------------------------
-
-/** @type {Map<string, string>} type → last-indexed signature */
-const _ftsIndexSignature = new Map();
-
-/**
- * Compute a cheap stable signature for an array of indexed file descriptors.
- * @param {Array<{filePath: string, mtimeMs: number, size: number}>} files
- * @returns {string}
- */
-function computeIndexSignature(files) {
-  // Sort by filePath for determinism regardless of scan order.
-  const sorted = [...files].sort((a, b) => a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0);
-  return sorted.map(f => `${f.filePath}\x00${f.mtimeMs}\x00${f.size}`).join('\n');
+// see .ai/contexts/viewer-panel.md (File list workers)
+const { createFileListsWorkerClient } = require('./file-lists-worker-client');
+const fileListStates = new Map();
+for (const kind of ['memory', 'work-file']) {
+  fileListStates.set(kind, { epoch: 0, indexed: null, invalidated: new Set(), invalidateAll: false });
 }
 
-/**
- * Returns true when the file set for the given FTS type has changed since
- * the last reindex (or was never indexed), and updates the stored signature.
- * @param {string} type - FTS type key ('memory' | 'work-file')
- * @param {string} sig  - result of computeIndexSignature()
- * @returns {boolean}
- */
-function shouldReindex(type, sig) {
-  if (_ftsIndexSignature.get(type) === sig) return false;
-  _ftsIndexSignature.set(type, sig);
+function invalidateFtsSignature(kind, filePath) {
+  const state = fileListStates.get(kind);
+  if (!state) return;
+  state.epoch++;
+  if (filePath) state.invalidated.add(filePath);
+  else state.invalidateAll = true;
+  if (!state.indexed) return;
+  if (filePath) state.indexed.set(filePath, null);
+  else for (const file of state.indexed.keys()) state.indexed.set(file, null);
+}
+
+function fileListsPolicy(kind) {
+  const state = fileListStates.get(kind);
+  const hiddenProjects = (getSetting('global') || {}).hiddenProjects || [];
+  const activeProjectPaths = [...activeSessions.values()].map(session => session.projectPath).filter(Boolean);
+  return {
+    hiddenProjects, activeProjectPaths,
+    version: JSON.stringify([state.epoch, hiddenProjects, activeProjectPaths]),
+  };
+}
+
+function fileListsSnapshot(kind) {
+  const state = fileListStates.get(kind);
+  if (!state.indexed) state.indexed = new Map(getSearchFileIds(kind).map(id => [id, null]));
+  return {
+    ...fileListsPolicy(kind), kind, epoch: state.epoch, indexed: [...state.indexed],
+    invalidated: [...state.invalidated], invalidateAll: state.invalidateAll,
+  };
+}
+
+async function applyFileListIndex(kind, result, valid) {
+  const state = fileListStates.get(kind);
+  const signatures = new Map(result.manifest);
+  const changes = [...result.deletes.map(id => ({ id })), ...result.upserts.map(entry => ({ entry }))];
+  for (let offset = 0; offset < changes.length; offset += 50) {
+    if (!valid()) return false;
+    const batch = changes.slice(offset, offset + 50);
+    const deletes = batch.filter(change => !change.entry).map(change => change.id);
+    const entries = batch.filter(change => change.entry).map(change => change.entry);
+    applySearchFileBatch(kind, deletes, entries);
+    for (const id of deletes) state.indexed.delete(id);
+    for (const entry of entries) state.indexed.set(entry.id, signatures.get(entry.id));
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  if (!valid()) return false;
+  state.invalidated.clear();
+  state.invalidateAll = false;
   return true;
 }
 
-/**
- * Invalidate the stored signature for a given FTS type, forcing a full
- * reindex on the next get-memories / get-work-files call.
- * @param {string} type
- */
-function invalidateFtsSignature(type) {
-  _ftsIndexSignature.delete(type);
-}
+const fileListClients = new Map(['memory', 'work-file'].map(kind => [kind, createFileListsWorkerClient({
+  workerFactory: () => new Worker(path.join(__dirname, 'workers', 'file-lists-query.js'), { workerData: { claudeDir: CLAUDE_DIR, projectsDir: PROJECTS_DIR } }),
+  snapshot: () => fileListsSnapshot(kind),
+  getVersion: () => fileListsPolicy(kind).version,
+  apply: (result, valid) => applyFileListIndex(kind, result, valid),
+})]));
+const fileListsClient = {
+  request: ({ kind }) => fileListClients.get(kind).request(),
+  shutdown: () => { for (const client of fileListClients.values()) client.shutdown(); },
+};
 
 // --- IPC: get-memories ---
-function folderToShortPath(folder) {
-  // Convert "-Users-home-dev-MyClaude" → "dev/MyClaude"
-  const parts = folder.replace(/^-/, '').split('-');
-  const meaningful = parts.filter(Boolean);
-  return meaningful.slice(-2).join('/');
-}
-
-ipcMain.handle('get-memories', () => {
-  const global = getSetting('global') || {};
-  const hiddenProjects = new Set(global.hiddenProjects || []);
-
-  // The known-project set is rebuilt from disk on every isAllowedMemoryPath
-  // call, so binding it once per handler call keeps this off a per-file path.
-  const knownRoots = [...getKnownProjectPaths()];
-  const isAllowed = (filePath) => _isAllowedMemoryPath(filePath, knownRoots);
-
-  // Bodies of the files accepted below, kept for the FTS index at the end of
-  // this handler. They travel here rather than on the entries themselves: the
-  // entries go to the renderer, the bodies have no business going with them.
-  const bodies = new Map();
-  const listed = ({ content, ...entry }) => {
-    bodies.set(entry.filePath, content);
-    return entry;
-  };
-
-  // --- Global files ---
-  const globalFiles = scanMdFiles(CLAUDE_DIR, isAllowed).map(f => ({ ...listed(f), displayPath: '~/.claude' }));
-
-  // --- Per-project files ---
-  const projects = [];
-  try {
-    if (fs.existsSync(PROJECTS_DIR)) {
-      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-        .filter(d => d.isDirectory() && d.name !== '.git')
-        .map(d => d.name);
-
-      for (const folder of folders) {
-        const folderPath = path.join(PROJECTS_DIR, folder);
-        const projectPath = deriveProjectPath(folderPath, folder);
-        if (projectPath && hiddenProjects.has(projectPath)) continue;
-
-        // Use same 2-deep short path as Sessions tab (e.g. "dev/MyClaude")
-        // Splits on both separators — `cwd` is backslash-separated on Windows,
-        // where splitting on '/' alone left the whole path as one segment.
-        const shortName = projectPath
-          ? projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/')
-          : folderToShortPath(folder);
-        const files = [];
-        const seenPaths = new Set();
-
-        // 1. ~/.claude/projects/{folder}/ — claude-home .md files
-        const claudeHomeFiles = scanMdFiles(folderPath, isAllowed);
-        for (const f of claudeHomeFiles) {
-          files.push({ ...listed(f), displayPath: '~/.claude', source: 'claude-home' });
-          seenPaths.add(f.filePath);
-        }
-        // memory/MEMORY.md
-        const memoryDir = path.join(folderPath, 'memory');
-        const memoryFiles = scanMdFiles(memoryDir, isAllowed);
-        for (const f of memoryFiles) {
-          files.push({ ...listed(f), displayPath: '~/.claude', source: 'claude-home' });
-          seenPaths.add(f.filePath);
-        }
-
-        // 2. {projectPath}/ — project root CLAUDE.md, agents.md
-        if (projectPath) {
-          for (const name of ['CLAUDE.md', 'GEMINI.md', 'agents.md']) {
-            const fp = path.join(projectPath, name);
-            const accepted = acceptMdFile(fp, isAllowed);
-            if (accepted && !seenPaths.has(fp)) {
-              files.push({ ...listed(accepted), displayPath: shortName + '/', source: 'project' });
-              seenPaths.add(fp);
-            }
-          }
-
-          // 3. {projectPath}/.claude/ — commands/*.md and other .md files
-          const dotClaudeDir = path.join(projectPath, '.claude');
-          const dotClaudeFiles = scanMdFiles(dotClaudeDir, isAllowed);
-          for (const f of dotClaudeFiles) {
-            if (!seenPaths.has(f.filePath)) {
-              files.push({ ...listed(f), displayPath: shortName + '/.claude/', source: 'project' });
-              seenPaths.add(f.filePath);
-            }
-          }
-          // commands/*.md
-          const commandsDir = path.join(dotClaudeDir, 'commands');
-          const commandFiles = scanMdFiles(commandsDir, isAllowed);
-          for (const f of commandFiles) {
-            if (!seenPaths.has(f.filePath)) {
-              files.push({ ...listed(f), displayPath: shortName + '/.claude/commands/', source: 'project' });
-              seenPaths.add(f.filePath);
-            }
-          }
-        }
-
-        if (files.length > 0) {
-          projects.push({ folder, projectPath: projectPath || '', shortName, files });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error scanning memories:', err);
+ipcMain.handle('get-memories', async () => {
+  const started = TRACE.on ? performance.now() : null;
+  const result = await fileListsClient.request({ kind: 'memory' });
+  if (TRACE.on) {
+    if (started !== null) trace('ipc.get-memories', null, { totalMs: performance.now() - started, entries: result.entries });
   }
-
-  // Sort projects by most recent file modified date
-  projects.sort((a, b) => {
-    const aMax = Math.max(...a.files.map(f => new Date(f.modified).getTime()));
-    const bMax = Math.max(...b.files.map(f => new Date(f.modified).getTime()));
-    return bMax - aMax;
-  });
-
-  const result = { global: { files: globalFiles }, projects };
-
-  // Index all files for FTS — skipped when the file set is unchanged (dirty-flag).
-  try {
-    const allFiles = [
-      ...globalFiles.map(f => ({ ...f, label: 'Global' })),
-      ...projects.flatMap(p => p.files.map(f => ({ ...f, label: p.shortName }))),
-    ];
-    const sig = computeIndexSignature(allFiles.map(f => ({
-      filePath: f.filePath,
-      mtimeMs: new Date(f.modified).getTime(),
-      size: 0, // .md files don't carry size in scanMdFiles; mtime + path is sufficient
-    })));
-    if (shouldReindex('memory', sig)) {
-      deleteSearchType('memory');
-      upsertSearchEntries(allFiles.map(f => ({
-        id: f.filePath, type: 'memory', folder: null,
-        title: f.label + ' ' + f.filename,
-        body: bodies.get(f.filePath) ?? '',
-      })));
-    }
-  } catch {}
-
-  return result;
+  return result.view;
 });
 
 // --- IPC: read-memory ---
@@ -1583,120 +1471,13 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 ipcMain.handle('save-memory', (_event, filePath, content, expected) => panelSaves.saveMemory(filePath, content, expected));
 
 // --- IPC: get-work-files ---
-// Walks <projectPath>/.work-files/ recursively for all known projects.
-// Returns { projects: WorkFilesProject[] } — empty projects are skipped.
-// Caps at WORK_FILES_CAP files per project (most recent by mtime) to guard
-// against huge .work-files trees (e.g. tagpay has ~39k files).
-const WORK_FILES_CAP = 200;
-
-function walkWorkFiles(dir, baseDir, results) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
+ipcMain.handle('get-work-files', async () => {
+  const started = TRACE.on ? performance.now() : null;
+  const result = await fileListsClient.request({ kind: 'work-file' });
+  if (TRACE.on) {
+    if (started !== null) trace('ipc.get-work-files', null, { totalMs: performance.now() - started, entries: result.entries });
   }
-  for (const e of entries) {
-    const fullPath = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      walkWorkFiles(fullPath, baseDir, results);
-    } else if (e.isFile()) {
-      try {
-        const stat = fs.statSync(fullPath);
-        const relativePath = path.relative(baseDir, fullPath);
-        results.push({
-          filename: e.name,
-          filePath: fullPath,
-          relativePath,
-          modified: stat.mtime.toISOString(),
-          size: stat.size,
-        });
-      } catch {}
-    }
-  }
-}
-
-ipcMain.handle('get-work-files', () => {
-  const global = getSetting('global') || {};
-  const hiddenProjects = new Set(global.hiddenProjects || []);
-  // Dedupe by projectPath: multiple ~/.claude/projects/ folders (e.g. worktrees
-  // of the same repo) can derive to the same projectPath via
-  // resolveWorktreePath, which would otherwise produce N copies of the same
-  // header+file list in the UI.
-  const seen = new Set();
-  const projects = [];
-
-  try {
-    if (fs.existsSync(PROJECTS_DIR)) {
-      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-        .filter(d => d.isDirectory() && d.name !== '.git')
-        .map(d => d.name);
-
-      for (const folder of folders) {
-        const folderPath = path.join(PROJECTS_DIR, folder);
-        const projectPath = deriveProjectPath(folderPath, folder);
-        if (!projectPath) continue;
-        if (hiddenProjects.has(projectPath)) continue;
-        if (seen.has(projectPath)) continue;
-        seen.add(projectPath);
-
-        const workFilesDir = path.join(projectPath, '.work-files');
-        if (!fs.existsSync(workFilesDir)) continue;
-
-        const shortName = projectPath.split('/').filter(Boolean).slice(-2).join('/');
-
-        const allFiles = [];
-        walkWorkFiles(workFilesDir, workFilesDir, allFiles);
-
-        // Sort by modified desc
-        allFiles.sort((a, b) => new Date(b.modified) - new Date(a.modified));
-
-        const totalCount = allFiles.length;
-        const files = allFiles.slice(0, WORK_FILES_CAP);
-
-        if (files.length > 0) {
-          projects.push({ projectPath, shortName, files, totalCount });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error scanning work-files:', err);
-  }
-
-  // Sort projects by most recent file modified date
-  projects.sort((a, b) => {
-    const aMax = a.files.length > 0 ? new Date(a.files[0].modified).getTime() : 0;
-    const bMax = b.files.length > 0 ? new Date(b.files[0].modified).getTime() : 0;
-    return bMax - aMax;
-  });
-
-  // Index for FTS — text files ≤ 64KB, skip .jsonl — skipped when file set is unchanged.
-  try {
-    const allFiles = projects.flatMap(proj => proj.files.map(f => ({ ...f, proj })));
-    const sig = computeIndexSignature(allFiles.map(f => ({
-      filePath: f.filePath,
-      mtimeMs: new Date(f.modified).getTime(),
-      size: f.size,
-    })));
-    if (shouldReindex('work-file', sig)) {
-      deleteSearchType('work-file');
-      const TEXT_MAX = 64 * 1024;
-      const entries = allFiles.map(f => {
-        let body = '';
-        if (!f.relativePath.endsWith('.jsonl') && f.size <= TEXT_MAX) {
-          try { body = fs.readFileSync(f.filePath, 'utf8'); } catch {}
-        }
-        return {
-          id: f.filePath, type: 'work-file', folder: null,
-          title: f.proj.shortName + ' ' + f.relativePath,
-          body,
-        };
-      });
-      upsertSearchEntries(entries);
-    }
-  } catch {}
-
-  return { projects };
+  return result.view;
 });
 
 // --- IPC: read-work-file ---
@@ -1729,10 +1510,7 @@ ipcMain.handle('delete-work-file', (_event, filePath) => {
     }
     if (!fs.existsSync(resolved)) return { ok: false, error: 'not found' };
     fs.unlinkSync(resolved);
-    // Invalidate the FTS signature so the next get-work-files call reindexes.
-    // Deletion changes the path set, which the signature would catch; the explicit
-    // invalidation is a belt-and-braces guard for path-set mutations.
-    invalidateFtsSignature('work-file');
+    invalidateFtsSignature('work-file', resolved);
     return { ok: true };
   } catch (err) {
     console.error('Error deleting work file:', err);
@@ -2134,8 +1912,8 @@ ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content, 
       maxBytes: PANEL_FILE_MAX_BYTES,
     });
     if (!result.ok) return result;
-    if (result.savedPath.split(/[\\/]/).includes('.work-files')) invalidateFtsSignature('work-file');
-    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory');
+    if (result.savedPath.split(/[\\/]/).includes('.work-files')) invalidateFtsSignature('work-file', result.savedPath);
+    if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory', result.savedPath);
     return { ok: true, version: result.version };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -3741,6 +3519,7 @@ app.on('will-quit', () => {
   // worker's read-only connection is released before the WAL checkpoint.
   // shutdown() suppresses the restart logic before calling terminate().
   projectsClient.shutdown();
+  fileListsClient.shutdown();
   searchClient.shutdown();
   closeDb();
 });

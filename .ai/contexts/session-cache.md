@@ -49,6 +49,18 @@ Diagnostics emits main.loop once per second via perf_hooks.monitorEventLoopDelay
 
 Tests: app-projects-single-invoke, get-projects-worker-wiring, projects-worker-client, projects-worker-equivalence (real isolated WAL DB with an Electron Node-mode worker), main-loop-monitor, plus the existing cold-start and pending/archive tests. Regression coverage includes the reviewer's 51-caller arrival probe, caller deadlines across retries, three-conflict view publication, startup failure/retry and pre-read persistence. Real worker equivalence applies effects to a second unreconciled WAL DB copy and compares session_cache/cache_meta; dropping the worker upsert must fail that comparison. The test-only projects-worker-delayed.cjs wrapper intercepts the shared reconcile helper and uses Atomics.wait after folder publication, keeping the delay seam out of the shipped worker. Real-worker regressions cover recovery from a hung sweep and zero progress for unchanged folders versus one for a changed folder. No stress runs or live typing measurements.
 
+
+### Memory and Work Files queries
+
+Issue #616 slice 2 uses separate lazy filesystem workers for the Memory and
+Work Files lists. They reuse the Projects client's queue, caller-deadline,
+hard-ceiling and bounded-conflict pattern without sharing its SQLite reader
+or reconciliation lane. FTS deltas are prepared off main and applied by main
+in guarded, yielding batches; unchanged files are not re-indexed. See
+[viewer-panel.md](viewer-panel.md#file-list-workers) for the path-policy,
+incremental indexing and test contracts. `getKnownProjectPaths` remains on
+main for explicit guarded panel reads/saves; neither list handler calls it.
+
 ## Invariants
 
 - **`modified` is always ISO8601 string** (`2026-05-22T20:59:33.000Z`). `substr(modified, 1, 10)` is the canonical "day" derivation. Don't switch to epoch ms without migrating.

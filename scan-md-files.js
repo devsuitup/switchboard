@@ -20,14 +20,16 @@ const { isSensitivePath } = require('./ipc-path-validator');
  * @param {(filePath: string) => boolean} [isAllowed] - caller's allowlist, given the literal path
  * @returns {{filename: string, filePath: string, modified: string, content: string}|null}
  */
-function acceptMdFile(filePath, isAllowed) {
+function acceptMdFile(filePath, isAllowed, readContent = (file) => fs.readFileSync(file, 'utf8')) {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) return null;
     if (isSensitivePath(filePath)) return null;
     if (isAllowed && !isAllowed(filePath)) return null;
-    const content = fs.readFileSync(filePath, 'utf8');
-    if (!content.trim()) return null;
+    const read = readContent(filePath, stat);
+    const content = typeof read === 'string' ? read : read.content;
+    const nonempty = typeof read === 'string' ? !!content.trim() : read.nonempty;
+    if (!nonempty) return null;
     return { filename: path.basename(filePath), filePath, modified: stat.mtime.toISOString(), content };
   } catch {
     return null; // unreadable, dangling or absent
@@ -41,14 +43,14 @@ function acceptMdFile(filePath, isAllowed) {
  * @param {(filePath: string) => boolean} [isAllowed] - caller's allowlist, given the literal path
  * @returns {Array<{filename: string, filePath: string, modified: string}>}
  */
-function scanMdFiles(dir, isAllowed) {
+function scanMdFiles(dir, isAllowed, readContent) {
   const results = [];
   try {
     if (!fs.existsSync(dir)) return results;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!e.name.endsWith('.md')) continue;
       if (!e.isFile() && !e.isSymbolicLink()) continue;
-      const accepted = acceptMdFile(path.join(dir, e.name), isAllowed);
+      const accepted = acceptMdFile(path.join(dir, e.name), isAllowed, readContent);
       if (accepted) results.push(accepted);
     }
   } catch { /* unreadable directory */ }

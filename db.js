@@ -725,6 +725,21 @@ function upsertSearchEntries(entries) {
   upsertSearchEntriesBatch(entries);
 }
 
+function getSearchFileIds(type) {
+  return db.prepare('SELECT id FROM search_map WHERE type = ?').all(type).map(row => row.id);
+}
+
+const applySearchFileBatch = db.transaction((type, deletes, entries) => {
+  for (const id of deletes) {
+    const existing = stmts.searchMapLookup.get(id, type);
+    if (!existing) continue;
+    stmts.searchDeleteByRowid.run(existing.rowid);
+    stmts.searchDeleteContentByRowid.run(existing.rowid);
+    stmts.searchMapDeleteByRowid.run(existing.rowid);
+  }
+  upsertSearchEntriesBatch(entries);
+});
+
 function updateSearchTitle(id, type, title) {
   // For an external-content fts5 table, updating search_content is the
   // authoritative change (snippet() reads columns from there). The fts5 index
@@ -950,6 +965,7 @@ module.exports = {
   replaceSessionMetrics,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
+  getSearchFileIds, applySearchFileBatch,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete,
