@@ -161,7 +161,9 @@ is selected, the last active one included.
   id takes its place in the saved set; if that continuation is already open,
   it is shown and the marked session is simply dropped from the saved set. A
   continuation declined or failing to start stays marked and saved under the
-  new id, also when you open it before the marking has reached it.
+  new id, also when you open it before the marking has reached it. A saved
+  session you click while the marking is still running is marked too until it
+  is open, so it stays saved if it fails to start.
 - **Don't restore**, in a marked session's right-click menu, removes it from
   the saved set without starting it. So does deleting the session.
 - A marked session never clicked stays in the saved set, so the next start
@@ -177,9 +179,11 @@ is selected, the last active one included.
   after another. The grid has no card for a marked session, so in the grid
   they skip it.
 - A saved session that is a member of a merged web-session row marks that
-  row. Clicking the row resumes the marked member, or shows the member already
-  open; either way the row is open, so every member of it is dropped from the
-  marked and saved sessions. **Don't restore** and deleting the row drop every
+  row. Clicking the row resumes its newest marked member, or shows the member
+  already open; either way the row is open, so every member of it is dropped
+  from the marked and saved sessions. A second click, or the session keys,
+  while a member is still starting wait for that start: if it fails, the row's
+  marked members stay marked and saved. **Don't restore** and deleting the row drop every
   marked member of it, and the session keys resume a marked member under its
   own id, or show the member already open. After a reload, a member whose row
   already has a running member is not marked, whatever its place in the saved

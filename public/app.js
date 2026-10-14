@@ -483,7 +483,7 @@ async function tickRestorePlanner() {
         if (item.fresh && !indexed) continue;
         const reattached = live.has(item.sessionId) && indexed
           && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
-        const open = openSessions.get(item.sessionId);
+        const open = !openingSessions.has(item.sessionId) && openSessions.get(item.sessionId);
         const row = indexedRowOf(item.sessionId);
         const rowOpen = row && rowSessionIds(row).some(id => !openingSessions.has(id) && openSessions.has(id) && !openSessions.get(id).closed);
         if (!reattached && rowOpen) {
@@ -1796,9 +1796,22 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
-  const openId = customOptions?.type === 'attach'
+  const currentOpenId = () => (customOptions?.type === 'attach'
     ? (openSessions.has(session.sessionId) && !openSessions.get(session.sessionId).closed ? session.sessionId : null)
-    : rowOpenId(session);
+    : rowOpenId(session));
+  let openId = currentOpenId();
+  const pending = openId && openingSessions.get(openId);
+  if (pending && pending !== open) {
+    // see .ai/contexts/session-cache.md ("Restore on click")
+    await pending.promise.catch(() => {});
+    const settled = currentOpenId();
+    if (!settled && (pending.byUser || automatic)) return;
+    if (!settled) {
+      session = { ...session, sessionId: openId, mergedMemberIds: [] };
+      if (open) openingSessions.set(openId, open);
+    }
+    openId = settled;
+  }
   if (openId) {
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     showSession(openId);
