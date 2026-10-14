@@ -55,9 +55,12 @@ size even when it equals `lastPtySize`. Refresh never temporarily shrinks
 xterm or adds a WebGL context (#353).
 
 The fit corrects stale xterm columns before requesting the PTY nudge (#603).
-While Refresh is pending, xterm's resize callback leaves size synchronization
-to the refresh branch: a changed fit sends one refresh IPC instead of an
-ordinary resize followed by a refresh. `safeFit` returns the content-box-clamped
+While Refresh is pending, xterm's resize callback still synchronizes changed
+sizes with an ordinary resize IPC. A changed fit can therefore send an ordinary
+resize followed by the refresh; if the refresh timer bails on a hidden, closed
+or disconnected tab, the PTY size and `lastPtySize` remain synchronized.
+A pending promotion size sync still suppresses the callback; shared attachments
+still refuse resize IPC. `safeFit` returns the content-box-clamped
 proposal for tracing, or `null` if it used FitAddon's fallback. The trace takes
 `prevPty` before fitting, since ordinary xterm resize callbacks can otherwise
 overwrite it. Shared explicit Refresh still performs only a local repaint.
@@ -208,12 +211,16 @@ These observations require a live Windows app; the tests do not establish them.
 
 ## Stale queries in hidden replay
 
+The shared `public/terminal-replay-queries.js` matcher serves hidden renderer
+accumulation/reveal and main's reattach buffer (`output-buffer.js`).
 `removeCursorPositionQueries` removes DSR cursor position (`ESC[6n`), private
 DECXCPR (`ESC[?6n`) and primary device attributes (`ESC[c` / `ESC[0c`) in one
 pass. The CLI was observed polling DECXCPR and DA1; replaying them made xterm
 send `ESC[?73;3R` and `ESC[?1;2c` roughly 60 seconds late. Hidden accumulation
-also removes each query completed across chunk boundaries, including one-byte
-chunks, and the reveal filter covers pending live-buffer drains.
+and reattach accumulation also remove each query completed across chunk
+boundaries, including one-byte chunks, and the reveal filter covers pending
+live-buffer drains. Reattach matching checks the last four code units across
+buffer entries and updates size accounting when removing a split prefix.
 
 Live output keeps queries so the current requester can receive a timely reply.
 Responses, cursor movement, status requests and other escape sequences remain
@@ -237,6 +244,9 @@ is removed are left alone in that pass, preserving the existing replay rule.
   capability results and preload/main resize round trip.
 - `test/terminal-hidden-suspend.test.js`: shipped query filter, split DECXCPR
   and DA1 queries, live-buffer drain and preservation of live queries.
+- `test/output-buffer.test.js`: reattach DSR, DECXCPR and DA1 filtering at every
+  split and one byte at a time, preserved queries/responses, size accounting,
+  coalescing and non-recursive removal.
 - `test/activity-trace-probe-guards.test.js`: permanent guarded `pty.resize`.
 - `test/main-wiring-source-check.test.js`: guarded handler registry wiring,
   allowing the optional resize trace hook.

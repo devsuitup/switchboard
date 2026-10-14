@@ -814,22 +814,13 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
 }
 
 // see .ai/contexts/terminal-refresh.md
-const REPLAY_QUERIES = ['\x1b[6n', '\x1b[?6n', '\x1b[c', '\x1b[0c'];
-
-// see .ai/contexts/terminal-refresh.md
 function removeCursorPositionQueries(str) {
-  return str.replace(/\x1b\[(?:\??6n|0?c)/g, '');
+  return window.terminalReplayQueries.removeCursorPositionQueries(str);
 }
 
 // see .ai/contexts/terminal-refresh.md
 function splitReplayQuery(prev, next) {
-  if (!'[?60nc'.includes(next[0])) return null;
-  for (const query of REPLAY_QUERIES) {
-    for (let k = query.length - 1; k > 0; k--) {
-      if (prev.endsWith(query.slice(0, k)) && next.startsWith(query.slice(k))) return { prefix: k, remainder: query.length - k };
-    }
-  }
-  return null;
+  return window.terminalReplayQueries.splitReplayQuery(prev, next);
 }
 
 function appendToHiddenAccumulator(sessionId, data) {
@@ -1195,7 +1186,7 @@ function createTerminalEntry(session, opts = {}) {
   setupTerminalContextMenu(container, terminal, () => entry.session.sessionId, () => hoveredLinkUri);
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
-    if (entry.resizeSyncRequested || entry.refreshRequested) return;
+    if (entry.resizeSyncRequested) return;
     if (entry.session.remoteAlias && entry.remoteResizeAllowed !== true) return;
     // Only tell the PTY when the size really moved — see ptySizeChanged.
     if (!ptySizeChanged(entry, cols, rows)) return;

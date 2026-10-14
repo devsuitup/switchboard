@@ -236,7 +236,7 @@ test('refresh bursts and the resize observer share one delayed geometry measurem
   } finally { ctx.destroy(); }
 });
 
-test('Refresh fits stale columns once and traces the previous PTY size before overwriting it', () => {
+test('Refresh fits stale columns and traces the previous PTY size before ordinary and refresh resizes', () => {
   const ctx = setup({ proposeDimensions: () => ({ cols: 204, rows: 40 }) });
   try {
     const e = ctx.entry('local');
@@ -249,8 +249,11 @@ test('Refresh fits stale columns once and traces the previous PTY size before ov
     ctx.window.requestTerminalRefresh('local');
     ctx.advance(80);
     assert.equal(e.terminal.cols, 204);
-    assert.deepEqual(ctx.resizes, [{ id: 'local', cols: 204, rows: 40 }]);
-    assert.deepEqual(ctx.refreshes, ctx.resizes);
+    assert.deepEqual(ctx.resizes, [
+      { id: 'local', cols: 204, rows: 40 },
+      { id: 'local', cols: 204, rows: 40 },
+    ]);
+    assert.deepEqual(ctx.refreshes, [{ id: 'local', cols: 204, rows: 40 }]);
     assert.deepEqual(events, [
       { cat: 'refresh.request', sid: 'local', payload: { hidden: false } },
       { cat: 'refresh.fit', sid: 'local', payload: { cols: 204, rows: 40, prevPty: { cols: 218, rows: 40 }, proposed: { cols: 204, rows: 40 }, clientW: 1632 } },
@@ -461,4 +464,30 @@ test('a hidden or disconnected fit discards refresh before a later unrelated geo
       assert.deepEqual(ctx.refreshes, [], hidden ? 'hidden terminal' : 'disconnected terminal');
     } finally { ctx.destroy(); }
   }
+});
+
+test('a resize during pending Refresh reaches the PTY when the debounce bails on a hidden tab', () => {
+  let dims = { cols: 120, rows: 40 };
+  const ctx = setup({ proposeDimensions: () => dims });
+  try {
+    const e = ctx.entry('local');
+    e.terminal.resize(120, 40);
+    ctx.window.requestTerminalRefresh('local');
+    ctx.advance(200);
+    ctx.resizes.length = 0;
+    ctx.refreshes.length = 0;
+
+    ctx.window.requestTerminalRefresh('local');
+    e.terminal.resize(150, 35);
+    Object.defineProperty(e.element, 'clientHeight', { value: 0, configurable: true });
+    ctx.advance(200);
+    Object.defineProperty(e.element, 'clientHeight', { value: 800, configurable: true });
+    dims = { cols: 150, rows: 35 };
+    ctx.spies.resizeObservers[0].trigger();
+    ctx.advance(200);
+
+    assert.deepEqual(ctx.resizes, [{ id: 'local', cols: 150, rows: 35 }]);
+    assert.deepEqual({ ...e.lastPtySize }, dims);
+    assert.deepEqual(ctx.refreshes, []);
+  } finally { ctx.destroy(); }
 });

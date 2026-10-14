@@ -349,18 +349,21 @@ once.
 
 A hidden single-view session cannot answer: its output goes to the hidden
 accumulator, not to xterm. A session with no renderer attached cannot either.
-Both replay paths drop the query instead of keeping it:
+Both replay paths drop DSR `CSI 6n`, private DECXCPR `CSI ?6n` and primary
+device-attributes queries `CSI c` / `CSI 0c` instead of keeping them. They
+share the matcher in `public/terminal-replay-queries.js`; see
+[terminal-refresh.md](terminal-refresh.md), "Stale queries in hidden replay":
 
 - `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
-  remove `CSI 6n` from what they keep, including a query split across chunks
+  remove these queries from what they keep, including a query split across chunks
   and one left in the live write buffer when the session was hidden.
-- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes it
+- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes them
   on the way in, a query split across several chunks included (the last
-  three code units of the buffer are checked, across entries). That buffer also
+  four code units of the buffer are checked, across entries). That buffer also
   holds the queries a visible renderer already answered.
 
 The filter is not specific to Windows or to OpenConsole: it runs on every
-platform and removes any `CSI 6n` in a session's output, including one an
+platform and removes these queries in a session's replay output, including one an
 application asked itself (a shell's line editor measuring the cursor, for
 example). Such an application gets its answer while its session is visible; a
 query it sent while the session was hidden or detached goes unanswered, where
@@ -381,8 +384,8 @@ moved on from, and nothing tells the renderer whether OpenConsole is still
 waiting or a reply was already sent. Left unanswered, OpenConsole keeps its own
 idea of the cursor, as it did on 1.1.0 where it never asked; the next query it
 sends while the session is visible is answered live. Other terminal queries
-in a replay (`CSI c`, `CSI > q`, OSC colour queries) are not filtered; their
-replay is older than this change and not addressed here.
+in a replay (`CSI > c`, `CSI 10c`, `CSI > q`, OSC colour queries) and responses
+(`CSI ?1;2c`, `CSI ?73;3R`) are not filtered.
 
 Swallowed errors are not silent: `setPtyOpLogger(log)` in `main.js` routes them
 to `log.debug` as `[pty] <op> skipped session=<id> reason=<message>`. Debug level

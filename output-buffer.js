@@ -65,22 +65,7 @@
 const COALESCE_THRESHOLD = 64;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
-// Cursor-position query (DSR 6). Never replayed: see .ai/contexts/ipc-bridge.md,
-// "Cursor-position queries".
-const CURSOR_POSITION_QUERY = '\x1b[6n';
-
-// One pass: a query re-formed by the removal is left alone, see the doc above.
-function removeCursorPositionQueries(data) {
-  return data.includes(CURSOR_POSITION_QUERY) ? data.split(CURSOR_POSITION_QUERY).join('') : data;
-}
-
-// Length of the query prefix `prev` ends with that `next` completes, 0 if none.
-function splitQueryPrefixLength(prev, next) {
-  for (let k = CURSOR_POSITION_QUERY.length - 1; k > 0; k--) {
-    if (prev.endsWith(CURSOR_POSITION_QUERY.slice(0, k)) && next.startsWith(CURSOR_POSITION_QUERY.slice(k))) return k;
-  }
-  return 0;
-}
+const { removeCursorPositionQueries, splitReplayQuery, maxPrefixLength } = require('./public/terminal-replay-queries');
 
 // The last n code units of the buffer, across entries.
 function bufferTail(state, n) {
@@ -111,13 +96,12 @@ function dropBufferEnd(state, count) {
   }
 }
 
-// Only a chunk starting with '[', '6' or 'n' can complete a split query.
+// see .ai/contexts/terminal-refresh.md
 function dropSplitQuery(state, chunk) {
-  if (!'[6n'.includes(chunk[0])) return chunk;
-  const k = splitQueryPrefixLength(bufferTail(state, CURSOR_POSITION_QUERY.length - 1), chunk);
-  if (k === 0) return chunk;
-  dropBufferEnd(state, k);
-  return chunk.slice(CURSOR_POSITION_QUERY.length - k);
+  const split = splitReplayQuery(bufferTail(state, maxPrefixLength), chunk);
+  if (!split) return chunk;
+  dropBufferEnd(state, split.prefix);
+  return chunk.slice(split.remainder);
 }
 
 /**

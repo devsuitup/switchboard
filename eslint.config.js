@@ -489,6 +489,11 @@ module.exports = [
     },
   },
 
+  {
+    files: ['public/terminal-replay-queries.js'],
+    languageOptions: { globals: { module: 'writable' } },
+  },
+
   // Dual-mode matcher (public/terminal-path-links.js — see
   // .ai/contexts/terminal-path-links.md): classic <script> in the renderer,
   // require()-d in node:test. It declares the four link-provider globals
