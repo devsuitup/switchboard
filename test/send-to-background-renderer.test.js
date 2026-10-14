@@ -17,6 +17,8 @@ function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', 
   vm.runInContext(`
     var activeSubagentsByParent = new Map(), activePtyIds = new Set(['old']);
     var sandboxedSessions = new Map();
+    var lastActivityTime = new Map(), ptyGenerations = new Map(), pendingOpens = new Map();
+    function rekeyActivityState() {}
     function refreshSidebar() {} function updateTerminalHeader() {}
     var droppedPty = [];
     function dropLocalPtySession(id, via) { droppedPty.push([id, via]); }
@@ -25,9 +27,33 @@ function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', 
   `, h.ctx, { filename: __filename });
   if (agents) h.ctx.activeSubagentsByParent.set('old', new Set(Array.from({ length: agents }, (_, n) => n)));
   if (existing) vm.runInContext("openSessions.set('new', { session: rows.find(row => row.sessionId === 'new'), attach: false });", h.ctx, { filename: __filename });
-  const app = loadAppFunctions(h.ctx, { functions: ['sendSessionToBackground', 'backgroundActionReason'] });
+  const app = loadAppFunctions(h.ctx, { functions: ['sendSessionToBackground', 'backgroundActionReason', 'rekeySessionEnvironment'] });
   return { ...h, app: { ...h.app, ...app }, calls, destroyed, notices, confirmations };
 }
+
+test('background handoff preserves panel, activity, spawn buffers and original conversation fields', async t => {
+  const h = handoff(t);
+  const entry = h.ctx.openSessions.get('old');
+  Object.assign(entry.session, { name: 'JB title', starred: 1, archived: 1, summary: 'original', custom: 'retained' });
+  h.ctx.lastActivityTime = new Map([['old', 123]]);
+  h.ctx.ptyGenerations = new Map([['old', 7]]);
+  h.ctx.pendingOpens = new Map([['old', ['buffered']]]);
+  h.ctx.rekeyFilePanelState = (from, to) => { h.ctx.panelRekey = [from, to]; };
+  h.ctx.rekeyPanelTerminalState = (from, to) => { h.ctx.shellRekey = [from, to]; };
+  h.ctx.rekeyActivityState = (from, to) => { h.ctx.activityRekey = [from, to]; };
+  await h.app.sendSessionToBackground('old');
+  assert.deepEqual(h.ctx.panelRekey, ['old', 'new']);
+  assert.deepEqual(h.ctx.shellRekey, ['old', 'new']);
+  assert.deepEqual(h.ctx.activityRekey, ['old', 'new']);
+  const session = h.ctx.openSessions.get('new').session;
+  assert.equal(session.name, 'JB title');
+  assert.equal(session.custom, 'retained');
+  assert.equal(session.starred, 1);
+  assert.equal(session.archived, 1);
+  assert.equal(h.ctx.lastActivityTime.get('new'), 123);
+  assert.equal(h.ctx.ptyGenerations.get('old'), undefined);
+  assert.equal(h.ctx.pendingOpens.has('old'), false);
+});
 
 test('R1: success replaces the old tab with attach, follows the active tab and persists bg', async t => {
   const h = handoff(t);

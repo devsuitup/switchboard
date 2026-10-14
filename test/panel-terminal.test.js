@@ -38,6 +38,31 @@ function setupPanel(extra = {}) {
   return ctx;
 }
 
+test('background rekey retains an in-flight panel shell and its toolbar owner', async () => {
+  let finish;
+  const h = setupPanel({ openTerminal: () => new Promise(resolve => { finish = resolve; }) });
+  try {
+    h.window.createTerminalEntry(h.window.sessionMap.get('owner'));
+    h.window.switchPanel('owner');
+    const pending = h.window.openPanelTerminal('owner');
+    const shell = h.window.openSessions.get('panel:owner');
+    h.window.openSessions.set('bg', h.window.openSessions.get('owner'));
+    h.window.openSessions.delete('owner');
+    h.window.rekeyFilePanelState('owner', 'bg');
+    assert.equal(h.window.toolBarOwner(), 'bg');
+    assert.equal(typeof h.window.rekeyPanelTerminalState, 'function');
+    h.window.rekeyPanelTerminalState('owner', 'bg');
+    assert.equal(h.window.panelTerminalIsOpen('bg'), true);
+    assert.equal(h.inCtx("panelSpawnsInFlight.has('bg')"), true);
+    finish({ ok: true });
+    await pending;
+    assert.equal(h.window.panelTerminalOwnerOf('panel:owner'), 'bg');
+    assert.equal(h.window.openSessions.get('panel:owner'), shell);
+    assert.equal(h.inCtx('panelSpawnsInFlight.size'), 0);
+    assert.deepEqual(h.spies.stopSession, []);
+  } finally { h.destroy(); }
+});
+
 // Let an awaited continuation (and anything it chains) run.
 async function microtasks(n = 4) {
   for (let i = 0; i < n; i++) await Promise.resolve();

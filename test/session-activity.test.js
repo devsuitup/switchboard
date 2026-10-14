@@ -60,6 +60,18 @@ function setup(sessionIds = ['s1', 's2']) {
   };
 }
 
+test('a background rekey preserves the unread marker on the existing row before reload', () => {
+  const h = setup(['s1']);
+  try {
+    h.setActivity('s1', true);
+    h.setActivity('s1', false);
+    h.rekeyActivityState('s1', 'bg', true);
+    assert.equal(h.responseReadySessions.has('bg'), true);
+    assert.equal(h.item('bg')?.classList.contains('response-ready'), true);
+    assert.equal(h.item('s1'), null);
+  } finally { h.destroy(); }
+});
+
 // ---------------------------------------------------------------------------
 // The bug: the response-ready lock swallowed whole turns
 // ---------------------------------------------------------------------------

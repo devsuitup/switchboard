@@ -517,7 +517,7 @@ function projectsSnapshot() {
       sessionId: d.sessionId, kind: d.kind, jobId: d.jobId, cwd: d.cwd,
       name: d.name, nameSource: d.nameSource, startedAt: d.startedAt,
     })),
-    localJobs: [...bgAgents.getCachedJobs()].map(([id, job]) => [id, { state: job.state, name: job.name }]),
+    localJobs: [...bgAgents.getCachedJobs()].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId }]),
   };
   const liveVersion = JSON.stringify(state);
   return { ...state, liveVersion, version: getProjectsRevision() + liveVersion };
@@ -1738,13 +1738,14 @@ async function handleSendToBackground(_event, sessionId) {
   const read = session?.projectFolder
     ? createContinuationReader(path.join(PROJECTS_DIR, session.projectFolder, oldId + '.jsonl'), oldId)
     : async () => null;
-  return sendToBackground(sessionId, {
+  const result = await sendToBackground(sessionId, {
     getSession: id => activeSessions.get(id),
     getStatus: id => cliSessionState.getStatus(id)?.status,
     write: (entry, text) => writePty(entry, text, sessionId),
     tapOutput: (entry, fn) => { const listener = entry.pty.onData(fn); return () => listener.dispose(); },
     readContinuationIds: read,
     readDescriptors: () => cliSessionState.readAllDescriptors(),
+    onConfirmed: () => { if (session?.projectFolder) detectSessionTransitions(session.projectFolder); },
     now: Date.now,
     delay: ms => new Promise(resolve => setTimeout(resolve, ms)),
     waitForChange: ms => new Promise(resolve => {
@@ -1758,6 +1759,8 @@ async function handleSendToBackground(_event, sessionId) {
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
   });
+  if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
+  return result;
 }
 ipcMain.handle('send-session-to-background', handleSendToBackground);
 
@@ -2446,7 +2449,6 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const exitSignal = ptyExitSignalName(signal);
     const stopped = !!session.stopRequested;
     session.exited = true;
-    if (!session.isAttach && !session.isPlainTerminal) taskRecords.ownerDied(session.realSessionId || sessionId);
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
     shutdownMcpServer(mcpId);
@@ -2455,8 +2457,10 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     const finish = suppress => {
+      const realId = session.realSessionId || sessionId;
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
+      if (!suppress && releaseReal && !session.isAttach && !session.isPlainTerminal) taskRecords.ownerDied(realId);
       if (!suppress && mainWindow && !mainWindow.isDestroyed() && !appQuitting) {
         mainWindow.webContents.send('process-exited', realId, exitCode, exitSignal, stopped, session.generation);
         if (realId !== sessionId && activeSessions.get(sessionId) === session) {
@@ -2479,7 +2483,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
         log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
       }
     };
-    if (!holdBackgroundExit(session, finish)) finish(false);
+    if (!holdBackgroundExit(session, finish) && !sessionTransitions.holdContinuationExit(sessionId, session, finish)) finish(false);
   });
 }
 
@@ -2575,6 +2579,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // Reattach to existing session
   if (activeSessions.has(sessionId)) {
     const session = activeSessions.get(sessionId);
+    if (session.backgrounded && sessionOptions?.type === 'attach') {
+      if (!JOB_ID_RE.test(String(sessionOptions.jobId)) || sessionOptions.jobId !== session.backgroundJobId) return { ok: false, error: 'invalid background session id' };
+      activeSessions.delete(sessionId);
+      if (!session.exited) killPty(session, sessionId);
+    } else {
     if (session.backgrounding && session.exited) return { ok: false, error: 'The terminal exited while its background handoff is being checked. Wait for the result, then open the conversation from the sidebar.' };
     session.rendererAttached = true;
     session.firstResize = !session.isPlainTerminal;
@@ -2602,6 +2611,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       remoteResizeAllowed: session.remoteResizeAllowed,
       generation: session.generation,
     };
+    }
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
@@ -3192,7 +3202,23 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
-  rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' }); },
+  rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' || kind === 'background' }); },
+  rekeyMetadata: (fromId, toId, kind) => {
+    if (kind !== 'background') return;
+    const row = getCachedSession(fromId);
+    require('./db').rekeySessionMeta(fromId, toId, row?.customTitle || row?.aiTitle || row?.summary);
+  },
+  getBackgroundTarget: id => {
+    const descriptors = cliSessionState.getSidebarDescriptors().filter(d => d.sessionId.toLowerCase() === id.toLowerCase());
+    if (descriptors.length) {
+      const jobs = new Set(descriptors.filter(d => d.kind === 'bg' && d.jobId).map(d => d.jobId));
+      if (jobs.size !== 1 || descriptors.some(d => d.kind !== 'bg')) return null;
+      return descriptors[0];
+    }
+    const jobs = [...bgAgents.getCachedJobs()].filter(([, job]) => job.sessionId?.toLowerCase() === id.toLowerCase()
+      && ['working', 'blocked'].includes(job.state));
+    return jobs.length === 1 ? { kind: 'bg', jobId: jobs[0][0], sessionId: id } : null;
+  },
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
   getDescriptorIdentity: snapshot => cliSessionState.getDescriptorIdentity(snapshot),
 });
@@ -3212,6 +3238,7 @@ cliSessionState.init({
   },
 });
 cliSessionState.onStatusesChanged(() => {
+  for (const folder of new Set([...activeSessions.values()].map(s => s.projectFolder).filter(Boolean))) detectSessionTransitions(folder);
   notifyRendererProjectsChanged();
   const observed = new Set();
   for (const descriptor of cliSessionState.getSidebarDescriptors()) {
@@ -3290,6 +3317,9 @@ bgAgents.init({
 const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
 bgAgents.onJobsChanged(notifyRendererProjectsChanged);
+bgAgents.onJobsChanged(() => {
+  for (const folder of new Set([...activeSessions.values()].map(s => s.projectFolder).filter(Boolean))) detectSessionTransitions(folder);
+});
 const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
   for (const job of roster) {
     if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);

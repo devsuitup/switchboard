@@ -150,7 +150,7 @@ function renderer(t) {
   return { window, context: dom.getInternalVMContext(), ...loadAppFunctions(dom.getInternalVMContext(), {
     sourcePath: path.join(__dirname, '..', 'public', 'agents-view.js'),
     declarations: ['agentsPendingVerbs', 'agentsVerbErrors', 'agentsViewActive', 'agentsDaemonReachable'],
-    functions: ['agentJobIsLive', 'agentVerbAvailability', 'agentsEntryKey', 'renderAgentDetail',
+    functions: ['agentJobIsLive', 'agentVerbAvailability', 'agentsEntryKey', 'agentDisplayName', 'renderAgentDetail',
       'formatTokens', 'formatAgentAge', 'agentsEscapeAttr', 'runAgentVerb', 'refreshAgentsRoster'],
   }) };
 }

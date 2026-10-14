@@ -180,7 +180,7 @@ function syncLocalPtyAgentsBusy(sessionId, active) {
 }
 
 // Carry the activity state across a session-detected / session-forked re-key.
-function rekeyActivityState(oldId, newId) {
+function rekeyActivityState(oldId, newId, preserveRow = false) {
   if (oldId === newId) return;
   const state = localPtyStates.get(oldId);
   if (window.ATRACE) {
@@ -188,6 +188,7 @@ function rekeyActivityState(oldId, newId) {
     window.atrace('store.rekey', newId, { from: oldId, busy: snap ? snap.busy : null, ready: snap ? snap.responseReady : false, attention: snap ? snap.attention : false, fn: 'rekeyActivityState' });
   }
   const oldItem = sessionItemEl(oldId);
+  if (preserveRow && oldItem && !sessionItemEl(newId)) oldItem.dataset.sessionId = newId;
   setCliBusy(oldItem, false);
   setResponseReady(oldItem, false);
   setNeedsAttention(oldItem, false);

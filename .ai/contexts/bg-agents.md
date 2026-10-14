@@ -37,7 +37,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
 4. Job watchers start with the app to keep the sidebar cache current. They
-   notify projects only when the job id to state/name projection changes;
+   notify projects only when the job id to state/name/name-source/conversation projection changes;
    token/detail/tempo/fan updates do not notify projects. Automatic roster
    rebuilds require an `onChange` subscriber, first installed by
    `get-bg-agents`, and stop when the last subscriber leaves. Explicit CLI
@@ -92,6 +92,48 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
     not an atomic lock on the conversation.
 
 ## Sidebar membership (#620)
+
+### Background continuations (#639)
+
+A complete, unambiguous `continued-in` record in the interactive conversation
+plus a live `kind: bg` descriptor or a working/blocked job identifies a
+background continuation. Its worker belongs to the daemon, so the interactive
+PTY ancestry check cannot authorize it. `session-transitions.js` checks this
+proof before the closest-writer cache and before requiring a target transcript.
+The job and descriptor subscriptions in `main.js` rerun detection even when no
+transcript has changed and Agents has never opened. Ambiguous links and
+interactive strangers do not authorize a background re-key.
+
+The original row becomes the background UUID. `sidebar-bg-sessions.js` retains
+the original conversation fields, keeps predecessors as merged members, and
+suppresses the target's separate row. The existing `bg` marker remains the
+membership signal. `parseJobState` reads `name`/`nameSource`; collision names
+cannot win through CLI, descriptor or job fallback. The Agents row and detail
+prefer the conversation's Switchboard name or original title. The handoff still
+submits `/bg` only, without `--name` or a suffix.
+
+Before publishing the re-key, `db.rekeySessionMeta` moves name, star and archive
+in one transaction. A missing Switchboard name uses the original cached title.
+The renderer keeps the existing xterm and open-set position, migrates activity,
+panel state and toolbar owner, panel-shell ownership and in-flight flags,
+last activity, sandbox flag, PTY generations, pending opens and restore entries.
+Terminal output buffers and grid handlers follow the new UUID. An in-flight
+panel-shell completion reads the migrated owner from its original state object;
+its physical `panel:<old>` PTY id stays unchanged until that shell closes.
+
+The background payload crosses `preload.js` and attaches in the preserved
+terminal. `open-terminal` replaces only the proven handoff's interactive PTY,
+validates the matching job id before doing so, and spawns `claude attach`.
+The button confirms/re-keys before releasing a held physical exit. A typed
+`/bg` with one proven continuation retains a just-exited source for at most
+15 seconds while daemon proof arrives; expiry releases the ordinary exit.
+`session.forked` activity traces include `kind: background` and `jobId`, including
+when Diagnostics is enabled after startup.
+
+Regression evidence: `test/bg-continuation-639.test.js`,
+`test/bg-rekey-renderer-639.test.js`, and the handoff, panel, activity,
+sidebar and Agents suites. `/clear` and fork keep their existing ownership and
+fresh-conversation rules; metadata migration applies only to background.
 
 The sidebar's `bg` membership also arrives through the local descriptor-backed
 projects payload (`bgJobId`/`bgSessionId`, #620), independently of opening this

@@ -2,14 +2,14 @@ const path = require('path');
 const fs = require('fs');
 const { readSubagentMeta, classifyUserText } = require('./read-session-file');
 const { scanContinuationIndex } = require('./session-continuations');
-const { enabled: TRACE, trace } = require('./activity-trace');
+const { state: TRACE, trace } = require('./activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
 
 /**
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord, getBackgroundTarget, rekeyMetadata;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -22,6 +22,8 @@ function init(ctx) {
   getDescriptorIdentity = ctx.getDescriptorIdentity || (() => null);
   setTimeoutFn = ctx.setTimeout || setTimeout;
   hasTaskRecord = ctx.hasTaskRecord || (() => false);
+  getBackgroundTarget = ctx.getBackgroundTarget || (() => null);
+  rekeyMetadata = ctx.rekeyMetadata || (() => {});
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -80,12 +82,12 @@ function recordRekey(oldId, newId) {
 const recheckTimers = new Map();
 const RECHECK_MS = 1000;
 
-function scheduleRecheck(folder) {
+function scheduleRecheck(folder, ms = RECHECK_MS) {
   if (recheckTimers.has(folder)) return;
   const timer = setTimeoutFn(() => {
     recheckTimers.delete(folder);
     detectSessionTransitions(folder);
-  }, RECHECK_MS);
+  }, ms);
   if (timer && typeof timer.unref === 'function') timer.unref();
   recheckTimers.set(folder, timer);
 }
@@ -257,7 +259,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           _lastHeartbeatAt: now,
           _recheckStart: recheck ? now : null,
         });
-        if (TRACE) trace('subagent.assumed-finished', sessionId, { agentId, ageMs: now - mtimeMs, bootstrap: isBootstrap, recheck });
+        if (TRACE.on) trace('subagent.assumed-finished', sessionId, { agentId, ageMs: now - mtimeMs, bootstrap: isBootstrap, recheck });
         continue;
       }
 
@@ -272,7 +274,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
         _lastHeartbeatAt: now,
       });
       log.info(`[subagent-spawn] parent=${sessionId} agentId=${agentId} type=${meta.agentType || 'unknown'}`);
-      if (TRACE) trace('subagent.spawned', sessionId, { agentId, kind: 'spawn', subagentType: meta.agentType || null, ageMs: now - mtimeMs, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+      if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: 'spawn', subagentType: meta.agentType || null, ageMs: now - mtimeMs, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('subagent-spawned', {
           parentSessionId: sessionId,
@@ -286,7 +288,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
       // grows is alive: undo the assumption and emit the withheld spawn.
       if (mtimeMs !== known.mtimeMs) {
         const meta = readSubagentMeta(filePath) || {};
-        if (TRACE) trace('subagent.rehabilitated', sessionId, { agentId, withheldForMs: now - known._recheckStart, subagentType: meta.agentType || null, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+        if (TRACE.on) trace('subagent.rehabilitated', sessionId, { agentId, withheldForMs: now - known._recheckStart, subagentType: meta.agentType || null, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         known.mtimeMs = mtimeMs;
         known.completed = false;
         known._completedAt = null;
@@ -322,7 +324,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           // see .ai/contexts/subagent-observability.md
           const stale = unseenForMs >= SUBAGENT_LIVE_TTL_MS;
           known._lastHeartbeatAt = now;
-          if (TRACE) trace('subagent.spawned', sessionId, { agentId, kind: stale ? 'reannounce' : 'heartbeat', subagentType: known.subagentType || null, sent: true });
+          if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: stale ? 'reannounce' : 'heartbeat', subagentType: known.subagentType || null, sent: true });
           mainWindow.webContents.send('subagent-spawned', {
             parentSessionId: sessionId,
             agentId,
@@ -341,7 +343,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           known._recheckStart = now;
           known._recheckMs = LIVE_RECHECK_MS;
           log.info(`[subagent-complete] parent=${sessionId} agentId=${agentId}`);
-          if (TRACE) trace('subagent.completed', sessionId, { agentId, stableForMs: now - known._stableStart, reason: 'mtime-stable', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+          if (TRACE.on) trace('subagent.completed', sessionId, { agentId, stableForMs: now - known._stableStart, reason: 'mtime-stable', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('subagent-completed', {
               parentSessionId: sessionId,
@@ -440,7 +442,8 @@ function isFresh(filePath) {
 }
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
-function rekeySession(sessionId, newId, session, currentFiles, kind) {
+function rekeySession(sessionId, newId, session, currentFiles, kind, background) {
+  rekeyMetadata(sessionId, newId, kind);
   log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
   session.knownJsonlFiles = new Set(currentFiles);
   session.realSessionId = newId;
@@ -454,10 +457,13 @@ function rekeySession(sessionId, newId, session, currentFiles, kind) {
   rekeyMcpServer(sessionId, newId);
   rekeyActivity(sessionId, newId, kind);
   const mainWindow = getMainWindow();
-  if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+  if (background) { session.backgrounded = true; session.backgroundJobId = background.jobId; }
+  if (TRACE.on) trace('session.forked', sessionId, { newId, kind, jobId: background?.jobId || null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('session-forked', sessionId, newId, kind);
+    if (background) mainWindow.webContents.send('session-forked', sessionId, newId, kind, background);
+    else mainWindow.webContents.send('session-forked', sessionId, newId, kind);
   }
+  if (background && session._continuationExit) session._continuationExit(true);
 }
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
@@ -471,8 +477,23 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
     cached.index = scanContinuationIndex(sourceFile, sourceId, cached.index);
     index = JSON.parse(cached.index);
   } catch { return false; }
-  if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder);
+  if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder, session.exited ? 0 : RECHECK_MS);
   const targets = new Set(index.ids);
+  if (session.exited && session._continuationExit && index.complete && (index.unresolved || targets.size !== 1)) {
+    session._continuationExit(false);
+    return false;
+  }
+  if (index.complete && !index.unresolved && targets.size === 1 && !session.isAttach && (!session.backgrounding || session.backgrounded)) {
+    const newId = [...targets][0];
+    if (newId !== sourceId && !isLive(newId)) {
+      const background = getBackgroundTarget(newId);
+      if (background?.kind === 'bg' && background.jobId) {
+        rekeySession(sessionId, newId, session, currentFiles, 'background', background);
+        return true;
+      }
+    }
+  }
+  if (session.exited) return false;
   for (const target of cached.other.keys()) if (!targets.has(target)) cached.other.delete(target);
   let identity;
   for (const newId of targets) {
@@ -497,6 +518,34 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
   return false;
 }
 
+function holdContinuationExit(sessionId, session, finish) {
+  if (session.isPlainTerminal || session.isAttach || session.stopRequested || !session.projectFolder) return false;
+  if (session.backgrounded) { finish(true); return true; }
+  const sourceId = session.realSessionId || sessionId;
+  let index;
+  try {
+    const previous = session._continuation?.sourceId === sourceId ? session._continuation : { sourceId, index: null, other: new Map() };
+    previous.index = scanContinuationIndex(path.join(PROJECTS_DIR, session.projectFolder, sourceId + '.jsonl'), sourceId, previous.index);
+    session._continuation = previous;
+    index = JSON.parse(previous.index);
+  }
+  catch { return false; }
+  if (index.complete && (index.unresolved || index.ids.length !== 1 || index.ids[0] === sourceId)) return false;
+  if (!index.complete && index.bytes >= index.size) return false;
+  const timer = setTimeoutFn(() => {
+    delete session._continuationExit;
+    finish(false);
+  }, 15000);
+  if (timer?.unref) timer.unref();
+  session._continuationExit = suppress => {
+    clearTimeout(timer);
+    delete session._continuationExit;
+    finish(suppress);
+  };
+  detectSessionTransitions(session.projectFolder);
+  return true;
+}
+
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
@@ -515,14 +564,15 @@ function detectSessionTransitions(folder) {
       detectSubagentTransitions(effectiveSessionId, session, folderPath);
     }
 
+    if (!session.isPlainTerminal && session.knownJsonlFiles && session.projectFolder === folder
+      && detectContinuation(sessionId, session, folderPath, currentFiles, readIdentity, descriptorSnapshot)) continue;
+
     if (session.exited || session.isPlainTerminal || !session.knownJsonlFiles || session.projectFolder !== folder) {
       if (!session.exited && !session.isPlainTerminal && session.forkFrom) {
         log.info(`[fork-detect] skipped session=${sessionId} forkFrom=${session.forkFrom||'none'} reason=${session.exited ? 'exited' : session.isPlainTerminal ? 'terminal' : !session.knownJsonlFiles ? 'noKnown' : 'folderMismatch('+session.projectFolder+' vs '+folder+')'}`);
       }
       continue;
     }
-
-    if (detectContinuation(sessionId, session, folderPath, currentFiles, readIdentity, descriptorSnapshot)) continue;
 
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
 
@@ -617,4 +667,4 @@ function detectSessionTransitions(folder) {
 }
 
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions, currentSessionId, isClearCommand, normalizeSessionId };
+module.exports = { init, detectSessionTransitions, detectSubagentTransitions, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };

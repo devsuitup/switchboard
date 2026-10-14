@@ -587,6 +587,16 @@ for an assumption a normal unit test can pin.
 
 ## Conversation continuations
 
+For an open interactive conversation moving to the daemon, #639 adds the
+background proof path in `session-transitions.js`. A single complete
+`continued-in` target must have a live `kind: bg` descriptor or a working/blocked
+job. It does not have to descend from the interactive PTY or have its own
+indexed turn. Detection runs again on descriptor and job identity changes,
+before the closest-writer rejection cache. A typed `/bg` exit can retain its
+source for a bounded 15-second proof window; no-link `/clear` and explicit fork
+still use their existing owner checks. See bg-agents.md, "Background
+continuations", for the transactional metadata migration and renderer state.
+
 CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,
 continuedInSessionId:<new>, timestamp:...}` to the old transcript. These records
 can be mid-file and repeated; the new transcript has no back-link. This is an
@@ -639,5 +649,6 @@ After resolution, `runRestore` checks the final id's liveness; a background
 continuation requests the guard's existing `{attach}` verdict. Other live kinds
 retain their refusal/confirmation rules. Saved entries are rekeyed before
 opening; background continuation attachments retain the resolved entry in the
-working set. Ordinary attach tabs remain excluded. Part A, live descriptor
-rekeying while the original PTY runs, remains out of scope pending #477.
+working set. Ordinary attach tabs remain excluded. #639 adds the live
+background continuation re-key described above; other live descriptor
+identity changes still use their existing ownership checks.

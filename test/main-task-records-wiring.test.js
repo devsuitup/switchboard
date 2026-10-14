@@ -61,6 +61,7 @@ test('status changes notify task liveness only for a changed owner identity', ()
   const live = [];
   const ctx = vm.createContext({
     notifyRendererProjectsChanged() {},
+    activeSessions: new Map(), detectSessionTransitions() {},
     taskOwnerLiveness: new Map(),
     taskRecords: { ownerAlive: id => live.push(id) },
     cliSessionState: { onStatusesChanged: cb => { callback = cb; }, getSidebarDescriptors: () => descriptors },

@@ -26,6 +26,19 @@ function panelTerminalSessionId(ownerSessionId) {
   return PANEL_TERMINAL_ID_PREFIX + ownerSessionId;
 }
 
+function rekeyPanelTerminalState(oldId, newId) {
+  const state = panelTerminals.get(oldId);
+  if (state) {
+    state.ownerSessionId = newId;
+    panelTerminals.delete(oldId);
+    panelTerminals.set(newId, state);
+  }
+  if (panelSpawnsInFlight.delete(oldId)) panelSpawnsInFlight.add(newId);
+  if (panelReopenAfterSpawn.delete(oldId)) panelReopenAfterSpawn.add(newId);
+  if (panelTerminalOwnerId === oldId) panelTerminalOwnerId = newId;
+}
+window.rekeyPanelTerminalState = rekeyPanelTerminalState;
+
 function isPanelTerminalSessionId(id) {
   return typeof id === 'string' && id.startsWith(PANEL_TERMINAL_ID_PREFIX);
 }
@@ -242,7 +255,7 @@ async function openPanelTerminal(ownerSessionId) {
   // see .ai/contexts/panel-terminal.md ("The ordering rule")
   if (openSessions.has(panelSessionId)) destroySession(panelSessionId);
 
-  const state = { panelSessionId, error: null };
+  const state = { panelSessionId, ownerSessionId, error: null };
   panelTerminals.set(ownerSessionId, state);
   resyncPanelFor(ownerSessionId);
 
@@ -259,6 +272,7 @@ async function openPanelTerminal(ownerSessionId) {
       panelSessionId, projectPath, true, { type: 'terminal', panelFor: ownerSessionId }, entry.initialSize,
     );
   } finally {
+    ownerSessionId = state.ownerSessionId;
     panelSpawnsInFlight.delete(ownerSessionId);
   }
   if (panelTerminals.get(ownerSessionId) !== state) {

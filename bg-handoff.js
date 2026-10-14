@@ -113,6 +113,7 @@ async function sendToBackground(sessionId, deps) {
         const job = findHandoff(descriptors, ids);
         if (job) {
           session.backgrounded = true;
+          deps.onConfirmed?.(job);
           deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
           return { ok: true, oldSessionId: sessionId, jobId: job.jobId, sessionId: job.sessionId, cwd: job.cwd || session.cwd };
         }

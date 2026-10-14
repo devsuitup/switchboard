@@ -525,6 +525,16 @@ const stmts = {
   `),
 };
 
+const rekeySessionMeta = db.transaction((oldId, newId, title) => {
+  if (oldId === newId) return;
+  const original = stmts.get.get(oldId);
+  const target = stmts.get.get(newId);
+  db.prepare(`INSERT INTO session_meta (sessionId, name, starred, archived) VALUES (?, ?, ?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET name = excluded.name, starred = excluded.starred, archived = excluded.archived`)
+    .run(newId, original?.name || title || target?.name || null, original?.starred ?? 0, original?.archived ?? 0);
+  db.prepare('DELETE FROM session_meta WHERE sessionId = ?').run(oldId);
+});
+
 function getMeta(sessionId) {
   return stmts.get.get(sessionId) || null;
 }
@@ -956,6 +966,7 @@ try {
 }
 
 module.exports = {
+  rekeySessionMeta,
   getMeta, getAllMeta, setName, toggleStar, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),

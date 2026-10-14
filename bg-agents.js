@@ -81,10 +81,10 @@ function scheduleJobsChanged() {
   if (!started || !jobsListeners.size || jobsFlushTimer) return;
   jobsFlushTimer = setTimeout(() => {
     jobsFlushTimer = null;
-    const next = new Map([...jobs].map(([id, job]) => [id, { state: job.state, name: job.name }]));
+    const next = new Map([...jobs].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId }]));
     const changed = next.size !== jobsProjection.size || [...next].some(([id, job]) => {
       const previous = jobsProjection.get(id);
-      return !previous || previous.state !== job.state || previous.name !== job.name;
+      return !previous || ['state', 'name', 'nameSource', 'sessionId'].some(field => previous[field] !== job[field]);
     });
     jobsProjection = next;
     if (!changed) return;
