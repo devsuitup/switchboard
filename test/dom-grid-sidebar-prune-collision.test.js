@@ -145,8 +145,9 @@ test('a stale grid subagent is pruned by TTL when grid-view.js and sidebar.js lo
     ctx.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore' });
 
     const cardsBefore = ctx.document.querySelectorAll('.grid-card[data-session-id="parent-1"]');
-    assert.equal(cardsBefore[cardsBefore.length - 1].querySelectorAll('.grid-subagent-pill').length, 1,
-      'pill renders right after spawn');
+    assert.equal(cardsBefore[cardsBefore.length - 1].querySelector('.grid-subagent-count'), null,
+      'fallback activity has no trustworthy count');
+    assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 1);
 
     const t0 = ctx.window.Date.now();
     ctx.window.Date.now = () => t0 + 61000;
@@ -155,8 +156,9 @@ test('a stale grid subagent is pruned by TTL when grid-view.js and sidebar.js lo
 
     const cardsAfter = ctx.document.querySelectorAll('.grid-card[data-session-id="parent-1"]');
     const latestCard = cardsAfter[cardsAfter.length - 1];
-    assert.equal(latestCard.querySelectorAll('.grid-subagent-pill').length, 0,
-      'stale subagent must be pruned from the grid\'s own map');
+    assert.equal(latestCard.querySelector('.grid-subagent-count'), null);
+    assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 0,
+      'stale fallback must be pruned from the shared registry');
   } finally {
     ctx.destroy();
   }

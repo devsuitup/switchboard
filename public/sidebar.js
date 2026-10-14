@@ -294,32 +294,41 @@ function subagentDomId(parentSessionId, agentId) {
   return 'si-sub:' + parentSessionId + ':' + agentId;
 }
 
-function reflectSubagentRunningState(parentSessionId, agentId) {
-  const running = isSubagentActive(parentSessionId, agentId);
-  const el = document.getElementById(subagentDomId(parentSessionId, agentId));
-  if (el) {
-    el.classList.toggle('running', running);
-    const icon = el.querySelector('.session-icon');
-    if (icon) icon.classList.toggle('running', running);
+function updateSessionSubagentCount(item, session) {
+  if (!item) return;
+  const count = window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0;
+  let text = item.querySelector('.session-subagent-count');
+  if (!count) {
+    text?.remove();
+    return;
   }
-  const caret = document.getElementById(caretIdFor(parentSessionId));
-  if (caret) caret.classList.toggle('has-running-child', parentHasActiveSubagent(parentSessionId));
+  if (!text) {
+    text = document.createElement('div');
+    text.className = 'session-subagent-count';
+    item.querySelector('.session-info').appendChild(text);
+  }
+  text.textContent = `${count} subagent${count === 1 ? '' : 's'} running`;
+  text.setAttribute('aria-label', text.textContent);
+}
+
+function reflectSubagentRunningState(parentSessionId, agentId) {
   // Mirror the live-subagent count into the local-pty adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
   if (typeof syncLocalPtyAgentsBusy === 'function') {
     const localMap = activeSubagentsByParent.get(parentSessionId);
     syncLocalPtyAgentsBusy(parentSessionId, !!(localMap && localMap.size > 0));
   }
-  // Parent session item: "subagents are working under this session" indicator.
-  // Unlike the caret badge, the parent item is always visible, so this shows
-  // whether the subagent group is expanded or collapsed. CSS gives the
-  // session's own states (needs-attention, response-ready, cli-busy)
-  // precedence over it.
   const parentEl = sessionItemEl(parentSessionId);
   const parentRow = parentEl && sessionMap.get(parentEl.dataset.sessionId);
   setHasBusyAgents(parentEl, rowSessionIds(parentRow || { sessionId: parentSessionId }).some(parentHasActiveSubagent));
+  updateSessionSubagentCount(parentEl, parentRow || { sessionId: parentSessionId });
   // see .ai/contexts/subagent-observability.md
   if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
-  if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
+  if (window.ATRACE) {
+    const running = isSubagentActive(parentSessionId, agentId);
+    const el = document.getElementById(subagentDomId(parentSessionId, agentId));
+    const caret = document.getElementById(caretIdFor(parentSessionId));
+    window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
+  }
 }
 
 // single write path into activeSubagentsByParent, sole emitter of recv.subagent-spawned — see docs/activity-trace.md
@@ -367,8 +376,6 @@ function buildSubagentItem(session) {
   const item = document.createElement('div');
   item.className = 'sidebar-subagent session-item js-stateful';
   item.id = 'si-' + session.sessionId;
-  const isRunning = isSubagentActive(session.parentSessionId, session.agentId);
-  if (isRunning) item.classList.add('running');
   setNeedsAttention(item, attentionSessions.has(session.sessionId));
   setResponseReady(item, responseReadySessions.has(session.sessionId));
   setCliBusy(item, !!sessionBusyState.get(session.sessionId));
@@ -390,7 +397,7 @@ function buildSubagentItem(session) {
 
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
-  icon.className = 'session-icon' + (isRunning ? ' running' : '');
+  icon.className = 'session-icon';
   paintSessionIcon(icon, session.sessionId, session);
 
   const info = document.createElement('div');
@@ -472,8 +479,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.className = 'sidebar-children-caret js-stateful';
   caret.id = caretId;
   if (isExpanded) caret.classList.add('expanded');
-  if (parentHasActiveSubagent(parentSessionId)) caret.classList.add('has-running-child');
-  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}<span class="caret-running-dot"></span>`;
+  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
 
   const domKey = parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const childrenContainer = document.createElement('div');
@@ -1941,6 +1947,7 @@ function buildSessionItem(session) {
   row.appendChild(actions);
   item.appendChild(row);
 
+  updateSessionSubagentCount(item, session);
   return item;
 }
 

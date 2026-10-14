@@ -1,28 +1,13 @@
-// Regression coverage for issue #129 — sidebar subagent rows never showed a
-// "running" indicator. buildSubagentItem() used to derive it from
-// activePtyIds.has(session.sessionId), which is structurally always false
-// for a subagent (it runs inside its parent's process, no PTY of its own).
-// The real signal is the subagent-spawned/subagent-completed IPC pair
-// (session-transitions.js:detectSubagentTransitions()) — this suite drives
-// that pair via the dom-setup.js test harness and checks:
-//
-//   1. spawn → .running on the item + its dot
-//   2. complete → .running removed
-//   3. a full renderProjects() re-render while a spawn is still active keeps
-//      .running (state lives in activeSubagentsByParent, not just the
-//      one-off DOM toggle)
-//   4. a collapsed parent's caret gets a has-running-child badge while a
-//      child is active, and loses it on completion
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
-// A dedicated fixture using the real subagent sessionId convention
-// (`sub:<parentSessionId>:<agentId>` — read-session-file.js:subagentSessionId)
-// so the id sidebar.js reconstructs from the IPC payload
-// (parentSessionId + agentId) actually matches the rendered element's id.
+function childIsActive(ctx, item) {
+  const [, parentId, agentId] = item.dataset.sessionId.split(':');
+  return ctx.window.isSubagentActive(parentId, agentId);
+}
+
 function projectWithLiveSubagent(overrides = {}) {
   return makeSampleProject({
     sessions: [
@@ -49,84 +34,80 @@ function projectWithLiveSubagent(overrides = {}) {
   });
 }
 
-test('subagent-spawned: .running lands on the subagent item + its dot', () => {
+test('subagent-spawned: child state updates without a green liveness dot', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     const item = ctx.document.getElementById('si-sub:s-top-1:agent-1');
     assert.ok(item, 'subagent item must be rendered');
-    assert.ok(!item.classList.contains('running'), 'not running before spawn event');
+    assert.ok(!childIsActive(ctx, item), 'not running before spawn event');
 
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
-    assert.ok(item.classList.contains('running'), '.running set on the subagent item after spawn');
+    assert.ok(childIsActive(ctx, item), 'spawn registers the child as active');
     const dot = item.querySelector('.session-icon');
-    assert.ok(dot.classList.contains('running'), '.running set on the dot after spawn');
+    assert.ok(!dot.classList.contains('running'), 'child has no green liveness dot');
   } finally {
     ctx.destroy();
   }
 });
 
-test('subagent-completed: .running is removed again', () => {
+test('subagent-completed: registry activity is removed again', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     const item = ctx.document.getElementById('si-sub:s-top-1:agent-1');
 
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
-    assert.ok(item.classList.contains('running'), 'running after spawn');
+    assert.ok(childIsActive(ctx, item), 'running after spawn');
 
     ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-1' });
-    assert.ok(!item.classList.contains('running'), '.running removed after completed');
+    assert.ok(!childIsActive(ctx, item), 'registry activity removed after completed');
     assert.ok(!item.querySelector('.session-icon').classList.contains('running'), 'dot no longer running');
   } finally {
     ctx.destroy();
   }
 });
 
-test('a full sidebar re-render while a subagent is still active keeps .running (state, not just the DOM toggle)', () => {
+test('a full sidebar re-render preserves the active child in the registry', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
     const before = ctx.document.getElementById('si-sub:s-top-1:agent-1');
-    assert.ok(before.classList.contains('running'), 'running before re-render');
-
-    // Full rebuild — morphdom reconciles against a freshly-built tree.
-    // buildSubagentItem must re-derive .running from activeSubagentsByParent,
-    // not rely on the one-off classList.toggle from the spawn event.
+    assert.ok(childIsActive(ctx, before), 'running before re-render');
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
 
     const after = ctx.document.getElementById('si-sub:s-top-1:agent-1');
     assert.ok(after, 'subagent item still present after re-render');
-    assert.ok(after.classList.contains('running'), '.running survives a full renderProjects() re-render');
+    assert.ok(childIsActive(ctx, after), 'registry activity survives a full renderProjects() re-render');
   } finally {
     ctx.destroy();
   }
 });
 
-test('collapsed parent: caret gets has-running-child while a child subagent is active, loses it on completion', () => {
+test('collapsed parent: registry tracks the child until completion without a caret marker', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     const caret = ctx.document.getElementById('sub-caret-s-top-1');
+    assert.equal(caret.classList.contains('has-running-child'), false);
     assert.ok(caret, 'caret for s-top-1 must exist');
-    // Default state: collapsed (sidebar.js:38-43 default), no running children yet.
     assert.ok(!caret.classList.contains('expanded'), 'caret starts collapsed by default');
-    assert.ok(!caret.classList.contains('has-running-child'), 'no badge before spawn');
+    assert.ok(!ctx.window.parentHasActiveSubagent('s-top-1'), 'no activity before spawn');
 
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
-    assert.ok(caret.classList.contains('has-running-child'), 'caret gets has-running-child badge while collapsed and a child is active');
+    assert.ok(ctx.window.parentHasActiveSubagent('s-top-1'), 'collapsed parent retains registry activity');
 
     ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-1' });
-    assert.ok(!caret.classList.contains('has-running-child'), 'badge removed once the child completes');
+    assert.ok(!ctx.window.parentHasActiveSubagent('s-top-1'), 'activity removed once the child completes');
   } finally {
     ctx.destroy();
   }
 });
 
-test('caret badge also survives a full re-render, not just the event-driven DOM toggle', () => {
+test('parent registry activity survives a full re-render without a caret marker', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
@@ -135,21 +116,12 @@ test('caret badge also survives a full re-render, not just the event-driven DOM 
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
 
     const caret = ctx.document.getElementById('sub-caret-s-top-1');
-    assert.ok(caret.classList.contains('has-running-child'), 'has-running-child survives a full renderProjects() re-render');
+    assert.equal(caret.classList.contains('has-running-child'), false);
+    assert.ok(ctx.window.parentHasActiveSubagent('s-top-1'), 'registry activity survives a full renderProjects() re-render');
   } finally {
     ctx.destroy();
   }
 });
-
-// --- pruneStaleSubagents() (review finding W1) ---
-// A parent PTY can exit before its subagent's transcript goes 30s quiet
-// (session-transitions.js's stability window) — detectSubagentTransitions()
-// stops polling !exited-only sessions, so no subagent-completed event ever
-// arrives for that agentId. Without a TTL, activeSubagentsByParent would keep
-// it "running" forever. renderProjects() calls pruneStaleSubagents() on every
-// render, so we drive the TTL by moving the jsdom realm's Date.now() forward
-// (sidebar.js runs inside that realm via vm.runInContext, so this affects the
-// module's own Date.now() calls) and forcing a re-render.
 
 test('pruneStaleSubagents: a subagent with no subagent-completed for 60s+ is evicted on the next render', () => {
   const ctx = setupSidebarDom();
@@ -157,28 +129,22 @@ test('pruneStaleSubagents: a subagent with no subagent-completed for 60s+ is evi
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
-    const caretBefore = ctx.document.getElementById('sub-caret-s-top-1');
-    assert.ok(caretBefore.classList.contains('has-running-child'), 'badge set right after spawn');
+    assert.equal(ctx.document.getElementById('sub-caret-s-top-1').classList.contains('has-running-child'), false);
+    assert.ok(ctx.window.parentHasActiveSubagent('s-top-1'), 'activity set right after spawn');
 
     const t0 = ctx.window.Date.now();
     ctx.window.Date.now = () => t0 + 61000; // 61s later — past the 60s TTL, no completed event ever arrived
 
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
 
-    const caretAfter = ctx.document.getElementById('sub-caret-s-top-1');
-    assert.ok(!caretAfter.classList.contains('has-running-child'), 'stale entry pruned — badge cleared after TTL');
+    assert.equal(ctx.document.getElementById('sub-caret-s-top-1').classList.contains('has-running-child'), false);
+    assert.ok(!ctx.window.parentHasActiveSubagent('s-top-1'), 'stale entry pruned — activity cleared after TTL');
     const itemAfter = ctx.document.getElementById('si-sub:s-top-1:agent-1');
-    assert.ok(!itemAfter.classList.contains('running'), 'stale subagent item no longer marked .running after TTL');
+    assert.ok(!childIsActive(ctx, itemAfter), 'stale subagent item no longer marked registry activity after TTL');
   } finally {
     ctx.destroy();
   }
 });
-
-// --- has-busy-agents on the PARENT session item ---
-// The caret badge alone is easy to miss; the parent item itself carries a
-// .has-busy-agents class while any of its subagents is active, so the
-// sidebar can show a distinct "subagents are working" indicator even though
-// the session's own cli-busy spinner is off (parent back at the prompt).
 
 test('parent item gets has-busy-agents on spawn and loses it when the last subagent completes', () => {
   const ctx = setupSidebarDom();
@@ -190,9 +156,6 @@ test('parent item gets has-busy-agents on spawn and loses it when the last subag
 
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
     assert.ok(parent.classList.contains('has-busy-agents'), 'indicator set on the parent item after spawn');
-
-    // A second agent spawns, then the first completes — indicator must stay
-    // until the LAST one is gone.
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-2', subagentType: 'plan' });
     ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-1' });
     assert.ok(parent.classList.contains('has-busy-agents'), 'indicator survives while another subagent is still active');
@@ -237,8 +200,6 @@ test('a session without active subagents never gets has-busy-agents', () => {
     const bystander = ctx.document.getElementById('si-s-top-2');
     assert.ok(bystander, 'bystander session item must be rendered');
     assert.ok(!bystander.classList.contains('has-busy-agents'), 'no indicator without subagents');
-
-    // Another parent's spawn must not leak onto it.
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
     assert.ok(!bystander.classList.contains('has-busy-agents'), 'other parents\' spawns do not mark this session');
     assert.ok(ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'), 'the real parent is marked');
@@ -247,7 +208,7 @@ test('a session without active subagents never gets has-busy-agents', () => {
   }
 });
 
-test('clearActiveSubagentsFor (parent PTY stopped): indicator, caret badge and child .running drop immediately, no TTL wait', () => {
+test('clearActiveSubagentsFor (parent PTY stopped): indicator, parent activity and child registry activity drop immediately, no TTL wait', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
@@ -255,27 +216,19 @@ test('clearActiveSubagentsFor (parent PTY stopped): indicator, caret badge and c
 
     const parent = ctx.document.getElementById('si-s-top-1');
     const caret = ctx.document.getElementById('sub-caret-s-top-1');
+    assert.equal(caret.classList.contains('has-running-child'), false);
     const child = ctx.document.getElementById('si-sub:s-top-1:agent-1');
     assert.ok(parent.classList.contains('has-busy-agents'), 'indicator set after spawn');
-    assert.ok(caret.classList.contains('has-running-child'), 'caret badge set after spawn');
-    assert.ok(child.classList.contains('running'), 'child running after spawn');
-
-    // app.js's updateRunningIndicators calls this when the parent's PTY
-    // leaves activePtyIds — no subagent-completed will ever arrive for a
-    // killed PTY (stop-session; detectSubagentTransitions skips exited
-    // sessions), so the state must drop NOW, not after the 60s TTL.
+    assert.ok(ctx.window.parentHasActiveSubagent('s-top-1'), 'parent activity set after spawn');
+    assert.ok(childIsActive(ctx, child), 'child running after spawn');
     ctx.window.clearActiveSubagentsFor('s-top-1');
 
     assert.ok(!parent.classList.contains('has-busy-agents'), 'indicator dropped immediately on PTY stop');
-    assert.ok(!caret.classList.contains('has-running-child'), 'caret badge dropped immediately');
-    assert.ok(!child.classList.contains('running'), 'child .running dropped immediately');
-
-    // And the source state is gone too: a re-render must not resurrect it.
+    assert.ok(!ctx.window.parentHasActiveSubagent('s-top-1'), 'parent activity dropped immediately');
+    assert.ok(!childIsActive(ctx, child), 'child registry activity dropped immediately');
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
     assert.ok(!ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
       'state purged — indicator stays off across a full re-render');
-
-    // Idempotent on a parent with no tracked subagents.
     ctx.window.clearActiveSubagentsFor('s-top-1');
     ctx.window.clearActiveSubagentsFor('never-seen');
   } finally {
@@ -289,21 +242,12 @@ test('a still-alive heartbeat (re-emitted subagent-spawned) refreshes the 60s TT
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     const t0 = ctx.window.Date.now();
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
-
-    // 45s in: the main process saw the agent's file still growing and
-    // re-emitted subagent-spawned with _heartbeat (session-transitions.js).
     ctx.window.Date.now = () => t0 + 45000;
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore', _heartbeat: true });
-
-    // 90s after the original spawn — past the TTL relative to the spawn, but
-    // only 45s after the heartbeat: the agent must still count as live.
     ctx.window.Date.now = () => t0 + 90000;
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
     assert.ok(ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
       'heartbeat refreshed the last-seen timestamp — a long-running subagent must not be TTL-evicted');
-
-    // 61s+ after the LAST heartbeat with no further signal → pruned (the
-    // orphan safety net is unchanged).
     ctx.window.Date.now = () => t0 + 45000 + 61000;
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
     assert.ok(!ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
@@ -342,18 +286,12 @@ test('pruneStaleSubagents: a subagent spawned within the last 60s is NOT evicted
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
 
     const caret = ctx.document.getElementById('sub-caret-s-top-1');
-    assert.ok(caret.classList.contains('has-running-child'), 'still within TTL — badge must survive the render-time prune');
+    assert.equal(caret.classList.contains('has-running-child'), false);
+    assert.ok(ctx.window.parentHasActiveSubagent('s-top-1'), 'still within TTL — activity must survive the render-time prune');
   } finally {
     ctx.destroy();
   }
 });
-
-// --- A heartbeat must never resurrect an untracked agent ---
-// subagent-spawned doubles as the still-alive heartbeat (payload._heartbeat).
-// The handler used to add-or-refresh unconditionally, so any heartbeat for an
-// agent the renderer no longer tracks (completed, TTL-pruned, or dropped by
-// clearActiveSubagentsFor) re-lit its running dot. A heartbeat only ever means
-// "still alive", never "started".
 
 function projectWithThreeSubagents() {
   const project = projectWithLiveSubagent();
@@ -376,17 +314,15 @@ test('a heartbeat for an agent absent from the live map does not resurrect it', 
   try {
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], true);
     const item = ctx.document.getElementById('si-sub:s-top-1:agent-1');
-    assert.ok(!item.classList.contains('running'), 'not running to begin with');
+    assert.ok(!childIsActive(ctx, item), 'not running to begin with');
 
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore', _heartbeat: true });
 
-    assert.ok(!item.classList.contains('running'), 'heartbeat for an untracked agent must not mark it running');
+    assert.ok(!childIsActive(ctx, item), 'heartbeat for an untracked agent must not mark it running');
     assert.ok(!ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
       'and it must not light the parent indicator either');
-
-    // Not just the DOM toggle — no state was created, so a full re-render agrees.
     ctx.sidebar.renderProjects([projectWithLiveSubagent()], false);
-    assert.ok(!ctx.document.getElementById('si-sub:s-top-1:agent-1').classList.contains('running'),
+    assert.ok(!childIsActive(ctx, ctx.document.getElementById('si-sub:s-top-1:agent-1')),
       'still not running after a full re-render');
   } finally {
     ctx.destroy();
@@ -403,7 +339,7 @@ test('a heartbeat after completion does not bring the agent back', () => {
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore', _heartbeat: true });
 
     const item = ctx.document.getElementById('si-sub:s-top-1:agent-1');
-    assert.ok(!item.classList.contains('running'), 'a late heartbeat must not undo the completion');
+    assert.ok(!childIsActive(ctx, item), 'a late heartbeat must not undo the completion');
   } finally {
     ctx.destroy();
   }
@@ -414,16 +350,11 @@ test('the observed inversion: once the only live subagent completes, none of the
   try {
     const project = projectWithThreeSubagents();
     ctx.sidebar.renderProjects([project], true);
-
-    // agent-2 is the one genuinely working; agents 1 and 3 are history.
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-2', subagentType: 'plan' });
-    assert.ok(ctx.document.getElementById('si-sub:s-top-1:agent-2').classList.contains('running'),
+    assert.ok(childIsActive(ctx, ctx.document.getElementById('si-sub:s-top-1:agent-2')),
       'the live one is running');
 
     ctx.emitSubagentCompleted({ parentSessionId: 's-top-1', agentId: 'agent-2' });
-
-    // The main process re-announces every file it rescans. Heartbeats for
-    // finished agents must be inert.
     for (const id of ['agent-1', 'agent-2', 'agent-3']) {
       ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: id, subagentType: 'plan', _heartbeat: true });
     }
@@ -433,7 +364,7 @@ test('the observed inversion: once the only live subagent completes, none of the
     for (const id of ['agent-1', 'agent-2', 'agent-3']) {
       const el = ctx.document.getElementById(`si-sub:s-top-1:${id}`);
       assert.ok(el, `${id} must be rendered`);
-      assert.ok(!el.classList.contains('running'), `${id} must not be running after the live agent completed`);
+      assert.ok(!childIsActive(ctx, el), `${id} must not be running after the live agent completed`);
     }
     assert.ok(!ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
       'parent indicator off — no subagent is working');
@@ -450,11 +381,9 @@ test('a real spawn (no _heartbeat) still adds an agent the renderer has never se
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-1', subagentType: 'explore' });
 
     const item = ctx.document.getElementById('si-sub:s-top-1:agent-1');
-    assert.ok(item.classList.contains('running'), 'a genuine spawn still marks the agent running');
+    assert.ok(childIsActive(ctx, item), 'a genuine spawn still marks the agent running');
     assert.ok(ctx.document.getElementById('si-s-top-1').classList.contains('has-busy-agents'),
       'and still lights the parent indicator');
-
-    // A bootstrap spawn is a real "this agent is live" statement too.
     ctx.emitSubagentSpawned({ parentSessionId: 's-top-1', agentId: 'agent-9', subagentType: 'plan', _bootstrap: true });
     assert.ok(ctx.window.isSubagentActive('s-top-1', 'agent-9'), 'bootstrap spawns are tracked like real ones');
   } finally {

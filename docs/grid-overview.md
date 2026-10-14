@@ -23,12 +23,9 @@ remembered (`localStorage.gridGroupByProject`).
   working), the session's name, its project, and a stop button while the
   process is alive.
 - **Body**: the session's terminal, live.
-- **Subagent pills**, above the footer, while the session has subagents running:
-  one coloured chip per subagent (the tooltip is its type), at most five, then
-  `+N more`. The colour follows the type name, compared case-insensitively:
-  `explore` green, `plan` indigo, `implement` orange, `review` light blue, `test`
-  red, any other type grey. A pill goes when its subagent completes, or after
-  60 seconds without a sign of life.
+- **Running subagents**, beneath the header: `1 subagent running` or
+  `N subagents running`, counting distinct active agent tasks. No line appears
+  when the count is zero or unknown. Remote sessions have no count.
 - **Footer**: Running or Stopped, and the time of the last modification.
 
 ## Using it

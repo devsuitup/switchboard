@@ -14,28 +14,6 @@ let gridFocusedSessionId = null;
 // Grouping is the historical layout, so an unset preference means "grouped".
 let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
-const activeSubagents = {
-  get(id) {
-    const entries = window.taskRegistry?.agents(id) || [];
-    return entries.length ? new Map(entries.map(t => [t.id, { agentId: t.id, subagentType: t.subagentType, spawnedAt: Math.max(...t.sources.values()) }])) : undefined;
-  },
-  has(id) { return !!this.get(id); },
-};
-
-// Subagent type → pill color (matches sidebar palette)
-const GRID_SUBAGENT_TYPE_COLORS = {
-  explore:   '#3ecf82',
-  plan:      '#8088ff',
-  implement: '#ffaa40',
-  review:    '#60bef0',
-  test:      '#ff6464',
-  default:   '#a0a0b4',
-};
-
-function gridSubagentColor(type) {
-  return GRID_SUBAGENT_TYPE_COLORS[(type || '').toLowerCase()] || GRID_SUBAGENT_TYPE_COLORS.default;
-}
-
 // Wire IPC listeners (guarded — bindings may not exist yet)
 (function initSubagentListeners() {
   if (typeof window.api === 'undefined') return;
@@ -78,53 +56,39 @@ function scheduleGridSubagentTtlTick() {
 
 function runGridSubagentTtlTick() {
   pruneStaleGridSubagents();
-  for (const id of gridCards.keys()) updateGridSubagentPills(id);
+  updateGridSubagentPills();
 }
 
-// Re-render the pill row for a single card (if it exists in the grid).
 function updateGridSubagentPills(parentSessionId) {
-  const card = gridCards.get(parentSessionId);
-  if (!card) return;
-
-  let pillRow = card.querySelector('.grid-subagent-pills');
-
-  const map = activeSubagents.get(parentSessionId);
-  if (!map || map.size === 0) {
-    if (pillRow) pillRow.remove();
-    return;
-  }
-
-  if (!pillRow) {
-    pillRow = document.createElement('div');
-    pillRow.className = 'grid-subagent-pills';
-    // Insert before the footer
-    const footer = card.querySelector('.grid-card-footer');
-    if (footer) {
-      card.insertBefore(pillRow, footer);
-    } else {
-      card.appendChild(pillRow);
+  for (const [sessionId, card] of gridCards) {
+    const openedSession = openSessions.get(sessionId)?.session;
+    const session = sessionMap.get(sessionId) || openedSession || { sessionId };
+    const item = sessionItemEl(sessionId);
+    const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
+    const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
+      item?.dataset.sessionId,
+      mergedRow?.sessionId,
+      ...(item?.dataset.mergedMemberIds?.split(' ') || []),
+      ...(mergedRow?.mergedMemberIds || []),
+      ...(session.mergedMemberIds || []),
+      ...(openedSession?.mergedMemberIds || []),
+    ] }).filter(Boolean))];
+    if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
+    const count = window.taskRegistry?.runningAgentCount(ids) || 0;
+    let text = card.querySelector('.grid-subagent-count');
+    if (!count) {
+      text?.remove();
+      continue;
     }
-  }
-
-  pillRow.innerHTML = '';
-  const entries = [...map.values()];
-  const MAX_PILLS = 5;
-  const shown = entries.slice(0, MAX_PILLS);
-  const overflow = entries.length - shown.length;
-
-  for (const info of shown) {
-    const pill = document.createElement('span');
-    pill.className = 'grid-subagent-pill';
-    pill.title = info.subagentType || 'subagent';
-    pill.style.background = gridSubagentColor(info.subagentType);
-    pillRow.appendChild(pill);
-  }
-
-  if (overflow > 0) {
-    const more = document.createElement('span');
-    more.className = 'grid-subagent-pill-overflow';
-    more.textContent = `+${overflow} more`;
-    pillRow.appendChild(more);
+    if (!text) {
+      text = document.createElement('div');
+      text.className = 'grid-subagent-count';
+      const header = card.querySelector('.grid-card-header');
+      if (header) header.after(text);
+      else card.prepend(text);
+    }
+    text.textContent = `${count} subagent${count === 1 ? '' : 's'} running`;
+    text.setAttribute('aria-label', text.textContent);
   }
 }
 
@@ -258,7 +222,6 @@ function wrapInGridCard(sessionId) {
   // Set initial status from the single source of truth
   updateRunningIndicators();
 
-  // Render subagent pills for any already-tracked children
   pruneStaleGridSubagents();
   updateGridSubagentPills(sessionId);
 }
