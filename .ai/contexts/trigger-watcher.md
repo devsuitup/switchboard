@@ -1228,9 +1228,10 @@ reaches it either.
   (`createDialogProbe`, the same detection as everywhere else).
 - The last main-thread message entry of the transcript closes a turn and
   has a parseable `timestamp` (`transcript-turn.js`, `classifyTranscriptTail`).
-  Three entries close one: an `assistant` entry with `stop_reason` `end_turn`
+  Closure evidence is an `assistant` entry with `stop_reason` `end_turn`
   or `stop_sequence`, followed by a main-thread `system` `turn_duration`
-  entry; a `user` entry whose string content is one `<local-command-stdout>`
+  entry; a record flagged `isApiErrorMessage: true`, without requiring
+  `turn_duration`; a user interruption; a `user` entry whose string content is one `<local-command-stdout>`
   block, start to end (the output of `/compact`, `/clear`, `/model`, …); a
   `user` entry with `isCompactSummary: true` whose previous main-thread entry
   is a `compact_boundary` with `compactMetadata.trigger` `manual` (an
@@ -1241,6 +1242,10 @@ reaches it either.
   does a `tool_use` stop. A slash command that expands into a prompt writes
   its `<command-name>` entry and then a model turn, so it is closed only by
   that turn's `end_turn`.
+  A plain `stop_sequence` without a later `turn_duration` stays open, including
+  the interval before a subsequent `tool_result` arrives. The API-error shortcut
+  applies only to flagged records; a later `tool_result` reopens that turn too.
+  This rule is shared with the sidebar head-turn classification (#625).
   Entries with `isSidechain` are skipped. Bookkeeping entries (`system`,
   `attachment`, `last-prompt`, `file-history-*`, …) are skipped. A
   `queue-operation` after the closed turn counts: any `dequeue`, or more
@@ -1250,8 +1255,8 @@ reaches it either.
   anchor before step 0). A turn that closed before our Enter says nothing
   about our step.
 - The transcript file has not changed for `SWITCHBOARD_TRANSCRIPT_QUIET_MS`
-  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). With `turn_duration`
-  required, the quiet window no longer decides when a turn ends; it lets the
+  (default 3000 ms, `DEFAULT_TRANSCRIPT_QUIET_MS`). For ordinary assistant stops,
+  `turn_duration` decides when a turn ends; the quiet window lets the
   entries written in the same burst (a queued prompt's `enqueue`/`dequeue`)
   land before the tail is trusted.
 

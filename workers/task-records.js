@@ -17,7 +17,7 @@ async function readHead(message) {
   if (!turnOnly) await reader.read(file, parentSessionId);
   const turn = turnReader.read(file);
   turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown',
-    lastEntryAt: turn?.lastEntryAt ?? null, revision: ++turnRevision });
+    lastEntryAt: turn?.lastEntryAt ?? null, mtimeMs: turn?.mtimeMs ?? null, revision: ++turnRevision });
   while (turns.size > 2048) turns.delete(turns.keys().next().value);
 }
 parentPort.on('message', message => {

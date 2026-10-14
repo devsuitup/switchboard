@@ -33,6 +33,9 @@ function createSessionState(kind) {
   let stale = false;
   let idleHintAt = null;
   let promptHint = false;
+  let promptHintAt = null;
+  let lastDescriptorStatus = null;
+  let lastDescriptorAt = null;
 
   function clearExclusive() {
     busy = false;
@@ -58,6 +61,7 @@ function createSessionState(kind) {
         if (event.active) {
           clearExclusive();
           busy = true;
+          promptHint = false;
         } else {
           busy = false;
           waitingForInput = true;
@@ -67,7 +71,7 @@ function createSessionState(kind) {
         break;
       case 'promptHint':
         promptHint = true;
-        if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);
+        if (Number.isFinite(event.at)) promptHintAt = Math.max(promptHintAt ?? -Infinity, event.at);
         break;
       case 'attention':
         attentionFromDescriptor = false;
@@ -93,13 +97,18 @@ function createSessionState(kind) {
         attached = !!event.value;
         break;
       case 'transcriptTouched':
+        promptHint = false;
         touch({ at: event.at !== undefined ? event.at : Date.now(), source: event.source || 'transcript' });
         break;
       case 'descriptorStatus':
-        if (event.status === 'idle') {
+        if ((event.status === 'busy' || event.status === 'shell')
+          && (lastDescriptorStatus !== event.status || Number.isFinite(event.at) && event.at > (lastDescriptorAt ?? -Infinity))) promptHint = false;
+        if (event.status === 'idle' && (lastDescriptorStatus !== 'idle' || Number.isFinite(event.at) && event.at > (idleHintAt ?? -Infinity))) {
           promptHint = true;
           if (Number.isFinite(event.at)) idleHintAt = Math.max(idleHintAt ?? -Infinity, event.at);
         }
+        lastDescriptorStatus = event.status;
+        if (Number.isFinite(event.at)) lastDescriptorAt = Math.max(lastDescriptorAt ?? -Infinity, event.at);
         liveness = event.status === 'alive' || event.status === 'dead' ? event.status : liveness;
         if (event.attention === false) releaseDescriptorAttention();
         if (event.attention === true) {
@@ -156,6 +165,7 @@ function createSessionState(kind) {
       stale,
       idleHintAt,
       promptHint,
+      promptHintAt,
     };
   }
 

@@ -23,8 +23,8 @@ for (const content of ['[Request interrupted by user]', [{ type: 'text', text: '
     assert.equal(classifyTranscriptTail(jsonl([user('Work'), user(content, 4)])).state, 'closed');
   });
 }
-test('an API error and stop_sequence close without turn_duration', () => {
-  for (const entry of [assistant('stop_sequence'), { ...assistant(null), isApiErrorMessage: true, error: 'overloaded' }]) {
+test('an API error closes without turn_duration', () => {
+  for (const entry of [{ ...assistant('stop_sequence'), isApiErrorMessage: true }, { ...assistant(null), isApiErrorMessage: true, error: 'overloaded' }]) {
     assert.equal(classifyTranscriptTail(jsonl([user('Work'), entry])).state, 'closed');
   }
 });
@@ -67,19 +67,20 @@ test('a newer descriptor idle neutralises open evidence, while newer transcript 
   turn('open', 1_800_000_000_020);
   assert.equal(icon().title, 'Working');
 });
-test('OSC idle is ordered against head entries; stale progress and decay cannot resurrect Working', t => {
+test('OSC idle is ordered against local head observation; stale progress and decay cannot resurrect Working', t => {
   const { ctx, turn, icon } = sidebar(t);
   ctx.window.activePtyIds.add('root');
-  ctx.window.Date.now = () => 1_800_000_000_010;
+  ctx.window.Date.now = () => 1_800_000_000_001;
   turn('open');
+  ctx.window.Date.now = () => 1_800_000_000_010;
   ctx.setActivity('root', false, 'onCliBusyState');
   assert.equal(icon().title, 'Waiting for input');
   ctx.setActivity('root', true, 'onCliBusyState');
   assert.equal(icon().title, 'Waiting for input');
+  ctx.window.Date.now = () => 1_800_000_000_020;
   turn('open', 1_800_000_000_020);
   assert.equal(icon().title, 'Working');
-  ctx.window.Date.now = () => 1_800_000_000_015;
-  ctx.setActivity('root', false, 'onCliBusyState');
+  ctx.setActivity('root', false, 'onCliBusyState', { at: 1_800_000_000_015 });
   assert.equal(icon().title, 'Working');
 });
 test('projection is pure, attention consumes unread at its event boundary, and response ready keeps its slot', t => {

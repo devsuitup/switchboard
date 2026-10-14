@@ -110,7 +110,7 @@ test('a remote row past the decay window shows the age with no response-ready gl
       assert.ok(slot);
       assert.ok(!slot.classList.contains('session-icon--response-ready'),
         'a silence-based decay must never claim response-ready');
-      assert.equal(slot.title, 'Waiting for input');
+      assert.equal(slot.title, 'Turn state unavailable');
 
       const statusEl = ctx.document.querySelector('#si-remote-decayed .session-status');
       assert.ok(statusEl, 'the age must still show via .session-status');
@@ -125,7 +125,6 @@ test('a subagent row also gets an icon slot, painted the same way as a session r
   const ctx = setupSidebarDom();
   try {
     ctx.sessionBusyState.set('sub:s-top-1:agent-1', true);
-    ctx.emitHeadTurn('sub:s-top-1:agent-1', 'open');
     ctx.sidebar.renderProjects([makeSampleProject({
       sessions: [
         {
@@ -142,6 +141,7 @@ test('a subagent row also gets an icon slot, painted the same way as a session r
 
     const slot = ctx.document.querySelector('#si-sub\\:s-top-1\\:agent-1 .session-icon');
     assert.ok(slot, 'the subagent row must carry a .session-icon slot');
-    assert.deepEqual(slotClassesOf(slot), ['session-icon--busy']);
+    assert.deepEqual(slotClassesOf(slot), ['session-icon--waiting']);
+    assert.equal(slot.title, 'Turn state unavailable');
   } finally { ctx.destroy(); }
 });

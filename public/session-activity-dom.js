@@ -5,7 +5,16 @@ function applyHeadTurnSnapshot(turn) {
   const previous = headTurns.get(turn.sessionId);
   if (previous && previous.revision >= turn.revision) return;
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
-  headTurns.set(turn.sessionId, { ...turn, ready: ready || (previous?.ready && turn.state === 'closed') });
+  const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt || previous.mtimeMs !== turn.mtimeMs;
+  const observedAt = changed ? Date.now() : previous.observedAt;
+  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed') });
+  if (previous && changed) {
+    for (const states of [typeof localPtyStates !== 'undefined' && localPtyStates,
+      typeof localTranscriptStates !== 'undefined' && localTranscriptStates,
+      typeof remoteSessionStates !== 'undefined' && remoteSessionStates]) {
+      if (states) states.get(turn.sessionId)?.apply({ type: 'transcriptTouched', at: observedAt, source: 'head-turn' });
+    }
+  }
   applyStateClasses(turn.sessionId, storedActivitySnapshot(turn.sessionId));
   if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
 }
@@ -14,7 +23,8 @@ function headActivitySnapshot(sessionId, snapshot) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
   const alive = s.liveness === 'alive' || (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
-  const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt;
+  const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
+    || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
   const headTurn = idleNewer || (s.promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
   return { ...s, headTurn, busy: alive && headTurn === 'open',
     responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',

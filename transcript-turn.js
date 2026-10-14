@@ -33,7 +33,7 @@ function endsTurn(entry, turnDurationAfter, previous) {
     if (entry.isCompactSummary === true) return isManualCompactBoundary(previous);
     return isLocalCommandOutput(entry) || /^\[Request interrupted by user(?:\]| for tool use\])/.test(entryText(entry));
   }
-  return entry.isApiErrorMessage === true || entry.message?.stop_reason === 'stop_sequence'
+  return entry.isApiErrorMessage === true
     || turnDurationAfter && CLOSED_STOP_REASONS.has(entry.message && entry.message.stop_reason);
 }
 

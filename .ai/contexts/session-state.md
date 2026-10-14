@@ -7,8 +7,8 @@ three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
 retains its existing `closed` API for trigger delivery and adds `state`.
 An empty or unreadable tail, or one without a main-thread user/assistant record,
 is unknown. A timestamped
-main-thread prompt or assistant record supplies open evidence; `end_turn`
-plus a later `turn_duration`, `stop_sequence`, an API error, an interrupted
+main-thread prompt or assistant record supplies open evidence; `end_turn` or
+plain `stop_sequence` plus a later `turn_duration`, an API error, an interrupted
 request, or a local-command/manual-compaction closure supplies closed evidence
 only when the queue is idle. Task notifications without an assistant reply do
 not reopen a closed turn. Automatic compaction summaries are skipped so the
@@ -24,9 +24,19 @@ snapshot, rejects older turn revisions, and repaints on turn-state changes.
 Liveness gates animation: a PTY here or a live descriptor is required. Job
 `working`, descriptor `busy`, OSC spinner/progress and transcript touches remain
 hints; they cannot open a head turn. An idle descriptor or explicit OSC idle
-is prompt evidence: its timestamp must be newer than the transcript's last
-entry to neutralise an open turn. A newer entry wins again. Untimestamped idle
-only resolves an otherwise unknown head. The 3 s/20 s adapter clocks retain
+is prompt evidence. Descriptor idle is ordered against the transcript's last
+entry on the CLI host's clock. OSC idle is ordered against the latest changed
+transcript evidence's arrival time in the renderer, on this machine's clock;
+attached remote sessions therefore tolerate host clock skew. The worker carries
+the transcript mtime as well as the last entry timestamp, so a changed oversized
+tail also replaces the observation. A higher revision rereading the same state,
+last entry and mtime retains the prior observation time. A newer observation
+wins over OSC idle; a newer entry wins over descriptor idle. Busy signals and
+new transcript evidence clear the prompt hint used for an unknown head, and
+reapplying the same idle descriptor does not restore a consumed hint.
+An actual descriptor transition back to idle supplies a new hint, including
+when the descriptor has no timestamp.
+Untimestamped idle only resolves an otherwise unknown head. The 3 s/20 s adapter clocks retain
 hints, but never close or reopen the projected turn.
 
 `headActivitySnapshot` selects the authoritative icon inputs, while
@@ -38,6 +48,10 @@ the existing waiting glyph, or the static full-braille glyph when background
 work remains. Attention owns the one slot first, followed by Response ready.
 An unseen confirmed closure keeps both the unread flag and its response-ready
 glyph until read or consumed by explicit or descriptor-owned attention.
+Maintainer decision (JB, 2026-10-14): retain the **● Response ready** glyph
+and its existing priority. It may mask the static background-work glyph until
+the row is seen. The slot has five visible states: animated, static, waiting,
+attention, and response-ready.
 Projection does not mutate stored turn evidence; event handlers replace it.
 An unknown
 live head cannot animate and uses the tooltip "Turn state unavailable" when
