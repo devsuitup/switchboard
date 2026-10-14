@@ -1159,7 +1159,10 @@ function populateCacheViaWorker() {
           if (msg.rejected) warnRejectedCwd(msg.rejected.folder, msg.rejected.cwd);
           scannedFolders = msg.current;
           totalFolders = msg.total;
-          const written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
+          let written = 0;
+          try {
+            written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
+          } catch (err) { log && log.error('[session-cache] folder write failed:', err.message); }
           if (written > 0) {
             sessionCount += written;
             indexedProjects++;
@@ -1180,15 +1183,6 @@ function populateCacheViaWorker() {
           return;
         }
 
-        // The scan reached its final message with every folder written: persist
-        // the completeness marker. This is the ONLY place it is set (besides the
-        // one-time migration backfill for pre-marker installs) — error/exit
-        // paths must not set it, so an interrupted or failed scan leaves it
-        // absent and the next get-projects resumes the background worker
-        // instead of running the synchronous reconcile sweep on a partial
-        // cache. Resuming is safe: each folder message above is a
-        // delete-then-insert (deleteCachedFolder/deleteSearchFolder before the
-        // upserts), so re-scanning already-written folders never duplicates rows.
         if (setInitialScanComplete) await writer.setInitialScanComplete();
         sendStatus(`Indexed ${sessionCount} sessions across ${indexedProjects} projects`, 'done');
         // Clear status after a few seconds

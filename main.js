@@ -406,23 +406,23 @@ function createWindow() {
   let boundsTimer = null;
   const saveBounds = () => {
     if (boundsTimer) clearTimeout(boundsTimer);
-    boundsTimer = setTimeout(async () => {
+    boundsTimer = setTimeout(() => (async () => {
       if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
       const b = mainWindow.getBounds();
       await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
-    }, 500);
+    })().catch(err => log.error('[window] bounds save failed:', err.message)), 500);
   };
   mainWindow.on('resize', saveBounds);
   mainWindow.on('move', saveBounds);
 
   // Also save immediately before close (debounce may not have flushed)
-  mainWindow.on('close', async () => {
+  mainWindow.on('close', () => (async () => {
     if (boundsTimer) clearTimeout(boundsTimer);
     if (!mainWindow.isMinimized()) {
       const b = mainWindow.getBounds();
       await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
     }
-  });
+  })().catch(err => log.error('[window] bounds save on close failed:', err.message)));
 
   mainWindow.on('closed', () => {
     // On macOS the app stays alive in the dock after the last window closes.
@@ -3350,7 +3350,7 @@ function startProjectsWatcher() {
       }
 
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(flushChanges, 500);
+      debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), 500);
     });
 
     projectsWatcher.on('error', (err) => {

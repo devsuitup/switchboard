@@ -16,7 +16,22 @@ function createSessionIndexWriter(backend = require('./db'), cache = require('./
     buildProjects: () => cache.buildProjectsFromCache(true),
   });
   return {
-    initializeCache(ctx) { cache.init({ ...ctx, db: backend, writer: this }); },
+    initializeCache(ctx) {
+      cache.init({ ...ctx, writer: this, db: {
+        deleteCachedFolder: backend.deleteCachedFolder, getCachedByFolder: backend.getCachedByFolder,
+        upsertCachedSessions: backend.upsertCachedSessions, deleteCachedSession: backend.deleteCachedSession,
+        replaceSessionMetrics: backend.replaceSessionMetrics, touchCachedModified: backend.touchCachedModified,
+        deleteSearchFolder: backend.deleteSearchFolder, deleteSearchSession: backend.deleteSearchSession,
+        upsertSearchEntries: backend.upsertSearchEntries, setFolderMeta: backend.setFolderMeta,
+        getFolderMeta: backend.getFolderMeta, getAllFolderMeta: backend.getAllFolderMeta,
+        getAllMeta: backend.getAllMeta, getAllCached: backend.getAllCached,
+        getSetting: backend.getSetting, setSetting: backend.setSetting, getMeta: backend.getMeta, setName: backend.setName,
+        isInitialScanComplete: backend.isInitialScanComplete, setInitialScanComplete: backend.setInitialScanComplete,
+        getCachedMissingEntrypoint: backend.getCachedMissingEntrypoint, setCachedEntrypoints: backend.setCachedEntrypoints,
+        getCachedSession: backend.getCachedSession, setCachedContinuationIndex: backend.setCachedContinuationIndex,
+        setCachedCustomTitles: backend.setCachedCustomTitles, getCachedMissingCustomTitle: backend.getCachedMissingCustomTitle,
+      } });
+    },
     async setSetting(key, value) { return backend.setSetting(key, value); },
     async deleteSetting(key) { return backend.deleteSetting(key); },
     async patchGlobal(fields) {

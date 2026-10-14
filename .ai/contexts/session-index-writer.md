@@ -14,7 +14,9 @@ each individual injected SQL function in an async function would introduce
 suspensions inside algorithms that currently read their own writes.
 
 `initializeCache` configures the cache; it is not a mutation command. It alone
-injects the real backend into the synchronous cache implementation, and also
+injects an explicit list of the cache's synchronous backend dependencies,
+retaining the previous reads and writers without exposing additional DB exports.
+It also
 injects the facade for asynchronous producers. The Projects worker still uses
 an in-memory effect adapter and never opens a writable SQLite connection.
 Tests may initialize cache with an isolated stub/fixture backend directly.
@@ -99,10 +101,36 @@ leaving a writer direct when routing requires a behavior change. This boundary
 is deferred explicitly, rather than adding an unawaited facade call. The guard
 allows exactly this one inline call and rejects additional raw imports/calls.
 
+## Accepted deviations and failure boundaries
+
+* The scheduler removes a failed launch from `runningTasks` so later checks can
+  retry it; the old launch-error path left that task registered as running.
+* Scheduler `check` failures are logged instead of escaping from the async
+  timer callback. Both scheduler error-path deviations are accepted for 1a.
+* Initial population keeps the baseline best-effort folder-write semantics
+  described below; this reverses the facade revision's worker termination on a
+  rejected folder command. Completeness still means that the worker finished
+  its scan, rather than that every folder write succeeded.
+* `start()` prunes removed remote aliases immediately, including during an
+  in-flight refresh and when the final host is removed, and logs prune failures.
+* Bounds timers, window close and the projects-watch timer catch and log their
+  async failures through the main logger.
+
+The guard rejects direct cache commands in main, raw cache writers outside the
+recorded synchronous write owners, dynamic DB imports and non-literal prepared
+SQL. Its only non-literal require exception is `path.join(..., 'node_modules',
+'electron')` for the existing isolated PR launcher; other dynamic paths are
+rejected conservatively. Fixture source strings exercise all four reviewer
+bypasses without injecting probes into production files.
+
 ## Ordering and validation
 
 Population/subset/title workers serialize message writes and drain them before
-resolving their completion. Projects effects are awaited and incoming replies
+resolving their completion. Initial population retains best-effort folder writes:
+a rejected folder command is logged through the main logger, later messages
+continue, and a successful worker `done` still records the completeness marker.
+A worker scan/error/abnormal-exit failure retains the existing failed-scan path.
+Remote subset scans retain their separate failed-write result contract. Projects effects are awaited and incoming replies
 are serialized while an apply is pending. File-list manifests advance after
 their FTS acknowledgment. Scheduler project suppliers and explicit schedule
 launch IPC accept the new Promise boundary. Full Projects reloads remain.

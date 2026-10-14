@@ -18,7 +18,8 @@ function mainCtxDbKeys() {
   const backend = Object.fromEntries(keys.map(key => [key, () => {}]));
   let injected;
   createSessionIndexWriter(backend, { init: ctx => { injected = ctx.db; } }).initializeCache({});
-  assert.equal(injected, backend);
+  assert.notEqual(injected, backend);
+  for (const key of Object.keys(injected)) assert.equal(injected[key], backend[key]);
   return new Set(Object.keys(injected));
 }
 
@@ -39,12 +40,7 @@ function sessionCacheDbDeps() {
 test('facade injects every exported backend dependency consumed by session-cache.js', () => {
   const provided = mainCtxDbKeys();
   const required = sessionCacheDbDeps();
-  const missing = [...required].filter(name => !provided.has(name));
-  assert.deepEqual(
-    missing,
-    [],
-    `main.js db: {} is missing functions session-cache.js needs: ${missing.join(', ')}`
-  );
+  assert.deepEqual([...provided].sort(), [...required].sort());
 });
 
 test('ctx.db forwards the two functions from the 2026-06-02 stats incident', () => {

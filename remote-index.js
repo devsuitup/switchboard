@@ -373,6 +373,7 @@ function createRemoteIndexer(ctx) {
     stopped = false;
     const list = hosts();
     publishRoots(list);
+    pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);

@@ -8,6 +8,22 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createSessionIndexWriter } = require('../session-index-writer');
 
+test('cache initialization exposes only its explicit backend dependencies', () => {
+  let injected;
+  const read = () => 'read';
+  const write = () => 'write';
+  const backend = { getSetting: read, setSetting: write, newWriter() {}, prepare() {}, toggleStar() {} };
+  const writer = createSessionIndexWriter(backend, { init: ctx => { injected = ctx; } });
+  writer.initializeCache({ PROJECTS_DIR: 'fixture' });
+  assert.notEqual(injected.db, backend);
+  assert.equal(injected.db.getSetting, read);
+  assert.equal(injected.db.setSetting, write);
+  assert.equal(injected.db.newWriter, undefined);
+  assert.equal(injected.db.prepare, undefined);
+  assert.equal(injected.db.toggleStar, undefined);
+  assert.equal(injected.writer, writer);
+});
+
 test('compound commands finish their reads and writes before yielding, and failures reject', async () => {
   const values = { global: { openWorkingSet: ['kept'] } };
   const writer = createSessionIndexWriter({
