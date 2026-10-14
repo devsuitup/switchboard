@@ -20,7 +20,7 @@ Each list has its own lazy worker and client. They are separate from the
 Projects worker so a large Work Files traversal cannot queue ahead of a
 Projects query or Memory listing. This adds at most two filesystem workers,
 with no SQLite connection in either. Each client follows the Projects client
-pattern: one in-flight job, one coalesced pending job, fixed 30-second deadlines
+pattern: one in-flight scan, one coalesced pending scan, fixed 30-second deadlines
 from caller registration, a five-minute dispatch ceiling, worker termination
 after errors or unobserved timed-out work, and three bounded snapshot conflicts.
 Unlike the Projects client's read-only fallback, an exhausted policy conflict
@@ -46,12 +46,25 @@ Main remains the sole SQLite writer. On the first request per type it reads
 existing indexed IDs so old rows absent from the current view can be removed.
 Signatures live for the application lifetime; a restart refreshes all visible
 files once in the background. A valid view is published before FTS applies;
-the client yields with `setImmediate` before the first write and retains job
-ownership until applying finishes, so pending requests remain coalesced and
-cannot race that apply. Main applies at most `FILE_LIST_INDEX_MAX_ENTRIES`
+the client yields with `setImmediate` before the first write. A published scan
+releases its scan slot immediately, so the next request can scan and publish
+while indexing is still running. Applies have a separate single slot per kind
+and one coalesced pending delta, replaced by the latest published scan. Each
+scan snapshots the signatures already acknowledged by SQLite. Main reconciles
+deletions against those currently acknowledged IDs before applying the delta;
+if an omitted body has become necessary since the scan, it requests a fresh
+background scan while preserving the published view. This covers writes that
+the preceding apply completed after the newer scan took its snapshot, as well
+as changes in replaced pending applies. Cancelling or restarting a
+worker invalidates an apply but retains its slot until it unwinds, preventing
+overlapping writes across worker generations. Expiring an unpublished scan
+terminates only that worker and leaves an already published apply valid.
+Main applies at most `FILE_LIST_INDEX_MAX_ENTRIES`
 (50) changes and `FILE_LIST_INDEX_MAX_BODY_BYTES` (128 KiB of UTF-8 bodies)
 per `applySearchFileBatch` transaction and yields with `setImmediate` between
-batches. Before every batch it checks the worker job and the hidden/live-root/save version. Accepted
+batches. An oversized body is clamped to the byte cap at a complete UTF-8
+character without changing the worker payload, so later entries still apply.
+Before every batch it checks the apply generation and the hidden/live-root/save version. Accepted
 signatures advance only after a successful transaction; a conflict retries
 from those accepted batches even without pending callers, and a failed write
 leaves its files dirty and logs the background failure without retracting the
@@ -60,6 +73,12 @@ ceiling and shutdown still stop it. Save and delete hooks invalidate the
 particular path, including Memory aliases of
 the resolved path, with Windows case and separator folding. Resolved Memory
 targets remain associated with listed IDs when their signatures become dirty.
+An inverse map of normalized literal and resolved path keys to listed IDs is
+built when the manifest is accepted for indexing (and seeded from existing
+SQLite IDs at the first snapshot). A save normalizes only its own path and
+looks up all matching IDs, including shared targets, without scanning the index.
+Successful deletions remove their IDs from this map; invalidation does not add
+unwritten entries to the accepted signatures.
 Unrelated Markdown saves leave the epochs alone: invalidations cover Claude
 memory directories, project instruction files, known listed aliases, and
 `.work-files/` for Work Files. Before a first snapshot there is no per-path set;
@@ -74,8 +93,8 @@ Diagnostics records `ipc.get-memories` and `ipc.get-work-files` with `totalMs`
 and `entries` (listed file descriptors, including duplicate Memory paths),
 behind the existing mutable
 `TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories both.
-`totalMs` excludes that reply's background index batches; queued calls can
-still wait for the previous job's apply to finish.
+`totalMs` excludes background index batches, including any previous job's apply.
+Only scan work can queue a list request.
 The new tests compare real-worker lists and initial FTS deltas to a frozen
 pre-change synchronous fixture, verify unchanged-body read counts and per-file
 changes, path guards, hidden projects and cap behavior, exercise client

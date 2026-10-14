@@ -97,6 +97,96 @@ test('index transactions bound UTF-8 body bytes as well as entry count', async (
   assert.ok(batches.flat().every(entry => entry.body.length === 32768));
 });
 
+test('an oversized UTF-8 body is clamped at a complete character and later entries still apply', async () => {
+  const batches = [];
+  const ctx = mainIndex({ applySearchFileBatch: (_kind, _deletes, entries) => batches.push(entries) });
+  ctx.fileListsSnapshot('memory');
+  const result = delta(2);
+  result.upserts[0].body = 'a' + '\u754c\ud83d\ude00'.repeat(32768);
+  const original = result.upserts[0].body;
+  assert.equal(await ctx.applyFileListIndex('memory', result, () => true), true);
+  const entries = batches.flat();
+  assert.equal(entries.length, 2);
+  assert.ok(batches.every(batch => batch.reduce((bytes, entry) => bytes + Buffer.byteLength(entry.body), 0) <= 128 * 1024));
+  assert.equal(entries[0].body, original.slice(0, entries[0].body.length));
+  assert.ok(Buffer.byteLength(entries[0].body) >= 128 * 1024 - 3);
+  assert.equal(entries[1].body, 'body');
+  assert.equal(result.upserts[0].body, original, 'clamping must not mutate the worker payload');
+  assert.equal(ctx.fileListsSnapshot('memory').indexed.length, 2);
+});
+
+test('saving one indexed path does not normalize every indexed ID again', async () => {
+  const { fileListPathKey } = require('../file-lists-path');
+  const mainRequire = require('node:module').createRequire(path.join(__dirname, '..', 'main.js'));
+  let normalized = 0;
+  const ctx = mainIndex({ require: id => id === './file-lists-path'
+    ? { fileListPathKey: (...args) => { normalized++; return fileListPathKey(...args); } }
+    : mainRequire(id) });
+  ctx.fileListsSnapshot('memory');
+  const result = delta(1000);
+  result.manifest = result.manifest.map(([id, signature]) => [path.resolve(`repo/.claude/${id}.md`), signature]);
+  result.upserts = result.upserts.map((entry, i) => ({ ...entry, id: result.manifest[i][0] }));
+  await ctx.applyFileListIndex('memory', result, () => true);
+  normalized = 0;
+  ctx.invalidateFtsSignature('memory', result.upserts[0].id);
+  assert.ok(normalized <= 2, `one save normalized ${normalized} paths`);
+  assert.equal(ctx.fileListsSnapshot('memory').indexed.filter(([, signature]) => signature === null).length, 1);
+});
+
+test('the published path map invalidates shared targets and forgets deleted aliases', async () => {
+  const ctx = mainIndex();
+  ctx.fileListsSnapshot('memory');
+  const target = path.join(path.parse(process.cwd()).root, 'unrelated-repo', 'docs', 'source.md');
+  const ids = ['one', 'two', 'other'].map(name => path.resolve(`repo/.claude/${name}.md`));
+  const manifest = ids.map((id, i) => [id, JSON.stringify([JSON.stringify([1, 4, i < 2 ? target : id]), 'title'])]);
+  const result = { manifest, deletes: [], upserts: ids.map(id => ({ id, body: 'body' })) };
+  await ctx.applyFileListIndex('memory', result, () => true);
+  ctx.invalidateFtsSignature('memory', target);
+  const state = ctx.fileListsSnapshot('memory');
+  assert.equal(state.indexed[0][1], null);
+  assert.equal(state.indexed[1][1], null);
+  assert.equal(state.indexed[2][1], manifest[2][1]);
+  await ctx.applyFileListIndex('memory', { manifest: [manifest[2]], deletes: ids.slice(0, 2), upserts: [] }, () => true);
+  const before = ctx.fileListsSnapshot('memory');
+  ctx.invalidateFtsSignature('memory', target);
+  assert.equal(ctx.fileListsSnapshot('memory').epoch, before.epoch);
+});
+
+test('invalidating a published but unwritten alias does not acknowledge a failed upsert', async () => {
+  const ctx = mainIndex({ applySearchFileBatch: () => { throw new Error('DB failed'); } });
+  ctx.fileListsSnapshot('memory');
+  const alias = path.resolve('repo/.claude/alias.md');
+  const target = path.join(path.parse(process.cwd()).root, 'unrelated-repo', 'docs', 'source.md');
+  const signature = JSON.stringify([JSON.stringify([1, 4, target]), 'title']);
+  await assert.rejects(ctx.applyFileListIndex('memory', { manifest: [[alias, signature]], deletes: [], upserts: [{ id: alias, body: 'body' }] }, () => true), /DB failed/);
+  ctx.invalidateFtsSignature('memory', target);
+  assert.equal(ctx.fileListsSnapshot('memory').indexed.length, 0);
+});
+
+test('a delta scanned before the previous apply removes rows absent from its newer manifest', async () => {
+  const batches = [];
+  const ctx = mainIndex({ applySearchFileBatch: (_kind, deletes, entries) => batches.push({ deletes, entries }) });
+  ctx.fileListsSnapshot('memory');
+  await ctx.applyFileListIndex('memory', delta(1), () => true);
+  assert.equal(await ctx.applyFileListIndex('memory', delta(0), () => true), true);
+  assert.equal(ctx.fileListsSnapshot('memory').indexed.length, 0);
+  assert.deepEqual(Array.from(batches.at(-1).deletes), ['0']);
+});
+
+test('a delta scanned before the previous apply retries when an omitted body is now needed', async () => {
+  const batches = [];
+  const ctx = mainIndex({ applySearchFileBatch: (_kind, _deletes, entries) => batches.push(entries) });
+  ctx.fileListsSnapshot('memory');
+  const written = delta(1);
+  await ctx.applyFileListIndex('memory', written, () => true);
+  const concurrent = delta(1);
+  concurrent.manifest[0][1] = JSON.stringify([JSON.stringify([2, 4, '0']), 'title']);
+  concurrent.upserts = [];
+  assert.equal(await ctx.applyFileListIndex('memory', concurrent, () => true), false);
+  assert.equal(batches.length, 1, 'an incomplete delta must not write or clear invalidation');
+  assert.equal(ctx.fileListsSnapshot('memory').indexed[0][1], written.manifest[0][1]);
+});
+
 test('unrelated Markdown saves leave both list versions and invalidations unchanged', () => {
   const ctx = mainIndex();
   for (const kind of ['memory', 'work-file']) {

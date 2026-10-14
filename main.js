@@ -1381,21 +1381,25 @@ const FILE_LIST_INDEX_MAX_ENTRIES = 50;
 const FILE_LIST_INDEX_MAX_BODY_BYTES = 128 * 1024;
 const FILE_LIST_MAX_INVALIDATED_PATHS = 256;
 for (const kind of ['memory', 'work-file']) {
-  fileListStates.set(kind, { epoch: 0, indexed: null, targets: new Map(), invalidated: new Set(), invalidateAll: false });
+  fileListStates.set(kind, { epoch: 0, indexed: null, targets: new Map(), paths: new Map(), invalidated: new Set(), invalidateAll: false });
+}
+
+function publishFileListPaths(state, ids) {
+  state.paths = new Map();
+  for (const id of ids) {
+    for (const key of [fileListPathKey(id, process.platform), state.targets.get(id)].filter(Boolean)) {
+      if (!state.paths.has(key)) state.paths.set(key, new Set());
+      state.paths.get(key).add(id);
+    }
+  }
 }
 
 function invalidateFtsSignature(kind, filePath) {
   const state = fileListStates.get(kind);
   if (!state) return;
   const key = filePath ? fileListPathKey(filePath, process.platform) : null;
-  const matching = [];
-  if (key && state.indexed) {
-    for (const id of state.indexed.keys()) {
-      if (fileListPathKey(id, process.platform) === key) matching.push(id);
-      else if (state.targets.get(id) === key) matching.push(id);
-    }
-  }
-  if (key && matching.length === 0) {
+  const matching = state.paths.get(key) || new Set();
+  if (key && matching.size === 0) {
     if (kind === 'work-file') {
       if (!key.includes('/.work-files/')) return;
     } else {
@@ -1416,7 +1420,9 @@ function invalidateFtsSignature(kind, filePath) {
     state.invalidateAll = true;
   }
   if (!state.indexed) return;
-  if (key) for (const id of matching) state.indexed.set(id, null);
+  if (key) for (const id of matching) {
+    if (state.indexed.has(id)) state.indexed.set(id, null);
+  }
   else for (const file of state.indexed.keys()) state.indexed.set(file, null);
 }
 
@@ -1432,7 +1438,10 @@ function fileListsPolicy(kind) {
 
 function fileListsSnapshot(kind) {
   const state = fileListStates.get(kind);
-  if (!state.indexed) state.indexed = new Map(getSearchFileIds(kind).map(id => [id, null]));
+  if (!state.indexed) {
+    state.indexed = new Map(getSearchFileIds(kind).map(id => [id, null]));
+    publishFileListPaths(state, state.indexed.keys());
+  }
   return {
     ...fileListsPolicy(kind), kind, epoch: state.epoch, indexed: [...state.indexed],
     invalidated: [...state.invalidated], invalidateAll: state.invalidateAll,
@@ -1443,16 +1452,28 @@ async function applyFileListIndex(kind, result, valid) {
   if (!valid()) return false;
   const state = fileListStates.get(kind);
   const signatures = new Map(result.manifest);
+  const upserts = new Map(result.upserts.map(entry => [entry.id, entry]));
+  for (const [id, signature] of signatures) {
+    if (state.indexed.get(id) !== signature && !upserts.has(id)) return false;
+  }
   if (kind === 'memory') state.targets = new Map(result.manifest.map(([id, signature]) => [id, fileListPathKey(JSON.parse(JSON.parse(signature)[0])[2], process.platform)]));
-  const changes = [...result.deletes.map(id => ({ id })), ...result.upserts.map(entry => ({ entry }))];
+  publishFileListPaths(state, new Set([...state.indexed.keys(), ...signatures.keys()]));
+  const removed = [...new Set([...result.deletes, ...state.indexed.keys()])].filter(id => !signatures.has(id));
+  const changes = [...removed.map(id => ({ id })), ...result.upserts.map(entry => ({ entry }))];
   for (let offset = 0; offset < changes.length;) {
     if (!valid()) return false;
     const batch = [];
     let bodyBytes = 0;
     while (offset < changes.length && batch.length < FILE_LIST_INDEX_MAX_ENTRIES) {
-      const change = changes[offset];
-      const bytes = change.entry ? Buffer.byteLength(change.entry.body || '', 'utf8') : 0;
-      if (bytes > FILE_LIST_INDEX_MAX_BODY_BYTES) throw new Error('file list index body exceeds batch limit');
+      let change = changes[offset];
+      let bytes = change.entry ? Buffer.byteLength(change.entry.body || '', 'utf8') : 0;
+      if (bytes > FILE_LIST_INDEX_MAX_BODY_BYTES) {
+        const buffer = Buffer.from(change.entry.body, 'utf8');
+        let end = FILE_LIST_INDEX_MAX_BODY_BYTES;
+        while ((buffer[end] & 0xc0) === 0x80) end--;
+        change = { entry: { ...change.entry, body: buffer.toString('utf8', 0, end) } };
+        bytes = end;
+      }
       if (bodyBytes + bytes > FILE_LIST_INDEX_MAX_BODY_BYTES) break;
       batch.push(change);
       bodyBytes += bytes;
@@ -1461,7 +1482,15 @@ async function applyFileListIndex(kind, result, valid) {
     const deletes = batch.filter(change => !change.entry).map(change => change.id);
     const entries = batch.filter(change => change.entry).map(change => change.entry);
     applySearchFileBatch(kind, deletes, entries);
-    for (const id of deletes) state.indexed.delete(id);
+    for (const id of deletes) {
+      state.indexed.delete(id);
+      for (const key of [fileListPathKey(id, process.platform), state.targets.get(id)].filter(Boolean)) {
+        const ids = state.paths.get(key);
+        ids?.delete(id);
+        if (ids?.size === 0) state.paths.delete(key);
+      }
+      state.targets.delete(id);
+    }
     for (const entry of entries) state.indexed.set(entry.id, signatures.get(entry.id));
     await new Promise(resolve => setImmediate(resolve));
   }

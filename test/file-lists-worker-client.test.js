@@ -147,7 +147,7 @@ test('failure during background indexing is reported, preserves the published vi
   assert.equal(r.workers.length, 2);
 });
 
-test('a valid view resolves before indexing starts and pending jobs wait for that apply', async t => {
+test('a request during a slow index apply resolves without waiting for that apply', async t => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   let applying = false;
@@ -157,8 +157,6 @@ test('a valid view resolves before indexing starts and pending jobs wait for tha
   const first = r.client.request().then(value => { published = value; });
   const payload = { view: 'ready' };
   r.reply(payload);
-  const pending = r.client.request();
-  pending.catch(() => {});
   try {
     await Promise.resolve();
     assert.equal(published, payload, 'the view must publish without waiting for FTS');
@@ -166,16 +164,141 @@ test('a valid view resolves before indexing starts and pending jobs wait for tha
     await nextTurn();
     assert.equal(applying, true);
     assert.equal(completed, false);
-    assert.equal(r.workers[0].messages.length, 1);
+    let second;
+    const pending = r.client.request().then(value => { second = value; });
+    pending.catch(() => {});
+    assert.equal(r.workers[0].messages.length, 2, 'navigation must dispatch during the first apply');
+    r.reply({ view: 'next' });
+    await Promise.resolve();
+    assert.equal(second.view, 'next', 'navigation must resolve while the apply gate is still closed');
+    assert.equal(completed, false);
+    await pending;
   } finally { release(); }
   await first;
   await nextTurn();
-  assert.equal(r.workers[0].messages.length, 2);
-  r.reply({ view: 'next' });
-  assert.equal((await pending).view, 'next');
 });
 
-test('a policy change after publication retries the background delta before serving pending callers', async t => {
+test('two published index applies never overlap while scans continue', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = [];
+  let running = 0;
+  let peak = 0;
+  const r = rig(t, { apply: async result => {
+    started.push(result.view);
+    peak = Math.max(peak, ++running);
+    if (result.view === 'first') await gate;
+    running--;
+    return true;
+  } });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  await first;
+  await nextTurn();
+  const second = r.client.request();
+  second.catch(() => {});
+  try {
+    assert.equal(r.workers[0].messages.length, 2);
+    r.reply({ view: 'second' });
+    await second;
+    await nextTurn();
+    assert.deepEqual(started, ['first']);
+  } finally { release(); }
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(started, ['first', 'second']);
+  assert.equal(peak, 1);
+});
+
+test('published deltas coalesce to the latest scan while one apply owns the slot', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const applied = [];
+  const r = rig(t, { apply: async result => {
+    applied.push(result.view);
+    if (result.view === 'first') await gate;
+    return true;
+  } });
+  try {
+    const first = r.client.request();
+    r.reply({ view: 'first' });
+    await first;
+    await nextTurn();
+    for (const view of ['second', 'latest']) {
+      const pending = r.client.request();
+      r.reply({ view });
+      assert.equal((await pending).view, view);
+    }
+    assert.deepEqual(applied, ['first']);
+  } finally { release(); }
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(applied, ['first', 'latest']);
+});
+
+test('a worker restart cannot overlap a cancelled apply with the next published delta', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const applied = [];
+  const errors = [];
+  let running = 0;
+  let peak = 0;
+  const r = rig(t, { apply: async (result, valid) => {
+    peak = Math.max(peak, ++running);
+    if (result.view === 'first') await gate;
+    if (valid()) applied.push(result.view);
+    running--;
+    return valid();
+  }, onError: error => errors.push(error) });
+  try {
+    const first = r.client.request();
+    r.reply({ view: 'first' });
+    await first;
+    await nextTurn();
+    r.workers[0].emit('error', new Error('broken worker'));
+    const recovered = r.client.request();
+    r.reply({ view: 'recovered' });
+    assert.equal((await recovered).view, 'recovered');
+    await nextTurn();
+    assert.deepEqual(applied, []);
+    assert.equal(running, 1);
+    assert.equal(r.workers.length, 2);
+    assert.equal(errors.length, 1);
+  } finally { release(); }
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(applied, ['recovered']);
+  assert.equal(peak, 1);
+});
+
+test('shutdown invalidates the active apply and drops the queued published delta', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = [];
+  const applied = [];
+  const r = rig(t, { apply: async (result, valid) => {
+    started.push(result.view);
+    await gate;
+    if (valid()) applied.push(result.view);
+    return valid();
+  } });
+  try {
+    const first = r.client.request();
+    r.reply({ view: 'first' });
+    await first;
+    await nextTurn();
+    const second = r.client.request();
+    r.reply({ view: 'second' });
+    await second;
+    r.client.shutdown();
+  } finally { release(); }
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(started, ['first']);
+  assert.deepEqual(applied, []);
+});
+
+test('a policy change invalidates both an ongoing apply and a concurrent scan before publication', async t => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   let writes = 0;
@@ -195,17 +318,22 @@ test('a policy change after publication retries the background delta before serv
   pending.then(() => { published = true; });
   await Promise.resolve();
   assert.equal(published, false);
+  r.reply({ view: 'stale concurrent scan' });
+  assert.equal(r.workers[0].messages.length, 3);
+  await Promise.resolve();
+  assert.equal(published, false);
   r.reply({ view: 'fresh' });
   assert.equal((await pending).view, 'fresh');
   await nextTurn();
   assert.equal(writes, 1);
 });
 
-test('a pending caller timeout does not cancel an already published index apply', async t => {
+test('a concurrent scan caller timeout does not cancel an already published index apply', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const r = rig(t, { timeoutMs: 100, hardTimeoutMs: 1000, apply: async () => { await gate; return true; } });
+  let applied = false;
+  const r = rig(t, { timeoutMs: 100, hardTimeoutMs: 1000, apply: async (_result, valid) => { await gate; applied = valid(); return applied; } });
   const first = r.client.request();
   r.reply({ view: 'first' });
   await first;
@@ -214,13 +342,15 @@ test('a pending caller timeout does not cancel an already published index apply'
   try {
     t.mock.timers.tick(100);
     await rejected;
-    assert.equal(r.workers[0].terminated, false);
+    assert.equal(r.workers[0].terminated, true);
+    assert.equal(applied, false);
   } finally { release(); }
   await nextTurn();
+  assert.equal(applied, true, 'terminating an expired scan must preserve the published apply');
   const retry = r.client.request();
   r.reply({ view: 'next' });
   assert.equal((await retry).view, 'next');
-  assert.equal(r.workers.length, 1);
+  assert.equal(r.workers.length, 2);
 });
 
 test('a published index apply retries a changed policy even when there are no pending callers', async t => {
@@ -235,4 +365,20 @@ test('a published index apply retries a changed policy even when there are no pe
   r.reply({ view: 'fresh' });
   await nextTurn();
   assert.equal(writes, 1);
+});
+
+test('an incomplete concurrent delta retries in the background without retracting its view', async t => {
+  const attempted = [];
+  const r = rig(t, { apply: async result => {
+    attempted.push(result.view);
+    return result.view === 'refreshed';
+  } });
+  const first = r.client.request();
+  r.reply({ view: 'ready' });
+  assert.equal((await first).view, 'ready');
+  await nextTurn();
+  assert.equal(r.workers[0].messages.length, 2);
+  r.reply({ view: 'refreshed' });
+  await nextTurn();
+  assert.deepEqual(attempted, ['ready', 'refreshed']);
 });

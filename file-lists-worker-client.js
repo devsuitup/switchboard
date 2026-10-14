@@ -6,6 +6,9 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
   let stopped = false;
   let active = null;
   let pending = null;
+  let applying = null;
+  let pendingApply = null;
+  let generation = 0;
   let nextId = 0;
   const waiters = new Set();
 
@@ -25,49 +28,77 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
   }
 
   function fail(error, report = true) {
-    const published = active?.published;
+    const published = active?.published || applying?.published || pendingApply?.published;
+    generation++;
     resetWorker();
     pending = null;
+    clearTimeout(applying?.timer);
+    clearTimeout(pendingApply?.timer);
+    pendingApply = null;
     for (const waiter of waiters) settle(waiter, error);
     if (report && published) onError(error);
   }
 
   function dispatchPending() {
+    if (active) return;
     const job = pending;
     pending = null;
     if (job && job.waiters.some(waiter => waiters.has(waiter))) dispatch(job);
   }
 
-  async function receive(message) {
+  function retry(job) {
+    clearTimeout(job.timer);
+    if (++job.discards < maxDiscards && (job.published || job.background || job.waiters.some(waiter => waiters.has(waiter)))) {
+      if (active) {
+        active.background = true;
+        active.discards = Math.max(active.discards, job.discards);
+      } else {
+        job.waiters.push(...(pending?.waiters || []));
+        pending = null;
+        dispatch(job);
+      }
+      return;
+    }
+    for (const waiter of job.waiters) settle(waiter, new Error('file list snapshot changed'));
+    if (job.published || job.background) onError(new Error('file list index snapshot changed'));
+    dispatchPending();
+  }
+
+  async function applyPending() {
+    if (applying || !pendingApply) return;
+    const job = pendingApply;
+    pendingApply = null;
+    applying = job;
+    const current = () => job.generation === generation && !stopped;
+    const valid = () => current() && getVersion() === job.version;
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      const accepted = valid() && await apply(job.result, valid);
+      if (current() && (!accepted || !valid())) retry(job);
+    } catch (error) { if (current()) fail(error); }
+    finally {
+      clearTimeout(job.timer);
+      applying = null;
+      void applyPending();
+    }
+  }
+
+  function receive(message) {
     const job = active;
     if (!job || message.id !== job.id || job.receiving) return;
     if (message.error) { fail(new Error(message.error)); return; }
     job.receiving = true;
     try {
-      const valid = () => active === job && getVersion() === job.version;
-      let accepted = false;
-      if (valid()) {
-        for (const waiter of job.waiters) settle(waiter, null, message.result);
-        job.published = true;
-        await new Promise(resolve => setImmediate(resolve));
-        accepted = valid() && await apply(message.result, valid);
-      }
-      if (active !== job) return;
-      if (!accepted || !valid()) {
-        clearTimeout(job.timer);
-        if (++job.discards < maxDiscards && (job.published || job.waiters.some(waiter => waiters.has(waiter)))) {
-          job.waiters.push(...(pending?.waiters || []));
-          pending = null;
-          dispatch(job);
-          return;
-        }
-        for (const waiter of job.waiters) settle(waiter, new Error('file list snapshot changed'));
-        if (job.published) onError(new Error('file list index snapshot changed'));
-      }
-      clearTimeout(job.timer);
       active = null;
+      if (getVersion() !== job.version) { retry(job); return; }
+      for (const waiter of job.waiters) settle(waiter, null, message.result);
+      job.published = true;
+      job.result = message.result;
+      clearTimeout(pendingApply?.timer);
+      pendingApply = job;
+      void applyPending();
       dispatchPending();
-    } catch (error) { if (active === job) fail(error); }
+    } catch (error) { fail(error); }
   }
 
   function dispatch(job) {
@@ -80,7 +111,7 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
         current.on('exit', code => { if (worker === current) fail(new Error(`file list worker exited ${code}`)); });
       }
       const state = snapshot();
-      active = { ...job, id: ++nextId, version: state.version, receiving: false };
+      active = { ...job, id: ++nextId, version: state.version, generation, receiving: false };
       active.timer = setTimeout(() => fail(new Error('file list worker hard deadline exceeded')), hardTimeoutMs);
       worker.postMessage({ ...state, id: active.id });
     } catch (error) { fail(error); }

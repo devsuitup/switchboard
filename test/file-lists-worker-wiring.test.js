@@ -52,7 +52,7 @@ for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'w
     await assert.rejects(handler(false, async () => { throw new Error('worker failed'); }, [])(), /worker failed/);
   });
 
-  test(`${channel} returns its view and trace before the background index apply finishes`, async t => {
+  test(`${channel} returns both consecutive views and traces during a slow background index apply`, async t => {
     const worker = new EventEmitter();
     let job;
     worker.postMessage = message => { job = message; };
@@ -69,13 +69,27 @@ for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'w
     const events = [];
     let published;
     const payload = { projects: [] };
-    const invoke = handler(true, () => client.request(), events)().then(view => { published = view; });
+    const invokeHandler = handler(true, () => client.request(), events);
+    const invoke = invokeHandler().then(view => { published = view; });
     worker.emit('message', { id: job.id, result: { view: payload, entries: 7 } });
     try {
       await nextTurn();
       assert.equal(published, payload);
       assert.equal(applied, false);
       assert.equal(events[0][2].entries, 7);
+      const firstId = job.id;
+      let secondView;
+      const second = invokeHandler().then(view => { secondView = view; });
+      second.catch(() => {});
+      assert.notEqual(job.id, firstId, 'the second IPC must dispatch before indexing completes');
+      const nextPayload = { projects: ['next'] };
+      worker.emit('message', { id: job.id, result: { view: nextPayload, entries: 8 } });
+      await nextTurn();
+      assert.equal(secondView, nextPayload);
+      assert.equal(events.length, 2);
+      assert.equal(events[1][2].entries, 8);
+      assert.equal(applied, false);
+      await second;
     } finally { release(); }
     await invoke;
     await nextTurn();
