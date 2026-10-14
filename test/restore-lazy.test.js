@@ -48,7 +48,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
       return typeof openResult === 'function' ? openResult(sessionId, options) : openResult;
     },
   });
-  window.confirm = (msg) => { confirms.push(msg); return confirmAnswer; };
+  window.appConfirm = async ({ message }) => { confirms.push(message); return confirmAnswer; };
 
   const project = {
     projectPath: PROJECT,

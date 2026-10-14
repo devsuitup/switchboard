@@ -63,7 +63,7 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode =
       'dedup', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone',
       'runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries',
       'showRestoreNotice', 'showNotRestoredNotice', 'showLiveElsewhereNotice', 'showColdCacheNotice',
-      'restoreStartupSessions', 'reopenActiveSessionAfterReload',, 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'
+      'restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'
     ],
   });
   Object.assign(h.window, {
