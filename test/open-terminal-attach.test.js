@@ -64,7 +64,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     unsavedGuard: { beforeQuit: () => false }, activityFlushedForQuit: false,
     activityReporter: { hasPendingWork: false, stop() {} }, mainLoopMonitor: { stop() {} },
     TRACE: { on: false }, activityTrace: { close() {} }, shutdownAllMcp() {},
-    localTranscriptTracker: { dispose() {} }, projectsWatcher: null,
+    localTranscriptTracker: { dispose() {} }, remoteActivityTracker: { dispose() {} }, projectsWatcher: null,
     cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
     appQuitting: false,
   };

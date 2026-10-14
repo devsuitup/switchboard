@@ -130,3 +130,87 @@ test('neither map grows without bound: both are pruned past the decay window', (
   assert.equal(pruned.seen, 1, 'stale sightings must be dropped');
   assert.equal(pruned.ipc, 1, 'stale throttle entries must be dropped too, or the map leaks one entry per session seen');
 });
+
+function timedTracker(t, opts = {}) {
+  const c = clock(0);
+  const timers = new Set();
+  const events = [];
+  const tracker = createRemoteActivityTracker({ ...opts, now: c.now, ipcMinMs: 50,
+    onActivity: event => events.push(event),
+    setTimeout: (fn, ms) => { const timer = { fn, at: c.now() + ms }; timers.add(timer); return timer; },
+    clearTimeout: timer => timers.delete(timer),
+  });
+  t.after(() => tracker.dispose?.());
+  return { tracker, events, timers, advance: ms => {
+    c.advance(ms);
+    for (const timer of [...timers]) {
+      if (timer.at > c.now()) continue;
+      timers.delete(timer);
+      timer.fn();
+    }
+  } };
+}
+
+test('three remote children retain independent leading and final updates per parent and host', t => {
+  const f = timedTracker(t);
+  const rels = ['A', 'B', 'C'].map(id => `folder/${UUID}/subagents/agent-${id}.jsonl`);
+  for (const rel of rels) assert.ok(f.tracker.record('vps', rel));
+  f.advance(10);
+  for (const rel of rels) assert.equal(f.tracker.record('vps', rel), null);
+  assert.ok(f.tracker.record('other-host', rels[0]));
+  assert.ok(f.tracker.record('vps', 'folder/other-parent/subagents/agent-A.jsonl'));
+  assert.ok(f.tracker.record('vps', `folder/${UUID}.jsonl`));
+  assert.equal(f.events.length, 6);
+  f.advance(40);
+  assert.deepEqual(f.events.slice(6).map(e => [e.agentId, e.at]), [['A', 10], ['B', 10], ['C', 10]]);
+  f.advance(50);
+  assert.equal(f.events.length, 9, 'one trailing event per identity');
+});
+
+test('remote parent final activity is delivered and dispose cancels queued work', t => {
+  const f = timedTracker(t);
+  const rel = `folder/${UUID}.jsonl`;
+  f.tracker.record('vps', rel);
+  f.advance(10);
+  f.tracker.record('vps', rel);
+  f.advance(40);
+  assert.deepEqual(f.events.map(e => e.at), [0, 10]);
+  f.tracker.record('vps', rel);
+  f.tracker.dispose();
+  assert.equal(f.timers.size, 0);
+  f.advance(50);
+  assert.equal(f.tracker.record('vps', rel), null);
+  assert.equal(f.events.length, 2);
+});
+
+test('remote capacity and idle expiry release per-agent throttle and pending timers', t => {
+  const f = timedTracker(t, { maxEntries: 2, decayMs: 100 });
+  const a = `folder/${UUID}/agent-A.jsonl`;
+  const b = `folder/${UUID}/agent-B.jsonl`;
+  const c = `folder/${UUID}/agent-C.jsonl`;
+  f.tracker.record('vps', a);
+  f.tracker.record('vps', b);
+  f.tracker.record('vps', a);
+  assert.equal(f.timers.size, 1);
+  f.tracker.record('vps', c);
+  assert.equal(f.tracker.stats().ipc, 2);
+  assert.equal(f.timers.size, 1, 'recent A survives eviction of idle B');
+  f.advance(50);
+  assert.equal(f.events.length, 4);
+  f.advance(101);
+  assert.deepEqual(f.tracker.stats(), { seen: 0, ipc: 0 });
+  assert.equal(f.timers.size, 0);
+  assert.ok(f.tracker.record('vps', a), 'expired identities regain a leading event');
+});
+
+test('queued remote delivery does not extend the top-level liveness decay window', t => {
+  const f = timedTracker(t, { decayMs: 10 });
+  const rel = `folder/${UUID}.jsonl`;
+  f.tracker.record('vps', rel);
+  f.advance(5);
+  f.tracker.record('vps', rel);
+  f.advance(11);
+  assert.equal(f.tracker.activeAt('vps', UUID), null, 'pending delivery is not new filesystem activity');
+  f.advance(34);
+  assert.equal(f.events.length, 2, 'the final observed update still arrives');
+});

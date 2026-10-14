@@ -571,14 +571,16 @@ let watchedAliases = new Set();
 function onRemoteWatchEvent(alias) { remoteIndexer.refreshHostNow(alias).catch(() => {}); }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — busy spinner (issue #242)")
-const remoteActivityTracker = createRemoteActivityTracker({});
+const remoteActivityTracker = createRemoteActivityTracker({
+  onActivity: activity => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('remote-activity', activity);
+    }
+  },
+});
 
 function onRemoteWatchActivity(alias, rel) {
-  const result = remoteActivityTracker.record(alias, rel);
-  if (!result) return;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('remote-activity', result);
-  }
+  remoteActivityTracker.record(alias, rel);
 }
 
 function startWatcherForHost(host) {
@@ -3723,6 +3725,7 @@ app.on('before-quit', (event) => {
   // Stops the timer and SIGKILLs any ssh/scp still in flight.
   remoteIndexer.dispose();
   remoteWatcher.stopAll();
+  remoteActivityTracker.dispose();
 
   // Kill all PTY processes on quit
   // see docs/session-restore.md ("Closing the app")

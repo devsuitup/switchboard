@@ -38,7 +38,7 @@ function timedFixture(t, opts = {}) {
     setTimeout: (fn, ms) => { const timer = { fn, at: at + ms }; timers.add(timer); return timer; },
     clearTimeout: timer => timers.delete(timer),
   });
-  return { ...f, advance: async ms => {
+  return { ...f, timerCount: () => timers.size, advance: async ms => {
     at += ms;
     for (const timer of [...timers]) {
       if (timer.at > at) continue;
@@ -409,4 +409,238 @@ test('dispose during a stat prevents in-flight activity from escaping', async t 
   release();
   assert.equal(await work, null);
   assert.deepEqual(f.events, []);
+});
+
+test('three children keep independent leading and trailing activity within one parent window', async t => {
+  const f = timedFixture(t);
+  const children = ['7', '8', '9'].map(id => ['folder', UUID_A, 'subagents', `agent-${id}.jsonl`]);
+  for (const parts of children) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'first\n');
+    assert.ok(await f.tracker.record(parts), 'each distinct child must surface immediately');
+  }
+  for (const parts of children) {
+    fs.appendFileSync(f.file(parts), 'final\n');
+    assert.equal(await f.tracker.record(parts), null);
+  }
+  assert.deepEqual(f.events.map(e => e.agentId), ['7', '8', '9']);
+  await f.advance(50);
+  assert.deepEqual(f.events.map(e => e.agentId), ['7', '8', '9', '7', '8', '9']);
+  await f.advance(50);
+  assert.equal(f.events.length, 6, 'unchanged files must not redeliver');
+});
+
+test('a child identity is independent of its parent, layout and ordinary parent activity', async t => {
+  const f = timedFixture(t);
+  for (const parts of [child, ['folder', UUID_A, 'subagents', 'agent-8.jsonl'], ['folder', UUID_B, 'agent-7.jsonl'], parent]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    fs.appendFileSync(f.file(parts), 'new\n');
+    assert.ok(await f.tracker.record(parts));
+  }
+  const legacy = ['folder', UUID_A, 'agent-7.jsonl'];
+  f.write(legacy, 'old\n');
+  await f.tracker.record(legacy);
+  fs.appendFileSync(f.file(legacy), 'new\n');
+  assert.equal(await f.tracker.record(legacy), null, 'alternate layouts share the same agent identity');
+  await f.advance(50);
+  assert.deepEqual(f.events.map(e => [e.parentSessionId || e.sessionId, e.agentId]),
+    [[UUID_A, '7'], [UUID_A, '8'], [UUID_B, '7'], [UUID_A, undefined], [UUID_A, '7']]);
+});
+
+test('baseline capacity evicts the least recently observed file and its trailing activity', async t => {
+  const f = timedFixture(t, { maxFiles: 2 });
+  const other = ['folder', UUID_A, 'subagents', 'agent-8.jsonl'];
+  for (const parts of [parent, child]) {
+    f.write(parts, 'old\n');
+    await f.tracker.record(parts);
+    f.write(parts, 'old\nnew\n');
+    await f.tracker.record(parts);
+  }
+  f.write(child, 'old\nnew\npending\n');
+  await f.tracker.record(child);
+  await f.tracker.record(parent);
+  f.write(other, 'old\n');
+  await f.tracker.record(other);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'an evicted baseline cannot authorize trailing activity');
+  f.write(child, 'new history after eviction\n', 200);
+  assert.equal(await f.tracker.record(child), null, 'evicted history establishes a new baseline');
+  assert.deepEqual(f.tracker.stats(), { baselines: 2, ipc: 0, pending: 0, inFlight: 0 });
+  fs.appendFileSync(f.file(child), 'fresh\n');
+  assert.ok(await f.tracker.record(child));
+  assert.equal(f.tracker.stats().baselines, 2);
+});
+
+test('baseline idle expiry and file deletion also release throttle and pending entries', async t => {
+  for (const mode of ['expiry', 'delete']) {
+    const f = timedFixture(t, { baselineTtlMs: 100 });
+    f.write(child, 'old\n');
+    await f.tracker.record(child);
+    f.write(child, 'old\nfirst\n');
+    await f.tracker.record(child);
+    if (mode === 'delete') {
+      fs.appendFileSync(f.file(child), 'pending\n');
+      await f.tracker.record(child);
+      fs.unlinkSync(f.file(child));
+      await f.tracker.record(child);
+    } else {
+      await f.advance(101);
+      f.write(child, 'history after expiry\n', 200);
+      assert.equal(await f.tracker.record(child), null, 'expired metadata must not report historical growth');
+      fs.unlinkSync(f.file(child));
+      await f.tracker.record(child);
+    }
+    assert.deepEqual(f.tracker.stats(), { baselines: 0, ipc: 0, pending: 0, inFlight: 0 });
+    await f.advance(50);
+    assert.equal(f.events.length, 1);
+  }
+});
+
+test('two or three racing appends deliver once after a deferred recheck with no later notification', async t => {
+  for (const burst of [2, 3]) {
+    let racing = 0;
+    let calls = 0;
+    let f;
+    f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+      calls++;
+      if (racing > 0) {
+        racing--;
+        fs.appendFileSync(file, 'racing append\n');
+        f.tracker.record(child);
+      }
+      return fs.promises.stat(file);
+    } } });
+    f.write(child, 'old\n');
+    await f.tracker.record(child);
+    calls = 0;
+    fs.appendFileSync(f.file(child), 'first\n');
+    racing = burst;
+    assert.equal(await f.tracker.record(child), null, 'unstable metadata must not emit');
+    assert.equal(calls, 2, 'one record must perform at most two verification attempts');
+    const deferred = f.timerCount();
+    await f.advance(50);
+    assert.equal(f.events.length, 1, 'the settled burst must surface without another watch event');
+    assert.equal(deferred, 1, 'one deferred recheck must retain the last dirty write');
+    assert.equal(f.events[0].agentId, '7');
+    assert.equal(f.timerCount(), 0);
+    await f.advance(50);
+    assert.equal(f.events.length, 1, 'the settled burst must not redeliver');
+  }
+});
+
+test('expired history stays quiet while delayed sibling first writes surface independently', async t => {
+  const f = timedFixture(t, { baselineTtlMs: 100 });
+  f.write(parent, 'first write\n', 1000);
+  assert.ok(await f.tracker.record(parent));
+  const other = ['folder', UUID_A, 'subagents', 'agent-8.jsonl'];
+  const sibling = ['folder', UUID_A, 'subagents', 'agent-9.jsonl'];
+  f.write(other, 'delayed first write\n', 1001);
+  f.write(sibling, 'delayed first write\n', 1001);
+  await f.advance(5000);
+  assert.equal(await f.tracker.record(parent), null, 'eviction must not replay a post-start historical write');
+  assert.ok(await f.tracker.record(other), 'expiry of another file must not raise the first-write floor');
+  assert.ok(await f.tracker.record(sibling), 'delayed siblings must retain independent first deliveries');
+  assert.equal(f.events.length, 3);
+});
+
+test('deletion, read errors and capacity eviction do not suppress an unseen delayed first write', async t => {
+  for (const mode of ['delete', 'error', 'capacity']) {
+    let deny = false;
+    const f = timedFixture(t, { maxFiles: 1, fs: { ...fs.promises, open: (...args) => {
+      if (deny) return Promise.reject(new Error('permission denied'));
+      return fs.promises.open(...args);
+    } } });
+    f.write(parent, 'old\n');
+    await f.tracker.record(parent);
+    f.write(child, 'delayed first write\n', 1001);
+    await f.advance(5000);
+    if (mode === 'delete') fs.unlinkSync(f.file(parent));
+    if (mode === 'error') deny = true;
+    if (mode === 'capacity') {
+      const other = ['folder', `${UUID_B}.jsonl`];
+      f.write(other, 'old\n');
+      await f.tracker.record(other);
+    } else await f.tracker.record(parent);
+    deny = false;
+    assert.ok(await f.tracker.record(child), `${mode} must only affect the forgotten file`);
+    assert.equal(f.events.length, 1);
+  }
+});
+
+test('continuous racing appends keep one deferred recheck and dispose cancels it', async t => {
+  let racing = false;
+  let calls = 0;
+  let f;
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (racing) {
+      calls++;
+      fs.appendFileSync(file, 'racing append\n');
+      f.tracker.record(parent);
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(parent, 'old\n');
+  await f.tracker.record(parent);
+  racing = true;
+  assert.equal(await f.tracker.record(parent), null);
+  assert.equal(calls, 2);
+  assert.equal(f.timerCount(), 1);
+  await f.advance(50);
+  assert.equal(calls, 4, 'the deferred call must also stop after two attempts');
+  assert.equal(f.timerCount(), 1, 'continuous writes must not multiply deferred checks');
+  f.tracker.dispose();
+  assert.equal(f.timerCount(), 0);
+  await f.advance(50);
+  assert.equal(calls, 4);
+  assert.deepEqual(f.events, []);
+});
+
+test('forgotten recent files do not replay unchanged writes but accept a fresh write', async t => {
+  for (const mode of ['delete', 'error']) {
+    let deny = false;
+    const f = timedFixture(t, { fs: { ...fs.promises, open: (...args) => {
+      if (deny) return Promise.reject(new Error('permission denied'));
+      return fs.promises.open(...args);
+    } } });
+    f.write(child, 'recent\n', 1000);
+    await f.tracker.record(child);
+    if (mode === 'delete') fs.unlinkSync(f.file(child));
+    else deny = true;
+    await f.tracker.record(child);
+    deny = false;
+    if (mode === 'delete') f.write(child, 'recent\n', 1000);
+    assert.equal(await f.tracker.record(child), null, 'the tombstone must suppress the same recent mtime');
+    assert.equal(f.events.length, 1);
+    await f.advance(50);
+    f.write(child, 'fresh write\n', 1001);
+    assert.ok(await f.tracker.record(child));
+    assert.equal(f.events.length, 2);
+  }
+});
+
+test('two racing appends during trailing reverification still deliver exactly two activities', async t => {
+  let racing = 0;
+  let f;
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+    if (racing > 0) {
+      racing--;
+      fs.appendFileSync(file, 'racing append\n');
+      f.tracker.record(child);
+    }
+    return fs.promises.stat(file);
+  } } });
+  f.write(child, 'old\n');
+  await f.tracker.record(child);
+  fs.appendFileSync(f.file(child), 'first\n');
+  await f.tracker.record(child);
+  fs.appendFileSync(f.file(child), 'pending\n');
+  await f.tracker.record(child);
+  racing = 2;
+  await f.advance(50);
+  await f.advance(50);
+  await f.advance(50);
+  assert.equal(f.events.length, 2, 'deferred verification must not duplicate trailing delivery');
+  assert.equal(f.timerCount(), 0);
 });

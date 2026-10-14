@@ -6,6 +6,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createLocalTranscriptTracker } = require('../local-transcript-activity');
+const { createRemoteActivityTracker } = require('../remote-activity');
 
 function projectWithRemoteSubagent() {
   return makeSampleProject({
@@ -107,3 +112,64 @@ test('a local-transcript parent (no PTY in this app) gets has-busy-agents from a
     ctx.destroy();
   }
 });
+
+for (const source of ['local', 'remote']) {
+  test(`${source} tracker delivers all three identities into the shared registry and source-scoped completion removes each separately`, async t => {
+    const ctx = setupSidebarDom();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-delivery-622-'));
+    const parentSessionId = '11111111-1111-4111-8111-111111111111';
+    const agentIds = ['A', 'B', 'C'];
+    const activitySource = source === 'local' ? 'local-transcript' : 'remote-watch';
+    const remote = source === 'remote' ? { remoteAlias: 'vps' } : {};
+    const project = makeSampleProject({ ...remote, sessions: [
+      { sessionId: parentSessionId, ...remote, modified: '2026-05-22T10:00:00Z' },
+      ...agentIds.map(agentId => ({ sessionId: `sub:${parentSessionId}:${agentId}`,
+        parentSessionId, agentId, ...remote, modified: '2026-05-22T10:00:00Z' })),
+    ] });
+    ctx.sidebar.renderProjects([project], true);
+    let delivered = 0;
+    const onRemote = event => { delivered++; ctx.window.onRemoteActivityEvent(event); };
+    const tracker = source === 'local'
+      ? createLocalTranscriptTracker({ projectsDir: root, now: () => 1_000_000,
+        onActivity: event => ctx.emitSessionTranscriptActivity(event) })
+      : createRemoteActivityTracker({ now: () => 1_000_000,
+        onActivity: onRemote });
+    t.after(() => {
+      tracker.dispose?.();
+      ctx.destroy();
+      assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    for (const agentId of agentIds) {
+      const parts = ['folder', parentSessionId, 'subagents', `agent-${agentId}.jsonl`];
+      if (source === 'local') {
+        const file = path.join(root, ...parts);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'old\n');
+        fs.utimesSync(file, 100, 100);
+        await tracker.record(parts);
+        fs.appendFileSync(file, 'new\n');
+        await tracker.record(parts);
+      } else {
+        const before = delivered;
+        const event = tracker.record('vps', parts.join('/'));
+        if (event && delivered === before) onRemote(event);
+      }
+    }
+    const active = () => Array.from(ctx.read(`activeSubagentsByParent.get('${parentSessionId}')?.keys() || []`));
+    assert.deepEqual(active(), agentIds);
+    for (let i = 0; i < agentIds.length; i++) {
+      const agentId = agentIds[i];
+      const sources = () => Array.from(ctx.read(`activeSubagentsByParent.get('${parentSessionId}')?.get('${agentId}')?.keys() || []`));
+      ctx.emitSubagentCompleted({ parentSessionId, agentId });
+      assert.deepEqual(active(), agentIds.slice(i), 'IPC completion preserves tracker-only identities');
+      ctx.emitSubagentSpawned({ parentSessionId, agentId });
+      assert.deepEqual(sources(), [activitySource, 'local-ipc']);
+      ctx.emitSubagentCompleted({ parentSessionId, agentId });
+      assert.deepEqual(sources(), [activitySource], 'IPC completion removes only its own contribution');
+      assert.deepEqual(active(), agentIds.slice(i), 'tracker evidence survives overlapping IPC completion');
+      ctx.window.releaseSubagentSource(parentSessionId, agentId, activitySource, 'test');
+      assert.deepEqual(active(), agentIds.slice(i + 1), 'source release removes only its agent, independently of heartbeat throttle');
+    }
+  });
+}
