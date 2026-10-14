@@ -164,7 +164,7 @@ test('ADR continuation size cap: the production limit is 512 MiB', () => {
   assert.equal(vm.runInNewContext(expression[1]), 512 * 1024 * 1024);
 });
 
-test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias without bytes', async t => {
+test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias without bytes', { timeout: 30000 }, async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const f = fixture(t, { a: [] });
   const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
@@ -210,6 +210,7 @@ test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias
   }
   assert.ok(finished, 'unresolved alias must refuse at the deadline');
   await refusal;
+  assert.ok(graphs.every(graph => graph.unresolved === true));
   pinned.binding.beginStep('prompt');
   assert.throws(() => pinned.handle.write('prompt'), /ownership.*unknown/);
   assert.throws(() => pinned.handle.write('\r'), /ownership.*unknown/);
