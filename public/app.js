@@ -643,6 +643,7 @@ window.api.onSessionForked((oldId, newId, kind, background) => {
   if (typeof syncToolBar === 'function') syncToolBar();
 
   if (kind === 'background') rekeyActivityState(oldId, newId, true);
+  else if (kind === 'continuation') rekeyActivityState(oldId, newId, false, true);
   else rekeyActivityState(oldId, newId);
 
   // Re-key pending session to newId so sidebar item persists until DB has real data
@@ -1121,6 +1122,15 @@ function backgroundActionReason(sessionId) {
 
 function rekeySessionEnvironment(oldId, newId) {
   if (oldId === newId) return;
+  const terminalSession = openSessions.get(oldId)?.session;
+  if (terminalSession?.headSessionId === oldId) terminalSession.headSessionId = newId;
+  const session = sessionMap.get(oldId);
+  if (session) {
+    sessionMap.delete(oldId);
+    session.sessionId = newId;
+    if (session.headSessionId === oldId) session.headSessionId = newId;
+    sessionMap.set(newId, session);
+  }
   if (typeof window.rekeyPanelTerminalState === 'function') window.rekeyPanelTerminalState(oldId, newId);
   if (typeof window.rekeyTerminalBuffers === 'function') window.rekeyTerminalBuffers(oldId, newId);
   for (const map of [lastActivityTime, sandboxedSessions, ptyGenerations, pendingOpens]) {

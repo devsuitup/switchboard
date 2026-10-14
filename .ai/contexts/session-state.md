@@ -87,6 +87,17 @@ freshness contract. Remote turn precision is limited by mirror refresh: about
 (default 5 minutes). Worker turn retention is capped at 2048, oldest first.
 Grid card animation uses the same merged-head projection as the sidebar.
 
+A background continuation re-key moves the stored head-turn evidence to the
+new UUID, retaining its revision, observation time and unread closure. A newer
+destination revision takes precedence. The existing adapter object carries
+the ordered descriptor/OSC prompt hints without replaying events or resetting
+their clocks. The preserved sidebar row and session map select the new head
+before projection, so the sidebar, grid and Agents view keep the same turn
+and response-ready priority until fresh evidence or an explicit read arrives.
+Ordinary continuations carry that evidence without preserving the source DOM
+row. Fork and `/clear` retain fresh head evidence rather than inheriting an
+unread closure from the preceding conversation.
+
 Origin: issue #246 (step 3 of the alignment sequence #244 → #245 → #246 → #247).
 Full design: the issue body and its 2026-09-11 lifecycle comment. This doc covers
 what actually shipped, not the whole plan.

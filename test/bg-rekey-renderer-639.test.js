@@ -80,6 +80,37 @@ test('the preserved grid card sends Stop to the new background UUID', t => {
   assert.deepEqual(stops, ['bg']);
 });
 
+test('a merged background rekey keeps sidebar, grid and Agents on the migrated conversation head', t => {
+  const h = fixture(t);
+  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js', 'agents-view.js']) {
+    h.inCtx(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'));
+  }
+  h.w.activeSessionId = 'other';
+  Object.assign(h.entry.session, { headSessionId: 'old', mergedMemberIds: ['prior', 'old'] });
+  h.w.sessionMap.set('old', { ...h.entry.session });
+  h.w.document.body.insertAdjacentHTML('beforeend', '<div class="session-item" data-session-id="old" data-head-session-id="old" data-merged-member-ids="prior old"><span class="session-icon"></span></div>');
+  h.w.sortedOrder = [];
+  h.w.wrapInGridCard('old');
+  h.w.applyHeadTurnSnapshot({ sessionId: 'old', state: 'open', revision: 1 });
+  h.receive('old', 'bg', 'background');
+  loadAppFunctions(h.context, { declarations: ['_lastPtySignature'], functions: ['updateRunningIndicators'] });
+  h.w.localTranscriptPtyTakeover = () => {};
+  h.w.renderDefaultStatus = () => {};
+  h.w.updateRunningIndicators();
+  const card = h.inCtx("gridCards.get('bg')");
+  assert.equal(h.w.sessionMap.get('bg').headSessionId, 'bg');
+  assert.equal(h.w.document.querySelector('[data-session-id="bg"] .session-icon').dataset.glyph, '⠋');
+  assert.equal(card.querySelector('.grid-card-dot').classList.contains('busy'), true);
+  const entry = { kind: 'background', sessionId: 'bg', state: 'working', name: 'original (1)', nameSource: 'collision' };
+  assert.equal(h.w.agentDisplayName(entry), 'original');
+  assert.equal(h.w.agentRowIcon(entry).glyph, '⠋');
+  h.w.applyHeadTurnSnapshot({ sessionId: 'bg', state: 'closed', revision: 2 });
+  assert.equal(h.w.document.querySelector('[data-session-id="bg"] .session-icon').dataset.glyph, '●');
+  assert.equal(h.w.agentRowIcon(entry).glyph, '●');
+  h.w.updateRunningIndicators();
+  assert.equal(card.querySelector('.grid-card-dot').classList.contains('busy'), false);
+});
+
 test('a buffered terminal write survives the background rekey', t => {
   const h = fixture(t);
   h.w.handleTerminalData('old', 'last interactive output');

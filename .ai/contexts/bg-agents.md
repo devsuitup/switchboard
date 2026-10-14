@@ -150,7 +150,11 @@ title. Retaining the old metadata cannot mask a newer background-head rename.
 The renderer keeps the existing xterm and open-set position, migrates activity,
 panel state and toolbar owner, panel-shell ownership and in-flight flags,
 last activity, sandbox flag, PTY generations, pending opens and restore entries.
-Terminal output buffers and grid handlers follow the new UUID. An in-flight
+Terminal output buffers and grid handlers follow the new UUID. The stored
+head-turn snapshot keeps its revision, observation time and unread marker at
+the new UUID; newer destination evidence wins. Ordered prompt hints retain
+their original adapter state, and both the session map and preserved row
+select the new head before the next sidebar/grid/Agents projection. An in-flight
 panel-shell completion reads the migrated owner from its original state object;
 its physical `panel:<old>` PTY id stays unchanged until that shell closes.
 
