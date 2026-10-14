@@ -1377,11 +1377,8 @@ async function loadProjects({ resort = false } = {}) {
     loadingStatus.className = 'active';
     loadingStatus.style.display = '';
   }
-  const [defaultProjects, allProjects, globalSettings] = await Promise.all([
-    window.api.getProjects(false),
-    window.api.getProjects(true),
-    window.api.getSetting('global'),
-  ]);
+  const { defaultProjects, allProjects } = await window.api.getProjects('both');
+  const globalSettings = await window.api.getSetting('global');
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
   loadingStatus.style.display = 'none';

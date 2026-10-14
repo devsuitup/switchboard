@@ -25,7 +25,7 @@ async function run(pendingSession, hiddenProjects) {
     window.refreshSidebar = () => {};
     window.renderDefaultStatus = () => {};
     window.api = {
-      getProjects: async () => [],
+      getProjects: async () => ({ defaultProjects: [], allProjects: [] }),
       getActiveTerminals: async () => [],
       getSetting: async (key) => (key === 'global' ? { hiddenProjects } : null),
     };

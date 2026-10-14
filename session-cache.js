@@ -90,6 +90,18 @@ function warnRejectedCwd(folder, cwd) {
 // see .ai/contexts/session-cache.md ("A running session keeps its row")
 const keptLiveRows = new Map();
 
+function resetProjectsWorkerRetainedRows() { keptLiveRows.clear(); }
+function getProjectsWorkerRetainedRows() { return [...keptLiveRows]; }
+
+// see .ai/contexts/session-cache.md ("Projects query worker")
+function applyProjectsWorkerEffects(result) {
+  const writers = { upsertCachedSessions, deleteCachedSession, deleteCachedFolder,
+    touchCachedModified, setFolderMeta, setName, replaceSessionMetrics,
+    deleteSearchFolder, deleteSearchSession, upsertSearchEntries };
+  for (const { name, args } of result.effects) writers[name](...args);
+  for (const [id, folder] of result.keptLiveRows) keptLiveRows.set(id, folder);
+}
+
 function isRunningSession(sessionId) {
   const s = activeSessions && activeSessions.get(sessionId);
   return !!s && !s.exited && !s.isPlainTerminal;
@@ -447,27 +459,7 @@ function refreshFolder(folder, opts = {}) {
   setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
 }
 
-/**
- * Reconcile the cache with the filesystem.
- *
- * Re-indexes only folders that are new or whose newest transcript is newer than
- * what we last indexed -- a cheap, stat-only gate (getFolderIndexMtimeMs vs the
- * cached cache_meta.indexMtimeMs) when nothing changed. This is what keeps
- * sessions from silently going missing: a project folder that changed while the
- * app was closed, or that predates the build which first indexed it, is
- * otherwise never picked up, because the cold-start full scan
- * (populateCacheViaWorker) only runs when the cache is completely empty.
- *
- * Throttled: the renderer's loadProjects() fires get-projects twice per sidebar
- * paint (showArchived false/true via Promise.all), which would run the sweep
- * back-to-back. The second pass is idempotent but wasted work -- and skipping it
- * keeps a single metaMap snapshot per paint. Changes landing inside the
- * throttle window are still picked up by the live watcher.
- */
-// 5s is plenty for sidebar freshness -- the live watcher picks up real-time
-// changes; this guard only prevents redundant readdir sweeps triggered by
-// the double loadProjects() call per sidebar paint. Raising from 1s to 5s
-// cuts idle readdirSync churn by 5x with no user-visible staleness.
+// see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_THROTTLE_MS = 5000;
 let lastReconcileAt = 0;
 function reconcileCacheFromFilesystem() {
@@ -1182,6 +1174,9 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
 
 module.exports = {
   resolveSessionContinuations,
+  applyProjectsWorkerEffects,
+  resetProjectsWorkerRetainedRows,
+  getProjectsWorkerRetainedRows,
   init,
   readSessionFile,
   readFolderFromFilesystem,

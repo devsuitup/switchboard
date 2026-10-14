@@ -50,8 +50,11 @@ test('add-project: clears the archived entry of the folder', () => {
 });
 
 test('get-projects: applies the archived folders with the requested showArchived', () => {
-  assert.match(handlerBody('get-projects'),
-    /applyAndPersistArchived\(mergePlaceholderSessions\(buildProjectsFromCache\(showArchived\)\), showArchived, \{ getSetting, setSetting \}\)/);
+  const body = handlerBody('get-projects');
+  assert.match(body, /applyAndPersistArchived\(mergePlaceholderSessions\(projects\), archived, \{ getSetting, setSetting \}\)/);
+  assert.match(body, /assemble\(result.defaultProjects, false\)/);
+  assert.match(body, /assemble\(result.allProjects, true\)/);
+  assert.match(body, /assemble\(showArchived \? result.allProjects : result.defaultProjects, !!showArchived\)/);
 });
 
 test('preload: both bridges forward their arguments', () => {
