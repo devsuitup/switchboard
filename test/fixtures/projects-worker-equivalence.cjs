@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const Database = require('better-sqlite3');
 const db = require('../../db');
 const cache = require('../../session-cache');
 const { encodeProjectPath } = require('../../encode-project-path');
@@ -45,11 +46,13 @@ async function run() {
   let nextId = 0;
   const request = reconcile => new Promise((resolve, reject) => {
     const id = ++nextId;
+    const effects = [];
     const message = msg => {
       if (msg.id !== id) return;
+      if (msg.progress) { effects.push(...msg.progress.effects); return; }
       worker.off('message', message);
       worker.off('error', error);
-      msg.error ? reject(new Error(msg.error)) : resolve(msg.result);
+      msg.error ? reject(new Error(msg.error)) : resolve({ ...msg.result, effects: [...effects, ...msg.result.effects] });
     };
     const error = err => { worker.off('message', message); reject(err); };
     worker.on('message', message);
@@ -76,20 +79,33 @@ async function run() {
     fs.appendFileSync(transcript, JSON.stringify({ type: 'user', cwd: project, timestamp: '2026-10-02T00:00:00.000Z', message: { role: 'user', content: 'Changed' } }) + '\n');
     db.setFolderMeta(folder, project, 0);
     const before = db.getAllCached();
+    const copyDir = path.join(process.env.SWITCHBOARD_DATA_DIR, 'unreconciled');
+    fs.mkdirSync(copyDir);
+    const original = new Database(db.DB_PATH);
+    await original.backup(path.join(copyDir, 'switchboard.db'));
+    original.close();
     const actual = await request(true);
     assert.deepEqual(db.getAllCached(), before, 'the worker must not write SQLite');
     assert.ok(actual.effects.length > 0);
     cache.reconcileCacheFromFilesystem();
     assert.deepEqual(actual.defaultProjects, cache.buildProjectsFromCache(false));
     assert.deepEqual(actual.allProjects, cache.buildProjectsFromCache(true));
+    process.env.SWITCHBOARD_DATA_DIR = copyDir;
+    delete require.cache[require.resolve('../../db')];
+    const workerDb = require('../../db');
+    cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console, db: workerDb });
     cache.resetProjectsWorkerRetainedRows();
+    if (process.env.PROJECTS_WORKER_DROP_WRITE) actual.effects = actual.effects.filter(effect => effect.name !== 'upsertCachedSessions');
     cache.applyProjectsWorkerEffects(actual);
+    assert.deepEqual(workerDb.getAllCached().sort((a, b) => a.sessionId.localeCompare(b.sessionId)), db.getAllCached().sort((a, b) => a.sessionId.localeCompare(b.sessionId)), 'session_cache effects must match on the unreconciled copy');
+    assert.deepEqual(workerDb.getAllFolderMeta(), db.getAllFolderMeta(), 'cache_meta effects must match on the unreconciled copy');
     assert.deepEqual(actual.defaultProjects, cache.buildProjectsFromCache(false));
     assert.deepEqual(actual.allProjects, cache.buildProjectsFromCache(true));
     assert.equal(cache.releaseLiveSession('archived'), false);
     activeSessions.delete('archived');
     assert.equal(cache.releaseLiveSession('archived'), true);
-    assert.equal(db.getCachedSession('archived'), null);
+    assert.equal(workerDb.getCachedSession('archived'), null);
+    workerDb.closeDb();
     console.log('equivalence verified');
   } finally {
     await worker.terminate();

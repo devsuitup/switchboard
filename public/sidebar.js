@@ -1198,7 +1198,7 @@ async function archiveProjectFolder(project, button) {
   const alias = project.remoteAlias || null;
   const parent = cachedAllProjects.find(p => (p.remoteAlias || null) === alias && p.projectPath === project.projectPath);
   if (!parent) {
-    loadProjects();
+    Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
     return;
   }
   const children = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias && worktreeParentPath(p.projectPath) === parent.projectPath);
@@ -1285,7 +1285,7 @@ async function archiveProjectFolder(project, button) {
     announceNotStopped(notStopped);
     if (refused) {
       pollActiveSessions();
-      loadProjects();
+      Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       return;
     }
     for (const s of own) {
@@ -1307,7 +1307,7 @@ async function archiveProjectFolder(project, button) {
       + res.failed.map(f => `${f.name}: ${f.error}`).join('\n') });
   }
   pollActiveSessions();
-  loadProjects();
+  Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
 }
 
 function rebindSidebarEvents(projects) {
@@ -1339,12 +1339,12 @@ function rebindSidebarEvents(projects) {
       offerNotice.querySelector('.schedule-reenable-on').onclick = async (e) => {
         e.stopPropagation();
         await window.api.reenableProjectSchedules(project.projectPath, project.folder);
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
       offerNotice.querySelector('.schedule-reenable-dismiss').onclick = async (e) => {
         e.stopPropagation();
         await window.api.dismissScheduleReenableOffer(project.projectPath, project.folder);
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
     const archiveGroupBtn = header.querySelector('.project-archive-btn');
@@ -1365,7 +1365,7 @@ function rebindSidebarEvents(projects) {
         } catch (err) {
           console.error('remote host refresh failed for ' + project.remoteAlias, err);
         }
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
     const remapBtn = header.querySelector('.project-remap-btn');
@@ -1380,7 +1380,7 @@ function rebindSidebarEvents(projects) {
         if (result.error) {
           await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
         } else {
-          loadProjects();
+          Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
         }
       };
     }
@@ -1417,7 +1417,7 @@ function rebindSidebarEvents(projects) {
         try {
           const result = await window.api.archiveProjectSettings(wtProject.projectPath, wtProject.folder);
           if (result.error) throw new Error(result.error);
-          await loadProjects();
+          await Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
         } catch (err) {
           await showChoiceDialog({ title: 'Could not archive project', message: err.message, confirmLabel: 'OK', returnFocus: wtHideBtn });
         }
@@ -1432,7 +1432,7 @@ function rebindSidebarEvents(projects) {
         if (!confirmed) return;
         const result = await window.api.deleteWorktree(wtProject.projectPath);
         if (result && result.ok) {
-          loadProjects();
+          Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
         } else {
           const msg = (result && result.error) ? result.error : 'Unknown error';
           await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
@@ -1477,7 +1477,7 @@ function rebindSidebarEvents(projects) {
         }
         announceNotStopped(notStopped);
         pollActiveSessions();
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
     header.onclick = (e) => {
@@ -1669,7 +1669,7 @@ function rebindSidebarEvents(projects) {
             && openSessions.has(session.sessionId)) {
           destroySession(session.sessionId);
         }
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
 
@@ -1698,7 +1698,7 @@ function rebindSidebarEvents(projects) {
         await window.api.archiveSession(session.sessionId, newVal);
         session.archived = newVal;
         announceNotStopped(notStoppedToAnnounce);
-        loadProjects();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
   });

@@ -49,22 +49,23 @@ test('warm get-projects relays to the worker without sweeping or building on mai
   assert.equal(requests, 1);
 });
 
-test('paired get-projects preserves both boolean views and traces the actual reply', async () => {
+test('paired get-projects traces worker-measured bytes without serializing views on main', async () => {
   const visible = [{ sessions: [{ sessionId: 'v' }] }];
   const all = [...visible, { sessions: [{ sessionId: 'a', archived: 1 }] }];
   const events = [];
   const invoke = handler({
     TRACE: { on: true },
     Buffer,
+    JSON: { stringify: () => assert.fail('full reply serialized on main') },
     trace: (...args) => events.push(args),
-    projectsClient: { request: async () => ({ defaultProjects: visible, allProjects: all, rows: 2 }) },
+    projectsClient: { request: async () => ({ defaultProjects: visible, allProjects: all, rows: 2, replyBytes: { both: 123, default: 45, all: 67 } }) },
   });
   const reply = await invoke(null, 'both');
   assert.deepEqual(reply.defaultProjects, visible);
   assert.deepEqual(reply.allProjects, all);
   assert.equal(events[0][0], 'ipc.get-projects');
   assert.equal(events[0][2].rows, 2);
-  assert.equal(events[0][2].replyBytes, Buffer.byteLength(JSON.stringify(reply)));
+  assert.equal(events[0][2].replyBytes, 123);
   assert.ok(events[0][2].totalMs >= 0);
 });
 

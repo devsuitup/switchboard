@@ -1,66 +1,103 @@
 'use strict';
 
 // see .ai/contexts/session-cache.md ("Projects query worker")
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000 }) {
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, maxDiscards = 3 }) {
   let worker = null;
   let stopped = false;
   let active = null;
   let pending = null;
   let nextId = 0;
-  let timer = null;
-  const waiters = [];
+  const waiters = new Set();
+  const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
 
-  function fail(error) {
-    clearTimeout(timer);
+  function settle(waiter, error, result) {
+    if (!waiters.delete(waiter)) return;
+    clearTimeout(waiter.timer);
+    if (error) waiter.reject(error);
+    else waiter.resolve(result);
+  }
+
+  function resetWorker() {
     const old = worker;
     worker = null;
-    active = pending = null;
-    for (const waiter of waiters.splice(0)) waiter.reject(error);
+    active = null;
     if (old) Promise.resolve(old.terminate()).catch(() => {});
   }
 
-  function dispatch(options) {
+  function fail(error) {
+    resetWorker();
+    pending = null;
+    for (const waiter of waiters) settle(waiter, error);
+  }
+
+  function dispatchPending() {
+    const job = pending;
+    pending = null;
+    if (job && job.waiters.some(waiter => waiters.has(waiter))) dispatch(job);
+  }
+
+  function receive(message) {
+    if (!active || message.id !== active.id) return;
+    if (message.error) { fail(new Error(message.error)); return; }
+    try {
+      const state = snapshot();
+      if (message.progress) {
+        if (active.stale || state.version !== active.version) { active.stale = true; return; }
+        apply({ ...message.progress, reconciled: false });
+        active.version = snapshot().version;
+        return;
+      }
+      const job = active;
+      const result = message.result;
+      const readOnly = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
+      const stale = job.stale || (!readOnly && state.version !== job.version);
+      if (stale && ++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
+        job.options = mergeOptions(job.options, pending?.options);
+        job.waiters.push(...(pending?.waiters || []));
+        pending = null;
+        dispatch(job);
+        return;
+      }
+      const published = stale ? { ...result, effects: [], keptLiveRows: [], reconciled: false, stale: true } : result;
+      if (!stale) apply(result);
+      active = null;
+      for (const waiter of job.waiters) settle(waiter, null, published);
+      dispatchPending();
+    } catch (error) { fail(error); }
+  }
+
+  function dispatch(job) {
     try {
       if (!worker) {
         const current = workerFactory();
         worker = current;
-        current.on('message', message => {
-          if (worker !== current || !active || message.id !== active.id) return;
-          clearTimeout(timer);
-          if (message.error) { fail(new Error(message.error)); return; }
-          try {
-            const state = snapshot();
-            const readOnly = message.result.effects?.length === 0
-              && message.result.keptLiveRows?.length === 0 && !message.result.reconciled;
-            if (pending || (!readOnly && state.version !== active.version)) {
-              const latest = { ...active.options, ...pending };
-              pending = null;
-              active = null;
-              dispatch(latest);
-              return;
-            }
-            apply(message.result);
-            active = null;
-            for (const waiter of waiters.splice(0)) waiter.resolve(message.result);
-          } catch (error) { fail(error); }
-        });
+        current.on('message', message => { if (worker === current) receive(message); });
         current.on('error', error => { if (worker === current) fail(error); });
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }
       const state = snapshot();
-      const id = ++nextId;
-      active = { id, version: state.version, options };
-      timer = setTimeout(() => fail(new Error('projects worker timed out')), timeoutMs);
-      worker.postMessage({ ...state, ...options, id });
+      active = { ...job, id: ++nextId, version: state.version, stale: false };
+      worker.postMessage({ ...state, ...job.options, id: active.id });
     } catch (error) { fail(error); }
   }
 
   function request(options = {}) {
     if (stopped) return Promise.reject(new Error('projects worker shut down'));
     return new Promise((resolve, reject) => {
-      waiters.push({ resolve, reject });
-      if (active) pending = options;
-      else dispatch(options);
+      const waiter = { resolve, reject };
+      waiters.add(waiter);
+      waiter.timer = setTimeout(() => {
+        settle(waiter, new Error('projects worker timed out'));
+        if (active && !active.options.reconcile && !active.waiters.some(w => waiters.has(w))) {
+          resetWorker();
+          dispatchPending();
+        }
+      }, timeoutMs);
+      if (active) {
+        if (!pending) pending = { options, waiters: [], discards: 0 };
+        else pending.options = mergeOptions(pending.options, options);
+        pending.waiters.push(waiter);
+      } else dispatch({ options, waiters: [waiter], discards: 0 });
     });
   }
 

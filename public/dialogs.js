@@ -743,7 +743,7 @@ function showAddProjectDialog() {
     }
     close();
 
-    await loadProjects();
+    await Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
   }
 
   dialog.querySelector('.add-project-browse-btn').onclick = async () => {

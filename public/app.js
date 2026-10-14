@@ -239,6 +239,7 @@ function pendingRestoreEntries() {
 }
 
 function schedulePersistWorkingSet() {
+  if (!savedWorkingSetRead) return;
   if (restoringWorkingSet) return;
   if (exitingApp) {
     persistSkippedWhileExiting = true;
@@ -616,7 +617,7 @@ window.api.onSessionDetected((tempId, realId) => {
       document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
     }
-  });
+  }).catch(error => console.warn('[switchboard] project reload failed', error));
   pollActiveSessions();
 });
 
@@ -662,7 +663,7 @@ window.api.onSessionForked((oldId, newId, kind) => {
       const summary = item.querySelector('.session-summary');
       if (summary) terminalHeaderName.textContent = summary.textContent;
     }
-  });
+  }).catch(error => console.warn('[switchboard] project reload failed', error));
   schedulePersistWorkingSet();
   pollActiveSessions();
 });
@@ -863,7 +864,7 @@ todayToggle.addEventListener('click', () => {
 
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {
-  loadProjects({ resort: true });
+  reloadProjects({ resort: true });
 });
 
 // --- Global settings gear button ---
@@ -1444,6 +1445,22 @@ async function loadProjects({ resort = false } = {}) {
   renderDefaultStatus();
 }
 
+// see .ai/contexts/session-cache.md ("Projects query worker")
+async function reloadProjects(options) {
+  try {
+    await loadProjects(options);
+    return true;
+  } catch (error) {
+    console.warn('[switchboard] project reload failed', error);
+    if (!cachedProjects.length) {
+      loadingStatus.textContent = 'Could not load projects. Reload to retry.';
+      loadingStatus.className = 'active';
+      loadingStatus.style.display = '';
+    }
+    return false;
+  }
+}
+
 // Sidebar rendering (slugId, folderId, buildSlugGroup, renderProjects,
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
@@ -1761,7 +1778,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       // Catch up on changes that happened while on another tab
       if (projectsChangedWhileAway) {
         projectsChangedWhileAway = false;
-        loadProjects().then(() => maybeRetryRestoreWorkingSet());
+        reloadProjects().then(loaded => { if (loaded) return maybeRetryRestoreWorkingSet(); }).catch(error => console.warn('[switchboard] restore retry failed', error));
       }
     } else if (tabName === 'stats') {
       statsContent.style.display = '';
@@ -1958,7 +1975,17 @@ async function restoreStartupSessions() {
   } finally { window._startupResumeResolutions = null; }
 }
 
-loadProjects().then(restoreStartupSessions);
+// see .ai/contexts/session-cache.md ("Projects query worker")
+async function loadStartupProjects() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await loadProjects(); break; }
+    catch (error) { console.warn('[switchboard] startup project load failed', error); }
+  }
+  try { await restoreStartupSessions(); }
+  catch (error) { console.warn('[switchboard] startup restore failed', error); }
+}
+
+loadStartupProjects();
 
 // Live-reload sidebar when filesystem changes are detected
 let projectsChangedTimer = null;
@@ -1975,7 +2002,7 @@ window.api.onProjectsChanged(() => {
   // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    loadProjects().then(() => maybeRetryRestoreWorkingSet());
+    reloadProjects().then(loaded => { if (loaded) return maybeRetryRestoreWorkingSet(); }).catch(error => console.warn('[switchboard] restore retry failed', error));
   }, 900);
 });
 

@@ -1267,13 +1267,13 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
 
     if (needsPopulate) populateCacheViaWorker();
     backfillEntrypoints();
-    const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000 });
+    const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
     const assemble = (projects, archived) => annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(projects), archived, { getSetting, setSetting }));
     const reply = showArchived === 'both'
       ? { defaultProjects: assemble(result.defaultProjects, false), allProjects: assemble(result.allProjects, true) }
       : assemble(showArchived ? result.allProjects : result.defaultProjects, !!showArchived);
     if (TRACE.on) {
-      if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: Buffer.byteLength(JSON.stringify(reply)) });
+      if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
     return reply;
   } catch (err) {

@@ -192,18 +192,11 @@ test('R2 startup resolves an active continued session only once', { timeout: 900
   const h = setup(t, { old: ['new'], new: [] });
   const lookup = t.mock.method(h.ctx.api, 'getSessionContinuations');
   vm.runInContext("activeSessionId = 'old';", h.ctx);
-  const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
-  const end = source.indexOf('\n// Live-reload sidebar');
-  const start = source.lastIndexOf('loadProjects().then(', end);
-  if (source.includes('async function restoreStartupSessions(')) {
-    loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions'] });
-  }
+  loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions', 'loadStartupProjects'] });
   h.ctx.restoreWorkingSet = h.restore;
   h.ctx.restoreAgentsViewAtStartup = () => {};
-  let startup;
-  h.ctx.loadProjects = () => ({ then: callback => { startup = callback(); } });
-  vm.runInContext(source.slice(start, end), h.ctx);
-  await startup;
+  h.ctx.loadProjects = async () => {};
+  await h.ctx.loadStartupProjects();
   assert.deepEqual(h.spawned.map(call => call.id), ['new']);
   assert.deepEqual(lookup.mock.calls.map(call => call.arguments[0]), ['old']);
 });

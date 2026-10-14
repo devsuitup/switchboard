@@ -462,9 +462,9 @@ function refreshFolder(folder, opts = {}) {
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_THROTTLE_MS = 5000;
 let lastReconcileAt = 0;
-function reconcileCacheFromFilesystem() {
+function reconcileCacheFromFilesystem({ onFolder, throttle = true } = {}) {
   const now = Date.now();
-  if (now - lastReconcileAt < RECONCILE_THROTTLE_MS) return;
+  if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return;
   lastReconcileAt = now;
   try {
     const metaMap = getAllFolderMeta();
@@ -479,6 +479,7 @@ function reconcileCacheFromFilesystem() {
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder))) {
         if (!pendingRepairFolders().includes(folder)) refreshFolder(folder);
       }
+      if (onFolder) onFolder(folder);
     }
   } catch (err) {
     console.error('Error reconciling cache:', err);

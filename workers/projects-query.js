@@ -63,10 +63,18 @@ function build(message) {
   cache.setRemoteRoots(new Map(message.remoteRoots || []));
   cache.resetProjectsWorkerRetainedRows();
   const reconciled = !!message.reconcile && adapter.isInitialScanComplete();
-  if (reconciled) cache.reconcileCacheFromFilesystem();
+  if (reconciled) cache.reconcileCacheFromFilesystem({ throttle: false, onFolder: () => {
+    parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows: cache.getProjectsWorkerRetainedRows() } });
+    if (workerData.reconcileFolderDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.reconcileFolderDelayMs);
+  } });
   const defaultProjects = cache.buildProjectsFromCache(false);
   const allProjects = cache.buildProjectsFromCache(true);
-  return { defaultProjects, allProjects, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled };
+  const replyBytes = message.measureBytes ? {
+    default: Buffer.byteLength(JSON.stringify(defaultProjects)),
+    all: Buffer.byteLength(JSON.stringify(allProjects)),
+    both: Buffer.byteLength(JSON.stringify({ defaultProjects, allProjects })),
+  } : null;
+  return { defaultProjects, allProjects, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled, replyBytes };
 }
 
 parentPort.on('message', message => {
