@@ -493,7 +493,9 @@ re-sees the entire history of the session**. `detectSubagentTransitions()` only
 rescans when the `subagents/` dir mtime moves — which is exactly what happens
 when a *new* subagent starts. Two rules keep that rescan quiet:
 
-- **Bootstrap never announces anything.** Every file present at a session's
+- **Fallback bootstrap never announces anything.** Files with a CLI task record
+  bypass mtime inference, including explicitly open tasks with old timestamps.
+  Every remaining file present at a session's
   first scan is recorded silently as `completed: true`, whatever its mtime.
   Switchboard owns the PTYs its subagents run in — one set per Electron
   process — so they all died with the previous process, and a restored session
@@ -533,6 +535,31 @@ when a *new* subagent starts. Two rules keep that rescan quiet:
   flagged completed). Dropping the entry was never a saving either — the rescan
   re-added it, at the cost of a `statSync` and a `readSubagentMeta()` each.
   The map is now bounded by the directory's own file count.
+
+### Trace history and lifecycle (#630)
+
+`detectSubagentTransitions()` emits one `subagent.history-summary` per successful
+parent/bootstrap directory scan, including zero history (`newestAgeMs:null`). It
+counts fallback files at least 60 seconds old and reports the minimum age among
+them. Recent fallback files emit `subagent.bootstrap-candidate` instead, retaining
+their reversible recheck. Post-bootstrap stale sightings retain
+`subagent.assumed-finished`; growth retains `subagent.rehabilitated` and ordinary
+spawn/heartbeat/reannounce paths retain `subagent.spawned`. All fallback lifecycle
+events identify `source:transcript-mtime`, `confidence:inferred`; the summary uses
+`confidence:historical`. Neither the summary nor a candidate sends lifecycle IPC.
+
+`task-records-client.js` observes consecutive worker snapshots and traces an agent
+open-to-terminal change as `subagent.completed`, `reason:cli-task-terminal`,
+`source:cli-task`, `confidence:explicit`, with the registry timestamp `at`.
+This includes registry closure from results/notifications, job state or owner
+death, without claiming which cause supplied the snapshot. Initial terminal
+replay and duplicate terminal snapshots are silent. The existing `hasTaskRecord`
+guard keeps explicitly open tasks out of the mtime stability ladder.
+
+Trace-only aggregation and snapshot comparison are under `TRACE.on`; there are
+no added scans, lifecycle changes, timers or retained trace maps. Diagnostics
+enabled after bootstrap does not replay earlier history. See
+`docs/activity-trace.md` for the categories and filters.
 
 The settle tick reopens this question, because the predicate that arms it counts
 completed-but-still-falsifiable entries — which is exactly what bootstrap leaves

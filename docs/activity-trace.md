@@ -116,10 +116,12 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `osc.progress` | Every OSC 9;4 progress level (except `4;0`) | `level`, `payload`, `was`, `decision` |
 | `osc.notify` | Every other OSC 9 | `message`, `sent` |
 | `busy.emit` | A `cli-busy-state` event leaves main | `busy`, `via` (`osc0` / `osc9.4`), `sent` |
-| `subagent.spawned` | `subagent-spawned` is sent | `agentId`, `kind` (`spawn` / `heartbeat`), `subagentType`, `ageMs`, `sent` |
-| `subagent.assumed-finished` | An unknown transcript is recorded as already finished, without any IPC | `agentId`, `ageMs`, `bootstrap`, `recheck` |
-| `subagent.rehabilitated` | An assumed-finished subagent grew within its recheck window: the withheld spawn is released | `agentId`, `withheldForMs`, `subagentType`, `sent` |
-| `subagent.completed` | `subagent-completed` is sent | `agentId`, `stableForMs`, `reason`, `sent` |
+| `subagent.history-summary` | Once per parent's first successful bootstrap scan, including an empty directory | `historyCount`, `newestAgeMs` (null when none), `source`, `confidence` |
+| `subagent.bootstrap-candidate` | A recent bootstrap transcript is provisionally recorded as finished with a reversible recheck window, without IPC | `agentId`, `ageMs`, `recheck`, `source`, `confidence` |
+| `subagent.spawned` | `subagent-spawned` is sent | `agentId`, `kind` (`spawn` / `heartbeat` / `reannounce`), `subagentType`, `ageMs` (first spawn), `source`, `confidence`, `sent` |
+| `subagent.assumed-finished` | A post-bootstrap stale first sighting is provisionally recorded as finished, without IPC | `agentId`, `ageMs`, `bootstrap:false`, `recheck`, `source`, `confidence` |
+| `subagent.rehabilitated` | A provisional subagent grew within its recheck window: the withheld spawn is released | `agentId`, `withheldForMs`, `subagentType`, `source`, `confidence`, `sent` |
+| `subagent.completed` | Fallback stability sends `subagent-completed`, or an observed open CLI task becomes terminal in a worker snapshot | `agentId`, `reason`, `source`, `confidence`; fallback: `stableForMs`, `sent`; primary: `cause` (`cli-task-terminal` / `owner-death`), `at` |
 | `session.forked` | A fork re-keys a live session | `newId`, `wasBusy`, `sent` |
 | `pty.input` | Every `terminal-input` IPC chunk, before the prompt model sees it | `len` always; `at` and `cp` only when the chunk holds a control character |
 | `pty.exit` | The PTY exits | `exitCode`, `alsoUnder`, `wasBusy` |
@@ -197,16 +199,36 @@ grows for as long as the trace is on.
 `busy.emit` right after it is a bug in the emitting branch;
 `suppressed:already-busy` is the rule working.
 
-> **Expect a burst at startup.** The first scan writes one
-> `subagent.assumed-finished` line per historical subagent transcript, all with
-> `bootstrap:true`; later scans write none. Filter them out when reading a
-> startup problem: `jq -c 'select(.bootstrap != true)' $TRACE`.
+**History is summarized, not completed live.** The first successful directory
+scan emits one `subagent.history-summary` for the parent. `historyCount` counts
+unregistered transcripts at least 60 seconds old; `newestAgeMs` is the smallest
+age among them, or null for zero history. Recent files instead produce separate
+`subagent.bootstrap-candidate` events and retain their recheck window. Static
+history produces no spawn or completion IPC. Subsequent scans do not repeat the
+summary, and files held by the CLI task registry are excluded regardless of age.
 
-**Is a subagent's state the truth or an assumption?** A transcript first seen
-already stale is recorded as finished without any event;
-`subagent.assumed-finished` is the only record of it. With `recheck: true` that
-verdict is a guess, and a later `subagent.rehabilitated` retracts it, with
-`withheldForMs` saying how long the spawn was held back.
+**Is a subagent's state explicit or inferred?** File-based events carry
+`source:"transcript-mtime"` and `confidence:"inferred"` (the history summary uses
+`confidence:"historical"`). A post-bootstrap stale sighting is an
+`subagent.assumed-finished`, and a recent bootstrap candidate has its own category.
+With `recheck:true` either verdict remains reversible: `subagent.rehabilitated`
+retracts it and reports `withheldForMs`. A fallback `subagent.completed` with
+`reason:"mtime-stable"` is still a silence assumption.
+
+A registry open-to-terminal transition produces `subagent.completed` with
+`source:"cli-task"` and the registry's `at` timestamp. Recorded terminal evidence
+(correlated results/notifications or job state) uses `confidence:"explicit"` and
+`reason:"cli-task-terminal"`, `cause:"cli-task-terminal"`. When the snapshot's
+`ownerDiedAt` changes, tasks closed by that owner death instead use
+`confidence:"inferred"`, `reason:"owner-death"` and `cause:"owner-death"`:
+the parent exited, but no task completion was recorded. A later recorded
+completion after restart stays explicit even though the earlier `ownerDiedAt`
+remains in the snapshot. The probe observes the worker snapshot, not a
+`subagent-completed` IPC; the renderer receives `task-snapshot`. Initial replay of
+terminal history and duplicate terminal snapshots do not emit a live completion. Explicitly
+open tasks never complete from silence. Only transitions observed while tracing
+is enabled are recorded; enabling Diagnostics does not rescan history or replay
+missed events. A directory absent at bootstrap produces no summary until it exists.
 
 **Did the UI receive it and act?** Follow `seq`: `busy.emit` →
 `recv.cli-busy-state` → `store.mutate` → `class.apply`. Where the chain stops
@@ -227,8 +249,11 @@ jq -c 'select(.sid=="6f1c…")' $TRACE
 # Every state write refused, and by which guard
 jq -c 'select(.cat=="store.skip" or .cat=="reconcile.skip")' $TRACE
 
-# The subagent detector's decisions, without the startup burst
-jq -c 'select((.cat | startswith("subagent.")) and .bootstrap != true)' $TRACE
+# Subagent decisions excluding historical summaries
+jq -c 'select((.cat | startswith("subagent.")) and .cat != "subagent.history-summary")' $TRACE
+
+# Explicit registry completion only
+jq -c 'select(.cat=="subagent.completed" and .confidence=="explicit")' $TRACE
 
 # Events produced but never delivered (renderer gone)
 jq -c 'select(.sent == false)' $TRACE

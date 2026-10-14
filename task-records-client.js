@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { state: TRACE, trace } = require('./activity-trace');
 
 function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, onError = () => {}, maxEntries = 2048, workerFactory = () => new Worker(path.join(__dirname, 'workers/task-records.js')) } = {}) {
   const snapshots = new Map();
@@ -29,6 +30,18 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
         }
         if (message.snapshot) {
           const s = message.snapshot;
+          if (TRACE.on) {
+            const previousSnapshot = snapshots.get(s.parentSessionId);
+            const previous = new Map((previousSnapshot?.tasks || []).map(t => [t.id, t]));
+            const ownerDied = Number.isFinite(s.ownerDiedAt) && s.ownerDiedAt !== previousSnapshot?.ownerDiedAt;
+            for (const task of s.tasks) {
+              const before = previous.get(task.id);
+              if (task.kind === 'agent' && task.terminal && before && !before.terminal) {
+                const cause = ownerDied ? 'owner-death' : 'cli-task-terminal';
+                trace('subagent.completed', s.parentSessionId, { agentId: task.id, reason: cause, cause, source: 'cli-task', confidence: ownerDied ? 'inferred' : 'explicit', at: task.at });
+              }
+            }
+          }
           if (!s.headTurn && snapshots.get(s.parentSessionId)?.headTurn) s.headTurn = snapshots.get(s.parentSessionId).headTurn;
           snapshots.set(s.parentSessionId, s);
           while (snapshots.size > maxEntries) snapshots.delete(snapshots.keys().next().value);
