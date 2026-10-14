@@ -178,7 +178,7 @@ test('main-wiring source check: terminal-resize delegates all resizes to the gua
     'the primary resize and refresh must reach the shared handler',
   );
   assert.match(
-    mainSrc, /createTerminalResizeHandler\(activeSessions\)/,
+    mainSrc, /createTerminalResizeHandler\(\s*activeSessions\s*(?:,|\))/,
     'the shared handler must use the current session registry',
   );
   const resizeSrc = fs.readFileSync(path.join(__dirname, '..', 'terminal-resize.js'), 'utf8');

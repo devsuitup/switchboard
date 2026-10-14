@@ -266,9 +266,9 @@ test('GIVEN a cursor-position query split across two chunks WHEN both are append
 
 test('GIVEN other sequences that look like the query WHEN appended THEN they are kept byte for byte', () => {
   const state = makeState();
-  appendToOutputBuffer(state, '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[', MAX);
+  appendToOutputBuffer(state, '\x1b[16n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[', MAX);
   appendToOutputBuffer(state, '5n', MAX);
-  assert.equal(joined(state), '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+  assert.equal(joined(state), '\x1b[16n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[5n');
 });
 
 test('GIVEN a chunk that is only a query WHEN appended THEN no empty entry is pushed', () => {
@@ -300,4 +300,51 @@ test('GIVEN a cursor-position query split across three chunks WHEN all are appen
   appendToOutputBuffer(state, '6nB', MAX);
   assert.equal(joined(state), 'AB');
   assert.equal(state.outputBufferSize, 2);
+});
+
+for (const query of ['\x1b[6n', '\x1b[?6n', '\x1b[c', '\x1b[0c']) {
+  test(`reattach replay removes ${JSON.stringify(query)} whole, at every split and one byte at a time`, () => {
+    const state = makeState();
+    appendToOutputBuffer(state, `A${query}B`, MAX);
+    assert.equal(joined(state), 'AB');
+    for (let split = 1; split < query.length; split++) {
+      appendToOutputBuffer(state, `C${query.slice(0, split)}`, MAX);
+      appendToOutputBuffer(state, `${query.slice(split)}D`, MAX);
+      assert.equal(joined(state), 'AB' + 'CD'.repeat(split));
+      assert.equal(state.outputBufferSize, joined(state).length);
+    }
+    for (const char of query) appendToOutputBuffer(state, char, MAX);
+    assert.equal(joined(state), 'AB' + 'CD'.repeat(query.length - 1));
+    assert.equal(state.outputBufferSize, joined(state).length);
+
+    const queryOnly = makeState();
+    for (const char of query) appendToOutputBuffer(queryOnly, char, MAX);
+    assert.deepEqual(queryOnly, makeState());
+  });
+}
+
+test('reattach replay preserves other queries and responses at every split and one byte at a time', () => {
+  for (const sequence of ['\x1b[>c', '\x1b[10c', '\x1b[?1;2c', '\x1b[?73;3R']) {
+    for (let split = 1; split < sequence.length; split++) {
+      const state = makeState();
+      appendToOutputBuffer(state, sequence.slice(0, split), MAX);
+      appendToOutputBuffer(state, sequence.slice(split), MAX);
+      assert.equal(joined(state), sequence);
+      assert.equal(state.outputBufferSize, sequence.length);
+    }
+    const state = makeState();
+    for (const char of sequence) appendToOutputBuffer(state, char, MAX);
+    assert.equal(joined(state), sequence);
+    assert.equal(state.outputBufferSize, sequence.length);
+  }
+});
+
+test('reattach replay removes a split DECXCPR across coalesced entries without recursively removing formed queries', () => {
+  const state = makeState();
+  for (let i = 0; i < COALESCE_THRESHOLD; i++) appendToOutputBuffer(state, 'X', MAX);
+  for (const char of '\x1b[?6n') appendToOutputBuffer(state, char, MAX);
+  assert.equal(joined(state), 'X'.repeat(COALESCE_THRESHOLD));
+  appendToOutputBuffer(state, 'A\x1b[\x1b[c?6nB', MAX);
+  assert.equal(joined(state), 'X'.repeat(COALESCE_THRESHOLD) + 'A\x1b[?6nB');
+  assert.equal(state.outputBufferSize, joined(state).length);
 });

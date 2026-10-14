@@ -169,6 +169,8 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
 test('the shipped preload and main resize registration forward one refresh and restore its size', () => {
   const calls = [];
   const pending = [];
+  const traces = [];
+  const TRACE = { on: true };
   const session = { pty: { resize(cols, rows) { calls.push({ cols, rows }); } } };
   const activeSessions = new Map([['fixture', session]]);
   let registered;
@@ -178,12 +180,14 @@ test('the shipped preload and main resize registration forward one refresh and r
   assert.ok(start !== -1 && end > start);
   vm.runInNewContext(main.slice(start, end), {
     activeSessions,
-    createTerminalResizeHandler: (sessions) => createTerminalResizeHandler(sessions, {
+    TRACE,
+    trace: (...args) => traces.push(args),
+    createTerminalResizeHandler: (sessions, _timers, onResize) => createTerminalResizeHandler(sessions, {
       setTimeout(cb) { pending.push(cb); return pending.length; }, clearTimeout() {},
-    }),
+    }, onResize),
     ipcMain: { on(channel, cb) { assert.equal(channel, 'terminal-resize'); registered = cb; } },
     setTimeout(cb) { pending.push(cb); },
-  });
+  }, { filename: 'main.js' });
   let api;
   let sends = 0;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload.js'), 'utf8'), {
@@ -199,7 +203,14 @@ test('the shipped preload and main resize registration forward one refresh and r
   assert.deepEqual(calls, [{ cols: 120, rows: 40 }, { cols: 119, rows: 40 }]);
   pending.shift()();
   assert.deepEqual(calls.at(-1), { cols: 120, rows: 40 });
+  assert.deepEqual(JSON.parse(JSON.stringify(traces)), [
+    ['pty.resize', 'fixture', { phase: 'fit', cols: 120, rows: 40, ok: true }],
+    ['pty.resize', 'fixture', { phase: 'nudge', cols: 119, rows: 40, ok: true }],
+    ['pty.resize', 'fixture', { phase: 'restore', cols: 120, rows: 40, ok: true }],
+  ]);
+  TRACE.on = false;
   calls.length = 0;
   api.resizeTerminal('fixture', 130, 40);
   assert.deepEqual(calls, [{ cols: 130, rows: 40 }]);
+  assert.equal(traces.length, 3);
 });

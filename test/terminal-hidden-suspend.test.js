@@ -777,13 +777,59 @@ test('GIVEN a hidden session WHEN it receives other escape sequences THEN they a
     window.activeSessionId = 'active';
     window.gridViewActive = false;
 
-    window.handleTerminalData('hidden', '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+    window.handleTerminalData('hidden', '\x1b[16n\x1b[6;1H\x1b[5n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
     window.showSession('hidden');
 
-    assert.strictEqual(spies.writes[0], '\x1b[16n\x1b[?6n\x1b[6;1H\x1b[5n');
+    assert.strictEqual(spies.writes[0], '\x1b[16n\x1b[6;1H\x1b[5n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
   } finally {
     destroy();
   }
+});
+
+test('shipped replay filter removes DSR, DECXCPR and DA1 queries in one pass', () => {
+  const { window, destroy } = setupTerminalDom();
+  try {
+    assert.equal(window.removeCursorPositionQueries('A\x1b[6nB\x1b[?6nC\x1b[cD\x1b[0cE'), 'ABCDE');
+    assert.equal(window.removeCursorPositionQueries('A\x1b[\x1b[c?6nB'), 'A\x1b[?6nB');
+  } finally { destroy(); }
+});
+
+for (const query of ['\x1b[?6n', '\x1b[c', '\x1b[0c']) {
+  test(`hidden replay removes ${JSON.stringify(query)} at every chunk boundary`, () => {
+    const { window, inCtx, spies, destroy } = setupTerminalDom();
+    try {
+      window.createTerminalEntry({ sessionId: 'active' });
+      window.createTerminalEntry({ sessionId: 'hidden' });
+      window.activeSessionId = 'active';
+      let expected = '';
+      for (let split = 1; split < query.length; split++) {
+        window.handleTerminalData('hidden', `A${query.slice(0, split)}`);
+        window.handleTerminalData('hidden', `${query.slice(split)}B`);
+        expected += 'AB';
+      }
+      for (const char of query) window.handleTerminalData('hidden', char);
+      assert.equal(inCtx("hiddenAccumulators.get('hidden').raw"), expected);
+      window.showSession('hidden');
+      assert.equal(spies.writes[0], expected);
+    } finally { destroy(); }
+  });
+}
+
+test('live-buffer drain strips stale DECXCPR and DA1 on reveal, while live output retains them', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'a' });
+    window.createTerminalEntry({ sessionId: 'b' });
+    window.activeSessionId = 'a';
+    window.handleTerminalData('a', 'LIVE\x1b[?6n\x1b[c');
+    window.flushTerminalBuffer('a');
+    assert.equal(spies.writes[0], 'LIVE\x1b[?6n\x1b[c');
+    window.handleTerminalData('a', 'OLD\x1b[?6n\x1b[0c');
+    window.showSession('b');
+    window.activeSessionId = 'b';
+    window.showSession('a');
+    assert.equal(spies.writes[1], 'OLD');
+  } finally { destroy(); }
 });
 
 test('GIVEN a hidden session WHEN a query arrives inside an unfinished sequence THEN the query is removed once and the bytes around it are kept', () => {

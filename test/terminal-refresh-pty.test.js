@@ -8,19 +8,75 @@ function handler() {
   return require('../terminal-resize').createTerminalResizeHandler;
 }
 
-function fixture() {
+function fixture(onResize) {
   const calls = [];
   const tasks = new Map();
   let token = 0;
+  let now = 0;
   const session = { pty: { resize(cols, rows) { calls.push({ cols, rows }); } }, exited: false };
   const sessions = new Map([['s', session]]);
   const resize = handler()(sessions, {
-    setTimeout(cb) { tasks.set(++token, cb); return token; },
+    setTimeout(cb, delay) { tasks.set(++token, { cb, at: now + delay }); return token; },
     clearTimeout(id) { tasks.delete(id); },
-  });
-  const flush = () => { for (const [id, cb] of [...tasks]) { tasks.delete(id); cb(); } };
-  return { calls, tasks, session, sessions, resize, flush };
+  }, onResize);
+  const flush = () => { for (const [id, task] of [...tasks]) { tasks.delete(id); task.cb(); } };
+  const advance = ms => {
+    now += ms;
+    for (const [id, task] of [...tasks]) {
+      if (task.at <= now) { tasks.delete(id); task.cb(); }
+    }
+  };
+  return { calls, tasks, session, sessions, resize, flush, advance };
 }
+
+test('explicit Refresh holds the nudge for 300 ms and restores the fitted size', () => {
+  const ctx = fixture();
+  ctx.resize('s', 204, 40, true);
+  ctx.advance(50);
+  assert.deepEqual(ctx.calls.at(-1), { cols: 203, rows: 40 });
+  ctx.advance(249);
+  assert.equal(ctx.calls.length, 2);
+  ctx.advance(1);
+  assert.deepEqual(ctx.calls.at(-1), { cols: 204, rows: 40 });
+  assert.equal(ctx.tasks.size, 0);
+});
+
+test('a newer fit during the 300 ms hold cancels the old restoration', () => {
+  const ctx = fixture();
+  ctx.resize('s', 204, 40, true);
+  ctx.advance(200);
+  ctx.resize('s', 218, 35);
+  ctx.advance(300);
+  assert.deepEqual(ctx.calls, [{ cols: 204, rows: 40 }, { cols: 203, rows: 40 }, { cols: 218, rows: 35 }]);
+  assert.equal(ctx.tasks.size, 0);
+});
+
+test('first-open nudge retains its 50 ms start and hold', () => {
+  const ctx = fixture();
+  ctx.session.firstResize = true;
+  ctx.resize('s', 120, 40);
+  ctx.advance(49);
+  assert.equal(ctx.calls.length, 1);
+  ctx.advance(1);
+  assert.deepEqual(ctx.calls.at(-1), { cols: 121, rows: 40 });
+  ctx.advance(49);
+  assert.equal(ctx.calls.length, 2);
+  ctx.advance(1);
+  assert.deepEqual(ctx.calls.at(-1), { cols: 120, rows: 40 });
+});
+
+test('resize hook reports fit, nudge and every restoration attempt with success', () => {
+  const events = [];
+  const ctx = fixture((...args) => events.push(args));
+  ctx.resize('s', 120, 40, true);
+  let fail = true;
+  ctx.session.pty.resize = () => { if (fail) { fail = false; throw new Error('lost restore'); } };
+  ctx.flush();
+  assert.deepEqual(events, [
+    ['s', 'fit', 120, 40, true], ['s', 'nudge', 119, 40, true],
+    ['s', 'restore', 120, 40, false], ['s', 'restore', 120, 40, true],
+  ]);
+});
 
 test('one refresh request nudges and finishes at the fitted PTY size', () => {
   const ctx = fixture();
