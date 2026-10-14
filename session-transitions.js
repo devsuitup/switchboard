@@ -9,7 +9,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord, getBackgroundTarget, rekeyMetadata;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord, getBackgroundTarget, rekeyMetadata, backgroundJobExists;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -24,6 +24,7 @@ function init(ctx) {
   hasTaskRecord = ctx.hasTaskRecord || (() => false);
   getBackgroundTarget = ctx.getBackgroundTarget || (() => null);
   rekeyMetadata = ctx.rekeyMetadata || (() => {});
+  backgroundJobExists = ctx.backgroundJobExists || (() => false);
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -451,6 +452,9 @@ function rekeySession(sessionId, newId, session, currentFiles, kind, background)
   session._prevDirMtime = undefined;
   session._subFileList = null;
   session._continuation = null;
+  session.continuationSnapshot = snapshotContinuations(path.join(PROJECTS_DIR, session.projectFolder, newId + '.jsonl'), newId);
+  session.backgroundCommandSource = null;
+  session._pendingBackgroundContinuation = false;
   activeSessions.delete(sessionId);
   activeSessions.set(newId, session);
   recordRekey(sessionId, newId);
@@ -467,7 +471,7 @@ function rekeySession(sessionId, newId, session, currentFiles, kind, background)
 }
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
-function detectContinuation(sessionId, session, folderPath, currentFiles, descriptorIdentity, descriptorSnapshot) {
+function detectContinuation(sessionId, session, folderPath, currentFiles, descriptorIdentity, descriptorSnapshot, backgroundOnly = false) {
   const sourceId = session.realSessionId || sessionId;
   const sourceFile = path.join(folderPath, sourceId + '.jsonl');
   let cached = session._continuation;
@@ -477,14 +481,18 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
     cached.index = scanContinuationIndex(sourceFile, sourceId, cached.index);
     index = JSON.parse(cached.index);
   } catch { return false; }
-  if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder, session.exited ? 0 : RECHECK_MS);
+  if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder);
   const targets = new Set(index.ids);
-  if (session.exited && session._continuationExit && index.complete && (index.unresolved || targets.size !== 1)) {
+  let fresh;
+  try { fresh = freshContinuationIndex(session, sourceId, sourceFile); } catch {}
+  const authorized = backgroundCommandMatches(session, sourceId);
+  session._pendingBackgroundContinuation = !!(authorized && fresh && (!fresh.complete || (!fresh.unresolved && fresh.ids.length === 1)));
+  if (session.exited && session._continuationExit && fresh?.complete && (fresh.unresolved || fresh.ids.length !== 1)) {
     session._continuationExit(false);
     return false;
   }
-  if (index.complete && !index.unresolved && targets.size === 1 && !session.isAttach && (!session.backgrounding || session.backgrounded)) {
-    const newId = [...targets][0];
+  if (authorized && fresh?.complete && !fresh.unresolved && fresh.ids.length === 1 && !session.isAttach && (!session.backgrounding || session.backgrounded)) {
+    const newId = fresh.ids[0];
     if (newId !== sourceId && !isLive(newId)) {
       const background = getBackgroundTarget(newId);
       if (background?.kind === 'bg' && background.jobId) {
@@ -493,7 +501,7 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
       }
     }
   }
-  if (session.exited) return false;
+  if (session.exited || backgroundOnly) return false;
   for (const target of cached.other.keys()) if (!targets.has(target)) cached.other.delete(target);
   let identity;
   for (const newId of targets) {
@@ -522,16 +530,19 @@ function holdContinuationExit(sessionId, session, finish) {
   if (session.isPlainTerminal || session.isAttach || session.stopRequested || !session.projectFolder) return false;
   if (session.backgrounded) { finish(true); return true; }
   const sourceId = session.realSessionId || sessionId;
+  if (!backgroundCommandMatches(session, sourceId)) return false;
   let index;
   try {
     const previous = session._continuation?.sourceId === sourceId ? session._continuation : { sourceId, index: null, other: new Map() };
     previous.index = scanContinuationIndex(path.join(PROJECTS_DIR, session.projectFolder, sourceId + '.jsonl'), sourceId, previous.index);
     session._continuation = previous;
-    index = JSON.parse(previous.index);
+    const file = path.join(PROJECTS_DIR, session.projectFolder, sourceId + '.jsonl');
+    do { index = freshContinuationIndex(session, sourceId, file); } while (index && index.bytes < index.size);
   }
   catch { return false; }
-  if (index.complete && (index.unresolved || index.ids.length !== 1 || index.ids[0] === sourceId)) return false;
-  if (!index.complete && index.bytes >= index.size) return false;
+  if (!index || index.unresolved || index.ids.length !== 1 || index.ids[0] === sourceId) return false;
+  const background = getBackgroundTarget(index.ids[0]);
+  if (background?.kind !== 'bg' || !background.jobId || !backgroundJobExists(background.jobId)) return false;
   const timer = setTimeoutFn(() => {
     delete session._continuationExit;
     finish(false);
@@ -667,4 +678,80 @@ function detectSessionTransitions(folder) {
 }
 
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };
+function snapshotContinuations(file, sourceId) {
+  let index, serialized;
+  try {
+    do {
+      serialized = scanContinuationIndex(file, sourceId, serialized);
+      index = JSON.parse(serialized);
+    } while (index.bytes < index.size);
+    return continuationSnapshot(index, sourceId);
+  } catch (err) {
+    return err.code === 'ENOENT' ? { sourceId, bytes: 0, ids: [], freshIndex: null } : null;
+  }
+}
+
+function continuationSnapshot(index, sourceId) {
+  const pending = Buffer.from(index.pending || '', 'base64');
+  const freshIndex = JSON.stringify({ ...index, ids: [], sealedIds: [], pending: '', invalid: false,
+    unresolved: false, skipLine: !!pending.length || index.skipLine, complete: true });
+  return { sourceId, bytes: index.bytes, ids: index.ids.map(normalizeSessionId), freshIndex };
+}
+
+async function snapshotContinuationsBeforeSpawn(file, sourceId) {
+  let index, serialized;
+  try {
+    do {
+      serialized = scanContinuationIndex(file, sourceId, serialized);
+      index = JSON.parse(serialized);
+      if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
+    } while (index.bytes < index.size);
+    return continuationSnapshot(index, sourceId);
+  } catch (err) {
+    return err.code === 'ENOENT' ? { sourceId, bytes: 0, ids: [], freshIndex: null } : null;
+  }
+}
+
+function freshContinuationIndex(session, sourceId, file) {
+  const snapshot = session.continuationSnapshot;
+  if (!snapshot || normalizeSessionId(snapshot.sourceId) !== normalizeSessionId(sourceId)) return null;
+  const cached = session._continuation;
+  const stat = fs.statSync(file);
+  if (stat.size < snapshot.bytes) return null;
+  let previous = cached.freshIndex || snapshot.freshIndex;
+  const fd = fs.openSync(file, 'r');
+  const tailAt = position => {
+    const tail = Buffer.alloc(Math.min(64, position));
+    const bytes = fs.readSync(fd, tail, 0, tail.length, position - tail.length);
+    return bytes === tail.length ? tail.toString('hex') : null;
+  };
+  try {
+    if (snapshot.bytes && tailAt(snapshot.bytes) !== JSON.parse(snapshot.freshIndex).tail) return null;
+    if (previous) {
+      let candidate = JSON.parse(previous);
+      if (candidate.bytes > stat.size || candidate.size > stat.size || candidate.tail !== tailAt(candidate.bytes)) {
+        candidate = snapshot.freshIndex ? JSON.parse(snapshot.freshIndex) : null;
+      }
+      if (candidate) candidate.mtime = stat.mtime.toISOString();
+      previous = candidate ? JSON.stringify(candidate) : null;
+    }
+  } finally { fs.closeSync(fd); }
+  cached.freshIndex = scanContinuationIndex(file, sourceId, previous);
+  const index = JSON.parse(cached.freshIndex);
+  if (index.size < snapshot.bytes) return null;
+  return { ...index, ids: index.ids.filter(id => !snapshot.ids.includes(normalizeSessionId(id))) };
+}
+
+function backgroundCommandMatches(session, sourceId) {
+  return session.backgrounded || normalizeSessionId(session.backgroundCommandSource) === normalizeSessionId(sourceId);
+}
+
+function detectPendingBackgroundContinuations() {
+  for (const [sessionId, session] of [...activeSessions]) {
+    if (!session._pendingBackgroundContinuation || session.isAttach || session.isPlainTerminal || !session.projectFolder) continue;
+    const folderPath = path.join(PROJECTS_DIR, session.projectFolder);
+    detectContinuation(sessionId, session, folderPath, [...session.knownJsonlFiles], () => null, {}, true);
+  }
+}
+
+module.exports = { init, detectSessionTransitions, detectSubagentTransitions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };

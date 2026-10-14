@@ -20,13 +20,15 @@ for (const proof of ['descriptor', 'job']) {
     fs.mkdirSync(path.join(projects, 'project'), { recursive: true });
     fs.mkdirSync(descriptors);
     fs.mkdirSync(jobs);
+    const continuationSnapshot = transitions.snapshotContinuations(path.join(projects, 'project', OLD + '.jsonl'), OLD);
     fs.writeFileSync(path.join(projects, 'project', OLD + '.jsonl'), JSON.stringify({ type: 'continued-in', sessionId: OLD, continuedInSessionId: HEAD }) + '\n');
     if (proof === 'descriptor') fs.writeFileSync(path.join(descriptors, '77.json'), JSON.stringify({ pid: 77, sessionId: HEAD, kind: 'bg', jobId: '1234abcd', cwd: root, status: 'idle' }));
     else {
       fs.mkdirSync(path.join(jobs, '1234abcd'));
       fs.writeFileSync(path.join(jobs, '1234abcd', 'state.json'), JSON.stringify({ sessionId: HEAD, state: 'working', name: 'launch (2)', nameSource: 'collision' }));
     }
-    const entry = { projectFolder: 'project', knownJsonlFiles: new Set([OLD + '.jsonl']), pty: { pid: 7 } };
+    const entry = { projectFolder: 'project', knownJsonlFiles: new Set([OLD + '.jsonl']), pty: { pid: 7 },
+      continuationSnapshot, backgroundCommandSource: OLD };
     const activeSessions = new Map([[OLD, entry]]);
     cli.init({ dir: descriptors, activeSessions, isProcessAlive: () => true, onIdle() {} });
     cli.ensureWatching();

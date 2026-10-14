@@ -72,7 +72,7 @@ function init(ctx) {
 function setTranscriptName(id, name) {
   const collision = getLocalDescriptors().some(d => d.sessionId?.toLowerCase() === id.toLowerCase() && d.nameSource === 'collision')
     || [...getLocalJobs().values()].some(job => job.sessionId?.toLowerCase() === id.toLowerCase() && job.nameSource === 'collision');
-  if (!collision) setName(id, name);
+  if (!collision) setName(id, name, 'transcript');
 }
 
 // alias -> that host's mirrored projects root; empty unless one is declared.
@@ -609,7 +609,7 @@ function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
 
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
-  const metaMap = getAllMeta();
+  const metaMap = getAllMeta(true);
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);

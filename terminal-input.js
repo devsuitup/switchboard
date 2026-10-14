@@ -15,8 +15,18 @@ const { writePty } = require('./pty-ops');
 function handleTerminalInput(activeSessions, sessionId, data, now) {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
-    if (session.composerState) noteUserInput(session.composerState, data, now);
-    writePty(session, data, sessionId);
+    if (session.composerState) {
+      for (const part of String(data).split(/([\r\n\x03])/)) {
+        if (!part) continue;
+        if (part === '\x03' && !session.composerState.inPaste) session.backgroundCommandSource = null;
+        if ((part === '\r' || part === '\n') && !session.composerState.inPaste && !session.composerState.partial && session.composerState.text.trim()) {
+          session.backgroundCommandSource = session.composerState.text.trim() === '/bg' ? session.realSessionId || sessionId : null;
+          session.backgroundCommandOutput = '';
+        }
+        noteUserInput(session.composerState, part, now);
+      }
+    }
+    if (!writePty(session, data, sessionId)) session.backgroundCommandSource = null;
   }
 }
 

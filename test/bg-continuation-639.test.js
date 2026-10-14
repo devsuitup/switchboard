@@ -19,16 +19,19 @@ function fixture(t, { exited = false, transcript = true, ambiguous = false } = {
   const folder = 'project';
   fs.mkdirSync(path.join(root, folder));
   const records = [{ type: 'continued-in', sessionId: OLD, continuedInSessionId: HEAD }];
+  const continuationSnapshot = transitions.snapshotContinuations(path.join(root, folder, OLD + '.jsonl'), OLD);
   if (ambiguous) records.push({ ...records[0], continuedInSessionId: '33333333-3333-4333-8333-333333333333' });
   fs.writeFileSync(path.join(root, folder, OLD + '.jsonl'), records.map(JSON.stringify).join('\n') + '\n');
   if (transcript) fs.writeFileSync(path.join(root, folder, HEAD + '.jsonl'), JSON.stringify({ type: 'user', sessionId: OLD }) + '\n');
-  const entry = { projectFolder: folder, pty: { pid: 7 }, exited, knownJsonlFiles: new Set([OLD + '.jsonl', HEAD + '.jsonl']) };
+  const entry = { projectFolder: folder, pty: { pid: 7 }, exited, continuationSnapshot, backgroundCommandSource: OLD,
+    knownJsonlFiles: new Set([OLD + '.jsonl', HEAD + '.jsonl']) };
   const activeSessions = new Map([[OLD, entry]]), events = [], migrated = [], timers = [];
   let proof = { sessionId: HEAD, jobId: '1234abcd', kind: 'bg', cwd: root };
   transitions.init({ PROJECTS_DIR: root, activeSessions,
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
     log: { info() {}, debug() {} }, rekeyMcpServer() {}, clearOwner: () => 'other',
     getBackgroundTarget: id => id === HEAD ? proof : null,
+    backgroundJobExists: () => true,
     rekeyMetadata: (...args) => migrated.push(args), setTimeout: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; },
   });
   return { root, folder, entry, activeSessions, events, migrated, timers, setProof: value => { proof = value; } };
@@ -64,14 +67,15 @@ test('ambiguous continuations and interactive strangers never authorize a backgr
   assert.equal(h.events.length, 0);
 });
 
-test('a typed /bg exit holds the original environment until late daemon proof arrives', t => {
+test('a typed /bg exit with an existing job holds a partial fresh tail until it completes', t => {
   const h = fixture(t, { exited: true, transcript: false });
-  h.setProof(null);
+  const file = path.join(h.root, h.folder, OLD + '.jsonl');
+  fs.appendFileSync(file, '{"type":"assistant"');
   const exits = [];
   assert.equal(typeof transitions.holdContinuationExit, 'function');
   assert.equal(transitions.holdContinuationExit(OLD, h.entry, suppress => exits.push(suppress)), true);
   assert.deepEqual(exits, []);
-  h.setProof({ sessionId: HEAD, kind: 'bg', jobId: '1234abcd' });
+  fs.appendFileSync(file, '}\n');
   transitions.detectSessionTransitions(h.folder);
   assert.deepEqual(exits, [true]);
   assert.equal(h.activeSessions.get(HEAD), h.entry);
@@ -150,7 +154,7 @@ test('collision job names are suppressed even when the CLI list repeats them', (
   assert.equal(roster[0].name, null);
 });
 
-test('SQLite migrates original metadata atomically, including a title fallback before a target turn', t => {
+test('SQLite copies original metadata atomically without persisting a title fallback', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-meta-639-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
@@ -160,10 +164,10 @@ test('SQLite migrates original metadata atomically, including a title fallback b
     db.setName('${HEAD}', 'daemon (2)');
     assert.equal(typeof db.rekeySessionMeta, 'function');
     db.rekeySessionMeta('${OLD}', '${HEAD}', 'original title');
-    assert.deepEqual(db.getMeta('${HEAD}'), { sessionId: '${HEAD}', name: 'JB rename', starred: 1, archived: 1 });
-    assert.equal(db.getMeta('${OLD}'), null);
+    assert.deepEqual(db.getMeta('${HEAD}'), { sessionId: '${HEAD}', name: 'daemon (2)', starred: 1, archived: 1 });
+    assert.deepEqual(db.getMeta('${OLD}'), { sessionId: '${OLD}', name: 'JB rename', starred: 1, archived: 1 });
     db.rekeySessionMeta('no-meta', 'new-meta', 'original title');
-    assert.equal(db.getMeta('new-meta').name, 'original title');
+    assert.equal(db.getMeta('new-meta'), null);
     db.closeDb();
   `], { cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: root } });
   assert.equal(result.status, 0, result.stderr || result.stdout);

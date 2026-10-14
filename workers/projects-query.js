@@ -9,7 +9,8 @@ db.pragma('busy_timeout = 5000');
 
 const readSnapshot = db.transaction(() => ({
   rows: db.prepare('SELECT * FROM session_cache').all(),
-  meta: db.prepare('SELECT * FROM session_meta').all(),
+  meta: db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision FROM session_meta m
+    LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all(),
   folders: db.prepare('SELECT * FROM cache_meta').all(),
   settings: db.prepare('SELECT key, value FROM settings').all(),
 }));
@@ -41,7 +42,7 @@ function build(message) {
     deleteCachedFolder: folder => { for (const row of rows.values()) if (row.folder === folder) rows.delete(row.sessionId); },
     touchCachedModified: (id, modified) => { const row = rows.get(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
-    setName: (id, name) => meta.set(id, { ...meta.get(id), sessionId: id, name }),
+    setName: (id, name, source = 'user') => meta.set(id, { ...meta.get(id), sessionId: id, name, nameSource: source }),
     replaceSessionMetrics: () => {},
     deleteSearchFolder: () => {},
     deleteSearchSession: () => {},

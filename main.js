@@ -1730,7 +1730,7 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
-const { sendToBackground, createContinuationReader, holdBackgroundExit } = require('./bg-handoff');
+const { sendToBackground, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
 
 async function handleSendToBackground(_event, sessionId) {
   const session = activeSessions.get(sessionId);
@@ -2357,6 +2357,13 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   session.generation = ++ptyGenerationCounter;
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
+    if (session.backgroundCommandSource) {
+      session.backgroundCommandOutput = ((session.backgroundCommandOutput || '') + data).slice(-1024);
+      if (cancellationIn(session.backgroundCommandOutput)) {
+        session.backgroundCommandSource = null;
+        session.backgroundCommandOutput = '';
+      }
+    }
 
     // Parse OSC sequences (title changes, progress, notifications, etc.)
     if (data.includes('\x1b]')) {
@@ -2721,11 +2728,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   let knownJsonlFiles = new Set();
   let projectFolder = null;
+  let continuationSnapshot = null;
 
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork detection)
     projectFolder = encodeProjectPath(spawnCwd);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
+    continuationSnapshot = await sessionTransitions.snapshotContinuationsBeforeSpawn(path.join(claudeProjectDir, sessionId + '.jsonl'), sessionId);
     if (fs.existsSync(claudeProjectDir)) {
       try {
         knownJsonlFiles = new Set(
@@ -2927,7 +2936,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     projectPath, firstResize: true,
     // see .ai/contexts/trigger-watcher.md, "Target guard"
     cwd: spawnCwd,
-    projectFolder, knownJsonlFiles,
+    projectFolder, knownJsonlFiles, continuationSnapshot,
     isPlainTerminal, panelFor: panelOwnerId, forkFrom: sessionOptions?.forkFrom || null,
     isAttach, attachJobId,
     preLaunch: !isAttach && !!sessionOptions?.preLaunchCmd,
@@ -3202,6 +3211,7 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
+  backgroundJobExists: jobId => ['working', 'blocked'].includes(bgAgents.getCachedJobs().get(jobId)?.state),
   rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' || kind === 'background' }); },
   rekeyMetadata: (fromId, toId, kind) => {
     if (kind !== 'background') return;
@@ -3238,7 +3248,7 @@ cliSessionState.init({
   },
 });
 cliSessionState.onStatusesChanged(() => {
-  for (const folder of new Set([...activeSessions.values()].map(s => s.projectFolder).filter(Boolean))) detectSessionTransitions(folder);
+  sessionTransitions.detectPendingBackgroundContinuations();
   notifyRendererProjectsChanged();
   const observed = new Set();
   for (const descriptor of cliSessionState.getSidebarDescriptors()) {
@@ -3318,7 +3328,7 @@ const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
 bgAgents.onJobsChanged(notifyRendererProjectsChanged);
 bgAgents.onJobsChanged(() => {
-  for (const folder of new Set([...activeSessions.values()].map(s => s.projectFolder).filter(Boolean))) detectSessionTransitions(folder);
+  sessionTransitions.detectPendingBackgroundContinuations();
 });
 const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
   for (const job of roster) {

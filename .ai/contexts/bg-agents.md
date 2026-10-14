@@ -93,27 +93,60 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 ## Sidebar membership (#620)
 
+The sidebar's `bg` membership also arrives through the local descriptor-backed
+projects payload (`bgJobId`/`bgSessionId`, #620), independently of opening this
+view. The existing roster set remains a fallback and checks every
+`mergedMemberIds` entry as well as the representative. A proven background
+continuation can therefore badge its conversation row before a new turn is
+indexed. See `session-cache.md`, "Local background sidebar rows", for identity
+and registry-name precedence. This changes the membership marker, not the
+status glyph policy from the indicators audit.
+
 ### Background continuations (#639)
 
-A complete, unambiguous `continued-in` record in the interactive conversation
+A complete, unambiguous new `continued-in` record in the interactive conversation
 plus a live `kind: bg` descriptor or a working/blocked job identifies a
-background continuation. Its worker belongs to the daemon, so the interactive
-PTY ancestry check cannot authorize it. `session-transitions.js` checks this
+background continuation. Before spawning, the tab snapshots continuation ids
+and the transcript byte offset. Snapshots before spawn yield between
+one-megabyte chunks to keep the event loop available for large resumed
+conversations. Only a target absent from that snapshot, in the appended tail,
+can authorize the re-key. A partial record already present
+at spawn and a rewritten prefix cannot become fresh evidence. The tab must
+also have submitted `/bg` itself (`terminal-input.js` tracks the composer),
+or have a confirmed button handoff. Ctrl+C and the CLI's cancellation message
+revoke the typed command, while an empty confirmation Enter preserves it.
+Another process backgrounding the same conversation cannot take over its PTY.
+Its worker belongs to the daemon, so the interactive PTY ancestry check cannot
+authorize it. `session-transitions.js` checks this
 proof before the closest-writer cache and before requiring a target transcript.
-The job and descriptor subscriptions in `main.js` rerun detection even when no
-transcript has changed and Agents has never opened. Ambiguous links and
-interactive strangers do not authorize a background re-key.
+The job and descriptor subscriptions in `main.js` reconsider only unresolved
+fresh background continuations, without scanning folders or subagents. This
+works even when no transcript has changed and Agents has never opened.
+Ambiguous links and interactive strangers do not authorize a background re-key.
 
 The original row becomes the background UUID. `sidebar-bg-sessions.js` retains
 the original conversation fields, keeps predecessors as merged members, and
 suppresses the target's separate row. The existing `bg` marker remains the
 membership signal. `parseJobState` reads `name`/`nameSource`; collision names
 cannot win through CLI, descriptor or job fallback. The Agents row and detail
-prefer the conversation's Switchboard name or original title. The handoff still
-submits `/bg` only, without `--name` or a suffix.
+prefer the conversation's Switchboard name or original title for a collision
+or a proven continuation; independently named jobs retain their name. The
+handoff still submits `/bg` only, without `--name` or a suffix.
 
-Before publishing the re-key, `db.rekeySessionMeta` moves name, star and archive
-in one transaction. A missing Switchboard name uses the original cached title.
+Before publishing the re-key, `db.rekeySessionMeta` copies name, star and archive
+in one transaction, retaining the original metadata for when the job finishes.
+Only Switchboard renames are copied as names; transcript titles remain titles.
+`session_meta_fields` records a monotonic revision and source per field, so an
+existing target retains whichever value was updated later, including explicit
+false star/archive values. For names, only user rename revisions participate;
+a newer transcript title cannot defeat a genuine rename. Legacy fields have
+no revision: a target field wins a tie, and an original name equal to its
+cached title is treated as a title. A copied legacy rename gains user source
+with revision zero so its provenance survives subsequent continuations.
+The projects cache and query worker carry name source and revision into the
+sidebar merger. It selects the newest genuine rename from the two ids,
+including a cleared name, before falling back to the original transcript
+title. Retaining the old metadata cannot mask a newer background-head rename.
 The renderer keeps the existing xterm and open-set position, migrates activity,
 panel state and toolbar owner, panel-shell ownership and in-flight flags,
 last activity, sandbox flag, PTY generations, pending opens and restore entries.
@@ -125,24 +158,17 @@ The background payload crosses `preload.js` and attaches in the preserved
 terminal. `open-terminal` replaces only the proven handoff's interactive PTY,
 validates the matching job id before doing so, and spawns `claude attach`.
 The button confirms/re-keys before releasing a held physical exit. A typed
-`/bg` with one proven continuation retains a just-exited source for at most
-15 seconds while daemon proof arrives; expiry releases the ordinary exit.
+`/bg` with one fresh continuation and an existing live bg job retains a
+just-exited source for at most 15 seconds while its tail completes. Rechecks
+wait one second; expiry releases the ordinary exit. Old links and absent jobs
+never delay `process-exited`, task owner death or activity end.
 `session.forked` activity traces include `kind: background` and `jobId`, including
 when Diagnostics is enabled after startup.
 
-Regression evidence: `test/bg-continuation-639.test.js`,
+Regression evidence: `test/bg-continuation-641b.test.js`, `test/bg-continuation-639.test.js`,
 `test/bg-rekey-renderer-639.test.js`, and the handoff, panel, activity,
 sidebar and Agents suites. `/clear` and fork keep their existing ownership and
 fresh-conversation rules; metadata migration applies only to background.
-
-The sidebar's `bg` membership also arrives through the local descriptor-backed
-projects payload (`bgJobId`/`bgSessionId`, #620), independently of opening this
-view. The existing roster set remains a fallback and checks every
-`mergedMemberIds` entry as well as the representative. A proven background
-continuation can therefore badge its conversation row before a new turn is
-indexed. See `session-cache.md`, "Local background sidebar rows", for identity
-and registry-name precedence. This changes the membership marker, not the
-status glyph policy from the indicators audit.
 
 ## Header counters
 

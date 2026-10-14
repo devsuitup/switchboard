@@ -588,13 +588,18 @@ for an assumption a normal unit test can pin.
 ## Conversation continuations
 
 For an open interactive conversation moving to the daemon, #639 adds the
-background proof path in `session-transitions.js`. A single complete
+background proof path in `session-transitions.js`. A single complete fresh
 `continued-in` target must have a live `kind: bg` descriptor or a working/blocked
-job. It does not have to descend from the interactive PTY or have its own
-indexed turn. Detection runs again on descriptor and job identity changes,
-before the closest-writer rejection cache. A typed `/bg` exit can retain its
-source for a bounded 15-second proof window; no-link `/clear` and explicit fork
-still use their existing owner checks. See bg-agents.md, "Background
+job. Its id must be absent from the ids snapshotted before this tab's spawn,
+and its record must follow the snapshotted byte offset. A typed `/bg` must
+come from this tab's composer; a confirmed button handoff also authorizes it.
+It does not have to descend from the interactive PTY or have its own indexed
+turn. Descriptor and job changes reconsider only pending fresh continuations,
+before the closest-writer rejection cache. A typed `/bg` exit with a fresh link
+and an existing bg job can retain its source for a bounded 15-second window,
+with one-second tail rechecks. Old links and absent jobs exit immediately.
+No-link `/clear` and explicit fork still use their existing owner checks.
+See bg-agents.md, "Background
 continuations", for the transactional metadata migration and renderer state.
 
 CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,

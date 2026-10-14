@@ -600,7 +600,7 @@ function rekeyTerminalBuffers(oldId, newId) {
   const index = lruOrder.indexOf(oldId);
   if (index !== -1) lruOrder[index] = newId;
 }
-window.rekeyTerminalBuffers = rekeyTerminalBuffers;
+if (typeof window !== 'undefined') window.rekeyTerminalBuffers = rekeyTerminalBuffers;
 
 // Only ever called for a session that is active or part of an open grid (see
 // handleTerminalData below) — a hidden single-view session never reaches

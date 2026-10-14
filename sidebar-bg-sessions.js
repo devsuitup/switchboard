@@ -95,8 +95,12 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
       root.mergedMemberIds = [...new Set([originalId, ...root.mergedMemberIds])].filter(id => key(id) !== head);
       const meta = metaMap.get(descriptor.sessionId);
       if (meta) {
-        const originalName = metaMap.get(originalId)?.name;
-        if (!originalName || originalName === localRows.get(key(originalId))?.customTitle) root.name = meta.name || root.name;
+        const originalMeta = metaMap.get(originalId), originalName = originalMeta?.name;
+        const headRename = meta.nameSource === 'user', sourceRename = originalMeta?.nameSource === 'user';
+        if (headRename || sourceRename) {
+          const chosen = headRename && (!sourceRename || (meta.nameRevision || 0) >= (originalMeta.nameRevision || 0)) ? meta : originalMeta;
+          root.name = chosen.name || localRows.get(key(originalId))?.customTitle || root.aiTitle || root.summary || null;
+        } else if (!originalName || originalName === localRows.get(key(originalId))?.customTitle) root.name = meta.name || root.name;
         root.starred = meta.starred ?? root.starred;
         root.archived = meta.archived ?? root.archived;
       }

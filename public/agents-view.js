@@ -26,6 +26,8 @@ function agentsEntryKey(entry) {
 
 function agentDisplayName(entry) {
   const session = typeof sessionMap !== 'undefined' && sessionMap.get(entry.sessionId);
+  const continuation = session?.bgSessionId === entry.sessionId && session?.mergedMemberIds?.length > 0;
+  if (entry.nameSource !== 'collision' && !continuation && entry.name) return entry.name;
   return session?.name || session?.aiTitle || session?.summary
     || (entry.nameSource !== 'collision' && entry.name) || entry.sessionId || entry.id || '';
 }

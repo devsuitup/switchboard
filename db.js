@@ -55,6 +55,11 @@ db.exec(`
   )
 `);
 
+db.exec(`CREATE TABLE IF NOT EXISTS session_meta_fields (
+  sessionId TEXT NOT NULL, field TEXT NOT NULL, revision INTEGER NOT NULL, source TEXT NOT NULL,
+  PRIMARY KEY (sessionId, field)
+)`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS session_cache (
     sessionId TEXT PRIMARY KEY,
@@ -525,40 +530,58 @@ const stmts = {
   `),
 };
 
+const metaFieldGet = db.prepare('SELECT revision, source FROM session_meta_fields WHERE sessionId = ? AND field = ?');
+const metaFieldNext = db.prepare('SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM session_meta_fields');
+const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source) VALUES (?, ?, ?, ?)
+  ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source`);
+
 const rekeySessionMeta = db.transaction((oldId, newId, title) => {
   if (oldId === newId) return;
   const original = stmts.get.get(oldId);
+  if (!original) return;
   const target = stmts.get.get(newId);
+  const values = {};
+  for (const field of ['name', 'starred', 'archived']) {
+    const from = metaFieldGet.get(oldId, field), to = metaFieldGet.get(newId, field);
+    const copy = field !== 'name' || (from ? from.source === 'user' : original.name !== title);
+    const keepTarget = field !== 'name' || (to ? to.source === 'user' : target?.name !== stmts.cacheGetSession.get(newId)?.customTitle);
+    const useOriginal = copy && (!target || !keepTarget || (from?.revision || 0) > (to?.revision || 0));
+    values[field] = useOriginal ? original[field] : (keepTarget ? target?.[field] : null) ?? (field === 'name' ? null : 0);
+    if (useOriginal) metaFieldSet.run(newId, field, from?.revision || 0, from?.source || 'user');
+  }
   db.prepare(`INSERT INTO session_meta (sessionId, name, starred, archived) VALUES (?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET name = excluded.name, starred = excluded.starred, archived = excluded.archived`)
-    .run(newId, original?.name || title || target?.name || null, original?.starred ?? 0, original?.archived ?? 0);
-  db.prepare('DELETE FROM session_meta WHERE sessionId = ?').run(oldId);
+    .run(newId, values.name, values.starred, values.archived);
 });
 
 function getMeta(sessionId) {
   return stmts.get.get(sessionId) || null;
 }
 
-function getAllMeta() {
-  const rows = stmts.getAll.all();
+function getAllMeta(withNameSource = false) {
+  const rows = withNameSource ? db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision FROM session_meta m
+    LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all() : stmts.getAll.all();
   const map = new Map();
   for (const row of rows) map.set(row.sessionId, row);
   return map;
 }
 
-function setName(sessionId, name) {
+const setName = db.transaction((sessionId, name, source = 'user') => {
   stmts.upsertName.run(sessionId, name);
-}
+  metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source);
+});
 
-function toggleStar(sessionId) {
+const toggleStar = db.transaction(sessionId => {
   stmts.upsertStar.run(sessionId);
+  metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user');
   const row = stmts.get.get(sessionId);
   return row.starred;
-}
+});
 
-function setArchived(sessionId, archived) {
+const setArchived = db.transaction((sessionId, archived) => {
   stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
-}
+  metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user');
+});
 
 // --- Session cache functions ---
 
