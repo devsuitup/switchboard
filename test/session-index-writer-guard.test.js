@@ -17,12 +17,25 @@ const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'del
   'upsertSearchEntries', 'setFolderMeta', 'setSetting', 'setName', 'setInitialScanComplete',
   'setCachedEntrypoints', 'setCachedContinuationIndex', 'setCachedCustomTitles']);
 const cacheCommands = new Set(['init', 'refreshFolder', 'dropFolderRows', 'releaseLiveSession',
-  'writeScannedFolder', 'writeScannedFolderPartial', 'applyProjectsWorkerEffects', 'buildProjectsFromCache']);
+  'writeScannedFolder', 'writeScannedFolderPartial', 'applyProjectsWorkerEffects', 'buildProjectsFromCache', 'reconcileCacheFromFilesystem']);
 const cacheWriteOwners = new Set([...cacheCommands, 'setTranscriptName']);
 
 function violations(source, file = '') {
-  const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', loc: true });
+  const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', loc: true, range: true });
   const found = [];
+  const scopes = require('eslint-scope').analyze(ast, { ecmaVersion: 2022, sourceType: 'module' });
+  const references = new Map(scopes.scopes.flatMap(scope => scope.references.map(ref => [ref.identifier, ref])));
+  function isRegexp(node) {
+    if (node.type === 'Literal') return !!node.regex;
+    if (node.type === 'NewExpression') return node.callee.name === 'RegExp';
+    const ref = references.get(node);
+    const variable = ref?.resolved;
+    return !!variable && variable.defs.length === 1
+      && variable.defs[0].type === 'Variable'
+      && variable.references.filter(reference => reference.isWrite()).length === 1
+      && ['Literal', 'NewExpression'].includes(variable.defs[0].node.init?.type)
+      && isRegexp(variable.defs[0].node.init);
+  }
   function walk(node, owner = null) {
     if (!node || typeof node !== 'object') return;
     if (node.type === 'FunctionDeclaration') owner = node.id.name;
@@ -40,9 +53,14 @@ function violations(source, file = '') {
       if (!property || cacheCommands.has(property)) found.push(`direct cache writer ${property || 'dynamic'}`);
     }
     if (file === 'session-cache.js' && node.type === 'CallExpression'
-      && node.callee.type === 'Identifier' && cacheWriters.has(node.callee.name)
+      && node.callee.type === 'Identifier' && (cacheWriters.has(node.callee.name) || cacheCommands.has(node.callee.name))
       && !cacheWriteOwners.has(owner)) {
       found.push(`raw cache writer ${node.callee.name} in ${owner || 'top level'}`);
+    }
+    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.init?.type === 'Identifier'
+      && ((file === 'main.js' && node.init.name === 'sessionCache')
+        || (file === 'session-cache.js' && cacheWriters.has(node.init.name)))) {
+      found.push(`writer alias ${node.init.name}`);
     }
     if (node.type === 'VariableDeclarator' && node.init?.type === 'CallExpression'
       && node.init.callee.name === 'require' && /(?:^|\/)db(?:\.js)?$/.test(node.init.arguments[0]?.value || '')) {
@@ -56,11 +74,12 @@ function violations(source, file = '') {
       found.push(`inline raw DB writer ${node.callee.property.name ?? node.callee.property.value}`);
     }
     if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
-      && ['prepare', 'exec'].includes(node.callee.property.name ?? node.callee.property.value)) {
+      && ['prepare', 'exec'].includes(node.callee.property.name ?? node.callee.property.value)
+      && !((node.callee.property.name ?? node.callee.property.value) === 'exec' && isRegexp(node.callee.object))) {
       const argument = node.arguments[0];
       const literal = (argument?.type === 'Literal' && typeof argument.value === 'string')
         || (argument?.type === 'TemplateLiteral' && argument.expressions.length === 0);
-      if ((node.callee.property.name ?? node.callee.property.value) === 'prepare' && !literal) {
+      if (!literal) {
         found.push(`non-literal SQL at ${node.loc.start.line}`);
       }
       const sql = argument?.value ?? (argument?.type === 'TemplateLiteral' ? argument.quasis.map(q => q.value.raw).join(' ') : '');
@@ -99,6 +118,28 @@ test('the guard rejects a non-literal DB require', () => {
 test('the guard rejects non-literal and interpolated SQL outside the backend', () => {
   assert.ok(violations('db.prepare(sql);').length);
   assert.ok(violations('db.prepare(`SELECT ${columns} FROM settings`);').length);
+});
+
+
+test('the guard rejects non-literal exec SQL', () => {
+  assert.ok(violations('getDb().exec(sql);').length);
+  assert.ok(violations('getDb().exec(`SELECT ${columns} FROM settings`);').length);
+  assert.deepEqual(violations("db.exec('SELECT * FROM settings');"), []);
+  assert.deepEqual(violations("const re = /a/; re.exec(text); new RegExp('a').exec(text);"), []);
+  assert.ok(violations("const re = /a/; function probe(re) { re.exec(sql); }").length);
+  assert.ok(violations('const re = re; re.exec(sql);').length);
+});
+
+test('the guard rejects a cache command injected in a cache reader', () => {
+  assert.ok(violations("function revealIfSdkSession(id) { refreshFolder('x'); }", 'session-cache.js').length);
+});
+
+test('the guard rejects aliases of sessionCache in main', () => {
+  assert.ok(violations("const sc = sessionCache; sc.refreshFolder('x');", 'main.js').length);
+});
+
+test('the guard rejects aliases of injected cache writers', () => {
+  assert.ok(violations("function revealIfSdkSession(id) { const w = setSetting; w('probe', 1); }", 'session-cache.js').length);
 });
 
 test('production SQL and raw DB writers stay inside the backend and facade except the recorded continuation callback', () => {

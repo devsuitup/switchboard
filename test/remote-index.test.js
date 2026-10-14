@@ -1077,7 +1077,7 @@ test('start prunes removed hosts immediately while a refresh is in flight', asyn
     assert.deepEqual(dropped, ['b::-y']);
     hosts = [];
     assert.equal(indexer.start(), false);
-    assert.deepEqual(dropped, ['b::-y', 'a::-x']);
+    assert.deepEqual(dropped, ['b::-y']);
   } finally {
     indexer.dispose();
     release();
@@ -1090,14 +1090,35 @@ test('start logs a rejected prune without an unhandled rejection', async () => {
   const dataDir = tmp('idx-remove-failure');
   const errors = [];
   const indexer = createRemoteIndexer({
-    getHosts: () => [], dataDir, transport: {}, timers: fakeTimers(),
+    getHosts: () => [{ alias: 'a' }], dataDir, transport: {}, timers: fakeTimers(),
     listIndexedFolderKeys: () => ['removed::-x'],
     dropFolder: async () => { throw new Error('prune failed'); },
     log: { warn: (...args) => errors.push(args.join(' ')), info() {}, error() {} },
   });
   try {
-    assert.equal(indexer.start(), false);
+    assert.equal(indexer.start(), true);
     await new Promise(resolve => setImmediate(resolve));
     assert.ok(errors.some(error => error.includes('prune failed')));
+  } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('start and restart with zero hosts retain all mirrored folders', () => {
+  const dataDir = tmp('idx-zero-hosts');
+  let hosts = [];
+  const dropped = [];
+  const indexer = createRemoteIndexer({
+    getHosts: () => hosts, dataDir, transport: {}, timers: fakeTimers(),
+    listIndexedFolderKeys: () => ['a::-x', 'b::-y'],
+    dropFolder: async key => { dropped.push(key); },
+    sync: async () => ({ changedFolders: new Set() }),
+  });
+  try {
+    assert.equal(indexer.start(), false);
+    assert.deepEqual(dropped, []);
+    hosts = [{ alias: 'a' }, { alias: 'b' }];
+    assert.equal(indexer.restart(), true);
+    hosts = [];
+    assert.equal(indexer.restart(), false);
+    assert.deepEqual(dropped, []);
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

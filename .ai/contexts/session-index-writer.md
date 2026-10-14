@@ -111,17 +111,30 @@ allows exactly this one inline call and rejects additional raw imports/calls.
   described below; this reverses the facade revision's worker termination on a
   rejected folder command. Completeness still means that the worker finished
   its scan, rather than that every folder write succeeded.
-* `start()` prunes removed remote aliases immediately, including during an
-  in-flight refresh and when the final host is removed, and logs prune failures.
 * Bounds timers, window close and the projects-watch timer catch and log their
   async failures through the main logger.
 
 The guard rejects direct cache commands in main, raw cache writers outside the
-recorded synchronous write owners, dynamic DB imports and non-literal prepared
-SQL. Its only non-literal require exception is `path.join(..., 'node_modules',
+recorded synchronous write owners, dynamic DB imports and non-literal SQL
+passed to `prepare` or `exec`. Scope-resolved, unreassigned RegExp receivers
+are excluded from SQL checks. Direct calls to cache commands from non-command
+cache functions are rejected, as are simple aliases of `sessionCache` in main
+and injected raw writers in session-cache. Its only non-literal require
+exception is `path.join(..., 'node_modules',
 'electron')` for the existing isolated PR launcher; other dynamic paths are
-rejected conservatively. Fixture source strings exercise all four reviewer
+rejected conservatively. Fixture source strings exercise the reviewer
 bypasses without injecting probes into production files.
+
+`reconcileCacheFromFilesystem` is a synchronous algorithm used by the readonly
+Projects worker with its in-memory effect adapter; those effects reach SQLite
+through `applyProjectsWorkerEffects`. The guard records it as a write owner and
+rejects direct main calls just like the facade commands. Alias checks cover
+simple identifier declarations, not arbitrary assignment/destructuring/data flow.
+
+`start()` retains baseline alias pruning: zero hosts return before pruning,
+including at launch and after removing every host. Removing one of two hosts
+prunes its folders immediately, including during an in-flight refresh. Prune
+failures are logged.
 
 ## Ordering and validation
 
