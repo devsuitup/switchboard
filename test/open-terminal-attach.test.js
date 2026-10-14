@@ -50,9 +50,33 @@ test('stop-session detaches an attach session instead of killing it', () => {
   assert.match(body, /detached: true/);
 });
 
-test('the window closing releases the agents watchers', () => {
+test('window close releases the Agents subscriber and app quit stops the job watchers', () => {
   const idx = MAIN.indexOf("mainWindow.on('closed'");
-  assert.match(MAIN.slice(idx, idx + 900), /bgAgents\.stop\(\);/);
+  const end = MAIN.indexOf('\n  });', idx) + '\n  });'.length;
+  const vm = require('node:vm');
+  let closed, beforeQuit, unsubscribed = 0, stopped = 0;
+  const context = {
+    mainWindow: { on: (_name, callback) => { closed = callback; } },
+    activeSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
+    subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
+    bgAgents: { stop: () => { stopped++; } },
+    app: { on: (_name, callback) => { beforeQuit = callback; } },
+    unsavedGuard: { beforeQuit: () => false }, activityFlushedForQuit: false,
+    activityReporter: { hasPendingWork: false, stop() {} }, mainLoopMonitor: { stop() {} },
+    TRACE: { on: false }, activityTrace: { close() {} }, shutdownAllMcp() {},
+    localTranscriptTracker: { dispose() {} }, projectsWatcher: null,
+    cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
+    appQuitting: false,
+  };
+  vm.runInNewContext(MAIN.slice(idx, end), context);
+  closed();
+  assert.equal(unsubscribed, 1);
+  assert.equal(stopped, 0, 'closing the window keeps the jobs cache active');
+  const quitStart = MAIN.indexOf("app.on('before-quit'");
+  const quitEnd = MAIN.indexOf('\n});', quitStart) + '\n});'.length;
+  vm.runInNewContext(MAIN.slice(quitStart, quitEnd), context);
+  beforeQuit({});
+  assert.equal(stopped, 1, 'app quit releases the job watchers');
 });
 
 test('preload exposes the four agents-view entries', () => {
@@ -60,4 +84,19 @@ test('preload exposes the four agents-view entries', () => {
     assert.ok(PRELOAD.includes(name + ':'), `${name} missing from preload.js`);
   }
   assert.match(PRELOAD, /ipcRenderer\.on\('bg-agents-changed'/);
+});
+
+test('registering an attach PTY notifies the sidebar even without a transcript or descriptor event', () => {
+  const start = MAIN.indexOf('  activeSessions.set(sessionId, session);');
+  const end = MAIN.indexOf('  if (!isPlainTerminal && !panelOwnerId)', start);
+  assert.ok(start >= 0 && end > start);
+  const register = new Function('activeSessions', 'sessionId', 'session', 'isAttach', 'isPlainTerminal',
+    'revealIfSdkSession', 'notifyRendererProjectsChanged', MAIN.slice(start, end));
+  const active = new Map();
+  let notifications = 0;
+  register(active, 'bg-head', { isAttach: true }, true, false, () => {}, () => { notifications++; });
+  assert.equal(active.has('bg-head'), true);
+  assert.equal(notifications, 1);
+  register(active, 'ordinary', {}, false, false, () => {}, () => { notifications++; });
+  assert.equal(notifications, 1);
 });

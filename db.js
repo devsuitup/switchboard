@@ -320,6 +320,7 @@ if (migrations.length > currentDbVersion) {
   if (!cols.has('entrypoint')) db.exec('ALTER TABLE session_cache ADD COLUMN entrypoint TEXT');
   if (!cols.has('scheduleSlug')) db.exec('ALTER TABLE session_cache ADD COLUMN scheduleSlug TEXT');
   if (!cols.has('continuationIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN continuationIndex TEXT');
+  if (!cols.has('customTitle')) db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
   // Fork table (shipped in our v5), referenced unconditionally by prepare()
   // below — must exist whatever db_version claims.
@@ -422,8 +423,8 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
@@ -435,7 +436,7 @@ const stmts = {
       bridgeSessionId = excluded.bridgeSessionId,
       mergedIntoSessionId = excluded.mergedIntoSessionId,
       entrypoint = excluded.entrypoint, scheduleSlug = excluded.scheduleSlug,
-      continuationIndex = excluded.continuationIndex
+      continuationIndex = excluded.continuationIndex, customTitle = COALESCE(excluded.customTitle, session_cache.customTitle)
   `),
   cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
   // Kept as SELECT * (upstream narrowed this to sessionId+fileMtime): our
@@ -446,6 +447,8 @@ const stmts = {
   cacheGetMissingEntrypoint: db.prepare('SELECT sessionId, folder FROM session_cache WHERE entrypoint IS NULL AND parentSessionId IS NULL'),
   cacheSetEntrypoint: db.prepare('UPDATE session_cache SET entrypoint = ? WHERE sessionId = ?'),
   cacheSetContinuationIndex: db.prepare('UPDATE session_cache SET continuationIndex = ? WHERE sessionId = ?'),
+  cacheSetCustomTitle: db.prepare('UPDATE session_cache SET customTitle = ? WHERE sessionId = ? AND customTitle IS NULL AND fileMtime IS ?'),
+  cacheGetMissingCustomTitle: db.prepare('SELECT sessionId, folder, fileMtime FROM session_cache WHERE customTitle IS NULL AND parentSessionId IS NULL'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
@@ -572,7 +575,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
-      s.scheduleSlug || null, s.continuationIndex || null
+      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null
     );
   }
 });
@@ -604,8 +607,18 @@ function upsertCachedSessions(sessions) {
   upsertCachedSessionsBatch(sessions);
 }
 
+const setCachedCustomTitles = db.transaction((pairs) => {
+  for (const { sessionId, customTitle, fileMtime } of pairs) {
+    stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null);
+  }
+});
+
 function getCachedMissingEntrypoint() {
   return stmts.cacheGetMissingEntrypoint.all();
+}
+
+function getCachedMissingCustomTitle() {
+  return stmts.cacheGetMissingCustomTitle.all();
 }
 
 const setCachedEntrypoints = db.transaction((pairs) => {
@@ -932,6 +945,7 @@ module.exports = {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),
   setCachedContinuationIndex: (sessionId, index) => stmts.cacheSetContinuationIndex.run(index, sessionId),
+  setCachedCustomTitles, getCachedMissingCustomTitle,
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,
   getFolderMeta, getAllFolderMeta, setFolderMeta,

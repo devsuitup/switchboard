@@ -53,6 +53,15 @@ test('CANARY: the Claude CLI still publishes per-session state we can read', (t)
     checked++;
     const seen = `(${name}, CLI version ${raw.version || 'unknown'})`;
 
+    if (raw.kind === 'bg') {
+      assert.match(raw.jobId || '', /^[a-f0-9]{8}$/i,
+        `PINNED ASSUMPTION BROKEN: a bg descriptor must name its daemon job ${seen}`);
+    }
+    if (raw.nameSource === 'user') {
+      assert.ok(typeof raw.name === 'string' && raw.name.length > 0,
+        `PINNED ASSUMPTION BROKEN: a user registry rename must carry its display name ${seen}`);
+    }
+
     assert.equal(typeof raw.sessionId, 'string',
       `PINNED ASSUMPTION BROKEN: ~/.claude/sessions/<pid>.json used to carry a string "sessionId" — that field is how cli-session-state.js matches a CLI process to a Switchboard session ${seen}`);
     assert.ok(Number.isInteger(raw.pid),

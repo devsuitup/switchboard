@@ -54,7 +54,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       clearTimeout(job.timer);
       const result = message.result;
       const readOnly = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
-      const stale = job.stale || (!readOnly && state.version !== job.version);
+      const stale = job.stale || state.liveVersion !== job.liveVersion || (!readOnly && state.version !== job.version);
       if (stale && ++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
         job.options = mergeOptions(job.options, pending?.options);
         job.waiters.push(...(pending?.waiters || []));
@@ -80,7 +80,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }
       const state = snapshot();
-      active = { ...job, id: ++nextId, version: state.version, stale: false };
+      active = { ...job, id: ++nextId, version: state.version, liveVersion: state.liveVersion, stale: false };
       if (job.options.reconcile) {
         active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), reconcileTimeoutMs);
       }

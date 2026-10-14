@@ -56,6 +56,8 @@ function build(message) {
   cache.init({
     PROJECTS_DIR: workerData.projectsDir,
     activeSessions: new Map(message.activeSessions || []),
+    getLocalDescriptors: () => message.localDescriptors || [],
+    getLocalJobs: () => new Map(message.localJobs || []),
     getMainWindow: () => null,
     log: console,
     db: adapter,

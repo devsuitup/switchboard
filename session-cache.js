@@ -10,6 +10,7 @@ const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId } = require('./session-continuations');
+const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
 
 /**
  * Session cache module.
@@ -22,10 +23,19 @@ let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, ge
 let isInitialScanComplete, setInitialScanComplete;
 let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
+let getLocalDescriptors = () => [];
+let getLocalJobs = () => new Map();
+let setCachedCustomTitles, getCachedMissingCustomTitle;
+let customTitleBackfill = null;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
+  getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
+  getLocalJobs = ctx.getLocalJobs || (() => new Map());
+  setCachedCustomTitles = ctx.db.setCachedCustomTitles;
+  getCachedMissingCustomTitle = ctx.db.getCachedMissingCustomTitle;
+  customTitleBackfill = null;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   // DB functions
@@ -527,6 +537,47 @@ function backfillEntrypoints() {
   return entrypointBackfill;
 }
 
+// see .ai/contexts/session-cache.md ("Local background sidebar rows")
+function backfillCustomTitles() {
+  if (customTitleBackfill) return customTitleBackfill;
+  if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
+  const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
+  if (!rows.length) return (customTitleBackfill = Promise.resolve());
+  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime,
+    file: resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' }) }));
+  customTitleBackfill = new Promise(resolve => {
+    let worker, settled = false;
+    const finish = ok => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => { worker?.terminate(); finish(false); }, SUBSET_SCAN_TIMEOUT_MS);
+    try {
+      worker = new Worker(path.join(__dirname, 'workers', 'scan-session-titles.js'), { workerData: { files } });
+    } catch (err) {
+      log.warn(`Title backfill failed: ${err.message}`);
+      finish(false);
+      return;
+    }
+    worker.on('message', pairs => {
+      if (settled) return;
+      try {
+        setCachedCustomTitles(pairs);
+        if (pairs.length) notifyRendererProjectsChanged();
+      } catch (err) {
+        log.warn(`Title backfill failed: ${err.message}`);
+        worker.terminate();
+        finish(false);
+      }
+    });
+    worker.on('error', err => { log.warn(`Title backfill failed: ${err.message}`); finish(false); });
+    worker.on('exit', code => finish(code === 0));
+  }).then(ok => { if (!ok) customTitleBackfill = null; });
+  return customTitleBackfill;
+}
+
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function revealIfSdkSession(sessionId) {
   const row = getCachedSession ? getCachedSession(sessionId) : null;
@@ -739,10 +790,21 @@ function buildProjectsFromCache(showArchived) {
     }
   }
 
-  const projects = [];
-  for (const proj of projectMap.values()) {
+  const localDescriptors = [...getLocalDescriptors()];
+  const descriptorIds = new Set(localDescriptors.map(descriptor => descriptor.sessionId.toLowerCase()));
+  for (const [id, session] of activeSessions) {
+    if (session.exited || !session.isAttach || session.host || !session.attachJobId) continue;
+    const sessionId = session.realSessionId || id;
+    if (descriptorIds.has(sessionId.toLowerCase())) continue;
+    localDescriptors.push({ sessionId, kind: 'bg', jobId: session.attachJobId,
+      cwd: session.cwd || session.projectPath, startedAt: session._openedAt });
+    descriptorIds.add(sessionId.toLowerCase());
+  }
+  const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
+    hiddenProjects, metaMap, showArchived, jobs: getLocalJobs(),
+  });
+  for (const proj of projects) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
-    projects.push(proj);
   }
 
   projects.sort((a, b) => {
@@ -1187,6 +1249,7 @@ module.exports = {
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   backfillEntrypoints,
+  backfillCustomTitles,
   revealIfSdkSession,
   notifyRendererProjectsChanged,
   sendStatus,

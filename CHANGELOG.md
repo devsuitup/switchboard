@@ -17,6 +17,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Reading old transcripts no longer marks sessions as Working or makes historical subagents appear active. Transcript writes still update activity, including a newly created transcript's first write and a final write during a burst. (#621)
+- Background sessions appear in the sidebar before their first new turn, show a **bg** marker without opening Agents, and use the name you gave them in Claude Code unless you renamed them in Switchboard. A proven continuation stays on its conversation's row while the background job is live; finished jobs lose their marker even if their process remains open. Job progress avoids unnecessary sidebar reloads, and background updates continue after closing and reopening the macOS window. (#620)
 - Refresh screen holds the temporary resize longer so the running CLI redraws a garbled screen, and the replay of a hidden or reattached tab no longer answers stale terminal queries. (#603)
 - Opening a compacted conversation that is not open now resumes its latest part, not the transcript from before the compaction. When both parts have open tabs, clicking the conversation shows the latest part's tab. (#564)
 - The sidebar project list reloads without blocking the window. (#616)

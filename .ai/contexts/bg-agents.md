@@ -18,7 +18,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
 | `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
-| `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; `bgAgents.stop()` in the window's `closed` handler |
+| `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; renderer unsubscribe on window close, `bgAgents.stop()` on app quit |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
 | `public/dialogs.js` | `showDispatchAgentDialog` |
@@ -36,9 +36,14 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    `control.key` are never touched.
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
-4. No steady-state cost before the view is first opened: the watchers are
-   armed by the first `get-bg-agents`. Closing the view keeps them so the
-   sidebar badge stays current; the window's `closed` handler releases them.
+4. Job watchers start with the app to keep the sidebar cache current. They
+   notify projects only when the job id to state/name projection changes;
+   token/detail/tempo/fan updates do not notify projects. Automatic roster
+   rebuilds require an `onChange` subscriber, first installed by
+   `get-bg-agents`, and stop when the last subscriber leaves. Explicit CLI
+   reconciles still return a fresh roster. Closing the view retains its push
+   subscription; closing the window releases it. Jobs and the projects listener
+   survive macOS window close/activate and are released on app quit.
 5. `jobs/` and the `kind: "bg"` descriptor are undocumented. Failure is
    silence: an unreadable `state.json` keeps the previous value; a CLI that
    fails leaves a file-only roster with `daemonReachable: false`. Canaries:
@@ -85,6 +90,17 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
     The check and CLI invocation are separate: a process can start after the
     check but before the CLI runs. This reduces stale-roster mistakes; it is
     not an atomic lock on the conversation.
+
+## Sidebar membership (#620)
+
+The sidebar's `bg` membership also arrives through the local descriptor-backed
+projects payload (`bgJobId`/`bgSessionId`, #620), independently of opening this
+view. The existing roster set remains a fallback and checks every
+`mergedMemberIds` entry as well as the representative. A proven background
+continuation can therefore badge its conversation row before a new turn is
+indexed. See `session-cache.md`, "Local background sidebar rows", for identity
+and registry-name precedence. This changes the membership marker, not the
+status glyph policy from the indicators audit.
 
 ## Header counters
 
@@ -134,6 +150,11 @@ the "open in Switchboard" reason; `conversationPid` still disables destructive v
 Any descriptor holding a row's session id supplies `conversationPid`, even
 when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
+
+The job watcher starts with the app so the sidebar can read `getCachedJobs`
+without opening Agents or scanning job files on project loads. A finished job
+with a live descriptor or attach PTY gets no sidebar bg marker or synthetic row.
+Sidebar registry names replace launch titles only; a Switchboard rename wins.
 
 `parseDescriptor` retains `bridgeSessionId`. `bridge-session-id.js` strips only
 the `cse_` / `session_` prefixes and preserves the opaque suffix's case. The

@@ -26,6 +26,7 @@ function handler(overrides = {}) {
     parseFolderKey: () => ({ alias: null }),
     populateCacheViaWorker: () => assert.fail('warm cache must not populate'),
     backfillEntrypoints: () => {},
+    backfillCustomTitles: () => {},
     reconcileCacheFromFilesystem: () => assert.fail('sync sweep ran on main'),
     buildProjectsFromCache: () => assert.fail('sync build ran on main'),
     projectsClient: { request: async () => ({ defaultProjects: [], allProjects: [], rows: 0 }) },
@@ -79,4 +80,35 @@ test('boolean and paired replies apply archive policy in the original order', as
   await invoke(null, true);
   await invoke(null, 'both');
   assert.deepEqual(flags, [false, true, false, true]);
+});
+
+test('projects snapshot carries cached background state and attach identity in its version', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const start = source.indexOf('function projectsSnapshot()');
+  const end = source.indexOf('\nconst projectsClient', start);
+  const descriptor = { sessionId: 'head', kind: 'bg', jobId: 'job', name: 'registry', nameSource: 'user' };
+  const job = { state: 'working', name: 'launch' };
+  const context = {
+    activeSessions: new Map([['tab', { isAttach: true, attachJobId: 'job', realSessionId: 'head', cwd: '/fixture', host: null }]]),
+    cliSessionState: { getSidebarDescriptors: () => [descriptor] },
+    bgAgents: { getCachedJobs: () => new Map([['job', job]]) },
+    sessionCache: { getRemoteRoots: () => new Map() },
+    getProjectsRevision: () => 'db-version',
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  const first = context.projectsSnapshot();
+  assert.equal(first.localDescriptors[0].name, 'registry');
+  assert.equal(first.localJobs[0][1].state, 'working');
+  const attach = first.activeSessions[0][1];
+  for (const field of ['isAttach', 'attachJobId', 'realSessionId', 'cwd', 'host']) {
+    assert.equal(attach[field], context.activeSessions.get('tab')[field]);
+  }
+  descriptor.name = 'renamed';
+  const renamed = context.projectsSnapshot();
+  assert.notEqual(renamed.version, first.version);
+  assert.notEqual(renamed.liveVersion, first.liveVersion);
+  job.state = 'completed';
+  const completed = context.projectsSnapshot();
+  assert.notEqual(completed.version, renamed.version);
+  assert.notEqual(completed.liveVersion, renamed.liveVersion);
 });

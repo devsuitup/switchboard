@@ -49,7 +49,7 @@ function makeHandler(mocks) {
     'populateCacheViaWorker',
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
     'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
-    'backfillEntrypoints', 'normalizeHosts', 'parseFolderKey',
+    'backfillEntrypoints', 'backfillCustomTitles', 'normalizeHosts', 'parseFolderKey',
     'projectsClient', 'TRACE', 'projectsReconciledAt',
     body
   );
@@ -66,7 +66,7 @@ function makeHandler(mocks) {
     mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
     mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
     annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), mocks.setSetting || (() => {}), false,
-    mocks.backfillEntrypoints || (() => {}), normalizeHosts, parseFolderKey,
+    mocks.backfillEntrypoints || (() => {}), mocks.backfillCustomTitles || (() => {}), normalizeHosts, parseFolderKey,
     { request: options => {
       if (options.reconcile) mocks.reconcileCacheFromFilesystem();
       return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
@@ -204,7 +204,7 @@ test('get-projects on a partial cache (interrupted first scan: rows present, mar
 });
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-test('get-projects starts the entrypoint backfill on a cold and on a warm cache, before building the list', async () => {
+test('get-projects starts entrypoint and custom-title backfills on cold and warm caches before building the list', async () => {
   for (const warm of [false, true]) {
     const calls = [];
     const handler = makeHandler({
@@ -214,9 +214,10 @@ test('get-projects starts the entrypoint backfill on a cold and on a warm cache,
       populateCacheViaWorker: () => {},
       reconcileCacheFromFilesystem: () => {},
       backfillEntrypoints: () => { calls.push('backfill'); },
+      backfillCustomTitles: () => { calls.push('titles'); return Promise.resolve(); },
       buildProjectsFromCache: () => { calls.push('build'); return []; },
     });
     await handler();
-    assert.deepEqual(calls, ['backfill', 'build'], warm ? 'warm cache' : 'cold cache');
+    assert.deepEqual(calls, ['backfill', 'titles', 'build'], warm ? 'warm cache' : 'cold cache');
   }
 });

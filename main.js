@@ -161,7 +161,7 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
-  isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints,
+  isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles, getCachedMissingCustomTitle,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
   DB_PATH, getProjectsRevision,
@@ -441,7 +441,7 @@ function createWindow() {
     }
     changesWatchers.closeAll();
     closeAllFileWatchers();
-    bgAgents.stop();
+    unsubscribeBgAgents();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {
@@ -488,17 +488,19 @@ const sessionCache = require('./session-cache');
 sessionCache.init({
   PROJECTS_DIR,
   activeSessions,
+  getLocalDescriptors: () => cliSessionState.getSidebarDescriptors(),
+  getLocalJobs: () => bgAgents.getCachedJobs(),
   getMainWindow: () => mainWindow,
   log,
   db: {
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
-    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex,
+    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex, setCachedCustomTitles, getCachedMissingCustomTitle,
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder,
-        buildProjectsFromCache, backfillEntrypoints, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+        buildProjectsFromCache, backfillEntrypoints, backfillCustomTitles, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const { createProjectsWorkerClient } = require('./projects-worker-client');
@@ -508,10 +510,17 @@ function projectsSnapshot() {
     activeSessions: [...activeSessions].map(([id, s]) => [id, {
       exited: !!s.exited, isPlainTerminal: !!s.isPlainTerminal, projectPath: s.projectPath,
       _openedAt: s._openedAt, panelFor: s.panelFor,
+      isAttach: !!s.isAttach, attachJobId: s.attachJobId, realSessionId: s.realSessionId, cwd: s.cwd, host: s.host,
     }]),
     remoteRoots: [...sessionCache.getRemoteRoots()],
+    localDescriptors: cliSessionState.getSidebarDescriptors().map(d => ({
+      sessionId: d.sessionId, kind: d.kind, jobId: d.jobId, cwd: d.cwd,
+      name: d.name, nameSource: d.nameSource, startedAt: d.startedAt,
+    })),
+    localJobs: [...bgAgents.getCachedJobs()].map(([id, job]) => [id, { state: job.state, name: job.name }]),
   };
-  return { ...state, version: getProjectsRevision() + JSON.stringify(state) };
+  const liveVersion = JSON.stringify(state);
+  return { ...state, liveVersion, version: getProjectsRevision() + liveVersion };
 }
 const projectsClient = createProjectsWorkerClient({
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
@@ -1267,6 +1276,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
 
     if (needsPopulate) populateCacheViaWorker();
     backfillEntrypoints();
+    backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
     const assemble = (projects, archived) => annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(projects), archived, { getSetting, setSetting }));
     const reply = showArchived === 'both'
@@ -3066,6 +3076,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   };
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
+  if (isAttach) notifyRendererProjectsChanged();
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
   // see .ai/contexts/cli-session-state.md
@@ -3348,8 +3359,9 @@ bgAgents.init({
     return false;
   },
 });
-require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
+const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
+bgAgents.onJobsChanged(notifyRendererProjectsChanged);
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
   getMergedMemberIds: id => getAllCached()
@@ -3514,6 +3526,7 @@ if (!gotSingleInstanceLock) {
     remoteIndexer.start();
     syncRemoteWatchers();
     cliSessionState.ensureWatching();
+    bgAgents.start();
     // Remove IDE lock files left behind by a crashed instance whose PID was
     // reused (the function only unlinks locks matching our own pid).
     cleanStaleLockFiles(log);
@@ -3706,6 +3719,7 @@ app.on('before-quit', (event) => {
     projectsWatcher = null;
   }
   cliSessionState.stop();
+  bgAgents.stop();
   // Stops the timer and SIGKILLs any ssh/scp still in flight.
   remoteIndexer.dispose();
   remoteWatcher.stopAll();

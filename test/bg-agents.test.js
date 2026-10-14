@@ -71,6 +71,113 @@ function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attache
 
 test.afterEach(() => bgAgents.stop());
 
+test('job and descriptor churn keeps the job cache current without rebuilding an unsubscribed roster', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working', detail: 'before' });
+    const sessionState = fakeSessionState();
+    let reads = 0;
+    sessionState.readAllDescriptors = () => { reads++; return []; };
+    boot(dir, { sessionState });
+    require('../bg-agents-ipc').init({ ipcMain: { handle() {} }, bgAgents, getMainWindow: () => null, log: silentLog });
+    const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    const projectsListener = mainSource.match(/bgAgents\.on\w+\(notifyRendererProjectsChanged\);/);
+    assert.ok(projectsListener);
+    require('node:vm').runInNewContext(projectsListener[0], { bgAgents, notifyRendererProjectsChanged() {} });
+    bgAgents.start();
+    writeJob(dir, 'aaaaaaaa', { state: 'blocked', detail: 'after' });
+    sessionState.fire();
+    await waitFor(() => bgAgents.getCachedJobs().get('aaaaaaaa')?.detail === 'after');
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(reads, 0, 'no roster descriptor scan without an Agents subscriber');
+    assert.deepEqual(bgAgents.getSnapshot().roster, []);
+    const unsubscribe = bgAgents.onChange(() => {});
+    sessionState.fire();
+    await waitFor(() => reads > 0);
+    unsubscribe();
+    const before = reads;
+    writeJob(dir, 'aaaaaaaa', { state: 'working', detail: 'unsubscribed' });
+    sessionState.fire();
+    await waitFor(() => bgAgents.getCachedJobs().get('aaaaaaaa')?.detail === 'unsubscribed');
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(reads, before, 'removing the last subscriber suspends roster scans again');
+  } finally { rmTmp(dir); }
+});
+
+test('projects listeners receive only coalesced job state/name membership changes', async () => {
+  const dir = mkTmp();
+  try {
+    const state = { state: 'working', respawnFlags: ['--name', 'launch'], detail: 'before', tokens: 1 };
+    writeJob(dir, 'aaaaaaaa', state);
+    const sessionState = fakeSessionState();
+    let reads = 0;
+    sessionState.readAllDescriptors = () => { reads++; return []; };
+    boot(dir, { sessionState });
+    let notifications = 0;
+    const unsubscribe = bgAgents.onJobsChanged(() => { notifications++; });
+    bgAgents.start();
+    await waitFor(() => notifications === 1);
+    notifications = 0;
+    writeJob(dir, 'aaaaaaaa', { ...state, detail: 'churn', tokens: 99, tempo: 'fast', fan: 4 });
+    sessionState.fire();
+    await waitFor(() => bgAgents.getCachedJobs().get('aaaaaaaa')?.tokens === 99);
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(notifications, 0, 'detail/tokens/tempo/fan and descriptor events do not change the job projection');
+    writeJob(dir, 'aaaaaaaa', { ...state, state: 'blocked', respawnFlags: ['--name', 'renamed'] });
+    await waitFor(() => notifications === 1);
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(notifications, 1, 'one notification for a state/name change');
+    writeJob(dir, 'aaaaaaaa', { ...state, state: 'done', respawnFlags: ['--name', 'renamed'] });
+    await waitFor(() => notifications === 2);
+    writeJob(dir, 'aaaaaaaa', { ...state, state: 'done', respawnFlags: ['--name', 'renamed again'] });
+    await waitFor(() => notifications === 3);
+    assert.equal(reads, 0, 'projects listeners do not subscribe to roster scans');
+    fs.rmSync(path.join(dir, 'aaaaaaaa'), { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await waitFor(() => notifications === 4);
+    assert.equal(bgAgents.getCachedJobs().size, 0);
+    unsubscribe();
+    writeJob(dir, 'bbbbbbbb', state);
+    await waitFor(() => bgAgents.getCachedJobs().has('bbbbbbbb'));
+    await delay(bgAgents.FLUSH_MS * 2);
+    assert.equal(notifications, 4);
+  } finally { rmTmp(dir); }
+});
+
+test('macOS window close and activate preserve sidebar job watching without an Agents request', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working' });
+    boot(dir);
+    let notifications = 0;
+    bgAgents.onChange(() => { notifications++; });
+    bgAgents.start();
+    await waitFor(() => notifications === 1);
+    const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    const vm = require('node:vm');
+    const context = {
+      mainWindow: { on: (_name, callback) => { context.closed = callback; } },
+      activeSessions: new Map(), killPty: () => assert.fail('no PTY to kill'),
+      changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, subagentWatchers: new Map(),
+      bgAgents, unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },
+      createWindow: () => { context.mainWindow = { reopened: true }; },
+      app: { on: (_name, callback) => { context.activate = callback; } },
+    };
+    const closedStart = source.indexOf("  mainWindow.on('closed', () => {");
+    const closedEnd = source.indexOf('\n  });', closedStart) + '\n  });'.length;
+    vm.runInNewContext(source.slice(closedStart, closedEnd), context);
+    const activateStart = source.indexOf("    app.on('activate', () => {");
+    const activateEnd = source.indexOf('\n    });', activateStart) + '\n    });'.length;
+    vm.runInNewContext(source.slice(activateStart, activateEnd), context);
+    context.closed();
+    assert.equal(bgAgents.getCachedJobs().get('aaaaaaaa')?.state, 'working', 'window close keeps the cache');
+    context.activate();
+    assert.equal(context.mainWindow.reopened, true);
+    writeJob(dir, 'aaaaaaaa', { state: 'done' });
+    await waitFor(() => notifications === 2);
+    assert.equal(bgAgents.getCachedJobs().get('aaaaaaaa').state, 'done');
+  } finally { rmTmp(dir); }
+});
+
 test('reconcile runs `claude agents --json --all`, merges the job files, and reports the daemon reachable', async () => {
   const dir = mkTmp();
   try {

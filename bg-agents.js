@@ -45,6 +45,9 @@ let roster = [];
 let flushTimer = null;
 let unsubscribeDescriptors = null;
 const listeners = new Set();
+const jobsListeners = new Set();
+let jobsFlushTimer = null;
+let jobsProjection = new Map();
 
 function init(ctx) {
   stop();
@@ -62,11 +65,42 @@ function init(ctx) {
 
 function onChange(listener) {
   listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  scheduleRebuild();
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size && flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  };
+}
+
+function onJobsChanged(listener) {
+  jobsListeners.add(listener);
+  return () => { jobsListeners.delete(listener); };
+}
+
+function scheduleJobsChanged() {
+  if (!started || !jobsListeners.size || jobsFlushTimer) return;
+  jobsFlushTimer = setTimeout(() => {
+    jobsFlushTimer = null;
+    const next = new Map([...jobs].map(([id, job]) => [id, { state: job.state, name: job.name }]));
+    const changed = next.size !== jobsProjection.size || [...next].some(([id, job]) => {
+      const previous = jobsProjection.get(id);
+      return !previous || previous.state !== job.state || previous.name !== job.name;
+    });
+    jobsProjection = next;
+    if (!changed) return;
+    for (const listener of jobsListeners) {
+      try { listener(); } catch (err) { log.warn(`[bg-agents] jobs listener failed: ${err.message}`); }
+    }
+  }, FLUSH_MS);
+  if (typeof jobsFlushTimer.unref === 'function') jobsFlushTimer.unref();
 }
 
 function getSnapshot() {
   return { roster, daemonReachable };
+}
+
+function getCachedJobs() {
+  return new Map(jobs);
 }
 
 function emit() {
@@ -135,7 +169,7 @@ function rebuild({ onlyIfChanged = false } = {}) {
 }
 
 function scheduleRebuild() {
-  if (!started || flushTimer) return;
+  if (!started || !listeners.size || flushTimer) return;
   flushTimer = setTimeout(() => { flushTimer = null; rebuild({ onlyIfChanged: true }); }, FLUSH_MS);
   if (typeof flushTimer.unref === 'function') flushTimer.unref();
 }
@@ -144,7 +178,7 @@ function readJob(id) {
   let text;
   try { text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8'); } catch { return; }
   const job = parseJobState(text);
-  if (job) jobs.set(id, job);
+  if (job) { jobs.set(id, job); scheduleJobsChanged(); }
   else log.debug(`[bg-agents] ${id}/state.json unreadable, keeping the previous value`);
 }
 
@@ -177,6 +211,7 @@ function syncJobWatchers() {
     jobs.delete(id);
   }
   for (const id of ids) watchJob(id);
+  scheduleJobsChanged();
   scheduleRebuild();
 }
 
@@ -206,8 +241,11 @@ function stop() {
   jobWatchers.clear();
   jobs.clear();
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (jobsFlushTimer) { clearTimeout(jobsFlushTimer); jobsFlushTimer = null; }
   if (unsubscribeDescriptors) { unsubscribeDescriptors(); unsubscribeDescriptors = null; }
   listeners.clear();
+  jobsListeners.clear();
+  jobsProjection.clear();
   cliList = null;
   daemonReachable = false;
   roster = [];
@@ -346,6 +384,6 @@ function liveJobCheck(sessionId) {
 }
 
 module.exports = {
-  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
+  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

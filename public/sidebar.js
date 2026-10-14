@@ -1866,7 +1866,8 @@ function buildSessionItem(session) {
   }
 
   // see .ai/contexts/bg-agents.md ("The sidebar")
-  if (typeof bgAgentSessionIds !== 'undefined' && bgAgentSessionIds.has(String(session.sessionId).toLowerCase())) {
+  if (session.bgJobId || (typeof bgAgentSessionIds !== 'undefined'
+    && rowSessionIds(session).some(id => bgAgentSessionIds.has(String(id).toLowerCase())))) {
     const badge = document.createElement('span');
     badge.className = 'bg-badge';
     badge.title = 'Background session run by the claude daemon — click to attach';

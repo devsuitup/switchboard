@@ -438,6 +438,16 @@ Two rules share that snapshot and must not be confused:
 
 ## Descriptor hooks for the agents view
 
+`getSidebarDescriptors()` (#620) returns the watcher's cached live descriptor
+display fields, with the existing throttled PID re-probe. `parseDescriptor`
+retains `nameSource`; seed and file flush retain descriptor kind, job id,
+session id, cwd, name/source and start time alongside status. A change to
+name/source, kind, job id or cwd notifies `onStatusesChanged`, so projects reload
+after a registry-only rename even when status is unchanged. Timestamp-only
+updates still do not notify projects. `getStatus` keeps its two-field result
+and the idle/rescan callback still runs only on the original status transition.
+The sidebar projection does not use a descriptor as proof of PTY ownership.
+
 The Agents view (`.ai/contexts/bg-agents.md`) reads the same
 `~/.claude/sessions/<pid>.json` files through three additions:
 
