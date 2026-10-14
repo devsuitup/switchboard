@@ -132,7 +132,7 @@ test('T9: failed text or Enter writes never convert', async () => {
 test('T10: a dialog that stays open after submission asks for terminal confirmation without another Enter', async () => {
   const h = setup();
   h.deps.timeoutMs = 5000;
-  h.deps.readDescriptors = () => h.deps.now() >= 2000 ? [h.bg] : [];
+  h.deps.readDescriptors = () => h.deps.now() >= 2000 ? [h.bg] : [{ sessionId: 'old', kind: 'interactive', status: 'waiting' }];
   h.deps.getStatus = () => h.deps.now() >= 400 ? 'waiting' : 'idle';
   assert.equal((await sendToBackground('old', h.deps)).ok, true);
   assert.equal(h.notices.length, 1);
@@ -236,15 +236,26 @@ test('T18b: a snapshot that reads on the retry proceeds', async () => {
   assert.equal((await sendToBackground('old', h.deps)).ok, true);
 });
 
-test('T19: the measured transient waiting after Enter shows no confirmation notice', async () => {
+test('T19: a deleted descriptor with retained waiting status shows no confirmation notice before proof', async () => {
   const h = setup();
-  h.deps.getStatus = () => {
-    const now = h.deps.now();
-    if (now <= 300) return 'idle';
-    return now < 500 ? 'waiting' : null;
-  };
+  h.deps.timeoutMs = 5000;
+  h.deps.getStatus = () => h.deps.now() <= 300 ? 'idle' : 'waiting';
+  h.deps.readDescriptors = () => h.deps.now() >= 2000 ? [h.bg]
+    : h.deps.now() < 600 ? [{ sessionId: 'old', kind: 'interactive', status: 'waiting' }] : [];
   assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.equal(h.deps.now(), 2000);
   assert.deepEqual(h.notices, []);
+});
+
+test('T19b: an original waiting descriptor past the notice window shows one confirmation notice', async () => {
+  const h = setup();
+  h.deps.timeoutMs = 2000;
+  h.deps.getStatus = () => h.deps.now() <= 300 ? 'idle' : 'waiting';
+  h.deps.readDescriptors = () => [{ sessionId: 'OLD', kind: 'interactive', status: 'waiting' }];
+  assert.equal((await sendToBackground('old', h.deps)).code, 'timeout');
+  assert.equal(h.notices.length, 1);
+  assert.match(h.notices[0], /confirm.*terminal/i);
+  assert.deepEqual(h.writes, ['/bg', '\r']);
 });
 
 test('T20: a busy session is refused before any write', async () => {
@@ -309,3 +320,36 @@ test('T26: after success the old CLI is stopped if it has not exited within the 
     assert.deepEqual(h.kills, exitsInTime ? [] : [h.session]);
   }
 });
+
+for (const [name, input] of [['Esc', '\x1b'], ['Esc Esc', '\x1b\x1b'], ['Ctrl+U after hello', 'hello\x15']]) {
+  test(`T27: an empty composer after ${name} submits /bg and confirms the handoff`, async () => {
+    const h = setup();
+    noteUserInput(h.session.composerState, input, 7);
+    assert.equal(h.session.composerState.pending, 0);
+    assert.equal((await sendToBackground('old', h.deps)).ok, true);
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+    assert.equal(h.session.composerState.pending, 0);
+  });
+}
+
+for (const failure of ['throw', 'false']) {
+  test(`T28: a ${failure} text write restores the composer and allows a retry`, async () => {
+    const h = setup();
+    noteUserInput(h.session.composerState, '\x1b', 7);
+    const composer = h.session.composerState;
+    const before = { ...composer };
+    h.deps.write = () => {
+      if (failure === 'throw') throw new Error('PTY write failed');
+      return false;
+    };
+    const result = await sendToBackground('old', h.deps);
+    assert.equal(result.code, failure === 'throw' ? 'failed' : 'write-failed');
+    assert.equal(h.session.composerState, composer);
+    assert.deepEqual(composer, before);
+    assert.equal(h.session.backgrounding, false);
+    assert.equal(h.outputAttached(), false);
+    h.deps.write = (_, text) => { h.writes.push(text); return true; };
+    assert.equal((await sendToBackground('old', h.deps)).ok, true);
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+  });
+}

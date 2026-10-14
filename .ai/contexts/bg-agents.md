@@ -471,7 +471,11 @@ recovery Enter is sent.
 
 The written `/bg` is recorded in `session.composerState` through
 `noteUserInput` before the write, and the Enter after it, as
-`terminal-input.js` does for typed keys. A withheld Enter therefore leaves the
+`terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
+before noting the plain `/bg` write, so a previous Esc (including Esc Esc)
+cannot consume its slash as Alt+/. Other partial sequences keep their ordinary
+parser handling. If that text write throws or returns false, the previous
+composer fields are restored on the same object. A withheld Enter leaves the
 model non-empty: a trigger queued behind the handoff refuses through its
 politeness check, and a retry is refused as unsent text instead of typing
 `/bg/bg`. The gap check compares the model's text to `/bg` and its
@@ -500,8 +504,12 @@ earlier hand-typed `/bg` prove this one.
 
 The `waiting` / `dialog open` transient measured at +65 ms is part of the
 success path. The confirm notice ("Claude asks you to confirm in the
-terminal") is shown only when `waiting` persists for 1 s
-(`BG_CONFIRM_NOTICE_MS`) without proof.
+terminal") is shown only when the original descriptor still exists with
+`status: "waiting"` for 1 s (`BG_CONFIRM_NOTICE_MS`) without proof. The fresh
+descriptor scan used for handoff proof also supplies this signal. The cached
+status can retain `waiting` after deletion while the original pid is alive
+(`retainAfterMiss`, with liveness probes every 5 s); deletion resets the notice
+window even if that cached status remains `waiting` until after proof.
 
 The wait lasts at most two minutes while the original PTY runs, shortened to
 15 seconds after an exit is observed. `wireSessionPty` marks the physical exit

@@ -80,9 +80,16 @@ async function sendToBackground(sessionId, deps) {
     if (recheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: recheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
     const composer = session.composerState;
-    if (composer) noteUserInput(composer, '/bg', deps.now());
+    const previousComposer = composer && { ...composer };
+    if (composer) {
+      if (composer.partial === '\x1b') composer.partial = '';
+      noteUserInput(composer, '/bg', deps.now());
+    }
     const inputAt = composer?.lastInputAt;
-    if (!deps.write(session, '/bg')) return { ok: false, code: 'write-failed', error: 'Could not write to the terminal. Try again when it is running.' };
+    let written = false;
+    try { written = deps.write(session, '/bg'); }
+    finally { if (!written && composer) Object.assign(composer, previousComposer); }
+    if (!written) return { ok: false, code: 'write-failed', error: 'Could not write to the terminal. Try again when it is running.' };
     await deps.delay(300);
     const status = deps.getStatus(oldId);
     if (!bound() || session.exited || status === 'waiting' || status === 'shell' || status === 'busy' || !status || (composer && (composer.text !== '/bg' || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
@@ -100,15 +107,18 @@ async function sendToBackground(sessionId, deps) {
       const reason = cancellationIn(output);
       if (reason) return { ok: false, code: 'cancelled', error: 'Claude cancelled it: ' + reason };
       const ids = (await deps.readContinuationIds(oldId, session) || []).filter(id => id.toLowerCase() !== oldId.toLowerCase() && !previous.has(id.toLowerCase()));
+      let waiting = false;
       if (deps.now() < Math.min(deadline, exitDeadline)) {
-        const job = findHandoff(deps.readDescriptors(), ids);
+        const descriptors = deps.readDescriptors();
+        const job = findHandoff(descriptors, ids);
         if (job) {
           session.backgrounded = true;
           deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
           return { ok: true, oldSessionId: sessionId, jobId: job.jobId, sessionId: job.sessionId, cwd: job.cwd || session.cwd };
         }
+        waiting = descriptors.some(d => d.sessionId.toLowerCase() === oldId.toLowerCase() && d.status === 'waiting');
       }
-      if (deps.getStatus(oldId) !== 'waiting') waitingSince = null;
+      if (!waiting) waitingSince = null;
       else if (waitingSince === null) waitingSince = deps.now();
       if (!notified && waitingSince !== null && deps.now() - waitingSince >= BG_CONFIRM_NOTICE_MS) {
         notified = true;
