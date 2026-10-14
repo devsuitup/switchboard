@@ -8,6 +8,7 @@ const path = require('node:path');
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_IPC_MIN_MS = 1000;
 const FIRST_WRITE_MTIME_ALLOWANCE_MS = 2000;
+const DIRTY_RECHECK_DELAY_MS = 25;
 const DEFAULT_MAX_FILES = 4096;
 const DEFAULT_BASELINE_TTL_MS = 5 * 60 * 1000;
 
@@ -25,7 +26,7 @@ function createLocalTranscriptTracker(opts = {}) {
   const ipcMinMs = opts.ipcMinMs || DEFAULT_IPC_MIN_MS;
   const now = opts.now || Date.now;
   const trackerCreatedAt = now();
-  let firstWriteFloor = trackerCreatedAt - FIRST_WRITE_MTIME_ALLOWANCE_MS;
+  const firstWriteFloor = trackerCreatedAt - FIRST_WRITE_MTIME_ALLOWANCE_MS;
   const hasPty = typeof opts.hasPty === 'function' ? opts.hasPty : () => false;
   const files = opts.fs || fs.promises;
   const onActivity = opts.onActivity || (() => {});
@@ -36,8 +37,10 @@ function createLocalTranscriptTracker(opts = {}) {
 
   const ipcAt = new Map();
   const baselines = new Map();
+  const forgotten = new Map();
   const inFlight = new Map();
   const pending = new Map();
+  const rechecks = new Map();
   let disposed = false;
 
   function cancelPending(file) {
@@ -50,8 +53,14 @@ function createLocalTranscriptTracker(opts = {}) {
 
   function forgetFile(file) {
     const previous = baselines.get(file);
-    if (previous) firstWriteFloor = Math.max(firstWriteFloor, now() - FIRST_WRITE_MTIME_ALLOWANCE_MS);
+    if (previous) {
+      forgotten.delete(file);
+      forgotten.set(file, { mtimeMs: previous.mtimeMs, floor: now() - FIRST_WRITE_MTIME_ALLOWANCE_MS });
+      while (forgotten.size > maxFiles) forgotten.delete(forgotten.keys().next().value);
+    }
     cancelPending(file);
+    if (rechecks.has(file)) cancel(rechecks.get(file));
+    rechecks.delete(file);
     baselines.delete(file);
     if (previous && ipcAt.get(previous.key)?.file === file) ipcAt.delete(previous.key);
   }
@@ -59,11 +68,13 @@ function createLocalTranscriptTracker(opts = {}) {
   function prune() {
     const t = now();
     for (const [file, baseline] of baselines) {
-      if (t - baseline.seenAt > baselineTtlMs) forgetFile(file);
+      if (t - baseline.seenAt <= baselineTtlMs) break;
+      forgetFile(file);
     }
   }
 
   function saveBaseline(file, baseline) {
+    forgotten.delete(file);
     baselines.delete(file);
     baselines.set(file, baseline);
     while (baselines.size > maxFiles) forgetFile(baselines.keys().next().value);
@@ -76,14 +87,19 @@ function createLocalTranscriptTracker(opts = {}) {
       const previous = pending.get(key);
       if (previous) cancel(previous.timer);
       const entry = { file, parts, payload };
-      entry.timer = schedule(async () => {
+      const deliver = async () => {
         await record(entry.parts);
         if (disposed || pending.get(key) !== entry) return;
+        if (rechecks.has(file)) {
+          entry.timer = schedule(deliver, DIRTY_RECHECK_DELAY_MS);
+          return;
+        }
         pending.delete(key);
         if (!baselines.has(file) || hasPty(payload.sessionId || payload.parentSessionId)) return;
         ipcAt.set(key, { at: now(), file });
         onActivity(entry.payload);
-      }, ipcMinMs - (t - last));
+      };
+      entry.timer = schedule(deliver, ipcMinMs - (t - last));
       pending.set(key, entry);
       return null;
     }
@@ -101,6 +117,7 @@ function createLocalTranscriptTracker(opts = {}) {
 
   async function verify(file, work) {
     const previous = baselines.get(file);
+    const tombstone = forgotten.get(file);
     let handle;
     try {
       handle = await files.open(file, 'r');
@@ -117,7 +134,8 @@ function createLocalTranscriptTracker(opts = {}) {
       }
       saveBaseline(file, { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs,
         size: stat.size, mtimeMs: stat.mtimeMs, key: work.key, seenAt: now() });
-      if (!previous) return stat.size > 0 && stat.mtimeMs >= firstWriteFloor;
+      if (!previous) return stat.size > 0 && stat.mtimeMs >= firstWriteFloor &&
+        (!tombstone || (stat.mtimeMs > tombstone.mtimeMs && stat.mtimeMs >= tombstone.floor));
       if (!sameIdentity(previous, stat) || stat.size < previous.size || stat.mtimeMs < previous.mtimeMs) {
         cancelPending(file);
         return false;
@@ -162,6 +180,8 @@ function createLocalTranscriptTracker(opts = {}) {
       running.dirty = true;
       return running.promise;
     }
+    if (rechecks.has(file)) cancel(rechecks.get(file));
+    rechecks.delete(file);
     const sessionId = sessionIdFromWatchParts(parts);
     const attribution = sessionId ? null : subagentParentFromParts(parts);
     const key = sessionId || JSON.stringify(['sub', attribution.parentSessionId, attribution.agentId]);
@@ -176,7 +196,16 @@ function createLocalTranscriptTracker(opts = {}) {
         attempts++;
       } while (work.dirty && !disposed && attempts < 2);
       return result;
-    })().finally(() => inFlight.delete(file));
+    })().finally(() => {
+      inFlight.delete(file);
+      if (work.dirty && !disposed && !rechecks.has(file)) {
+        const timer = schedule(async () => {
+          rechecks.delete(file);
+          await record(parts);
+        }, DIRTY_RECHECK_DELAY_MS);
+        rechecks.set(file, timer);
+      }
+    });
     inFlight.set(file, work);
     return work.promise;
   }
@@ -189,8 +218,11 @@ function createLocalTranscriptTracker(opts = {}) {
   function dispose() {
     disposed = true;
     for (const entry of pending.values()) cancel(entry.timer);
+    for (const timer of rechecks.values()) cancel(timer);
     pending.clear();
+    rechecks.clear();
     baselines.clear();
+    forgotten.clear();
     ipcAt.clear();
   }
 

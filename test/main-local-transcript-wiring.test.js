@@ -80,6 +80,9 @@ test('injected projects-watch notifications verify real files while indexing sta
   const sent = [];
   const refreshed = [];
   const timers = [];
+  const activityTimers = new Set();
+  let at = Date.now();
+  let racing = 0;
   let callback;
   const context = vm.createContext({
     PROJECTS_DIR: root, path, console, projectsWatcher: null,
@@ -93,7 +96,18 @@ test('injected projects-watch notifications verify real files while indexing sta
   let tracker;
   context.sessionHasPty = () => false;
   context.createLocalTranscriptTracker = opts => {
-    tracker = createLocalTranscriptTracker({ ...opts, projectsDir: root });
+    tracker = createLocalTranscriptTracker({ ...opts, projectsDir: root, now: () => at,
+      setTimeout: (fn, ms) => { const timer = { fn, at: at + ms }; activityTimers.add(timer); return timer; },
+      clearTimeout: timer => activityTimers.delete(timer),
+      fs: { ...fs.promises, stat: async transcript => {
+        if (racing > 0 && transcript === childFile) {
+          racing--;
+          fs.appendFileSync(transcript, 'racing child append\n');
+          callback('change', childName);
+        }
+        return fs.promises.stat(transcript);
+      } },
+    });
     return tracker;
   };
   vm.runInContext(declaration + '\n' + extractFunction(mainSrc, 'startProjectsWatcher') + '\nstartProjectsWatcher();', context);
@@ -143,6 +157,22 @@ test('injected projects-watch notifications verify real files while indexing sta
   assert.equal(sent[2][1].sessionId, freshId);
   assert.equal(sent[3][1].parentSessionId, freshId);
   assert.equal(sent[3][1].agentId, '8');
+  at += 1000;
+  fs.appendFileSync(childFile, 'first burst append\n');
+  racing = 2;
+  callback('change', childName);
+  await tracker.record(childParts);
+  assert.equal(sent.length, 4, 'unstable child evidence must not reach IPC');
+  at += 50;
+  for (const timer of [...activityTimers]) {
+    if (timer.at > at) continue;
+    activityTimers.delete(timer);
+    await timer.fn();
+  }
+  assert.equal(sent.length, 5, 'the settled burst must reach IPC without a later watch notification');
+  assert.equal(sent[4][0], 'session-transcript-activity');
+  assert.equal(sent[4][1].agentId, '7');
+  assert.equal(activityTimers.size, 0);
 });
 
 test('remote watcher wiring sends leading and trailing activity once and guards a destroyed window', t => {

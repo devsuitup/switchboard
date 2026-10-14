@@ -154,8 +154,12 @@ metadata verification, without a content read. Monotonic writes racing the
 check retain the baseline and pending delivery and request a dirty retry.
 Replacement, truncation and open/stat failures invalidate activity without
 a spawn or completion. Since #622, each `record()` performs at most two
-verification attempts; continuous appends retain the previous evidence for
-the next notification rather than keeping one call alive indefinitely.
+verification attempts. If the file is still dirty, one deferred recheck per
+file runs through the injected scheduler after `DIRTY_RECHECK_DELAY_MS`
+(25 ms). A notification arriving first replaces that scheduled check.
+Continuous appends yield between calls; a settled burst is checked even
+without a later notification. Trailing delivery waits for dirty verification
+to settle, so its deferred recheck cannot duplicate that delivery.
 The final validated child update within its own throttle window is delivered
 after reverification. Distinct children have distinct throttle keys. See
 `.ai/contexts/session-state.md`, "Verified watch notifications", for the
@@ -251,18 +255,23 @@ The local tracker retains at most 4096 per-file baselines (`maxFiles`), in
 least-recently-observed order, and expires observations after five idle
 minutes (`baselineTtlMs`). Pruning runs on `record()` and `stats()`; a missing
 or unreadable transcript is forgotten when verification fails. Eviction and
-errors release the file's throttle entry and cancel its pending delivery;
+errors release the file's throttle entry and cancel its pending delivery and
+deferred check. Pruning stops at the first unexpired observation;
 `dispose()` clears all retained state and timers. Capacity eviction is global,
 not a per-parent limit on the number of children.
 
-After forgetting a baseline, the first-write mtime floor advances to the
-eviction time minus the existing 2 s resolution allowance. An older file
-rebaselines quietly, even if it was written after tracker startup. This is a
-conservative fallback: a first notification delayed beyond that floor may
-also rebaseline quietly; subsequent verified growth remains activity. Files
-still retained keep their previous metadata comparison. Each identity has
-at most one pending payload and timer; alternate transcript layouts for the
-same `(parent, agent)` share the identity.
+The first-write mtime floor stays at tracker creation minus the 2 s resolution
+allowance, including for an unseen file whose notification arrives after
+another baseline expires or fails verification. Forgotten files have separate
+tombstones containing their last verified write mtime and a floor at forgetting
+time minus that allowance. Their first re-observation emits only if its mtime
+advances past the tombstone and meets both floors; otherwise it rebaselines
+quietly. Subsequent verified growth remains activity. Tombstones are removed
+when a baseline is saved and capped at `maxFiles` in forgetting order. After
+that cap evicts a tombstone, the file follows the ordinary first-sighting
+rule again; this bounded history cannot suppress every old write forever.
+Each identity has at most one pending payload and delivery timer; alternate
+transcript layouts for the same `(parent, agent)` share the identity.
 
 The remote tracker retains at most 4096 identities (`maxEntries`), also in
 least-recently-observed order, and prunes idle state after `decayMs` (20 s by
@@ -275,11 +284,18 @@ in either tracker; retained identities never overwrite another child's
 payload. No completion channel is throttled here, and no lifecycle detection
 or full-sidebar refresh was added.
 
+With the production 1 s `ipcMinMs`, activity delivery is bounded by two
+messages/s per identity (including both endpoints of a one-second interval).
+Different children retain independent delivery budgets, so aggregate traffic
+can grow with the number of identities. A cross-identity cap or per-parent
+batching is a follow-up beyond #622's scope.
+
 Coverage: `test/local-transcript-activity.test.js` and
 `test/remote-activity.test.js` pin A/B/C delivery, identity independence,
 trailing updates, cache bounds, idle expiry, deletion and bounded dirty retry.
-`test/main-local-transcript-wiring.test.js` exercises the shipped remote
-watcher callback through IPC with controlled timers.
+`test/main-local-transcript-wiring.test.js` exercises the shipped local and
+remote watcher callbacks through IPC with controlled timers, including a
+local burst that settles after exhausting both immediate attempts.
 `test/dom-sidebar-remote-subagent-attribution.test.js` routes each real
 tracker's output into the renderer's shared `activeSubagentsByParent` registry
 and removes all three agents independently through completion IPC. Shared
