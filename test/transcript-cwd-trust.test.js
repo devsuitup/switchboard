@@ -178,7 +178,7 @@ test('chain B: resuming a forged session spawns in the project, and a new sessio
 
 test('first launch of a normal project: open-terminal registers the requested project without any folder precondition', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /^\s*if \(projectPath\) scheduleProjects\(\)\.add\(projectPath\);\s*$/m);
+  assert.match(src, /^\s*if \(projectPath\) await scheduleProjects\(\)\.add\(projectPath\);\s*$/m);
 });
 
 test('storedProjectPathMatchesFolder: accepts the folder project and its worktree collapse, refuses a path below it', () => {

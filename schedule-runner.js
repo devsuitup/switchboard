@@ -494,8 +494,12 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
       runningTasks.add(taskKey);
-      runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
+      const launched = runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
         runningTasks.delete(taskKey);
+      });
+      if (launched?.catch) launched.catch(err => {
+        runningTasks.delete(taskKey);
+        log.error(`[schedule] Failed to run ${schedule.name}:`, err);
       });
     } catch (err) {
       log.error(`[schedule] Failed to run ${schedule.name}:`, err);
@@ -530,7 +534,16 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   function check(onTick) {
     if (!running) return;
     const now = new Date();
-    const schedules = scanSchedules(log, projects ? projects() : []);
+    const selected = projects ? projects() : [];
+    if (selected && typeof selected.then === 'function') {
+      return selected.then(paths => checkProjects(onTick, paths, now));
+    }
+    return checkProjects(onTick, selected, now);
+  }
+
+  function checkProjects(onTick, paths, now) {
+    if (!running) return;
+    const schedules = scanSchedules(log, paths);
     let state = null;
     if (catchUpOn && schedules.some(s => s.catchUp)) {
       try {
@@ -553,17 +566,24 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
     }
   }
 
-  const tick = () => check(true);
-  const onResume = () => check(false);
+  const runCheck = onTick => {
+    try {
+      const result = check(onTick);
+      if (result?.catch) return result.catch(err => log.error('[schedule] Cannot load schedule projects:', err));
+    } catch (err) { log.error('[schedule] Cannot load schedule projects:', err); }
+  };
+  const tick = () => runCheck(true);
+  const onResume = () => runCheck(false);
 
-  check(false);
+  runCheck(false);
   if (resumeSource) resumeSource.on('resume', onResume);
 
   const msUntilNextMinute = (60 - new Date().getSeconds()) * 1000;
   const initialTimer = setTimeout(() => {
-    tick();
+    const checked = tick();
     const interval = setInterval(tick, 60 * 1000);
     initialTimer._interval = interval;
+    return checked;
   }, msUntilNextMinute);
 
   return function stop() {

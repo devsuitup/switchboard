@@ -38,20 +38,22 @@ test('archive-project: wires the real effects into archiveProjectFolders', () =>
   assert.match(handlerBody('archive-project'), /archiveProjectFolders\(groups, opts, archiveDeps\(\)\)/);
   const deps = functionBody(read('main.js'), 'archiveDeps');
   for (const wiring of [
-    /isInitialScanComplete,/, /plan: projectArchivePlan,/, /setEnabled: setScheduleEnabled,/,
-    /getAllCached, resolveFolderDir, refreshFolder,/,
-    /buildProjects: \(\) => mergePlaceholderSessions\(buildProjectsFromCache\(true\)\),/,
-    /activeSessions, getSetting, setSetting,/, /notify: notifyRendererProjectsChanged,/,
+    /isInitialScanComplete,/, /scan: projectPath => scanSchedules\(log, \[projectPath\]\),/, /setEnabled: setScheduleEnabled,/,
+    /mergeProjects: mergePlaceholderSessions,/, /activeSessions,/, /notify: notifyRendererProjectsChanged,/,
   ]) assert.match(deps, wiring);
+  const facade = read('session-index-writer.js');
+  assert.match(facade, /archive\.archiveProjectFolders\(groups, opts,/);
+  assert.match(facade, /buildProjects: \(\) => deps\.mergeProjects\(cache\.buildProjectsFromCache\(true\)\)/);
 });
 
 test('add-project: clears the archived entry of the folder', () => {
-  assert.match(handlerBody('add-project'), /clearArchivedEntry\(getSetting, setSetting, null, projectPath\)/);
+  assert.match(handlerBody('add-project'), /await writer\.revealAddedProject\(projectPath\)/);
+  assert.match(read('session-index-writer.js'), /clearArchivedEntry\(backend.getSetting, backend.setSetting, null, projectPath\)/);
 });
 
 test('get-projects: applies the archived folders with the requested showArchived', () => {
   const body = handlerBody('get-projects');
-  assert.match(body, /applyAndPersistArchived\(mergePlaceholderSessions\(projects\), archived, \{ getSetting, setSetting \}\)/);
+  assert.match(body, /await writer\.applyAndPersistArchived\(mergePlaceholderSessions\(projects\), archived\)/);
   assert.match(body, /assemble\(result.defaultProjects, false\)/);
   assert.match(body, /assemble\(result.allProjects, true\)/);
   assert.match(body, /assemble\(showArchived \? result.allProjects : result.defaultProjects, !!showArchived\)/);
@@ -64,7 +66,8 @@ test('preload: both bridges forward their arguments', () => {
 });
 
 test('delete-worktree: clears the archived entry of the removed worktree', () => {
-  assert.match(handlerBody('delete-worktree'), /clearArchivedEntry\(getSetting, setSetting, null, normalizedPath\)/);
+  assert.match(handlerBody('delete-worktree'), /await writer\.cleanupWorktree\(normalizedPath, log\)/);
+  assert.match(read('session-index-writer.js'), /clearArchivedEntry\(backend.getSetting, backend.setSetting, null, normalizedPath\)/);
 });
 
 test('archive plan: refused while the initial scan is incomplete', () => {

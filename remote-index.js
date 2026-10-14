@@ -171,14 +171,14 @@ function createRemoteIndexer(ctx) {
   }
 
   // Nothing else ever revisits a folder whose alias is no longer declared.
-  function pruneUnknownAliases(list) {
+  async function pruneUnknownAliases(list) {
     if (!ctx.listIndexedFolderKeys || !ctx.dropFolder) return 0;
     const known = new Set(list.map(h => h.alias));
     let dropped = 0;
     for (const key of ctx.listIndexedFolderKeys()) {
       const { alias } = parseFolderKey(key);
       if (alias === null || known.has(alias)) continue;
-      ctx.dropFolder(key);
+      await ctx.dropFolder(key);
       dropped++;
     }
     for (const alias of [...remoteSessions.keys()]) {
@@ -263,7 +263,7 @@ function createRemoteIndexer(ctx) {
       if (ctx.dropFolder) {
         const presentSet = new Set(present);
         for (const folder of indexed) {
-          if (!presentSet.has(folder)) ctx.dropFolder(joinFolderKey(host.alias, folder));
+            if (!presentSet.has(folder)) await ctx.dropFolder(joinFolderKey(host.alias, folder));
         }
       }
     }
@@ -299,10 +299,11 @@ function createRemoteIndexer(ctx) {
     if (list.length === 0) return { skipped: true, hosts: 0 };
 
     inFlight = true;
-    let changed = pruneUnknownAliases(list) > 0;
+    let changed = false;
     const errors = [];
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     try {
+      changed = await pruneUnknownAliases(list) > 0;
       for (const host of list) {
         if (stopped) break;
         if (hostInFlight.has(host.alias)) continue;
@@ -374,7 +375,7 @@ function createRemoteIndexer(ctx) {
     publishRoots(list);
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
-    pruneUnknownAliases(list);
+    pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     timer = timers.setInterval(() => { refreshNow().catch(() => {}); }, intervalMs);
     if (timer && typeof timer.unref === 'function') timer.unref();

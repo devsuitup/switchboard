@@ -22,6 +22,44 @@ function fixture(options = {}) {
   return { client, worker, messages, applied, reply, change: () => { version++; } };
 }
 
+test('async effect acknowledgments complete before publication and cannot absorb a later external write', async () => {
+  let release;
+  const pendingApply = new Promise(resolve => { release = resolve; });
+  let version = 0;
+  const f = fixture({
+    snapshot: () => ({ version }),
+    apply: async result => {
+      if (!result.progressApply) return;
+      const committed = ++version;
+      await pendingApply;
+      return { version: committed };
+    },
+  });
+  try {
+    const request = f.client.request({ reconcile: true });
+    let published = false;
+    request.then(() => { published = true; });
+    f.worker.emit('message', { id: f.messages[0].id, progress: { progressApply: true, effects: [] } });
+    version++;
+    f.reply(0, { effects: [{ name: 'stale' }], reconciled: true });
+    assert.equal(published, false);
+    release();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.messages.length, 2);
+    f.reply(1, { effects: [], keptLiveRows: [], reconciled: true });
+    await request;
+  } finally { release(); f.client.shutdown(); }
+});
+
+test('a rejected async effect acknowledgment rejects the original request', async () => {
+  const f = fixture({ apply: async () => { throw new Error('write rejected'); } });
+  try {
+    const request = f.client.request();
+    f.reply(0, { effects: [] });
+    await assert.rejects(request, /write rejected/);
+  } finally { f.client.shutdown(); }
+});
+
 test('a dispatch resolves its own callers while later callers coalesce into the pending job', async () => {
   const f = fixture();
   try {

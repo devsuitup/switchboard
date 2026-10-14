@@ -501,7 +501,7 @@ test('dropFolderRows, the watcher\'s path for a vanished folder, keeps the row o
 test('the watcher drops a vanished folder through dropFolderRows', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const flush = main.slice(main.indexOf('function flushChanges()'), main.indexOf('function recordChange('));
-  assert.match(flush, /sessionCache\.dropFolderRows\(folder\)/);
+  assert.match(flush, /await writer\.dropFolderRows\(folder\)/);
   assert.doesNotMatch(flush, /deleteCachedFolder\(/);
 });
 
@@ -553,7 +553,7 @@ test('refreshFolder keeps a running session\'s row when its folder no longer res
   }
 });
 
-function runExitHandler({ releaseLiveSession }) {
+async function runExitHandler({ releaseLiveSession }) {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = main.indexOf('  ptyProcess.onExit(');
   const end = main.indexOf('\n  });', start) + '\n  });'.length;
@@ -576,7 +576,7 @@ function runExitHandler({ releaseLiveSession }) {
     mainWindow: null,
     activityReporter: { sessionEnded: () => {} },
     taskRecords: { ownerDied() {} },
-    sessionCache: {
+    writer: {
       releaseLiveSession: (id) => {
         if (calls.deletedBeforeRelease === null) calls.deletedBeforeRelease = activeSessions.size === 0;
         calls.released.push(id);
@@ -587,19 +587,19 @@ function runExitHandler({ releaseLiveSession }) {
     log: { warn: (m) => calls.warned.push(m) },
   });
   vm.runInContext(main.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js') });
-  handler({ exitCode: 0, signal: 0 });
+  await handler({ exitCode: 0, signal: 0 });
   return calls;
 }
 
-test('the PTY exit handler releases both ids after dropping the session, and refreshes the sidebar when a row was released', () => {
-  const calls = runExitHandler({ releaseLiveSession: (id) => id === 'real' });
+test('the PTY exit handler releases both ids after dropping the session, and refreshes the sidebar when a row was released', async () => {
+  const calls = await runExitHandler({ releaseLiveSession: (id) => id === 'real' });
   assert.equal(calls.deletedBeforeRelease, true);
   assert.deepEqual(calls.released, ['real', 'orig']);
   assert.equal(calls.notified, 1);
 });
 
-test('the PTY exit handler survives a release that throws on a closed database', () => {
-  const calls = runExitHandler({ releaseLiveSession: () => { throw new Error('The database connection is not open'); } });
+test('the PTY exit handler survives a release that throws on a closed database', async () => {
+  const calls = await runExitHandler({ releaseLiveSession: () => { throw new Error('The database connection is not open'); } });
   assert.equal(calls.notified, 0);
   assert.equal(calls.warned.length, 1);
   assert.match(calls.warned[0], /database connection is not open/);

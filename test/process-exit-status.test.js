@@ -255,7 +255,7 @@ test('main names the signal node-pty reports and forwards it with the exit code'
   assert.equal(ptyExitSignalName(undefined), null);
   assert.equal(ptyExitSignalName(999, {}), 'signal 999');
 
-  assert.match(MAIN_SRC, /ptyProcess\.onExit\(\(\{ exitCode, signal \}\) => \{\s*const exitSignal = ptyExitSignalName\(signal\);/);
+  assert.match(MAIN_SRC, /ptyProcess\.onExit\(async \(\{ exitCode, signal \}\) => \{\s*const exitSignal = ptyExitSignalName\(signal\);/);
   const sends = MAIN_SRC.match(/webContents\.send\('process-exited', [^)]*\)/g);
   assert.equal(sends.length, 2);
   for (const send of sends) assert.match(send, /, exitCode, exitSignal, stopped, session\.generation\)$/);

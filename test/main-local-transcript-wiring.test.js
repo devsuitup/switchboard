@@ -93,7 +93,7 @@ test('injected projects-watch notifications verify real files while indexing sta
     mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => sent.push(args) } },
     setTimeout: fn => { timers.push(fn); return fn; }, clearTimeout() {},
     detectSessionTransitions() {}, notifyRendererProjectsChanged() {},
-    refreshFolder: (...args) => refreshed.push(args), sessionCache: { dropFolderRows() {} },
+    writer: { refreshFolder: async (...args) => refreshed.push(args), async dropFolderRows() {} },
   });
   const declaration = mainSrc.slice(mainSrc.indexOf('const localTranscriptTracker ='), mainSrc.indexOf('\n\n// see .ai/contexts/cli-session-state.md', mainSrc.indexOf('const localTranscriptTracker =')));
   let tracker;
@@ -131,7 +131,7 @@ test('injected projects-watch notifications verify real files while indexing sta
   callback('change', childName);
   await tracker.record(childParts);
   assert.deepEqual(sent, [], 'unchanged metadata produces no activity/unread/spawn');
-  timers.at(-1)();
+  await timers.at(-1)();
   assert.equal(refreshed.length, 1, 'suppressed activity still invalidates indexing');
   fs.appendFileSync(file, 'new\n');
   callback('change', filename);

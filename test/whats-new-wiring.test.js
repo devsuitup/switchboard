@@ -30,19 +30,21 @@ test('whether the install predates this launch is read when main loads, before t
 });
 
 test('main builds the What\'s new service from the running version, that signal and the shared default', () => {
-  const at = MAIN.indexOf('const whatsNew = createWhatsNew({');
+  const at = MAIN.indexOf('const whatsNew = writer.createWhatsNew({');
   assert.notEqual(at, -1);
   const args = MAIN.slice(at, MAIN.indexOf('});', at));
   assert.match(args, /currentVersion: app\.getVersion\(\)/);
   assert.match(args, /existingInstall: INSTALL_PREDATES_LAUNCH/);
   assert.match(args, /lastSeenDefault: SETTING_DEFAULTS\.lastSeenVersion/);
-  assert.match(args, /getSetting,\s*setSetting,/);
+  const facade = fs.readFileSync(path.join(ROOT, 'session-index-writer.js'), 'utf8');
+  assert.match(facade, /getSetting: backend\.getSetting, setSetting: backend\.setSetting/);
+  assert.match(facade, /createWhatsNew\(\{ \.\.\.options, \.\.\.settings \}\)/);
   assert.match(args, /\blog,/);
 });
 
 test('the IPC handlers and the menu entry go through the service', () => {
-  assert.match(MAIN, /ipcMain\.handle\('whats-new-startup', \(\) => whatsNew\.startup\(\)\);/);
-  assert.match(MAIN, /ipcMain\.handle\('whats-new-dismissed', \(\) => whatsNew\.dismissed\(\)\);/);
+  assert.match(MAIN, /ipcMain\.handle\('whats-new-startup', async \(\) => await whatsNew\.startup\(\)\);/);
+  assert.match(MAIN, /ipcMain\.handle\('whats-new-dismissed', async \(\) => await whatsNew\.dismissed\(\)\);/);
   const at = MAIN.indexOf('function showWhatsNewFromMenu()');
   const body = MAIN.slice(at, MAIN.indexOf('\n}\n', at));
   assert.match(body, /const payload = whatsNew\.forMenu\(\);\s*if \(payload\) mainWindow\.webContents\.send\('show-whats-new', payload\);/);
