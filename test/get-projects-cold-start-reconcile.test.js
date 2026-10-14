@@ -50,7 +50,7 @@ function makeHandler(mocks) {
     'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
     'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
     'backfillEntrypoints', 'backfillCustomTitles', 'normalizeHosts', 'parseFolderKey',
-    'projectsClient', 'TRACE', 'projectsReconciledAt',
+    'projectsClient', 'TRACE', 'projectsReconciledAt', 'writer',
     body
   );
   // annotateRemoteAttachable (remote-attach join, issue #221),
@@ -70,7 +70,7 @@ function makeHandler(mocks) {
     { request: options => {
       if (options.reconcile) mocks.reconcileCacheFromFilesystem();
       return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
-    } }, { on: false }, 0
+    } }, { on: false }, 0, { applyAndPersistArchived }
   );
 }
 

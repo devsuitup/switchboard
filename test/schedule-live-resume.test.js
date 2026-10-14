@@ -51,7 +51,7 @@ function setup(t, { sandbox = false } = {}) {
     log,
   });
   const source = read('main.js');
-  vm.runInContext(extractFunction(source.replace(/^    function runScheduleCommand/m, 'function runScheduleCommand'), 'runScheduleCommand'), main);
+  vm.runInContext(extractFunction(source.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand'), 'runScheduleCommand'), main);
   for (const channel of ['session-live-elsewhere', 'sessions-live-elsewhere']) {
     const line = source.split('\n').find((line) => line.includes(`ipcMain.handle('${channel}'`));
     assert.ok(line, `missing ${channel} handler`);
@@ -120,9 +120,9 @@ function setup(t, { sandbox = false } = {}) {
   return {
     get child() { return children[0]; },
     spawns, done, messages, confirmations, openTerminalCalls, session, ctx, settings, dom,
-    start: () => {
+    start: async () => {
       const { claudeArgs } = buildScheduleCommand(SID, { name: 'Scheduled task', cli: {} });
-      main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true));
+      (await main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true)));
       return children.at(-1);
     },
     open: (options) => app.openSession(session, undefined, options),
@@ -139,7 +139,7 @@ function setup(t, { sandbox = false } = {}) {
 
 test('a click during a scheduled run refuses a second process even when the dialog is accepted', async (t) => {
   const h = setup(t);
-  h.start();
+  (await h.start());
   assert.equal(h.spawns.length, 1);
   await h.open();
   assert.equal(h.openTerminalCalls.length, 0, 'a live scheduled run must not spawn a second claude --resume');
@@ -154,7 +154,7 @@ test('a click during a scheduled run refuses a second process even when the dial
 
 test('automatic reload during a scheduled run skips the resume without prompting', async (t) => {
   const h = setup(t);
-  h.start();
+  (await h.start());
   await h.open({ automatic: true });
   assert.equal(h.openTerminalCalls.length, 0, 'automatic reload must not fork the running transcript');
   assert.equal(h.messages.length, 0);
@@ -162,7 +162,7 @@ test('automatic reload during a scheduled run skips the resume without prompting
 
 test('working-set restore skips the scheduled run and retains its saved entry', async (t) => {
   const h = setup(t);
-  h.start();
+  (await h.start());
   await h.restore();
   assert.equal(h.openTerminalCalls.length, 0, 'batch restore must not resume a live scheduled run');
   assert.equal(h.settings.global.openWorkingSet[0].sessionId, SID);
@@ -172,7 +172,7 @@ test('working-set restore skips the scheduled run and retains its saved entry', 
 
 test('a scheduled child without a CLI descriptor is visible under either session id case', async (t) => {
   const h = setup(t);
-  h.start();
+  (await h.start());
   assert.deepEqual(fs.readdirSync(h.session.projectPath), []);
   const live = await h.query(SID.toUpperCase());
   assert.equal(live?.kind, 'schedule');
@@ -184,7 +184,7 @@ test('a scheduled child without a CLI descriptor is visible under either session
 
 test('a spawn error clears the scheduled run so its session can be opened', async (t) => {
   const h = setup(t);
-  h.start();
+  (await h.start());
   assert.equal((await h.query())?.kind, 'schedule');
   h.child.emit('error', new Error('spawn failed'));
   assert.equal(await h.query(), null);
@@ -195,9 +195,9 @@ test('a spawn error clears the scheduled run so its session can be opened', asyn
 
 test('a replaced scheduled child exiting preserves the replacement until it exits', async (t) => {
   const h = setup(t);
-  const first = h.start();
+  const first = (await h.start());
   assert.equal((await h.query())?.pid, first.pid);
-  const replacement = h.start();
+  const replacement = (await h.start());
   assert.notEqual(first, replacement);
   assert.equal(h.spawns.length, 2);
   first.emit('exit', 0);
@@ -215,7 +215,7 @@ test('a replaced scheduled child exiting preserves the replacement until it exit
 
 test('a refused scheduled spawn leaves no live run', async (t) => {
   const h = setup(t, { sandbox: true });
-  h.start();
+  (await h.start());
   assert.equal(h.spawns.length, 0);
   assert.equal(await h.query(), null);
   await h.open();

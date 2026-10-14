@@ -40,7 +40,6 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
-const { createWhatsNew } = require('./changelog');
 const { createUnsavedGuard } = require('./unsaved-guard');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
 const { cleanEnv } = require('./clean-env');
@@ -72,8 +71,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
-const { applyAndPersistArchived, clearArchivedEntry, archivePlanForGroups, validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer } = require('./archived-projects');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
+const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
@@ -152,20 +151,18 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
     }
   });
 }
+const writer = require('./session-index-writer').createSessionIndexWriter();
 const {
-  getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions, setCachedContinuationIndex,
-  deleteCachedSession, deleteCachedFolder, replaceSessionMetrics, touchCachedModified,
-  getFolderMeta, getAllFolderMeta, setFolderMeta,
-  upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
-  getSearchFileIds, applySearchFileBatch,
+  isCachePopulated, getAllCached, getCachedByParent, getCachedFolder, getCachedSession,
+  getAllFolderMeta, getSearchFileIds,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
-  getSetting, setSetting, deleteSetting, listSettingKeys,
-  isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles, getCachedMissingCustomTitle,
+  getSetting, listSettingKeys, isInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
-  closeDb,
   DB_PATH, getProjectsRevision,
 } = require('./db');
+const { toggleStar, setArchived, deleteCachedSession, deleteCachedFolder,
+  deleteSearchSession, deleteSearchFolder, deleteSearchType, applySearchFileBatch,
+  setSetting, deleteSetting, closeDb } = writer;
 
 // see docs/changelog.md ("What's new in the app")
 const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
@@ -197,7 +194,7 @@ activityReporter.setEnabled(
 
 // One-shot cleanup: the Plans tab was removed, so nothing indexes or clears
 // FTS rows of type 'plan' anymore. Purge any left behind by earlier versions.
-try { deleteSearchType('plan'); } catch {}
+const legacySearchCleanup = deleteSearchType('plan').catch(() => {});
 
 // --- Search query worker ---
 // Routes 'search' IPC off the main thread so that a slow FTS5 phrase query
@@ -409,25 +406,21 @@ function createWindow() {
   let boundsTimer = null;
   const saveBounds = () => {
     if (boundsTimer) clearTimeout(boundsTimer);
-    boundsTimer = setTimeout(() => {
+    boundsTimer = setTimeout(async () => {
       if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
       const b = mainWindow.getBounds();
-      const global = getSetting('global') || {};
-      global.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
-      setSetting('global', global);
+      await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
     }, 500);
   };
   mainWindow.on('resize', saveBounds);
   mainWindow.on('move', saveBounds);
 
   // Also save immediately before close (debounce may not have flushed)
-  mainWindow.on('close', () => {
+  mainWindow.on('close', async () => {
     if (boundsTimer) clearTimeout(boundsTimer);
     if (!mainWindow.isMinimized()) {
       const b = mainWindow.getBounds();
-      const global = getSetting('global') || {};
-      global.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
-      setSetting('global', global);
+      await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
     }
   });
 
@@ -458,9 +451,7 @@ function buildMenu() {
 
 // --- What's new (see docs/changelog.md) ---
 
-const whatsNew = createWhatsNew({
-  getSetting,
-  setSetting,
+const whatsNew = writer.createWhatsNew({
   currentVersion: app.getVersion(),
   existingInstall: INSTALL_PREDATES_LAUNCH,
   lastSeenDefault: SETTING_DEFAULTS.lastSeenVersion,
@@ -474,33 +465,26 @@ function showWhatsNewFromMenu() {
   if (payload) mainWindow.webContents.send('show-whats-new', payload);
 }
 
-ipcMain.handle('whats-new-startup', () => whatsNew.startup());
-ipcMain.handle('whats-new-dismissed', () => whatsNew.dismissed());
+ipcMain.handle('whats-new-startup', async () => await whatsNew.startup());
+ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { remapProjectTranscripts } = require('./project-remap');
 const { resolveDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
-sessionCache.init({
+writer.initializeCache({
   PROJECTS_DIR,
   activeSessions,
   getLocalDescriptors: () => cliSessionState.getSidebarDescriptors(),
   getLocalJobs: () => bgAgents.getCachedJobs(),
   getMainWindow: () => mainWindow,
   log,
-  db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
-    deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
-    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex, setCachedCustomTitles, getCachedMissingCustomTitle,
-  },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder,
-        buildProjectsFromCache, backfillEntrypoints, backfillCustomTitles, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+const { readSessionFile, readFolderFromFilesystem,
+        backfillEntrypoints, backfillCustomTitles, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
         scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const { createProjectsWorkerClient } = require('./projects-worker-client');
@@ -525,9 +509,12 @@ function projectsSnapshot() {
 const projectsClient = createProjectsWorkerClient({
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
-  apply: result => {
-    sessionCache.applyProjectsWorkerEffects(result);
+  apply: async result => {
+    const applied = writer.applyProjectsWorkerEffects(result);
+    const version = projectsSnapshot().version;
+    await applied;
     if (result.reconciled) projectsReconciledAt = Date.now();
+    return { version };
   },
 });
 
@@ -556,14 +543,7 @@ const remoteIndexer = createRemoteIndexer({
     return result;
   },
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
-  dropFolder: (folderKey) => {
-    deleteCachedFolder(folderKey);
-    deleteSearchFolder(folderKey);
-    const pending = getSetting('bridge_uuid_reindex_folders');
-    if (Array.isArray(pending) && pending.includes(folderKey)) {
-      setSetting('bridge_uuid_reindex_folders', pending.filter(key => key !== folderKey));
-    }
-  },
+  dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
   notify: notifyRendererProjectsChanged,
   log,
@@ -759,17 +739,17 @@ ipcMain.handle('browse-folder', async () => {
 
 // Projects whose schedules may run; see docs/sandbox.md ("Schedules").
 function scheduleProjects() {
-  return scheduleRegistry(getSetting, setSetting, () => initialScheduleProjects(() => listSettingKeys('project:')));
+  return writer.scheduleRegistry(() => initialScheduleProjects(() => listSettingKeys('project:')));
 }
 
 function isDirectory(target) {
   try { return fs.statSync(target).isDirectory(); } catch { return false; }
 }
 
-function unarchivedScheduleProjects(projectPath) {
+async function unarchivedScheduleProjects(projectPath) {
   const { isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
   const target = normalizeArchivedProjectPath(projectPath);
-  return scheduleProjects().list().filter(p => {
+  return (await scheduleProjects().list()).filter(p => {
     const candidate = normalizeArchivedProjectPath(p);
     return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target]);
   });
@@ -792,14 +772,11 @@ function isProjectSettingsArchived(projectPath) {
 }
 
 // see .ai/contexts/session-cache.md ("Project Archive and Delete")
-ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
+ipcMain.handle('archive-project-settings', async (_event, projectPath, folderKey) => {
   try {
-    const global = getSetting('global') || {};
     const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
     const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
-    global.hiddenProjects = [...new Set([...(global.hiddenProjects || []), entry])];
-    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [entry]: 'archive' };
-    setSetting('global', global);
+    await writer.hideProject(entry, 'archive');
     notifyRendererProjectsChanged();
     return { ok: true };
   } catch (err) {
@@ -807,20 +784,17 @@ ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
   }
 });
 
-ipcMain.handle('unarchive-project', (_event, entry) => {
+ipcMain.handle('unarchive-project', async (_event, entry) => {
   try {
     const global = getSetting('global') || {};
     if (!(global.hiddenProjects || []).includes(entry)) return { error: 'Project is not archived' };
     const { alias, folder: projectPath } = parseFolderKey(entry);
     const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
-    refreshFolder(folder);
-    const { [entry]: kind, ...kinds } = global.hiddenProjectKinds || {};
-    if (alias === null && kind === undefined && isDirectory(projectPath)) scheduleProjects().add(projectPath);
-    if (alias === null) skipMissedScheduleRuns(unarchivedScheduleProjects(projectPath));
-    clearArchivedEntry(getSetting, setSetting, alias, projectPath);
-    global.hiddenProjects = global.hiddenProjects.filter(p => p !== entry);
-    global.hiddenProjectKinds = kinds;
-    setSetting('global', global);
+    await writer.refreshFolder(folder);
+    const kind = global.hiddenProjectKinds?.[entry];
+    if (alias === null && kind === undefined && isDirectory(projectPath)) await scheduleProjects().add(projectPath);
+    if (alias === null) skipMissedScheduleRuns(await unarchivedScheduleProjects(projectPath));
+    await writer.unhideProject(entry, alias, projectPath);
     notifyRendererProjectsChanged();
     return { ok: true };
   } catch (err) {
@@ -829,20 +803,14 @@ ipcMain.handle('unarchive-project', (_event, entry) => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', async (_event, projectPath) => {
   try {
     // Validate the path exists and is a directory
     const stat = fs.statSync(projectPath);
     if (!stat.isDirectory()) return { error: 'Path is not a directory' };
 
     // see .ai/contexts/session-cache.md ("Project Archive and Delete")
-    const global = getSetting('global') || {};
-    if (global.hiddenProjects && global.hiddenProjects.includes(projectPath)) {
-      global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
-      if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[projectPath];
-      setSetting('global', global);
-    }
-    clearArchivedEntry(getSetting, setSetting, null, projectPath);
+    await writer.revealAddedProject(projectPath);
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
@@ -861,9 +829,9 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     }
 
     // Immediately index the new folder so it's in cache before frontend renders
-    refreshFolder(folder);
+    await writer.refreshFolder(folder);
     notifyRendererProjectsChanged();
-    scheduleProjects().add(projectPath);
+    await scheduleProjects().add(projectPath);
 
     return { ok: true, folder, projectPath };
   } catch (err) {
@@ -872,24 +840,19 @@ ipcMain.handle('add-project', (_event, projectPath) => {
 });
 
 // --- IPC: remove-project ---
-ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
+ipcMain.handle('remove-project', async (_event, projectPath, folderKey) => {
   try {
     // Add to hidden projects list
-    const global = getSetting('global') || {};
-    const hidden = global.hiddenProjects || [];
     const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
     const hiddenEntry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
-    if (!hidden.includes(hiddenEntry)) hidden.push(hiddenEntry);
-    global.hiddenProjects = hidden;
-    global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [hiddenEntry]: 'delete' };
-    setSetting('global', global);
+    await writer.hideProject(hiddenEntry, 'delete');
 
     // Clean up DB cache and search index for this folder
     const folder = folderKey || encodeProjectPath(projectPath);
-    deleteCachedFolder(folder);
-    deleteSearchFolder(folder);
-    deleteSetting('project:' + projectPath);
-    scheduleProjects().remove(projectPath);
+    await deleteCachedFolder(folder);
+    await deleteSearchFolder(folder);
+    await deleteSetting('project:' + projectPath);
+    await scheduleProjects().remove(projectPath);
 
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -899,9 +862,9 @@ ipcMain.handle('remove-project', (_event, projectPath, folderKey) => {
 });
 
 // --- IPC: archive a project folder — see .ai/contexts/session-cache.md ("Archived projects") ---
-function projectArchivePlan(groups) {
+async function projectArchivePlan(groups) {
   return archivePlanForGroups(groups, {
-    registered: scheduleProjects().list(),
+    registered: await scheduleProjects().list(),
     scan: (projectPath) => scanSchedules(log, [projectPath]),
     realpath: fs.realpathSync,
   });
@@ -910,37 +873,38 @@ function projectArchivePlan(groups) {
 function archiveDeps() {
   return {
     isInitialScanComplete,
-    plan: projectArchivePlan,
+    seedProjects: () => initialScheduleProjects(() => listSettingKeys('project:')),
+    scan: projectPath => scanSchedules(log, [projectPath]),
+    realpath: fs.realpathSync,
     setEnabled: setScheduleEnabled,
-    getAllCached, resolveFolderDir, refreshFolder,
-    buildProjects: () => mergePlaceholderSessions(buildProjectsFromCache(true)),
-    activeSessions, getSetting, setSetting,
+    mergeProjects: mergePlaceholderSessions,
+    activeSessions,
     notify: notifyRendererProjectsChanged,
     now: () => new Date().toISOString(),
   };
 }
 
-ipcMain.handle('get-project-archive-plan', (_event, groups) => {
+ipcMain.handle('get-project-archive-plan', async (_event, groups) => {
   if (!isInitialScanComplete()) return { indexing: true };
-  return { schedules: projectArchivePlan(validArchiveGroups(groups)) };
+  return { schedules: await projectArchivePlan(validArchiveGroups(groups)) };
 });
 
-ipcMain.handle('archive-project', (_event, groups, opts) => {
-  const res = archiveProjectFolders(groups, opts, archiveDeps());
+ipcMain.handle('archive-project', async (_event, groups, opts) => {
+  const res = await writer.archiveProjectFolders(groups, opts, archiveDeps());
   if (res.error) log.warn(`[archive-project] failed: ${res.error} disabled=${(res.disabled || []).length}`);
   else log.info(`[archive-project] disabled=${res.disabled.length} failed=${res.failed.length}`);
   return res;
 });
 
-ipcMain.handle('reenable-project-schedules', (_event, projectPath, folderKey) =>
-  reenableOfferedSchedules(projectPath, folderKey, archiveDeps()));
+ipcMain.handle('reenable-project-schedules', async (_event, projectPath, folderKey) =>
+  await writer.reenableOfferedSchedules(projectPath, folderKey, archiveDeps()));
 
-ipcMain.handle('dismiss-schedule-reenable-offer', (_event, projectPath, folderKey) =>
-  dismissReenableOffer(projectPath, folderKey, archiveDeps()));
+ipcMain.handle('dismiss-schedule-reenable-offer', async (_event, projectPath, folderKey) =>
+  await writer.dismissReenableOffer(projectPath, folderKey, archiveDeps()));
 
 // --- IPC: remap-project ---
 
-ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
+ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
   try {
     // Validate oldPath/newPath are strings (basic sanitisation)
     if (typeof oldPath !== 'string' || typeof newPath !== 'string') {
@@ -977,10 +941,10 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
 
     // Rewrite cwd in all session JSONL files (top-level + subagents) so
     // `claude --resume` from CLI also picks up the new path.
-    remapProjectTranscripts({ folder, folderPath, oldPath, newPath, getSetting, setSetting });
+    await writer.remapProjectTranscripts({ folder, folderPath, oldPath, newPath });
 
     // Refresh the folder cache so the new path takes effect in the UI
-    refreshFolder(folder);
+    await writer.refreshFolder(folder);
     notifyRendererProjectsChanged();
     return { ok: true };
   } catch (err) {
@@ -1025,53 +989,22 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
       execFile('git', args, (err, _stdout, stderr) => callback(err, stderr));
     }
 
-    runRemove(false, (err, stderr) => {
+    runRemove(false, async (err, stderr) => {
       if (err && /locked/i.test(stderr || err.message || '')) {
         // Retry with double force for locked worktrees
-        runRemove(true, (err2, stderr2) => {
+        runRemove(true, async (err2, stderr2) => {
           if (err2) return resolve({ ok: false, error: (stderr2 || err2.message || String(err2)).trim() });
-          afterRemove();
+          await afterRemove();
         });
       } else if (err) {
         return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
       } else {
-        afterRemove();
+        await afterRemove();
       }
     });
 
-    function afterRemove() {
-      // Clean up DB cache: delete all sessions whose projectPath matches worktreePath
-      let removed = 0;
-      try {
-        const allRows = getAllCached();
-        for (const row of allRows) {
-          if (row.projectPath === normalizedPath) {
-            deleteCachedSession(row.sessionId);
-            deleteSearchSession(row.sessionId);
-            removed++;
-          }
-        }
-      } catch (dbErr) {
-        log.warn('[delete-worktree] DB cleanup error:', dbErr.message);
-      }
-
-      // Remove from hiddenProjects if present
-      try {
-        const global = getSetting('global') || {};
-        if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
-          global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
-          if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[normalizedPath];
-          setSetting('global', global);
-        }
-      } catch {}
-      try { clearArchivedEntry(getSetting, setSetting, null, normalizedPath); } catch {}
-
-      // Also clean up folder meta
-      try {
-        const folder = encodeProjectPath(normalizedPath);
-        deleteCachedFolder(folder);
-        deleteSearchFolder(folder);
-      } catch {}
+    async function afterRemove() {
+      const removed = await writer.cleanupWorktree(normalizedPath, log);
 
       log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
       notifyRendererProjectsChanged();
@@ -1276,7 +1209,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
         if (alias === null) { repairPending = true; return true; }
         return aliases.has(alias);
       });
-      if (declared.length !== repairFolders.length) setSetting('bridge_uuid_reindex_folders', declared);
+      if (declared.length !== repairFolders.length) await setSetting('bridge_uuid_reindex_folders', declared);
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
@@ -1284,10 +1217,10 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
-    const assemble = (projects, archived) => annotateRemoteAttachable(applyAndPersistArchived(mergePlaceholderSessions(projects), archived, { getSetting, setSetting }));
+    const assemble = async (projects, archived) => annotateRemoteAttachable(await writer.applyAndPersistArchived(mergePlaceholderSessions(projects), archived));
     const reply = showArchived === 'both'
-      ? { defaultProjects: assemble(result.defaultProjects, false), allProjects: assemble(result.allProjects, true) }
-      : assemble(showArchived ? result.allProjects : result.defaultProjects, !!showArchived);
+      ? { defaultProjects: await assemble(result.defaultProjects, false), allProjects: await assemble(result.allProjects, true) }
+      : await assemble(showArchived ? result.allProjects : result.defaultProjects, !!showArchived);
     if (TRACE.on) {
       if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
@@ -1485,7 +1418,7 @@ async function applyFileListIndex(kind, result, valid) {
     }
     const deletes = batch.filter(change => !change.entry).map(change => change.id);
     const entries = batch.filter(change => change.entry).map(change => change.entry);
-    applySearchFileBatch(kind, deletes, entries);
+    await applySearchFileBatch(kind, deletes, entries);
     for (const id of deletes) {
       state.indexed.delete(id);
       for (const key of [fileListPathKey(id, process.platform), state.targets.get(id)].filter(Boolean)) {
@@ -1508,7 +1441,7 @@ const fileListClients = new Map(['memory', 'work-file'].map(kind => [kind, creat
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'file-lists-query.js'), { workerData: { claudeDir: CLAUDE_DIR, projectsDir: PROJECTS_DIR } }),
   snapshot: () => fileListsSnapshot(kind),
   getVersion: () => fileListsPolicy(kind).version,
-  apply: (result, valid) => applyFileListIndex(kind, result, valid),
+  apply: async (result, valid) => await applyFileListIndex(kind, result, valid),
   onError: error => log.error(`Error indexing ${kind} files:`, error),
 })]));
 const fileListsClient = {
@@ -1616,8 +1549,8 @@ ipcMain.handle('get-setting', (_event, key) => {
   return getSetting(key);
 });
 
-ipcMain.handle('set-setting', (_event, key, value) => {
-  setSetting(key, value);
+ipcMain.handle('set-setting', async (_event, key, value) => {
+  await setSetting(key, value);
   if (key === 'global') applyUpdateChannel();
   return { ok: true };
 });
@@ -1664,8 +1597,8 @@ ipcMain.handle('remote-host-refresh', async (_event, alias) => {
   }
 });
 
-ipcMain.handle('delete-setting', (_event, key) => {
-  deleteSetting(key);
+ipcMain.handle('delete-setting', async (_event, key) => {
+  await deleteSetting(key);
   return { ok: true };
 });
 
@@ -2064,19 +1997,14 @@ ipcMain.handle('session-touched-files', async (_event, sessionId, options = {}) 
 });
 
 // --- IPC: toggle-star ---
-ipcMain.handle('toggle-star', (_event, sessionId) => {
-  const starred = toggleStar(sessionId);
+ipcMain.handle('toggle-star', async (_event, sessionId) => {
+  const starred = await toggleStar(sessionId);
   return { starred };
 });
 
 // --- IPC: rename-session ---
-ipcMain.handle('rename-session', (_event, sessionId, name) => {
-  setName(sessionId, name || null);
-  // Update search index title to include the new name
-  const cached = getCachedSession(sessionId);
-  const summary = cached?.summary || '';
-  updateSearchTitle(sessionId, 'session', (name ? name + ' ' : '') + summary);
-  return { name: name || null };
+ipcMain.handle('rename-session', async (_event, sessionId, name) => {
+  return await writer.renameSession(sessionId, name);
 });
 
 // --- IPC: archive-session ---
@@ -2289,8 +2217,8 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
 
   for (const sid of [id, ...subagentIds]) {
     mainTouchedCache.dropSession(sid);
-    try { deleteCachedSession(sid); } catch {}
-    try { deleteSearchSession(sid); } catch {}
+    try { await deleteCachedSession(sid); } catch {}
+    try { await deleteSearchSession(sid); } catch {}
   }
 
   // A session with no transcript on disk is not an error case: launchNewSession
@@ -2305,9 +2233,9 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
   return { ok: true, removed, subagents: subagentIds.length };
 });
 
-ipcMain.handle('archive-session', (_event, sessionId, archived) => {
+ipcMain.handle('archive-session', async (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
-  setArchived(sessionId, val);
+  await setArchived(sessionId, val);
   return { archived: val };
 });
 
@@ -2452,7 +2380,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     }
   });
 
-  ptyProcess.onExit(({ exitCode, signal }) => {
+  ptyProcess.onExit(async ({ exitCode, signal }) => {
     const exitSignal = ptyExitSignalName(signal);
     const stopped = !!session.stopRequested;
     session.exited = true;
@@ -2463,7 +2391,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
-    const finish = suppress => {
+    const finish = async suppress => {
       const realId = session.realSessionId || sessionId;
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
@@ -2483,14 +2411,14 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       if (releaseReal) activityReporter.sessionEnded(realId);
       if (releaseOriginal) activityReporter.sessionEnded(sessionId);
       try {
-        const releasedReal = releaseReal && sessionCache.releaseLiveSession(realId);
-        const releasedOriginal = releaseOriginal && sessionCache.releaseLiveSession(sessionId);
+        const releasedReal = releaseReal && await writer.releaseLiveSession(realId);
+        const releasedOriginal = releaseOriginal && await writer.releaseLiveSession(sessionId);
         if (releasedReal || releasedOriginal) notifyRendererProjectsChanged();
       } catch (err) {
         log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
       }
     };
-    if (!holdBackgroundExit(session, finish) && !sessionTransitions.holdContinuationExit(sessionId, session, finish)) finish(false);
+    if (!holdBackgroundExit(session, finish) && !sessionTransitions.holdContinuationExit(sessionId, session, finish)) await finish(false);
   });
 }
 
@@ -2900,7 +2828,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
       // see docs/sandbox.md ("Schedules")
-      if (projectPath) scheduleProjects().add(projectPath);
+      if (projectPath) await scheduleProjects().add(projectPath);
       if (!isAttach && sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
@@ -3032,12 +2960,12 @@ async function activityReportingState() {
 
 ipcMain.handle('get-activity-reporting-state', () => activityReportingState());
 
-ipcMain.handle('set-activity-reporting-enabled', (_event, enabled) => {
+ipcMain.handle('set-activity-reporting-enabled', async (_event, enabled) => {
   const on = !!enabled;
   activityReporter.setEnabled(on);
   const global = getSetting('global') || {};
   global.activityReporting = on;
-  setSetting('global', global);
+  await setSetting('global', global);
   log.info(`[activitywatch] reporting ${on ? 'enabled' : 'disabled'} from the UI`);
   return activityReportingState();
 });
@@ -3085,7 +3013,7 @@ ipcMain.handle('set-activity-trace-enabled', async (_event, enabled) => {
   mainLoopMonitor.sync();
   const global = getSetting('global') || {};
   global.activityTrace = on;
-  setSetting('global', global);
+  await setSetting('global', global);
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity-trace-state', on);
   log.info(`[activity-trace] ${on ? 'enabled' : 'disabled'} from the UI → ${activityTrace.currentFile() || '(closed)'}`);
   return activityTraceState();
@@ -3356,7 +3284,7 @@ function startProjectsWatcher() {
   const pendingChanges = new Map();
   let debounceTimer = null;
 
-  function flushChanges() {
+  async function flushChanges() {
     debounceTimer = null;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
@@ -3369,12 +3297,12 @@ function startProjectsWatcher() {
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
         if (scope === true) {
-          refreshFolder(folder);
+          await writer.refreshFolder(folder);
         } else {
-          refreshFolder(folder, { files: scope });
+          await writer.refreshFolder(folder, { files: scope });
         }
       } else {
-        sessionCache.dropFolderRows(folder);
+        await writer.dropFolderRows(folder);
       }
       changed = true;
     }
@@ -3447,7 +3375,7 @@ ipcMain.handle('updater-download', () => {
 });
 ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
-  if (mainWindow && !(await unsavedGuard.confirmQuit(mainWindow))) return;
+  if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
   activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
   autoUpdater.quitAndInstall();
 });
@@ -3477,7 +3405,8 @@ if (!gotSingleInstanceLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await legacySearchCleanup;
     // Content Security Policy — restrict what the renderer can load or execute.
     // 'unsafe-inline' for style-src is required because the app sets .style.*
     // properties via JavaScript and style.css uses data: URIs in background-image.
@@ -3507,7 +3436,7 @@ if (!gotSingleInstanceLock) {
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
-    function runScheduleCommand(claudeArgv, cwd, name, onDone) {
+    async function runScheduleCommand(claudeArgv, cwd, name, onDone) {
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
         log.info(`[schedule] ${name} suspended: project is archived`);
@@ -3546,7 +3475,7 @@ if (!gotSingleInstanceLock) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
         // see docs/sandbox.md ("Schedules")
-        const refused = scheduleBindRefusals(addDirs, scheduleProjects().list(), os.homedir(), cwd);
+        const refused = scheduleBindRefusals(addDirs, await scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
           log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
@@ -3588,11 +3517,11 @@ if (!gotSingleInstanceLock) {
 
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
     // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
-    scheduleProjects().list();
+    await scheduleProjects().list();
     startScheduler(log, runScheduleCommand, {
       resumeSource: powerMonitor,
       stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
-      projects: () => scheduleProjects().list().filter(p => !isProjectSettingsArchived(p)),
+      projects: async () => (await scheduleProjects().list()).filter(p => !isProjectSettingsArchived(p)),
     });
 
     // File-trigger watcher — allows harness scripts to inject input into open
@@ -3709,12 +3638,12 @@ app.on('before-quit', (event) => {
 });
 
 // Close SQLite after all windows are closed to avoid "connection is not open" errors
-app.on('will-quit', () => {
+app.on('will-quit', async () => {
   // Terminate the search worker gracefully before closing the DB, so the
   // worker's read-only connection is released before the WAL checkpoint.
   // shutdown() suppresses the restart logic before calling terminate().
   projectsClient.shutdown();
   fileListsClient.shutdown();
   searchClient.shutdown();
-  closeDb();
+  await closeDb();
 });

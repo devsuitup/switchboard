@@ -184,7 +184,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       return null;
     }
   });
-  ipcMain.handle('run-schedule-now', (_event, filePath) => {
+  ipcMain.handle('run-schedule-now', async (_event, filePath) => {
     try {
       const target = resolveRunNowTarget(filePath, isPathAllowed);
       if (!target.ok) {
@@ -212,7 +212,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
+      await runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
       return { ok: true, sessionId };

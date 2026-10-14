@@ -10,6 +10,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
   let pending = null;
   let nextId = 0;
   const waiters = new Set();
+  let receiving = null;
   const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
 
   function settle(waiter, error, result) {
@@ -46,9 +47,13 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       const state = snapshot();
       if (message.progress) {
         if (active.stale || state.version !== active.version) { active.stale = true; return; }
-        apply({ ...message.progress, reconciled: false });
-        active.version = snapshot().version;
-        return;
+        const job = active;
+        const applied = apply({ ...message.progress, reconciled: false });
+        const finish = acknowledgment => {
+          if (active === job) active.version = acknowledgment?.version ?? snapshot().version;
+        };
+        if (applied?.then) return applied.then(finish).catch(fail);
+        return finish();
       }
       const job = active;
       clearTimeout(job.timer);
@@ -63,10 +68,15 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         return;
       }
       const published = stale ? { ...result, effects: [], keptLiveRows: [], reconciled: false, stale: true } : result;
-      if (!stale) apply(result);
-      active = null;
-      for (const waiter of job.waiters) settle(waiter, null, published);
-      dispatchPending();
+      const finish = () => {
+        if (active !== job) return;
+        active = null;
+        for (const waiter of job.waiters) settle(waiter, null, published);
+        dispatchPending();
+      };
+      const applied = !stale && apply(result);
+      if (applied?.then) return applied.then(finish).catch(fail);
+      finish();
     } catch (error) { fail(error); }
   }
 
@@ -75,7 +85,14 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       if (!worker) {
         const current = workerFactory();
         worker = current;
-        current.on('message', message => { if (worker === current) receive(message); });
+        current.on('message', message => {
+          const receiveCurrent = () => worker === current ? receive(message) : undefined;
+          const result = receiving ? receiving.then(receiveCurrent) : receiveCurrent();
+          if (result?.then) {
+            const queued = Promise.resolve(result).finally(() => { if (receiving === queued) receiving = null; });
+            receiving = queued;
+          }
+        });
         current.on('error', error => { if (worker === current) fail(error); });
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }

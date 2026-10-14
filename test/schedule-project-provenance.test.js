@@ -114,7 +114,7 @@ test('schedules: a transcript folder with no schedule, or a schedule without a .
 
 test('schedules: main.js seeds the registry from the project: settings keys and the schedule source', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(source, /scheduleRegistry\(getSetting, setSetting, \(\) => initialScheduleProjects\(\(\) => listSettingKeys\('project:'\)\)\)/);
+  assert.match(source, /writer\.scheduleRegistry\(\(\) => initialScheduleProjects\(\(\) => listSettingKeys\('project:'\)\)\)/);
 });
 
 test('schedules: a schedule is sandboxed by the nearest project setting that contains it', () => {

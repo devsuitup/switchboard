@@ -35,6 +35,7 @@ function handler(overrides = {}) {
     annotateRemoteAttachable: projects => projects,
     ...overrides,
   };
+  context.writer = { applyAndPersistArchived: context.applyAndPersistArchived };
   vm.runInNewContext(source.slice(start, end), context);
   return invoke;
 }

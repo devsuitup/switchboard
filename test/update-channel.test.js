@@ -90,33 +90,33 @@ test('startup resolves a missing channel from SETTING_DEFAULTS', () => {
   assert.equal(ctx.updater.allowPrerelease, true);
 });
 
-test('saving global settings switches both ways and missing values restore the default', () => {
+test('saving global settings switches both ways and missing values restore the default', async () => {
   const ctx = setup({ receiveBetaVersions: false });
-  ctx.save('global', { receiveBetaVersions: true });
+  (await ctx.save('global', { receiveBetaVersions: true }));
   assert.equal(ctx.updater.allowPrerelease, true);
-  ctx.save('project:/example', { receiveBetaVersions: false });
+  (await ctx.save('project:/example', { receiveBetaVersions: false }));
   assert.equal(ctx.updater.allowPrerelease, true);
-  ctx.save('global', { receiveBetaVersions: false });
+  (await ctx.save('global', { receiveBetaVersions: false }));
   assert.equal(ctx.updater.allowPrerelease, false);
-  ctx.save('global', { receiveBetaVersions: true });
-  ctx.save('global', {});
+  (await ctx.save('global', { receiveBetaVersions: true }));
+  (await ctx.save('global', {}));
   assert.equal(ctx.updater.allowPrerelease, SETTING_DEFAULTS.receiveBetaVersions);
   assert.equal(ctx.updater.allowDowngrade, false);
 });
 
-test('beta applies even when automatic checks are disabled', () => {
+test('beta applies even when automatic checks are disabled', async () => {
   const ctx = setup({ receiveBetaVersions: true, autoUpdate: false });
   assert.equal(ctx.updater.allowPrerelease, true);
   assert.equal(ctx.updater.autoDownload, false);
   assert.equal(ctx.updater.autoInstallOnAppQuit, false);
   assert.equal(ctx.timers.length, 0);
-  ctx.save('global', { receiveBetaVersions: false, autoUpdate: false });
+  (await ctx.save('global', { receiveBetaVersions: false, autoUpdate: false }));
   assert.equal(ctx.updater.allowPrerelease, false);
 });
 
-test('saving the channel without a packaged updater remains available', () => {
+test('saving the channel without a packaged updater remains available', async () => {
   const ctx = setup({}, { packaged: false });
-  assert.equal(ctx.save('global', { receiveBetaVersions: true }).ok, true);
+  assert.equal((await ctx.save('global', { receiveBetaVersions: true })).ok, true);
   assert.deepEqual(ctx.logs, []);
   assert.equal(ctx.timers.length, 0);
 });

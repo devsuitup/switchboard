@@ -26,7 +26,7 @@ function handlerBody() {
 
 test('remove-project: accepts an explicit folder key and uses it for cache cleanup', () => {
   const body = handlerBody();
-  assert.match(body, /\('remove-project',\s*\(_event,\s*projectPath,\s*folderKey\)/,
+  assert.match(body, /\('remove-project',\s*async \(_event,\s*projectPath,\s*folderKey\)/,
     'the handler must accept a second folderKey argument');
   assert.match(body, /const folder = folderKey \|\| encodeProjectPath\(projectPath\);/,
     'the cache folder key must prefer the passed folderKey over deriving one from projectPath alone');
@@ -44,11 +44,10 @@ test('remove-project: writes an alias-qualified hidden entry for a remote group'
     'the alias must be derived from the passed folder key, not guessed');
   assert.match(body, /const hiddenEntry = alias === null \? projectPath : joinFolderKey\(alias, projectPath\);/,
     'a remote group must be hidden under its alias-qualified entry, a local one under the bare path');
-  const entryLine = body.indexOf('const hiddenEntry');
-  const push = body.slice(entryLine);
-  assert.match(push, /hidden\.includes\(hiddenEntry\)/);
-  assert.match(push, /hidden\.push\(hiddenEntry\)/,
-    'the computed hiddenEntry must be what gets pushed, not the bare projectPath');
+  assert.match(body, /await writer\.hideProject\(hiddenEntry, 'delete'\)/);
+  const facade = fs.readFileSync(path.join(ROOT, 'session-index-writer.js'), 'utf8');
+  assert.match(facade, /hidden\.includes\(entry\)/);
+  assert.match(facade, /hidden\.push\(entry\)/);
 });
 
 test('preload: deleteProject forwards the folder key to the main process', () => {

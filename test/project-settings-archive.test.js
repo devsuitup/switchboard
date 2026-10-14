@@ -61,6 +61,10 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true,
     notifyRendererProjectsChanged: () => { notices++; },
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
   });
+  context.writer = require('../session-index-writer').createSessionIndexWriter({
+    getSetting, setSetting, deleteSetting,
+    deleteCachedFolder: context.deleteCachedFolder, deleteSearchFolder: context.deleteSearchFolder,
+  }, { refreshFolder: context.refreshFolder });
   const source = read('main.js');
   vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
   context.normalizeArchivedProjectPath = modules.load('normalize-project-path.js').normalizeProjectPath;
@@ -81,10 +85,10 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true,
     invoke, archive, scheduleFile, scheduleBytes, notices: () => notices };
 }
 
-test('archive keeps persisted project settings, cache, search and schedule registration', t => {
+test('archive keeps persisted project settings, cache, search and schedule registration', async t => {
   const h = setup(t);
   const before = h.getSetting('project:' + h.projectPath);
-  assert.equal(h.archive().ok, true);
+  assert.equal((await h.archive()).ok, true);
   assert.deepEqual(h.getSetting('project:' + h.projectPath), before);
   assert.ok(h.cache.has(h.folder));
   assert.ok(h.search.has(h.folder));
@@ -114,22 +118,22 @@ test('archive and unarchive filter the public project payload and restore its si
   await app.loadProjects();
   const id = 'ph-' + ctx.sidebar.folderId(h.projectPath);
   assert.ok(ctx.document.getElementById(id));
-  h.archive();
+  (await h.archive());
   await app.loadProjects();
   assert.equal(ctx.document.getElementById(id), null);
-  assert.equal(h.invoke('unarchive-project', h.projectPath).ok, true);
+  assert.equal((await h.invoke('unarchive-project', h.projectPath)).ok, true);
   await app.loadProjects();
   assert.ok(ctx.document.getElementById(id));
   assert.equal(h.getSetting('project:' + h.projectPath).permissionMode, 'plan');
 });
 
-test('legacy hidden entries unarchive with default settings and rebuild the folder', t => {
+test('legacy hidden entries unarchive with default settings and rebuild the folder', async t => {
   const h = setup(t);
   h.setSetting('global', { hiddenProjects: [h.projectPath] });
   h.deleteSetting('project:' + h.projectPath);
   h.setSetting('scheduleProjects', []);
   h.cache.clear();
-  assert.equal(h.invoke('unarchive-project', h.projectPath).ok, true);
+  assert.equal((await h.invoke('unarchive-project', h.projectPath)).ok, true);
   assert.deepEqual(h.getSetting('global').hiddenProjects, []);
   assert.equal(h.getSetting('project:' + h.projectPath), undefined);
   assert.ok(h.cache.has(h.folder));
@@ -137,25 +141,25 @@ test('legacy hidden entries unarchive with default settings and rebuild the fold
 });
 
 test('Windows legacy Hide unarchive with different case keeps one registration and one scheduled run',
-  { skip: process.platform !== 'win32' }, t => {
+  { skip: process.platform !== 'win32' }, async t => {
     const h = setup(t, { cron: '0 * * * *' });
     const hidden = h.projectPath.toUpperCase();
     h.setSetting('global', { hiddenProjects: [hidden] });
-    assert.equal(h.invoke('unarchive-project', hidden).ok, true);
+    assert.equal((await h.invoke('unarchive-project', hidden)).ok, true);
     assert.deepEqual(h.getSetting('scheduleProjects'), [h.projectPath]);
-    const s = schedulerHarness(t, h);
+    const s = (await schedulerHarness(t, h));
     s.at(11, 0);
-    s.tick();
+    (await s.tick());
     assert.deepEqual(s.runs, [h.projectPath]);
   });
 
-test('remote archive and unarchive preserve host scope without registering a local schedule', t => {
+test('remote archive and unarchive preserve host scope without registering a local schedule', async t => {
   const h = setup(t);
   const remoteFolder = joinFolderKey('server', h.folder);
-  h.archive(h.projectPath, remoteFolder);
+  (await h.archive(h.projectPath, remoteFolder));
   assert.deepEqual(h.getSetting('global').hiddenProjects, ['server::' + h.projectPath]);
   h.setSetting('scheduleProjects', []);
-  assert.equal(h.invoke('unarchive-project', 'server::' + h.projectPath).ok, true);
+  assert.equal((await h.invoke('unarchive-project', 'server::' + h.projectPath)).ok, true);
   assert.deepEqual(h.getSetting('scheduleProjects'), []);
   assert.ok(h.refreshed.includes(remoteFolder));
 });
@@ -170,9 +174,9 @@ test('archiving a host named null does not archive the same local project', t =>
   assert.equal(kept[0].remoteAlias, null);
 });
 
-test('delete drops project settings, cache, search and schedules without changing disk files', t => {
+test('delete drops project settings, cache, search and schedules without changing disk files', async t => {
   const h = setup(t);
-  assert.equal(h.invoke('remove-project', h.projectPath, h.folder).ok, true);
+  assert.equal((await h.invoke('remove-project', h.projectPath, h.folder)).ok, true);
   assert.equal(h.getSetting('project:' + h.projectPath), undefined);
   assert.equal(h.cache.has(h.folder), false);
   assert.equal(h.search.has(h.folder), false);
@@ -181,7 +185,7 @@ test('delete drops project settings, cache, search and schedules without changin
   assert.ok(fs.statSync(h.projectPath).isDirectory());
 });
 
-function schedulerHarness(t, h) {
+async function schedulerHarness(t, h) {
   const localRequire = createRequire(path.join(ROOT, 'schedule-runner.js'));
   const timers = [];
   const clock = { now: new Date(2026, 0, 5, 10, 50).getTime() };
@@ -199,7 +203,7 @@ function schedulerHarness(t, h) {
   const log = { info() {}, warn() {}, error() {} };
   h.context.skipMissedScheduleRuns = projects => runnerContext.module.exports.skipMissedRuns(log, projects, stateDir);
   const source = read('main.js');
-  const projectsLine = source.split('\n').find(line => line.includes('projects: () => scheduleProjects().list()'));
+  const projectsLine = source.split('\n').find(line => line.includes('projects: async () => (await scheduleProjects().list())'));
   const projects = vm.runInContext('({' + projectsLine.trim() + '}).projects', h.context, { filename: path.join(ROOT, 'main.js') });
   const runs = [];
   const resume = new EventEmitter();
@@ -207,50 +211,53 @@ function schedulerHarness(t, h) {
     (_args, cwd, _name, done) => { runs.push(cwd); done(); },
     { projects, resumeSource: resume, stateDir });
   t.after(stop);
-  return { runs, resume, stateDir, tick: () => timers[0].fn(), at: (...args) => { clock.now = new Date(2026, 0, 5, ...args).getTime(); } };
+  await settle();
+  return { runs, resume: { emit: async (...args) => { resume.emit(...args); await settle(); } }, stateDir,
+    tick: async () => { await timers[0].fn(); await settle(); },
+    at: (...args) => { clock.now = new Date(2026, 0, 5, ...args).getTime(); } };
 }
 
-test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', t => {
+test('archived schedules cannot run on ticks or catch-up and a run missed while archived is not caught up on unarchive', async t => {
   const h = setup(t, { cron: '0 * * * *' });
-  const s = schedulerHarness(t, h);
+  const s = (await schedulerHarness(t, h));
   assert.equal(s.runs.length, 0);
-  h.archive();
+  (await h.archive());
   s.at(11, 30);
-  s.tick();
-  s.resume.emit('resume');
+  (await s.tick());
+  (await s.resume.emit('resume'));
   assert.equal(s.runs.length, 0, 'archive must suspend ticks and resume catch-up checks');
-  h.invoke('unarchive-project', h.projectPath);
+  (await h.invoke('unarchive-project', h.projectPath));
   s.at(11, 31);
-  s.tick();
+  (await s.tick());
   assert.equal(s.runs.length, 0, 'the 11:00 run missed while archived is not caught up');
   s.at(12, 0);
-  s.tick();
+  (await s.tick());
   assert.equal(s.runs.length, 1, 'the same registration runs again at its next due minute');
 });
 
-test('a nested worktree schedule is not caught up either when its project is unarchived', t => {
+test('a nested worktree schedule is not caught up either when its project is unarchived', async t => {
   const h = setup(t, { cron: '0 * * * *' });
   const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
   const commands = path.join(worktree, '.claude', 'commands');
   fs.mkdirSync(commands, { recursive: true });
   fs.writeFileSync(path.join(commands, 'schedule-audit.md'), h.scheduleBytes);
   h.setSetting('scheduleProjects', [h.projectPath, worktree]);
-  const s = schedulerHarness(t, h);
-  h.archive();
+  const s = (await schedulerHarness(t, h));
+  (await h.archive());
   s.at(11, 30);
-  s.tick();
+  (await s.tick());
   assert.equal(s.runs.length, 0);
-  h.invoke('unarchive-project', h.projectPath);
+  (await h.invoke('unarchive-project', h.projectPath));
   s.at(11, 31);
-  s.tick();
+  (await s.tick());
   assert.equal(s.runs.length, 0, 'neither the project nor its worktree replays the 11:00 run');
   s.at(12, 0);
-  s.tick();
+  (await s.tick());
   assert.deepEqual([...s.runs].sort(), [h.projectPath, worktree].sort());
 });
 
 for (const target of ['root', 'worktree']) {
-  test(`Windows unarchive with different path case resets the ${target} scheduler key`, t => {
+  test(`Windows unarchive with different path case resets the ${target} scheduler key`, async t => {
     let h;
     const onDisk = value => value.toLowerCase().startsWith(h.projectPath.toLowerCase())
       ? h.projectPath + value.slice(h.projectPath.length) : value;
@@ -261,37 +268,37 @@ for (const target of ['root', 'worktree']) {
     const worktreeFile = path.join(commands, 'schedule-audit.md');
     fs.writeFileSync(worktreeFile, h.scheduleBytes);
     h.setSetting('scheduleProjects', [h.projectPath, worktree]);
-    const s = schedulerHarness(t, h);
+    const s = (await schedulerHarness(t, h));
     const archivedPath = h.projectPath.toUpperCase();
     assert.notEqual(archivedPath, h.projectPath);
-    assert.equal(h.archive(archivedPath, encodeProjectPath(archivedPath)).ok, true);
+    assert.equal((await h.archive(archivedPath, encodeProjectPath(archivedPath))).ok, true);
     s.at(11, 30);
-    s.tick();
-    s.resume.emit('resume');
+    (await s.tick());
+    (await s.resume.emit('resume'));
     assert.equal(s.runs.length, 0);
-    assert.equal(h.invoke('unarchive-project', archivedPath).ok, true);
+    assert.equal((await h.invoke('unarchive-project', archivedPath)).ok, true);
     const file = target === 'root' ? h.scheduleFile : worktreeFile;
     const key = createHash('sha256').update(file).digest('hex').slice(0, 16);
     const baseline = new Date(2026, 0, 5, 11, 29).getTime();
     assert.ok(fs.existsSync(path.join(s.stateDir, `${key}-${baseline}.json`)),
       'unarchive must reset the catch-up record under the registry schedule file key');
     s.at(11, 31);
-    s.tick();
-    s.resume.emit('resume');
+    (await s.tick());
+    (await s.resume.emit('resume'));
     assert.equal(s.runs.length, 0, 'the missed 11:00 run must not replay');
     s.at(12, 0);
-    s.tick();
+    (await s.tick());
     assert.deepEqual([...s.runs].sort(), [h.projectPath, worktree].sort());
   });
 }
 
 for (const platform of ['linux', 'darwin']) {
-  test(`${platform} unarchive keeps differently cased registry projects distinct`, t => {
+  test(`${platform} unarchive keeps differently cased registry projects distinct`, async t => {
     const h = setup(t, { platform, realpath: value => value });
     const otherRoot = h.projectPath.toUpperCase();
     const otherWorktree = path.join(otherRoot, '.claude', 'worktrees', 'worker');
     h.setSetting('scheduleProjects', [h.projectPath, otherRoot, otherWorktree]);
-    assert.deepEqual(Array.from(h.context.unarchivedScheduleProjects(h.projectPath)), [h.projectPath]);
+    assert.deepEqual(Array.from((await h.context.unarchivedScheduleProjects(h.projectPath))), [h.projectPath]);
   });
 }
 
@@ -319,47 +326,47 @@ function runNowHarness(h) {
   return { run: file => handlers.get('run-schedule-now')(null, file), runs };
 }
 
-test('Run now refuses an archived project before writing a transcript and resumes on unarchive', t => {
+test('Run now refuses an archived project before writing a transcript and resumes on unarchive', async t => {
   const h = setup(t);
   const runner = runNowHarness(h);
-  h.archive();
-  assert.equal(runner.run(h.scheduleFile).ok, false);
+  (await h.archive());
+  assert.equal((await runner.run(h.scheduleFile)).ok, false);
   assert.equal(runner.runs.length, 0);
   assert.equal(fs.existsSync(path.join(h.dir, '.claude', 'projects')), false);
-  h.invoke('unarchive-project', h.projectPath);
-  assert.equal(runner.run(h.scheduleFile).ok, true);
+  (await h.invoke('unarchive-project', h.projectPath));
+  assert.equal((await runner.run(h.scheduleFile)).ok, true);
   assert.equal(runner.runs.length, 1);
 });
 
-test('Run now cannot bypass project Archive through a directory junction or symlink', t => {
+test('Run now cannot bypass project Archive through a directory junction or symlink', async t => {
   const h = setup(t);
   const link = path.join(h.dir, 'linked-project');
   fs.symlinkSync(h.projectPath, link, process.platform === 'win32' ? 'junction' : 'dir');
-  h.archive(link, encodeProjectPath(link));
+  (await h.archive(link, encodeProjectPath(link)));
   const runner = runNowHarness(h);
-  assert.equal(runner.run(path.join(link, '.claude', 'commands', 'schedule-audit.md')).ok, false);
+  assert.equal((await runner.run(path.join(link, '.claude', 'commands', 'schedule-audit.md'))).ok, false);
   assert.equal(runner.runs.length, 0);
   assert.equal(fs.existsSync(path.join(h.dir, '.claude', 'projects')), false);
 });
 
-test('project Archive suspends nested worktree schedules with native path separators', t => {
+test('project Archive suspends nested worktree schedules with native path separators', async t => {
   const h = setup(t);
   const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'worker');
   fs.mkdirSync(worktree, { recursive: true });
-  h.archive();
+  (await h.archive());
   assert.equal(h.context.isProjectSettingsArchived(worktree), true);
-  h.invoke('unarchive-project', h.projectPath);
+  (await h.invoke('unarchive-project', h.projectPath));
   assert.equal(h.context.isProjectSettingsArchived(worktree), false);
 });
 
-test('the shared schedule launch refuses an archived project and releases its running guard', t => {
+test('the shared schedule launch refuses an archived project and releases its running guard', async t => {
   const h = setup(t);
-  h.archive();
+  (await h.archive());
   let done = 0;
   h.context.log = { info() {} };
-  const source = read('main.js').replace(/^    function runScheduleCommand/m, 'function runScheduleCommand');
+  const source = read('main.js').replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand');
   vm.runInContext(extractFunction(source, 'runScheduleCommand'), h.context, { filename: path.join(ROOT, 'main.js') });
-  h.context.runScheduleCommand([], h.projectPath, 'Audit', () => { done++; });
+  (await h.context.runScheduleCommand([], h.projectPath, 'Audit', () => { done++; }));
   assert.equal(done, 1);
 });
 
@@ -388,9 +395,9 @@ function settingsDom(t, h) {
   dom.window.api = new Proxy({
     platform: 'win32', getSetting: async key => h.getSetting(key), getShellProfiles: async () => [],
     setSetting: async (key, value) => { h.setSetting(key, value); return { ok: true }; },
-    archiveProjectSettings: async (...args) => { calls.push(['archive', ...args]); return h.archive(...args); },
-    deleteProject: async (...args) => { calls.push(['delete', ...args]); return h.invoke('remove-project', ...args); },
-    unarchiveProject: async entry => { calls.push(['unarchive', entry]); return h.invoke('unarchive-project', entry); },
+    archiveProjectSettings: async (...args) => { calls.push(['archive', ...args]); return (await h.archive(...args)); },
+    deleteProject: async (...args) => { calls.push(['delete', ...args]); return (await h.invoke('remove-project', ...args)); },
+    unarchiveProject: async entry => { calls.push(['unarchive', entry]); return (await h.invoke('unarchive-project', entry)); },
   }, { get: (obj, key) => key in obj ? obj[key] : async () => ({ ok: true }) });
   dom.window.confirm = () => { throw new Error('native confirm must not be used'); };
   dom.window.alert = () => { throw new Error('native alert must not be used'); };
@@ -470,7 +477,7 @@ test('archiving an exact project does not reinsert a pending session into the si
   ctx.window.renderDefaultStatus = () => {};
   ctx.window.pendingSessions.set('pending', { projectPath: h.projectPath, folder: h.folder,
     session: { sessionId: 'pending', projectPath: h.projectPath } });
-  h.archive();
+  (await h.archive());
   await loadAppFunctions(ctx.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
   assert.equal(ctx.window.cachedProjects.length, 0);
   assert.equal(ctx.window.cachedAllProjects.length, 0);
@@ -489,7 +496,7 @@ test('a pending session arriving during project fetch cannot reinsert an archive
   ctx.window.reportActivityTitles = () => {};
   ctx.window.refreshSidebar = () => {};
   ctx.window.renderDefaultStatus = () => {};
-  h.archive();
+  (await h.archive());
   const loading = loadAppFunctions(ctx.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
   ctx.window.pendingSessions.set('pending', { projectPath: h.projectPath, folder: h.folder,
     session: { sessionId: 'pending', projectPath: h.projectPath } });
@@ -499,28 +506,28 @@ test('a pending session arriving during project fetch cannot reinsert an archive
   assert.equal(ctx.window.cachedAllProjects.length, 0);
 });
 
-test('unarchiving a project that was never registered or was deleted registers no schedule', t => {
+test('unarchiving a project that was never registered or was deleted registers no schedule', async t => {
   const never = setup(t, { registered: false });
-  never.archive();
-  assert.equal(never.invoke('unarchive-project', never.projectPath).ok, true);
+  (await never.archive());
+  assert.equal((await never.invoke('unarchive-project', never.projectPath)).ok, true);
   assert.deepEqual(never.getSetting('scheduleProjects'), []);
   const deleted = setup(t);
-  deleted.invoke('remove-project', deleted.projectPath, deleted.folder);
-  assert.equal(deleted.invoke('unarchive-project', deleted.projectPath).ok, true);
+  (await deleted.invoke('remove-project', deleted.projectPath, deleted.folder));
+  assert.equal((await deleted.invoke('unarchive-project', deleted.projectPath)).ok, true);
   assert.deepEqual(deleted.getSetting('scheduleProjects'), []);
 });
 
-test('a legacy hidden entry whose folder is gone is not registered on unarchive', t => {
+test('a legacy hidden entry whose folder is gone is not registered on unarchive', async t => {
   const h = setup(t, { registered: false });
   const gone = path.join(h.dir, 'gone');
   h.setSetting('global', { hiddenProjects: [gone] });
-  assert.equal(h.invoke('unarchive-project', gone).ok, true);
+  assert.equal((await h.invoke('unarchive-project', gone)).ok, true);
   assert.deepEqual(h.getSetting('scheduleProjects'), []);
 });
 
-test('Archive matches a project path whatever its letter case on Windows', { skip: process.platform !== 'win32' }, t => {
+test('Archive matches a project path whatever its letter case on Windows', { skip: process.platform !== 'win32' }, async t => {
   const h = setup(t);
-  h.archive();
+  (await h.archive());
   assert.equal(h.context.isProjectSettingsArchived(h.projectPath.toUpperCase()), true);
   const worktree = path.join(h.projectPath, '.claude', 'worktrees', 'w');
   fs.mkdirSync(worktree, { recursive: true });
@@ -537,11 +544,11 @@ test('Settings lists archived projects but not deleted ones, and Delete and Arch
   assert.ok(text.includes(h.projectPath));
   assert.equal(text.includes(other), false);
   h.setSetting('global', {});
-  h.archive();
+  (await h.archive());
   assert.deepEqual(h.getSetting('global').hiddenProjectKinds, { [h.projectPath]: 'archive' });
-  h.invoke('unarchive-project', h.projectPath);
+  (await h.invoke('unarchive-project', h.projectPath));
   assert.deepEqual(h.getSetting('global').hiddenProjectKinds, {});
-  h.invoke('remove-project', h.projectPath, h.folder);
+  (await h.invoke('remove-project', h.projectPath, h.folder));
   assert.deepEqual(h.getSetting('global').hiddenProjectKinds, { [h.projectPath]: 'delete' });
 });
 

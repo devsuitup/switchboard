@@ -269,14 +269,14 @@ test('pruning an undeclared host clears its pending repair through the main drop
   f.search.set('remote', { id: 'remote', folder: key });
   f.meta.set(key, {});
   f.settings.set('bridge_uuid_reindex_folders', [key, f.folder, 'vps::-srv-demo']);
+  const writer = require('../session-index-writer').createSessionIndexWriter(f.db);
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const body = source.match(/dropFolder: \(folderKey\) => \{([\s\S]*?)\n?\s*\},/)[1];
-  const drop = new Function('deleteCachedFolder', 'deleteSearchFolder', 'getSetting', 'setSetting', 'folderKey', body);
+  assert.match(source, /dropFolder: async folderKey => await writer\.dropRemoteFolder\(folderKey\)/);
   const indexer = createRemoteIndexer({
     getHosts: () => [{ alias: 'vps' }], dataDir: f.root, transport: {},
     sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
     listIndexedFolderKeys: () => [...f.meta.keys()],
-    dropFolder: folder => drop(f.db.deleteCachedFolder, f.db.deleteSearchFolder, f.db.getSetting, f.db.setSetting, folder),
+    dropFolder: folder => writer.dropRemoteFolder(folder),
   });
   t.after(() => indexer.dispose());
   await indexer.refreshNow();
