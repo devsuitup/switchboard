@@ -28,7 +28,7 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
   }
 
   function fail(error, report = true) {
-    const published = active?.published || applying?.published || pendingApply?.published;
+    const published = active?.published || active?.background || applying?.published || pendingApply?.published;
     generation++;
     resetWorker();
     pending = null;
@@ -64,18 +64,26 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
     dispatchPending();
   }
 
+  function failApply(job, error) {
+    if (job.cancelled || job.generation !== generation || stopped) return;
+    job.cancelled = true;
+    if (pendingApply === job) pendingApply = null;
+    onError(error);
+    retry(job);
+  }
+
   async function applyPending() {
     if (applying || !pendingApply) return;
     const job = pendingApply;
     pendingApply = null;
     applying = job;
-    const current = () => job.generation === generation && !stopped;
+    const current = () => job.generation === generation && !job.cancelled && !stopped;
     const valid = () => current() && getVersion() === job.version;
     try {
       await new Promise(resolve => setImmediate(resolve));
       const accepted = valid() && await apply(job.result, valid);
       if (current() && (!accepted || !valid())) retry(job);
-    } catch (error) { if (current()) fail(error); }
+    } catch (error) { if (current()) failApply(job, error); }
     finally {
       clearTimeout(job.timer);
       applying = null;
@@ -111,8 +119,13 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
         current.on('exit', code => { if (worker === current) fail(new Error(`file list worker exited ${code}`)); });
       }
       const state = snapshot();
-      active = { ...job, id: ++nextId, version: state.version, generation, receiving: false };
-      active.timer = setTimeout(() => fail(new Error('file list worker hard deadline exceeded')), hardTimeoutMs);
+      active = { ...job, id: ++nextId, version: state.version, generation, receiving: false, background: job.background || job.published, published: false, cancelled: false };
+      const dispatched = active;
+      active.timer = setTimeout(() => {
+        const error = new Error('file list worker hard deadline exceeded');
+        if (dispatched.published) failApply(dispatched, error);
+        else fail(error);
+      }, hardTimeoutMs);
       worker.postMessage({ ...state, id: active.id });
     } catch (error) { fail(error); }
   }

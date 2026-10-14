@@ -18,7 +18,12 @@ test('save invalidation only marks the changed file for reindexing', () => {
   const ctx = makeCtx();
   const a = JSON.stringify([JSON.stringify([1, 2, 'a.md']), 'a']);
   const b = JSON.stringify([JSON.stringify([1, 2, 'b.md']), 'b']);
-  vm.runInContext(`fileListStates.get('memory').indexed = new Map([['a.md', ${JSON.stringify(a)}], ['b.md', ${JSON.stringify(b)}]]); invalidateFtsSignature('memory', 'a.md');`, ctx, { filename: path.join(__dirname, '..', 'main.js') });
+  vm.runInContext(`
+    const state = fileListStates.get('memory');
+    state.indexed = new Map([['a.md', ${JSON.stringify(a)}], ['b.md', ${JSON.stringify(b)}]]);
+    publishFileListPaths(state, state.indexed.keys());
+    invalidateFtsSignature('memory', 'a.md');
+  `, ctx, { filename: path.join(__dirname, '..', 'main.js') });
   assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('a.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), null);
   assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('b.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), b);
   assert.equal(vm.runInContext("fileListStates.get('memory').epoch", ctx), 1);

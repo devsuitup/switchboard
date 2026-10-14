@@ -67,9 +67,14 @@ character without changing the worker payload, so later entries still apply.
 Before every batch it checks the apply generation and the hidden/live-root/save version. Accepted
 signatures advance only after a successful transaction; a conflict retries
 from those accepted batches even without pending callers, and a failed write
-leaves its files dirty and logs the background failure without retracting the
-published view. Caller timeouts do not cancel a published apply; the dispatch
-ceiling and shutdown still stop it. Save and delete hooks invalidate the
+  leaves its files dirty and logs the background failure without retracting the
+  published view. Apply failures retry through a fresh background scan, sharing
+  an already active scan when possible, within the same three-discard limit.
+  They preserve unrelated active and queued scan callers. A published job's
+  dispatch ceiling invalidates only that apply and retries its background work;
+  the apply retains its slot until it unwinds. Retried scans get a fresh ceiling
+  and become published only on their own reply. Caller timeouts do not cancel
+  a published apply; shutdown still stops it. Save and delete hooks invalidate the
 particular path, including Memory aliases of
 the resolved path, with Windows case and separator folding. Resolved Memory
 targets remain associated with listed IDs when their signatures become dirty.

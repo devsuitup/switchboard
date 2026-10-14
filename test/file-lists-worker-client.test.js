@@ -132,19 +132,109 @@ test('shutdown rejects active and pending callers and refuses future requests', 
   assert.equal(r.workers[0].terminated, true);
 });
 
-test('failure during background indexing is reported, preserves the published view and restarts', async t => {
+test('failure during background indexing is reported and retries without callers or a worker restart', async t => {
   const errors = [];
-  const r = rig(t, { apply: async () => { throw new Error('DB failed'); }, onError: error => errors.push(error) });
+  const applied = [];
+  const r = rig(t, { apply: async result => {
+    if (result.view === 'ready') throw new Error('DB failed');
+    applied.push(result.view);
+    return true;
+  }, onError: error => errors.push(error) });
   const result = r.client.request();
   r.reply({ view: 'ready' });
   assert.equal((await result).view, 'ready');
   await nextTurn();
   assert.match(errors[0].message, /DB failed/);
-  assert.equal(r.workers[0].terminated, true);
-  const retry = r.client.request();
+  assert.equal(r.workers[0].terminated, false);
+  assert.equal(r.workers[0].messages.length, 2);
   r.reply({ view: 'retry' });
-  assert.equal((await retry).view, 'retry');
-  assert.equal(r.workers.length, 2);
+  await nextTurn();
+  assert.deepEqual(applied, ['retry']);
+  assert.equal(r.workers.length, 1);
+});
+
+test('an apply failure preserves active and queued scan callers and retries through the healthy scan', async t => {
+  const errors = [];
+  const applied = [];
+  const r = rig(t, { apply: async result => {
+    if (result.view === 'first') throw new Error('DB failed');
+    applied.push(result.view);
+    return true;
+  }, onError: error => errors.push(error) });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  await first;
+  const healthy = r.client.request().then(value => ({ value }), error => ({ error }));
+  const queued = r.client.request().then(value => ({ value }), error => ({ error }));
+  await nextTurn();
+  assert.match(errors[0].message, /DB failed/);
+  assert.equal(r.workers[0].terminated, false, 'an apply failure must not terminate a healthy scan');
+  assert.equal(r.workers[0].messages.length, 2);
+  r.reply({ view: 'healthy' });
+  assert.equal((await healthy).value.view, 'healthy');
+  r.reply({ view: 'queued' });
+  assert.equal((await queued).value.view, 'queued');
+  await nextTurn();
+  await nextTurn();
+  assert.ok(applied.includes('queued'));
+  assert.equal(r.workers.length, 1);
+});
+
+test('repeated apply failures stop retrying at the discard limit and leave navigation available', async t => {
+  const errors = [];
+  const r = rig(t, { apply: async result => {
+    if (result.view !== 'recovered') throw new Error('DB failed');
+    return true;
+  }, onError: error => errors.push(error) });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  await first;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await nextTurn();
+    assert.equal(errors.filter(error => /DB failed/.test(error.message)).length, attempt);
+    assert.equal(r.workers[0].messages.length, Math.min(attempt + 1, 3));
+    if (attempt < 3) r.reply({ view: 'retry' });
+  }
+  const recovered = r.client.request();
+  r.reply({ view: 'recovered' });
+  assert.equal((await recovered).view, 'recovered');
+  assert.equal(r.workers.length, 1);
+});
+
+test('a published apply hard deadline cancels only that apply and preserves a newer healthy scan', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const errors = [];
+  const applied = [];
+  let firstValid;
+  const r = rig(t, { timeoutMs: 1000, hardTimeoutMs: 100, apply: async (result, valid) => {
+    if (result.view === 'first') {
+      firstValid = valid;
+      await gate;
+    }
+    if (valid()) applied.push(result.view);
+    return valid();
+  }, onError: error => errors.push(error) });
+  try {
+    const first = r.client.request();
+    r.reply({ view: 'first' });
+    await first;
+    await nextTurn();
+    t.mock.timers.tick(50);
+    const healthy = r.client.request().then(value => ({ value }), error => ({ error }));
+    t.mock.timers.tick(50);
+    assert.equal(firstValid(), false, 'the expired apply must stop writing');
+    assert.match(errors[0].message, /hard deadline/);
+    assert.equal(r.workers[0].terminated, false, 'the newer scan still has 50ms left');
+    r.reply({ view: 'healthy' });
+    assert.equal((await healthy).value.view, 'healthy');
+    assert.deepEqual(applied, []);
+  } finally { release(); }
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(applied, ['healthy']);
+  assert.equal(r.workers.length, 1);
 });
 
 test('a request during a slow index apply resolves without waiting for that apply', async t => {
