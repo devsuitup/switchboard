@@ -2442,6 +2442,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const exitSignal = ptyExitSignalName(signal);
     const stopped = !!session.stopRequested;
     session.exited = true;
+    if (!session.isAttach && !session.isPlainTerminal) taskRecords.ownerDied(session.realSessionId || sessionId);
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
     shutdownMcpServer(mcpId);
@@ -3135,10 +3136,42 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 });
 
 // Session transitions → session-transitions.js
+const { createTaskRecordsClient } = require('./task-records-client');
+const taskRecords = createTaskRecordsClient({
+  onSnapshot: snapshot => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-snapshot', snapshot);
+  },
+  onError: error => log.warn(`[task-records] ${error}`),
+  onRekey: (oldId, newId) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId });
+  },
+});
+ipcMain.handle('get-task-snapshots', async () => {
+  const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
+  for (const [key, session] of activeSessions) {
+    if (!session.exited && !session.isPlainTerminal) live.add(session.realSessionId || key);
+  }
+  for (const job of bgAgents.getSnapshot().roster) {
+    if (job.sessionId && ['working', 'blocked'].includes(job.state)) live.add(job.sessionId);
+  }
+  for (const row of getAllCached()) {
+    if (row.isSidechain || row.parentSessionId || row.remoteAlias || !live.has(row.sessionId)) continue;
+    const folder = getCachedFolder(row.sessionId);
+    const dir = folder && !folder.includes('::') && projectsDirForFolder(folder);
+    if (dir) {
+      await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
+      for (const child of getCachedByParent(row.sessionId)) {
+        if (child.agentId) await taskRecords.child(path.join(dir, row.sessionId, 'subagents', 'agent-' + child.agentId + '.jsonl'), row.sessionId, child.agentId);
+      }
+    }
+  }
+  return taskRecords.snapshots();
+});
 const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
-  rekeyActivity: (fromId, toId) => activityReporter.rekey(fromId, toId),
+  hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
+  rekeyActivity: (fromId, toId) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId); },
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
   getDescriptorIdentity: snapshot => cliSessionState.getDescriptorIdentity(snapshot),
 });
@@ -3149,13 +3182,17 @@ const cliSessionState = require('./cli-session-state');
 cliSessionState.init({
   activeSessions,
   log,
+  onOwnerExit: id => taskRecords.ownerDied(id),
   onIdle: (sessionId, session) => {
     sessionTransitions.detectSubagentTransitions(
       sessionId, session, path.join(PROJECTS_DIR, session.projectFolder)
     );
   },
 });
-cliSessionState.onStatusesChanged(notifyRendererProjectsChanged);
+cliSessionState.onStatusesChanged(() => {
+  notifyRendererProjectsChanged();
+  for (const descriptor of cliSessionState.getSidebarDescriptors()) taskRecords.ownerAlive(descriptor.sessionId);
+});
 
 // a session with a live PTY is owned by the OSC path — see .ai/contexts/session-state.md
 const ptyPids = cliSessionState.makePtyPids(activeSessions);
@@ -3170,6 +3207,14 @@ function sessionHasPty(sessionId) {
 const localTranscriptTracker = createLocalTranscriptTracker({
   hasPty: sessionHasPty,
   projectsDir: PROJECTS_DIR,
+  onTranscript: (file, id, agentId) => {
+    if (sessionHasPty(id) || cliSessionState.getStatus(id) || bgAgents.getSnapshot().roster.some(job => job.sessionId === id && ['working', 'blocked'].includes(job.state))) {
+      if (agentId) {
+        const folder = path.relative(PROJECTS_DIR, file).split(path.sep)[0];
+        taskRecords.read(path.join(PROJECTS_DIR, folder, id + '.jsonl'), id).then(() => taskRecords.child(file, id, agentId));
+      } else taskRecords.read(file, id);
+    }
+  },
   onActivity: (activity) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('session-transcript-activity', activity);
@@ -3213,6 +3258,11 @@ bgAgents.init({
 const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
 bgAgents.onJobsChanged(notifyRendererProjectsChanged);
+const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
+  for (const job of roster) {
+    if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);
+  }
+});
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
   getMergedMemberIds: id => getAllCached()
@@ -3565,6 +3615,8 @@ app.on('before-quit', (event) => {
 
   // Close filesystem watcher
   localTranscriptTracker.dispose();
+  unsubscribeTaskJobs();
+  taskRecords.dispose();
   if (projectsWatcher) {
     projectsWatcher.close();
     projectsWatcher = null;

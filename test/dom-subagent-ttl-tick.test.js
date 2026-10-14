@@ -87,7 +87,7 @@ function setupCombinedDom() {
   for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
-  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
+  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
 
@@ -176,7 +176,7 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
     assert.ok(row, 'the subagent row must be in the DOM');
     assert.ok(row.classList.contains('running'), 'the spawn lights the row');
-    assert.equal(ctx.scheduled.length, 2, 'each view arms its own TTL timer on the spawn');
+    assert.equal(ctx.scheduled.length, 1, 'each view arms its own TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     // The subagent goes silent: no completion event, no heartbeat, and — the
@@ -210,7 +210,7 @@ test('grid: a stale subagent pill is removed by the TTL tick with no card rebuil
 
     const card = ctx.document.querySelector('.grid-card[data-session-id="' + PARENT + '"]');
     assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 1, 'the pill renders on spawn');
-    assert.equal(ctx.scheduled.length, 2, 'each view arms its own TTL timer on the spawn');
+    assert.equal(ctx.scheduled.length, 1, 'each view arms its own TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     ctx.advanceTime(61000);
@@ -228,7 +228,7 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
   try {
     ctx.window.renderProjects([sampleProject()], true);
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
-    assert.equal(ctx.scheduled.length, 2);
+    assert.equal(ctx.scheduled.length, 1);
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     // Fires while the agent is still within its TTL: nothing to prune, but the
@@ -236,7 +236,7 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
     ctx.runScheduled();
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
     assert.ok(row.classList.contains('running'), 'a fresh agent must survive the tick');
-    assert.equal(ctx.scheduled.length, 2, 'the tick must re-arm while an agent is tracked');
+    assert.equal(ctx.scheduled.length, 1, 'the tick must re-arm while an agent is tracked');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 're-arm for an agent still inside its TTL');
 
     ctx.advanceTime(61000);
@@ -248,7 +248,7 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
   }
 });
 
-test('two agents share one timer per view, re-armed at the survivor\'s own deadline', () => {
+test('two agents share one shared timer, re-armed at the survivor\'s own deadline', () => {
   // Covers the `if (subagentTtlTimer) return;` guard — a second spawn must not
   // arm a second timer — and proves the re-arm is deadline-driven: after the
   // older agent is pruned the next wakeup is the *younger* one's remaining TTL,
@@ -259,11 +259,11 @@ test('two agents share one timer per view, re-armed at the survivor\'s own deadl
     const t0 = ctx.now();
 
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
-    assert.equal(ctx.scheduled.length, 2, 'one timer per view');
+    assert.equal(ctx.scheduled.length, 1, 'one shared timer');
 
     ctx.setNow(t0 + 30000);
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT2, subagentType: 'plan' });
-    assert.equal(ctx.scheduled.length, 2, 'a second agent must not arm a second timer per view');
+    assert.equal(ctx.scheduled.length, 1, 'a second agent must not arm a second shared timer');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'still armed on the older agent');
 
     // The older agent's deadline: it is pruned, the younger one survives.

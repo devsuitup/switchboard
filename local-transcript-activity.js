@@ -132,6 +132,7 @@ function createLocalTranscriptTracker(opts = {}) {
         work.dirty = true;
         return false;
       }
+      if (opts.onTranscript && work.sessionId) opts.onTranscript(file, work.sessionId, work.agentId);
       saveBaseline(file, { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs,
         size: stat.size, mtimeMs: stat.mtimeMs, key: work.key, seenAt: now() });
       if (!previous) return stat.size > 0 && stat.mtimeMs >= firstWriteFloor &&
@@ -185,7 +186,7 @@ function createLocalTranscriptTracker(opts = {}) {
     const sessionId = sessionIdFromWatchParts(parts);
     const attribution = sessionId ? null : subagentParentFromParts(parts);
     const key = sessionId || JSON.stringify(['sub', attribution.parentSessionId, attribution.agentId]);
-    const work = { dirty: false, key };
+    const work = { dirty: false, key, sessionId: sessionId || attribution.parentSessionId, agentId: attribution?.agentId };
     work.promise = (async () => {
       let result = null;
       let attempts = 0;

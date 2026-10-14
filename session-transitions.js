@@ -9,7 +9,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Fork detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -21,6 +21,7 @@ function init(ctx) {
   clearOwner = ctx.clearOwner || (() => 'pending');
   getDescriptorIdentity = ctx.getDescriptorIdentity || (() => null);
   setTimeoutFn = ctx.setTimeout || setTimeout;
+  hasTaskRecord = ctx.hasTaskRecord || (() => false);
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -107,6 +108,7 @@ function nextStableMs(current) {
 function hasUnsettledSubagents(session) {
   if (!session.knownSubagents) return false;
   for (const known of session.knownSubagents.values()) {
+    if (known._cliTask) continue;
     if (!known.completed || known._recheckStart) return true;
   }
   return false;
@@ -210,6 +212,11 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     const m = file.match(/^agent-(.+)\.jsonl$/);
     if (!m) continue;
     const agentId = m[1];
+    if (hasTaskRecord(sessionId, agentId)) {
+      const entry = session.knownSubagents.get(agentId);
+      if (entry) entry._cliTask = true;
+      continue;
+    }
     const filePath = path.join(subagentsDir, file);
 
     const known = session.knownSubagents.get(agentId);

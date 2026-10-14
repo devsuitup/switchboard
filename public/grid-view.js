@@ -14,9 +14,13 @@ let gridFocusedSessionId = null;
 // Grouping is the historical layout, so an unset preference means "grouped".
 let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
-// Active subagents tracked via IPC events (subagent-spawned / subagent-completed).
-// parentSessionId → Set of { agentId, subagentType, spawnedAt }
-const activeSubagents = new Map();
+const activeSubagents = {
+  get(id) {
+    const entries = window.taskRegistry.agents(id);
+    return entries.length ? new Map(entries.map(t => [t.id, { agentId: t.id, subagentType: t.subagentType, spawnedAt: Math.max(...t.sources.values()) }])) : undefined;
+  },
+  has(id) { return !!this.get(id); },
+};
 
 // Subagent type → pill color (matches sidebar palette)
 const GRID_SUBAGENT_TYPE_COLORS = {
@@ -41,14 +45,9 @@ function gridSubagentColor(type) {
     window.api.onSubagentSpawned((data) => {
       const { parentSessionId, agentId, subagentType, _heartbeat } = data || {};
       if (!parentSessionId || !agentId) return;
-      let map = activeSubagents.get(parentSessionId);
-      // A heartbeat means "still alive", never "started".
-      if (_heartbeat && !(map && map.has(agentId))) return;
-      if (!map) {
-        map = new Map();
-        activeSubagents.set(parentSessionId, map);
-      }
-      map.set(agentId, { agentId, subagentType, spawnedAt: Date.now() });
+      const source = data.source || 'local-ipc';
+      if (_heartbeat && !window.taskRegistry.agentView.get(parentSessionId)?.get(agentId)?.has(source)) return;
+      window.taskRegistry.note(parentSessionId, agentId, source, { subagentType });
       scheduleGridSubagentTtlTick();
       updateGridSubagentPills(parentSessionId);
     });
@@ -58,10 +57,10 @@ function gridSubagentColor(type) {
     window.api.onSubagentCompleted((data) => {
       const { parentSessionId, agentId } = data || {};
       if (!parentSessionId || !agentId) return;
-      const map = activeSubagents.get(parentSessionId);
-      if (map) {
-        map.delete(agentId);
-        if (map.size === 0) activeSubagents.delete(parentSessionId);
+      if (data.source === 'cli-task') window.taskRegistry.end(parentSessionId, agentId);
+      else {
+        window.taskRegistry.release(parentSessionId, agentId, 'local-ipc');
+        window.taskRegistry.release(parentSessionId, agentId, 'attached-ipc');
       }
       updateGridSubagentPills(parentSessionId);
     });
@@ -71,40 +70,16 @@ function gridSubagentColor(type) {
 // Prune subagents that have been running for more than 60 s without a completion event.
 // see .ai/contexts/subagent-observability.md
 function pruneStaleGridSubagents() {
-  const cutoff = Date.now() - SUBAGENT_LIVE_TTL_MS;
-  for (const [parentId, map] of activeSubagents) {
-    for (const [agentId, info] of map) {
-      if (info.spawnedAt < cutoff) map.delete(agentId);
-    }
-    if (map.size === 0) activeSubagents.delete(parentId);
-  }
+  window.taskRegistry.prune(SUBAGENT_LIVE_TTL_MS);
 }
 
-let gridSubagentTtlTimer = null;
-
 function scheduleGridSubagentTtlTick() {
-  if (gridSubagentTtlTimer) return;
-  let oldest = Infinity;
-  for (const map of activeSubagents.values()) {
-    for (const info of map.values()) {
-      if (info.spawnedAt < oldest) oldest = info.spawnedAt;
-    }
-  }
-  if (oldest === Infinity) return;
-  const delay = Math.max(1, oldest + SUBAGENT_LIVE_TTL_MS + 1 - Date.now());
-  gridSubagentTtlTimer = setTimeout(runGridSubagentTtlTick, delay);
+  if (typeof scheduleSubagentTtlTick === 'function') scheduleSubagentTtlTick();
 }
 
 function runGridSubagentTtlTick() {
-  gridSubagentTtlTimer = null;
-  const sizeBefore = new Map();
-  for (const [parentId, map] of activeSubagents) sizeBefore.set(parentId, map.size);
   pruneStaleGridSubagents();
-  for (const [parentId, size] of sizeBefore) {
-    const map = activeSubagents.get(parentId);
-    if (!map || map.size !== size) updateGridSubagentPills(parentId);
-  }
-  scheduleGridSubagentTtlTick();
+  for (const id of gridCards.keys()) updateGridSubagentPills(id);
 }
 
 // Re-render the pill row for a single card (if it exists in the grid).

@@ -153,6 +153,7 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));

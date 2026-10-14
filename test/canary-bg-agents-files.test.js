@@ -14,6 +14,7 @@ const os = require('os');
 const path = require('path');
 
 const { JOB_STATES } = require('../bg-agents-roster');
+const { normalizeTaskEvidence } = require('../task-records');
 
 const JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 
@@ -37,7 +38,11 @@ test('CANARY: the Claude CLI daemon still writes jobs/<id>/state.json in the sha
   for (const file of files) {
     let raw;
     try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
-    const seen = `(${file})`;
+    const seen = `(${file}; CLI fixture version 2.1.296)`;
+    if (raw.inFlight !== undefined || raw.fan !== undefined || ['done', 'stopped', 'failed'].includes(raw.state)) {
+      assert.equal(normalizeTaskEvidence(raw).valid, true,
+        `PINNED ASSUMPTION BROKEN: consumed fan ids/kinds/times, inFlight kinds/count, updatedAt or terminal state ${seen}`);
+    }
     if (!JOB_STATES.has(raw.state)) {
       t.diagnostic(`unknown job state "${raw.state}" (known: ${[...JOB_STATES].join(', ')}) ${seen}; the view shows it as Unknown`);
     }

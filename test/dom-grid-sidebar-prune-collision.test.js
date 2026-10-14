@@ -105,7 +105,7 @@ function setupCombinedDom() {
   loadAppFunctions(dom.getInternalVMContext(), {
     functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
-  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
+  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
 

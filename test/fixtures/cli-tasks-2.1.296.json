@@ -1,0 +1,125 @@
+{
+  "cliVersion": "2.1.296",
+  "provenance": "Sanitized Agent tool-use, async result, notification and job envelopes read on 2026-10-14. Synchronous result is a contract fixture; no live synchronous sample was found.",
+  "parentSessionId": "11111111-1111-4111-8111-111111111111",
+  "agentId": "a1111111111111111",
+  "use": {
+    "uuid": "use-1",
+    "type": "assistant",
+    "timestamp": "2026-10-14T00:00:00.000Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_111",
+          "name": "Agent",
+          "input": {
+            "run_in_background": true,
+            "subagent_type": "explore",
+            "description": "Sanitized task",
+            "prompt": "Sanitized prompt"
+          }
+        }
+      ]
+    }
+  },
+  "launch": {
+    "uuid": "result-1",
+    "type": "user",
+    "timestamp": "2026-10-14T00:00:01.000Z",
+    "toolUseResult": {
+      "isAsync": true,
+      "status": "async_launched",
+      "agentId": "a1111111111111111"
+    },
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_111",
+          "content": [
+            {
+              "type": "text",
+              "text": "Async agent launched successfully.\nagentId: a1111111111111111\nThe agent is working in the background."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "notification": {
+    "uuid": "notification-1",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<tool-use-id>toolu_111</tool-use-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>completed</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    }
+  },
+  "syncResult": {
+    "uuid": "sync-result",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "toolUseResult": {
+      "agentId": "a1111111111111111"
+    },
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_111",
+          "content": [
+            {
+              "type": "text",
+              "text": "Sanitized result"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "job": {
+    "state": "working",
+    "updatedAt": "2026-10-14T00:01:00.000Z",
+    "linkScanPath": "C:\\Projects\\11111111-1111-4111-8111-111111111111.jsonl",
+    "inFlight": {
+      "tasks": 3,
+      "queued": 0,
+      "kinds": [
+        "monitor",
+        "local_agent",
+        "session_cron"
+      ],
+      "drainableMonitors": 0
+    },
+    "fan": [
+      {
+        "id": "a1111111111111111",
+        "kind": "agent",
+        "label": "Sanitized agent",
+        "startedAt": 1791936000000
+      },
+      {
+        "id": "b11111111",
+        "kind": "monitor",
+        "label": "Sanitized monitor",
+        "startedAt": 1791936000000
+      }
+    ]
+  },
+  "terminalJob": {
+    "state": "stopped",
+    "updatedAt": "2026-10-14T00:12:00.000Z"
+  },
+  "childMeta": {
+    "agentType": "explore",
+    "description": "Sanitized task",
+    "toolUseId": "toolu_111",
+    "spawnDepth": 1,
+    "requestShape": "Sanitized",
+    "requestNonInteractive": false
+  }
+}
