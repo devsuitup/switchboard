@@ -7,21 +7,26 @@ const os = require('node:os');
 const path = require('node:path');
 const cache = require('../session-cache');
 const cli = require('../cli-session-state');
+const bgAgents = require('../bg-agents');
 const { encodeProjectPath } = require('../encode-project-path');
-const { scanContinuationIndex } = require('../session-continuations');
+const { scanContinuationIndex, resolveContinuationsSync } = require('../session-continuations');
 const { setupSidebarDom } = require('./dom-setup');
 
 const OLD = '11111111-1111-4111-8111-111111111111';
 const MID = '22222222-2222-4222-8222-222222222222';
 const HEAD = '33333333-3333-4333-8333-333333333333';
 
-function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = false, archived = false } = {}) {
+function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = false, archived = false, state = 'working' } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-620-')));
   const projectPath = path.join(root, 'project');
   const projectsDir = path.join(root, 'projects');
   const dir = path.join(root, 'sessions');
+  const jobsDir = path.join(root, 'jobs');
   fs.mkdirSync(projectPath);
   fs.mkdirSync(dir);
+  fs.mkdirSync(path.join(jobsDir, '33333333'), { recursive: true });
+  const jobFile = path.join(jobsDir, '33333333', 'state.json');
+  fs.writeFileSync(jobFile, JSON.stringify({ state, sessionId: HEAD, respawnFlags: ['--name', 'fixture launch'] }));
   const folder = encodeProjectPath(projectPath);
   fs.mkdirSync(path.join(projectsDir, folder), { recursive: true });
   const rows = [];
@@ -32,10 +37,10 @@ function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = f
       ...targets.map(target => ({ type: 'continued-in', sessionId: id, continuedInSessionId: target, timestamp: modified }))];
     fs.writeFileSync(file, records.map(JSON.stringify).join('\n') + '\n');
     rows.push({ sessionId: id, folder, projectPath, modified, fileMtime: fs.statSync(file).mtime.toISOString(),
-      messageCount: 2, summary: 'fixture prompt', continuationIndex: scanContinuationIndex(file, id) });
+      messageCount: 2, summary: 'fixture prompt', customTitle: 'fixture launch (2)', continuationIndex: scanContinuationIndex(file, id) });
   }
   if (indexedHead && !rows.some(row => row.sessionId === HEAD)) {
-    rows.push({ sessionId: HEAD, folder, projectPath, modified, messageCount: 3, summary: 'first own turn' });
+    rows.push({ sessionId: HEAD, folder, projectPath, modified, messageCount: 3, summary: 'first own turn', customTitle: 'fixture launch (2)' });
   }
   const headFile = path.join(projectsDir, folder, HEAD + '.jsonl');
   fs.writeFileSync(headFile, [
@@ -54,14 +59,17 @@ function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = f
   const activeSessions = new Map();
   cli.init({ dir, activeSessions, onIdle() {}, isProcessAlive: () => alive, readParentPid: () => null, now: () => clock });
   assert.equal(cli.ensureWatching(), true);
+  bgAgents.init({ jobsDir, cliSessionState: cli, resolveProjectRoots: async cwd => ({ projectRoot: cwd, worktreeRoot: cwd }) });
+  bgAgents.start();
   const meta = new Map(rows.map(row => [row.sessionId, { name: 'fixture launch (2)', archived: archived ? 1 : 0 }]));
   cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console,
     getLocalDescriptors: () => cli.getSidebarDescriptors?.() || [],
+    getLocalJobs: () => bgAgents.getCachedJobs?.() || new Map(),
     db: { getAllCached: () => rows, getAllMeta: () => meta,
       getAllFolderMeta: () => new Map([[folder, { projectPath }]]),
       getSetting: key => key === 'global' ? { hiddenProjects: hidden ? [projectPath] : [] } : null } });
   const ctx = setupSidebarDom();
-  t.after(() => { ctx.destroy(); cli.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { ctx.destroy(); bgAgents.stop(); cli.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const projects = () => cache.buildProjectsFromCache(false);
   const render = () => { ctx.sidebar.renderProjects(projects(), false); return ctx.document; };
   const firstTurn = () => {
@@ -74,7 +82,18 @@ function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = f
     assert.ok(row);
     rows.push(row);
   };
-  return { rows, descriptor, descriptorFile, projects, render, ctx, firstTurn, activeSessions, die: () => { alive = false; clock += 5001; } };
+  return { rows, meta, descriptor, descriptorFile, jobFile, projects, render, ctx, firstTurn, activeSessions, die: () => { alive = false; clock += 5001; } };
+}
+
+async function afterEvent(subscribe, action) {
+  let unsubscribe, timeout;
+  try {
+    await new Promise((resolve, reject) => {
+      unsubscribe = subscribe(resolve);
+      timeout = setTimeout(() => reject(new Error('no watcher notification')), 4000);
+      action();
+    });
+  } finally { unsubscribe?.(); clearTimeout(timeout); }
 }
 
 test('an attached live bg UUID has a sidebar row before its first indexed turn and before opening Agents', t => {
@@ -120,13 +139,9 @@ test('a registry name whose source is not user keeps the indexed display name', 
 
 test('a name-only registry update notifies projects and updates the rendered name', async t => {
   const h = setup(t, { indexedHead: true });
-  let notifications = 0;
-  const unsubscribe = cli.onStatusesChanged(() => { notifications++; });
-  t.after(unsubscribe);
-  fs.writeFileSync(h.descriptorFile, JSON.stringify({ ...h.descriptor, name: 'second rename' }));
-  const deadline = Date.now() + 4000;
-  while (!notifications && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(notifications > 0, 'a rename must notify project listeners even when status stays idle');
+  await afterEvent(cli.onStatusesChanged, () => {
+    fs.writeFileSync(h.descriptorFile, JSON.stringify({ ...h.descriptor, name: 'second rename' }));
+  });
   assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'second rename');
 });
 
@@ -226,4 +241,149 @@ test('an attach tab remains listed and marked open when no registry descriptor i
   assert.equal(row.querySelector('.bg-badge')?.textContent, 'bg');
   h.activeSessions.get(HEAD).exited = true;
   assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
+});
+
+test('a live PID with a finished job supplies neither a synthetic row nor an indexed bg badge', t => {
+  const h = setup(t, { state: 'done' });
+  assert.equal(cli.getSidebarDescriptors().length, 1, 'the descriptor PID is still live');
+  assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
+  h.firstTurn();
+  const row = h.render().querySelector(`[data-session-id="${HEAD}"]`);
+  assert.ok(row);
+  assert.equal(row.querySelector('.bg-badge'), null);
+});
+
+test('an open attach PTY cannot keep a finished job descriptor-only row alive', t => {
+  const h = setup(t, { state: 'done' });
+  cli.stop();
+  fs.unlinkSync(h.descriptorFile);
+  cli.ensureWatching();
+  h.activeSessions.set(HEAD, { isAttach: true, attachJobId: '33333333', cwd: h.descriptor.cwd });
+  assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
+});
+
+test('job watcher completion removes the badge and splits the live continuation display merge', async t => {
+  const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
+  assert.equal(h.projects().flatMap(p => p.sessions).length, 1);
+  await afterEvent(bgAgents.onChange, () => {
+    fs.writeFileSync(h.jobFile, JSON.stringify({ state: 'done', sessionId: HEAD }));
+  });
+  const sessions = h.projects().flatMap(p => p.sessions);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions.every(row => !row.bgJobId));
+  assert.equal(h.render().querySelector('.bg-badge'), null);
+});
+
+test('working and blocked cached jobs retain the badge', t => {
+  for (const state of ['working', 'blocked']) {
+    const h = setup(t, { state });
+    assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
+  }
+});
+
+test('a Switchboard rename wins over a user registry name for interactive and bg rows', t => {
+  const h = setup(t, { indexedHead: true });
+  h.meta.set(HEAD, { name: 'my Switchboard rename' });
+  for (const kind of ['interactive', 'bg']) {
+    fs.writeFileSync(h.descriptorFile, JSON.stringify({ ...h.descriptor, kind }));
+    cli.stop();
+    cli.ensureWatching();
+    assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'my Switchboard rename');
+  }
+});
+
+test('a numbered launch title yields to a user registry name for interactive and bg rows', t => {
+  const h = setup(t, { indexedHead: true });
+  h.meta.set(HEAD, { name: 'x (3)' });
+  h.rows[0].customTitle = 'x (3)';
+  for (const kind of ['interactive', 'bg']) {
+    fs.writeFileSync(h.descriptorFile, JSON.stringify({ ...h.descriptor, kind, name: 'x' }));
+    cli.stop();
+    cli.ensureWatching();
+    assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'x');
+  }
+});
+
+test('a numbered Switchboard rename is preserved when the launch title differs from the registry name', t => {
+  const h = setup(t, { indexedHead: true });
+  h.meta.set(HEAD, { name: 'x (3)' });
+  for (const kind of ['interactive', 'bg']) {
+    fs.writeFileSync(h.descriptorFile, JSON.stringify({ ...h.descriptor, kind, name: 'x' }));
+    cli.stop();
+    cli.ensureWatching();
+    assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'x (3)');
+  }
+});
+
+test('a merged row keeps its Switchboard rename over the bg head user name', t => {
+  const h = setup(t, { graph: { [OLD]: [HEAD] } });
+  h.meta.set(OLD, { name: 'my conversation name' });
+  assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'my conversation name');
+});
+
+test('a non-user bg head takes the most recent user-named part in either descriptor order', t => {
+  const h = setup(t, { graph: { [OLD]: [MID], [MID]: [HEAD] }, source: 'generated' });
+  const predecessors = [OLD, MID].map((sessionId, i) => ({ ...h.descriptor, pid: 4343 + i,
+    sessionId, kind: 'interactive', jobId: undefined, nameSource: 'user', name: i ? 'recent part' : 'older part' }));
+  h.rows[0].modified = '2026-10-13T00:00:00.000Z';
+  for (const descriptors of [[...predecessors, h.descriptor], [h.descriptor, ...predecessors.reverse()]]) {
+    fs.rmSync(h.descriptorFile);
+    for (let i = 0; i < descriptors.length; i++) {
+      fs.writeFileSync(path.join(path.dirname(h.descriptorFile), `${4242 + i}.json`), JSON.stringify({ ...descriptors[i], pid: 4242 + i }));
+    }
+    cli.stop();
+    cli.ensureWatching();
+    assert.equal(h.projects().flatMap(p => p.sessions)[0].name, 'recent part');
+  }
+});
+
+test('a dead bg PID splits the predecessor and indexed head back into separate rows', t => {
+  const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
+  assert.equal(h.projects().flatMap(p => p.sessions).length, 1);
+  h.die();
+  const sessions = h.projects().flatMap(p => p.sessions);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions.every(row => !row.bgJobId));
+});
+
+test('an SDK-only root drops the visible head marker and registry name', t => {
+  const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
+  h.rows[0].entrypoint = 'sdk-ts';
+  const sessions = h.projects().flatMap(p => p.sessions);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].sessionId, HEAD);
+  assert.equal(sessions[0].bgJobId, undefined);
+  assert.equal(sessions[0].name, 'fixture launch (2)');
+});
+
+test('continuation projection matches the bounded forward resolver on graph fixtures', t => {
+  const fixtures = [{ [OLD]: [MID], [MID]: [HEAD] }, { [OLD]: [HEAD], [MID]: [HEAD] },
+    { [OLD]: [MID, HEAD], [MID]: [HEAD] }, { [OLD]: [MID], [MID]: [OLD] }, { [OLD]: ['missing'] },
+    { [OLD]: [] }];
+  for (const graph of fixtures) {
+    const h = setup(t, { graph });
+    const paths = h.rows.map(row => ({ id: row.sessionId, result: resolveContinuationsSync(row.sessionId, id => {
+      const found = h.rows.find(r => r.sessionId === id);
+      if (!found) return id === HEAD ? { index: { ids: [] } } : null;
+      const index = JSON.parse(found.continuationIndex);
+      return index.complete && !index.unresolved && index.ids.length <= 1 ? { index, modified: found.modified } : null;
+    }, { includeReachable: true }) })).filter(({ result }) => !result.incomplete && result.continued
+      && result.candidates.length === 1 && result.candidates[0].sessionId === HEAD);
+    const roots = paths.filter(candidate => !paths.some(other => other !== candidate && other.result.reachable.includes(candidate.id)));
+    const expected = roots.length === 1
+      ? [roots[0].id, ...Object.keys(graph).filter(id => !roots[0].result.reachable.includes(id))].sort()
+      : [...Object.keys(graph), HEAD].sort();
+    assert.deepEqual(h.projects().flatMap(p => p.sessions).map(row => row.sessionId).sort(), expected);
+    if (roots.length === 1) assert.deepEqual(h.projects().flatMap(p => p.sessions).find(row => row.bgJobId).mergedMemberIds.slice().sort(),
+      roots[0].result.reachable.filter(id => id !== roots[0].id).sort());
+  }
+});
+
+test('bridge members on a continuation path contribute their visible row only once', t => {
+  const h = setup(t, { graph: { [OLD]: [MID], [MID]: [HEAD] }, indexedHead: true });
+  h.rows.find(row => row.sessionId === HEAD).mergedIntoSessionId = MID;
+  const sessions = h.projects().flatMap(project => project.sessions);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].messageCount, 7);
+  assert.deepEqual(sessions[0].mergedMemberIds.slice().sort(), [MID, HEAD].sort());
 });

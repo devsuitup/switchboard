@@ -148,17 +148,22 @@ Merged sidebar entries include `mergedMemberIds`, the ids rolled into their visi
 
 `sidebar-bg-sessions.js` projects live local background descriptors into the
 fresh sidebar payload. `session-cache.init` receives `getLocalDescriptors`,
-wired to the CLI watcher's cached `getSidebarDescriptors`. This neither scans
-transcript bodies on project loads nor starts the lazy Agents roster. A bg UUID
+wired to the CLI watcher's cached `getSidebarDescriptors`, and `getLocalJobs`,
+wired to `bg-agents.getCachedJobs`. The existing job watcher starts with the
+app and notifies projects when its roster changes; opening Agents is unnecessary.
+Project loads perform no additional job-file or transcript scan. Only cached
+job states `working` and `blocked` permit a bg marker, display merge or synthetic
+row, even when a finished job's descriptor PID or attach PTY remains live. A bg UUID
 without an indexed row gets a transient `descriptorOnly` row, grouped through
 the existing worktree resolver. An open local attach PTY supplies its explicit
 session UUID/job id if its registry descriptor is absent; registering that PTY
 notifies projects immediately. Indexed rows replace it without double counts;
-PID exit removes it. Hidden projects and archived representatives stay hidden.
+PID exit or job completion removes it. Hidden projects and archived representatives stay hidden.
 No synthetic row, rename overlay or display merge is persisted to SQLite/FTS.
 
-Complete, non-malformed, linear format-3 continuation indexes drive the existing bounded
-`resolveContinuationsSync` traversal. One unique head matching a live bg
+Complete, non-malformed, linear format-3 continuation indexes are parsed once
+per build into a reverse predecessor index. Walking back from a live bg head
+retains the forward resolver's 32-hop bound and unique-root rule. One unique head matching a live bg
 descriptor can join the outermost proven predecessor's visible row. The row
 keeps that representative UUID, gains the continuation UUIDs in
 `mergedMemberIds`, and carries `bgJobId`/`bgSessionId` from the head. Display
@@ -169,14 +174,53 @@ Remote rows stay in their host namespace. This does not re-key any PTY and does
 not replace #579/ADR 0003's closest-writer proof. It is the limited bg projection
 of #564's distinction between a conversation row and its head.
 
-A live registry `name` overrides a row's display name only when `nameSource`
-is `user`; other indexed display names keep their existing precedence. A
-proven bg head supplies the name for its representative. Status vocabulary,
+The predecessor/head merge exists only while the bg PID lives and its cached
+job remains live. Once either ends, fresh display rows split back into their
+original representatives. If the proven root is hidden, archived (with archived
+sessions excluded), or SDK-only, the head loses its marker and registry-name
+overlay as intended; a visible indexed head keeps its ordinary display name.
+
+A live registry `name` overlays a row's display name only when `nameSource`
+is `user` and the database name is absent or still matches the launch/custom-title
+name (including its `name (N)` form). A Switchboard rename always wins, for
+interactive and background rows alike. Names are selected after display merges:
+a user-named bg head comes first, otherwise the most recently modified user-named
+part supplies the name, with start time and UUID/name breaking ties. Descriptor
+order cannot change the selected name. Status vocabulary,
 idle callbacks and the background activity indicator policy remain separate:
 the historical frozen bg descriptor in `audit-indicators.md` is not treated
 as reliable turn evidence by this display projection.
 
-`test/sidebar-bg-sessions-620.test.js` exercises disposable descriptor files,
+`session_cache.customTitle` retains the parsed title separately from the editable
+`session_meta.name`. Schema reconciliation adds the nullable column without
+clearing existing rows or metadata. Existing local rows with an unknown title
+are backfilled once by `workers/scan-session-titles.js`, using the existing
+bounded header reader off the main thread. The backfill writes only that column
+when the row's file mtime still matches and its title remains unknown, so a
+concurrent refresh or Switchboard rename is preserved. An empty string means a
+known absence of a title; `NULL` means it has not been backfilled yet.
+
+The projects request snapshots cached sidebar descriptors and job state/name,
+plus the attach PTY's UUID, job id, cwd and host. These projections participate
+in the request version alongside the DB, active sessions and remote roots.
+`workers/projects-query.js` supplies them to `session-cache.init`, so both
+archive views apply the background overlay within their worker build. Main
+does not scan descriptors or jobs, traverse continuation indexes or resolve
+worktree paths during a reload. The existing version checks detect changes
+to registry names and job liveness while a build is pending.
+The request also carries `liveVersion`, the serialized non-DB projection.
+A read-only reply may ignore DB-only changes during cold population, but a
+live-version change uses the relay's bounded retry path. The existing caller
+deadlines and three-conflict publication limit still apply.
+
+`get-projects` starts the custom-title backfill without awaiting it, before
+requesting the projects worker. The backfill promise is retained even when
+there are no eligible rows, avoiding a full cache query on every reload.
+Successful batches notify the sidebar and update the DB revision; a failed
+worker can be retried. Eligibility and filename construction occur once on
+main; bounded transcript reads remain in `workers/scan-session-titles.js`.
+
+`test/sidebar-bg-sessions-620.test.js` exercises disposable descriptor and job files,
 continuation indexes, the cache's public sidebar operation and shipped DOM
 rendering before/after indexing. `test/dom-sidebar-bg-badge.test.js` also pins
 merged-member badge lookup.

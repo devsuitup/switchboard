@@ -24,11 +24,17 @@ let isInitialScanComplete, setInitialScanComplete;
 let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
 let getLocalDescriptors = () => [];
+let getLocalJobs = () => new Map();
+let setCachedCustomTitles;
+let customTitleBackfill = null;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
+  getLocalJobs = ctx.getLocalJobs || (() => new Map());
+  setCachedCustomTitles = ctx.db.setCachedCustomTitles;
+  customTitleBackfill = null;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   // DB functions
@@ -530,6 +536,48 @@ function backfillEntrypoints() {
   return entrypointBackfill;
 }
 
+// see .ai/contexts/session-cache.md ("Local background sidebar rows")
+function backfillCustomTitles() {
+  if (customTitleBackfill) return customTitleBackfill;
+  if (!setCachedCustomTitles) return (customTitleBackfill = Promise.resolve());
+  const rows = getAllCached().filter(row => row.customTitle == null && !row.parentSessionId
+    && validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
+  if (!rows.length) return (customTitleBackfill = Promise.resolve());
+  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime,
+    file: resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' }) }));
+  customTitleBackfill = new Promise(resolve => {
+    let worker, settled = false;
+    const finish = ok => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => { worker?.terminate(); finish(false); }, SUBSET_SCAN_TIMEOUT_MS);
+    try {
+      worker = new Worker(path.join(__dirname, 'workers', 'scan-session-titles.js'), { workerData: { files } });
+    } catch (err) {
+      log.warn(`Title backfill failed: ${err.message}`);
+      finish(false);
+      return;
+    }
+    worker.on('message', pairs => {
+      if (settled) return;
+      try {
+        setCachedCustomTitles(pairs);
+        if (pairs.length) notifyRendererProjectsChanged();
+      } catch (err) {
+        log.warn(`Title backfill failed: ${err.message}`);
+        worker.terminate();
+        finish(false);
+      }
+    });
+    worker.on('error', err => { log.warn(`Title backfill failed: ${err.message}`); finish(false); });
+    worker.on('exit', code => finish(code === 0));
+  }).then(ok => { if (!ok) customTitleBackfill = null; });
+  return customTitleBackfill;
+}
+
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function revealIfSdkSession(sessionId) {
   const row = getCachedSession ? getCachedSession(sessionId) : null;
@@ -753,7 +801,7 @@ function buildProjectsFromCache(showArchived) {
     descriptorIds.add(sessionId.toLowerCase());
   }
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenProjects, metaMap, showArchived,
+    hiddenProjects, metaMap, showArchived, jobs: getLocalJobs(),
   });
   for (const proj of projects) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -1201,6 +1249,7 @@ module.exports = {
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   backfillEntrypoints,
+  backfillCustomTitles,
   revealIfSdkSession,
   notifyRendererProjectsChanged,
   sendStatus,

@@ -146,6 +146,11 @@ Any descriptor holding a row's session id supplies `conversationPid`, even
 when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
 
+The job watcher starts with the app so the sidebar can read `getCachedJobs`
+without opening Agents or scanning job files on project loads. A finished job
+with a live descriptor or attach PTY gets no sidebar bg marker or synthetic row.
+Sidebar registry names replace launch titles only; a Switchboard rename wins.
+
 `parseDescriptor` retains `bridgeSessionId`. `bridge-session-id.js` strips only
 the `cse_` / `session_` prefixes and preserves the opaque suffix's case. The
 shared lineage is measured in `.ai/contexts/session-cache.md`, "Open on

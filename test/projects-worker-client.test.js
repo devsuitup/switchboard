@@ -161,3 +161,34 @@ test('cold-start scan writes do not postpone a read-only partial projects reply'
     assert.deepEqual(await pending, result);
   } finally { f.client.shutdown(); }
 });
+
+test('a background-state change retries a read-only reply against the current live snapshot', async () => {
+  let liveVersion = 'working';
+  const f = fixture({ snapshot: () => ({ version: 'db-' + liveVersion, liveVersion }) });
+  const pending = f.client.request({ reconcile: false });
+  pending.catch(() => {});
+  try {
+    liveVersion = 'completed';
+    f.reply(0, { effects: [], keptLiveRows: [], reconciled: false, value: 'old badge' });
+    assert.equal(f.messages.length, 2);
+    assert.equal(f.messages[1].liveVersion, 'completed');
+    assert.deepEqual(f.applied, []);
+    const result = { effects: [], keptLiveRows: [], reconciled: false, value: 'no badge' };
+    f.reply(1, result);
+    assert.deepEqual(await pending, result);
+  } finally { f.client.shutdown(); }
+});
+
+test('a DB-only change preserves first paint when the live snapshot is unchanged', async () => {
+  let version = 0;
+  const f = fixture({ snapshot: () => ({ version, liveVersion: 'working' }) });
+  try {
+    const pending = f.client.request({ reconcile: false });
+    pending.catch(() => {});
+    version++;
+    const result = { effects: [], keptLiveRows: [], reconciled: false, value: 'partial' };
+    f.reply(0, result);
+    assert.equal(f.messages.length, 1);
+    assert.deepEqual(await pending, result);
+  } finally { f.client.shutdown(); }
+});

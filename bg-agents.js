@@ -69,6 +69,10 @@ function getSnapshot() {
   return { roster, daemonReachable };
 }
 
+function getCachedJobs() {
+  return new Map(jobs);
+}
+
 function emit() {
   const snapshot = getSnapshot();
   for (const listener of listeners) {
@@ -346,6 +350,6 @@ function liveJobCheck(sessionId) {
 }
 
 module.exports = {
-  init, start, stop, onChange, getSnapshot, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
+  init, start, stop, onChange, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };
