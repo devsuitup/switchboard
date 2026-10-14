@@ -168,6 +168,7 @@ test('real worker explicit lifecycle survives silence and traces completion once
   assert.equal(completed.length, 1);
   assert.equal(completed[0].agentId, fixture.agentId);
   assert.equal(completed[0].reason, 'cli-task-terminal');
+  assert.equal(completed[0].cause, 'cli-task-terminal');
   assert.equal(completed[0].source, 'cli-task');
   assert.equal(completed[0].confidence, 'explicit');
   await client.dispose();
@@ -176,10 +177,68 @@ test('real worker explicit lifecycle survives silence and traces completion once
   assert.equal(records.filter(r => r.cat === 'subagent.completed').length, 1, 'historical terminal replay is not a live completion');
 });
 
+for (const enabled of [true, false]) {
+  test(`owner death ends three open agents without claiming recorded completion (trace: ${enabled})`, async t => {
+    const h = setup(t, { trace: enabled });
+    const client = createTaskRecordsClient();
+    t.after(() => client.dispose());
+    const file = path.join(h.dir, `${h.id}.jsonl`);
+    const entries = [1, 2, 3].flatMap(index => [fixture.use, fixture.launch].map(entry => {
+      const copy = JSON.parse(JSON.stringify(entry).replaceAll(fixture.agentId, `agent-${index}`).replaceAll('toolu_111', `toolu_${index}`));
+      copy.uuid += `-${index}`;
+      return copy;
+    }));
+    fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry) + '\n').join(''));
+    await client.read(file, h.id);
+    assert.equal(client.snapshots()[0].tasks.filter(task => !task.terminal).length, 3);
+    await client.ownerDied(h.id);
+    await client.ownerDied(h.id);
+    await client.read(file, h.id);
+    assert.equal(client.snapshots()[0].tasks.filter(task => task.terminal).length, 3);
+    const completed = records.filter(record => record.cat === 'subagent.completed');
+    assert.equal(completed.length, enabled ? 3 : 0);
+    if (enabled) {
+      assert.deepEqual(completed.map(record => record.agentId).sort(), ['agent-1', 'agent-2', 'agent-3']);
+      for (const record of completed) {
+        assert.equal(record.confidence, 'inferred');
+        assert.equal(record.cause, 'owner-death');
+        assert.equal(record.reason, 'owner-death');
+        assert.equal(record.source, 'cli-task');
+      }
+    } else assert.deepEqual(records, []);
+  });
+}
+
+test('CLI completion after owner restart stays explicit despite an earlier death snapshot', async t => {
+  const h = setup(t);
+  const client = createTaskRecordsClient();
+  t.after(() => client.dispose());
+  await client.ownerDied(h.id);
+  await client.ownerAlive(h.id);
+  const diedAt = client.snapshots()[0].ownerDiedAt;
+  const entries = [fixture.use, fixture.launch, fixture.notification].map((entry, index) => ({
+    ...structuredClone(entry), timestamp: new Date(diedAt + (index + 1) * 1000).toISOString(),
+  }));
+  const file = path.join(h.dir, `${h.id}.jsonl`);
+  fs.writeFileSync(file, entries.slice(0, 2).map(entry => JSON.stringify(entry) + '\n').join(''));
+  await client.read(file, h.id);
+  assert.equal(client.snapshots()[0].tasks[0].terminal, false);
+  fs.appendFileSync(file, JSON.stringify(entries[2]) + '\n');
+  await client.read(file, h.id);
+  await client.ownerDied(h.id);
+  const completed = records.filter(record => record.cat === 'subagent.completed');
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].reason, 'cli-task-terminal');
+  assert.equal(completed[0].cause, 'cli-task-terminal');
+  assert.equal(completed[0].confidence, 'explicit');
+});
+
 test('disabled registry tracing never evaluates the lifecycle comparison payload', async t => {
   const h = setup(t, { trace: false });
   const worker = new EventEmitter();
-  const snapshot = { parentSessionId: h.id, get tasks() { throw new Error('trace-only task enumeration while disabled'); } };
+  const snapshot = { parentSessionId: h.id,
+    get tasks() { throw new Error('trace-only task enumeration while disabled'); },
+    get ownerDiedAt() { throw new Error('trace-only death cause evaluation while disabled'); } };
   worker.postMessage = message => {
     worker.emit('message', { snapshot });
     worker.emit('message', { requestId: message.requestId });

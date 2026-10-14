@@ -31,11 +31,14 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
         if (message.snapshot) {
           const s = message.snapshot;
           if (TRACE.on) {
-            const previous = new Map((snapshots.get(s.parentSessionId)?.tasks || []).map(t => [t.id, t]));
+            const previousSnapshot = snapshots.get(s.parentSessionId);
+            const previous = new Map((previousSnapshot?.tasks || []).map(t => [t.id, t]));
+            const ownerDied = Number.isFinite(s.ownerDiedAt) && s.ownerDiedAt !== previousSnapshot?.ownerDiedAt;
             for (const task of s.tasks) {
               const before = previous.get(task.id);
               if (task.kind === 'agent' && task.terminal && before && !before.terminal) {
-                trace('subagent.completed', s.parentSessionId, { agentId: task.id, reason: 'cli-task-terminal', source: 'cli-task', confidence: 'explicit', at: task.at });
+                const cause = ownerDied ? 'owner-death' : 'cli-task-terminal';
+                trace('subagent.completed', s.parentSessionId, { agentId: task.id, reason: cause, cause, source: 'cli-task', confidence: ownerDied ? 'inferred' : 'explicit', at: task.at });
               }
             }
           }

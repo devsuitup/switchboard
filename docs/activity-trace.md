@@ -121,7 +121,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `subagent.spawned` | `subagent-spawned` is sent | `agentId`, `kind` (`spawn` / `heartbeat` / `reannounce`), `subagentType`, `ageMs` (first spawn), `source`, `confidence`, `sent` |
 | `subagent.assumed-finished` | A post-bootstrap stale first sighting is provisionally recorded as finished, without IPC | `agentId`, `ageMs`, `bootstrap:false`, `recheck`, `source`, `confidence` |
 | `subagent.rehabilitated` | A provisional subagent grew within its recheck window: the withheld spawn is released | `agentId`, `withheldForMs`, `subagentType`, `source`, `confidence`, `sent` |
-| `subagent.completed` | Fallback stability sends `subagent-completed`, or an observed open CLI task becomes terminal in a worker snapshot | `agentId`, `reason`, `source`, `confidence`; fallback: `stableForMs`, `sent`; primary: `at` |
+| `subagent.completed` | Fallback stability sends `subagent-completed`, or an observed open CLI task becomes terminal in a worker snapshot | `agentId`, `reason`, `source`, `confidence`; fallback: `stableForMs`, `sent`; primary: `cause` (`cli-task-terminal` / `owner-death`), `at` |
 | `session.forked` | A fork re-keys a live session | `newId`, `wasBusy`, `sent` |
 | `pty.input` | Every `terminal-input` IPC chunk, before the prompt model sees it | `len` always; `at` and `cp` only when the chunk holds a control character |
 | `pty.exit` | The PTY exits | `exitCode`, `alsoUnder`, `wasBusy` |
@@ -216,12 +216,16 @@ retracts it and reports `withheldForMs`. A fallback `subagent.completed` with
 `reason:"mtime-stable"` is still a silence assumption.
 
 A registry open-to-terminal transition produces `subagent.completed` with
-`source:"cli-task"`, `confidence:"explicit"`, `reason:"cli-task-terminal"` and
-the registry's `at` timestamp. It observes the worker snapshot, not a
-`subagent-completed` IPC; the renderer receives `task-snapshot`. Terminal registry
-evidence includes correlated results/notifications, job state and confirmed owner
-death; this category does not distinguish those causes. Initial replay of terminal
-history and duplicate terminal snapshots do not emit a live completion. Explicitly
+`source:"cli-task"` and the registry's `at` timestamp. Recorded terminal evidence
+(correlated results/notifications or job state) uses `confidence:"explicit"` and
+`reason:"cli-task-terminal"`, `cause:"cli-task-terminal"`. When the snapshot's
+`ownerDiedAt` changes, tasks closed by that owner death instead use
+`confidence:"inferred"`, `reason:"owner-death"` and `cause:"owner-death"`:
+the parent exited, but no task completion was recorded. A later recorded
+completion after restart stays explicit even though the earlier `ownerDiedAt`
+remains in the snapshot. The probe observes the worker snapshot, not a
+`subagent-completed` IPC; the renderer receives `task-snapshot`. Initial replay of
+terminal history and duplicate terminal snapshots do not emit a live completion. Explicitly
 open tasks never complete from silence. Only transitions observed while tracing
 is enabled are recorded; enabling Diagnostics does not rescan history or replay
 missed events. A directory absent at bootstrap produces no summary until it exists.
