@@ -350,6 +350,7 @@ function parseDescriptor(text) {
     jobId: s(raw.jobId),
     agent: s(raw.agent),
     name: s(raw.name),
+    ...(s(raw.nameSource) ? { nameSource: s(raw.nameSource) } : {}),
     cwd: s(raw.cwd),
     status: KNOWN_STATUSES.has(raw.status) ? raw.status : null,
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
@@ -441,7 +442,7 @@ function handleFile(name) {
   if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
   known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+    statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
     forgetSession(state.sessionId);
   }
@@ -479,7 +480,7 @@ function flush() {
   armLivenessProbe();
   if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
     const prev = previous.get(id);
-    return !prev || prev.status !== entry.status || prev.pid !== entry.pid;
+    return sidebarStateChanged(prev, entry);
   })) notifyStatusesChanged();
   if (batch.length > 0) notifyDescriptorsChanged();
 }
@@ -505,7 +506,7 @@ function armLivenessProbe() {
     }
     if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
       const prev = previous.get(id);
-      return !prev || prev.status !== entry.status || prev.pid !== entry.pid;
+      return sidebarStateChanged(prev, entry);
     })) {
       notifyDescriptorsChanged();
       notifyStatusesChanged();
@@ -527,7 +528,7 @@ function seed() {
     if (state) {
       known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(statusKey(state.sessionId), { status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+        statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       }
     }
   }
@@ -612,6 +613,18 @@ function getStatus(sessionId) {
     }
   }
   return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt };
+}
+
+function sidebarStateChanged(previous, entry) {
+  return !previous || ['status', 'pid', 'kind', 'jobId', 'name', 'nameSource', 'cwd'].some(field => previous[field] !== entry[field]);
+}
+
+function getSidebarDescriptors() {
+  const descriptors = [];
+  for (const [id, entry] of statusBySession) {
+    if (getStatus(id)) descriptors.push({ ...entry });
+  }
+  return descriptors;
 }
 
 function canCompareProcStart(raw) {
@@ -1015,6 +1028,7 @@ module.exports = {
   probeProcessTable,
   PROCESS_TABLE_TTL_MS,
   getStatus,
+  getSidebarDescriptors,
   KNOWN_STATUSES,
   DEFAULT_DIR,
   FLUSH_MS,

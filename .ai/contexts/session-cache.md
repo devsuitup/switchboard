@@ -144,6 +144,43 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 
 Merged sidebar entries include `mergedMemberIds`, the ids rolled into their visible representative (#547), ordered newest-first by `modified`, then by session id for ties; rows with no members carry an empty array. `headSessionId` identifies the newest-modified part, comparing each cached part's own `modified`, not the row's aggregated value. Ties follow `mergedMemberIds` order, with the representative last; an unmerged row uses its own id. The projects IPC payload preserves this order. Running filters, ordering, active highlights, activity indicators, grid cards and keyboard navigation consider the representative and its members. `rowHeadId` reads `headSessionId`, falling back to the representative for older payloads. Clicking the row or choosing Refresh screen prefers the head's non-closed open tab, then the other members newest first, then the representative. When none is open, a local row passes the head's id and the other part ids to the continuation flow. Continuation candidates already belonging to the row (the representative or a merged member) are excluded, so a representative that is the head is resumed without an offer to reopen its own mirror. Before resuming, the live-elsewhere guard checks the head, representative and all merged members in one batch, even when a caller already supplied the head's liveness; each live part must pass the existing manual, automatic, scheduled-run and background-attach rules. The sidebar's stored row identity stays the representative. Stop still targets one live member per click, representative first, then members newest first. Archive attempts to stop each open or running part on its actual host before hiding the representative; a local "not running" or remote "session not found on that host" reply also permits archiving, while other stop failures or a live background job refuse it. `annotateRemoteAttachable` chooses `remoteAttachSessionId` from parts with a live descriptor on the row's host: the head first, then the representative, then the other members. It evaluates attachability on that descriptor, and the sidebar sends that same id to `open-terminal`; a row with no descriptor remains a transcript-viewer click. Host blocking and adapter support still apply. It also sends `remoteMemberDescriptorSeen`, a map of each merged member id to whether its own live descriptor was seen on that row's host (#556). Archive uses that member's flag when its remote state is unseeded or unknown; the representative keeps its own `remoteDescriptorSeen`. A confirmed alive or dead state takes precedence. Payloads without the member map retain the previous descriptor fallback. Single-row Archive (`.session-archive-btn`) and slug-group Archive (`.slug-group-archive-btn`, `public/sidebar.js`) have no confirmation: both call `stopBeforeArchive` and stop live members without asking, the group one row by row, skipping a row whose stop is refused. Only folder Archive (`archiveProjectFolder`) confirms, through `showChoiceDialog`; it then attempts every stop, and if any is refused it archives nothing (the sessions it did stop stay stopped). Delete refuses while a merged member is live or has a non-closed tab, with the existing running-session message; when only the representative runs, its local process is stopped before deletion. The main-process guard checks all terminals, background jobs and processes outside this window before allowing deletion; remote deletion remains refused. The merge ownership rules remain unchanged.
 
+## Local background sidebar rows (#620)
+
+`sidebar-bg-sessions.js` projects live local background descriptors into the
+fresh sidebar payload. `session-cache.init` receives `getLocalDescriptors`,
+wired to the CLI watcher's cached `getSidebarDescriptors`. This neither scans
+transcript bodies on project loads nor starts the lazy Agents roster. A bg UUID
+without an indexed row gets a transient `descriptorOnly` row, grouped through
+the existing worktree resolver. An open local attach PTY supplies its explicit
+session UUID/job id if its registry descriptor is absent; registering that PTY
+notifies projects immediately. Indexed rows replace it without double counts;
+PID exit removes it. Hidden projects and archived representatives stay hidden.
+No synthetic row, rename overlay or display merge is persisted to SQLite/FTS.
+
+Complete, non-malformed, linear format-3 continuation indexes drive the existing bounded
+`resolveContinuationsSync` traversal. One unique head matching a live bg
+descriptor can join the outermost proven predecessor's visible row. The row
+keeps that representative UUID, gains the continuation UUIDs in
+`mergedMemberIds`, and carries `bgJobId`/`bgSessionId` from the head. Display
+counts aggregate each visible row once. Incomplete/stale indexes, cycles,
+ambiguous heads and competing predecessors never establish a display merge.
+Bridge labels alone prove nothing; prior bridge merge membership is retained.
+Remote rows stay in their host namespace. This does not re-key any PTY and does
+not replace #579/ADR 0003's closest-writer proof. It is the limited bg projection
+of #564's distinction between a conversation row and its head.
+
+A live registry `name` overrides a row's display name only when `nameSource`
+is `user`; other indexed display names keep their existing precedence. A
+proven bg head supplies the name for its representative. Status vocabulary,
+idle callbacks and the background activity indicator policy remain separate:
+the historical frozen bg descriptor in `audit-indicators.md` is not treated
+as reliable turn evidence by this display projection.
+
+`test/sidebar-bg-sessions-620.test.js` exercises disposable descriptor files,
+continuation indexes, the cache's public sidebar operation and shipped DOM
+rendering before/after indexing. `test/dom-sidebar-bg-badge.test.js` also pins
+merged-member badge lookup.
+
 ## Bridge history divergence
 
 Issue #524: a shared `bridgeSessionId` is not proof that all messages before a

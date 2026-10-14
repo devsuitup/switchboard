@@ -49,3 +49,13 @@ test('a roster job badges its session whatever the case of either id', (t) => {
   ctx.sidebar.renderProjects([project], false);
   assert.ok(ctx.document.querySelector('[data-session-id="s-top-1"] .bg-badge'));
 });
+
+test('a live background merged member badges its representative row', t => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  Object.defineProperty(ctx.window, 'bgAgentSessionIds', { value: new Set(['bg-member']) });
+  const project = makeSampleProject();
+  project.sessions[0].mergedMemberIds = ['BG-MEMBER'];
+  ctx.sidebar.renderProjects([project], false);
+  assert.ok(ctx.document.querySelector('[data-session-id="s-top-1"] .bg-badge'));
+});

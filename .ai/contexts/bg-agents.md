@@ -86,6 +86,17 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
     check but before the CLI runs. This reduces stale-roster mistakes; it is
     not an atomic lock on the conversation.
 
+## Sidebar membership (#620)
+
+The sidebar's `bg` membership also arrives through the local descriptor-backed
+projects payload (`bgJobId`/`bgSessionId`, #620), independently of opening this
+view. The existing roster set remains a fallback and checks every
+`mergedMemberIds` entry as well as the representative. A proven background
+continuation can therefore badge its conversation row before a new turn is
+indexed. See `session-cache.md`, "Local background sidebar rows", for identity
+and registry-name precedence. This changes the membership marker, not the
+status glyph policy from the indicators audit.
+
 ## Header counters
 
 `#agents-viewer-count` reads `N running · M finished`, plus ` · K external` when

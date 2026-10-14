@@ -61,3 +61,18 @@ test('preload exposes the four agents-view entries', () => {
   }
   assert.match(PRELOAD, /ipcRenderer\.on\('bg-agents-changed'/);
 });
+
+test('registering an attach PTY notifies the sidebar even without a transcript or descriptor event', () => {
+  const start = MAIN.indexOf('  activeSessions.set(sessionId, session);');
+  const end = MAIN.indexOf('  if (!isPlainTerminal && !panelOwnerId)', start);
+  assert.ok(start >= 0 && end > start);
+  const register = new Function('activeSessions', 'sessionId', 'session', 'isAttach', 'isPlainTerminal',
+    'revealIfSdkSession', 'notifyRendererProjectsChanged', MAIN.slice(start, end));
+  const active = new Map();
+  let notifications = 0;
+  register(active, 'bg-head', { isAttach: true }, true, false, () => {}, () => { notifications++; });
+  assert.equal(active.has('bg-head'), true);
+  assert.equal(notifications, 1);
+  register(active, 'ordinary', {}, false, false, () => {}, () => { notifications++; });
+  assert.equal(notifications, 1);
+});

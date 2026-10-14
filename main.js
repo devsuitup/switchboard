@@ -488,6 +488,7 @@ const sessionCache = require('./session-cache');
 sessionCache.init({
   PROJECTS_DIR,
   activeSessions,
+  getLocalDescriptors: () => cliSessionState.getSidebarDescriptors(),
   getMainWindow: () => mainWindow,
   log,
   db: {
@@ -3066,6 +3067,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   };
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
+  if (isAttach) notifyRendererProjectsChanged();
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
   // see .ai/contexts/cli-session-state.md

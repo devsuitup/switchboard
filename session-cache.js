@@ -10,6 +10,7 @@ const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId } = require('./session-continuations');
+const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
 
 /**
  * Session cache module.
@@ -22,10 +23,12 @@ let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, ge
 let isInitialScanComplete, setInitialScanComplete;
 let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
+let getLocalDescriptors = () => [];
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
+  getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   // DB functions
@@ -739,10 +742,21 @@ function buildProjectsFromCache(showArchived) {
     }
   }
 
-  const projects = [];
-  for (const proj of projectMap.values()) {
+  const localDescriptors = [...getLocalDescriptors()];
+  const descriptorIds = new Set(localDescriptors.map(descriptor => descriptor.sessionId.toLowerCase()));
+  for (const [id, session] of activeSessions) {
+    if (session.exited || !session.isAttach || session.host || !session.attachJobId) continue;
+    const sessionId = session.realSessionId || id;
+    if (descriptorIds.has(sessionId.toLowerCase())) continue;
+    localDescriptors.push({ sessionId, kind: 'bg', jobId: session.attachJobId,
+      cwd: session.cwd || session.projectPath, startedAt: session._openedAt });
+    descriptorIds.add(sessionId.toLowerCase());
+  }
+  const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
+    hiddenProjects, metaMap, showArchived,
+  });
+  for (const proj of projects) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
-    projects.push(proj);
   }
 
   projects.sort((a, b) => {
