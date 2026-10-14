@@ -113,7 +113,8 @@ test('children: an active but old subagent stays visible on top of the 10 most r
 
     const item = ctx.document.getElementById('si-' + subId('s-top-1', 'agent-14'));
     assert.ok(item, 'a running subagent must be rendered however old its transcript is');
-    assert.ok(item.classList.contains('running'), 'and it must carry the running indicator');
+    assert.ok(ctx.window.isSubagentActive('s-top-1', 'agent-14'), 'the preview includes the active registry identity');
+    assert.equal(item.classList.contains('running'), false, 'no redundant child marker');
 
     const container = ctx.document.getElementById('subc-s-top-1');
     assert.equal(itemsIn(container), 11, '10 most recent + 1 active = 11 rendered children');

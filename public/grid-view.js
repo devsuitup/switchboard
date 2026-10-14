@@ -56,14 +56,16 @@ function scheduleGridSubagentTtlTick() {
 
 function runGridSubagentTtlTick() {
   pruneStaleGridSubagents();
-  for (const id of gridCards.keys()) updateGridSubagentPills(id);
+  updateGridSubagentPills();
 }
 
 function updateGridSubagentPills(parentSessionId) {
   for (const [sessionId, card] of gridCards) {
     const session = sessionMap.get(sessionId) || openSessions.get(sessionId)?.session || { sessionId };
-    const ids = rowSessionIds(session);
-    if (!ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
+    const item = sessionItemEl(sessionId);
+    const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
+    const ids = rowSessionIds({ sessionId, mergedMemberIds: item?.dataset.mergedMemberIds?.split(' ') || mergedRow?.mergedMemberIds || session.mergedMemberIds });
+    if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
     const count = window.taskRegistry?.runningAgentCount(ids) || 0;
     let text = card.querySelector('.grid-subagent-count');
     if (!count) {
@@ -212,7 +214,6 @@ function wrapInGridCard(sessionId) {
   // Set initial status from the single source of truth
   updateRunningIndicators();
 
-  // Render subagent pills for any already-tracked children
   pruneStaleGridSubagents();
   updateGridSubagentPills(sessionId);
 }

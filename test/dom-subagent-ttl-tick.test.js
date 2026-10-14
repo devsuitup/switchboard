@@ -174,8 +174,9 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
 
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
+    assert.equal(row.classList.contains('running'), false);
     assert.ok(row, 'the subagent row must be in the DOM');
-    assert.ok(row.classList.contains('running'), 'the spawn lights the row');
+    assert.ok(ctx.window.isSubagentActive(PARENT, AGENT), 'the spawn registers child activity');
     assert.equal(ctx.scheduled.length, 1, 'both views share one TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
@@ -184,11 +185,11 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
     ctx.advanceTime(61000);
     ctx.runScheduled();
 
-    assert.equal(row.classList.contains('running'), false,
-      'the TTL tick must clear the row without waiting for a render');
+    assert.equal(ctx.window.isSubagentActive(PARENT, AGENT), false,
+      'the TTL tick must clear registry activity without waiting for a render');
     const caret = ctx.document.getElementById('sub-caret-' + PARENT);
     assert.equal(caret.classList.contains('has-running-child'), false,
-      'the caret badge must follow');
+      'the caret has no redundant marker');
     assert.equal(ctx.document.getElementById('si-' + PARENT).classList.contains('has-busy-agents'), false,
       'the parent indicator must follow');
   } finally {
@@ -237,13 +238,14 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
     // timer must re-arm so the eviction still happens later.
     ctx.runScheduled();
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
-    assert.ok(row.classList.contains('running'), 'a fresh agent must survive the tick');
+    assert.equal(row.classList.contains('running'), false);
+    assert.ok(ctx.window.isSubagentActive(PARENT, AGENT), 'a fresh agent must survive the tick');
     assert.equal(ctx.scheduled.length, 1, 'the tick must re-arm while an agent is tracked');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 're-arm for an agent still inside its TTL');
 
     ctx.advanceTime(61000);
     ctx.runScheduled();
-    assert.equal(row.classList.contains('running'), false);
+    assert.equal(ctx.window.isSubagentActive(PARENT, AGENT), false);
     assert.equal(ctx.scheduled.length, 0, 'an empty map must leave no timer running');
   } finally {
     ctx.destroy();
@@ -272,7 +274,7 @@ test('two agents share one shared timer, re-armed at the survivor\'s own deadlin
     ctx.setNow(t0 + TTL_MS + 1000);
     ctx.runScheduled();
 
-    assert.equal(ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT).classList.contains('running'),
+    assert.equal(ctx.window.isSubagentActive(PARENT, AGENT),
       false, 'the older agent is evicted');
     assertArmedAt(ctx, 30000 - 1000 + ARM_GRACE_MS, "re-armed at the survivor's remaining TTL");
   } finally {
@@ -293,7 +295,7 @@ test('a tick that fires exactly on the deadline still makes progress', () => {
     ctx.setNow(t0 + TTL_MS); // exactly on the cutoff
     ctx.runScheduled();
 
-    assert.ok(ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT).classList.contains('running'),
+    assert.ok(ctx.window.isSubagentActive(PARENT, AGENT),
       'an entry exactly on the cutoff is not stale yet');
     assertArmedAt(ctx, ARM_GRACE_MS, 'boundary re-arm');
   } finally {

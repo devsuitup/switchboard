@@ -160,8 +160,60 @@ test('#627 child and caret have no green running dot and host reachability remai
   assert.equal(ctx.document.querySelector('.caret-running-dot, .sidebar-subagent .session-icon.running'), null);
   ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: 'A' });
   assert.equal(ctx.document.querySelector('.caret-running-dot, .sidebar-subagent .session-icon.running'), null);
+  assert.equal(ctx.document.querySelector('.sidebar-subagent.running, .has-running-child'), null);
   ctx.sidebar.renderProjects([makeSampleProject({ remoteAlias: 'vps', remoteStatus: 'connected', sessions: [parent, child] })], true);
   assert.ok(ctx.document.querySelector('.remote-host-dot'), 'host reachability indicator remains');
+});
+
+for (const visible of [true, false]) {
+  test(`#627 head-keyed grid counts a sibling member with sidebar visible=${visible}`, t => {
+    const head = 'head-627';
+    const { ctx, parent, registry } = setup(t, { mergedMemberIds: [PARENT, head], headSessionId: head });
+    if (!visible) ctx.window.indexLocalMergedMemberRows([makeSampleProject({ sessions: [parent] })]);
+    render(ctx, parent);
+    ctx.window.sessionMap.set(head, { sessionId: head, mergedMemberIds: [] });
+    ctx.window.openSessions.set(head, { session: { sessionId: head, mergedMemberIds: [] } });
+    if (!visible) ctx.document.getElementById('si-' + PARENT).remove();
+    ctx.evalPublic('shortcuts.js');
+    ctx.evalPublic('grid-view.js');
+    const card = ctx.document.createElement('div');
+    card.innerHTML = '<div class="grid-card-header"></div>';
+    ctx.window.testCountCard = card;
+    ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+    snapshot(registry, PARENT, [{ id: 'sibling-agent' }]);
+    assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
+    if (visible) label(ctx.document.getElementById('si-' + PARENT), '1 subagent running');
+    snapshot(registry, PARENT, [], 2);
+    assert.equal(card.querySelector('.grid-subagent-count'), null);
+  });
+}
+
+test('#627 TTL refresh visits each grid card once', t => {
+  const { ctx, registry } = setup(t);
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  const reads = [];
+  for (const id of [PARENT, 'another-627', 'third-627']) {
+    const card = ctx.document.createElement('div');
+    card.innerHTML = '<div class="grid-card-header"></div>';
+    ctx.window.testCountCard = card;
+    ctx.read(`gridCards.set('${id}', window.testCountCard)`);
+    snapshot(registry, id, [{ id: 'agent-' + id }]);
+    const query = card.querySelector.bind(card);
+    card.querySelector = selector => {
+      if (selector === '.grid-subagent-count') reads.push(id);
+      return query(selector);
+    };
+  }
+  const lookups = [];
+  const getSession = ctx.window.sessionMap.get.bind(ctx.window.sessionMap);
+  ctx.window.sessionMap.get = id => {
+    lookups.push(id);
+    return getSession(id);
+  };
+  ctx.window.runGridSubagentTtlTick();
+  assert.deepEqual(reads, [PARENT, 'another-627', 'third-627']);
+  assert.deepEqual(lookups, [PARENT, 'another-627', 'third-627']);
 });
 
 test('#627 grid replaces pills with a pluralized count under its header and follows merged members', t => {

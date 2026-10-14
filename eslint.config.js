@@ -411,6 +411,7 @@ const rendererCrossFileGlobals = {
 
 module.exports = [
   { files: ['public/task-registry.js'], languageOptions: { globals: { module: 'writable' } } },
+  { files: ['public/grid-view.js'], languageOptions: { globals: { localMergedMemberRows: 'readonly' } } },
   // Ignore generated/vendored bundles and binaries
   {
     ignores: [

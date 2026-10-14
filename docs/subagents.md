@@ -48,26 +48,32 @@ where that is wanted.
 
 ## Live status
 
-The session's own status icon has three shapes for "something is running",
-distinguished by movement and hue:
+The parent conversation shows `1 subagent running` or `N subagents running`
+beneath its title in the sidebar and beneath its header in the
+[grid](grid-overview.md). The line stays visible with the child list collapsed
+or expanded, and counts distinct active agent tasks even when their transcripts
+are not listed. It replaces the green dots on child rows and collapsed carets.
+No line appears when the count is zero or unknown. Remote sessions never show
+a count: their mirrored transcripts supply turn state only.
+
+The session's own status icon distinguishes turn activity from background
+work:
 
 | Icon | Meaning |
 |---|---|
-| Light-blue braille spinner | The session is working; no subagent runs under it |
-| The same spinner, violet | The session is working, and at least one subagent runs under it |
-| Static violet ⠿ | The session is at its prompt; subagents still run under it |
+| Light-blue braille spinner | The session is working; no background work is known |
+| The same spinner, violet | The session is working, with background work running |
+| Static violet ⠿ | The session is at its prompt, with background work running |
 
-The violet spinner says the session is busy while agents run. It does not say
+The violet spinner says the session is busy while background work runs. It does not say
 the session is waiting for them: the CLI reports one busy state on its terminal
 title and never signals "waiting for background agents", so the two cannot be
 told apart. The session's higher-priority states — needs attention, response
 ready — replace the icon (see [Status indicators](notifications.md)). The three
 shapes show whether the subagent list is expanded or not.
 
-Subagent activity is detected from the subagent transcripts on disk — for local
-sessions, for sessions started outside Switchboard, and for sessions on remote
-hosts. A subagent whose transcript stops growing is marked finished after a
-stability window; one that grows again is shown running again.
-
-The [grid](grid-overview.md) shows running subagents as coloured pills on the
-parent's card.
+The count comes from agent task lifecycle records in the local conversation's
+transcript. Shells, monitors and scheduled work can affect the status icon,
+but never increase the subagent count. A silent agent stays counted until its
+task ends. Activity inferred from child transcript growth or remote watches
+can affect the status icon, but cannot supply a trustworthy count.

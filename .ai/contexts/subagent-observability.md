@@ -72,11 +72,20 @@ records remove the task once, including replayed completions.
 `buildSessionItem` uses `updateSessionSubagentCount` on initial paint;
 `reflectSubagentRunningState` refreshes the same element on snapshots and
 source changes, locating the merged row from any member id. Child `.running`
-and caret `has-running-child` remain registry-backed state markers, but neither
-adds a green liveness dot. Host reachability dots retain their own styling.
+and caret `has-running-child` were removed with their green liveness dots;
+activity remains in the registry. Host reachability dots retain their styling.
 Grid cards use the same count under their header, replacing the coloured
 subagent pills. `updateGridSubagentPills` retains its callback name and updates
-cards whose row contains the changed member or its continuation alias.
+cards whose row contains the changed member or its continuation alias. It
+resolves merged members from `sessionItemEl(cardKey)` and its
+`data-merged-member-ids`, then `localMergedMemberRows`, before the card's own
+session record. This covers cards opened under the head member by startup
+restore, whose stored `mergedMemberIds` can be empty. The TTL tick refreshes
+all cards in one pass.
+
+Remote mirrors never supply a numeric count: `refreshRemoteHeadTurns` in
+`main.js` reads them with `turnOnly: true`, so only head-turn state reaches the
+renderer from those transcripts.
 
 `test/dom-subagent-running-count-627.test.js` exercises shipped sidebar and
 grid functions with snapshots and actual registry ingestion: count before
@@ -96,11 +105,10 @@ retain their state checks and assert the new presentation.
   `grid-view.js` and `jsonl-viewer.js`).
 - **State**: `activeSubagentsByParent` in `public/sidebar.js` —
   `parentSessionId → Map<agentId, Map<source, lastSeenAt(ms)>>` of live source contributions
-  subagents. `buildSubagentItem()` re-derives child `.running` and
-  `appendSubagentChildren()` derives caret state from this view on every render,
-  so the state survives a full
-  sidebar rebuild; the IPC handlers only fast-path the visual toggle between
-  rebuilds (`reflectSubagentRunningState`).
+  subagents. Registry activity survives a full sidebar rebuild and selects
+  active children for the capped preview. `reflectSubagentRunningState`
+  refreshes the parent's count and status glyph; child rows and carets carry
+  no liveness class.
 - **Why a TTL** (`SUBAGENT_LIVE_TTL_MS` = 60s, shared with grid-view — see
   "One TTL, one definition" below):
   `detectSubagentTransitions()` only polls subagents of `!exited` sessions —
@@ -113,8 +121,8 @@ retain their state checks and assert the new presentation.
   outside `childrenContainer`. The former child and caret green dots were
   removed in #627.
 - **The `updateRunningIndicators` guard** (`public/app.js`): the periodic PTY
-  poll must skip `dataset.subagent` items, or it would clear the `.running`
-  state within one cycle of the IPC setting it.
+  poll skips `dataset.subagent` items because they never own a PTY and must
+  not acquire a top-level session's liveness projection.
 - **`subagentDomId()`** mirrors `subagentSessionId()` in
   `read-session-file.js` — that file is main-process and not `require()`-able
   from the renderer (sidebar.js loads as a plain script), hence the local copy.
@@ -127,12 +135,12 @@ retain their state checks and assert the new presentation.
   prune until PR #137. Keep cross-file names distinct;
   `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
 
-## The child row's `.running` state, for every source (issue #285)
+## Child registry activity, for every source (issue #285)
 
 `activeSubagentsByParent` (above) used to be fed only by the local
 `subagent-spawned`/`subagent-completed` IPC pair, so a remote or
-local-transcript subagent's own row never got `.running` — not even after a
-full rebuild — even though both sources' `kind:'subagent'` payload already
+local-transcript subagent activity was missing from it, even though both
+sources' `kind:'subagent'` payload already
 carries `agentId` (`remote-activity.js`, `local-transcript-activity.js`).
 `noteSubagentActivity(parentSessionId, agentId)` (`public/sidebar.js`) is now
 the single write path into that map: the local IPC handler, `onRemoteActivityEvent`'s
@@ -149,7 +157,9 @@ reproduce: every subagent row's `sessionId` is built by
 alike, so `'si-' + session.sessionId` and `subagentDomId(parent, agentId)`
 are byte-identical by construction. `test/dom-sidebar-subagent-running.test.js`
 already pinned this for the local IPC path with no rebuild; the actual gap
-was purely the missing feed, not the lookup.
+was purely the missing feed, not the lookup. Since #627 the child liveness
+classes are gone; these tests verify registry activity and the parent's
+projection instead.
 
 Parent icon repaint now uses the shared `paintSessionIcon` projection. That
 projection chooses the owning local PTY, remote SSH or local transcript adapter
@@ -891,7 +901,7 @@ Each list now renders, by default, the **union** of
 a `+ N more` toggle is emitted (`appendSubagentRestToggle`). Same fixture after
 the change: 217 elements in the sidebar, 20 subagent rows. The union is
 deliberate, not a truncated sort: a long-running subagent whose transcript
-stopped growing hours ago must keep its `.running` state and preview row, which a
+stopped growing hours ago must keep its registry activity and preview row, which a
 recency-only cut would silently extinguish — the exact class of bug PR #130
 was about. Row order inside each list is unchanged; only membership is.
 

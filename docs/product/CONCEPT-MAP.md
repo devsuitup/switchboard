@@ -151,13 +151,15 @@ schedule's runs share its slug (`docs/session-browser.md:145-147`).
 
 ## 5. Subagent
 
-**States**: icon with a running dot; the parent's icon shows **Subagents
-running** or the violet working spinner (`docs/subagents.md:49-62`). A
-subagent is "finished" after a stability window (`docs/subagents.md:67-70`).
+**States**: the parent shows `1 subagent running` / `N subagents running`
+below its title, with no line at zero or unknown and no count on remote rows.
+The parent's status icon distinguishes its working turn from background work;
+child rows and collapsed carets have no green running dots
+(`docs/subagents.md`, "Live status").
 
 **Actions**: click opens the read-only transcript (`public/sidebar.js:1430-1436`).
-Nothing else (`docs/subagents.md:32`). Grid: coloured pills, at most five
-(`docs/grid-overview.md:26-32`).
+Nothing else (`docs/subagents.md:32`). Grid: the same running count beneath
+the card header (`docs/grid-overview.md`, "A card").
 
 **Rules**: R5.1 follows the parent's archive state; parent not found →
 **Orphan subagents** group (`docs/subagents.md:23-31`). R5.2 deleting a session

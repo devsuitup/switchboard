@@ -84,7 +84,7 @@ test('missing CLI records retain the sixty-second fallback TTL', t => {
   assert.equal(h.window.isSubagentActive('parent-1', 'agent-1'), false);
 });
 
-test('primary snapshots keep the adapter glyph, child dot and grid pill consistent beyond all decays', t => {
+test('primary snapshots keep the adapter glyph and sidebar/grid counts consistent beyond all decays', t => {
   const h = setup(t);
   h.evalPublic('shortcuts.js');
   h.evalPublic('grid-view.js');
@@ -98,11 +98,13 @@ test('primary snapshots keep the adapter glyph, child dot and grid pill consiste
   h.window.decayLocalTranscriptAgentsBusy('parent-1');
   h.window.runSubagentTtlTick();
   assert.ok(h.document.getElementById('si-parent-1').classList.contains('has-busy-agents'));
-  assert.ok(h.document.getElementById('si-sub:parent-1:agent-1').classList.contains('running'));
+  assert.equal(h.document.getElementById('si-parent-1').querySelector('.session-subagent-count').textContent, '1 subagent running');
+  assert.equal(h.document.getElementById('si-sub:parent-1:agent-1').classList.contains('running'), false);
   assert.equal(card.querySelector('.grid-subagent-count').textContent, '1 subagent running');
   h.emitSessionTranscriptActivity({ kind: 'subagent', parentSessionId: 'parent-1', agentId: 'agent-1', at: Date.now() });
   h.window.taskRegistry.applySnapshot({ parentSessionId: 'parent-1', revision: 2, known: true, tasks: [{ id: 'agent-1', kind: 'agent', terminal: true, at: 2 }] });
   assert.equal(h.document.getElementById('si-parent-1').classList.contains('has-busy-agents'), false);
+  assert.equal(h.document.getElementById('si-parent-1').querySelector('.session-subagent-count'), null);
   assert.equal(h.document.getElementById('si-sub:parent-1:agent-1').classList.contains('running'), false);
   assert.equal(card.querySelector('.grid-subagent-count'), null);
 });

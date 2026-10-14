@@ -314,21 +314,12 @@ function updateSessionSubagentCount(item, session) {
 function reflectSubagentRunningState(parentSessionId, agentId) {
   const running = isSubagentActive(parentSessionId, agentId);
   const el = document.getElementById(subagentDomId(parentSessionId, agentId));
-  if (el) {
-    el.classList.toggle('running', running);
-  }
   const caret = document.getElementById(caretIdFor(parentSessionId));
-  if (caret) caret.classList.toggle('has-running-child', parentHasActiveSubagent(parentSessionId));
   // Mirror the live-subagent count into the local-pty adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
   if (typeof syncLocalPtyAgentsBusy === 'function') {
     const localMap = activeSubagentsByParent.get(parentSessionId);
     syncLocalPtyAgentsBusy(parentSessionId, !!(localMap && localMap.size > 0));
   }
-  // Parent session item: "subagents are working under this session" indicator.
-  // Unlike the caret badge, the parent item is always visible, so this shows
-  // whether the subagent group is expanded or collapsed. CSS gives the
-  // session's own states (needs-attention, response-ready, cli-busy)
-  // precedence over it.
   const parentEl = sessionItemEl(parentSessionId);
   const parentRow = parentEl && sessionMap.get(parentEl.dataset.sessionId);
   setHasBusyAgents(parentEl, rowSessionIds(parentRow || { sessionId: parentSessionId }).some(parentHasActiveSubagent));
@@ -383,8 +374,6 @@ function buildSubagentItem(session) {
   const item = document.createElement('div');
   item.className = 'sidebar-subagent session-item js-stateful';
   item.id = 'si-' + session.sessionId;
-  const isRunning = isSubagentActive(session.parentSessionId, session.agentId);
-  if (isRunning) item.classList.add('running');
   setNeedsAttention(item, attentionSessions.has(session.sessionId));
   setResponseReady(item, responseReadySessions.has(session.sessionId));
   setCliBusy(item, !!sessionBusyState.get(session.sessionId));
@@ -488,7 +477,6 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.className = 'sidebar-children-caret js-stateful';
   caret.id = caretId;
   if (isExpanded) caret.classList.add('expanded');
-  if (parentHasActiveSubagent(parentSessionId)) caret.classList.add('has-running-child');
   caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
 
   const domKey = parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
