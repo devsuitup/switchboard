@@ -198,6 +198,8 @@ focus) with a form body.
 - **Anatomy.** Plain-text message, optional text action button, and `Dismiss`.
   A fixed `#app-notices` container stacks notices at the bottom right with
   wrapping text and scrolls when they exceed the available height.
+  It is an empty, persistent `aria-live="polite"` region in `index.html`.
+  Caller ids are stored in `data-notice-id`, without assigning a DOM id.
 - **Variants.** `kind: 'error'` has `role="alert"` and remains until dismissed,
   acted on or cleared. `kind: 'info'` (the default) has `role="status"` and
   expires after 15 s. `kind: 'undo'` has `role="status"` and expires after
@@ -207,6 +209,10 @@ focus) with a form body.
   shared focus ring; showing a notice does not move focus. An action removes
   its notice and invokes its callback once. The caller owns asynchronous
   action results and can report a failure with a new error notice.
+  Info and Undo timeouts pause while hovered or focused and resume with the
+  remaining time after both leave. Pointer presses preserve existing focus;
+  removing a focused notice returns focus to the previously focused control
+  if it is still connected.
 - **Used.** `announceNotStopped` in `public/sidebar.js` reports an archived
   remote session that could not be stopped as a persistent error (#604/#566).
 - **Remaining separate.** `.restore-toast` and `#update-toast` retain their

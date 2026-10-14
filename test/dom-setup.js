@@ -32,6 +32,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     <div id="memory-content"></div>
     <div id="placeholder"></div>
     <div id="terminals"></div>
+    <div id="app-notices" aria-live="polite"></div>
   </body>
 </html>`;
 

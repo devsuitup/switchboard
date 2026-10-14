@@ -72,7 +72,7 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   return {
     ...ctx, indexer, calls, attached, session, polls: () => polls, pollsAtStop: () => pollsAtStop, isLive: () => live, finishPoll,
     get notices() {
-      return [...ctx.document.querySelectorAll('#app-notices [role="alert"] .app-notice-message')].map(el => el.textContent);
+      return [...ctx.document.querySelectorAll('#app-notices .app-notice')].map(el => el.querySelector('.app-notice-message').textContent);
     },
   };
 }
@@ -82,6 +82,14 @@ async function archive(ctx) {
   await button.onclick({ stopPropagation() {} });
   return button;
 }
+
+test('the notices getter includes error, info and Undo messages', t => {
+  const ctx = setup(t);
+  for (const kind of ['error', 'info', 'undo']) {
+    ctx.window.showAppNotice({ id: kind, kind, message: kind });
+  }
+  assert.deepEqual(ctx.notices, ['error', 'info', 'undo']);
+});
 
 test('Archive before the first remote poll stops the live process and closes its local attach', async t => {
   const ctx = setup(t);
