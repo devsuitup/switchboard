@@ -24,7 +24,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   const ctx = vm.createContext({ require: name => name === './task-records-client' ? require('../task-records-client') : null,
     path, mainWindow: { isDestroyed: () => false, webContents: { send: (channel, payload) => {
       if (channel === 'task-snapshot') renderer.applySnapshot(payload);
-      if (channel === 'task-rekey') renderer.rekey(payload.oldId, payload.newId);
+      if (channel === 'task-rekey') renderer.rekey(payload.oldId, payload.newId, { continued: payload.continued });
     } } }, log: { warn(message) { throw new Error(message); } },
     ipcMain: { handle: (_channel, callback) => { handler = callback; } },
     cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }, { sessionId: remote }] },
@@ -48,4 +48,34 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   fs.writeFileSync(path.join(dir, `${next}.jsonl`), JSON.stringify(fixture.notification) + '\n');
   await client.read(path.join(dir, `${next}.jsonl`), next);
   assert.equal(renderer.agents(next).length, 0);
+});
+
+test('status changes notify task liveness only for a changed owner identity', () => {
+  const start = source.indexOf('cliSessionState.onStatusesChanged(');
+  const end = source.indexOf('\n});', start) + '\n});'.length;
+  let callback;
+  let descriptors = [{ sessionId: 'owner', pid: 12, startedAt: 1 }];
+  const live = [];
+  const ctx = vm.createContext({
+    notifyRendererProjectsChanged() {},
+    taskOwnerLiveness: new Map(),
+    taskRecords: { ownerAlive: id => live.push(id) },
+    cliSessionState: { onStatusesChanged: cb => { callback = cb; }, getSidebarDescriptors: () => descriptors },
+  });
+  vm.runInContext(source.slice(start, end), ctx);
+  callback();
+  descriptors[0].status = 'working';
+  callback();
+  assert.deepEqual(live, ['owner'], 'a status-only change must not send ownerAlive again');
+  descriptors = [{ sessionId: 'owner', pid: 13, startedAt: 2 }];
+  callback();
+  assert.deepEqual(live, ['owner', 'owner']);
+  descriptors = [{ sessionId: 'owner', pid: 13, startedAt: 3 }];
+  callback();
+  assert.deepEqual(live, ['owner', 'owner', 'owner'], 'PID reuse is distinguished by the descriptor start time');
+  descriptors = [];
+  callback();
+  descriptors = [{ sessionId: 'owner', pid: 13, startedAt: 3 }];
+  callback();
+  assert.deepEqual(live, ['owner', 'owner', 'owner', 'owner']);
 });

@@ -26,7 +26,7 @@ function createTaskTranscriptReader({ registry, files = fs, chunkBytes = 64 * 10
             const read = await handle.read(boundary, 0, boundary.length, c.offset - boundary.length);
             boundaryChanged = read.bytesRead !== boundary.length || !boundary.equals(c.boundary);
           }
-          if (!c || c.dev !== stat.dev || c.ino !== stat.ino || c.birthtimeMs !== stat.birthtimeMs || stat.size < c.offset || stat.mtimeMs < c.mtimeMs || boundaryChanged || stat.size === c.offset && stat.mtimeMs !== c.mtimeMs) {
+          if (!c || c.dev !== stat.dev || c.ino !== stat.ino || c.birthtimeMs !== stat.birthtimeMs || stat.size < c.offset || boundaryChanged) {
             c = { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs, offset: 0, pending: '', decoder: new StringDecoder('utf8'), mtimeMs: stat.mtimeMs, boundary: Buffer.alloc(0) };
             cursors.set(file, c);
           }
@@ -53,6 +53,7 @@ function createTaskTranscriptReader({ registry, files = fs, chunkBytes = 64 * 10
             c.mtimeMs = stat.mtimeMs;
             await yieldRead();
           }
+          c.mtimeMs = stat.mtimeMs;
         } catch {}
         finally { if (handle) await handle.close().catch(() => {}); }
       } while (!disposed && work.dirty);

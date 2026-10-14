@@ -10,6 +10,7 @@ test('mandatory CLI 2.1.296 fixtures pin consumed launch, notification, job and 
   assert.equal(fixture.cliVersion, '2.1.296');
   assertLaunch(fixture.launch, fixture.cliVersion);
   assertNotification(fixture.notification, fixture.cliVersion);
+  for (const key of ['completedNoTool', 'failedNoTool', 'killed', 'stoppedNoOutput']) assertNotification(fixture[key], fixture.cliVersion);
   assertChildMeta(fixture.childMeta, fixture.cliVersion);
   assert.equal(fixture.childMeta.toolUseId, fixture.use.message.content[0].id);
   assert.equal(fixture.use.message.content[0].name, 'Agent');
@@ -30,7 +31,7 @@ test('format alarms detect changed ids, timestamps, kinds, wrappers and terminal
     mutate(e);
     assert.throws(() => assertLaunch(e, fixture.cliVersion), /PINNED ASSUMPTION BROKEN/);
   }
-  for (const [before, after] of [['task-notification', 'task-event'], ['<task-id>', '<id>'], ['<tool-use-id>', '<tool-id>'], ['completed', 'finished_v2']]) {
+  for (const [before, after] of [['task-notification', 'task-event'], ['<task-id>', '<id>'], ['completed', 'finished_v2']]) {
     const e = structuredClone(fixture.notification);
     e.message.content = e.message.content.replaceAll(before, after);
     assert.throws(() => assertNotification(e, fixture.cliVersion), /PINNED ASSUMPTION BROKEN/);
@@ -50,3 +51,8 @@ test('format alarms detect changed ids, timestamps, kinds, wrappers and terminal
   }
 });
 
+test('notification correlation accepts opaque CLI tool ids including Monitor inner ids', () => {
+  const e = structuredClone(fixture.notification);
+  e.message.content = e.message.content.replaceAll('toolu_111', '11111111-1111-4111-8111-111111111111:inner');
+  assertNotification(e, fixture.cliVersion);
+});

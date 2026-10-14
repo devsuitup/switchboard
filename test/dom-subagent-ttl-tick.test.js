@@ -176,7 +176,7 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
     assert.ok(row, 'the subagent row must be in the DOM');
     assert.ok(row.classList.contains('running'), 'the spawn lights the row');
-    assert.equal(ctx.scheduled.length, 1, 'each view arms its own TTL timer on the spawn');
+    assert.equal(ctx.scheduled.length, 1, 'both views share one TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     // The subagent goes silent: no completion event, no heartbeat, and — the
@@ -210,7 +210,7 @@ test('grid: a stale subagent pill is removed by the TTL tick with no card rebuil
 
     const card = ctx.document.querySelector('.grid-card[data-session-id="' + PARENT + '"]');
     assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 1, 'the pill renders on spawn');
-    assert.equal(ctx.scheduled.length, 1, 'each view arms its own TTL timer on the spawn');
+    assert.equal(ctx.scheduled.length, 1, 'both views share one TTL timer on the spawn');
     assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     ctx.advanceTime(61000);

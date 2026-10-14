@@ -36,7 +36,7 @@ const INDEX_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
-function setupSidebarDom() {
+function setupSidebarDom({ loadTaskRegistry = true } = {}) {
   const dom = new JSDOM(INDEX_HTML, {
     url: 'http://localhost/',
     runScripts: 'outside-only',
@@ -51,6 +51,8 @@ function setupSidebarDom() {
   // that event — sidebar.js registers these listeners once at eval time via
   // an IIFE, so we must capture the callback before the module evaluates.
   const apiTarget = {
+    onTaskSnapshot: cb => { apiTarget._taskSnapshotCb = cb; },
+    getTaskSnapshots: () => Promise.resolve([]),
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },
     onSubagentCompleted: (cb) => { apiTarget._subagentCompletedCb = cb; },
     // initLocalTranscriptAdapter() registers this once — see
@@ -153,7 +155,7 @@ function setupSidebarDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
+  if (loadTaskRegistry) evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
@@ -190,6 +192,9 @@ function setupSidebarDom() {
     // via window.api.onSubagentSpawned/onSubagentCompleted at eval time.
     emitSubagentSpawned(payload) {
       if (typeof apiTarget._subagentSpawnedCb === 'function') apiTarget._subagentSpawnedCb(payload);
+    },
+    emitTaskSnapshot(payload) {
+      apiTarget._taskSnapshotCb(payload);
     },
     emitSubagentCompleted(payload) {
       if (typeof apiTarget._subagentCompletedCb === 'function') apiTarget._subagentCompletedCb(payload);

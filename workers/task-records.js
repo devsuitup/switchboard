@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const { createTaskRegistry } = require('../public/task-registry');
 const { createTaskTranscriptReader } = require('../task-transcript-reader');
 
-const registry = createTaskRegistry({ onRekey: (oldId, newId) => parentPort.postMessage({ rekey: { oldId, newId } }) });
+const registry = createTaskRegistry({ onRekey: (oldId, newId, continued) => parentPort.postMessage({ rekey: { oldId, newId, continued } }) });
 const reader = createTaskTranscriptReader({ registry });
 let queue = Promise.resolve();
 parentPort.on('message', message => {
@@ -27,7 +27,7 @@ parentPort.on('message', message => {
     else if (type === 'job') registry.applyJob(parentSessionId, message.evidence);
     else if (type === 'death') registry.ownerDied(parentSessionId);
     else if (type === 'alive') registry.ownerAlive(parentSessionId);
-    else if (type === 'rekey') registry.rekey(message.oldId, message.newId);
+    else if (type === 'rekey') registry.rekey(message.oldId, message.newId, { continued: message.continued });
     if (parentSessionId) parentPort.postMessage({ snapshot: registry.snapshot(registry.resolve(parentSessionId)) });
     if (type === 'rekey') parentPort.postMessage({ snapshot: registry.snapshot(registry.resolve(message.newId)) });
     if (message.requestId) parentPort.postMessage({ requestId: message.requestId });

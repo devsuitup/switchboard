@@ -3142,8 +3142,8 @@ const taskRecords = createTaskRecordsClient({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-snapshot', snapshot);
   },
   onError: error => log.warn(`[task-records] ${error}`),
-  onRekey: (oldId, newId) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId });
+  onRekey: (oldId, newId, continued) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId, continued });
   },
 });
 ipcMain.handle('get-task-snapshots', async () => {
@@ -3171,7 +3171,7 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
-  rekeyActivity: (fromId, toId) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId); },
+  rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' }); },
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
   getDescriptorIdentity: snapshot => cliSessionState.getDescriptorIdentity(snapshot),
 });
@@ -3179,10 +3179,11 @@ const { detectSessionTransitions } = sessionTransitions;
 
 // see .ai/contexts/cli-session-state.md
 const cliSessionState = require('./cli-session-state');
+const taskOwnerLiveness = new Map();
 cliSessionState.init({
   activeSessions,
   log,
-  onOwnerExit: id => taskRecords.ownerDied(id),
+  onOwnerExit: id => { taskOwnerLiveness.delete(id); taskRecords.ownerDied(id); },
   onIdle: (sessionId, session) => {
     sessionTransitions.detectSubagentTransitions(
       sessionId, session, path.join(PROJECTS_DIR, session.projectFolder)
@@ -3191,7 +3192,17 @@ cliSessionState.init({
 });
 cliSessionState.onStatusesChanged(() => {
   notifyRendererProjectsChanged();
-  for (const descriptor of cliSessionState.getSidebarDescriptors()) taskRecords.ownerAlive(descriptor.sessionId);
+  const observed = new Set();
+  for (const descriptor of cliSessionState.getSidebarDescriptors()) {
+    const id = descriptor.sessionId;
+    const identity = JSON.stringify([descriptor.pid, descriptor.startedAt]);
+    observed.add(id);
+    if (taskOwnerLiveness.get(id) !== identity) {
+      taskOwnerLiveness.set(id, identity);
+      taskRecords.ownerAlive(id);
+    }
+  }
+  for (const id of taskOwnerLiveness.keys()) if (!observed.has(id)) taskOwnerLiveness.delete(id);
 });
 
 // a session with a live PTY is owned by the OSC path — see .ai/contexts/session-state.md

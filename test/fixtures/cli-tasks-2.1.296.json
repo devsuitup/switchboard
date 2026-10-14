@@ -1,6 +1,6 @@
 {
   "cliVersion": "2.1.296",
-  "provenance": "Sanitized Agent tool-use, async result, notification and job envelopes read on 2026-10-14. Synchronous result is a contract fixture; no live synchronous sample was found.",
+  "provenance": "Sanitized Agent tool-use, async result, notification and job envelopes read on 2026-10-14. Synchronous result is a contract fixture; no live synchronous sample was found. Completed/failed notifications without tool-use-id and stopped records without output-file were verified by the read-only live canary. Killed, monitor-event, aggregate-stop and absent-origin variants are contract fixtures derived from the same envelope.",
   "parentSessionId": "11111111-1111-4111-8111-111111111111",
   "agentId": "a1111111111111111",
   "use": {
@@ -56,6 +56,9 @@
     "message": {
       "role": "user",
       "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<tool-use-id>toolu_111</tool-use-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>completed</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
     }
   },
   "syncResult": {
@@ -121,5 +124,86 @@
     "spawnDepth": 1,
     "requestShape": "Sanitized",
     "requestNonInteractive": false
+  },
+  "completedNoTool": {
+    "uuid": "completedNoTool",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>completed</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
+  },
+  "failedNoTool": {
+    "uuid": "failedNoTool",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>failed</status>\n<summary>Agent \"It was running when the previous Claude Code process exited and did not complete\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
+  },
+  "killed": {
+    "uuid": "killed",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>killed</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
+  },
+  "monitorEvent": {
+    "uuid": "monitor-event",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<event>monitor</event>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
+  },
+  "withoutOrigin": {
+    "uuid": "no-origin",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<tool-use-id>toolu_111</tool-use-id>\n<output-file>C:\\Temp\\claude\\project\\11111111-1111-4111-8111-111111111111\\tasks\\a1111111111111111.output</output-file>\n<status>completed</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    }
+  },
+  "stoppedNoOutput": {
+    "uuid": "stopped-no-output",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id>\n<status>stopped</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
+  },
+  "aggregateStopped": {
+    "uuid": "aggregate-stopped",
+    "type": "user",
+    "timestamp": "2026-10-14T00:11:00.000Z",
+    "message": {
+      "role": "user",
+      "content": "<task-notification>\n<task-id>a1111111111111111</task-id><task-id>a2222222222222222</task-id>\n<status>stopped</status>\n<summary>Agent \"Sanitized task\" finished</summary>\n</task-notification>"
+    },
+    "origin": {
+      "kind": "task-notification"
+    }
   }
 }

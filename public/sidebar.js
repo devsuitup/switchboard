@@ -205,7 +205,7 @@ function subagentTypeColor(type) {
 
 // --- Live subagent tracking — see .ai/contexts/subagent-observability.md ---
 // parentSessionId → Map<agentId, Map<source, lastSeenAtMs>>.
-const activeSubagentsByParent = window.taskRegistry.agentView;
+const activeSubagentsByParent = window.taskRegistry?.agentView || new Map();
 
 function isSubagentActive(parentSessionId, agentId) {
   const map = activeSubagentsByParent.get(parentSessionId);
@@ -216,7 +216,7 @@ function isSubagentActive(parentSessionId, agentId) {
 function parentHasActiveSubagent(parentSessionId) {
   const map = activeSubagentsByParent.get(parentSessionId);
   if (map && map.size > 0) return true;
-  if (window.taskRegistry.known(parentSessionId)) return false;
+  if (window.taskRegistry?.known(parentSessionId)) return false;
   if (typeof remoteSessionStates !== 'undefined') {
     const remote = remoteSessionStates.get(parentSessionId);
     if (remote && remote.snapshot().agentsBusy) return true;
@@ -244,7 +244,7 @@ let subagentTtlTimer = null;
 
 function scheduleSubagentTtlTick() {
   if (subagentTtlTimer) return;
-  const oldest = window.taskRegistry.oldestFallback();
+  const oldest = window.taskRegistry?.oldestFallback() ?? Infinity;
   if (oldest === Infinity) return;
   const delay = Math.max(1, oldest + SUBAGENT_LIVE_TTL_MS + 1 - Date.now());
   subagentTtlTimer = setTimeout(runSubagentTtlTick, delay);
@@ -269,7 +269,7 @@ function releaseSubagentSource(parentSessionId, agentId, source, via) {
   const sources = map?.get(agentId);
   if (!sources || (source !== undefined && !sources.has(source))) return;
   const from = Math.max(...sources.values());
-  window.taskRegistry.release(parentSessionId, agentId, source);
+  window.taskRegistry?.release(parentSessionId, agentId, source);
   const to = sources.size ? Math.max(...sources.values()) : null;
 
   if (window.ATRACE) window.atrace('recv.subagent-completed', parentSessionId, { map: 'activeSubagentsByParent', op: to === null ? 'delete' : 'set', agentId, from, to, source, via, fn: 'releaseSubagentSource' });
@@ -283,7 +283,7 @@ function clearActiveSubagentsFor(parentSessionId, source) {
 }
 
 function rekeyActiveSubagents(oldId, newId) {
-  window.taskRegistry.rekey(oldId, newId);
+  window.taskRegistry?.rekey(oldId, newId);
 }
 
 function caretIdFor(parentSessionId) {
@@ -317,7 +317,7 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   const parentEl = sessionItemEl(parentSessionId);
   const parentRow = parentEl && sessionMap.get(parentEl.dataset.sessionId);
   setHasBusyAgents(parentEl, rowSessionIds(parentRow || { sessionId: parentSessionId }).some(parentHasActiveSubagent));
-  // parent slot repainted only when local-pty owns it — see .ai/contexts/subagent-observability.md
+  // see .ai/contexts/subagent-observability.md
   if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
   if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
 }
@@ -326,7 +326,7 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
 function noteSubagentActivity(parentSessionId, agentId, source, extra) {
   const previous = activeSubagentsByParent.get(parentSessionId)?.get(agentId);
   const from = previous ? Math.max(...previous.values()) : null;
-  if (!window.taskRegistry.note(parentSessionId, agentId, source || 'local-ipc', extra || {})) return;
+  if (!window.taskRegistry?.note(parentSessionId, agentId, source || 'local-ipc', extra || {})) return;
   if (window.ATRACE) window.atrace('recv.subagent-spawned', parentSessionId, { map: 'activeSubagentsByParent', op: 'set', agentId, from, applied: true, source: source || 'local-ipc', fn: 'noteSubagentActivity', ...(extra || {}) });
   scheduleSubagentTtlTick();
   reflectSubagentRunningState(parentSessionId, agentId);
@@ -338,10 +338,6 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
   if (typeof window.api.onSubagentSpawned === 'function') {
     window.api.onSubagentSpawned((payload) => {
       const { parentSessionId, agentId, _heartbeat } = payload || {};
-      if (payload?.source === 'cli-task') {
-        noteSubagentActivity(parentSessionId, agentId, 'cli-task', payload);
-        return;
-      }
       if (!parentSessionId || !agentId) return;
       const map = activeSubagentsByParent.get(parentSessionId);
       const sources = _heartbeat
@@ -361,10 +357,6 @@ function noteSubagentActivity(parentSessionId, agentId, source, extra) {
     window.api.onSubagentCompleted((payload) => {
       const { parentSessionId, agentId } = payload || {};
       if (!parentSessionId || !agentId) return;
-      if (payload.source === 'cli-task') {
-        window.taskRegistry.end(parentSessionId, agentId);
-        return;
-      }
       releaseSubagentSource(parentSessionId, agentId, 'local-ipc', 'ipc');
       releaseSubagentSource(parentSessionId, agentId, 'attached-ipc', 'ipc');
     });

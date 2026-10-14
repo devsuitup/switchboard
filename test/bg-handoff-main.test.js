@@ -21,6 +21,7 @@ function setup() {
     activeSessions: sessions,
     exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded: id => ended.push(id) },
+    taskRecords: { ownerDied() {} },
     sessionCache: { releaseLiveSession: () => false },
     notifyRendererProjectsChanged() {},
     log: { warn() {} },

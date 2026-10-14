@@ -188,7 +188,7 @@ test('a terminal job observed before replay suppresses old tasks and an explicit
 test('rekeyed snapshots and continuation notifications finish tasks under their current identity', () => {
   const r = createTaskRegistry();
   r.applySnapshot({ parentSessionId: id, revision: 1, known: true, tasks: [{ id: agent, kind: 'agent', terminal: false, at: 1 }] });
-  r.rekey(id, 'new-parent');
+  r.rekey(id, 'new-parent', { continued: true });
   r.applySnapshot({ parentSessionId: id, revision: 2, known: true, tasks: [{ id: agent, kind: 'agent', terminal: true, at: 2 }] });
   assert.equal(r.agents('new-parent').length, 0, 'late old-id completion routes to the rekeyed registry');
   assert.equal(r.note(id, agent, 'local-transcript'), false, 'late old-id growth cannot bypass the moved terminal record');
@@ -280,7 +280,7 @@ test('in-place compaction with the same byte length invalidates the old cursor',
 test('worker continuation rekeys an existing renderer snapshot before delivering its completion', async t => {
   const file = disk(t);
   const renderer = createTaskRegistry();
-  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s), onRekey: (oldId, newId) => renderer.rekey(oldId, newId) });
+  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s), onRekey: (oldId, newId, continued) => renderer.rekey(oldId, newId, { continued }) });
   t.after(() => client.dispose());
   fs.writeFileSync(file, jsonl(fixture.use, fixture.launch));
   await client.read(file, id);

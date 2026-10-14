@@ -16,7 +16,7 @@ let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
 const activeSubagents = {
   get(id) {
-    const entries = window.taskRegistry.agents(id);
+    const entries = window.taskRegistry?.agents(id) || [];
     return entries.length ? new Map(entries.map(t => [t.id, { agentId: t.id, subagentType: t.subagentType, spawnedAt: Math.max(...t.sources.values()) }])) : undefined;
   },
   has(id) { return !!this.get(id); },
@@ -44,10 +44,12 @@ function gridSubagentColor(type) {
   if (typeof window.api.onSubagentSpawned === 'function') {
     window.api.onSubagentSpawned((data) => {
       const { parentSessionId, agentId, subagentType, _heartbeat } = data || {};
-      if (!parentSessionId || !agentId) return;
-      const source = data.source || 'local-ipc';
-      if (_heartbeat && !window.taskRegistry.agentView.get(parentSessionId)?.get(agentId)?.has(source)) return;
-      window.taskRegistry.note(parentSessionId, agentId, source, { subagentType });
+      if (!parentSessionId || !agentId || !window.taskRegistry) return;
+      const map = window.taskRegistry.agentView.get(parentSessionId);
+      const sources = _heartbeat
+        ? ['local-ipc', 'attached-ipc'].filter(source => map?.get(agentId)?.has(source))
+        : [openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc'];
+      for (const source of sources) window.taskRegistry.note(parentSessionId, agentId, source, { subagentType });
       scheduleGridSubagentTtlTick();
       updateGridSubagentPills(parentSessionId);
     });
@@ -56,12 +58,9 @@ function gridSubagentColor(type) {
   if (typeof window.api.onSubagentCompleted === 'function') {
     window.api.onSubagentCompleted((data) => {
       const { parentSessionId, agentId } = data || {};
-      if (!parentSessionId || !agentId) return;
-      if (data.source === 'cli-task') window.taskRegistry.end(parentSessionId, agentId);
-      else {
-        window.taskRegistry.release(parentSessionId, agentId, 'local-ipc');
-        window.taskRegistry.release(parentSessionId, agentId, 'attached-ipc');
-      }
+      if (!parentSessionId || !agentId || !window.taskRegistry) return;
+      window.taskRegistry.release(parentSessionId, agentId, 'local-ipc');
+      window.taskRegistry.release(parentSessionId, agentId, 'attached-ipc');
       updateGridSubagentPills(parentSessionId);
     });
   }
@@ -70,7 +69,7 @@ function gridSubagentColor(type) {
 // Prune subagents that have been running for more than 60 s without a completion event.
 // see .ai/contexts/subagent-observability.md
 function pruneStaleGridSubagents() {
-  window.taskRegistry.prune(SUBAGENT_LIVE_TTL_MS);
+  window.taskRegistry?.prune(SUBAGENT_LIVE_TTL_MS);
 }
 
 function scheduleGridSubagentTtlTick() {

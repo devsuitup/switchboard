@@ -35,8 +35,8 @@ test('a PTY exit ends the span under both ids, since a re-key may not have run y
 });
 
 test('a re-key reaches the reporter, beside the MCP server that follows it the same way', () => {
-  assert.match(TRANSITIONS, /rekeyMcpServer\(sessionId, newId\);\s*\n\s*rekeyActivity\(sessionId, newId\);/);
-  assert.match(MAIN, /rekeyActivity: \(fromId, toId\) => activityReporter\.rekey\(fromId, toId\)/);
+  assert.match(TRANSITIONS, /rekeyMcpServer\(sessionId, newId\);\s*\n\s*rekeyActivity\(sessionId, newId, kind\);/);
+  assert.match(MAIN, /rekeyActivity: \(fromId, toId, kind\) => \{ activityReporter\.rekey\(fromId, toId\); taskRecords\.rekey/);
 });
 
 test('a scheduled run is a running session, ended on exit and on a spawn error alike', () => {

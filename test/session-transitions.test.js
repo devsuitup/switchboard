@@ -6,6 +6,8 @@ const path = require('path');
 
 const sessionTransitions = require('../session-transitions');
 const { detectSubagentTransitions, init } = sessionTransitions;
+const { createTaskRegistry } = require('../public/task-registry');
+const taskFixture = require('./fixtures/cli-tasks-2.1.296.json');
 
 // detectSubagentTransitions arms the settle tick on every call. These tests
 // drive the scan by hand, so a real 5 s timer would be a phantom that could
@@ -21,6 +23,35 @@ function mkTmp() {
 
 function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+for (const kind of ['clear', 'fork']) {
+  test(`shipped ${kind} detection moves CLI tasks without retaining an owner alias`, () => {
+    const tmp = mkTmp();
+    try {
+      const folder = 'task-transition';
+      fs.mkdirSync(path.join(tmp, folder));
+      const registry = createTaskRegistry();
+      registry.ingest('old-id', taskFixture.use);
+      registry.ingest('old-id', taskFixture.launch);
+      const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      const wiring = main.split('\n').find(line => line.includes('rekeyActivity:'));
+      const { rekeyActivity } = require('node:vm').runInNewContext('({' + wiring + '})', {
+        activityReporter: { rekey() {} }, taskRecords: registry,
+      });
+      const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => 'mine', rekeyActivity });
+      activeSessions.set('old-id', makePtySession(folder, { pty: { pid: 7 } }));
+      if (kind === 'clear') writeClearTranscript(path.join(tmp, folder), 'new-id');
+      else fs.writeFileSync(path.join(tmp, folder, 'new-id.jsonl'), JSON.stringify({ type: 'user', forkedFrom: { sessionId: 'old-id' } }) + '\n');
+      sessionTransitions.detectSessionTransitions(folder);
+      assert.equal(activeSessions.has('new-id'), true);
+      assert.equal(registry.agents('new-id').length, 1);
+      registry.note('old-id', 'old-agent', 'local-transcript');
+      assert.deepEqual(registry.agents('old-id').map(t => t.id), ['old-agent']);
+      registry.ownerDied('old-id');
+      assert.equal(registry.agents('new-id').length, 1);
+    } finally { cleanup(tmp); }
+  });
 }
 
 /** Build a mock mainWindow that records every webContents.send call. */

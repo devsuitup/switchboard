@@ -18,9 +18,9 @@ function assertNotification(entry, version) {
   const why = `PINNED ASSUMPTION BROKEN: CLI ${version} terminal task notification schema`;
   assert.ok(Number.isFinite(Date.parse(entry.timestamp)), `${why}: timestamp`);
   const result = createTaskRegistry().notification(entry);
-  assert.ok(result, `${why}: wrapper, task-id, tool-use-id, output-file or status`);
+  assert.ok(result, `${why}: origin, wrapper, task-id, output-file or status`);
   assert.match(result.id, /^[a-z][a-z0-9]+$/, `${why}: task-id`);
-  assert.match(result.tool, /^toolu_\w+$/, `${why}: tool-use-id`);
+  if (result.tool !== null) assert.equal(typeof result.tool, 'string', `${why}: tool-use-id`);
 }
 
 function assertChildMeta(meta, version) {

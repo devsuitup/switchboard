@@ -574,6 +574,7 @@ function runExitHandler({ releaseLiveSession }) {
     trace: () => {},
     mainWindow: null,
     activityReporter: { sessionEnded: () => {} },
+    taskRecords: { ownerDied() {} },
     sessionCache: {
       releaseLiveSession: (id) => {
         if (calls.deletedBeforeRelease === null) calls.deletedBeforeRelease = activeSessions.size === 0;

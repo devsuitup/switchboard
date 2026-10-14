@@ -3,7 +3,7 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
-function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, onError = () => {}, workerFactory = () => new Worker(path.join(__dirname, 'workers/task-records.js')) } = {}) {
+function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, onError = () => {}, maxEntries = 2048, workerFactory = () => new Worker(path.join(__dirname, 'workers/task-records.js')) } = {}) {
   const snapshots = new Map();
   const requests = new Map();
   const dirty = new Map();
@@ -19,10 +19,13 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
       worker = workerFactory();
       worker.on('message', message => {
         if (message.rekey) {
-          const { oldId, newId } = message.rekey;
-          redirects.set(oldId, newId);
+          const { oldId, newId, continued } = message.rekey;
+          if (continued) {
+            redirects.set(oldId, newId);
+            while (redirects.size > maxEntries) redirects.delete(redirects.keys().next().value);
+          }
           snapshots.delete(oldId);
-          onRekey(oldId, newId);
+          onRekey(oldId, newId, continued);
         }
         if (message.snapshot) {
           const s = message.snapshot;
@@ -64,7 +67,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
     child: (file, parentSessionId, agentId) => send({ type: 'child', file, parentSessionId, agentId }),
     ownerDied: parentSessionId => send({ type: 'death', parentSessionId }),
     ownerAlive: parentSessionId => send({ type: 'alive', parentSessionId }),
-    rekey: (oldId, newId) => send({ type: 'rekey', oldId, newId }),
+    rekey: (oldId, newId, { continued = false } = {}) => send({ type: 'rekey', oldId, newId, continued }),
     hasRecord: (id, taskId) => snapshots.get(resolve(id))?.tasks.some(t => t.id === taskId) || false,
     snapshots: () => [...snapshots.values()],
     async dispose() { disposed = true; for (const resolve of requests.values()) resolve(); requests.clear(); if (worker) await worker.terminate(); },

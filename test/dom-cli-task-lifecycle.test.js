@@ -3,6 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const { createTaskRegistry } = require('../public/task-registry');
+const fixture = require('./fixtures/cli-tasks-2.1.296.json');
+
+function primary(h) {
+  const registry = createTaskRegistry({ onChange: snapshot => h.emitTaskSnapshot(snapshot) });
+  for (const entry of [fixture.use, fixture.launch]) registry.ingest('parent-1', entry);
+  registry.correlateAgent('parent-1', 'agent-1', fixture.childMeta);
+  registry.ownerAlive('parent-1');
+  return registry;
+}
 
 function setup(t) {
   const ctx = setupSidebarDom();
@@ -18,7 +28,7 @@ test('an explicit CLI launch survives ten minutes of silence in the shared rende
   const h = setup(t);
   let at = Date.now();
   h.window.Date.now = () => at;
-  h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', source: 'cli-task' });
+  primary(h);
   for (const elapsed of [30001, 60001, 120001, 300001, 600001]) {
     at += elapsed;
     h.window.runSubagentTtlTick();
@@ -28,13 +38,40 @@ test('an explicit CLI launch survives ten minutes of silence in the shared rende
 
 test('CLI completion clears overlapping fallback evidence immediately and rejects late growth', t => {
   const h = setup(t);
-  h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', source: 'cli-task' });
+  const registry = primary(h);
   h.window.noteSubagentActivity('parent-1', 'agent-1', 'local-transcript');
-  h.emitSubagentCompleted({ parentSessionId: 'parent-1', agentId: 'agent-1', source: 'cli-task' });
+  const completion = structuredClone(fixture.notification);
+  completion.message.content = completion.message.content.replaceAll(fixture.agentId, 'agent-1');
+  registry.ingest('parent-1', completion);
   assert.equal(h.window.isSubagentActive('parent-1', 'agent-1'), false, 'terminal records override fallback evidence');
   h.window.noteSubagentActivity('parent-1', 'agent-1', 'local-transcript');
   h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', _heartbeat: true });
   assert.equal(h.window.isSubagentActive('parent-1', 'agent-1'), false, 'late growth cannot resurrect a completed task');
+});
+
+test('subagent IPC cannot claim CLI primary evidence or complete a primary task', t => {
+  const h = setup(t);
+  h.evalPublic('shortcuts.js');
+  h.evalPublic('grid-view.js');
+  h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', source: 'cli-task' });
+  assert.equal(h.window.taskRegistry.primary('parent-1', 'agent-1'), false);
+  primary(h);
+  h.emitSubagentCompleted({ parentSessionId: 'parent-1', agentId: 'agent-1', source: 'cli-task' });
+  assert.equal(h.window.taskRegistry.primary('parent-1', 'agent-1'), true);
+});
+
+test('grid attach fallback records attached-ipc and refreshes the existing IPC source on heartbeat', t => {
+  const h = setup(t);
+  h.evalPublic('shortcuts.js');
+  h.evalPublic('grid-view.js');
+  h.read("openSessions.set('parent-1', { attach: true })");
+  h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1' });
+  const sources = h.window.taskRegistry.agents('parent-1')[0].sources;
+  assert.equal(sources.has('attached-ipc'), true);
+  assert.equal(sources.has('local-ipc'), false);
+  h.read("openSessions.delete('parent-1')");
+  h.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', _heartbeat: true });
+  assert.equal(sources.has('local-ipc'), false);
 });
 
 test('missing CLI records retain the sixty-second fallback TTL', t => {

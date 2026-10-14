@@ -452,7 +452,7 @@ function rekeySession(sessionId, newId, session, currentFiles, kind) {
   activeSessions.set(newId, session);
   recordRekey(sessionId, newId);
   rekeyMcpServer(sessionId, newId);
-  rekeyActivity(sessionId, newId);
+  rekeyActivity(sessionId, newId, kind);
   const mainWindow = getMainWindow();
   if (TRACE) trace('session.forked', sessionId, { newId, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
   if (mainWindow && !mainWindow.isDestroyed()) {
