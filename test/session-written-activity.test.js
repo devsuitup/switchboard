@@ -305,7 +305,7 @@ test('session environment rekey carries the written watermark before the PTY env
   assert.equal(h.window.writtenActivitySnapshot('s').unseenWrittenActivity, false);
 });
 
-for (const view of ['single', 'grid']) test(`explicit ${view} selection consumes the current capture and retains newer writes`, t => {
+for (const view of ['single', 'grid']) test(`${view} selection clears notifications but preserves scrolled-up output until viewed`, t => {
   const h = terminal(t);
   h.window.activeSessionId = 'elsewhere';
   h.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'open', revision: 1 });
@@ -314,19 +314,110 @@ for (const view of ['single', 'grid']) test(`explicit ${view} selection consumes
   loadAppFunctions(h.context, { functions: ['clearNotifications'] });
   h.window.setActiveSession = id => { h.window.activeSessionId = id; };
   h.window.Element.prototype.scrollIntoView = () => {};
+  h.entry.terminal.buffer.active.baseY = 10;
+  h.entry.terminal.buffer.active.viewportY = 2;
+  h.entry.renderedWrittenWatermark = h.window.writtenActivitySnapshot('s').writtenWatermark;
   const select = () => view === 'single' ? h.window.showSession('s') : h.window.focusGridCard('s');
   select();
   assert.equal(h.inCtx("headTurns.get('s').ready"), false);
-  assert.equal(h.unseen(), false);
-  const captured = h.window.noteWrittenActivity('s');
-  const clear = h.window.clearNotifications;
-  h.window.clearNotifications = (id, watermark = h.window.writtenActivitySnapshot(id).writtenWatermark) => {
-    assert.equal(watermark, captured);
-    h.window.noteWrittenActivity(id);
-    clear(id, watermark);
-  };
-  select();
   assert.equal(h.unseen(), true);
+  h.entry.terminal.buffer.active.viewportY = 10;
+  h.window.markTerminalOutputSeen(h.entry);
+  assert.equal(h.unseen(), false);
+});
+
+for (const mode of ['single', 'visible-grid', 'scrolled-up', 'hidden-window', 'inactive', 'offscreen-grid']) {
+  test(`${mode}: rendered output followed by its digest needs no further PTY data`, t => {
+    const h = terminal(t);
+    h.head('baseline');
+    if (mode === 'scrolled-up') h.entry.terminal.buffer.active.baseY = 10;
+    if (mode === 'hidden-window') Object.defineProperty(h.document, 'hidden', { value: true });
+    if (mode === 'inactive') h.window.activeSessionId = 'elsewhere';
+    if (mode.includes('grid')) {
+      h.window.gridViewActive = true;
+      h.window.activeSessionId = 'elsewhere';
+      const card = h.document.createElement('div');
+      card.className = 'grid-card';
+      card.dataset.outputVisible = String(mode === 'visible-grid');
+      h.entry.element.parentNode.appendChild(card);
+      card.appendChild(h.entry.element);
+    }
+    h.window.handleTerminalData('s', 'final answer');
+    h.window.flushTerminalBuffer('s');
+    h.head('final answer digest');
+    assert.equal(h.unseen(), !['single', 'visible-grid'].includes(mode));
+    h.window.markTerminalOutputSeen(h.entry);
+    assert.equal(h.unseen(), !['single', 'visible-grid'].includes(mode));
+  });
+}
+
+for (const order of ['digest-first', 'during-write']) test(`${order}: digest is seen only after the pending write finishes`, t => {
+  const h = terminal(t);
+  h.head('baseline');
+  let done;
+  h.entry.terminal.write = (_text, callback) => { done = callback; };
+  h.window.handleTerminalData('s', 'answer');
+  if (order === 'digest-first') h.head('answer digest');
+  h.window.flushTerminalBuffer('s');
+  if (order === 'during-write') h.head('answer digest');
+  assert.equal(h.unseen(), true);
+  done();
+  assert.equal(h.unseen(), false);
+});
+
+for (const view of ['single', 'grid']) test(`${view} selection cannot consume a pending hidden replay`, t => {
+  const h = terminal(t);
+  h.head('baseline');
+  h.window.activeSessionId = 'elsewhere';
+  h.window.handleTerminalData('s', 'hidden answer');
+  h.head('hidden digest');
+  loadAppFunctions(h.context, { functions: ['clearNotifications'] });
+  h.window.setActiveSession = id => { h.window.activeSessionId = id; };
+  h.window.Element.prototype.scrollIntoView = () => {};
+  let done;
+  h.entry.terminal.write = (_text, callback) => { done = callback; };
+  if (view === 'single') h.window.showSession('s');
+  else {
+    h.window.focusGridCard('s');
+    h.window.replayHiddenBuffer('s');
+  }
+  assert.equal(h.unseen(), true);
+  done();
+  assert.equal(h.unseen(), false);
+});
+
+for (const order of ['render-first', 'digest-first', 'scrolled-up', 'hidden']) test(`transcript ${order}: a late digest respects the rendered viewer position`, async t => {
+  const h = setup(t);
+  h.ctx.evalPublic('jsonl-viewer.js');
+  for (const name of ['terminalArea', 'jsonlViewer', 'jsonlViewerTitle', 'jsonlViewerSessionId', 'jsonlViewerBody']) {
+    h.ctx.window[name] = h.ctx.document.createElement('div');
+    h.ctx.document.body.appendChild(h.ctx.window[name]);
+  }
+  const body = h.ctx.window.jsonlViewerBody;
+  h.ctx.window.jsonlViewer.appendChild(body);
+  Object.defineProperties(body, { clientHeight: { value: 100 }, scrollHeight: { value: 300 } });
+  h.ctx.window.hideAllViewers = () => {};
+  h.ctx.window.api.readSessionJsonl = async () => ({ entries: [{ type: 'assistant', message: { content: 'answer' } }] });
+  let frame;
+  h.ctx.window.requestAnimationFrame = callback => { frame = callback; return 1; };
+  const head = (revision, writtenOutput) => h.ctx.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'open', revision, writtenOutput });
+  head(1, 'baseline');
+  await h.ctx.window.showJsonlViewer(h.row);
+  body.scrollTop = 200;
+  if (order === 'digest-first') {
+    head(2, 'answer digest');
+    assert.equal(h.blue(), true);
+    frame();
+    assert.equal(h.blue(), false);
+  } else {
+    frame();
+    if (order === 'scrolled-up') body.scrollTop = 0;
+    if (order === 'hidden') h.ctx.window.jsonlViewer.style.display = 'none';
+    head(2, 'answer digest');
+    assert.equal(h.blue(), order !== 'render-first');
+    body.onscroll();
+    assert.equal(h.blue(), order !== 'render-first');
+  }
 });
 
 test('an empty transcript read cannot consume written output that it did not display', async t => {

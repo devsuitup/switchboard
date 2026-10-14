@@ -573,7 +573,9 @@ function flushTerminalBuffer(sessionId) {
   const wasAtBottom = isAtBottom(entry.terminal);
   const savedViewportY = entry.terminal.buffer.active.viewportY;
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
+  entry.pendingWrittenRenders = (entry.pendingWrittenRenders || 0) + 1;
   entry.terminal.write(data, () => {
+    entry.pendingWrittenRenders--;
     entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
     if (sessionId === activeSessionId && wasAtBottom) {
       entry.terminal.scrollToBottom();
@@ -919,7 +921,9 @@ function replayHiddenBuffer(sessionId) {
   if (acc.reset) entry.terminal.reset();
   if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
+  entry.pendingWrittenRenders = (entry.pendingWrittenRenders || 0) + 1;
   entry.terminal.write(raw, () => {
+    entry.pendingWrittenRenders--;
     entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
     if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
@@ -1449,7 +1453,7 @@ function showSession(sessionId) {
   const item = sessionItemEl(sessionId);
   if (item) item.classList.add('active');
   setActiveSession(sessionId);
-  clearNotifications(sessionId);
+  clearNotifications(sessionId, 0);
   lruTouch(sessionId);
 
   if (gridViewActive) {

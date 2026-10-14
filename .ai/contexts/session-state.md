@@ -620,17 +620,32 @@ used only to acknowledge rendered output, never to detect written activity:
 spinner and timer frames, resize repaints, attach/history replays and input
 echo cannot advance the written watermark.
 
+The written-output digest extends the tail backwards to a complete record
+boundary when its first record exceeds 256 KiB. Complete large tool results
+therefore contribute their content digest, while partial writes, large
+metadata and child records retain the usual filtering. This can read more
+than 256 KiB for a single oversized record. Turn classification and timestamp
+evidence still use only the original bounded tail.
+Reads carrying a compaction cursor retain their tail-plus-cursor I/O budget
+and defer oversized digests. A later read without that cursor refreshes the
+digest even when file metadata has not changed.
+
 Seen means the output was rendered and the page is visible, even without
 keyboard focus, at its latest position. A terminal write callback records
-only the watermark captured for that batch. Scroll, focus, visibility, reveal
-and grid intersection events consume only that rendered watermark. A single
-terminal must be active; a grid card must be at least 99% within the viewport. Scrolling
-above the latest output preserves unread. Transcript reads capture the
-watermark before IPC and consume that capture only after the main transcript
-renders at the bottom; later scrolling uses the same capture, and nested child
-transcripts cannot consume it. The existing explicit clear consumes its capture
-without a visibility requirement; both single-view and grid selection use
-that explicit clear. A newer write after capture stays unseen. Rendering a
+the watermark captured for that batch. A digest arriving after the render
+also advances the rendered watermark when the terminal is visible at the
+bottom, with no queued flush, hidden replay or write callback pending. A
+digest arriving during a write waits for its callback. Scroll, focus,
+visibility, reveal and grid intersection events recheck those conditions.
+A single terminal must be active; a grid card must be at least 99% within the
+viewport. Scrolling above the latest output preserves unread. Transcript
+reads capture the watermark before IPC; their main viewer records subsequent
+digest watermarks and consumes them only after rendering at the bottom of a
+visible page. Empty reads and nested child transcripts cannot consume them.
+The existing explicit clear consumes its capture without a visibility
+requirement. Single-view and grid selection instead pass watermark zero:
+they clear notifications, while output is consumed by the visibility check
+after reveal. A newer write after a captured clear stays unseen. Rendering a
 grid card only advances the written watermark's seen state; attention and
 the response-ready glyph keep their existing focus/clear policy. The terminal
 seen check returns before style queries when there is no unseen writing.

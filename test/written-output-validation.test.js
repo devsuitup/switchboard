@@ -7,6 +7,28 @@ const os = require('node:os');
 const path = require('node:path');
 const { createTaskRecordsClient } = require('../task-records-client');
 
+test('the worker advances written output for a tool result larger than the transcript tail', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-large-'));
+  const file = path.join(dir, 's.jsonl');
+  let snapshot;
+  const client = createTaskRecordsClient({ onSnapshot: value => { snapshot = value; } });
+  t.after(() => { client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const read = async () => { await client.readBatch([{ file, parentSessionId: 's', turnOnly: true }]); return snapshot.headTurn.writtenOutput; };
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: 'baseline' } }) + '\n');
+  let previous = await read();
+  for (const size of [300, 600]) {
+    const line = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'call', content: 'x'.repeat(size * 1024) }] } });
+    fs.appendFileSync(file, line);
+    assert.equal(await read(), previous);
+    fs.appendFileSync(file, '\n');
+    const written = await read();
+    assert.notEqual(written, previous);
+    fs.appendFileSync(file, JSON.stringify({ type: 'system', subtype: 'progress' }) + '\n');
+    assert.equal(await read(), written);
+    previous = written;
+  }
+});
+
 test('the worker validates new main output, ignores metadata/partial writes/children, and carries the signature through rekey', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-'));
   const file = path.join(dir, 's.jsonl');

@@ -13,8 +13,6 @@ function markTerminalOutputSeen(entry) {
   if (!entry?.terminal) return;
   const sessionId = entry.session.sessionId;
   if (!writtenActivitySnapshot(sessionId).unseenWrittenActivity || !entry.element.classList.contains('visible')) return;
-  const watermark = entry.renderedWrittenWatermark ?? 0;
-  if (watermark <= writtenActivitySnapshot(sessionId).seenWrittenWatermark) return;
   const buffer = entry.terminal.buffer.active;
   if (buffer.viewportY < buffer.baseY) return;
   const card = entry.element.closest('.grid-card');
@@ -22,6 +20,13 @@ function markTerminalOutputSeen(entry) {
     if (card?.dataset.outputVisible !== 'true') return;
   } else if (sessionId !== activeSessionId) return;
   if (!outputSurfaceVisible(entry.element)) return;
+  const buffered = typeof terminalWriteBuffers !== 'undefined' && terminalWriteBuffers.get(sessionId)?.chunks.length;
+  const hidden = typeof hiddenAccumulators !== 'undefined' && hiddenAccumulators.get(sessionId)?.raw.length;
+  if (!buffered && !hidden && !entry.pendingWrittenRenders) {
+    entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, entry.digestWrittenWatermark || 0);
+  }
+  const watermark = entry.renderedWrittenWatermark ?? 0;
+  if (watermark <= writtenActivitySnapshot(sessionId).seenWrittenWatermark) return;
   markWrittenActivitySeen(sessionId, watermark);
 }
 
@@ -42,7 +47,18 @@ function applyHeadTurnSnapshot(turn) {
   if (!turn || typeof turn.sessionId !== 'string' || !['open', 'closed', 'unknown'].includes(turn.state) || !Number.isFinite(turn.revision)) return;
   const previous = headTurns.get(turn.sessionId);
   if (previous && previous.revision >= turn.revision) return;
-  if (typeof turn.writtenOutput === 'string' && previous?.writtenOutput !== undefined && turn.writtenOutput !== previous.writtenOutput) noteWrittenActivity(turn.sessionId);
+  if (typeof turn.writtenOutput === 'string' && previous?.writtenOutput !== undefined && turn.writtenOutput !== previous.writtenOutput) {
+    const watermark = noteWrittenActivity(turn.sessionId);
+    const entry = typeof openSessions !== 'undefined' && openSessions.get(turn.sessionId);
+    if (entry) {
+      entry.digestWrittenWatermark = watermark;
+      markTerminalOutputSeen(entry);
+    }
+    if (typeof jsonlViewerBody !== 'undefined' && jsonlViewerBody.writtenActivity?.sessionId === turn.sessionId) {
+      jsonlViewerBody.writtenActivity.watermark = watermark;
+      jsonlViewerBody.onscroll?.();
+    }
+  }
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;

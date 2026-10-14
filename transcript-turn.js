@@ -158,10 +158,20 @@ function classifyTranscriptTail(text) {
   return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
 }
 
-function readTail(filePath, size, tailBytes) {
+function readTail(filePath, size, tailBytes, includeWritten) {
   const start = Math.max(0, size - tailBytes);
   const length = size - start;
-  return readRange(filePath, start, length).toString('utf8');
+  const chunks = [readRange(filePath, start, length)];
+  let offset = start;
+  while (includeWritten && offset > 0) {
+    const count = Math.min(tailBytes, offset);
+    const chunk = readRange(filePath, offset - count, count);
+    const newline = chunk.lastIndexOf(10);
+    chunks.unshift(chunk.subarray(newline + 1));
+    if (newline >= 0) break;
+    offset -= count;
+  }
+  return { text: chunks[chunks.length - 1].toString('utf8'), writtenText: Buffer.concat(chunks).toString('utf8') };
 }
 
 function readRange(filePath, start, length, expectedStat) {
@@ -225,13 +235,15 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
       } catch (_) { return null; }
       const hit = cache.get(filePath);
       let cached = hit;
-      if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev) {
+      if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev
+        || !compactionCursor && !hit.writtenComplete) {
         let tail;
-        try { tail = readTail(filePath, stat.size, tailBytes); } catch (_) { return null; }
-        const turn = { ...classifyTranscriptTail(tail), mtimeMs: stat.mtimeMs,
-          writtenOutput: latestWrittenOutput(tail) ?? hit?.turn.writtenOutput ?? '' };
+        try { tail = readTail(filePath, stat.size, tailBytes, !compactionCursor); } catch (_) { return null; }
+        const turn = { ...classifyTranscriptTail(tail.text), mtimeMs: stat.mtimeMs,
+          writtenOutput: latestWrittenOutput(tail.writtenText) ?? hit?.turn.writtenOutput ?? '' };
         cached = { mtimeMs: stat.mtimeMs, size: stat.size, dev: stat.dev, ino: stat.ino,
-          skipLine: tail.length > 0 && !tail.endsWith('\n'), turn };
+          writtenComplete: !compactionCursor,
+          skipLine: tail.text.length > 0 && !tail.text.endsWith('\n'), turn };
         cache.set(filePath, cached);
       }
       const turn = { ...cached.turn };
