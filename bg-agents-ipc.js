@@ -11,8 +11,11 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     try { win.webContents.send('bg-agents-changed', snapshot); } catch (err) { log.warn(`[bg-agents] push failed: ${err.message}`); }
   };
   let unsubscribe = null;
+  const unsubscribeView = () => {
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+  };
   const subscribe = () => {
-    if (unsubscribe) unsubscribe();
+    unsubscribeView();
     unsubscribe = bgAgents.onChange(push);
   };
   ipcMain.handle('get-bg-agents', async () => {
@@ -48,7 +51,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   });
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
   ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));
-  subscribe();
+  return unsubscribeView;
 }
 
 module.exports = { init };

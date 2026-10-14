@@ -125,12 +125,67 @@ test('an empty custom-title backfill is memoized without rescanning cached rows 
     db.upsertCachedSessions([cache.readSessionFile(file, folder, root)]);
     let reads = 0;
     cache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null,
-      log: console, db: { ...db, getAllCached: () => { reads++; return db.getAllCached(); } } });
+      log: console, db: { ...db,
+        getAllCached: () => assert.fail('title backfill must not load every cache row'),
+        getCachedMissingCustomTitle: () => { reads++; return db.getCachedMissingCustomTitle(); } } });
     (async () => {
       const first = cache.backfillCustomTitles();
       await first;
       assert.equal(cache.backfillCustomTitles(), first);
       assert.equal(reads, 1);
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `, root);
+});
+
+test('header-only upserts leave unknown titles eligible for backfill and preserve existing titles', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-name-refresh-631-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  run(fixture + `
+    const row = cache.readSessionFile(file, folder, root);
+    delete row.customTitle;
+    db.upsertCachedSessions([row]);
+    assert.equal(db.getCachedSession(id).customTitle, null, 'an undefined title remains unknown');
+    db.upsertCachedSessions([{ ...row, modified: '2026-10-14T01:00:00.000Z' }]);
+    assert.equal(db.getCachedSession(id).customTitle, null, 'header refresh does not mark a legacy title absent');
+    fs.utimesSync(file, new Date('2026-10-14T01:00:00.000Z'), new Date('2026-10-14T01:00:00.000Z'));
+    cache.refreshFolder(folder);
+    assert.equal(db.getCachedSession(id).customTitle, null, 'the public header refresh preserves unknown titles');
+    (async () => {
+      await cache.backfillCustomTitles();
+      assert.equal(db.getCachedSession(id).customTitle, 'launch (3)');
+      db.upsertCachedSessions([row]);
+      assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'an omitted title does not overwrite a known title');
+      fs.utimesSync(file, new Date('2026-10-14T02:00:00.000Z'), new Date('2026-10-14T02:00:00.000Z'));
+      cache.refreshFolder(folder);
+      assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'the public header refresh preserves known titles');
+      db.upsertCachedSessions([{ ...row, customTitle: '' }]);
+      assert.equal(db.getCachedSession(id).customTitle, '', 'a full scan can record a known absence');
+      db.closeDb();
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `, root);
+});
+
+test('title backfill selects only narrow unknown top-level rows and excludes known titles and subagents', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-name-query-631-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  run(fixture + `
+    const row = cache.readSessionFile(file, folder, root);
+    db.upsertCachedSessions([
+      { ...row, customTitle: undefined },
+      { ...row, sessionId: 'known', customTitle: 'known' },
+      { ...row, sessionId: 'absent', customTitle: '' },
+      { ...row, sessionId: 'child', parentSessionId: id, agentId: 'agent', customTitle: undefined },
+    ]);
+    const candidates = db.getCachedMissingCustomTitle();
+    assert.equal(candidates.length, 1);
+    assert.deepEqual(candidates[0], { sessionId: id, folder, fileMtime: row.fileMtime });
+    cache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console,
+      db: { ...db, getAllCached: () => assert.fail('title backfill must use the narrow query') } });
+    (async () => {
+      await cache.backfillCustomTitles();
+      assert.equal(db.getCachedSession(id).customTitle, 'launch (3)');
+      assert.equal(db.getCachedSession('child').customTitle, null);
+      db.closeDb();
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `, root);
 });

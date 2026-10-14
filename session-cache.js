@@ -25,7 +25,7 @@ let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCache
 let entrypointBackfill = null;
 let getLocalDescriptors = () => [];
 let getLocalJobs = () => new Map();
-let setCachedCustomTitles;
+let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 
 function init(ctx) {
@@ -34,6 +34,7 @@ function init(ctx) {
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
   getLocalJobs = ctx.getLocalJobs || (() => new Map());
   setCachedCustomTitles = ctx.db.setCachedCustomTitles;
+  getCachedMissingCustomTitle = ctx.db.getCachedMissingCustomTitle;
   customTitleBackfill = null;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
@@ -539,9 +540,8 @@ function backfillEntrypoints() {
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
 function backfillCustomTitles() {
   if (customTitleBackfill) return customTitleBackfill;
-  if (!setCachedCustomTitles) return (customTitleBackfill = Promise.resolve());
-  const rows = getAllCached().filter(row => row.customTitle == null && !row.parentSessionId
-    && validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
+  if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
+  const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
   if (!rows.length) return (customTitleBackfill = Promise.resolve());
   const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime,
     file: resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' }) }));

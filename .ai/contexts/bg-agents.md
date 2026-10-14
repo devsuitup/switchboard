@@ -18,7 +18,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
 | `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
-| `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; `bgAgents.stop()` in the window's `closed` handler |
+| `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; renderer unsubscribe on window close, `bgAgents.stop()` on app quit |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
 | `public/dialogs.js` | `showDispatchAgentDialog` |
@@ -36,9 +36,14 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    `control.key` are never touched.
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
-4. No steady-state cost before the view is first opened: the watchers are
-   armed by the first `get-bg-agents`. Closing the view keeps them so the
-   sidebar badge stays current; the window's `closed` handler releases them.
+4. Job watchers start with the app to keep the sidebar cache current. They
+   notify projects only when the job id to state/name projection changes;
+   token/detail/tempo/fan updates do not notify projects. Automatic roster
+   rebuilds require an `onChange` subscriber, first installed by
+   `get-bg-agents`, and stop when the last subscriber leaves. Explicit CLI
+   reconciles still return a fresh roster. Closing the view retains its push
+   subscription; closing the window releases it. Jobs and the projects listener
+   survive macOS window close/activate and are released on app quit.
 5. `jobs/` and the `kind: "bg"` descriptor are undocumented. Failure is
    silence: an unreadable `state.json` keeps the previous value; a CLI that
    fails leaves a file-only roster with `daemonReachable: false`. Canaries:

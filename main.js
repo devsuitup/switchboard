@@ -161,7 +161,7 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
-  isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles,
+  isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles, getCachedMissingCustomTitle,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
   DB_PATH, getProjectsRevision,
@@ -441,7 +441,7 @@ function createWindow() {
     }
     changesWatchers.closeAll();
     closeAllFileWatchers();
-    bgAgents.stop();
+    unsubscribeBgAgents();
     // Release all subagent file watchers (closes fs.watch handles + clears any
     // debounce timers / polling fallbacks via the stored teardown closure)
     for (const [, entry] of subagentWatchers) {
@@ -496,7 +496,7 @@ sessionCache.init({
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
-    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex, setCachedCustomTitles,
+    isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex, setCachedCustomTitles, getCachedMissingCustomTitle,
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder,
@@ -3359,9 +3359,9 @@ bgAgents.init({
     return false;
   },
 });
-require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
+const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
-bgAgents.onChange(notifyRendererProjectsChanged);
+bgAgents.onJobsChanged(notifyRendererProjectsChanged);
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
   getMergedMemberIds: id => getAllCached()
@@ -3719,6 +3719,7 @@ app.on('before-quit', (event) => {
     projectsWatcher = null;
   }
   cliSessionState.stop();
+  bgAgents.stop();
   // Stops the timer and SIGKILLs any ssh/scp still in flight.
   remoteIndexer.dispose();
   remoteWatcher.stopAll();

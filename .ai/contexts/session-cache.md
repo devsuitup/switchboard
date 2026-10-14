@@ -150,7 +150,9 @@ Merged sidebar entries include `mergedMemberIds`, the ids rolled into their visi
 fresh sidebar payload. `session-cache.init` receives `getLocalDescriptors`,
 wired to the CLI watcher's cached `getSidebarDescriptors`, and `getLocalJobs`,
 wired to `bg-agents.getCachedJobs`. The existing job watcher starts with the
-app and notifies projects when its roster changes; opening Agents is unnecessary.
+app and notifies projects only when its cached job id to state/name projection
+changes; opening Agents is unnecessary. Roster rebuilding is independent and
+requires an Agents subscriber. Job watching survives macOS window close/activate.
 Project loads perform no additional job-file or transcript scan. Only cached
 job states `working` and `blocked` permit a bg marker, display merge or synthetic
 row, even when a finished job's descriptor PID or attach PTY remains live. A bg UUID
@@ -194,11 +196,15 @@ as reliable turn evidence by this display projection.
 `session_cache.customTitle` retains the parsed title separately from the editable
 `session_meta.name`. Schema reconciliation adds the nullable column without
 clearing existing rows or metadata. Existing local rows with an unknown title
-are backfilled once by `workers/scan-session-titles.js`, using the existing
+are selected through `getCachedMissingCustomTitle`: only session id, folder and
+file mtime for rows with `customTitle IS NULL AND parentSessionId IS NULL`.
+They are backfilled once by `workers/scan-session-titles.js`, using the existing
 bounded header reader off the main thread. The backfill writes only that column
 when the row's file mtime still matches and its title remains unknown, so a
 concurrent refresh or Switchboard rename is preserved. An empty string means a
-known absence of a title; `NULL` means it has not been backfilled yet.
+known absence of a title; `NULL` means it has not been backfilled yet. Cache
+upserts bind omitted titles as `NULL` and preserve a known title on conflict
+when the incoming title is unknown, including header-only refreshes.
 
 The projects request snapshots cached sidebar descriptors and job state/name,
 plus the attach PTY's UUID, job id, cwd and host. These projections participate

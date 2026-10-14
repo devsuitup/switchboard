@@ -36,12 +36,15 @@ test('get-bg-agents arms the watchers then reconciles; the verbs pass straight t
   assert.deepEqual(bg.calls.slice(2), [['verb', 'stop', 'aaaaaaaa'], ['dispatch', { prompt: 'p', cwd: '/x' }]]);
 });
 
-test('a roster change is pushed to the window on bg-agents-changed, and skipped when the window is gone', () => {
-  const { ipcMain } = fakeIpc();
+test('a roster change is pushed only after an Agents request, and skipped when the window is gone', async () => {
+  const { handlers, ipcMain } = fakeIpc();
   const bg = fakeBgAgents();
   const sent = [];
   let window = { isDestroyed: () => false, webContents: { send: (ch, payload) => sent.push([ch, payload]) } };
   init({ ipcMain, bgAgents: bg, getMainWindow: () => window, log: { warn() {} } });
+  bg.fire({ roster: [], daemonReachable: false });
+  assert.deepEqual(sent, [], 'initialization must not subscribe to the roster');
+  await handlers.get('get-bg-agents')({});
   bg.fire({ roster: [{ id: 'aaaaaaaa' }], daemonReachable: true });
   assert.deepEqual(sent, [['bg-agents-changed', { roster: [{ id: 'aaaaaaaa' }], daemonReachable: true }]]);
   window = null;
@@ -66,6 +69,33 @@ test('get-bg-agents restores the push after stop() cleared it, without ever doub
   await handlers.get('get-bg-agents')({});
   for (const l of listeners) l({ roster: [], daemonReachable: true });
   assert.deepEqual(sent, [['bg-agents-changed', { roster: [], daemonReachable: true }]]);
+});
+
+test('window close releases the roster subscription and a reopened window can subscribe once', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const listeners = new Set();
+  const bg = {
+    start: () => true,
+    reconcile: async () => ({ roster: [], daemonReachable: true }),
+    onChange: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  const sent = [];
+  let window = { isDestroyed: () => false, webContents: { send: (channel, payload) => sent.push([channel, payload]) } };
+  const close = init({ ipcMain, bgAgents: bg, getMainWindow: () => window, log: { warn() {} } });
+  assert.equal(listeners.size, 0);
+  await handlers.get('get-bg-agents')({});
+  assert.equal(listeners.size, 1);
+  close();
+  close();
+  window = null;
+  assert.equal(listeners.size, 0);
+  window = { isDestroyed: () => false, webContents: { send: (channel, payload) => sent.push([channel, payload]) } };
+  await handlers.get('get-bg-agents')({});
+  await handlers.get('get-bg-agents')({});
+  assert.equal(listeners.size, 1);
+  for (const listener of listeners) listener({ roster: [], daemonReachable: true });
+  assert.equal(sent.length, 1);
+  close();
 });
 
 test('bg-agent-live-job answers liveJobCheck for the id, coerced to a string', async () => {

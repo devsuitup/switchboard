@@ -80,9 +80,9 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
           root.messageCount += child.messageCount || 0;
           if (child.modified > root.modified) root.modified = child.modified;
           members.add(child.sessionId);
-        for (const member of child.mergedMemberIds || []) members.add(member);
-        for (const project of projects) project.sessions = project.sessions.filter(row => row !== child);
-        for (const member of [child.sessionId, ...(child.mergedMemberIds || [])]) visibleRows.set(key(member), root);
+          for (const member of child.mergedMemberIds || []) members.add(member);
+          for (const project of projects) project.sessions = project.sessions.filter(row => row !== child);
+          for (const member of [child.sessionId, ...(child.mergedMemberIds || [])]) visibleRows.set(key(member), root);
         }
         if (key(id) !== key(root.sessionId)) members.add(localRows.get(key(id))?.sessionId || descriptor.sessionId);
       }
