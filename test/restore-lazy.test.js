@@ -886,7 +886,7 @@ test('lazy merged row: a member whose row has a reattached member is not marked,
   }
 });
 
-test('lazy merged row: a member is marked while a sibling opened during the marking is still opening, and kept saved if that open fails', async () => {
+test('lazy merged row: a member and the sibling opened during the marking are marked while that open is in flight, and kept saved if it fails', async () => {
   for (const ok of [false, true]) {
     const label = ok ? 'A opens' : 'A fails';
     let finishOpen;
@@ -904,12 +904,12 @@ test('lazy merged row: a member is marked while a sibling opened during the mark
       };
       await h.fns.tickRestorePlanner();
       assert.deepEqual(h.openTerminalCalls, ['A'], label);
-      assert.deepEqual(h.dormantIds(), ['B', 'x'], label);
+      assert.deepEqual(h.dormantIds(), ['A', 'B', 'x'], label);
       finishOpen(ok ? { ok: true } : { ok: false, error: 'boom' });
       for (let j = 0; j < 5; j++) await settle();
       await h.fns.persistWorkingSet();
-      assert.deepEqual(h.dormantIds(), ok ? ['x'] : ['B', 'x'], label);
-      assert.deepEqual(h.savedIds(), ok ? ['A', 'x'] : ['B', 'x'], label);
+      assert.deepEqual(h.dormantIds(), ok ? ['x'] : ['A', 'B', 'x'], label);
+      assert.deepEqual(h.savedIds(), ok ? ['A', 'x'] : ['A', 'B', 'x'], label);
       assert.equal(h.row('A').classList.contains('dormant'), !ok, label);
     } finally { h.destroy(); }
   }
@@ -957,6 +957,88 @@ test('lazy merged row: the session keys on a dormant member of a row with an ope
     assert.equal(h.run('activeSessionId'), 'A');
     assert.deepEqual(h.dormantIds(), ['x']);
     assert.equal(h.row('A').classList.contains('dormant'), false);
+  } finally { h.destroy(); }
+});
+
+test('lazy: a saved session the user opens during the marking is marked while that open is in flight, and kept saved if it fails', async () => {
+  for (const ok of [false, true]) {
+    const label = ok ? 'x opens' : 'x fails';
+    let finishOpen;
+    const h = setup({ openResult: () => new Promise((resolve) => { finishOpen = resolve; }) });
+    try {
+      h.index(['a', 'x', 'b']);
+      let clicked = false;
+      h.window.api.getActiveSessions = async () => {
+        if (clicked) return [];
+        clicked = true;
+        h.open('x');
+        for (let j = 0; j < 10; j++) await settle();
+        return [];
+      };
+      await h.fns.tickRestorePlanner();
+      assert.deepEqual(h.openTerminalCalls, ['x'], label);
+      assert.deepEqual(h.dormantIds(), ['a', 'b', 'x'], label);
+      finishOpen(ok ? { ok: true } : { ok: false, error: 'boom' });
+      for (let j = 0; j < 5; j++) await settle();
+      await h.fns.persistWorkingSet();
+      assert.deepEqual(h.dormantIds(), ok ? ['a', 'b'] : ['a', 'b', 'x'], label);
+      assert.deepEqual(h.savedIds(), ['a', 'x', 'b'], label);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy merged row: a second click, or the session keys on a dormant sibling, while a member is opening waits for that open and keeps the row\'s dormant members if it fails', async () => {
+  for (const second of ['click', 'keys']) {
+    for (const ok of [false, true]) {
+      const label = `${second}, ${ok ? 'B opens' : 'B fails'}`;
+      let finishOpen;
+      const h = setupMerged({ saved: ['B', 'C', 'x'], members: ['B', 'C'], openResult: () => new Promise((resolve) => { finishOpen = resolve; }) });
+      try {
+        h.indexMerged();
+        await h.fns.tickRestorePlanner();
+        assert.deepEqual(h.dormantIds(), ['B', 'C', 'x'], label);
+        h.row('A').click();
+        for (let j = 0; j < 5; j++) await settle();
+        assert.deepEqual(h.openTerminalCalls, ['B'], label);
+        if (second === 'click') {
+          h.row('A').click();
+        } else {
+          h.run('activeSessionId = "B"');
+          h.run('navigateSession(1)');
+        }
+        for (let j = 0; j < 5; j++) await settle();
+        assert.deepEqual(h.dormantIds(), ['B', 'C', 'x'], `${label}: nothing is dropped before the open settles`);
+        finishOpen(ok ? { ok: true } : { ok: false, error: 'boom' });
+        for (let j = 0; j < 5; j++) await settle();
+        await h.fns.persistWorkingSet();
+        assert.deepEqual(h.openTerminalCalls, ['B'], `${label}: the second open starts nothing`);
+        assert.deepEqual(h.dormantIds(), ok ? ['x'] : ['B', 'C', 'x'], label);
+        assert.deepEqual(h.savedIds(), ok ? ['B', 'x'] : ['B', 'C', 'x'], label);
+      } finally { h.destroy(); }
+    }
+  }
+});
+
+test('lazy merged row: a click on the row during a member\'s reattach-only open resumes that member when no PTY is left', async () => {
+  let release;
+  const h = setupMerged({
+    livePtys: ['B'],
+    openResult: (_id, options) => (options.reattachOnly ? new Promise((resolve) => { release = () => resolve({ ok: false, notLive: true }); }) : { ok: true }),
+  });
+  try {
+    h.indexMerged();
+    h.window.renderProjects(h.window.cachedProjects, true);
+    const ticking = h.fns.tickRestorePlanner();
+    for (let j = 0; j < 5; j++) await settle();
+    h.row('A').click();
+    for (let j = 0; j < 5; j++) await settle();
+    release();
+    await ticking;
+    for (let j = 0; j < 5; j++) await settle();
+    assert.deepEqual(h.openTerminalCalls, ['B', 'B']);
+    assert.equal(h.openTerminalOptions[1].reattachOnly, undefined, 'the click resumes it');
+    assert.equal(h.window.openSessions.has('B'), true);
+    assert.deepEqual(h.dormantIds(), ['x']);
   } finally { h.destroy(); }
 });
 
