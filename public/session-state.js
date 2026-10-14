@@ -187,31 +187,6 @@ function createSessionState(kind) {
   return { apply, snapshot };
 }
 
-function createWrittenOutputFilter() {
-  let mode = 'text';
-  let escaped = false;
-  return data => {
-    let text = '';
-    for (const char of data) {
-      if (mode === 'string') {
-        if (char === '\x07' || escaped && char === '\\') mode = 'text';
-        escaped = char === '\x1b';
-      } else if (mode === 'escape') {
-        if (char === '[') mode = 'csi';
-        else if (']PX^_'.includes(char)) mode = 'string';
-        else if (char >= '0' && char <= '~') mode = 'text';
-      } else if (mode === 'csi') {
-        if (char >= '@' && char <= '~') mode = 'text';
-      } else if (char === '\x1b') {
-        mode = 'escape';
-      } else if (char >= ' ' && char !== '\x7f') {
-        text += char;
-      }
-    }
-    return !!text.trim();
-  };
-}
-
 // One icon slot per row, highest rung wins — see .ai/contexts/session-state.md
 function renderSessionIcon(snapshot) {
   const s = snapshot || {};
@@ -241,5 +216,5 @@ function rungActive(s, rung) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { createSessionState, renderSessionIcon, createWrittenOutputFilter };
+  module.exports = { createSessionState, renderSessionIcon };
 }

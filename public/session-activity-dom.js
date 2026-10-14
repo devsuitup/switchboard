@@ -1,7 +1,7 @@
 const headTurns = new Map();
 
 function outputSurfaceVisible(element) {
-  if (!element?.isConnected || document.hidden || !document.hasFocus()) return false;
+  if (!element?.isConnected || document.hidden || document.visibilityState !== 'visible') return false;
   for (let parent = element; parent; parent = parent.parentElement) {
     const style = window.getComputedStyle(parent);
     if (parent.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
@@ -10,21 +10,19 @@ function outputSurfaceVisible(element) {
 }
 
 function markTerminalOutputSeen(entry) {
-  if (!entry?.terminal || !outputSurfaceVisible(entry.element) || !entry.element.classList.contains('visible')) return;
+  if (!entry?.terminal) return;
   const sessionId = entry.session.sessionId;
+  if (!writtenActivitySnapshot(sessionId).unseenWrittenActivity || !entry.element.classList.contains('visible')) return;
+  const watermark = entry.renderedWrittenWatermark ?? 0;
+  if (watermark <= writtenActivitySnapshot(sessionId).seenWrittenWatermark) return;
   const buffer = entry.terminal.buffer.active;
   if (buffer.viewportY < buffer.baseY) return;
   const card = entry.element.closest('.grid-card');
   if (typeof gridViewActive !== 'undefined' && gridViewActive) {
     if (card?.dataset.outputVisible !== 'true') return;
   } else if (sessionId !== activeSessionId) return;
-  const watermark = entry.renderedWrittenWatermark ?? 0;
+  if (!outputSurfaceVisible(entry.element)) return;
   markWrittenActivitySeen(sessionId, watermark);
-  if (watermark > 0 && watermark >= writtenActivitySnapshot(sessionId).writtenWatermark
-    && (headTurns.get(sessionId)?.ready || storedActivitySnapshot(sessionId).attention)) {
-    clearHeadUnread(sessionId);
-    setAttention(sessionId, false, 'output-seen');
-  }
 }
 
 function markTranscriptOutputSeen(sessionId, body, watermark) {
@@ -44,8 +42,7 @@ function applyHeadTurnSnapshot(turn) {
   if (!turn || typeof turn.sessionId !== 'string' || !['open', 'closed', 'unknown'].includes(turn.state) || !Number.isFinite(turn.revision)) return;
   const previous = headTurns.get(turn.sessionId);
   if (previous && previous.revision >= turn.revision) return;
-  if (typeof turn.writtenOutput === 'string' && previous?.writtenOutput !== undefined && turn.writtenOutput !== previous.writtenOutput
-    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(turn.sessionId))) noteWrittenActivity(turn.sessionId);
+  if (typeof turn.writtenOutput === 'string' && previous?.writtenOutput !== undefined && turn.writtenOutput !== previous.writtenOutput) noteWrittenActivity(turn.sessionId);
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;

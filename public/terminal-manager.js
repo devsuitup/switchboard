@@ -931,10 +931,6 @@ function replayHiddenBuffer(sessionId) {
 // this logic sat in untestable app.js.
 function handleTerminalData(sessionId, data) {
   const entry = openSessions.get(sessionId);
-  if (entry && entry.session.type !== 'terminal' && typeof createWrittenOutputFilter === 'function' && typeof noteWrittenActivity === 'function') {
-    entry.writtenOutputFilter ||= createWrittenOutputFilter();
-    if (entry.writtenOutputFilter(data)) noteWrittenActivity(sessionId);
-  }
   const hidden = !!entry && isHiddenSingleViewSession(sessionId);
   if (window.ATRACE) {
     const s = renderStatFor(sessionId);
@@ -1453,7 +1449,7 @@ function showSession(sessionId) {
   const item = sessionItemEl(sessionId);
   if (item) item.classList.add('active');
   setActiveSession(sessionId);
-  clearNotifications(sessionId, 0);
+  clearNotifications(sessionId);
   lruTouch(sessionId);
 
   if (gridViewActive) {

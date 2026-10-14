@@ -257,7 +257,7 @@ function focusGridCard(sessionId) {
   const previousSessionId = gridFocusedSessionId;
   gridFocusedSessionId = sessionId;
   setActiveSession(sessionId);
-  clearNotifications(sessionId, 0);
+  clearNotifications(sessionId);
   lruTouch(sessionId);
   // Update sidebar active highlight
   document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
@@ -433,14 +433,11 @@ function initGridObservers() {
   new ResizeObserver(updateGridColumns).observe(terminalsEl);
   new MutationObserver(updateGridColumns).observe(terminalsEl, { childList: true });
   if (typeof IntersectionObserver !== 'undefined') {
-    // TODO: threshold 0 suspends/restores on every boundary crossing; if fast
-    // grid scrolling ever shows GL-context churn, add a small debounce or
-    // rootMargin here.
     gridCardObserver = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const sid = e.target.dataset.sessionId;
         if (!sid) continue;
-        e.target.dataset.outputVisible = String(e.isIntersecting);
+        e.target.dataset.outputVisible = String(e.isIntersecting && e.intersectionRatio >= 0.99);
         if (e.isIntersecting) {
           restoreTerminalWebgl(sid);
           if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(openSessions.get(sid));
@@ -448,7 +445,7 @@ function initGridObservers() {
           suspendTerminalWebgl(sid);
         }
       }
-    }, { threshold: 0 });
+    }, { threshold: [0, 0.99] });
   }
 }
 

@@ -125,7 +125,7 @@ function terminal(t) {
   };
   const unseen = () => h.window.writtenActivitySnapshot('s').unseenWrittenActivity;
   const head = output => h.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'open', revision: ++revision, writtenOutput: output });
-  return { ...h, entry, write, unseen, head };
+  return { ...h, document: h.window.document, entry, write, unseen, head };
 }
 
 test('fully viewed busy output is seen only after rendering; a newer write during the callback remains unseen', t => {
@@ -190,13 +190,109 @@ test('title CSS depends only on unseen writing and preserves attention priority'
   assert.doesNotMatch(css, /\.session-item\.(?:cli-busy|response-ready)[^{]*\.session-(?:name|summary)\s*\{/);
 });
 
-test('PTY receipt validates printable output across fragmented escape sequences and does not treat OSC busy as writing', t => {
+for (const [name, frame] of [
+  ['spinner', '\x1b[2K\x1b[1G✻ Thinking… (3s · esc to interrupt)'],
+  ['spinner redraw', '\x1b[1A\x1b[2K\x1b[G✶'],
+  ['timer tick', '\x1b[5C\x1b[1A4s'],
+  ['resize repaint', '\x1b[2J\x1b[H> previous answer'],
+  ['restore replay', '\x1b[2J\x1b[HClaude Code\r\n> previous answer'],
+  ['bracketed paste echo', '\x1b[200~my own input\x1b[201~'],
+]) {
+  test(`a fully seen inactive PTY stays seen after ${name}`, t => {
+    const h = terminal(t);
+    h.head('baseline');
+    h.write('previous answer');
+    assert.equal(h.unseen(), false);
+    h.window.activeSessionId = 'elsewhere';
+    h.window.handleTerminalData('s', frame);
+    h.window.flushTerminalBuffer('s');
+    assert.equal(h.unseen(), false);
+  });
+}
+
+test('new transcript assistant and tool output marks an inactive attached head unseen', t => {
   const h = terminal(t);
+  const { createTranscriptTurnReader } = require('../transcript-turn');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-626b-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  const reader = createTranscriptTurnReader();
+  const digest = text => { fs.writeFileSync(file, text); return reader.read(file).writtenOutput; };
+  let transcript = JSON.stringify({ type: 'assistant', uuid: 'old', message: { content: 'previous answer' } }) + '\n';
+  h.head(digest(transcript));
   h.window.activeSessionId = 'elsewhere';
-  for (const chunk of ['\x1b]0;busy', '\x07', '\x1b[', '2J', ' \r\n']) h.window.handleTerminalData('s', chunk);
+  for (const entry of [
+    { type: 'assistant', uuid: 'new', message: { content: 'new answer' } },
+    { type: 'user', uuid: 'tool', message: { content: [{ type: 'tool_result', tool_use_id: 'call', content: 'result' }] } },
+  ]) {
+    transcript += JSON.stringify(entry) + '\n';
+    h.head(digest(transcript));
+    assert.equal(h.unseen(), true);
+    h.window.clearUnread('s');
+    assert.equal(h.unseen(), false);
+  }
+});
+
+for (const notification of ['attention', 'response-ready']) {
+  test(`rendering a visible unfocused grid card preserves ${notification}`, t => {
+    const h = terminal(t);
+    h.window.gridViewActive = true;
+    h.window.activeSessionId = 'elsewhere';
+    const card = h.document.createElement('div');
+    card.className = 'grid-card';
+    card.dataset.outputVisible = 'true';
+    h.entry.element.parentNode.appendChild(card);
+    card.appendChild(h.entry.element);
+    h.head('baseline');
+    if (notification === 'attention') h.window.setAttention('s', true);
+    else h.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'closed', revision: 2 });
+    h.write('answer');
+    assert.equal(h.unseen(), false);
+    assert.equal(notification === 'attention' ? h.window.storedActivitySnapshot('s').attention : h.inCtx("headTurns.get('s').ready"), true);
+  });
+}
+
+test('a visible window without keyboard focus sees rendered terminal and transcript output', t => {
+  const h = terminal(t);
+  h.document.hasFocus = () => false;
+  h.write('answer');
   assert.equal(h.unseen(), false);
-  h.window.handleTerminalData('s', 'new output');
+  const body = h.document.createElement('div');
+  h.document.body.appendChild(body);
+  const watermark = h.window.noteWrittenActivity('s');
+  h.window.markTranscriptOutputSeen('s', body, watermark);
+  assert.equal(h.unseen(), false);
+});
+
+test('a terminal with no unseen writing skips layout queries', t => {
+  const h = terminal(t);
+  let queries = 0;
+  h.window.getComputedStyle = () => { queries++; return { display: 'block', visibility: 'visible' }; };
+  h.window.markTerminalOutputSeen(h.entry);
+  assert.equal(queries, 0);
+});
+
+test('grid intersection requires nearly the entire card before consuming latest output', t => {
+  const h = terminal(t);
+  let observer;
+  h.window.IntersectionObserver = class {
+    constructor(callback, options) { observer = { callback, options }; }
+    observe() {}
+  };
+  h.window.initGridObservers();
+  h.window.gridViewActive = true;
+  const card = h.document.createElement('div');
+  card.className = 'grid-card';
+  card.dataset.sessionId = 's';
+  h.entry.element.parentNode.appendChild(card);
+  card.appendChild(h.entry.element);
+  const watermark = h.window.noteWrittenActivity('s');
+  h.entry.renderedWrittenWatermark = watermark;
+  observer.callback([{ target: card, isIntersecting: true, intersectionRatio: 0.001 }]);
   assert.equal(h.unseen(), true);
+  observer.callback([{ target: card, isIntersecting: true, intersectionRatio: 1 }]);
+  assert.equal(h.unseen(), false);
+  assert.ok([observer.options.threshold].flat().some(threshold => threshold >= 0.99));
 });
 
 test('session environment rekey carries the written watermark before the PTY environment moves', t => {
@@ -209,7 +305,7 @@ test('session environment rekey carries the written watermark before the PTY env
   assert.equal(h.window.writtenActivitySnapshot('s').unseenWrittenActivity, false);
 });
 
-test('selecting a session retains the existing glyph clearing policy while pending written output stays unseen', t => {
+for (const view of ['single', 'grid']) test(`explicit ${view} selection consumes the current capture and retains newer writes`, t => {
   const h = terminal(t);
   h.window.activeSessionId = 'elsewhere';
   h.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'open', revision: 1 });
@@ -217,8 +313,19 @@ test('selecting a session retains the existing glyph clearing policy while pendi
   h.window.noteWrittenActivity('s');
   loadAppFunctions(h.context, { functions: ['clearNotifications'] });
   h.window.setActiveSession = id => { h.window.activeSessionId = id; };
-  h.window.showSession('s');
+  h.window.Element.prototype.scrollIntoView = () => {};
+  const select = () => view === 'single' ? h.window.showSession('s') : h.window.focusGridCard('s');
+  select();
   assert.equal(h.inCtx("headTurns.get('s').ready"), false);
+  assert.equal(h.unseen(), false);
+  const captured = h.window.noteWrittenActivity('s');
+  const clear = h.window.clearNotifications;
+  h.window.clearNotifications = (id, watermark = h.window.writtenActivitySnapshot(id).writtenWatermark) => {
+    assert.equal(watermark, captured);
+    h.window.noteWrittenActivity(id);
+    clear(id, watermark);
+  };
+  select();
   assert.equal(h.unseen(), true);
 });
 

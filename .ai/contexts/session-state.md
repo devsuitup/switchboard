@@ -609,28 +609,31 @@ identity. They never aggregate child transcript text or older members' unread.
 Both activity and environment re-keying move the watermark to the new id.
 There is no restart persistence.
 
-PTY data counts only when its streaming filter finds printable, nonblank
-output outside escape sequences; fragmented OSC titles, CSI redraw controls
-and whitespace alone do not count. Plain panel/shell terminals are excluded.
-For heads without a PTY, the existing worker's cached transcript tail carries
+For every head, including attached PTYs, the existing worker's cached transcript tail carries
 a digest of the latest complete main-thread output record: assistant content,
 tool results, task notifications or local-command output. The first snapshot
 establishes a baseline. A changed digest advances unread; unchanged reads,
 watch events, mtime-only updates, descriptors, scans, sidechains, bookkeeping
 and background existence do not. Incomplete JSONL records wait for a newline.
-The existing bounded tail and mirror-refresh limits still apply.
+The existing bounded tail and mirror-refresh limits still apply. PTY data is
+used only to acknowledge rendered output, never to detect written activity:
+spinner and timer frames, resize repaints, attach/history replays and input
+echo cannot advance the written watermark.
 
-Seen means the output was rendered and the surface is visible in a focused,
-non-hidden window at its latest position. A terminal write callback records
+Seen means the output was rendered and the page is visible, even without
+keyboard focus, at its latest position. A terminal write callback records
 only the watermark captured for that batch. Scroll, focus, visibility, reveal
 and grid intersection events consume only that rendered watermark. A single
-terminal must be active; a grid card must intersect the viewport. Scrolling
+terminal must be active; a grid card must be at least 99% within the viewport. Scrolling
 above the latest output preserves unread. Transcript reads capture the
 watermark before IPC and consume that capture only after the main transcript
 renders at the bottom; later scrolling uses the same capture, and nested child
 transcripts cannot consume it. The existing explicit clear consumes its capture
-without a visibility requirement. Selecting a sidebar row alone does not clear
-written unread.
+without a visibility requirement; both single-view and grid selection use
+that explicit clear. A newer write after capture stays unseen. Rendering a
+grid card only advances the written watermark's seen state; attention and
+the response-ready glyph keep their existing focus/clear policy. The terminal
+seen check returns before style queries when there is no unseen writing.
 
 Coverage lives in test/session-written-activity.test.js and
 test/written-output-validation.test.js, alongside the updated reducer, local
