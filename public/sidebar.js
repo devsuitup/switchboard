@@ -312,9 +312,6 @@ function updateSessionSubagentCount(item, session) {
 }
 
 function reflectSubagentRunningState(parentSessionId, agentId) {
-  const running = isSubagentActive(parentSessionId, agentId);
-  const el = document.getElementById(subagentDomId(parentSessionId, agentId));
-  const caret = document.getElementById(caretIdFor(parentSessionId));
   // Mirror the live-subagent count into the local-pty adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
   if (typeof syncLocalPtyAgentsBusy === 'function') {
     const localMap = activeSubagentsByParent.get(parentSessionId);
@@ -326,7 +323,12 @@ function reflectSubagentRunningState(parentSessionId, agentId) {
   updateSessionSubagentCount(parentEl, parentRow || { sessionId: parentSessionId });
   // see .ai/contexts/subagent-observability.md
   if (parentEl) paintSessionIcon(parentEl.querySelector('.session-icon'), parentSessionId);
-  if (window.ATRACE) window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
+  if (window.ATRACE) {
+    const running = isSubagentActive(parentSessionId, agentId);
+    const el = document.getElementById(subagentDomId(parentSessionId, agentId));
+    const caret = document.getElementById(caretIdFor(parentSessionId));
+    window.atrace('class.subagent', parentSessionId, { agentId, running, childEl: el ? el.id : null, caretEl: caret ? caret.id : null, parentEl: parentEl ? parentEl.id : null, 'has-busy-agents': parentHasActiveSubagent(parentSessionId), fn: 'reflectSubagentRunningState' });
+  }
 }
 
 // single write path into activeSubagentsByParent, sole emitter of recv.subagent-spawned — see docs/activity-trace.md

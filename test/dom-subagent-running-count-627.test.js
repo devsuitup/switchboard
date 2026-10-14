@@ -127,7 +127,7 @@ test('#627 collapsed, expanded, capped, filtered and rebuilt children keep the f
 });
 
 test('#627 merged continuation members deduplicate tasks and refresh on a member-only snapshot', t => {
-  const { ctx, parent, registry } = setup(t, { mergedMemberIds: [PARENT, 'continued-627'], headSessionId: 'continued-627' });
+  const { ctx, parent, registry } = setup(t, { mergedMemberIds: ['continued-627'], headSessionId: 'continued-627' });
   snapshot(registry, PARENT, [{ id: 'A' }]);
   snapshot(registry, 'continued-627', [{ id: 'A' }, { id: 'B' }]);
   const row = render(ctx, parent);
@@ -168,7 +168,8 @@ test('#627 child and caret have no green running dot and host reachability remai
 for (const visible of [true, false]) {
   test(`#627 head-keyed grid counts a sibling member with sidebar visible=${visible}`, t => {
     const head = 'head-627';
-    const { ctx, parent, registry } = setup(t, { mergedMemberIds: [PARENT, head], headSessionId: head });
+    const sibling = 'sibling-627';
+    const { ctx, parent, registry } = setup(t, { mergedMemberIds: [sibling, head], headSessionId: head });
     if (!visible) ctx.window.indexLocalMergedMemberRows([makeSampleProject({ sessions: [parent] })]);
     render(ctx, parent);
     ctx.window.sessionMap.set(head, { sessionId: head, mergedMemberIds: [] });
@@ -180,13 +181,96 @@ for (const visible of [true, false]) {
     card.innerHTML = '<div class="grid-card-header"></div>';
     ctx.window.testCountCard = card;
     ctx.read(`gridCards.set('${head}', window.testCountCard)`);
-    snapshot(registry, PARENT, [{ id: 'sibling-agent' }]);
+    snapshot(registry, sibling, [{ id: 'sibling-agent' }]);
     assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
     if (visible) label(ctx.document.getElementById('si-' + PARENT), '1 subagent running');
-    snapshot(registry, PARENT, [], 2);
+    snapshot(registry, sibling, [], 2);
     assert.equal(card.querySelector('.grid-subagent-count'), null);
   });
 }
+
+for (const visible of [true, false]) {
+  test(`#627 head-keyed grid retains the root after a sidebar click with sidebar visible=${visible}`, t => {
+    const head = 'head-627';
+    const { ctx, parent, registry } = setup(t, { mergedMemberIds: [head], headSessionId: head });
+    ctx.window.indexLocalMergedMemberRows([makeSampleProject({ sessions: [parent] })]);
+    const row = render(ctx, parent);
+    ctx.window.openSession = session => {
+      ctx.window.sessionMap.set(session.sessionId, session);
+      ctx.window.openSessions.set(session.sessionId, { session });
+    };
+    row.click();
+    const opened = ctx.window.openSessions.get(head)?.session;
+    assert.ok(opened, 'sidebar click opens the head conversation');
+    assert.deepEqual(Array.from(opened.mergedMemberIds), [PARENT]);
+    snapshot(registry, PARENT, [{ id: 'root-agent' }]);
+    label(row, '1 subagent running');
+    if (!visible) row.remove();
+    ctx.evalPublic('shortcuts.js');
+    ctx.evalPublic('grid-view.js');
+    const card = ctx.document.createElement('div');
+    card.innerHTML = '<div class="grid-card-header"></div>';
+    ctx.window.testCountCard = card;
+    ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+    snapshot(registry, PARENT, [{ id: 'root-agent' }], 2);
+    if (visible) label(row, '1 subagent running');
+    assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
+    snapshot(registry, PARENT, [], 3);
+    assert.equal(card.querySelector('.grid-subagent-count'), null);
+  });
+}
+
+test('#627 grid unions sidebar, indexed, mapped and opened members', t => {
+  const head = 'head-627';
+  const { ctx, parent, registry } = setup(t, { mergedMemberIds: [head, 'sidebar-member'], headSessionId: head });
+  render(ctx, parent);
+  ctx.window.indexLocalMergedMemberRows([makeSampleProject({ sessions: [{ ...parent, mergedMemberIds: [head, 'indexed-member'] }] })]);
+  ctx.window.sessionMap.set(head, { sessionId: head, mergedMemberIds: ['mapped-member'] });
+  ctx.window.openSessions.set(head, { session: { sessionId: head, mergedMemberIds: [PARENT, 'opened-member'] } });
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  const card = ctx.document.createElement('div');
+  card.innerHTML = '<div class="grid-card-header"></div>';
+  ctx.window.testCountCard = card;
+  ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+  const ids = [PARENT, head, 'sidebar-member', 'indexed-member', 'mapped-member', 'opened-member'];
+  for (const [i, id] of ids.entries()) {
+    snapshot(registry, id, [{ id: 'agent-' + id }]);
+    assert.equal(card.querySelector('.grid-subagent-count')?.textContent, `${i + 1} subagent${i ? 's' : ''} running`, id);
+  }
+  for (const id of ids) snapshot(registry, id, [], 2);
+  assert.equal(card.querySelector('.grid-subagent-count'), null);
+});
+
+test('#641 background re-key retains the sidebar and grid count through rebuild and completion', t => {
+  const next = 'new-641';
+  const { ctx, parent, registry } = setup(t);
+  render(ctx, parent);
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  const card = ctx.document.createElement('div');
+  card.innerHTML = '<div class="grid-card-header"></div>';
+  card.rekeySessionId = id => { card.dataset.sessionId = id; };
+  ctx.window.testCountCard = card;
+  ctx.read(`gridCards.set('${PARENT}', window.testCountCard)`);
+  snapshot(registry, PARENT, [{ id: 'A' }]);
+  label(ctx.document.getElementById('si-' + PARENT), '1 subagent running');
+  assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
+  registry.rekey(PARENT, next, { continued: true });
+  ctx.window.rekeyGridCard(PARENT, next);
+  assert.equal(card.dataset.sessionId, next);
+  const after = { ...parent, sessionId: next, headSessionId: next, mergedMemberIds: [PARENT] };
+  ctx.window.sessionMap.delete(PARENT);
+  ctx.window.sessionMap.set(next, after);
+  ctx.sidebar.renderProjects([makeSampleProject({ sessions: [after] })], true);
+  const row = ctx.document.getElementById('si-' + next);
+  label(row, '1 subagent running');
+  ctx.window.updateGridSubagentPills(next);
+  assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
+  registry.end(next, 'A', AT + 10);
+  label(row, null);
+  assert.equal(card.querySelector('.grid-subagent-count'), null);
+});
 
 test('#627 TTL refresh visits each grid card once', t => {
   const { ctx, registry } = setup(t);

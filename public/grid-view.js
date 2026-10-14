@@ -61,10 +61,18 @@ function runGridSubagentTtlTick() {
 
 function updateGridSubagentPills(parentSessionId) {
   for (const [sessionId, card] of gridCards) {
-    const session = sessionMap.get(sessionId) || openSessions.get(sessionId)?.session || { sessionId };
+    const openedSession = openSessions.get(sessionId)?.session;
+    const session = sessionMap.get(sessionId) || openedSession || { sessionId };
     const item = sessionItemEl(sessionId);
     const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
-    const ids = rowSessionIds({ sessionId, mergedMemberIds: item?.dataset.mergedMemberIds?.split(' ') || mergedRow?.mergedMemberIds || session.mergedMemberIds });
+    const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
+      item?.dataset.sessionId,
+      mergedRow?.sessionId,
+      ...(item?.dataset.mergedMemberIds?.split(' ') || []),
+      ...(mergedRow?.mergedMemberIds || []),
+      ...(session.mergedMemberIds || []),
+      ...(openedSession?.mergedMemberIds || []),
+    ] }).filter(Boolean))];
     if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
     const count = window.taskRegistry?.runningAgentCount(ids) || 0;
     let text = card.querySelector('.grid-subagent-count');
