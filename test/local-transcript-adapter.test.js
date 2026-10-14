@@ -94,7 +94,7 @@ test('a session-transcript-activity event drives the adapter busy, then decay wa
   snap = t.snapshot('s1');
   assert.equal(snap.busy, true, 'the transcript-activity event marks the adapter busy');
   assert.equal(snap.attention, false, 'no PTY exists to ever justify attention');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'projected onto the row');
+  assert.equal(t.item('s1').classList.contains('cli-busy'), false, 'a write hint does not establish an open head turn');
 
   const timer = t.pending()[0];
   assert.ok(timer, 'a decay timer must be scheduled');

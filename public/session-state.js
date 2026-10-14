@@ -8,7 +8,7 @@ const ICON_BY_RUNG = {
   attention: { classes: ['needs-attention'], slotClasses: ['session-icon--attention'], glyph: '!', title: 'Needs your attention' },
   responseReady: { classes: ['response-ready'], slotClasses: ['session-icon--response-ready'], glyph: '●', title: 'Response ready' },
   busy: { classes: ['cli-busy'], slotClasses: ['session-icon--busy'], glyph: '⠋', title: 'Working' },
-  agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '◆', title: 'Subagents running' },
+  agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '⠿', title: 'Background work running' },
   waitingForInput: { classes: [], slotClasses: ['session-icon--waiting'], glyph: '○', title: 'Waiting for input' },
   idle: { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' },
   stale: { classes: [], slotClasses: ['session-icon--stale'], glyph: '', title: 'Stale' },
@@ -156,7 +156,8 @@ function renderSessionIcon(snapshot) {
   for (const rung of PRIORITY) {
     if (rungActive(s, rung)) {
       const icon = ICON_BY_RUNG[rung];
-      return { classes: icon.classes.slice(), slotClasses: icon.slotClasses.slice(), glyph: icon.glyph, title: icon.title };
+      const title = s.headTurn === 'unknown' && rung === 'waitingForInput' ? 'Turn state unavailable' : icon.title;
+      return { classes: icon.classes.slice(), slotClasses: icon.slotClasses.slice(), glyph: icon.glyph, title };
     }
   }
   const idle = ICON_BY_RUNG.idle;
@@ -166,9 +167,9 @@ function renderSessionIcon(snapshot) {
 function rungActive(s, rung) {
   switch (rung) {
     case 'attention': return !!s.attention;
-    case 'responseReady': return !!s.responseReady;
-    case 'busy': return !!s.busy;
-    case 'agentsBusy': return !!s.agentsBusy;
+    case 'responseReady': return s.headTurn === undefined && !!s.responseReady;
+    case 'busy': return !!s.busy && (s.headTurn === undefined || s.headTurn === 'open');
+    case 'agentsBusy': return !!(s.agentsBusy || s.backgroundWork);
     case 'waitingForInput': return !!s.waitingForInput;
     case 'idle': return false; // fallback rung, never matched directly here
     case 'stale': return !!s.stale;

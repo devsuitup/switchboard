@@ -109,9 +109,9 @@ function classifyTranscriptTail(text) {
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
     const queueIdle = enqueued <= removed && dequeued === 0;
     const closed = endsTurn(entry, turnDurationAfter, entries[i - 1]) && queueIdle && at !== null;
-    return { closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries };
+    return { state: at === null ? 'unknown' : (closed ? 'closed' : 'open'), closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries };
   }
-  return { closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
+  return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
 }
 
 function readTail(filePath, size, tailBytes) {

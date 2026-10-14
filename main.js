@@ -550,7 +550,11 @@ const remoteIndexer = createRemoteIndexer({
   getRefreshMs: () => (getSetting('global') || {}).remoteRefreshMs,
   dataDir: path.dirname(DB_PATH),
   transport: remoteTransport,
-  scanFolders: scanFoldersViaWorker,
+  scanFolders: async options => {
+    const result = await scanFoldersViaWorker(options);
+    await refreshRemoteHeadTurns(options.folderPrefix);
+    return result;
+  },
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
   dropFolder: (folderKey) => {
     deleteCachedFolder(folderKey);
@@ -3146,6 +3150,16 @@ const taskRecords = createTaskRecordsClient({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId, continued });
   },
 });
+async function refreshRemoteHeadTurns(folderPrefix) {
+  if (!folderPrefix) return;
+  for (const row of getAllCached()) {
+    if (!row.remoteAlias || row.isSidechain || row.parentSessionId) continue;
+    const folder = getCachedFolder(row.sessionId);
+    if (!folder?.startsWith(folderPrefix)) continue;
+    const dir = projectsDirForFolder(folder);
+    if (dir) await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId, { turnOnly: true });
+  }
+}
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
   for (const [key, session] of activeSessions) {
@@ -3155,6 +3169,11 @@ ipcMain.handle('get-task-snapshots', async () => {
     if (job.sessionId && ['working', 'blocked'].includes(job.state)) live.add(job.sessionId);
   }
   for (const row of getAllCached()) {
+    if (row.remoteAlias && !row.isSidechain && !row.parentSessionId) {
+      const dir = projectsDirForFolder(getCachedFolder(row.sessionId));
+      if (dir) await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId, { turnOnly: true });
+      continue;
+    }
     if (row.isSidechain || row.parentSessionId || row.remoteAlias || !live.has(row.sessionId)) continue;
     const folder = getCachedFolder(row.sessionId);
     const dir = folder && !folder.includes('::') && projectsDirForFolder(folder);

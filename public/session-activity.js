@@ -11,7 +11,7 @@ function localPtyState(sessionId) {
 }
 
 function projectLocalPtyState(sessionId) {
-  applyStateClasses(sessionId, localPtyState(sessionId).snapshot());
+  applyStateClasses(sessionId, snapshotForLocal(sessionId));
 }
 
 // Map-/Set-like views over localPtyStates, for readers not yet migrated onto the adapter — see .ai/contexts/session-state.md ("The local-pty adapter")
@@ -145,6 +145,7 @@ function setActivity(sessionId, active, via, opts) {
 }
 
 function clearUnread(sessionId, via) {
+  if (headTurns.has(sessionId)) headTurns.get(sessionId).ready = false;
   const state = localPtyState(sessionId);
   if (window.ATRACE && state.snapshot().responseReady) window.atrace('store.mutate', sessionId, { map: 'responseReadySessions', op: 'delete', from: true, to: false, fn: 'clearUnread', via });
   state.apply({ type: 'clearUnread' });
@@ -153,6 +154,7 @@ function clearUnread(sessionId, via) {
 
 // OSC 9 "needs attention" — supersedes and consumes response-ready, see .ai/contexts/session-state.md ("The local-pty adapter")
 function setAttention(sessionId, on, via) {
+  if (on && headTurns.has(sessionId)) headTurns.get(sessionId).ready = false;
   const state = localPtyState(sessionId);
   const before = state.snapshot();
   if (window.ATRACE && before.attention !== !!on) window.atrace('store.mutate', sessionId, { map: 'attentionSessions', op: on ? 'add' : 'delete', from: before.attention, to: !!on, fn: 'setAttention', via });

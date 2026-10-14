@@ -139,12 +139,14 @@ function groupAgentEntries(entries, mode, opts = {}) {
 
 function agentRowIcon(entry) {
   const live = agentIsLive(entry);
-  const blocked = entry.kind === 'background' && entry.state === 'blocked';
-  const icon = renderSessionIcon({
-    busy: live && !blocked && entry.status === 'busy',
-    waitingForInput: live && (blocked || entry.status === 'waiting'),
+  const ports = {
+    liveness: live ? 'alive' : 'dead',
+    attention: live && entry.status === 'waiting',
+    waitingForInput: live,
     stale: !live,
-  });
+  };
+  const snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
+  const icon = renderSessionIcon(snapshot);
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
 }
 

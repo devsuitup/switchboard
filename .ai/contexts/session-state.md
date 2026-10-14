@@ -1,5 +1,66 @@
 # Session state — one domain module, one icon slot
 
+## Conversation head turn and the single spinner (#625)
+
+The row's animation is selected from its `headSessionId || sessionId`, with
+three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
+retains its existing `closed` API for trigger delivery and adds `state`.
+An empty or unreadable tail, or one without a main-thread user/assistant record,
+is unknown. A timestamped
+main-thread user/assistant record supplies open evidence; a final stop reason
+plus a later `turn_duration`, or the existing local-command/manual-compaction
+closure, supplies closed evidence only when the queue is idle. Existing queued
+work prevents closure. The live head-turn canary alarms on the consumed
+stop-reason/timestamp/duration pairing; an absent sample is explicitly skipped,
+and does not validate the installed CLI.
+
+The existing task-record worker reads a cached 256 KiB transcript tail after a
+verified invalidation. Its task snapshot carries independently revisioned
+`headTurn` evidence. The renderer applies turn evidence before the background
+snapshot, rejects older turn revisions, and repaints on turn-state changes.
+Liveness gates animation: a PTY here or a live descriptor is required. Job
+`working`, descriptor `busy`, OSC spinner/progress and transcript touches remain
+hints; they cannot open a head turn. The existing 3 s/20 s adapter clocks can
+expire hints, but never close or reopen the projected turn.
+
+`headActivitySnapshot` selects the authoritative icon inputs, while
+`mergedRowSnapshot` retains the head's busy, prompt and unread states. Attention,
+background work and row liveness may aggregate across members; an older
+member's open turn cannot animate the head. `taskRegistry.background` is the
+source of background work, including non-agent kinds. A closed live head uses
+the existing waiting glyph, or the static full-braille glyph when background
+work remains. Attention owns the one slot first. An unseen confirmed closure
+keeps the existing unread row flag, but does not replace the prompt/background
+glyph. Explicit and descriptor-owned attention consume that flag. An unknown
+live head cannot animate and uses the tooltip "Turn state unavailable" when
+there is no known background work. This does not implement #626 title colour
+or #627 subagent counts.
+
+The CLI also emits job fan kind `shell` (observed live on 2.1.296). The job
+normalizer accepts it as the existing canonical `bash` kind; otherwise one
+shell entry would invalidate the entire job's background snapshot. The
+existing job-state canary covers this consumed alias alongside the offline
+registry-to-static-glyph regression.
+
+Both initial sidebar paint and incremental updates use this selection. Agents
+view rows use the same turn and registry facts; job state alone supplies only
+liveness. Its list repaints on turn changes and task changes while visible.
+The legacy adapter snapshots and Map-like views retain their hint state for
+other readers; they are not the sidebar's authoritative busy classification.
+
+Local bootstrap reuses #624's positively live-owner transcript reads. Verified
+local top-level watch notifications already reach the worker even when a PTY
+owns the session. Remote bootstrap and the existing mirror indexing callback
+read local mirrored tails through `turnOnly` worker requests, without replaying
+remote lifecycle records into #624's registry and without additional SSH calls
+or per-row network polling. Remote head members receive their own descriptor
+liveness. A descriptor missing from a successful host snapshot makes liveness
+unknown without completing tasks; a failed host snapshot retains the previous
+freshness contract. Remote turn precision is limited by the mirror refresh.
+
+This section supersedes the older OSC/mtime-driven spinner and short-parent
+decay descriptions below. Their timers still describe hint retention.
+
 Origin: issue #246 (step 3 of the alignment sequence #244 → #245 → #246 → #247).
 Full design: the issue body and its 2026-09-11 lifecycle comment. This doc covers
 what actually shipped, not the whole plan.

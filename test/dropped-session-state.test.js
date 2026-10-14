@@ -100,7 +100,7 @@ test('a busy signal that lands after the pty-set scan is cleared when the sessio
     ctx.document.getElementById('sidebar-content').append(item);
 
     ctx.setActivity('dropped-1', true, 'onCliBusyState');
-    assert.ok(item.classList.contains('cli-busy'), 'precondition: the late busy signal marked the row');
+    assert.equal(item.classList.contains('cli-busy'), false, 'late hints cannot animate an unknown head');
 
     ctx.window.dropLocalPtySession('dropped-1', 'process-exited');
 

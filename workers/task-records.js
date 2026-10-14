@@ -4,14 +4,22 @@ const { parentPort } = require('node:worker_threads');
 const fs = require('node:fs/promises');
 const { createTaskRegistry } = require('../public/task-registry');
 const { createTaskTranscriptReader } = require('../task-transcript-reader');
+const { createTranscriptTurnReader } = require('../transcript-turn');
 
 const registry = createTaskRegistry({ onRekey: (oldId, newId, continued) => parentPort.postMessage({ rekey: { oldId, newId, continued } }) });
 const reader = createTaskTranscriptReader({ registry });
+const turnReader = createTranscriptTurnReader();
+const turns = new Map();
+let turnRevision = 0;
 let queue = Promise.resolve();
 parentPort.on('message', message => {
   queue = queue.then(async () => {
     const { type, parentSessionId } = message;
-    if (type === 'read') await reader.read(message.file, parentSessionId);
+    if (type === 'read') {
+      if (!message.turnOnly) await reader.read(message.file, parentSessionId);
+      const turn = turnReader.read(message.file);
+      turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown', revision: ++turnRevision });
+    }
     else if (type === 'child') {
       try {
         const file = message.file.replace(/\.jsonl$/, '.meta.json');
@@ -28,8 +36,11 @@ parentPort.on('message', message => {
     else if (type === 'death') registry.ownerDied(parentSessionId);
     else if (type === 'alive') registry.ownerAlive(parentSessionId);
     else if (type === 'rekey') registry.rekey(message.oldId, message.newId, { continued: message.continued });
-    if (parentSessionId) parentPort.postMessage({ snapshot: registry.snapshot(registry.resolve(parentSessionId)) });
-    if (type === 'rekey') parentPort.postMessage({ snapshot: registry.snapshot(registry.resolve(message.newId)) });
+    if (parentSessionId) {
+      const id = registry.resolve(parentSessionId);
+      parentPort.postMessage({ snapshot: { ...registry.snapshot(id), headTurn: turns.get(id) } });
+    }
+    if (type === 'rekey') parentPort.postMessage({ snapshot: { ...registry.snapshot(registry.resolve(message.newId)), headTurn: turns.get(message.newId) } });
     if (message.requestId) parentPort.postMessage({ requestId: message.requestId });
   }).catch(error => parentPort.postMessage({ error: error.message, requestId: message.requestId }));
 });

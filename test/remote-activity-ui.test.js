@@ -89,14 +89,14 @@ function setup(sessionIds = ['s1']) {
   };
 }
 
-test('a remote-activity event marks the matching row busy through setActivity', () => {
+test('a remote-activity event records a hint without animating an unknown head', () => {
   const t = setup(['s1']);
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'precondition: row starts idle');
 
   t.emit({ alias: 'vps', sessionId: 's1', at: Date.now() });
 
   assert.equal(t.sessionBusyState.get('s1'), true, 'sessionBusyState is set through the central dispatcher');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'the row must go busy, same as a local session');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'remote hints require turn evidence, same as local hints');
   t.destroy();
 });
 
@@ -111,17 +111,17 @@ test('a payload with no sessionId is ignored', () => {
   t.destroy();
 });
 
-test('.cli-busy clears once the decay timer fires, and not before', () => {
+test('hint decay does not animate an unknown head before or after its timer', () => {
   const t = setup(['s1']);
   t.emit({ sessionId: 's1' });
-  assert.ok(t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
 
   const timer = t.pending()[0];
   assert.ok(timer, 'a decay timer must be scheduled');
   assert.equal(timer.ms, 20000, 'the decay window is 20s');
 
   // Before the timer fires, the row stays busy.
-  assert.ok(t.item('s1').classList.contains('cli-busy'));
+  assert.ok(!t.item('s1').classList.contains('cli-busy'));
 
   timer.fn(); // simulate the 20s elapsing
   assert.ok(!t.item('s1').classList.contains('cli-busy'), 'the row must go idle once the decay window elapses');
@@ -172,7 +172,7 @@ test('a second event before decay resets the timer instead of stacking one', () 
 test('applyRemoteStopped marks the row dead/detached, clears busy state, and cancels its decay timers', () => {
   const t = setup(['s1']);
   t.emit({ sessionId: 's1' }); // busy, with a live decay timer
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'precondition: row is busy');
+  assert.ok(!t.item('s1').classList.contains('cli-busy'), 'an unknown head stays unanimated');
   assert.equal(t.pending().length, 1, 'precondition: a decay timer is armed');
 
   t.applyRemoteStopped('s1');

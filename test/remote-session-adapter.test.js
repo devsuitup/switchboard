@@ -92,7 +92,7 @@ test('a remote-activity event drives the adapter snapshot busy, then decay clear
   snap = t.snapshot('s1');
   assert.equal(snap.busy, true, 'the watch-channel event marks the adapter busy');
   assert.equal(snap.lastActivitySource, 'remote-watch');
-  assert.ok(t.item('s1').classList.contains('cli-busy'), 'projected onto the row');
+  assert.equal(t.item('s1').classList.contains('cli-busy'), false, 'a remote write hint does not establish an open head turn');
 
   const timer = t.pending()[0];
   assert.ok(timer, 'a decay timer must be scheduled');

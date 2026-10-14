@@ -1,6 +1,6 @@
 'use strict';
 
-const TASK_KINDS = new Map([['agent', 'agent'], ['bash', 'bash'], ['monitor', 'monitor'], ['cron', 'cron']]);
+const TASK_KINDS = new Map([['agent', 'agent'], ['bash', 'bash'], ['shell', 'bash'], ['monitor', 'monitor'], ['cron', 'cron']]);
 const IN_FLIGHT_KINDS = new Set(['local_agent', 'local_bash', 'monitor', 'session_cron']);
 
 function normalizeTaskEvidence(raw) {

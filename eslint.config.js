@@ -242,6 +242,9 @@ const rendererCrossFileGlobals = {
   // public/sidebar.js — see .ai/contexts/subagent-observability.md
   noteSubagentActivity: 'readonly',
   taskActivitySnapshot: 'readonly',
+  applyHeadTurnSnapshot: 'readonly',
+  headTurns: 'readonly',
+  renderAgentsView: 'readonly',
   updateGridSubagentPills: 'readonly',
   reflectSubagentRunningState: 'readonly',
   scheduleSubagentTtlTick: 'readonly',
