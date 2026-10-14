@@ -1,7 +1,7 @@
 'use strict';
 
 // see .ai/contexts/viewer-panel.md (File list workers)
-function createFileListsWorkerClient({ workerFactory, snapshot, apply, getVersion = () => snapshot().version, timeoutMs = 30000, hardTimeoutMs = 5 * 60 * 1000, maxDiscards = 3 }) {
+function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError = () => {}, getVersion = () => snapshot().version, timeoutMs = 30000, hardTimeoutMs = 5 * 60 * 1000, maxDiscards = 3 }) {
   let worker = null;
   let stopped = false;
   let active = null;
@@ -24,10 +24,12 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, getVersio
     if (old) Promise.resolve(old.terminate()).catch(() => {});
   }
 
-  function fail(error) {
+  function fail(error, report = true) {
+    const published = active?.published;
     resetWorker();
     pending = null;
     for (const waiter of waiters) settle(waiter, error);
+    if (report && published) onError(error);
   }
 
   function dispatchPending() {
@@ -43,20 +45,26 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, getVersio
     job.receiving = true;
     try {
       const valid = () => active === job && getVersion() === job.version;
-      const accepted = valid() && await apply(message.result, valid);
+      let accepted = false;
+      if (valid()) {
+        for (const waiter of job.waiters) settle(waiter, null, message.result);
+        job.published = true;
+        await new Promise(resolve => setImmediate(resolve));
+        accepted = valid() && await apply(message.result, valid);
+      }
       if (active !== job) return;
-      clearTimeout(job.timer);
       if (!accepted || !valid()) {
-        if (++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
+        clearTimeout(job.timer);
+        if (++job.discards < maxDiscards && (job.published || job.waiters.some(waiter => waiters.has(waiter)))) {
           job.waiters.push(...(pending?.waiters || []));
           pending = null;
           dispatch(job);
           return;
         }
         for (const waiter of job.waiters) settle(waiter, new Error('file list snapshot changed'));
-      } else {
-        for (const waiter of job.waiters) settle(waiter, null, message.result);
+        if (job.published) onError(new Error('file list index snapshot changed'));
       }
+      clearTimeout(job.timer);
       active = null;
       dispatchPending();
     } catch (error) { if (active === job) fail(error); }
@@ -85,7 +93,7 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, getVersio
       waiters.add(waiter);
       waiter.timer = setTimeout(() => {
         settle(waiter, new Error('file list worker timed out'));
-        if (active && !active.waiters.some(w => waiters.has(w))) {
+        if (active && !active.receiving && !active.published && !active.waiters.some(w => waiters.has(w))) {
           resetWorker();
           dispatchPending();
         }
@@ -99,7 +107,7 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, getVersio
 
   function shutdown() {
     stopped = true;
-    fail(new Error('file list worker shut down'));
+    fail(new Error('file list worker shut down'), false);
   }
 
   return { request, shutdown };

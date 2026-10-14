@@ -4,6 +4,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
 const { listMemories, listWorkFiles } = require('../file-lists');
+const { fileListPathKey } = require('../file-lists-path');
 const memoryBodies = new Map();
 let previousEpoch;
 
@@ -11,11 +12,11 @@ function build(message) {
   const options = { ...workerData, ...message };
   const indexed = new Map(message.indexed || []);
   const touched = new Set();
-  const invalidated = new Set(message.invalidated || []);
+  const invalidated = new Set((message.invalidated || []).map(file => fileListPathKey(file)));
   if (previousEpoch !== message.epoch) {
     if (message.invalidateAll) memoryBodies.clear();
     else for (const [file, cached] of memoryBodies) {
-      if (invalidated.has(file) || invalidated.has(JSON.parse(cached.signature)[2])) memoryBodies.delete(file);
+      if (invalidated.has(fileListPathKey(file)) || invalidated.has(fileListPathKey(JSON.parse(cached.signature)[2]))) memoryBodies.delete(file);
     }
   }
   previousEpoch = message.epoch;
@@ -40,7 +41,7 @@ function build(message) {
     else signature = JSON.stringify([file.modified, file.size, file.title]);
     manifest.set(file.filePath, signature);
     const target = message.kind === 'memory' ? JSON.parse(memoryBodies.get(file.filePath).signature)[2] : file.filePath;
-    if (!message.invalidateAll && !invalidated.has(target) && !invalidated.has(file.filePath) && indexed.get(file.filePath) === signature) continue;
+    if (!message.invalidateAll && !invalidated.has(fileListPathKey(target)) && !invalidated.has(fileListPathKey(file.filePath)) && indexed.get(file.filePath) === signature) continue;
     let body = '';
     if (message.kind === 'memory') body = listing.bodies.get(file.filePath) ?? '';
     else if (!file.relativePath.endsWith('.jsonl') && file.size <= 64 * 1024) {

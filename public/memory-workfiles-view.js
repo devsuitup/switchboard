@@ -28,8 +28,13 @@ function hideAllViewers() {
 // --- Memory ---
 
 async function loadMemories() {
-  cachedMemoryData = await window.api.getMemories();
-  renderMemories();
+  try {
+    cachedMemoryData = await window.api.getMemories();
+    renderMemories();
+    clearAppNotice('getMemories');
+  } catch {
+    showAppNotice({ id: 'getMemories', kind: 'error', message: 'Memory could not be loaded. Reopen the Memory tab to retry.' });
+  }
 }
 
 function renderMemories(filterIds) {
@@ -207,9 +212,14 @@ let currentWorkFileContent = '';
 const workFilesCollapsedState = new Map();
 
 async function loadWorkFiles() {
-  const result = await window.api.getWorkFiles();
-  cachedWorkFilesData = result.projects || [];
-  renderWorkFiles();
+  try {
+    const result = await window.api.getWorkFiles();
+    cachedWorkFilesData = result.projects || [];
+    renderWorkFiles();
+    clearAppNotice('getWorkFiles');
+  } catch {
+    showAppNotice({ id: 'getWorkFiles', kind: 'error', message: 'Work Files could not be loaded. Reopen the Work Files tab to retry.' });
+  }
 }
 
 // Remove a single deleted file from the in-memory model and re-render.

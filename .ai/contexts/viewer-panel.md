@@ -9,8 +9,9 @@ Issue #616 slice 2 routes `get-memories` and `get-work-files` through
 `file-lists-worker-client.js` to `workers/file-lists-query.js`.
 `file-lists.js` contains the previous synchronous listing algorithms, executed
 only inside the worker. Main snapshots hidden projects and live project roots
-without walking the filesystem. The worker adds the roots derived from the
-on-disk project folders, then uses the unchanged `isAllowedMemoryPath` and
+without walking the filesystem; live roots participate only in Memory's version,
+so session start/stop does not discard Work Files jobs. The worker adds the
+roots derived from the on-disk project folders, then uses the unchanged `isAllowedMemoryPath` and
 `scan-md-files` acceptance rules. Hidden-project filtering, Memory display
 paths and ordering, Work Files worktree deduplication, recursive traversal,
 the 200-file cap and total counts retain their previous behavior.
@@ -25,7 +26,9 @@ after errors or unobserved timed-out work, and three bounded snapshot conflicts.
 Unlike the Projects client's read-only fallback, an exhausted policy conflict
 rejects the listing rather than publishing files from an obsolete allowlist or
 hidden-project setting. Quit shuts down both clients. There is no main-thread
-filesystem fallback.
+filesystem fallback. A rejected list load keeps the renderer's previous list and
+shows a persistent error notice asking the user to reopen that tab to retry;
+a successful reload clears the notice.
 
 FTS preparation happens in the worker. Memory caches each file's acceptance
 and first 32,768 characters by precise mtime, size and real path; empty files
@@ -42,20 +45,37 @@ the title is part of the signature. Duplicate Memory paths share one FTS row.
 Main remains the sole SQLite writer. On the first request per type it reads
 existing indexed IDs so old rows absent from the current view can be removed.
 Signatures live for the application lifetime; a restart refreshes all visible
-files once. Main applies at most 50 changes per `applySearchFileBatch`
-transaction and yields with `setImmediate` between batches. Before every
-batch it checks the worker job and the hidden/live-root/save version. Accepted
+files once in the background. A valid view is published before FTS applies;
+the client yields with `setImmediate` before the first write and retains job
+ownership until applying finishes, so pending requests remain coalesced and
+cannot race that apply. Main applies at most `FILE_LIST_INDEX_MAX_ENTRIES`
+(50) changes and `FILE_LIST_INDEX_MAX_BODY_BYTES` (128 KiB of UTF-8 bodies)
+per `applySearchFileBatch` transaction and yields with `setImmediate` between
+batches. Before every batch it checks the worker job and the hidden/live-root/save version. Accepted
 signatures advance only after a successful transaction; a conflict retries
-from those accepted batches, and a failed write leaves its files dirty. Save
-and delete hooks invalidate the particular path, including Memory aliases of
-the resolved path. Invalidating a whole type is still supported. Structured
-clone and bounded SQLite/FTS writes remain on main; no live responsiveness or
+from those accepted batches even without pending callers, and a failed write
+leaves its files dirty and logs the background failure without retracting the
+published view. Caller timeouts do not cancel a published apply; the dispatch
+ceiling and shutdown still stop it. Save and delete hooks invalidate the
+particular path, including Memory aliases of
+the resolved path, with Windows case and separator folding. Resolved Memory
+targets remain associated with listed IDs when their signatures become dirty.
+Unrelated Markdown saves leave the epochs alone: invalidations cover Claude
+memory directories, project instruction files, known listed aliases, and
+`.work-files/` for Work Files. Before a first snapshot there is no per-path set;
+afterwards `FILE_LIST_MAX_INVALIDATED_PATHS` (256) bounds it, collapsing overflow
+to whole-type invalidation until a successful apply. Saving an unlisted file
+does not grow the accepted-signature map. Invalidating a whole type is still
+supported. Structured clone and bounded SQLite/FTS writes remain on main; no live responsiveness or
 stress measurement was performed for this slice.
 
 Diagnostics records `ipc.get-memories` and `ipc.get-work-files` with `totalMs`
-(including queue, retries and index batches) and `entries` (listed file
-descriptors, including duplicate Memory paths), behind the existing mutable
+(time to a valid view, including queue, listing and pre-publication retries)
+and `entries` (listed file descriptors, including duplicate Memory paths),
+behind the existing mutable
 `TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories both.
+`totalMs` excludes that reply's background index batches; queued calls can
+still wait for the previous job's apply to finish.
 The new tests compare real-worker lists and initial FTS deltas to a frozen
 pre-change synchronous fixture, verify unchanged-body read counts and per-file
 changes, path guards, hidden projects and cap behavior, exercise client

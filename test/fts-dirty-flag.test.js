@@ -9,16 +9,18 @@ const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 function makeCtx() {
   const start = mainSrc.indexOf('const fileListStates =');
   const end = mainSrc.indexOf('function fileListsSnapshot(');
-  const ctx = vm.createContext({});
-  vm.runInContext(mainSrc.slice(start, end), ctx);
+  const ctx = vm.createContext({ path, process, CLAUDE_DIR: path.resolve('test-claude'), require: require('node:module').createRequire(path.join(__dirname, '..', 'main.js')) });
+  vm.runInContext(mainSrc.slice(start, end), ctx, { filename: path.join(__dirname, '..', 'main.js') });
   return ctx;
 }
 
 test('save invalidation only marks the changed file for reindexing', () => {
   const ctx = makeCtx();
-  vm.runInContext("fileListStates.get('memory').indexed = new Map([['a.md', 'sig-a'], ['b.md', 'sig-b']]); invalidateFtsSignature('memory', 'a.md');", ctx);
-  assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('a.md')", ctx), null);
-  assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('b.md')", ctx), 'sig-b');
+  const a = JSON.stringify([JSON.stringify([1, 2, 'a.md']), 'a']);
+  const b = JSON.stringify([JSON.stringify([1, 2, 'b.md']), 'b']);
+  vm.runInContext(`fileListStates.get('memory').indexed = new Map([['a.md', ${JSON.stringify(a)}], ['b.md', ${JSON.stringify(b)}]]); invalidateFtsSignature('memory', 'a.md');`, ctx, { filename: path.join(__dirname, '..', 'main.js') });
+  assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('a.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), null);
+  assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('b.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), b);
   assert.equal(vm.runInContext("fileListStates.get('memory').epoch", ctx), 1);
   assert.equal(vm.runInContext("fileListStates.get('work-file').epoch", ctx), 0);
 });

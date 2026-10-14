@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const { setImmediate: nextTurn } = require('node:timers/promises');
+const { createFileListsWorkerClient } = require('../file-lists-worker-client');
 
 for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'work-file']]) {
   function handler(on, request, events) {
@@ -19,7 +22,7 @@ for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'w
       getKnownProjectPaths: fail, scanMdFiles: fail, deriveProjectPath: fail,
       getSetting: () => ({}), TRACE: { on }, performance,
       fileListsClient: { request }, trace: (...args) => events.push(args),
-    });
+    }, { filename: path.join(__dirname, '..', 'main.js') });
     return invoke;
   }
 
@@ -47,5 +50,35 @@ for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'w
 
   test(`${channel} rejects worker failure without a synchronous fallback`, async () => {
     await assert.rejects(handler(false, async () => { throw new Error('worker failed'); }, [])(), /worker failed/);
+  });
+
+  test(`${channel} returns its view and trace before the background index apply finishes`, async t => {
+    const worker = new EventEmitter();
+    let job;
+    worker.postMessage = message => { job = message; };
+    worker.terminate = () => Promise.resolve();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let applied = false;
+    const client = createFileListsWorkerClient({
+      workerFactory: () => worker,
+      snapshot: () => ({ version: 'v1' }),
+      apply: async () => { await gate; applied = true; return true; },
+    });
+    t.after(() => client.shutdown());
+    const events = [];
+    let published;
+    const payload = { projects: [] };
+    const invoke = handler(true, () => client.request(), events)().then(view => { published = view; });
+    worker.emit('message', { id: job.id, result: { view: payload, entries: 7 } });
+    try {
+      await nextTurn();
+      assert.equal(published, payload);
+      assert.equal(applied, false);
+      assert.equal(events[0][2].entries, 7);
+    } finally { release(); }
+    await invoke;
+    await nextTurn();
+    assert.equal(applied, true);
   });
 }

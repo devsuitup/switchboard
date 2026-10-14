@@ -28,11 +28,13 @@ async function run() {
   db.upsertSearchEntries([{ id: 'stale-memory-file', type: 'memory', body: 'staleterm' }]);
   let global = {};
   const ctx = vm.createContext({
+    Buffer, path, process, CLAUDE_DIR: claudeDir,
+    require: require('node:module').createRequire(path.join(__dirname, '../../main.js')),
     setImmediate, activeSessions: new Map(), getSetting: () => global,
     getSearchFileIds: db.getSearchFileIds, applySearchFileBatch: db.applySearchFileBatch,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('const fileListStates ='), source.indexOf('const fileListClients =')), ctx);
+  vm.runInContext(source.slice(source.indexOf('const fileListStates ='), source.indexOf('const fileListClients =')), ctx, { filename: path.join(__dirname, '../../main.js') });
   const worker = new Worker(path.join(__dirname, '../../workers/file-lists-query.js'), { workerData: { claudeDir, projectsDir } });
   let id = 0;
   const query = async kind => {

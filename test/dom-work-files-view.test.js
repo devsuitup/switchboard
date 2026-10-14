@@ -19,6 +19,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 <html>
   <body>
     <div id="sidebar-content"></div>
+    <div id="app-notices"></div>
     <div id="memory-content"></div>
     <div id="work-files-content"></div>
     <div id="placeholder"></div>
@@ -63,6 +64,7 @@ function setupWorkFilesDom() {
 
   // Stub window.api — default: getWorkFiles returns empty, readWorkFile returns ''
   window.api = {
+    getMemories: () => Promise.resolve({ global: { files: [] }, projects: [] }),
     getWorkFiles: () => Promise.resolve({ projects: [] }),
     readWorkFile: () => Promise.resolve(''),
     readMemory: () => Promise.resolve(''),
@@ -94,10 +96,12 @@ function setupWorkFilesDom() {
   // Load dependencies
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'memory-workfiles-view.js'));
 
   return {
     window,
+    context: dom.getInternalVMContext(),
     document: window.document,
     /** Load work files using a given data fixture (replaces window.api.getWorkFiles). */
     async loadWith(data) {
@@ -136,6 +140,37 @@ function makeSampleWorkFilesData() {
 }
 
 // ---- tests ----
+
+for (const [loader, api, container, label, render] of [
+  ['loadMemories', 'getMemories', 'memory-content', 'Memory', 'renderMemories'],
+  ['loadWorkFiles', 'getWorkFiles', 'work-files-content', 'Work Files', 'renderWorkFiles'],
+]) {
+  test(`${loader} preserves the previous list on rejection and shows a persistent retry notice`, async () => {
+    const ctx = setupWorkFilesDom();
+    try {
+      const file = makeSampleWorkFilesData().projects[0].files[0];
+      const initial = api === 'getMemories' ? { global: { files: [{ ...file, displayPath: 'Global' }] }, projects: [] } : makeSampleWorkFilesData();
+      ctx.window.api[api] = async () => initial;
+      await ctx.window[loader]();
+      const content = ctx.document.getElementById(container);
+      const previous = content.firstChild;
+      const html = content.innerHTML;
+      ctx.window.api[api] = async () => { throw new Error('worker timed out'); };
+      await assert.doesNotReject(ctx.window[loader]());
+      assert.equal(content.firstChild, previous);
+      ctx.window[render]();
+      assert.equal(content.innerHTML, html);
+      const notice = ctx.document.querySelector('#app-notices [role="alert"]');
+      assert.ok(notice);
+      assert.match(notice.textContent, new RegExp(label));
+      assert.match(notice.textContent, /reopen.*tab.*retry/i);
+      assert.equal(vm.runInContext(`appNoticeEntries.get(${JSON.stringify(api)}).timer`, ctx.context), null);
+      ctx.window.api[api] = async () => initial;
+      await ctx.window[loader]();
+      assert.equal(ctx.document.querySelector('#app-notices [role="alert"]'), null);
+    } finally { ctx.destroy(); }
+  });
+}
 
 test('renderWorkFiles: empty state shows correct message', async () => {
   const ctx = setupWorkFilesDom();

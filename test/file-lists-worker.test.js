@@ -194,3 +194,22 @@ test('saving a resolved Memory alias invalidates its cached body even at the sam
   assert.equal(changed.upserts[0].body, 'after!');
   assert.equal(changed.bodyReads, first.bodyReads + 1);
 });
+
+for (const kind of ['memory', 'work-file']) {
+  test(`${kind} invalidation folds Windows case and separators at unchanged mtime and size`, async t => {
+    const f = fixture(t);
+    const file = kind === 'memory' ? f.first : path.join(f.project, '.work-files', 'nested', 'note.txt');
+    fs.writeFileSync(file, 'before');
+    fs.utimesSync(file, new Date('2026-02-01'), new Date('2026-02-01'));
+    const query = shipped(t, f.options);
+    await query(kind, { epoch: 0 });
+    const stat = fs.statSync(file);
+    fs.writeFileSync(file, 'after!');
+    fs.utimesSync(file, stat.atime, stat.mtime);
+    const invalidated = process.platform === 'win32' ? file.toUpperCase().replace(/\\/g, '/') : file;
+    const changed = await query(kind, { epoch: 1, invalidated: [invalidated] });
+    assert.equal(changed.upserts.length, 1);
+    assert.equal(changed.upserts[0].id, file);
+    assert.equal(changed.upserts[0].body, 'after!');
+  });
+}

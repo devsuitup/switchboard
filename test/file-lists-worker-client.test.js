@@ -40,6 +40,7 @@ test('51 arriving callers own two coalesced jobs and the first valid reply is pu
   const initial = { view: 'first' };
   r.reply(initial);
   assert.equal(await first, initial);
+  await nextTurn();
   assert.equal(r.workers[0].messages.length, 2);
   const latest = { view: 'latest' };
   r.reply(latest);
@@ -86,6 +87,7 @@ test('a queued caller expires at registration deadline rather than dispatch dead
   t.mock.timers.tick(25);
   r.reply();
   await first;
+  await nextTurn();
   t.mock.timers.tick(75);
   await rejected;
   assert.equal(r.workers[0].terminated, true);
@@ -130,10 +132,107 @@ test('shutdown rejects active and pending callers and refuses future requests', 
   assert.equal(r.workers[0].terminated, true);
 });
 
-test('failure during indexing does not acknowledge a manifest and restarts', async t => {
-  const r = rig(t, { apply: async () => { throw new Error('DB failed'); } });
-  const rejected = assert.rejects(r.client.request(), /DB failed/);
-  r.reply();
-  await rejected;
+test('failure during background indexing is reported, preserves the published view and restarts', async t => {
+  const errors = [];
+  const r = rig(t, { apply: async () => { throw new Error('DB failed'); }, onError: error => errors.push(error) });
+  const result = r.client.request();
+  r.reply({ view: 'ready' });
+  assert.equal((await result).view, 'ready');
+  await nextTurn();
+  assert.match(errors[0].message, /DB failed/);
   assert.equal(r.workers[0].terminated, true);
+  const retry = r.client.request();
+  r.reply({ view: 'retry' });
+  assert.equal((await retry).view, 'retry');
+  assert.equal(r.workers.length, 2);
+});
+
+test('a valid view resolves before indexing starts and pending jobs wait for that apply', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let applying = false;
+  let completed = false;
+  const r = rig(t, { apply: async () => { applying = true; await gate; completed = true; return true; } });
+  let published;
+  const first = r.client.request().then(value => { published = value; });
+  const payload = { view: 'ready' };
+  r.reply(payload);
+  const pending = r.client.request();
+  pending.catch(() => {});
+  try {
+    await Promise.resolve();
+    assert.equal(published, payload, 'the view must publish without waiting for FTS');
+    assert.equal(applying, false, 'the first write must yield to the IPC reply');
+    await nextTurn();
+    assert.equal(applying, true);
+    assert.equal(completed, false);
+    assert.equal(r.workers[0].messages.length, 1);
+  } finally { release(); }
+  await first;
+  await nextTurn();
+  assert.equal(r.workers[0].messages.length, 2);
+  r.reply({ view: 'next' });
+  assert.equal((await pending).view, 'next');
+});
+
+test('a policy change after publication retries the background delta before serving pending callers', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let writes = 0;
+  const r = rig(t, { apply: async (_result, valid) => { await gate; if (valid()) writes++; return valid(); } });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  assert.equal((await first).view, 'first');
+  await nextTurn();
+  const pending = r.client.request();
+  pending.catch(() => {});
+  r.change();
+  release();
+  await nextTurn();
+  assert.equal(writes, 0);
+  assert.equal(r.workers[0].messages.length, 2);
+  let published = false;
+  pending.then(() => { published = true; });
+  await Promise.resolve();
+  assert.equal(published, false);
+  r.reply({ view: 'fresh' });
+  assert.equal((await pending).view, 'fresh');
+  await nextTurn();
+  assert.equal(writes, 1);
+});
+
+test('a pending caller timeout does not cancel an already published index apply', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const r = rig(t, { timeoutMs: 100, hardTimeoutMs: 1000, apply: async () => { await gate; return true; } });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  await first;
+  await nextTurn();
+  const rejected = assert.rejects(r.client.request(), /timed out/);
+  try {
+    t.mock.timers.tick(100);
+    await rejected;
+    assert.equal(r.workers[0].terminated, false);
+  } finally { release(); }
+  await nextTurn();
+  const retry = r.client.request();
+  r.reply({ view: 'next' });
+  assert.equal((await retry).view, 'next');
+  assert.equal(r.workers.length, 1);
+});
+
+test('a published index apply retries a changed policy even when there are no pending callers', async t => {
+  let writes = 0;
+  const r = rig(t, { apply: async (_result, valid) => { if (valid()) writes++; return valid(); } });
+  const first = r.client.request();
+  r.reply({ view: 'first' });
+  await first;
+  r.change();
+  await nextTurn();
+  assert.equal(r.workers[0].messages.length, 2);
+  r.reply({ view: 'fresh' });
+  await nextTurn();
+  assert.equal(writes, 1);
 });

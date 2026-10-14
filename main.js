@@ -1376,25 +1376,54 @@ ipcMain.handle('get-usage', async () => {
 // see .ai/contexts/viewer-panel.md (File list workers)
 const { createFileListsWorkerClient } = require('./file-lists-worker-client');
 const fileListStates = new Map();
+const { fileListPathKey } = require('./file-lists-path');
+const FILE_LIST_INDEX_MAX_ENTRIES = 50;
+const FILE_LIST_INDEX_MAX_BODY_BYTES = 128 * 1024;
+const FILE_LIST_MAX_INVALIDATED_PATHS = 256;
 for (const kind of ['memory', 'work-file']) {
-  fileListStates.set(kind, { epoch: 0, indexed: null, invalidated: new Set(), invalidateAll: false });
+  fileListStates.set(kind, { epoch: 0, indexed: null, targets: new Map(), invalidated: new Set(), invalidateAll: false });
 }
 
 function invalidateFtsSignature(kind, filePath) {
   const state = fileListStates.get(kind);
   if (!state) return;
+  const key = filePath ? fileListPathKey(filePath, process.platform) : null;
+  const matching = [];
+  if (key && state.indexed) {
+    for (const id of state.indexed.keys()) {
+      if (fileListPathKey(id, process.platform) === key) matching.push(id);
+      else if (state.targets.get(id) === key) matching.push(id);
+    }
+  }
+  if (key && matching.length === 0) {
+    if (kind === 'work-file') {
+      if (!key.includes('/.work-files/')) return;
+    } else {
+      const root = fileListPathKey(CLAUDE_DIR, process.platform);
+      const names = process.platform === 'win32' ? ['claude.md', 'gemini.md', 'agents.md'] : ['CLAUDE.md', 'GEMINI.md', 'agents.md'];
+      if (!key.endsWith('.md') || !(key.startsWith(root + '/') || key.includes('/.claude/') || names.includes(key.slice(key.lastIndexOf('/') + 1)))) return;
+    }
+  }
   state.epoch++;
-  if (filePath) state.invalidated.add(filePath);
-  else state.invalidateAll = true;
+  if (key && state.indexed && !state.invalidateAll) {
+    state.invalidated.add(key);
+    if (state.invalidated.size > FILE_LIST_MAX_INVALIDATED_PATHS) {
+      state.invalidated.clear();
+      state.invalidateAll = true;
+    }
+  } else if (!key || !state.indexed) {
+    state.invalidated.clear();
+    state.invalidateAll = true;
+  }
   if (!state.indexed) return;
-  if (filePath) state.indexed.set(filePath, null);
+  if (key) for (const id of matching) state.indexed.set(id, null);
   else for (const file of state.indexed.keys()) state.indexed.set(file, null);
 }
 
 function fileListsPolicy(kind) {
   const state = fileListStates.get(kind);
   const hiddenProjects = (getSetting('global') || {}).hiddenProjects || [];
-  const activeProjectPaths = [...activeSessions.values()].map(session => session.projectPath).filter(Boolean);
+  const activeProjectPaths = kind === 'memory' ? [...activeSessions.values()].map(session => session.projectPath).filter(Boolean) : [];
   return {
     hiddenProjects, activeProjectPaths,
     version: JSON.stringify([state.epoch, hiddenProjects, activeProjectPaths]),
@@ -1411,12 +1440,24 @@ function fileListsSnapshot(kind) {
 }
 
 async function applyFileListIndex(kind, result, valid) {
+  if (!valid()) return false;
   const state = fileListStates.get(kind);
   const signatures = new Map(result.manifest);
+  if (kind === 'memory') state.targets = new Map(result.manifest.map(([id, signature]) => [id, fileListPathKey(JSON.parse(JSON.parse(signature)[0])[2], process.platform)]));
   const changes = [...result.deletes.map(id => ({ id })), ...result.upserts.map(entry => ({ entry }))];
-  for (let offset = 0; offset < changes.length; offset += 50) {
+  for (let offset = 0; offset < changes.length;) {
     if (!valid()) return false;
-    const batch = changes.slice(offset, offset + 50);
+    const batch = [];
+    let bodyBytes = 0;
+    while (offset < changes.length && batch.length < FILE_LIST_INDEX_MAX_ENTRIES) {
+      const change = changes[offset];
+      const bytes = change.entry ? Buffer.byteLength(change.entry.body || '', 'utf8') : 0;
+      if (bytes > FILE_LIST_INDEX_MAX_BODY_BYTES) throw new Error('file list index body exceeds batch limit');
+      if (bodyBytes + bytes > FILE_LIST_INDEX_MAX_BODY_BYTES) break;
+      batch.push(change);
+      bodyBytes += bytes;
+      offset++;
+    }
     const deletes = batch.filter(change => !change.entry).map(change => change.id);
     const entries = batch.filter(change => change.entry).map(change => change.entry);
     applySearchFileBatch(kind, deletes, entries);
@@ -1435,6 +1476,7 @@ const fileListClients = new Map(['memory', 'work-file'].map(kind => [kind, creat
   snapshot: () => fileListsSnapshot(kind),
   getVersion: () => fileListsPolicy(kind).version,
   apply: (result, valid) => applyFileListIndex(kind, result, valid),
+  onError: error => log.error(`Error indexing ${kind} files:`, error),
 })]));
 const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
